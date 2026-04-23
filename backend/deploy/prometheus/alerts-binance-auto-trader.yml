@@ -1,0 +1,11 @@
+groups:
+  - name: binance-auto-trader.rules
+    interval: 30s
+    rules:
+      - alert: ApiDown
+        expr: up{job="binance-auto-trader-api"} == 0
+        for: 2m
+        labels: { severity: critical, service: api }
+        annotations:
+          summary: "API is down"
+          description: "binance-auto-trader-api has been unreachable for 2 minutes."

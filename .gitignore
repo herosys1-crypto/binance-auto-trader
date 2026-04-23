@@ -1,0 +1,86 @@
+# ---------- Secrets & local config ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# 사용자 시크릿 노트 (혹시 있으면 절대 커밋 금지)
+.secret_notes.txt
+**/secrets/
+**/secret*.txt
+**/secret*.json
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+.eggs/
+build/
+develop-eggs/
+dist/
+downloads/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+MANIFEST
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.cover
+.cache
+
+# ---------- Virtualenv ----------
+.venv/
+venv/
+env/
+ENV/
+
+# ---------- IDE ----------
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ---------- Docker ----------
+# 컨테이너 내부 볼륨 잔재 (있을 일은 거의 없지만 방어)
+postgres_data/
+redis_data/
+
+# ---------- Backup folders ----------
+binance_auto_trader_project.backup.*
+*.bak
+*.backup
+
+# ---------- Logs ----------
+*.log
+logs/
+
+# ---------- OS ----------
+*.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- Project-specific ----------
+# Claude 작업 중간 산출물 (사용자 로컬에만 존재)
+DEV_STATUS_REPORT.md
+binance_auto_trader_project_v2.zip
+new_files/

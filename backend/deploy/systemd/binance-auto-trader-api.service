@@ -1,0 +1,15 @@
+[Unit]
+Description=Binance Auto Trader API
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/binance-auto-trader
+EnvironmentFile=/opt/binance-auto-trader/.env
+ExecStart=/opt/binance-auto-trader/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

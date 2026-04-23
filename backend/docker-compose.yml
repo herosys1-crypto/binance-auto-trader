@@ -1,0 +1,61 @@
+services:
+  db:
+    image: postgres:16
+    container_name: binance-auto-trader-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: binance_auto_trader
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      # 호스트 5433 → 컨테이너 5432 (호스트 충돌 방지용). 컨테이너끼리는 항상 5432 사용.
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: binance-auto-trader-redis
+    restart: unless-stopped
+    ports:
+      # 호스트 6380 → 컨테이너 6379 (호스트 충돌 방지용). 컨테이너끼리는 항상 6379 사용.
+      - "6380:6379"
+
+  api:
+    build: .
+    container_name: binance-auto-trader-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: binance-auto-trader-prometheus
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./deploy/prometheus/alerts-binance-auto-trader.yml:/etc/prometheus/alerts-binance-auto-trader.yml
+    ports:
+      - "9090:9090"
+    depends_on:
+      - api
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: binance-auto-trader-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+
+volumes:
+  postgres_data:
