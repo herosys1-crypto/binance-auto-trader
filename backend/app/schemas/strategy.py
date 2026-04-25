@@ -17,7 +17,6 @@ class StrategyCalculateRequest(BaseModel):
     side: StrategySide
     start_price: Decimal = Field(..., gt=0)
     strategy_template_id: int
-    total_capital: Decimal = Field(..., gt=0)
 
 class StrategyCalculateResponse(BaseModel):
     symbol: str
