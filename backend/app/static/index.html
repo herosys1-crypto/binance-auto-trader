@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Binance Auto Trader — Admin Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #0f172a; color: #e2e8f0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+  .card { background: #1e293b; border: 1px solid #334155; }
+  .btn-primary { background: #3b82f6; }
+  .btn-primary:hover { background: #2563eb; }
+  .btn-danger { background: #ef4444; }
+  .btn-danger:hover { background: #dc2626; }
+  .badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .badge-active { background: #10b981; color: #fff; }
+  .badge-waiting { background: #f59e0b; color: #fff; }
+  .badge-closed { background: #6b7280; color: #fff; }
+  .badge-pending { background: #8b5cf6; color: #fff; }
+  table { width: 100%; }
+  th { text-align: left; padding: 8px; background: #0f172a; font-size: 12px; color: #94a3b8; }
+  td { padding: 8px; border-top: 1px solid #334155; font-size: 13px; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 6px; z-index: 50; }
+  .toast-success { background: #10b981; color: #fff; }
+  .toast-error { background: #ef4444; color: #fff; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- ============ Login Screen ============ -->
+<div id="login-screen" class="min-h-screen flex items-center justify-center">
+  <div class="card rounded-lg p-8 w-96">
+    <h1 class="text-2xl font-bold mb-2">🔐 Binance Auto Trader</h1>
+    <p class="text-sm text-slate-400 mb-6">Admin Dashboard</p>
+    <form id="login-form" class="space-y-4">
+      <div>
+        <label class="block text-sm mb-1 text-slate-300">Email</label>
+        <input type="email" id="email" required value="herosys1@gmail.com"
+          class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
+      </div>
+      <div>
+        <label class="block text-sm mb-1 text-slate-300">Password</label>
+        <input type="password" id="password" required
+          class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
+      </div>
+      <button type="submit" class="btn-primary w-full py-2 rounded text-white font-semibold">로그인</button>
+    </form>
+  </div>
+</div>
+
+<!-- ============ Dashboard Screen ============ -->
+<div id="dashboard-screen" class="hidden p-6 max-w-7xl mx-auto">
+  <!-- Header -->
+  <div class="flex justify-between items-center mb-6">
+    <h1 class="text-2xl font-bold">📊 Admin Dashboard</h1>
+    <div class="flex gap-2 items-center">
+      <span id="user-info" class="text-sm text-slate-400"></span>
+      <button onclick="refreshAll()" class="btn-primary px-3 py-1 rounded text-sm">↻ 새로고침</button>
+      <button onclick="logout()" class="btn-danger px-3 py-1 rounded text-sm">로그아웃</button>
+    </div>
+  </div>
+
+  <!-- 4-column metrics -->
+  <div class="grid grid-cols-4 gap-4 mb-6">
+    <div class="card rounded-lg p-4">
+      <p class="text-xs text-slate-400">Strategy Templates</p>
+      <p id="metric-templates" class="text-2xl font-bold">-</p>
+    </div>
+    <div class="card rounded-lg p-4">
+      <p class="text-xs text-slate-400">Active Strategies</p>
+      <p id="metric-active" class="text-2xl font-bold">-</p>
+    </div>
+    <div class="card rounded-lg p-4">
+      <p class="text-xs text-slate-400">Exchange Accounts</p>
+      <p id="metric-accounts" class="text-2xl font-bold">-</p>
+    </div>
+    <div class="card rounded-lg p-4">
+      <p class="text-xs text-slate-400">API Health</p>
+      <p id="metric-health" class="text-2xl font-bold">-</p>
+    </div>
+  </div>
+
+  <!-- Strategies List -->
+  <div class="card rounded-lg p-4 mb-6">
+    <div class="flex justify-between items-center mb-3">
+      <h2 class="text-lg font-semibold">🎯 전략 인스턴스</h2>
+      <button onclick="testTelegram()" class="btn-primary px-3 py-1 rounded text-sm">📨 Telegram 테스트</button>
+    </div>
+    <div class="overflow-x-auto">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>심볼</th><th>방향</th><th>상태</th><th>단계</th>
+            <th class="num">진입가</th><th class="num">포지션</th><th class="num">미실현 손익</th>
+            <th>액션</th>
+          </tr>
+        </thead>
+        <tbody id="strategies-tbody"><tr><td colspan="9" class="text-center text-slate-500">로딩 중...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Strategy Templates List -->
+  <div class="card rounded-lg p-4 mb-6">
+    <h2 class="text-lg font-semibold mb-3">📋 전략 템플릿</h2>
+    <div class="overflow-x-auto">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>이름</th><th>타입</th><th>방향</th>
+            <th class="num">레버리지</th><th class="num">총 자본</th><th>단계 구성</th><th>활성</th>
+          </tr>
+        </thead>
+        <tbody id="templates-tbody"><tr><td colspan="8" class="text-center text-slate-500">로딩 중...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Selected Strategy Detail -->
+  <div id="detail-section" class="hidden">
+    <div class="card rounded-lg p-4 mb-6">
+      <h2 class="text-lg font-semibold mb-3">📦 주문 내역 (선택 전략)</h2>
+      <div class="overflow-x-auto">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th><th>단계</th><th>유형</th><th>방향</th><th>타입</th>
+              <th class="num">가격</th><th class="num">수량</th><th class="num">체결</th><th>상태</th>
+            </tr>
+          </thead>
+          <tbody id="orders-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="hidden toast"></div>
+
+<script>
+const API_BASE = window.location.origin + '/api/v1';
+let token = localStorage.getItem('access_token');
+
+// ==================== Auth ====================
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('email').value;
+  const password = document.getElementById('password').value;
+  try {
+    const formData = new URLSearchParams();
+    formData.set('username', email);
+    formData.set('password', password);
+    const res = await fetch(API_BASE + '/auth/token', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+      body: formData,
+    });
+    if (!res.ok) throw new Error('Login failed: ' + res.status);
+    const data = await res.json();
+    token = data.access_token;
+    localStorage.setItem('access_token', token);
+    showDashboard();
+    refreshAll();
+    toast('로그인 성공', 'success');
+  } catch (err) {
+    toast('로그인 실패: ' + err.message, 'error');
+  }
+});
+
+function logout() {
+  localStorage.removeItem('access_token');
+  token = null;
+  document.getElementById('login-screen').classList.remove('hidden');
+  document.getElementById('dashboard-screen').classList.add('hidden');
+}
+
+function showDashboard() {
+  document.getElementById('login-screen').classList.add('hidden');
+  document.getElementById('dashboard-screen').classList.remove('hidden');
+  const email = document.getElementById('email').value;
+  document.getElementById('user-info').textContent = '👤 ' + email;
+}
+
+// ==================== API helper ====================
+async function api(path, opts = {}) {
+  const headers = opts.headers || {};
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof URLSearchParams)) {
+    headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(API_BASE + path, {...opts, headers});
+  if (res.status === 401) {
+    logout();
+    throw new Error('인증 만료. 다시 로그인 해주세요.');
+  }
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+// ==================== Refresh ====================
+async function refreshAll() {
+  await Promise.all([
+    refreshHealth(),
+    refreshTemplates(),
+    refreshStrategies(),
+    refreshExchangeAccounts(),
+  ]);
+}
+
+async function refreshHealth() {
+  try {
+    const res = await fetch(window.location.origin + '/health');
+    const data = await res.json();
+    document.getElementById('metric-health').textContent = data.status === 'ok' ? '✅' : '❌';
+  } catch { document.getElementById('metric-health').textContent = '❌'; }
+}
+
+async function refreshTemplates() {
+  try {
+    const data = await api('/admin/strategy-templates');
+    document.getElementById('metric-templates').textContent = data.length;
+    const tbody = document.getElementById('templates-tbody');
+    tbody.innerHTML = data.map(t => {
+      const sc = t.stages_config || {};
+      const stages = (sc.capitals || []).join(' / ');
+      return `<tr>
+        <td>${t.id}</td>
+        <td class="font-mono">${escapeHtml(t.name)}</td>
+        <td>${t.strategy_type}</td>
+        <td>${sideEmoji(t.side)} ${t.side}</td>
+        <td class="num">${t.leverage}x</td>
+        <td class="num">${fmtNum(t.total_capital)}</td>
+        <td class="text-xs text-slate-400">${stages}</td>
+        <td>${t.is_active ? '✅' : '⏸️'}</td>
+      </tr>`;
+    }).join('');
+  } catch (err) { toast('템플릿 조회 실패: ' + err.message, 'error'); }
+}
+
+async function refreshStrategies() {
+  try {
+    const data = await api('/strategies');
+    const active = data.filter(s => !['STOPPED', 'STOPPING', 'CLOSED', 'CLOSED_BY_SL'].includes(s.status));
+    document.getElementById('metric-active').textContent = active.length;
+    const tbody = document.getElementById('strategies-tbody');
+    if (data.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500">전략 없음</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.map(s => `<tr class="cursor-pointer hover:bg-slate-700" onclick="selectStrategy(${s.id})">
+      <td>${s.id}</td>
+      <td class="font-mono">${s.symbol}</td>
+      <td>${sideEmoji(s.side)} ${s.side}</td>
+      <td><span class="badge ${statusBadge(s.status)}">${s.status}</span></td>
+      <td class="num">-</td>
+      <td class="num">-</td>
+      <td class="num">-</td>
+      <td class="num">-</td>
+      <td>
+        <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-danger px-2 py-1 rounded text-xs">중지</button>
+      </td>
+    </tr>`).join('');
+  } catch (err) { toast('전략 조회 실패: ' + err.message, 'error'); }
+}
+
+async function refreshExchangeAccounts() {
+  try {
+    const data = await api('/exchange-accounts');
+    document.getElementById('metric-accounts').textContent = data.length;
+  } catch (err) { document.getElementById('metric-accounts').textContent = '?'; }
+}
+
+async function selectStrategy(id) {
+  document.getElementById('detail-section').classList.remove('hidden');
+  try {
+    const orders = await api('/orders/by-strategy/' + id);
+    const tbody = document.getElementById('orders-tbody');
+    if (orders.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500">주문 없음</td></tr>';
+      return;
+    }
+    tbody.innerHTML = orders.map(o => `<tr>
+      <td>${o.id}</td>
+      <td>${o.stage_no || '-'}</td>
+      <td>${o.purpose}</td>
+      <td>${o.side}</td>
+      <td>${o.order_type}</td>
+      <td class="num">${fmtNum(o.price)}</td>
+      <td class="num">${fmtNum(o.orig_qty)}</td>
+      <td class="num">${fmtNum(o.executed_qty)}</td>
+      <td><span class="badge ${statusBadge(o.status)}">${o.status}</span></td>
+    </tr>`).join('');
+  } catch (err) { toast('주문 조회 실패: ' + err.message, 'error'); }
+}
+
+async function stopStrategy(id) {
+  if (!confirm(`전략 #${id} 을(를) 중지하시겠습니까?\n(open 주문 모두 취소)`)) return;
+  try {
+    await api(`/strategies/${id}/stop`, {method: 'POST', body: {mode: 'cancel_only', reason: 'Manual stop from dashboard'}});
+    toast('전략 중지 요청 발송', 'success');
+    refreshStrategies();
+  } catch (err) { toast('중지 실패: ' + err.message, 'error'); }
+}
+
+async function testTelegram() {
+  try {
+    const data = await api('/admin/test-telegram', {method: 'POST'});
+    toast('Telegram 테스트 발송: ' + data.message, 'success');
+  } catch (err) { toast('Telegram 실패: ' + err.message, 'error'); }
+}
+
+// ==================== Helpers ====================
+function fmtNum(v) {
+  if (v === null || v === undefined) return '-';
+  const n = Number(v); if (isNaN(n)) return v;
+  return n.toLocaleString('en-US', {maximumFractionDigits: 8});
+}
+function sideEmoji(side) { return side === 'SHORT' ? '📉' : '📈'; }
+function statusBadge(status) {
+  if (!status) return 'badge-pending';
+  const s = status.toUpperCase();
+  if (s.includes('ACTIVE') || s.includes('FILLED') || s === 'NEW') return 'badge-active';
+  if (s.includes('WAITING') || s.includes('PENDING') || s.includes('OPEN')) return 'badge-waiting';
+  if (s.includes('STOP') || s.includes('CLOSED') || s.includes('CANCEL')) return 'badge-closed';
+  return 'badge-pending';
+}
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast toast-' + (type || 'success');
+  el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 3500);
+}
+
+// ==================== Init ====================
+if (token) {
+  showDashboard();
+  refreshAll();
+  setInterval(() => { if (!document.hidden) refreshStrategies(); }, 5000); // 5초마다 전략만 자동 새로고침
+}
+</script>
+</body>
+</html>
