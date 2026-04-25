@@ -65,6 +65,11 @@ Thumbs.db
 postgres_data/
 redis_data/
 
+# ---------- DB backups ----------
+# postgres-backup-local 출력 (실 데이터 포함)
+db_backups/
+backend/db_backups/
+
 # ---------- Backup folders ----------
 binance_auto_trader_project.backup.*
 *.bak

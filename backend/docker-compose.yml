@@ -83,5 +83,29 @@ services:
     depends_on:
       - prometheus
 
+  # PostgreSQL 자동 백업 (일/주/월 보관)
+  # - 매일 03:00 (UTC) 실행 → 호스트 ./db_backups 폴더에 저장
+  # - 일별 7개, 주별 4개, 월별 6개 보관
+  # - 복원: docker compose run --rm db psql -U postgres -d binance_auto_trader < db_backups/last/binance_auto_trader-YYYYMMDD.sql.gz (gunzip 필요)
+  db-backup:
+    image: prodrigestivill/postgres-backup-local:16
+    container_name: binance-auto-trader-db-backup
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: binance_auto_trader
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_EXTRA_OPTS: "-Z6 --schema=public --blobs"
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+      HEALTHCHECK_PORT: 8080
+    volumes:
+      - ./db_backups:/backups
+    depends_on:
+      - db
+
 volumes:
   postgres_data:
