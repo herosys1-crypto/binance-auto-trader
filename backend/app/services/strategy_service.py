@@ -1,43 +1,46 @@
 from decimal import Decimal
+from typing import Any
+
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_stage_plan import StrategyStagePlan
 from app.repositories.strategy_repository import StrategyRepository
-from app.services.strategy_calculator import StrategyCalculator, StrategyTemplate, SymbolRule
+from app.services.strategy_calculator import StrategyCalculator, SymbolRule
+
 
 class StrategyService:
     def __init__(self, db) -> None:
         self.db = db
         self.repo = StrategyRepository(db)
 
-    def _build_template(self, template_model) -> StrategyTemplate:
-        return StrategyTemplate(
-            name=template_model.name,
-            side=template_model.side,
-            leverage=template_model.leverage,
-            total_capital=Decimal(template_model.total_capital),
-            stage1_capital=Decimal(template_model.stage1_capital),
-            stage2_capital=Decimal(template_model.stage2_capital),
-            stage3_capital=Decimal(template_model.stage3_capital),
-            stage4_capital=Decimal(template_model.stage4_capital),
-            stage2_trigger_percent=Decimal(template_model.stage2_trigger_percent),
-            stage3_trigger_percent=Decimal(template_model.stage3_trigger_percent),
-            stage4_trigger_mode=template_model.stage4_trigger_mode,
-            stage4_trigger_percent=Decimal(template_model.stage4_trigger_percent or 0),
-            tp1_percent=Decimal(template_model.tp1_percent),
-            tp2_percent=Decimal(template_model.tp2_percent),
-            tp3_percent=Decimal(template_model.tp3_percent),
-            tp1_qty_ratio=Decimal(template_model.tp1_qty_ratio),
-            tp2_qty_ratio=Decimal(template_model.tp2_qty_ratio),
-            tp3_qty_ratio=Decimal(template_model.tp3_qty_ratio),
-            stop_loss_percent_of_capital=Decimal(template_model.stop_loss_percent_of_capital),
-            reentry_policy=template_model.reentry_policy,
-        )
+    @staticmethod
+    def _resolve_stages_config(template_model) -> dict[str, Any]:
+        """DB 템플릿에서 stages_config 추출. 신규 컬럼 우선, 없으면 구 컬럼에서 변환."""
+        if template_model.stages_config:
+            return dict(template_model.stages_config)
+        # 구 4단계 자동 변환 (마이그레이션이 안 됐던 row 대비)
+        return {
+            "capitals": [
+                template_model.stage1_capital,
+                template_model.stage2_capital,
+                template_model.stage3_capital,
+                template_model.stage4_capital,
+            ],
+            "trigger_percents": [
+                None,
+                template_model.stage2_trigger_percent,
+                template_model.stage3_trigger_percent,
+                None,
+            ],
+            "last_stage_trigger_mode": template_model.stage4_trigger_mode,
+            "last_stage_trigger_percent": template_model.stage4_trigger_percent,
+        }
 
     def calculate_preview(self, *, symbol: str, side: str, start_price: Decimal, strategy_template_id: int):
         template_model = self.repo.get_template(strategy_template_id)
         symbol_model = self.repo.get_symbol(symbol)
         if not template_model or not symbol_model:
             raise ValueError("Strategy template or symbol not found")
+
         symbol_rule = SymbolRule(
             symbol=symbol_model.symbol,
             tick_size=Decimal(symbol_model.tick_size or 0),
@@ -47,7 +50,19 @@ class StrategyService:
             quantity_precision=symbol_model.quantity_precision or 8,
         )
         calculator = StrategyCalculator(symbol_rule)
-        return calculator.calculate_preview(symbol=symbol, side=side, start_price=start_price, template=self._build_template(template_model))
+        stages_config = self._resolve_stages_config(template_model)
+        return calculator.calculate_preview(
+            symbol=symbol,
+            side=side,
+            start_price=start_price,
+            stages_config=stages_config,
+            leverage=template_model.leverage,
+            total_capital=Decimal(template_model.total_capital),
+            tp1_percent=Decimal(template_model.tp1_percent),
+            tp2_percent=Decimal(template_model.tp2_percent),
+            tp3_percent=Decimal(template_model.tp3_percent),
+            stop_loss_percent_of_capital=Decimal(template_model.stop_loss_percent_of_capital),
+        )
 
     def create_strategy_instance(self, *, user_id: int, exchange_account_id: int, strategy_template_id: int, symbol: str, side: str, start_price: Decimal) -> StrategyInstance:
         template_model = self.repo.get_template(strategy_template_id)
