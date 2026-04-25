@@ -8,8 +8,9 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      # 호스트 5433 → 컨테이너 5432 (호스트 충돌 방지용). 컨테이너끼리는 항상 5432 사용.
-      - "5433:5432"
+      # 보안: 127.0.0.1 로 바인딩해서 외부 네트워크에서 접근 불가.
+      # 호스트 5433 → 컨테이너 5432. 컨테이너끼리는 항상 5432 사용.
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 

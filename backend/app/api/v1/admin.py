@@ -137,10 +137,20 @@ def test_telegram(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> MessageResponse:
+    """Telegram 연결 테스트 — 한국어 + 이모지 포함된 시스템 알림 1건 발송."""
     try:
         NotificationService(db).send_system_alert(
-            title="[관리 테스트] Telegram alert",
-            body="This is a Telegram connectivity test from the admin API.",
+            title="🤖 [관리 테스트] 텔레그램 연결 확인",
+            body=(
+                "✅ 백엔드 → 텔레그램 알림 라인이 정상 동작합니다.\n"
+                "📡 채널         : TELEGRAM\n"
+                "🔧 발송 경로    : admin API (/admin/test-telegram)\n"
+                "📦 메시지 포맷  : HTML (parse_mode=HTML)\n"
+                "👤 운영자       : herosys1@gmail.com\n"
+                "\n"
+                "이제 단계 진입 / 익절 / 손절 / Kill-Switch / 청산 임박 알림이\n"
+                "자동으로 이 채널로 발송됩니다."
+            ),
         )
     except Exception as e:  # pragma: no cover
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e)) from e
