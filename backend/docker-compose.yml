@@ -35,6 +35,32 @@ services:
     volumes:
       - .:/app
 
+  scheduler:
+    build: .
+    container_name: binance-auto-trader-scheduler
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    command: ["python", "-m", "app.workers.scheduler_runner"]
+    volumes:
+      - .:/app
+
+  user-stream:
+    build: .
+    container_name: binance-auto-trader-user-stream
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    command: ["python", "-m", "app.workers.run_user_stream"]
+    volumes:
+      - .:/app
+
   prometheus:
     image: prom/prometheus:latest
     container_name: binance-auto-trader-prometheus

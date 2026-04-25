@@ -1,6 +1,11 @@
+import logging
+
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
+
+# logging.basicConfig 호출 (이게 없으면 APScheduler/우리 logger.info 가 stdout 에 안 보임)
+import app.core.logging  # noqa: F401
 from app.core.crypto import decrypt_text
 from app.core.redis_client import get_redis_client
 from app.observability.metrics import scheduler_leader_status
@@ -8,6 +13,9 @@ from app.workers.distributed_scheduler_guard import DistributedSchedulerGuard
 from app.workers.keepalive_worker import run_keepalive_once
 from app.workers.reconcile_worker import run_position_reconcile_once
 from app.workers.run_workers import run_symbol_sync_once, run_tp_sl_once
+
+logger = logging.getLogger(__name__)
+
 
 def start_scheduler() -> None:
     scheduler = BlockingScheduler(timezone="Asia/Seoul")
@@ -17,6 +25,7 @@ def start_scheduler() -> None:
         print("[scheduler] another node is leader; exiting")
         scheduler_leader_status.set(0)
         return
+    print("[scheduler] became leader, registering jobs")
     scheduler_leader_status.set(1)
 
     def guarded_job(job_name: str, ttl_seconds: int, fn):

@@ -37,7 +37,10 @@ class BinanceAPIError(Exception):
 class BinanceClient:
     """Thin but complete REST client for the USDⓈ-M Futures API."""
 
-    RECV_WINDOW_MS = 5000
+    # recvWindow: 요청 타임스탬프가 서버 시간과 최대 이만큼 어긋나도 허용.
+    # Docker Desktop on Windows 환경에서 VM 시계가 드리프트하는 경우 대비 30초로 넉넉히.
+    # 보안상 너무 크게 두면 replay 공격 창이 커지므로 운영에선 5000 권장.
+    RECV_WINDOW_MS = 30000
     DEFAULT_TIMEOUT_SECONDS = 10
 
     def __init__(
