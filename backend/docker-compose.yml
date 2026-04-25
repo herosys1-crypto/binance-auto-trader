@@ -6,7 +6,8 @@ services:
     environment:
       POSTGRES_DB: binance_auto_trader
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      # .env 의 POSTGRES_PASSWORD 를 주입. 미설정 시 'postgres' 기본값 (testnet 호환).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
       # 보안: 127.0.0.1 로 바인딩해서 외부 네트워크에서 접근 불가.
       # 호스트 5433 → 컨테이너 5432. 컨테이너끼리는 항상 5432 사용.
@@ -96,7 +97,8 @@ services:
       POSTGRES_HOST: db
       POSTGRES_DB: binance_auto_trader
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      # db 와 동일한 비번 변수 사용
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_EXTRA_OPTS: "-Z6 --schema=public --blobs"
       SCHEDULE: "@daily"
       BACKUP_KEEP_DAYS: 7
