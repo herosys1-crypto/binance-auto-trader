@@ -70,15 +70,16 @@ def create_strategy(
     return StrategyDetailResponse.model_validate(instance)
 
 
-@router.get("", response_model=list[StrategyInstanceResponse])
+@router.get("", response_model=list[StrategyDetailResponse])
 def list_strategies(
     status_filter: str | None = None,
     symbol: str | None = None,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
-) -> list[StrategyInstanceResponse]:
+) -> list[StrategyDetailResponse]:
+    """전략 인스턴스 목록 — 대시보드 표시를 위해 detail 필드까지 포함."""
     rows = StrategyRepository(db).list_strategies(user_id=user_id, status=status_filter, symbol=symbol)
-    return [StrategyInstanceResponse.model_validate(r) for r in rows]
+    return [StrategyDetailResponse.model_validate(r) for r in rows]
 
 
 @router.get("/{strategy_id}", response_model=StrategyDetailResponse)

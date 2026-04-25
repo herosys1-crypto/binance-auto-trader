@@ -252,19 +252,29 @@ async function refreshStrategies() {
       tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500">전략 없음</td></tr>';
       return;
     }
-    tbody.innerHTML = data.map(s => `<tr class="cursor-pointer hover:bg-slate-700" onclick="selectStrategy(${s.id})">
-      <td>${s.id}</td>
-      <td class="font-mono">${s.symbol}</td>
-      <td>${sideEmoji(s.side)} ${s.side}</td>
-      <td><span class="badge ${statusBadge(s.status)}">${s.status}</span></td>
-      <td class="num">-</td>
-      <td class="num">-</td>
-      <td class="num">-</td>
-      <td class="num">-</td>
-      <td>
-        <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-danger px-2 py-1 rounded text-xs">중지</button>
-      </td>
-    </tr>`).join('');
+    tbody.innerHTML = data.map(s => {
+      const stage = s.current_stage > 0 ? `${s.current_stage}` : '-';
+      const entry = s.avg_entry_price ? fmtNum(s.avg_entry_price) : '-';
+      const qty = s.current_position_qty && Number(s.current_position_qty) !== 0 ? fmtNum(s.current_position_qty) : '-';
+      const pnl = s.unrealized_pnl !== undefined && s.unrealized_pnl !== null ? fmtNum(s.unrealized_pnl) : '-';
+      const pnlNum = Number(s.unrealized_pnl || 0);
+      const pnlClass = pnlNum > 0 ? 'text-green-400' : pnlNum < 0 ? 'text-red-400' : '';
+      const isClosed = ['STOPPED', 'STOPPING', 'CLOSED', 'CLOSED_BY_SL'].includes((s.status || '').toUpperCase());
+      const stopBtn = isClosed
+        ? `<span class="text-slate-500 text-xs">-</span>`
+        : `<button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-danger px-2 py-1 rounded text-xs">중지</button>`;
+      return `<tr class="cursor-pointer hover:bg-slate-700" onclick="selectStrategy(${s.id})">
+        <td>${s.id}</td>
+        <td class="font-mono">${s.symbol}</td>
+        <td>${sideEmoji(s.side)} ${s.side}</td>
+        <td><span class="badge ${statusBadge(s.status)}">${s.status}</span></td>
+        <td class="num">${stage}</td>
+        <td class="num">${entry}</td>
+        <td class="num">${qty}</td>
+        <td class="num ${pnlClass}">${pnl}</td>
+        <td>${stopBtn}</td>
+      </tr>`;
+    }).join('');
   } catch (err) { toast('전략 조회 실패: ' + err.message, 'error'); }
 }
 
