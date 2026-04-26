@@ -180,6 +180,54 @@ def get_strategy(
     return StrategyDetailResponse.model_validate(strategy)
 
 
+@router.get("/{strategy_id}/blueprint")
+def get_strategy_blueprint(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """이전 전략의 모든 설정을 한 번에 반환 — 새 전략 시작 모달에서 재사용용.
+
+    반환: {
+      symbol, side, leverage, exchange_account_id, start_price,
+      capitals: [...], trigger_percents: [...],
+      tp1_percent, tp2_percent, tp3_percent,
+      tp1_qty_ratio, tp2_qty_ratio, tp3_qty_ratio,
+      stop_loss_percent_of_capital,
+      last_stage_trigger_mode, last_stage_trigger_percent,
+    }
+    """
+    from app.models.strategy_template import StrategyTemplate
+
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+    tpl = db.get(StrategyTemplate, strategy.strategy_template_id)
+    if not tpl:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template missing")
+
+    sc = tpl.stages_config or {}
+    return {
+        "source_strategy_id": strategy.id,
+        "symbol": strategy.symbol,
+        "side": strategy.side,
+        "leverage": tpl.leverage,
+        "exchange_account_id": strategy.exchange_account_id,
+        "start_price": str(strategy.start_price) if strategy.start_price else None,
+        "capitals": sc.get("capitals") or [],
+        "trigger_percents": sc.get("trigger_percents") or [],
+        "last_stage_trigger_mode": sc.get("last_stage_trigger_mode"),
+        "last_stage_trigger_percent": sc.get("last_stage_trigger_percent"),
+        "tp1_percent": str(tpl.tp1_percent),
+        "tp2_percent": str(tpl.tp2_percent),
+        "tp3_percent": str(tpl.tp3_percent),
+        "tp1_qty_ratio": str(tpl.tp1_qty_ratio),
+        "tp2_qty_ratio": str(tpl.tp2_qty_ratio),
+        "tp3_qty_ratio": str(tpl.tp3_qty_ratio),
+        "stop_loss_percent_of_capital": str(tpl.stop_loss_percent_of_capital),
+    }
+
+
 @router.post("/{strategy_id}/start", response_model=StrategyActionResponse)
 def start_strategy(
     strategy_id: int,

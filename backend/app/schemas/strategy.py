@@ -55,6 +55,7 @@ class StrategyInstanceResponse(BaseModel):
 class StrategyDetailResponse(StrategyInstanceResponse):
     leverage: int
     current_stage: int
+    start_price: Decimal | None = None      # 운영자가 입력한 1단계 LIMIT 진입요청가
     avg_entry_price: Decimal | None = None
     current_position_qty: Decimal
     invested_capital: Decimal

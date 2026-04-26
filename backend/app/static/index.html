@@ -157,8 +157,17 @@
        style="background:rgba(0,0,0,0.7); padding:20px;">
     <div class="card rounded-xl p-6" style="max-width:720px; width:100%; max-height:90vh; overflow-y:auto;">
       <div class="flex justify-between items-center mb-4">
-        <h2 class="text-xl font-bold">➕ 새 전략 시작</h2>
+        <h2 id="cm-title" class="text-xl font-bold">➕ 새 전략 시작</h2>
         <button onclick="closeCreateModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
+      </div>
+
+      <!-- 수정 모드 배너 -->
+      <div id="cm-edit-banner" class="hidden alert-bar mb-3" style="background:linear-gradient(90deg,rgba(245,158,11,0.18),rgba(245,158,11,0.05)); border-color:rgba(245,158,11,0.5)">
+        <span class="text-2xl">✏️</span>
+        <div class="flex-1">
+          <div class="font-semibold text-yellow-300">수정 모드</div>
+          <div class="text-sm text-slate-300" id="cm-edit-banner-detail">시작 시 기존 전략은 자동 종료되고, 새 설정으로 새 전략이 시작됩니다.</div>
+        </div>
       </div>
 
       <!-- 1) 거래소 계정 -->
@@ -189,27 +198,110 @@
         <label class="block text-sm font-semibold mb-2 text-slate-300">3️⃣  전략 구성</label>
         <div class="flex gap-2 mb-3">
           <button id="cm-mode-direct" onclick="setCmMode('direct')"
-            class="btn flex-1 btn-primary">📝 직접 입력 (1~10단계)</button>
+            class="btn flex-1 btn-primary" style="font-size:12px;padding:6px 10px">📝 직접 입력</button>
           <button id="cm-mode-template" onclick="setCmMode('template')"
-            class="btn flex-1 btn-ghost">📋 템플릿 선택</button>
+            class="btn flex-1 btn-ghost" style="font-size:12px;padding:6px 10px">📋 템플릿 선택</button>
+          <button id="cm-mode-prev" onclick="setCmMode('prev')"
+            class="btn flex-1 btn-ghost" style="font-size:12px;padding:6px 10px">📂 이전 전략 불러오기</button>
         </div>
 
         <!-- 직접 입력 모드 -->
         <div id="cm-direct-panel">
-          <p class="text-xs text-slate-400 mb-3">
-            각 단계에 투입할 USDT 금액을 입력하세요 (빈 칸은 그 단계 사용 안 함).<br>
-            트리거 가격: <strong>2단계=+10%</strong>, <strong>3단계 이후=+20%</strong>, <strong>마지막 단계=청산가 -5%</strong> 자동 적용.<br>
-            레버리지: <strong>숏=2x</strong>, <strong>롱=1x</strong> 자동 적용.
+          <p class="text-xs text-slate-400 mb-2">
+            단계별 USDT 투입금 + 트리거 % 를 직접 입력하세요. 빈 칸은 사용 안 함.<br>
+            기본값 — 2단계=+10%, 3단계 이후=+20% (수정 가능), 마지막 단계는 청산가 -5% 자동.
           </p>
-          <div class="grid grid-cols-5 gap-2" id="cm-capitals-grid">
-            <!-- 10개 입력박스 JS 로 채움 -->
-          </div>
+          <div id="cm-capitals-grid" class="space-y-1"><!-- JS 로 10행 입력 채움 --></div>
           <p id="cm-capitals-summary" class="text-xs text-slate-400 mt-2">합계: 0 USDT (0단계)</p>
+
+          <!-- TP / SL 가변 설정 -->
+          <details class="mt-3 border border-slate-700 rounded">
+            <summary class="cursor-pointer px-3 py-2 text-sm bg-slate-800 rounded">⚙️ 익절/손절 설정 (기본값 사용 가능)</summary>
+            <div class="p-3 space-y-2">
+              <div class="grid grid-cols-3 gap-2 text-xs">
+                <div>
+                  <label class="text-slate-400">TP1 이익 %</label>
+                  <input id="cm-tp1-pct" type="number" step="0.1" value="10" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+                <div>
+                  <label class="text-slate-400">TP2 이익 %</label>
+                  <input id="cm-tp2-pct" type="number" step="0.1" value="20" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+                <div>
+                  <label class="text-slate-400">TP3 이익 %</label>
+                  <input id="cm-tp3-pct" type="number" step="0.1" value="30" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+              </div>
+              <div class="grid grid-cols-3 gap-2 text-xs">
+                <div>
+                  <label class="text-slate-400">TP1 청산 수량 %</label>
+                  <input id="cm-tp1-qty" type="number" step="0.1" value="25" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+                <div>
+                  <label class="text-slate-400">TP2 청산 수량 %<span class="text-slate-600">(of 남은)</span></label>
+                  <input id="cm-tp2-qty" type="number" step="0.1" value="50" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+                <div>
+                  <label class="text-slate-400">TP3 청산 수량 %<span class="text-slate-600">(of 남은)</span></label>
+                  <input id="cm-tp3-qty" type="number" step="0.1" value="100" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+              </div>
+              <div class="grid grid-cols-1 gap-2 text-xs">
+                <div>
+                  <label class="text-slate-400">손절 — 총 자본 대비 손실 %</label>
+                  <input id="cm-sl-pct" type="number" step="0.1" value="50" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+              </div>
+              <p class="text-xs text-slate-500">트레일링 익절은 별도 — 피크 ≥ TP2 % 이상 도달 후 다시 TP2 % 이하로 회귀 시 전량 청산 (자동, 코드 레벨).</p>
+            </div>
+          </details>
         </div>
 
         <!-- 템플릿 선택 모드 -->
         <div id="cm-template-panel" class="hidden">
           <div id="cm-templates" class="space-y-1"><span class="text-slate-500 text-sm">로딩 중...</span></div>
+        </div>
+
+        <!-- 이전 전략 불러오기 모드 -->
+        <div id="cm-prev-panel" class="hidden">
+          <p class="text-xs text-slate-400 mb-2">
+            이전에 만든 전략을 불러와 종목/시작가/세부값만 바꿔서 재사용할 수 있어요.
+          </p>
+          <div id="cm-prev-list" class="space-y-1 max-h-72 overflow-y-auto"><span class="text-slate-500 text-sm">로딩 중...</span></div>
+        </div>
+      </div>
+
+      <!-- 시세 정보 패널 -->
+      <div id="cm-market" class="card rounded-lg p-3 mb-3 bg-slate-900 border-slate-700">
+        <div class="flex justify-between items-start mb-2">
+          <div>
+            <div class="text-xs text-slate-400">현재가 (Binance)</div>
+            <div id="cm-mkt-price" class="text-2xl font-bold text-blue-300">-</div>
+          </div>
+          <div class="text-right text-xs">
+            <div id="cm-mkt-change" class="font-semibold">-</div>
+            <div class="text-slate-500">24h 변동</div>
+          </div>
+        </div>
+        <div class="grid grid-cols-3 gap-2 text-xs mb-2">
+          <div><span class="text-slate-500">24h 고가</span> <span id="cm-mkt-high" class="ml-1 text-green-400">-</span></div>
+          <div><span class="text-slate-500">24h 저가</span> <span id="cm-mkt-low" class="ml-1 text-red-400">-</span></div>
+          <div><span class="text-slate-500">24h 거래량</span> <span id="cm-mkt-vol" class="ml-1 text-slate-300">-</span></div>
+        </div>
+        <!-- 미니 차트 (24h, 1h 캔들 = 24개 점) -->
+        <svg id="cm-chart" viewBox="0 0 400 80" class="w-full" style="height:80px;">
+          <rect x="0" y="0" width="400" height="80" fill="transparent" />
+          <text x="200" y="44" text-anchor="middle" class="text-xs" fill="#64748b">차트 로딩 중...</text>
+        </svg>
+        <div class="flex gap-2 mt-2 items-center text-xs">
+          <span class="text-slate-400">시작가 자동:</span>
+          <button onclick="fillStartPrice('current')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">현재가</button>
+          <button onclick="fillStartPrice('+1')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">+1%</button>
+          <button onclick="fillStartPrice('+5')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">+5%</button>
+          <button onclick="fillStartPrice('+10')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">+10%</button>
+          <button onclick="fillStartPrice('-1')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">-1%</button>
+          <button onclick="fillStartPrice('-5')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">-5%</button>
+          <button onclick="fillStartPrice('-10')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">-10%</button>
         </div>
       </div>
 
@@ -221,7 +313,7 @@
             class="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
           <button onclick="calcPreview()" class="btn-primary btn">📋 미리보기</button>
         </div>
-        <p class="text-xs text-slate-500 mt-1">SHORT: 현재가 보다 약간 높게 / LONG: 현재가 보다 약간 낮게 추천</p>
+        <p class="text-xs text-slate-500 mt-1">SHORT: 현재가보다 약간 위 / LONG: 현재가보다 약간 아래 추천 (위 버튼으로 자동 채움 가능)</p>
       </div>
 
       <!-- 미리보기 결과 -->
@@ -262,13 +354,14 @@
             <th>방향</th>
             <th>상태</th>
             <th>단계 진행</th>
+            <th class="num">진입요청가</th>
             <th class="num">평균 진입가</th>
             <th class="num">포지션</th>
             <th class="num">미실현 손익</th>
             <th style="width:140px">액션</th>
           </tr>
         </thead>
-        <tbody id="strategies-tbody"><tr><td colspan="9" class="text-center text-slate-500 py-6">로딩 중...</td></tr></tbody>
+        <tbody id="strategies-tbody"><tr><td colspan="10" class="text-center text-slate-500 py-6">로딩 중...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -527,7 +620,7 @@ async function refreshStrategies() {
 
     const tbody = document.getElementById('strategies-tbody');
     if (data.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500 py-6">전략 없음</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" class="text-center text-slate-500 py-6">전략 없음</td></tr>';
       return;
     }
 
@@ -545,7 +638,7 @@ async function refreshStrategies() {
     if (hideTerm) visible = data.filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()));
     const hiddenCount = data.length - visible.length;
     if (visible.length === 0 && hiddenCount > 0) {
-      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-slate-500 py-6">진행 중인 전략 없음 (종료 ${hiddenCount}건 숨김)</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" class="text-center text-slate-500 py-6">진행 중인 전략 없음 (종료 ${hiddenCount}건 숨김)</td></tr>`;
       return;
     }
 
@@ -568,14 +661,19 @@ async function refreshStrategies() {
       const isTerminal = TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
       const stopBtn = isTerminal
         ? '<span class="text-slate-500 text-xs">-</span>'
-        : `<button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="padding:4px 10px">⏸ 정지</button>
-           <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs ml-1" style="padding:4px 10px">🛑</button>`;
+        : `<button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="padding:4px 8px" title="설정 수정 (기존 전략 종료 후 새 설정으로 재시작)">✏️</button>
+           <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="padding:4px 8px" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
+           <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="padding:4px 8px" title="긴급 종료 (포지션 시장가 청산)">🛑</button>`;
+      const startPx = s.start_price && Number(s.start_price) > 0
+        ? `<span class="text-yellow-400" title="운영자가 입력한 1단계 LIMIT 가격">${fmtNum(s.start_price)}</span>`
+        : '<span class="text-slate-500">-</span>';
       return `<tr class="row-clickable" onclick="selectStrategy(${s.id})">
         <td>#${s.id}</td>
         <td class="font-mono text-blue-300">${s.symbol}</td>
         <td>${sideBadge(s.side)}</td>
         <td><span class="badge badge-${info.sig}">${info.icon} ${info.ko}</span></td>
         <td>${stage}</td>
+        <td class="num">${startPx}</td>
         <td class="num">${entry}</td>
         <td class="num">${qty}</td>
         <td class="num">${pnl}</td>
@@ -719,45 +817,169 @@ let cmState = {
   preview: null,
 };
 
-async function openCreateModal() {
+async function openCreateModal(editStrategyId) {
   document.getElementById('create-modal').classList.remove('hidden');
   document.getElementById('cm-preview').classList.add('hidden');
   document.getElementById('cm-submit').disabled = true;
   cmState = { accountId: null, side: 'SHORT', templateId: null, mode: 'direct',
-              capitals: ['', '', '', '', '', '', '', '', '', ''], preview: null };
+              capitals: ['', '', '', '', '', '', '', '', '', ''], preview: null,
+              editingStrategyId: editStrategyId || null };
   buildCapitalsGrid();
+  // 입력값 초기화 (이전에 모달 열었던 잔재 제거)
+  for (let i = 1; i <= 10; i++) {
+    const cap = document.getElementById('cm-cap-' + i); if (cap) cap.value = '';
+    const trg = document.getElementById('cm-trg-' + i); if (trg) trg.value = '';
+  }
+  document.getElementById('cm-tp1-pct').value = '10';
+  document.getElementById('cm-tp2-pct').value = '20';
+  document.getElementById('cm-tp3-pct').value = '30';
+  document.getElementById('cm-tp1-qty').value = '25';
+  document.getElementById('cm-tp2-qty').value = '50';
+  document.getElementById('cm-tp3-qty').value = '100';
+  document.getElementById('cm-sl-pct').value = '50';
+  document.getElementById('cm-start-price').value = '';
   await Promise.all([loadCmAccounts(), loadCmTemplates(), loadCmSymbols()]);
   setCmSide('SHORT');
   setCmMode('direct');
+  // 수정 모드면 배너 표시 + blueprint 자동 로드
+  const banner = document.getElementById('cm-edit-banner');
+  const title = document.getElementById('cm-title');
+  const submit = document.getElementById('cm-submit');
+  if (editStrategyId) {
+    banner.classList.remove('hidden');
+    document.getElementById('cm-edit-banner-detail').textContent =
+      `전략 #${editStrategyId} 의 미체결 주문이 모두 취소된 후, 아래 설정으로 새 전략이 시작됩니다.`;
+    title.textContent = `✏️ 전략 #${editStrategyId} 수정`;
+    submit.textContent = '🔄 종료 후 새로 시작';
+    await loadPrevBlueprint(editStrategyId, /*silent=*/true);
+  } else {
+    banner.classList.add('hidden');
+    title.textContent = '➕ 새 전략 시작';
+    submit.textContent = '🚀 전략 시작';
+  }
+}
+
+async function editStrategy(id) {
+  if (!confirm(`전략 #${id} 의 설정을 수정하시겠어요?\n\n- 기존 전략의 미체결 주문은 모두 취소됩니다.\n- 이미 체결된 포지션은 그대로 유지됩니다.\n- 새 설정으로 새 전략이 시작됩니다.`)) return;
+  await openCreateModal(id);
 }
 
 function setCmMode(mode) {
   cmState.mode = mode;
   cmState.preview = null;
   document.getElementById('cm-preview').classList.add('hidden');
-  if (mode === 'direct') {
-    document.getElementById('cm-mode-direct').className = 'btn flex-1 btn-primary';
-    document.getElementById('cm-mode-template').className = 'btn flex-1 btn-ghost';
-    document.getElementById('cm-direct-panel').classList.remove('hidden');
-    document.getElementById('cm-template-panel').classList.add('hidden');
-  } else {
-    document.getElementById('cm-mode-direct').className = 'btn flex-1 btn-ghost';
-    document.getElementById('cm-mode-template').className = 'btn flex-1 btn-primary';
-    document.getElementById('cm-direct-panel').classList.add('hidden');
-    document.getElementById('cm-template-panel').classList.remove('hidden');
-  }
+  // 버튼 스타일
+  const modes = ['direct', 'template', 'prev'];
+  modes.forEach(m => {
+    const btn = document.getElementById('cm-mode-' + m);
+    btn.className = 'btn flex-1' + (m === mode ? ' btn-primary' : ' btn-ghost');
+    btn.style.fontSize = '12px';
+    btn.style.padding = '6px 10px';
+  });
+  // 패널 표시
+  document.getElementById('cm-direct-panel').classList.toggle('hidden', mode !== 'direct');
+  document.getElementById('cm-template-panel').classList.toggle('hidden', mode !== 'template');
+  document.getElementById('cm-prev-panel').classList.toggle('hidden', mode !== 'prev');
+  if (mode === 'prev') loadCmPrevStrategies();
   updateCmSubmit();
+}
+
+async function loadCmPrevStrategies() {
+  try {
+    const data = await api('/strategies');
+    const list = document.getElementById('cm-prev-list');
+    if (!data.length) {
+      list.innerHTML = '<p class="text-slate-500 text-sm">이전 전략이 없습니다.</p>';
+      return;
+    }
+    list.innerHTML = data.map(s => {
+      const sideKo = s.side === 'SHORT' ? '📉 숏' : '📈 롱';
+      const status = (s.status || '').toUpperCase();
+      const statusKo = (STATUS_MAP[status] || {ko: status}).ko;
+      return `<label class="flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-slate-700">
+        <input type="radio" name="cm-prev" value="${s.id}" onchange="loadPrevBlueprint(${s.id})" />
+        <span class="font-mono text-blue-300">#${s.id}</span>
+        <span class="font-semibold">${s.symbol}</span>
+        <span class="badge ${s.side==='SHORT'?'badge-red':'badge-green'}">${sideKo}</span>
+        <span class="badge badge-gray">${statusKo}</span>
+        <span class="text-xs text-slate-400 ml-auto">레버리지 ${s.leverage}x</span>
+      </label>`;
+    }).join('');
+  } catch (e) { toast('이전 전략 조회 실패: '+e.message, 'error'); }
+}
+
+async function loadPrevBlueprint(strategyId, silent) {
+  try {
+    const bp = await api(`/strategies/${strategyId}/blueprint`);
+    // 1) 거래소 계정 자동 선택 (있으면)
+    const accountRadio = document.querySelector(`input[name="cm-account"][value="${bp.exchange_account_id}"]`);
+    if (accountRadio) { accountRadio.checked = true; cmState.accountId = bp.exchange_account_id; }
+    // 2) 심볼 + 방향
+    document.getElementById('cm-symbol').value = bp.symbol;
+    setCmSide(bp.side);
+    // 3) 직접 입력 모드로 전환 + capitals/trigger_percents 채우기
+    setCmMode('direct');
+    for (let i = 1; i <= 10; i++) {
+      const cap = (bp.capitals || [])[i-1];
+      const trg = (bp.trigger_percents || [])[i-1];
+      document.getElementById('cm-cap-' + i).value = cap !== undefined && cap !== null ? cap : '';
+      if (i > 1) {
+        document.getElementById('cm-trg-' + i).value = trg !== undefined && trg !== null ? trg : '';
+      }
+    }
+    // 4) TP/SL 채우기
+    document.getElementById('cm-tp1-pct').value = bp.tp1_percent;
+    document.getElementById('cm-tp2-pct').value = bp.tp2_percent;
+    document.getElementById('cm-tp3-pct').value = bp.tp3_percent;
+    document.getElementById('cm-tp1-qty').value = bp.tp1_qty_ratio;
+    document.getElementById('cm-tp2-qty').value = bp.tp2_qty_ratio;
+    document.getElementById('cm-tp3-qty').value = bp.tp3_qty_ratio;
+    document.getElementById('cm-sl-pct').value = bp.stop_loss_percent_of_capital;
+    // 5) 시작가 — 수정 모드면 원래 시작가 유지, 일반 불러오기는 비움
+    if (cmState.editingStrategyId && bp.start_price) {
+      document.getElementById('cm-start-price').value = bp.start_price;
+    } else {
+      document.getElementById('cm-start-price').value = '';
+    }
+    onCapitalsChange();
+    if (!silent) {
+      toast(`전략 #${bp.source_strategy_id} 설정을 불러왔습니다. 종목/시작가만 변경하세요`, 'success');
+    }
+    // 시세 다시 로드
+    loadCmMarketInfo();
+  } catch (e) { toast('불러오기 실패: '+e.message, 'error'); }
+}
+
+function _defaultTriggerPct(stageNo) {
+  // 1단계는 IMMEDIATE, 2단계=10, 3단계 이후=20
+  if (stageNo === 1) return '';
+  if (stageNo === 2) return '10';
+  return '20';
 }
 
 function buildCapitalsGrid() {
   const grid = document.getElementById('cm-capitals-grid');
-  let html = '';
+  // 헤더 + 10행 (단계 / capital / trigger %)
+  let html = `<div class="grid grid-cols-12 gap-2 text-xs text-slate-500 px-1">
+    <div class="col-span-2">단계</div>
+    <div class="col-span-5">투입 자본 (USDT)</div>
+    <div class="col-span-5">트리거 %</div>
+  </div>`;
   for (let i = 1; i <= 10; i++) {
-    html += `<div>
-      <label class="block text-xs text-slate-500 mb-1">${i}단계</label>
-      <input type="number" min="0" step="any" id="cm-cap-${i}" placeholder="${i===1?'필수':''}"
-        oninput="onCapitalsChange()"
-        class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm" />
+    const triggerPlaceholder = i === 1 ? '즉시 (자동)' : (i === 10 ? '청산가 -5% (자동)' : _defaultTriggerPct(i));
+    const triggerDisabled = i === 1 ? 'disabled' : '';
+    html += `<div class="grid grid-cols-12 gap-2 items-center">
+      <div class="col-span-2 text-sm text-slate-400">${i}단계</div>
+      <div class="col-span-5">
+        <input type="number" min="0" step="any" id="cm-cap-${i}" placeholder="${i===1?'필수':''}"
+          oninput="onCapitalsChange()"
+          class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm" />
+      </div>
+      <div class="col-span-5">
+        <input type="number" min="0" step="0.1" id="cm-trg-${i}" placeholder="${triggerPlaceholder}" ${triggerDisabled}
+          oninput="onCapitalsChange()"
+          class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm ${triggerDisabled?'opacity-50':''}" />
+      </div>
     </div>`;
   }
   grid.innerHTML = html;
@@ -776,6 +998,37 @@ function onCapitalsChange() {
   cmState.preview = null;
   document.getElementById('cm-preview').classList.add('hidden');
   updateCmSubmit();
+}
+
+function _collectDirectInputs() {
+  const caps = [];
+  const triggers = [];
+  for (let i = 1; i <= 10; i++) {
+    const v = document.getElementById('cm-cap-' + i).value;
+    if (v === '' || v === null || v === undefined || Number(v) === 0) break;
+    caps.push(String(v));
+    if (i === 1) {
+      triggers.push(null);  // 1단계는 IMMEDIATE
+    } else {
+      const t = document.getElementById('cm-trg-' + i).value;
+      triggers.push(t === '' ? null : String(t));
+    }
+  }
+  // 마지막 단계의 trigger 는 LIQUIDATION_BUFFER 로 처리되므로 None
+  if (triggers.length > 1) triggers[triggers.length - 1] = null;
+  return { capitals: caps, trigger_percents: triggers };
+}
+
+function _collectTpSl() {
+  return {
+    tp1_percent: document.getElementById('cm-tp1-pct').value || '10',
+    tp2_percent: document.getElementById('cm-tp2-pct').value || '20',
+    tp3_percent: document.getElementById('cm-tp3-pct').value || '30',
+    tp1_qty_ratio: document.getElementById('cm-tp1-qty').value || '25',
+    tp2_qty_ratio: document.getElementById('cm-tp2-qty').value || '50',
+    tp3_qty_ratio: document.getElementById('cm-tp3-qty').value || '100',
+    stop_loss_percent_of_capital: document.getElementById('cm-sl-pct').value || '50',
+  };
 }
 
 function closeCreateModal() {
@@ -833,6 +1086,99 @@ async function loadCmSymbols() {
     const list = document.getElementById('cm-symbol-list');
     list.innerHTML = data.map(s => `<option value="${s.symbol}"></option>`).join('');
   } catch { /* symbols 없으면 무시 — 사용자 직접 입력 가능 */ }
+  // 심볼 입력 변경 시 시세 자동 로드 (debounce)
+  const symEl = document.getElementById('cm-symbol');
+  if (!symEl.dataset.bound) {
+    let timer = null;
+    const trigger = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => loadCmMarketInfo(), 400);
+    };
+    symEl.addEventListener('input', trigger);
+    symEl.addEventListener('change', trigger);
+    symEl.dataset.bound = '1';
+  }
+  // 거래소 계정 변경 시 testnet 여부 변경 → 시세 다시
+  loadCmMarketInfo();
+}
+
+let _cmCurrentPrice = null;
+
+async function loadCmMarketInfo() {
+  const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
+  if (!symbol) return;
+  // 선택된 거래소 계정의 testnet 여부
+  const checked = document.querySelector('input[name="cm-account"]:checked');
+  const isTestnet = checked ? !!checked.closest('label').querySelector('.badge-yellow') : true;
+  try {
+    const [tk, kl] = await Promise.all([
+      fetch(`${window.location.origin}/api/v1/market/ticker24h?symbol=${symbol}&testnet=${isTestnet}`).then(r => r.json()),
+      fetch(`${window.location.origin}/api/v1/market/klines?symbol=${symbol}&interval=1h&limit=24&testnet=${isTestnet}`).then(r => r.json()),
+    ]);
+    if (tk && tk.lastPrice) {
+      _cmCurrentPrice = Number(tk.lastPrice);
+      const changePct = Number(tk.priceChangePercent || 0);
+      const changeColor = changePct >= 0 ? 'text-green-400' : 'text-red-400';
+      const arrow = changePct >= 0 ? '▲' : '▼';
+      document.getElementById('cm-mkt-price').textContent = fmtNum(_cmCurrentPrice);
+      const changeEl = document.getElementById('cm-mkt-change');
+      changeEl.textContent = `${arrow} ${Math.abs(changePct).toFixed(2)}%`;
+      changeEl.className = 'font-semibold ' + changeColor;
+      document.getElementById('cm-mkt-high').textContent = fmtNum(tk.highPrice);
+      document.getElementById('cm-mkt-low').textContent = fmtNum(tk.lowPrice);
+      document.getElementById('cm-mkt-vol').textContent = fmtNum(Number(tk.quoteVolume || 0)) + ' USDT';
+    } else {
+      document.getElementById('cm-mkt-price').textContent = '-';
+    }
+    if (Array.isArray(kl) && kl.length > 0) {
+      _drawCmChart(kl.map(c => Number(c[4])));  // close prices
+    }
+  } catch (e) {
+    document.getElementById('cm-mkt-price').textContent = '시세 조회 실패';
+    console.warn('Market info error', e);
+  }
+}
+
+function _drawCmChart(closes) {
+  if (!closes || closes.length < 2) return;
+  const svg = document.getElementById('cm-chart');
+  const W = 400, H = 80, P = 4;
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const range = (max - min) || 1;
+  const stepX = (W - P*2) / (closes.length - 1);
+  const points = closes.map((c, i) => {
+    const x = P + i * stepX;
+    const y = P + (H - P*2) * (1 - (c - min) / range);
+    return [x, y];
+  });
+  const path = points.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(2) + ',' + p[1].toFixed(2)).join(' ');
+  const last = closes[closes.length - 1];
+  const first = closes[0];
+  const isUp = last >= first;
+  const color = isUp ? '#10b981' : '#ef4444';
+  const fillColor = isUp ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)';
+  // 면적 채우기 영역
+  const area = `${path} L${points[points.length-1][0].toFixed(2)},${H - P} L${points[0][0].toFixed(2)},${H - P} Z`;
+  svg.innerHTML = `
+    <path d="${area}" fill="${fillColor}" />
+    <path d="${path}" fill="none" stroke="${color}" stroke-width="1.5" />
+    <circle cx="${points[points.length-1][0].toFixed(2)}" cy="${points[points.length-1][1].toFixed(2)}" r="3" fill="${color}" />
+    <text x="${W-P}" y="14" text-anchor="end" class="text-xs" fill="#64748b" font-size="10">24h × 1h</text>
+  `;
+}
+
+function fillStartPrice(mode) {
+  if (_cmCurrentPrice === null || isNaN(_cmCurrentPrice)) {
+    return toast('현재가 조회가 안 됩니다. 직접 입력하세요', 'warning');
+  }
+  let val = _cmCurrentPrice;
+  if (mode !== 'current') {
+    const pct = Number(mode);  // '+5' → 5, '-3' → -3
+    val = _cmCurrentPrice * (1 + pct / 100);
+  }
+  document.getElementById('cm-start-price').value = val.toFixed(2);
+  document.getElementById('cm-start-price').focus();
 }
 
 function setCmSide(side) {
@@ -875,18 +1221,25 @@ async function calcPreview() {
 
   if (cmState.mode === 'direct') {
     // 직접 입력 모드 — 인라인 미리보기 (DB 에 템플릿 안 만듦)
-    const caps = _filledCapitals();
-    if (caps.length === 0) return toast('1단계 투자금액 이상을 입력하세요', 'warning');
+    const inp = _collectDirectInputs();
+    if (inp.capitals.length === 0) return toast('1단계 투자금액 이상을 입력하세요', 'warning');
+    const tpsl = _collectTpSl();
     try {
       const data = await api('/strategies/preview-inline', {
         method: 'POST',
         body: {
           symbol, side: cmState.side, start_price: startPrice,
-          capitals: caps,
+          capitals: inp.capitals,
+          trigger_percents: inp.trigger_percents,
+          tp1_percent: tpsl.tp1_percent,
+          tp2_percent: tpsl.tp2_percent,
+          tp3_percent: tpsl.tp3_percent,
+          stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
         },
       });
       cmState.preview = data;
-      cmState._directCaps = caps;  // submit 시 사용
+      cmState._directInputs = inp;
+      cmState._directTpsl = tpsl;
       _renderPreview(data);
       updateCmSubmit();
       return;
@@ -934,16 +1287,36 @@ function _renderPreview(data) {
 async function submitCreate() {
   const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
   const startPrice = document.getElementById('cm-start-price').value;
-  if (!confirm(`${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략을 시작합니다.\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요? (testnet 거래소면 실거래 발생)`)) return;
+  const editingId = cmState.editingStrategyId;
+  const confirmMsg = editingId
+    ? `🔄 전략 #${editingId} 수정\n\n1. 기존 미체결 주문 자동 취소\n2. 새 설정으로 ${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략 시작\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요?`
+    : `${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략을 시작합니다.\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요? (testnet 거래소면 실거래 발생)`;
+  if (!confirm(confirmMsg)) return;
   try {
     document.getElementById('cm-submit').disabled = true;
-    document.getElementById('cm-submit').textContent = '⏳ 생성 중...';
+    document.getElementById('cm-submit').textContent = editingId ? '⏳ 종료 + 재시작 중...' : '⏳ 생성 중...';
+
+    // 수정 모드 — 기존 전략 먼저 cancel_only 로 정지
+    if (editingId) {
+      try {
+        await api(`/strategies/${editingId}/stop`, {
+          method: 'POST',
+          body: { mode: 'cancel_only', reason: '수정 모드 — 새 설정으로 재시작' },
+        });
+        toast(`전략 #${editingId} 미체결 주문 취소 완료`, 'success');
+      } catch (e) {
+        // 이미 종료됐거나 주문 없으면 무시하고 계속
+        console.warn('Cancel old strategy:', e.message);
+      }
+    }
 
     // 직접 입력 모드 — 이 시점에만 템플릿 1번 생성
     let templateId = cmState.templateId;
     if (cmState.mode === 'direct') {
       const ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
       const leverage = cmState.side === 'SHORT' ? 2 : 1;
+      const inp = cmState._directInputs || _collectDirectInputs();
+      const tpsl = cmState._directTpsl || _collectTpSl();
       const tplCreated = await api('/admin/strategy-templates', {
         method: 'POST',
         body: {
@@ -951,11 +1324,15 @@ async function submitCreate() {
           strategy_type: cmState.side === 'SHORT' ? 'DYNAMIC_SHORT' : 'DYNAMIC_LONG',
           side: cmState.side,
           leverage,
-          capitals: cmState._directCaps || _filledCapitals(),
-          trigger_percents: null,
-          tp1_percent: '10', tp2_percent: '20', tp3_percent: '30',
-          tp1_qty_ratio: '25', tp2_qty_ratio: '50', tp3_qty_ratio: '25',
-          stop_loss_percent_of_capital: '50',
+          capitals: inp.capitals,
+          trigger_percents: inp.trigger_percents,
+          tp1_percent: tpsl.tp1_percent,
+          tp2_percent: tpsl.tp2_percent,
+          tp3_percent: tpsl.tp3_percent,
+          tp1_qty_ratio: tpsl.tp1_qty_ratio,
+          tp2_qty_ratio: tpsl.tp2_qty_ratio,
+          tp3_qty_ratio: tpsl.tp3_qty_ratio,
+          stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
           reentry_policy: 'manual_ready',
         },
       });

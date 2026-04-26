@@ -7,6 +7,7 @@ from app.api.v1.events import router as events_router
 from app.api.v1.admin import router as admin_router
 from app.api.v1.exchange_accounts import router as exchange_accounts_router
 from app.api.v1.symbols import router as symbols_router
+from app.api.v1.market import router as market_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth_router)
@@ -17,3 +18,4 @@ api_router.include_router(events_router)
 api_router.include_router(admin_router)
 api_router.include_router(exchange_accounts_router)
 api_router.include_router(symbols_router)
+api_router.include_router(market_router)
