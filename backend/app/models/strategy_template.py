@@ -58,6 +58,10 @@ class StrategyTemplate(Base):
     stop_loss_percent_of_capital: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
 
     reentry_policy: Mapped[str] = mapped_column(String(30), default="manual_ready", nullable=False)
+    # auto 정책 — SL 후 자동 재시작 대기 시간 (초). 기본 600 (10분).
+    reentry_delay_seconds: Mapped[int] = mapped_column(Integer, default=600, nullable=False)
+    # auto 정책 — 새 start_price 계산 오프셋 % (현재가에서 SHORT 위 / LONG 아래 방향).
+    reentry_offset_pct: Mapped[Decimal] = mapped_column(Numeric(8, 4), default=Decimal("1.0"), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

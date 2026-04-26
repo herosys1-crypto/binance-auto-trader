@@ -50,7 +50,9 @@ class StrategyTemplateCreate(BaseModel):
     tp4_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     tp5_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     stop_loss_percent_of_capital: Decimal = Field(..., gt=0, le=100)
-    reentry_policy: str = "manual_ready"
+    reentry_policy: Literal["manual_ready", "auto"] = "manual_ready"
+    reentry_delay_seconds: int = Field(default=600, ge=10, le=86400)
+    reentry_offset_pct: Decimal = Field(default=Decimal("1.0"), ge=0, le=50)
 
 
 class StrategyTemplateResponse(BaseModel):
@@ -119,6 +121,8 @@ def create_strategy_template(
         tp5_qty_ratio=payload.tp5_qty_ratio,
         stop_loss_percent_of_capital=payload.stop_loss_percent_of_capital,
         reentry_policy=payload.reentry_policy,
+        reentry_delay_seconds=payload.reentry_delay_seconds,
+        reentry_offset_pct=payload.reentry_offset_pct,
         is_active=True,
     )
     db.add(template)
