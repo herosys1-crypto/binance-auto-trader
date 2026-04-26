@@ -182,6 +182,95 @@ def get_strategy(
     return StrategyDetailResponse.model_validate(strategy)
 
 
+@router.get("/{strategy_id}/timeline")
+def get_strategy_timeline(
+    strategy_id: int,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> list[dict]:
+    """전략의 활동 타임라인 — orders / risk_events / notifications 시간순 통합.
+
+    각 항목 형식:
+      { "ts": ISO8601, "kind": "ORDER"|"RISK"|"NOTIFY", "icon": "✅", "title": "...", "detail": "..." }
+
+    프론트엔드 상세 패널에서 한눈에 "이 전략이 어떻게 흘러갔는지" 확인용.
+    """
+    from sqlalchemy import select as sa_select
+    from app.models.order import Order
+    from app.models.risk_event import RiskEvent
+    from app.models.notification import Notification
+
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+
+    items: list[dict] = []
+
+    # 주문 — 발송 시점 + 체결 시점
+    orders = db.execute(
+        sa_select(Order)
+        .where(Order.strategy_instance_id == strategy_id)
+        .order_by(Order.created_at.asc())
+    ).scalars().all()
+    for o in orders:
+        purpose_ko = {"ENTRY": "진입", "TAKE_PROFIT": "익절", "STOP_LOSS": "손절", "EMERGENCY_CLOSE": "긴급청산"}.get(o.purpose, o.purpose)
+        side_ko = "매도 📉" if o.side == "SELL" else "매수 📈"
+        # 발송
+        items.append({
+            "ts": o.created_at.isoformat(),
+            "kind": "ORDER",
+            "icon": "📤",
+            "title": f"{purpose_ko} 주문 발송 (#{o.id})",
+            "detail": f"{side_ko} {o.order_type} @ {o.price} / 수량 {o.orig_qty}" + (f" — {o.stage_no}단계" if o.stage_no else ""),
+        })
+        # 체결 (status=FILLED 이고 updated_at 이 created_at 보다 늦으면)
+        if (o.status or "").upper() == "FILLED" and o.updated_at and o.created_at and o.updated_at > o.created_at:
+            items.append({
+                "ts": o.updated_at.isoformat(),
+                "kind": "ORDER",
+                "icon": "✅",
+                "title": f"{purpose_ko} 체결 (#{o.id})",
+                "detail": f"{side_ko} {o.executed_qty} @ {o.avg_price}" + (f" — {o.stage_no}단계" if o.stage_no else ""),
+            })
+
+    # 리스크 이벤트 (크라이시스 진입, 손절 발동 등)
+    risk_events = db.execute(
+        sa_select(RiskEvent)
+        .where(RiskEvent.strategy_instance_id == strategy_id)
+        .order_by(RiskEvent.created_at.asc())
+    ).scalars().all()
+    for r in risk_events:
+        sev_icon = {"CRITICAL": "🚨", "WARNING": "⚠️", "INFO": "ℹ️"}.get(r.severity, "📌")
+        items.append({
+            "ts": r.created_at.isoformat(),
+            "kind": "RISK",
+            "icon": sev_icon,
+            "title": r.title or r.event_type,
+            "detail": r.message or "",
+        })
+
+    # 알림 (Telegram 발송 등)
+    notifications = db.execute(
+        sa_select(Notification)
+        .where(Notification.strategy_instance_id == strategy_id)
+        .order_by(Notification.created_at.asc())
+    ).scalars().all()
+    for n in notifications:
+        status_icon = "✉️" if (n.send_status or "").upper() == "SENT" else "❌"
+        items.append({
+            "ts": n.created_at.isoformat(),
+            "kind": "NOTIFY",
+            "icon": status_icon,
+            "title": n.title or "알림",
+            "detail": (n.body or "")[:200],
+        })
+
+    # 시간 역순 정렬 (최신이 위로)
+    items.sort(key=lambda x: x["ts"], reverse=True)
+    return items[:limit]
+
+
 @router.get("/{strategy_id}/stage-plans")
 def get_strategy_stage_plans(
     strategy_id: int,

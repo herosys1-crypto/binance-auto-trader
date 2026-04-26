@@ -430,8 +430,14 @@
     </div>
   </div>
 
-  <!-- 선택 전략 — 단계별 계획 + 주문 내역 -->
+  <!-- 선택 전략 — 활동 타임라인 + 단계별 계획 + 주문 내역 -->
   <div id="detail-section" class="hidden">
+    <!-- 활동 타임라인 -->
+    <div class="card rounded-lg mb-4">
+      <div class="card-header text-sm">📜 선택 전략 — 활동 타임라인 (최신순)</div>
+      <div id="timeline-container" class="p-3 max-h-72 overflow-y-auto"></div>
+    </div>
+
     <!-- 단계별 계획 -->
     <div class="card rounded-lg mb-4">
       <div class="card-header text-sm">📋 선택 전략 — 단계별 계획</div>
@@ -813,10 +819,32 @@ async function refreshExchangeAccounts() {
 async function selectStrategy(id) {
   document.getElementById('detail-section').classList.remove('hidden');
   try {
-    const [stagePlans, orders] = await Promise.all([
+    const [timeline, stagePlans, orders] = await Promise.all([
+      api('/strategies/' + id + '/timeline?limit=100').catch(() => []),
       api('/strategies/' + id + '/stage-plans').catch(() => []),
       api('/orders/by-strategy/' + id).catch(() => []),
     ]);
+
+    // 활동 타임라인 렌더링
+    const tlEl = document.getElementById('timeline-container');
+    if (!timeline.length) {
+      tlEl.innerHTML = '<p class="text-slate-500 text-sm text-center py-4">활동 이력 없음</p>';
+    } else {
+      const kindColor = { ORDER: 'text-blue-300', RISK: 'text-red-300', NOTIFY: 'text-slate-400' };
+      tlEl.innerHTML = timeline.map(t => {
+        const ts = new Date(t.ts);
+        const tsStr = ts.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const kindCls = kindColor[t.kind] || 'text-slate-300';
+        return `<div class="flex gap-3 py-1.5 border-b border-slate-700 last:border-0 text-xs">
+          <div class="text-slate-500 font-mono whitespace-nowrap" style="min-width:120px">${tsStr}</div>
+          <div class="text-lg leading-tight">${t.icon}</div>
+          <div class="flex-1">
+            <div class="${kindCls} font-semibold">${escapeHtml(t.title)}</div>
+            <div class="text-slate-400 text-xs mt-0.5">${escapeHtml(t.detail || '')}</div>
+          </div>
+        </div>`;
+      }).join('');
+    }
 
     // 단계별 계획 렌더링
     const stTbody = document.getElementById('stage-plans-tbody');
