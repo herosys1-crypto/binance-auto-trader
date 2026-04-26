@@ -17,6 +17,22 @@ from app.workers.run_workers import run_symbol_sync_once, run_tp_sl_once
 logger = logging.getLogger(__name__)
 
 
+# Redis heartbeat 키 — API process 가 폴링해서 Prometheus gauge 갱신
+HEALTH_KEY_SCHEDULER_LEADER = "health:scheduler:leader"
+HEALTH_TTL_SECONDS = 60
+
+
+def _set_scheduler_health(is_leader: bool, redis_client=None) -> None:
+    try:
+        client = redis_client or get_redis_client()
+        if is_leader:
+            client.setex(HEALTH_KEY_SCHEDULER_LEADER, HEALTH_TTL_SECONDS, "1")
+        else:
+            client.delete(HEALTH_KEY_SCHEDULER_LEADER)
+    except Exception:  # pragma: no cover
+        pass
+
+
 def start_scheduler() -> None:
     scheduler = BlockingScheduler(timezone="Asia/Seoul")
     redis_client = get_redis_client()
@@ -24,16 +40,20 @@ def start_scheduler() -> None:
     if not guard.try_become_leader():
         print("[scheduler] another node is leader; exiting")
         scheduler_leader_status.set(0)
+        _set_scheduler_health(False, redis_client)
         return
     print("[scheduler] became leader, registering jobs")
     scheduler_leader_status.set(1)
+    _set_scheduler_health(True, redis_client)
 
     def guarded_job(job_name: str, ttl_seconds: int, fn):
         def _wrapped():
             if not guard.refresh_leader():
                 scheduler_leader_status.set(0)
+                _set_scheduler_health(False, redis_client)
                 return
             scheduler_leader_status.set(1)
+            _set_scheduler_health(True, redis_client)  # heartbeat 갱신
             if not guard.acquire_job_lock(job_name, ttl_seconds):
                 return
             fn()

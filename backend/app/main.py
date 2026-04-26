@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -7,13 +9,43 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.api.router import api_router
 from app.core.config import settings
+from app.core.redis_client import get_redis_client
 from app.core.sentry import init_sentry
 from app.middleware.idempotency import IdempotencyMiddleware
+from app.observability.metrics import scheduler_leader_status, user_stream_connected
+
+logger = logging.getLogger(__name__)
+
+# 다른 worker process 가 Redis 에 쓰는 heartbeat 키
+HEALTH_KEY_USER_STREAM = "health:user_stream:connected"
+HEALTH_KEY_SCHEDULER_LEADER = "health:scheduler:leader"
+
+
+async def _poll_health_metrics() -> None:
+    """5초마다 Redis 의 worker heartbeat 키를 확인해 Prometheus gauge 를 갱신.
+
+    user-stream / scheduler 는 별도 process 라 그들의 metric 이
+    API process 의 /metrics 에 직접 보이지 않는다. Redis 를 가교로 사용.
+    """
+    while True:
+        try:
+            client = get_redis_client()
+            user_stream_connected.set(1 if client.exists(HEALTH_KEY_USER_STREAM) else 0)
+            scheduler_leader_status.set(1 if client.exists(HEALTH_KEY_SCHEDULER_LEADER) else 0)
+        except Exception as e:  # pragma: no cover
+            logger.debug("health poll error: %s", e)
+        await asyncio.sleep(5)
+
 
 init_sentry()
 app = FastAPI(title=settings.app_name)
 app.add_middleware(IdempotencyMiddleware)
 app.include_router(api_router)
+
+
+@app.on_event("startup")
+async def _start_health_poller() -> None:
+    asyncio.create_task(_poll_health_metrics())
 
 # Static admin dashboard (single-page HTML)
 _STATIC_DIR = Path(__file__).resolve().parent / "static"

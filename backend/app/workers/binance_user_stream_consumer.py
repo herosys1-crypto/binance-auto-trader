@@ -2,6 +2,7 @@ from __future__ import annotations
 import json, logging, time
 import websocket
 from app.core.database import SessionLocal
+from app.core.redis_client import get_redis_client
 from app.integrations.binance.client import BinanceClient
 from app.observability.metrics import user_stream_connected, user_stream_reconnect_total
 from app.services.notification_service import NotificationService
@@ -9,6 +10,22 @@ from app.services.stream_service import StreamService
 from app.utils.backoff import exponential_backoff
 
 logger = logging.getLogger(__name__)
+
+# Redis heartbeat 키 — API process 가 폴링해서 Prometheus gauge 갱신.
+# TTL 60s — 60초 내 갱신 안 되면 자동 만료 → API 가 끊김으로 간주.
+HEALTH_KEY_USER_STREAM = "health:user_stream:connected"
+HEALTH_TTL_SECONDS = 60
+
+
+def _set_user_stream_health(connected: bool) -> None:
+    try:
+        client = get_redis_client()
+        if connected:
+            client.setex(HEALTH_KEY_USER_STREAM, HEALTH_TTL_SECONDS, "1")
+        else:
+            client.delete(HEALTH_KEY_USER_STREAM)
+    except Exception:  # pragma: no cover - Redis 장애 시 무시 (메트릭만 영향)
+        pass
 
 class BinanceUserStreamConsumer:
     def __init__(self, *, api_key: str, api_secret: str, is_testnet: bool, ws_base_url: str, on_disconnect_sleep_seconds: int = 5) -> None:
@@ -40,8 +57,11 @@ class BinanceUserStreamConsumer:
 
     def _on_open(self, ws) -> None:
         user_stream_connected.set(1)
+        _set_user_stream_health(True)
 
     def _on_message(self, ws, message: str) -> None:
+        # 메시지 수신할 때마다 heartbeat 갱신 (60s TTL refresh)
+        _set_user_stream_health(True)
         data = json.loads(message)
         event_type = data.get("e")
         db = SessionLocal()
@@ -63,6 +83,7 @@ class BinanceUserStreamConsumer:
 
     def _on_close(self, ws, close_status_code, close_msg) -> None:
         user_stream_connected.set(0)
+        _set_user_stream_health(False)
         logger.warning("Binance user stream closed code=%s msg=%s", close_status_code, close_msg)
 
     def _notify_system_error(self, message: str) -> None:
