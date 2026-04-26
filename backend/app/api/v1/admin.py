@@ -241,6 +241,82 @@ def cleanup_quick_templates(
     return MessageResponse(message=msg)
 
 
+@router.get("/recent-activity")
+def get_recent_activity(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> list[dict]:
+    """모든 전략의 최근 활동 통합 (orders + risk_events + notifications).
+
+    메인 대시보드 활동 피드용. 시간 역순 정렬, 최근 N건만 반환.
+    """
+    from sqlalchemy import select as sa_select
+    from app.models.order import Order
+    from app.models.risk_event import RiskEvent
+    from app.models.notification import Notification
+
+    items: list[dict] = []
+
+    # 최근 주문 (체결 위주)
+    orders = db.execute(
+        sa_select(Order).order_by(Order.updated_at.desc()).limit(limit)
+    ).scalars().all()
+    for o in orders:
+        purpose_ko = {"ENTRY": "진입", "TAKE_PROFIT": "익절", "STOP_LOSS": "손절", "EMERGENCY_CLOSE": "긴급청산"}.get(o.purpose, o.purpose)
+        side_ko = "매도 📉" if o.side == "SELL" else "매수 📈"
+        is_filled = (o.status or "").upper() == "FILLED"
+        ts = o.updated_at if (is_filled and o.updated_at) else o.created_at
+        items.append({
+            "ts": ts.isoformat(),
+            "strategy_id": o.strategy_instance_id,
+            "symbol": o.symbol,
+            "kind": "ORDER",
+            "icon": "✅" if is_filled else "📤",
+            "title": f"{purpose_ko}{' 체결' if is_filled else ' 발송'}",
+            "detail": f"{side_ko} {o.executed_qty if is_filled else o.orig_qty} @ {o.avg_price if is_filled else o.price}" + (f" — {o.stage_no}단계" if o.stage_no else ""),
+        })
+
+    # 최근 리스크 이벤트 (크라이시스/손절 등)
+    risk_events = db.execute(
+        sa_select(RiskEvent).order_by(RiskEvent.created_at.desc()).limit(limit)
+    ).scalars().all()
+    for r in risk_events:
+        sev_icon = {"CRITICAL": "🚨", "WARNING": "⚠️", "INFO": "ℹ️"}.get(r.severity, "📌")
+        # strategy 의 symbol 가져오기 (relationship)
+        sym = r.strategy_instance.symbol if r.strategy_instance else "?"
+        items.append({
+            "ts": r.created_at.isoformat(),
+            "strategy_id": r.strategy_instance_id,
+            "symbol": sym,
+            "kind": "RISK",
+            "icon": sev_icon,
+            "title": r.title or r.event_type,
+            "detail": (r.message or "")[:200],
+        })
+
+    # 최근 알림 (Telegram 발송)
+    notifications = db.execute(
+        sa_select(Notification).order_by(Notification.created_at.desc()).limit(limit)
+    ).scalars().all()
+    for n in notifications:
+        status_icon = "✉️" if (n.send_status or "").upper() == "SENT" else "❌"
+        sym = n.strategy_instance.symbol if n.strategy_instance else "시스템"
+        items.append({
+            "ts": n.created_at.isoformat(),
+            "strategy_id": n.strategy_instance_id,
+            "symbol": sym,
+            "kind": "NOTIFY",
+            "icon": status_icon,
+            "title": n.title or "알림",
+            "detail": (n.body or "")[:200],
+        })
+
+    # 시간 역순 정렬 + 상위 limit 만
+    items.sort(key=lambda x: x["ts"], reverse=True)
+    return items[:limit]
+
+
 @router.get("/stats")
 def get_operation_stats(
     db: Session = Depends(get_db),
