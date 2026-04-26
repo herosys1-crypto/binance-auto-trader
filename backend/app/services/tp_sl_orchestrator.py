@@ -37,13 +37,23 @@ class TPSLOrchestratorService:
                     self._execute_take_profit(strategy, "TP2")
                 elif tp_level == "TP3" and strategy.status != "COMPLETED":
                     self._execute_take_profit(strategy, "TP3")
+                elif tp_level == "TRAILING_TP" and strategy.status != "COMPLETED":
+                    # 피크 +20% 이상 도달 후 +20% 이하로 회귀 — 남은 전량 청산
+                    self._execute_take_profit(strategy, "TRAILING_TP")
         except RedisLockError:
             return
 
     def _execute_take_profit(self, strategy, level: str) -> None:
         current_qty = Decimal(str(strategy.current_position_qty))
-        close_ratio = {"TP1": Decimal("0.25"), "TP2": Decimal("0.50"), "TP3": Decimal("1.00")}[level]
-        close_qty = current_qty if level == "TP3" else (current_qty * close_ratio).quantize(Decimal("0.00000001"))
+        # TP1/TP2 는 부분 청산, TP3/TRAILING_TP 는 전량 청산
+        close_ratio_map = {
+            "TP1": Decimal("0.25"),
+            "TP2": Decimal("0.50"),
+            "TP3": Decimal("1.00"),
+            "TRAILING_TP": Decimal("1.00"),
+        }
+        close_ratio = close_ratio_map[level]
+        close_qty = current_qty if close_ratio == Decimal("1.00") else (current_qty * close_ratio).quantize(Decimal("0.00000001"))
         if close_qty <= 0:
             return
         self.execution_service.emergency_close_position(strategy.id, quantity=close_qty)
@@ -51,9 +61,14 @@ class TPSLOrchestratorService:
             strategy.status = "TP1_DONE_PARTIAL"
         elif level == "TP2":
             strategy.status = "TP2_DONE_PARTIAL"
-        else:
+        elif level == "TP3":
             strategy.status = "COMPLETED"
             strategy.reentry_ready = False
+            self.risk_service.reset_peak_pnl(strategy.id)
+        else:  # TRAILING_TP
+            strategy.status = "COMPLETED"
+            strategy.reentry_ready = False
+            self.risk_service.reset_peak_pnl(strategy.id)
         self.db.commit()
         strategy_take_profit_total.labels(symbol=strategy.symbol, side=strategy.side, level=level).inc()
         self.notification_service.send_take_profit_alert(strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side, level=level)

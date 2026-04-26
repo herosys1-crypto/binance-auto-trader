@@ -3,135 +3,281 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Binance Auto Trader — Admin Dashboard</title>
+<title>Binance Auto Trader — 운영 대시보드</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
-  body { background: #0f172a; color: #e2e8f0; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+  body { background: #0b1120; color: #e2e8f0; font-family: 'Pretendard', 'Segoe UI', system-ui, -apple-system, sans-serif; }
   .card { background: #1e293b; border: 1px solid #334155; }
-  .btn-primary { background: #3b82f6; }
+  .card-header { background: #0f172a; padding: 12px 16px; border-bottom: 1px solid #334155; font-weight: 600; }
+  .btn { padding: 8px 16px; border-radius: 6px; font-weight: 600; transition: all 0.15s; }
+  .btn-primary { background: #3b82f6; color: #fff; }
   .btn-primary:hover { background: #2563eb; }
-  .btn-danger { background: #ef4444; }
+  .btn-success { background: #10b981; color: #fff; }
+  .btn-success:hover { background: #059669; }
+  .btn-warning { background: #f59e0b; color: #fff; }
+  .btn-warning:hover { background: #d97706; }
+  .btn-danger { background: #ef4444; color: #fff; }
   .btn-danger:hover { background: #dc2626; }
-  .badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-  .badge-active { background: #10b981; color: #fff; }
-  .badge-waiting { background: #f59e0b; color: #fff; }
-  .badge-closed { background: #6b7280; color: #fff; }
-  .badge-pending { background: #8b5cf6; color: #fff; }
+  .btn-ghost { background: transparent; border: 1px solid #475569; color: #cbd5e1; }
+  .btn-ghost:hover { background: #1e293b; }
+
+  /* 신호등 — 카드 좌측 컬러바 */
+  .signal-green  { border-left: 4px solid #10b981; }
+  .signal-yellow { border-left: 4px solid #f59e0b; }
+  .signal-red    { border-left: 4px solid #ef4444; }
+  .signal-gray   { border-left: 4px solid #6b7280; }
+
+  /* 상태 배지 */
+  .badge { padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; gap: 4px; }
+  .badge-green  { background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
+  .badge-yellow { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+  .badge-red    { background: rgba(239,68,68,0.15);  color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+  .badge-gray   { background: rgba(107,114,128,0.2); color: #9ca3af; border: 1px solid rgba(107,114,128,0.3); }
+  .badge-blue   { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+
+  /* 단계 진행 바 */
+  .stage-bar { display: inline-flex; gap: 3px; align-items: center; }
+  .stage-dot { width: 16px; height: 8px; border-radius: 2px; background: #334155; }
+  .stage-dot.done    { background: #10b981; }
+  .stage-dot.current { background: #f59e0b; animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+  /* 시스템 상태 점 */
+  .sys-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .sys-dot-green  { background: #10b981; box-shadow: 0 0 6px #10b981; }
+  .sys-dot-yellow { background: #f59e0b; box-shadow: 0 0 6px #f59e0b; }
+  .sys-dot-red    { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+  .sys-dot-gray   { background: #6b7280; }
+
   table { width: 100%; }
-  th { text-align: left; padding: 8px; background: #0f172a; font-size: 12px; color: #94a3b8; }
-  td { padding: 8px; border-top: 1px solid #334155; font-size: 13px; }
-  .num { text-align: right; font-variant-numeric: tabular-nums; }
-  .toast { position: fixed; top: 20px; right: 20px; padding: 12px 20px; border-radius: 6px; z-index: 50; }
+  th { text-align: left; padding: 10px 12px; background: #0f172a; font-size: 11px; color: #94a3b8; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+  td { padding: 12px; border-top: 1px solid #334155; font-size: 13px; }
+  tr.row-clickable { cursor: pointer; transition: background 0.1s; }
+  tr.row-clickable:hover { background: rgba(59,130,246,0.05); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
+  .pos { color: #34d399; }
+  .neg { color: #f87171; }
+
+  /* Toast */
+  .toast { position: fixed; top: 20px; right: 20px; padding: 14px 22px; border-radius: 8px; z-index: 50; box-shadow: 0 10px 25px rgba(0,0,0,0.5); font-weight: 500; }
   .toast-success { background: #10b981; color: #fff; }
-  .toast-error { background: #ef4444; color: #fff; }
+  .toast-error   { background: #ef4444; color: #fff; }
+  .toast-warning { background: #f59e0b; color: #fff; }
+
+  /* 위험 알림 띠 */
+  .alert-bar { background: linear-gradient(90deg, rgba(239,68,68,0.15), rgba(239,68,68,0.05)); border: 1px solid rgba(239,68,68,0.4); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: flex; gap: 12px; align-items: center; }
 </style>
 </head>
 <body class="min-h-screen">
 
 <!-- ============ Login Screen ============ -->
 <div id="login-screen" class="min-h-screen flex items-center justify-center">
-  <div class="card rounded-lg p-8 w-96">
-    <h1 class="text-2xl font-bold mb-2">🔐 Binance Auto Trader</h1>
-    <p class="text-sm text-slate-400 mb-6">Admin Dashboard</p>
+  <div class="card rounded-xl p-8 w-96">
+    <h1 class="text-2xl font-bold mb-1">🤖 Binance Auto Trader</h1>
+    <p class="text-sm text-slate-400 mb-6">운영자 로그인</p>
     <form id="login-form" class="space-y-4">
       <div>
-        <label class="block text-sm mb-1 text-slate-300">Email</label>
+        <label class="block text-sm mb-1 text-slate-300">이메일</label>
         <input type="email" id="email" required value="herosys1@gmail.com"
-          class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
+          class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-md text-white focus:border-blue-500 outline-none" />
       </div>
       <div>
-        <label class="block text-sm mb-1 text-slate-300">Password</label>
+        <label class="block text-sm mb-1 text-slate-300">비밀번호</label>
         <input type="password" id="password" required
-          class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
+          class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-md text-white focus:border-blue-500 outline-none" />
       </div>
-      <button type="submit" class="btn-primary w-full py-2 rounded text-white font-semibold">로그인</button>
+      <button type="submit" class="btn-primary btn w-full">로그인</button>
     </form>
   </div>
 </div>
 
-<!-- ============ Dashboard Screen ============ -->
+<!-- ============ Dashboard ============ -->
 <div id="dashboard-screen" class="hidden p-6 max-w-7xl mx-auto">
+
   <!-- Header -->
-  <div class="flex justify-between items-center mb-6">
-    <h1 class="text-2xl font-bold">📊 Admin Dashboard</h1>
+  <div class="flex justify-between items-center mb-5">
+    <div>
+      <h1 class="text-2xl font-bold">🤖 운영 대시보드</h1>
+      <p id="last-updated" class="text-xs text-slate-400 mt-1">마지막 갱신: -</p>
+    </div>
     <div class="flex gap-2 items-center">
-      <span id="user-info" class="text-sm text-slate-400"></span>
-      <button onclick="refreshAll()" class="btn-primary px-3 py-1 rounded text-sm">↻ 새로고침</button>
-      <button onclick="logout()" class="btn-danger px-3 py-1 rounded text-sm">로그아웃</button>
+      <span id="user-info" class="text-sm text-slate-300"></span>
+      <button onclick="refreshAll()" class="btn-ghost btn text-sm">↻ 새로고침</button>
+      <button onclick="logout()" class="btn-danger btn text-sm">로그아웃</button>
     </div>
   </div>
 
-  <!-- 4-column metrics -->
+  <!-- 위험 알림 띠 (조건부 표시) -->
+  <div id="alert-bar" class="alert-bar hidden">
+    <span class="text-2xl">⚠️</span>
+    <div class="flex-1">
+      <div class="font-semibold text-red-300" id="alert-title">위험 신호 감지</div>
+      <div class="text-sm text-slate-300" id="alert-detail">상세 내용</div>
+    </div>
+    <button onclick="dismissAlert()" class="text-slate-400 hover:text-white">✕</button>
+  </div>
+
+  <!-- 4-card metrics (운영자 중심) -->
   <div class="grid grid-cols-4 gap-4 mb-6">
-    <div class="card rounded-lg p-4">
-      <p class="text-xs text-slate-400">Strategy Templates</p>
-      <p id="metric-templates" class="text-2xl font-bold">-</p>
+    <div id="card-system" class="card rounded-lg p-4 signal-gray">
+      <p class="text-xs text-slate-400 mb-1">시스템 상태</p>
+      <p id="metric-system" class="text-2xl font-bold">-</p>
+      <p id="metric-system-detail" class="text-xs text-slate-500 mt-1">-</p>
     </div>
-    <div class="card rounded-lg p-4">
-      <p class="text-xs text-slate-400">Active Strategies</p>
+    <div id="card-active" class="card rounded-lg p-4 signal-gray">
+      <p class="text-xs text-slate-400 mb-1">진행 중인 전략</p>
       <p id="metric-active" class="text-2xl font-bold">-</p>
+      <p id="metric-active-detail" class="text-xs text-slate-500 mt-1">-</p>
     </div>
-    <div class="card rounded-lg p-4">
-      <p class="text-xs text-slate-400">Exchange Accounts</p>
-      <p id="metric-accounts" class="text-2xl font-bold">-</p>
+    <div id="card-pnl" class="card rounded-lg p-4 signal-gray">
+      <p class="text-xs text-slate-400 mb-1">미실현 손익 합계</p>
+      <p id="metric-pnl" class="text-2xl font-bold">-</p>
+      <p id="metric-pnl-detail" class="text-xs text-slate-500 mt-1">실시간</p>
     </div>
-    <div class="card rounded-lg p-4">
-      <p class="text-xs text-slate-400">API Health</p>
-      <p id="metric-health" class="text-2xl font-bold">-</p>
-    </div>
-  </div>
-
-  <!-- Strategies List -->
-  <div class="card rounded-lg p-4 mb-6">
-    <div class="flex justify-between items-center mb-3">
-      <h2 class="text-lg font-semibold">🎯 전략 인스턴스</h2>
-      <button onclick="testTelegram()" class="btn-primary px-3 py-1 rounded text-sm">📨 Telegram 테스트</button>
-    </div>
-    <div class="overflow-x-auto">
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th><th>심볼</th><th>방향</th><th>상태</th><th>단계</th>
-            <th class="num">진입가</th><th class="num">포지션</th><th class="num">미실현 손익</th>
-            <th>액션</th>
-          </tr>
-        </thead>
-        <tbody id="strategies-tbody"><tr><td colspan="9" class="text-center text-slate-500">로딩 중...</td></tr></tbody>
-      </table>
+    <div id="card-templates" class="card rounded-lg p-4 signal-gray">
+      <p class="text-xs text-slate-400 mb-1">전략 템플릿</p>
+      <p id="metric-templates" class="text-2xl font-bold">-</p>
+      <p id="metric-templates-detail" class="text-xs text-slate-500 mt-1">-</p>
     </div>
   </div>
 
-  <!-- Strategy Templates List -->
-  <div class="card rounded-lg p-4 mb-6">
-    <h2 class="text-lg font-semibold mb-3">📋 전략 템플릿</h2>
-    <div class="overflow-x-auto">
-      <table>
-        <thead>
-          <tr>
-            <th>ID</th><th>이름</th><th>타입</th><th>방향</th>
-            <th class="num">레버리지</th><th class="num">총 자본</th><th>단계 구성</th><th>활성</th>
-          </tr>
-        </thead>
-        <tbody id="templates-tbody"><tr><td colspan="8" class="text-center text-slate-500">로딩 중...</td></tr></tbody>
-      </table>
+  <!-- 빠른 작업 -->
+  <div class="card rounded-lg mb-6">
+    <div class="card-header text-sm">⚡ 빠른 작업</div>
+    <div class="p-4 flex gap-2 flex-wrap">
+      <button class="btn-success btn" onclick="openCreateModal()">➕ 새 전략 시작</button>
+      <button class="btn-ghost btn" onclick="testTelegram()">📨 Telegram 테스트</button>
+      <button class="btn-ghost btn" onclick="window.open('http://localhost:3000','_blank')">📊 Grafana 모니터링</button>
+      <button class="btn-ghost btn" onclick="window.open('http://localhost:8000/docs','_blank')">🔧 API 문서 (Swagger)</button>
     </div>
   </div>
 
-  <!-- Selected Strategy Detail -->
-  <div id="detail-section" class="hidden">
-    <div class="card rounded-lg p-4 mb-6">
-      <h2 class="text-lg font-semibold mb-3">📦 주문 내역 (선택 전략)</h2>
-      <div class="overflow-x-auto">
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th><th>단계</th><th>유형</th><th>방향</th><th>타입</th>
-              <th class="num">가격</th><th class="num">수량</th><th class="num">체결</th><th>상태</th>
-            </tr>
-          </thead>
-          <tbody id="orders-tbody"></tbody>
-        </table>
+  <!-- ===== 신규 전략 시작 모달 ===== -->
+  <div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
+       style="background:rgba(0,0,0,0.7); padding:20px;">
+    <div class="card rounded-xl p-6" style="max-width:720px; width:100%; max-height:90vh; overflow-y:auto;">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-bold">➕ 새 전략 시작</h2>
+        <button onclick="closeCreateModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
       </div>
+
+      <!-- 1) 거래소 계정 -->
+      <div class="mb-4">
+        <label class="block text-sm font-semibold mb-2 text-slate-300">1️⃣  거래소 계정</label>
+        <div id="cm-accounts" class="space-y-1"><span class="text-slate-500 text-sm">로딩 중...</span></div>
+      </div>
+
+      <!-- 2) 심볼 + 방향 -->
+      <div class="grid grid-cols-2 gap-4 mb-4">
+        <div>
+          <label class="block text-sm font-semibold mb-2 text-slate-300">2️⃣  심볼</label>
+          <input id="cm-symbol" list="cm-symbol-list" value="BTCUSDT" placeholder="예: BTCUSDT"
+            class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
+          <datalist id="cm-symbol-list"></datalist>
+        </div>
+        <div>
+          <label class="block text-sm font-semibold mb-2 text-slate-300">방향</label>
+          <div class="flex gap-2">
+            <button id="cm-side-short" onclick="setCmSide('SHORT')" class="btn flex-1" style="background:#ef4444; color:#fff">📉 숏</button>
+            <button id="cm-side-long"  onclick="setCmSide('LONG')"  class="btn flex-1 btn-ghost">📈 롱</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3) 템플릿 -->
+      <div class="mb-4">
+        <label class="block text-sm font-semibold mb-2 text-slate-300">3️⃣  전략 템플릿</label>
+        <div id="cm-templates" class="space-y-1"><span class="text-slate-500 text-sm">로딩 중...</span></div>
+      </div>
+
+      <!-- 4) 시작가 -->
+      <div class="mb-4">
+        <label class="block text-sm font-semibold mb-2 text-slate-300">4️⃣  시작가 (LIMIT 1단계 가격)</label>
+        <div class="flex gap-2">
+          <input id="cm-start-price" type="number" step="0.01" placeholder="예: 100000"
+            class="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
+          <button onclick="calcPreview()" class="btn-primary btn">📋 미리보기</button>
+        </div>
+        <p class="text-xs text-slate-500 mt-1">SHORT: 현재가 보다 약간 높게 / LONG: 현재가 보다 약간 낮게 추천</p>
+      </div>
+
+      <!-- 미리보기 결과 -->
+      <div id="cm-preview" class="hidden card rounded-lg p-3 mb-4 bg-slate-900 border-slate-700">
+        <div class="text-sm font-semibold mb-2 text-blue-300">📊 단계별 계산 결과</div>
+        <table class="text-xs">
+          <thead>
+            <tr><th>단계</th><th>조건</th><th class="num">트리거가</th><th class="num">투입 자본</th><th class="num">수량</th></tr>
+          </thead>
+          <tbody id="cm-preview-tbody"></tbody>
+        </table>
+        <div id="cm-preview-meta" class="text-xs text-slate-400 mt-2"></div>
+      </div>
+
+      <!-- 액션 버튼 -->
+      <div class="flex justify-end gap-2 pt-3 border-t border-slate-700">
+        <button onclick="closeCreateModal()" class="btn-ghost btn">취소</button>
+        <button id="cm-submit" onclick="submitCreate()" class="btn-success btn" disabled>🚀 전략 시작</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 진행 중인 전략 -->
+  <div class="card rounded-lg mb-6">
+    <div class="card-header text-sm">🎯 진행 중인 전략</div>
+    <div class="overflow-x-auto">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:40px">#</th>
+            <th>심볼</th>
+            <th>방향</th>
+            <th>상태</th>
+            <th>단계 진행</th>
+            <th class="num">평균 진입가</th>
+            <th class="num">포지션</th>
+            <th class="num">미실현 손익</th>
+            <th style="width:120px">액션</th>
+          </tr>
+        </thead>
+        <tbody id="strategies-tbody"><tr><td colspan="9" class="text-center text-slate-500 py-6">로딩 중...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 전략 템플릿 -->
+  <div class="card rounded-lg mb-6">
+    <div class="card-header text-sm">📋 전략 템플릿 (운영자 사용 가능)</div>
+    <div class="overflow-x-auto">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:40px">#</th>
+            <th>이름</th>
+            <th>방향</th>
+            <th class="num">레버리지</th>
+            <th class="num">총 자본</th>
+            <th>단계 자본 구성</th>
+            <th style="width:60px">활성</th>
+          </tr>
+        </thead>
+        <tbody id="templates-tbody"><tr><td colspan="7" class="text-center text-slate-500 py-6">로딩 중...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 선택 전략 주문 내역 -->
+  <div id="detail-section" class="hidden card rounded-lg mb-6">
+    <div class="card-header text-sm">📦 선택 전략 — 주문 내역</div>
+    <div class="overflow-x-auto">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>단계</th><th>유형</th><th>방향</th><th>주문 타입</th>
+            <th class="num">가격</th><th class="num">수량</th><th class="num">체결</th><th>상태</th>
+          </tr>
+        </thead>
+        <tbody id="orders-tbody"></tbody>
+      </table>
     </div>
   </div>
 </div>
@@ -141,6 +287,49 @@
 <script>
 const API_BASE = window.location.origin + '/api/v1';
 let token = localStorage.getItem('access_token');
+
+// ==================== 상태 매핑 ====================
+const STATUS_MAP = {
+  'WAITING':                    { ko: '대기 중',           sig: 'gray',   icon: '⚪' },
+  'STAGE1_OPEN_PENDING':        { ko: '1단계 주문 발송 중', sig: 'yellow', icon: '⏳' },
+  'STAGE1_OPEN':                { ko: '1단계 체결 대기',    sig: 'yellow', icon: '⏳' },
+  'STAGE1_FILLED':              { ko: '1단계 진입 완료',    sig: 'green',  icon: '✅' },
+  'ACTIVE':                     { ko: '진행 중',           sig: 'green',  icon: '🟢' },
+  'STAGE2_OPEN_PENDING':        { ko: '2단계 주문 발송 중', sig: 'yellow', icon: '⏳' },
+  'STAGE2_OPEN':                { ko: '2단계 체결 대기',    sig: 'yellow', icon: '⏳' },
+  'STAGE2_FILLED':              { ko: '2단계 진입 완료',    sig: 'green',  icon: '✅' },
+  'STAGE3_OPEN_PENDING':        { ko: '3단계 주문 발송 중', sig: 'yellow', icon: '⏳' },
+  'STAGE3_OPEN':                { ko: '3단계 체결 대기',    sig: 'yellow', icon: '⏳' },
+  'STAGE3_FILLED':              { ko: '3단계 진입 완료',    sig: 'green',  icon: '✅' },
+  'TP1_FILLED':                 { ko: '1차 익절 체결',     sig: 'green',  icon: '💎' },
+  'TP2_FILLED':                 { ko: '2차 익절 체결',     sig: 'green',  icon: '💎' },
+  'TP3_FILLED':                 { ko: '3차 익절 체결',     sig: 'green',  icon: '💎' },
+  'CLOSED':                     { ko: '정상 종료',         sig: 'gray',   icon: '✓' },
+  'CLOSED_BY_TP':               { ko: '익절 종료',         sig: 'green',  icon: '💎' },
+  'CLOSED_BY_SL':               { ko: '손절 종료',         sig: 'red',    icon: '🛑' },
+  'STOPPING':                   { ko: '종료 중',           sig: 'gray',   icon: '⏸' },
+  'STOPPED':                    { ko: '수동 종료',         sig: 'gray',   icon: '⏹' },
+  'LIQUIDATION_IMMINENT':       { ko: '⚠️ 청산 임박',      sig: 'red',    icon: '🚨' },
+  'KILL_SWITCH_TRIGGERED':      { ko: '🚨 긴급 정지',      sig: 'red',    icon: '🛑' },
+};
+
+const ORDER_STATUS_MAP = {
+  'NEW':              { ko: '대기',     sig: 'yellow' },
+  'PARTIALLY_FILLED': { ko: '부분 체결', sig: 'yellow' },
+  'FILLED':           { ko: '체결 완료', sig: 'green' },
+  'CANCELED':         { ko: '취소',     sig: 'gray' },
+  'EXPIRED':          { ko: '만료',     sig: 'gray' },
+  'REJECTED':         { ko: '거부',     sig: 'red' },
+};
+
+const PURPOSE_MAP = {
+  'ENTRY':            '진입',
+  'TAKE_PROFIT':      '익절',
+  'STOP_LOSS':        '손절',
+  'EMERGENCY_CLOSE':  '긴급 청산',
+};
+
+const TERMINAL_STATUSES = ['STOPPED', 'STOPPING', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'KILL_SWITCH_TRIGGERED'];
 
 // ==================== Auth ====================
 document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -156,15 +345,15 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
       body: formData,
     });
-    if (!res.ok) throw new Error('Login failed: ' + res.status);
+    if (!res.ok) throw new Error('로그인 실패: ' + res.status);
     const data = await res.json();
     token = data.access_token;
     localStorage.setItem('access_token', token);
     showDashboard();
     refreshAll();
-    toast('로그인 성공', 'success');
+    toast('환영합니다 ' + email, 'success');
   } catch (err) {
-    toast('로그인 실패: ' + err.message, 'error');
+    toast(err.message, 'error');
   }
 });
 
@@ -210,33 +399,41 @@ async function refreshAll() {
     refreshStrategies(),
     refreshExchangeAccounts(),
   ]);
+  document.getElementById('last-updated').textContent = '마지막 갱신: ' + new Date().toLocaleTimeString('ko-KR');
 }
 
 async function refreshHealth() {
   try {
     const res = await fetch(window.location.origin + '/health');
     const data = await res.json();
-    document.getElementById('metric-health').textContent = data.status === 'ok' ? '✅' : '❌';
-  } catch { document.getElementById('metric-health').textContent = '❌'; }
+    const ok = data.status === 'ok';
+    setMetric('system', ok ? '🟢 정상' : '🔴 오류',  ok ? 'API + DB 연결됨' : '연결 실패', ok ? 'green' : 'red');
+  } catch {
+    setMetric('system', '🔴 오류', 'API 응답 없음', 'red');
+  }
 }
 
 async function refreshTemplates() {
   try {
     const data = await api('/admin/strategy-templates');
-    document.getElementById('metric-templates').textContent = data.length;
+    const active = data.filter(t => t.is_active).length;
+    setMetric('templates', data.length + '개', `사용 가능 ${active}개`, data.length ? 'green' : 'gray');
     const tbody = document.getElementById('templates-tbody');
+    if (data.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-slate-500 py-6">템플릿 없음</td></tr>';
+      return;
+    }
     tbody.innerHTML = data.map(t => {
       const sc = t.stages_config || {};
-      const stages = (sc.capitals || []).join(' / ');
+      const stages = (sc.capitals || []).map(c => fmtNum(c)).join(' / ');
       return `<tr>
         <td>${t.id}</td>
-        <td class="font-mono">${escapeHtml(t.name)}</td>
-        <td>${t.strategy_type}</td>
-        <td>${sideEmoji(t.side)} ${t.side}</td>
+        <td class="font-mono text-blue-300">${escapeHtml(t.name)}</td>
+        <td>${sideBadge(t.side)}</td>
         <td class="num">${t.leverage}x</td>
-        <td class="num">${fmtNum(t.total_capital)}</td>
-        <td class="text-xs text-slate-400">${stages}</td>
-        <td>${t.is_active ? '✅' : '⏸️'}</td>
+        <td class="num">${fmtNum(t.total_capital)} <span class="text-slate-500">USDT</span></td>
+        <td class="text-xs text-slate-400">${stages || '-'}</td>
+        <td>${t.is_active ? '<span class="badge badge-green">활성</span>' : '<span class="badge badge-gray">중지</span>'}</td>
       </tr>`;
     }).join('');
   } catch (err) { toast('템플릿 조회 실패: ' + err.message, 'error'); }
@@ -245,33 +442,64 @@ async function refreshTemplates() {
 async function refreshStrategies() {
   try {
     const data = await api('/strategies');
-    const active = data.filter(s => !['STOPPED', 'STOPPING', 'CLOSED', 'CLOSED_BY_SL'].includes(s.status));
-    document.getElementById('metric-active').textContent = active.length;
+    const active = data.filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()));
+    let totalUnrealized = 0;
+    active.forEach(s => { totalUnrealized += Number(s.unrealized_pnl || 0); });
+
+    setMetric('active', active.length + '건',
+      active.length === 0 ? '진행 중인 전략 없음' : `전체 ${data.length}건 중`,
+      active.length === 0 ? 'gray' : 'green');
+
+    const pnlSig = totalUnrealized > 0 ? 'green' : totalUnrealized < 0 ? 'red' : 'gray';
+    const pnlEl = document.getElementById('metric-pnl');
+    pnlEl.textContent = fmtPnL(totalUnrealized) + ' USDT';
+    pnlEl.className = 'text-2xl font-bold ' + (totalUnrealized > 0 ? 'pos' : totalUnrealized < 0 ? 'neg' : '');
+    setSignal('card-pnl', pnlSig);
+
     const tbody = document.getElementById('strategies-tbody');
     if (data.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500">전략 없음</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500 py-6">전략 없음</td></tr>';
       return;
     }
-    tbody.innerHTML = data.map(s => {
-      const stage = s.current_stage > 0 ? `${s.current_stage}` : '-';
-      const entry = s.avg_entry_price ? fmtNum(s.avg_entry_price) : '-';
-      const qty = s.current_position_qty && Number(s.current_position_qty) !== 0 ? fmtNum(s.current_position_qty) : '-';
-      const pnl = s.unrealized_pnl !== undefined && s.unrealized_pnl !== null ? fmtNum(s.unrealized_pnl) : '-';
+
+    // 위험 신호 감지 (청산 임박, 손절 종료 발생 직후 등)
+    const danger = data.find(s => ['LIQUIDATION_IMMINENT', 'KILL_SWITCH_TRIGGERED'].includes((s.status || '').toUpperCase()));
+    if (danger) {
+      showAlert(`전략 #${danger.id} ${danger.symbol} ${danger.side} — 즉시 확인 필요`, statusInfo(danger.status).ko);
+    } else {
+      hideAlert();
+    }
+
+    // 활성 전략 우선 정렬
+    const sorted = [...data].sort((a, b) => {
+      const aTerm = TERMINAL_STATUSES.includes((a.status || '').toUpperCase()) ? 1 : 0;
+      const bTerm = TERMINAL_STATUSES.includes((b.status || '').toUpperCase()) ? 1 : 0;
+      return aTerm - bTerm || b.id - a.id;
+    });
+
+    tbody.innerHTML = sorted.map(s => {
+      const info = statusInfo(s.status);
+      const stage = s.current_stage > 0 ? renderStageBar(s.current_stage, 4) : '<span class="text-slate-500">대기</span>';
+      const entry = s.avg_entry_price ? fmtNum(s.avg_entry_price) : '<span class="text-slate-500">-</span>';
+      const qty = s.current_position_qty && Number(s.current_position_qty) !== 0 ? fmtQty(s.current_position_qty) : '<span class="text-slate-500">-</span>';
       const pnlNum = Number(s.unrealized_pnl || 0);
-      const pnlClass = pnlNum > 0 ? 'text-green-400' : pnlNum < 0 ? 'text-red-400' : '';
-      const isClosed = ['STOPPED', 'STOPPING', 'CLOSED', 'CLOSED_BY_SL'].includes((s.status || '').toUpperCase());
-      const stopBtn = isClosed
-        ? `<span class="text-slate-500 text-xs">-</span>`
-        : `<button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-danger px-2 py-1 rounded text-xs">중지</button>`;
-      return `<tr class="cursor-pointer hover:bg-slate-700" onclick="selectStrategy(${s.id})">
-        <td>${s.id}</td>
-        <td class="font-mono">${s.symbol}</td>
-        <td>${sideEmoji(s.side)} ${s.side}</td>
-        <td><span class="badge ${statusBadge(s.status)}">${s.status}</span></td>
-        <td class="num">${stage}</td>
+      const pnl = (s.unrealized_pnl !== null && s.unrealized_pnl !== undefined && Number(s.current_position_qty) !== 0)
+        ? `<span class="${pnlNum>0?'pos':pnlNum<0?'neg':''}">${fmtPnL(pnlNum)}</span>`
+        : '<span class="text-slate-500">-</span>';
+      const isTerminal = TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
+      const stopBtn = isTerminal
+        ? '<span class="text-slate-500 text-xs">-</span>'
+        : `<button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="padding:4px 10px">⏸ 정지</button>
+           <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs ml-1" style="padding:4px 10px">🛑</button>`;
+      return `<tr class="row-clickable" onclick="selectStrategy(${s.id})">
+        <td>#${s.id}</td>
+        <td class="font-mono text-blue-300">${s.symbol}</td>
+        <td>${sideBadge(s.side)}</td>
+        <td><span class="badge badge-${info.sig}">${info.icon} ${info.ko}</span></td>
+        <td>${stage}</td>
         <td class="num">${entry}</td>
         <td class="num">${qty}</td>
-        <td class="num ${pnlClass}">${pnl}</td>
+        <td class="num">${pnl}</td>
         <td>${stopBtn}</td>
       </tr>`;
     }).join('');
@@ -281,8 +509,8 @@ async function refreshStrategies() {
 async function refreshExchangeAccounts() {
   try {
     const data = await api('/exchange-accounts');
-    document.getElementById('metric-accounts').textContent = data.length;
-  } catch (err) { document.getElementById('metric-accounts').textContent = '?'; }
+    // 별도 카드 없음 (시스템 카드 detail 에 표시 가능)
+  } catch (err) { /* 무시 */ }
 }
 
 async function selectStrategy(id) {
@@ -291,55 +519,274 @@ async function selectStrategy(id) {
     const orders = await api('/orders/by-strategy/' + id);
     const tbody = document.getElementById('orders-tbody');
     if (orders.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500">주문 없음</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500 py-6">주문 없음</td></tr>';
       return;
     }
-    tbody.innerHTML = orders.map(o => `<tr>
-      <td>${o.id}</td>
-      <td>${o.stage_no || '-'}</td>
-      <td>${o.purpose}</td>
-      <td>${o.side}</td>
-      <td>${o.order_type}</td>
-      <td class="num">${fmtNum(o.price)}</td>
-      <td class="num">${fmtNum(o.orig_qty)}</td>
-      <td class="num">${fmtNum(o.executed_qty)}</td>
-      <td><span class="badge ${statusBadge(o.status)}">${o.status}</span></td>
-    </tr>`).join('');
+    tbody.innerHTML = orders.map(o => {
+      const oInfo = ORDER_STATUS_MAP[o.status] || { ko: o.status, sig: 'gray' };
+      const purpose = PURPOSE_MAP[o.purpose] || o.purpose;
+      const sideKo = o.side === 'SELL' ? '매도 📉' : '매수 📈';
+      return `<tr>
+        <td>#${o.id}</td>
+        <td>${o.stage_no || '-'}</td>
+        <td>${purpose}</td>
+        <td>${sideKo}</td>
+        <td>${o.order_type}</td>
+        <td class="num">${fmtNum(o.price)}</td>
+        <td class="num">${fmtQty(o.orig_qty)}</td>
+        <td class="num">${fmtQty(o.executed_qty)}</td>
+        <td><span class="badge badge-${oInfo.sig}">${oInfo.ko}</span></td>
+      </tr>`;
+    }).join('');
+    document.getElementById('detail-section').scrollIntoView({behavior:'smooth', block:'center'});
   } catch (err) { toast('주문 조회 실패: ' + err.message, 'error'); }
 }
 
 async function stopStrategy(id) {
-  if (!confirm(`전략 #${id} 을(를) 중지하시겠습니까?\n(open 주문 모두 취소)`)) return;
+  if (!confirm(`전략 #${id} 의 모든 미체결 주문을 취소합니다.\n\n포지션은 그대로 유지됩니다.\n진행할까요?`)) return;
   try {
-    await api(`/strategies/${id}/stop`, {method: 'POST', body: {mode: 'cancel_only', reason: 'Manual stop from dashboard'}});
-    toast('전략 중지 요청 발송', 'success');
+    await api(`/strategies/${id}/stop`, {method: 'POST', body: {mode: 'cancel_only', reason: '대시보드에서 수동 정지'}});
+    toast(`전략 #${id} 미체결 주문 취소 요청 발송`, 'success');
     refreshStrategies();
-  } catch (err) { toast('중지 실패: ' + err.message, 'error'); }
+  } catch (err) { toast('정지 실패: ' + err.message, 'error'); }
+}
+
+async function emergencyStop(id) {
+  if (!confirm(`⚠️ 긴급 종료\n\n전략 #${id} 의 모든 주문을 취소하고 포지션을 시장가로 청산합니다.\n\n실손실이 확정될 수 있습니다. 정말 진행할까요?`)) return;
+  try {
+    await api(`/strategies/${id}/stop`, {method: 'POST', body: {mode: 'emergency_stop', reason: '대시보드에서 긴급 종료'}});
+    toast(`전략 #${id} 긴급 종료 요청 발송`, 'warning');
+    refreshStrategies();
+  } catch (err) { toast('긴급 종료 실패: ' + err.message, 'error'); }
 }
 
 async function testTelegram() {
   try {
     const data = await api('/admin/test-telegram', {method: 'POST'});
-    toast('Telegram 테스트 발송: ' + data.message, 'success');
-  } catch (err) { toast('Telegram 실패: ' + err.message, 'error'); }
+    toast('Telegram 테스트 발송 완료. 봇 채팅 확인해주세요', 'success');
+  } catch (err) { toast('Telegram 발송 실패: ' + err.message, 'error'); }
 }
 
 // ==================== Helpers ====================
+function statusInfo(status) {
+  if (!status) return { ko: '알 수 없음', sig: 'gray', icon: '?' };
+  return STATUS_MAP[status.toUpperCase()] || { ko: status, sig: 'blue', icon: '•' };
+}
+
+function sideBadge(side) {
+  if (side === 'SHORT') return '<span class="badge badge-red">📉 숏</span>';
+  if (side === 'LONG')  return '<span class="badge badge-green">📈 롱</span>';
+  return '<span class="badge badge-gray">' + side + '</span>';
+}
+
+function renderStageBar(current, total) {
+  let dots = '';
+  for (let i = 1; i <= total; i++) {
+    let cls = 'stage-dot';
+    if (i < current) cls += ' done';
+    else if (i === current) cls += ' current';
+    dots += `<span class="${cls}"></span>`;
+  }
+  return `<span class="stage-bar">${dots} <span class="text-xs text-slate-400 ml-1">${current}/${total}</span></span>`;
+}
+
 function fmtNum(v) {
+  if (v === null || v === undefined) return '-';
+  const n = Number(v); if (isNaN(n)) return v;
+  if (Math.abs(n) >= 1) return n.toLocaleString('en-US', {maximumFractionDigits: 2});
+  return n.toLocaleString('en-US', {maximumFractionDigits: 8});
+}
+function fmtQty(v) {
   if (v === null || v === undefined) return '-';
   const n = Number(v); if (isNaN(n)) return v;
   return n.toLocaleString('en-US', {maximumFractionDigits: 8});
 }
-function sideEmoji(side) { return side === 'SHORT' ? '📉' : '📈'; }
-function statusBadge(status) {
-  if (!status) return 'badge-pending';
-  const s = status.toUpperCase();
-  if (s.includes('ACTIVE') || s.includes('FILLED') || s === 'NEW') return 'badge-active';
-  if (s.includes('WAITING') || s.includes('PENDING') || s.includes('OPEN')) return 'badge-waiting';
-  if (s.includes('STOP') || s.includes('CLOSED') || s.includes('CANCEL')) return 'badge-closed';
-  return 'badge-pending';
+function fmtPnL(v) {
+  const n = Number(v || 0);
+  if (isNaN(n)) return '0';
+  const formatted = n.toLocaleString('en-US', {maximumFractionDigits: 2, minimumFractionDigits: 2});
+  return n > 0 ? '+' + formatted : formatted;
 }
+
+function setMetric(name, value, detail, signal) {
+  document.getElementById('metric-' + name).textContent = value;
+  if (detail !== undefined) document.getElementById('metric-' + name + '-detail').textContent = detail;
+  setSignal('card-' + name, signal);
+}
+function setSignal(cardId, sig) {
+  const el = document.getElementById(cardId);
+  if (!el) return;
+  el.classList.remove('signal-green','signal-yellow','signal-red','signal-gray');
+  el.classList.add('signal-' + (sig || 'gray'));
+}
+
+function showAlert(title, detail) {
+  document.getElementById('alert-title').textContent = title;
+  document.getElementById('alert-detail').textContent = detail;
+  document.getElementById('alert-bar').classList.remove('hidden');
+}
+function hideAlert() { document.getElementById('alert-bar').classList.add('hidden'); }
+function dismissAlert() { hideAlert(); }
+
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+
+// ==================== 신규 전략 모달 ====================
+let cmState = {
+  accountId: null,
+  side: 'SHORT',
+  templateId: null,
+  preview: null,
+};
+
+async function openCreateModal() {
+  document.getElementById('create-modal').classList.remove('hidden');
+  document.getElementById('cm-preview').classList.add('hidden');
+  document.getElementById('cm-submit').disabled = true;
+  cmState = { accountId: null, side: 'SHORT', templateId: null, preview: null };
+  await Promise.all([loadCmAccounts(), loadCmTemplates(), loadCmSymbols()]);
+  setCmSide('SHORT');
+}
+
+function closeCreateModal() {
+  document.getElementById('create-modal').classList.add('hidden');
+}
+
+async function loadCmAccounts() {
+  try {
+    const data = await api('/exchange-accounts');
+    const el = document.getElementById('cm-accounts');
+    if (!data.length) {
+      el.innerHTML = '<p class="text-red-400 text-sm">⚠️ 등록된 거래소 계정이 없습니다. 먼저 등록하세요.</p>';
+      return;
+    }
+    el.innerHTML = data.map((a, idx) => `
+      <label class="flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-slate-700">
+        <input type="radio" name="cm-account" value="${a.id}" ${idx===0?'checked':''} onchange="cmState.accountId=${a.id}; updateCmSubmit()" />
+        <span class="font-mono">#${a.id}</span>
+        <span>${a.exchange_name}/${a.market_type}</span>
+        ${a.is_testnet ? '<span class="badge badge-yellow">testnet</span>' : '<span class="badge badge-red">mainnet</span>'}
+        ${a.hedge_mode_enabled ? '<span class="badge badge-blue">hedge</span>' : ''}
+      </label>
+    `).join('');
+    cmState.accountId = data[0].id;
+    updateCmSubmit();
+  } catch (e) { toast('계정 조회 실패: '+e.message, 'error'); }
+}
+
+async function loadCmTemplates() {
+  try {
+    const data = await api('/admin/strategy-templates');
+    const el = document.getElementById('cm-templates');
+    const active = data.filter(t => t.is_active);
+    if (!active.length) {
+      el.innerHTML = '<p class="text-red-400 text-sm">⚠️ 활성 템플릿이 없습니다.</p>';
+      return;
+    }
+    el.innerHTML = active.map(t => {
+      const sc = t.stages_config || {};
+      const stages = (sc.capitals || []).join(' / ');
+      return `<label class="flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-slate-700">
+        <input type="radio" name="cm-template" value="${t.id}" onchange="cmState.templateId=${t.id}; updateCmSubmit()" />
+        <span class="font-mono text-blue-300">#${t.id}</span>
+        <span class="font-semibold">${escapeHtml(t.name)}</span>
+        <span class="badge ${t.side==='SHORT'?'badge-red':'badge-green'}">${t.side}</span>
+        <span class="text-xs text-slate-400">${t.leverage}x · ${fmtNum(t.total_capital)} USDT · ${stages}</span>
+      </label>`;
+    }).join('');
+  } catch (e) { toast('템플릿 조회 실패: '+e.message, 'error'); }
+}
+
+async function loadCmSymbols() {
+  try {
+    const data = await api('/symbols?only_trading=true&limit=200');
+    const list = document.getElementById('cm-symbol-list');
+    list.innerHTML = data.map(s => `<option value="${s.symbol}"></option>`).join('');
+  } catch { /* symbols 없으면 무시 — 사용자 직접 입력 가능 */ }
+}
+
+function setCmSide(side) {
+  cmState.side = side;
+  document.getElementById('cm-side-short').className = 'btn flex-1' + (side==='SHORT' ? '' : ' btn-ghost');
+  document.getElementById('cm-side-short').style.background = side==='SHORT' ? '#ef4444' : 'transparent';
+  document.getElementById('cm-side-short').style.color = side==='SHORT' ? '#fff' : '#cbd5e1';
+  document.getElementById('cm-side-long').className = 'btn flex-1' + (side==='LONG' ? '' : ' btn-ghost');
+  document.getElementById('cm-side-long').style.background = side==='LONG' ? '#10b981' : 'transparent';
+  document.getElementById('cm-side-long').style.color = side==='LONG' ? '#fff' : '#cbd5e1';
+}
+
+function updateCmSubmit() {
+  const ok = cmState.accountId && cmState.templateId && cmState.preview;
+  document.getElementById('cm-submit').disabled = !ok;
+}
+
+async function calcPreview() {
+  const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
+  const startPrice = document.getElementById('cm-start-price').value;
+  if (!symbol || !startPrice) return toast('심볼과 시작가를 입력하세요', 'warning');
+  if (!cmState.templateId) return toast('템플릿을 먼저 선택하세요', 'warning');
+  try {
+    const data = await api('/strategies/calculate', {
+      method: 'POST',
+      body: { symbol, side: cmState.side, start_price: startPrice, strategy_template_id: cmState.templateId },
+    });
+    cmState.preview = data;
+    const triggerKo = (mode, pct) => {
+      if (mode === 'IMMEDIATE') return '즉시';
+      if (mode === 'PRICE_UP_PCT') return `+${pct}% 도달 시`;
+      if (mode === 'PRICE_DOWN_PCT') return `-${pct}% 도달 시`;
+      if (mode === 'LIQUIDATION_BUFFER') return `청산가 -${pct}% 전`;
+      return mode;
+    };
+    document.getElementById('cm-preview-tbody').innerHTML = data.stages.map(s => `
+      <tr>
+        <td>${s.stage_no}단계</td>
+        <td>${triggerKo(s.trigger_mode, s.trigger_percent)}</td>
+        <td class="num">${s.trigger_price ? fmtNum(s.trigger_price) : '-'}</td>
+        <td class="num">${fmtNum(s.planned_capital)}</td>
+        <td class="num">${s.planned_qty ? fmtQty(s.planned_qty) : '-'}</td>
+      </tr>
+    `).join('');
+    const totalCap = data.stages.reduce((sum, s) => sum + Number(s.planned_capital || 0), 0);
+    document.getElementById('cm-preview-meta').innerHTML =
+      `레버리지: ${data.leverage}x | 총 투입자본: <strong>${fmtNum(totalCap)} USDT</strong> | ` +
+      `TP: ${data.tp1_percent}/${data.tp2_percent}/${data.tp3_percent}% | ` +
+      `<span class="text-red-400">손절 한도: ${fmtNum(data.stop_loss_amount)} USDT</span>`;
+    document.getElementById('cm-preview').classList.remove('hidden');
+    updateCmSubmit();
+  } catch (e) { toast('미리보기 실패: '+e.message, 'error'); }
+}
+
+async function submitCreate() {
+  const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
+  const startPrice = document.getElementById('cm-start-price').value;
+  if (!confirm(`${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략을 시작합니다.\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요? (testnet 거래소면 실거래 발생)`)) return;
+  try {
+    document.getElementById('cm-submit').disabled = true;
+    document.getElementById('cm-submit').textContent = '⏳ 생성 중...';
+    const created = await api('/strategies', {
+      method: 'POST',
+      body: {
+        exchange_account_id: cmState.accountId,
+        strategy_template_id: cmState.templateId,
+        symbol, side: cmState.side, start_price: startPrice,
+      },
+    });
+    toast('✅ 전략 #' + created.id + ' 생성됨. 1단계 주문 발송 중...', 'success');
+    try {
+      await api('/strategies/' + created.id + '/start', { method: 'POST' });
+      toast('🚀 전략 #' + created.id + ' 시작 완료. 1단계 주문 발송됨.', 'success');
+    } catch (startErr) {
+      toast('전략 생성됐지만 시작 실패: ' + startErr.message + ' (수동으로 다시 시도하세요)', 'warning');
+    }
+    closeCreateModal();
+    refreshStrategies();
+  } catch (e) {
+    toast('전략 생성 실패: '+e.message, 'error');
+    document.getElementById('cm-submit').disabled = false;
+    document.getElementById('cm-submit').textContent = '🚀 전략 시작';
+  }
+}
+
 function toast(msg, type) {
   const el = document.getElementById('toast');
   el.textContent = msg;
@@ -352,7 +799,7 @@ function toast(msg, type) {
 if (token) {
   showDashboard();
   refreshAll();
-  setInterval(() => { if (!document.hidden) refreshStrategies(); }, 5000); // 5초마다 전략만 자동 새로고침
+  setInterval(() => { if (!document.hidden) { refreshStrategies(); refreshHealth(); } }, 5000);
 }
 </script>
 </body>
