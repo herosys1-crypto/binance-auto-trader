@@ -241,6 +241,77 @@ def cleanup_quick_templates(
     return MessageResponse(message=msg)
 
 
+@router.get("/stats")
+def get_operation_stats(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """운영 통계 — 전체 전략 분포 + 누적 손익 + 승률 + 크라이시스 발동 횟수.
+
+    대시보드 상단 패널에 표시. 시계열 차트는 다음 phase 에서 추가.
+    """
+    from decimal import Decimal
+    from sqlalchemy import func, select as sa_select
+    from app.models.strategy_instance import StrategyInstance
+
+    # 전체/활성/완료/손절 분포
+    rows = db.execute(
+        sa_select(StrategyInstance.status, func.count(StrategyInstance.id))
+        .group_by(StrategyInstance.status)
+    ).all()
+    status_counts = {r[0]: r[1] for r in rows}
+    total = sum(status_counts.values())
+
+    terminal = {"STOPPED", "CLOSED", "CLOSED_BY_TP", "CLOSED_BY_SL", "COMPLETED", "STOPPING"}
+    active_count = sum(c for s, c in status_counts.items() if (s or "").upper() not in terminal)
+    completed_count = status_counts.get("COMPLETED", 0)
+    sl_count = status_counts.get("CLOSED_BY_SL", 0) + status_counts.get("STOPPING", 0)
+
+    # 누적 실현 손익 합계
+    realized_total = db.execute(
+        sa_select(func.coalesce(func.sum(StrategyInstance.realized_pnl), 0))
+    ).scalar_one() or Decimal("0")
+
+    # 승률 (COMPLETED / (COMPLETED + CLOSED_BY_SL)) — 진행 중 제외
+    decided = completed_count + sl_count
+    win_rate = (Decimal(completed_count) / Decimal(decided) * Decimal("100")) if decided > 0 else Decimal("0")
+
+    # 크라이시스 모드 진입 횟수
+    crisis_total = db.execute(
+        sa_select(func.count(StrategyInstance.id))
+        .where(StrategyInstance.crisis_mode_triggered_at.is_not(None))
+    ).scalar_one() or 0
+    crisis_active = db.execute(
+        sa_select(func.count(StrategyInstance.id))
+        .where(
+            StrategyInstance.crisis_mode_triggered_at.is_not(None),
+            StrategyInstance.status.notin_(list(terminal)),
+        )
+    ).scalar_one() or 0
+
+    # 평균 max_loss / max_profit (운영 패턴 파악)
+    avg_max_loss = db.execute(
+        sa_select(func.coalesce(func.avg(StrategyInstance.max_loss_pct), 0))
+    ).scalar_one() or Decimal("0")
+    avg_max_profit = db.execute(
+        sa_select(func.coalesce(func.avg(StrategyInstance.max_profit_pct), 0))
+    ).scalar_one() or Decimal("0")
+
+    return {
+        "total": total,
+        "active": active_count,
+        "completed": completed_count,
+        "stop_loss": sl_count,
+        "win_rate_pct": str(round(win_rate, 2)),
+        "realized_pnl_total": str(realized_total),
+        "crisis_total": crisis_total,
+        "crisis_active": crisis_active,
+        "avg_max_loss_pct": str(round(Decimal(str(avg_max_loss)), 2)),
+        "avg_max_profit_pct": str(round(Decimal(str(avg_max_profit)), 2)),
+        "status_breakdown": status_counts,
+    }
+
+
 @router.post("/test-telegram", response_model=MessageResponse)
 def test_telegram(
     db: Session = Depends(get_db),
