@@ -428,19 +428,43 @@
     </div>
   </div>
 
-  <!-- 선택 전략 주문 내역 -->
-  <div id="detail-section" class="hidden card rounded-lg mb-6">
-    <div class="card-header text-sm">📦 선택 전략 — 주문 내역</div>
-    <div class="overflow-x-auto">
-      <table>
-        <thead>
-          <tr>
-            <th>#</th><th>단계</th><th>유형</th><th>방향</th><th>주문 타입</th>
-            <th class="num">가격</th><th class="num">수량</th><th class="num">체결</th><th>상태</th>
-          </tr>
-        </thead>
-        <tbody id="orders-tbody"></tbody>
-      </table>
+  <!-- 선택 전략 — 단계별 계획 + 주문 내역 -->
+  <div id="detail-section" class="hidden">
+    <!-- 단계별 계획 -->
+    <div class="card rounded-lg mb-4">
+      <div class="card-header text-sm">📋 선택 전략 — 단계별 계획</div>
+      <div class="overflow-x-auto">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:60px">단계</th>
+              <th>진입 조건</th>
+              <th class="num">트리거가</th>
+              <th class="num">투입 자본</th>
+              <th class="num">계획 수량</th>
+              <th>상태</th>
+              <th>발동 시각</th>
+            </tr>
+          </thead>
+          <tbody id="stage-plans-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 주문 내역 -->
+    <div class="card rounded-lg mb-6">
+      <div class="card-header text-sm">📦 선택 전략 — 주문 내역</div>
+      <div class="overflow-x-auto">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th><th>단계</th><th>유형</th><th>방향</th><th>주문 타입</th>
+              <th class="num">가격</th><th class="num">수량</th><th class="num">체결</th><th>상태</th>
+            </tr>
+          </thead>
+          <tbody id="orders-tbody"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>
@@ -756,30 +780,75 @@ async function refreshExchangeAccounts() {
 async function selectStrategy(id) {
   document.getElementById('detail-section').classList.remove('hidden');
   try {
-    const orders = await api('/orders/by-strategy/' + id);
+    const [stagePlans, orders] = await Promise.all([
+      api('/strategies/' + id + '/stage-plans').catch(() => []),
+      api('/orders/by-strategy/' + id).catch(() => []),
+    ]);
+
+    // 단계별 계획 렌더링
+    const stTbody = document.getElementById('stage-plans-tbody');
+    if (!stagePlans.length) {
+      stTbody.innerHTML = '<tr><td colspan="7" class="text-center text-slate-500 py-6">단계 계획 없음</td></tr>';
+    } else {
+      stTbody.innerHTML = stagePlans.map(s => {
+        const conditionKo = (mode, pct) => {
+          if (mode === 'IMMEDIATE') return '즉시 진입';
+          if (mode === 'PRICE_UP_PCT') return `+${pct}% 도달 시`;
+          if (mode === 'PRICE_DOWN_PCT') return `-${pct}% 도달 시`;
+          if (mode === 'LIQUIDATION_BUFFER') return `청산가 -${pct}%`;
+          return mode;
+        };
+        let stageStatus, badgeClass;
+        if (s.is_triggered) {
+          stageStatus = '✅ 발동됨';
+          badgeClass = 'badge-green';
+        } else if (!s.is_enabled) {
+          stageStatus = '⏸ 비활성';
+          badgeClass = 'badge-gray';
+        } else {
+          stageStatus = '⏳ 대기';
+          badgeClass = 'badge-yellow';
+        }
+        const triggeredTime = s.triggered_at
+          ? new Date(s.triggered_at).toLocaleString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          : '-';
+        return `<tr>
+          <td class="text-center font-semibold text-slate-200">${s.stage_no}</td>
+          <td>${conditionKo(s.trigger_mode, s.trigger_percent)}</td>
+          <td class="num">${s.trigger_price ? fmtNum(s.trigger_price) : '<span class="text-slate-500">-</span>'}</td>
+          <td class="num">${fmtNum(s.planned_capital)} <span class="text-slate-500 text-xs">USDT</span></td>
+          <td class="num">${s.planned_qty ? fmtQty(s.planned_qty) : '<span class="text-slate-500">-</span>'}</td>
+          <td><span class="badge ${badgeClass}">${stageStatus}</span></td>
+          <td class="text-xs text-slate-400">${triggeredTime}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // 주문 내역 렌더링
     const tbody = document.getElementById('orders-tbody');
     if (orders.length === 0) {
       tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500 py-6">주문 없음</td></tr>';
-      return;
+    } else {
+      tbody.innerHTML = orders.map(o => {
+        const oInfo = ORDER_STATUS_MAP[o.status] || { ko: o.status, sig: 'gray' };
+        const purpose = PURPOSE_MAP[o.purpose] || o.purpose;
+        const sideKo = o.side === 'SELL' ? '매도 📉' : '매수 📈';
+        return `<tr>
+          <td>#${o.id}</td>
+          <td>${o.stage_no || '-'}</td>
+          <td>${purpose}</td>
+          <td>${sideKo}</td>
+          <td>${o.order_type}</td>
+          <td class="num">${fmtNum(o.price)}</td>
+          <td class="num">${fmtQty(o.orig_qty)}</td>
+          <td class="num">${fmtQty(o.executed_qty)}</td>
+          <td><span class="badge badge-${oInfo.sig}">${oInfo.ko}</span></td>
+        </tr>`;
+      }).join('');
     }
-    tbody.innerHTML = orders.map(o => {
-      const oInfo = ORDER_STATUS_MAP[o.status] || { ko: o.status, sig: 'gray' };
-      const purpose = PURPOSE_MAP[o.purpose] || o.purpose;
-      const sideKo = o.side === 'SELL' ? '매도 📉' : '매수 📈';
-      return `<tr>
-        <td>#${o.id}</td>
-        <td>${o.stage_no || '-'}</td>
-        <td>${purpose}</td>
-        <td>${sideKo}</td>
-        <td>${o.order_type}</td>
-        <td class="num">${fmtNum(o.price)}</td>
-        <td class="num">${fmtQty(o.orig_qty)}</td>
-        <td class="num">${fmtQty(o.executed_qty)}</td>
-        <td><span class="badge badge-${oInfo.sig}">${oInfo.ko}</span></td>
-      </tr>`;
-    }).join('');
+
     document.getElementById('detail-section').scrollIntoView({behavior:'smooth', block:'center'});
-  } catch (err) { toast('주문 조회 실패: ' + err.message, 'error'); }
+  } catch (err) { toast('상세 조회 실패: ' + err.message, 'error'); }
 }
 
 async function stopStrategy(id) {

@@ -182,6 +182,40 @@ def get_strategy(
     return StrategyDetailResponse.model_validate(strategy)
 
 
+@router.get("/{strategy_id}/stage-plans")
+def get_strategy_stage_plans(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> list[dict]:
+    """전략의 단계별 계획 + 트리거 상태 반환. 대시보드 상세 패널용."""
+    from app.models.strategy_stage_plan import StrategyStagePlan
+    from sqlalchemy import select as sa_select
+
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+    rows = db.execute(
+        sa_select(StrategyStagePlan)
+        .where(StrategyStagePlan.strategy_instance_id == strategy_id)
+        .order_by(StrategyStagePlan.stage_no.asc())
+    ).scalars().all()
+    return [
+        {
+            "stage_no": r.stage_no,
+            "trigger_mode": r.trigger_mode,
+            "trigger_percent": str(r.trigger_percent) if r.trigger_percent is not None else None,
+            "trigger_price": str(r.trigger_price) if r.trigger_price is not None else None,
+            "planned_capital": str(r.planned_capital),
+            "planned_qty": str(r.planned_qty) if r.planned_qty is not None else None,
+            "is_enabled": r.is_enabled,
+            "is_triggered": r.is_triggered,
+            "triggered_at": r.triggered_at.isoformat() if r.triggered_at else None,
+        }
+        for r in rows
+    ]
+
+
 @router.get("/{strategy_id}/blueprint")
 def get_strategy_blueprint(
     strategy_id: int,
