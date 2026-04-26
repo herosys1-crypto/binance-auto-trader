@@ -244,6 +244,93 @@ class NotificationService:
         return self.send(strategy_instance_id=strategy_instance_id, channel="TELEGRAM", title=title, body=body)
 
     # ------------------------------------------------------------------
+    # 크라이시스 복구 모드 알림 4종 (Phase D-2)
+    # ------------------------------------------------------------------
+    def send_crisis_mode_entered(
+        self,
+        *,
+        strategy_instance_id: int,
+        symbol: str,
+        side: str,
+        current_stage: int,
+        max_loss_pct: Any,
+    ) -> Notification:
+        emoji = _side_emoji(side)
+        title = f"🚨 [크라이시스 모드 진입] {symbol} {side} {emoji}"
+        body = "\n".join([
+            f"📌 종목         : {symbol}",
+            f"🎯 방향         : {side}",
+            f"🪜 현재 단계    : {current_stage}",
+            f"📉 누적 최대 손실: {_fmt_num(max_loss_pct)}%",
+            "",
+            "ℹ️ TP1 임계가 기존 +10% → +5% 로 낮아집니다.",
+            "ℹ️ +5% TP1 발동 시 트레일링 -5% + 빠른 손절 -1% 보호 모드 활성화.",
+        ])
+        return self.send(strategy_instance_id=strategy_instance_id, channel="TELEGRAM", title=title, body=body)
+
+    def send_crisis_first_tp(
+        self,
+        *,
+        strategy_instance_id: int,
+        symbol: str,
+        side: str,
+        pnl_pct: Any,
+        closed_qty: Any,
+    ) -> Notification:
+        emoji = _side_emoji(side)
+        title = f"⚡ [크라이시스 첫 TP +5%] {symbol} {side} {emoji}"
+        body = "\n".join([
+            f"📌 종목      : {symbol}",
+            f"💰 현재 PnL : {_fmt_num(pnl_pct)}%",
+            f"💵 청산 수량: {_fmt_qty(closed_qty)} (25%)",
+            "",
+            "🛡 보호 모드 [Stage 2] 활성화:",
+            "   • 트레일링 -5% (피크에서 -5% 회귀 시 전량 청산)",
+            "   • 빠른 손절 -1% (PnL -1% 시 전량 손절)",
+        ])
+        return self.send(strategy_instance_id=strategy_instance_id, channel="TELEGRAM", title=title, body=body)
+
+    def send_crisis_trailing_full(
+        self,
+        *,
+        strategy_instance_id: int,
+        symbol: str,
+        side: str,
+        peak_pnl_pct: Any,
+        current_pnl_pct: Any,
+    ) -> Notification:
+        emoji = _side_emoji(side)
+        title = f"🛡 [크라이시스 트레일링 청산] {symbol} {side} {emoji}"
+        body = "\n".join([
+            f"📌 종목      : {symbol}",
+            f"📈 피크 PnL : {_fmt_num(peak_pnl_pct)}%",
+            f"📉 현재 PnL : {_fmt_num(current_pnl_pct)}%",
+            f"📏 회귀     : {_fmt_num(Decimal(str(peak_pnl_pct or 0)) - Decimal(str(current_pnl_pct or 0)))}% ≥ 5%",
+            "",
+            "✅ 남은 전량 시장가 청산 — 차익 보호 완료.",
+        ])
+        return self.send(strategy_instance_id=strategy_instance_id, channel="TELEGRAM", title=title, body=body)
+
+    def send_crisis_hard_sl(
+        self,
+        *,
+        strategy_instance_id: int,
+        symbol: str,
+        side: str,
+        pnl_pct: Any,
+    ) -> Notification:
+        emoji = _side_emoji(side)
+        title = f"🚨 [크라이시스 빠른 손절 -1%] {symbol} {side} {emoji}"
+        body = "\n".join([
+            f"📌 종목      : {symbol}",
+            f"📉 현재 PnL : {_fmt_num(pnl_pct)}%",
+            "",
+            "🛑 첫 TP +5% 발동 후 PnL 가 -1% 이하 도달.",
+            "🛑 남은 전량 시장가 손절 → 재진입 대기 (manual_ready).",
+        ])
+        return self.send(strategy_instance_id=strategy_instance_id, channel="TELEGRAM", title=title, body=body)
+
+    # ------------------------------------------------------------------
     # Telegram 발송 (plain text — 한국어/이모지/특수문자 안전)
     # ------------------------------------------------------------------
     def _send_telegram(self, *, title: str, body: str) -> str:

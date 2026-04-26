@@ -384,15 +384,17 @@
             <th>심볼</th>
             <th>방향</th>
             <th>상태</th>
+            <th>모드</th>
             <th>단계 진행</th>
             <th class="num">진입요청가</th>
             <th class="num">평균 진입가</th>
             <th class="num">포지션</th>
             <th class="num">미실현 손익</th>
+            <th class="num" title="누적 최대 손실 / 최대 이익">최대손실/이익</th>
             <th style="width:140px">액션</th>
           </tr>
         </thead>
-        <tbody id="strategies-tbody"><tr><td colspan="10" class="text-center text-slate-500 py-6">로딩 중...</td></tr></tbody>
+        <tbody id="strategies-tbody"><tr><td colspan="12" class="text-center text-slate-500 py-6">로딩 중...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -707,14 +709,21 @@ async function refreshStrategies() {
 
     const tbody = document.getElementById('strategies-tbody');
     if (data.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="10" class="text-center text-slate-500 py-6">전략 없음</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="12" class="text-center text-slate-500 py-6">전략 없음</td></tr>';
       return;
     }
 
-    // 위험 신호 감지 (청산 임박, 손절 종료 발생 직후 등)
+    // 위험 신호 감지 (청산 임박, 손절 종료, 크라이시스 모드)
     const danger = data.find(s => ['LIQUIDATION_IMMINENT', 'KILL_SWITCH_TRIGGERED'].includes((s.status || '').toUpperCase()));
+    const crisisActive = data.find(s => s.crisis_mode_triggered_at && !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()));
     if (danger) {
       showAlert(`전략 #${danger.id} ${danger.symbol} ${danger.side} — 즉시 확인 필요`, statusInfo(danger.status).ko);
+    } else if (crisisActive) {
+      const stage2 = !!crisisActive.crisis_first_tp_done_at;
+      const detail = stage2
+        ? `Stage 2 보호 활성 — 트레일링 -5% + 빠른 손절 -1% 동작 중. 최대 손실: ${fmtNum(crisisActive.max_loss_pct)}% / 피크 후 PnL 추적 중.`
+        : `Stage 1 — TP1 임계 +5% 활성. 최대 손실: ${fmtNum(crisisActive.max_loss_pct)}% 도달했으니 회복 시 빠른 익절 예정.`;
+      showAlert(`🚨 크라이시스 모드 활성 — 전략 #${crisisActive.id} ${crisisActive.symbol} ${crisisActive.side}`, detail);
     } else {
       hideAlert();
     }
@@ -725,7 +734,7 @@ async function refreshStrategies() {
     if (hideTerm) visible = data.filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()));
     const hiddenCount = data.length - visible.length;
     if (visible.length === 0 && hiddenCount > 0) {
-      tbody.innerHTML = `<tr><td colspan="10" class="text-center text-slate-500 py-6">진행 중인 전략 없음 (종료 ${hiddenCount}건 숨김)</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="12" class="text-center text-slate-500 py-6">진행 중인 전략 없음 (종료 ${hiddenCount}건 숨김)</td></tr>`;
       return;
     }
 
@@ -754,16 +763,40 @@ async function refreshStrategies() {
       const startPx = s.start_price && Number(s.start_price) > 0
         ? `<span class="text-yellow-400" title="운영자가 입력한 1단계 LIMIT 가격">${fmtNum(s.start_price)}</span>`
         : '<span class="text-slate-500">-</span>';
+
+      // 크라이시스 모드 배지 (Stage1: TP1 미발동, Stage2: TP1 발동 후 보호 활성)
+      let modeBadge;
+      if (s.crisis_mode_triggered_at) {
+        if (s.crisis_first_tp_done_at) {
+          modeBadge = '<span class="badge badge-red" title="크라이시스 [Stage 2] — 트레일링 -5% + 빠른 손절 -1% 활성">🛡 크라이시스 보호</span>';
+        } else {
+          modeBadge = '<span class="badge badge-yellow" title="크라이시스 [Stage 1] — TP1 임계 +5% (정상 -50% 손절 유지)">🚨 크라이시스</span>';
+        }
+      } else {
+        modeBadge = '<span class="badge badge-gray">정상</span>';
+      }
+
+      // 최대 손실/이익
+      const maxLoss = s.max_loss_pct !== null && s.max_loss_pct !== undefined
+        ? `<span class="text-red-400">${fmtNum(s.max_loss_pct)}%</span>`
+        : '<span class="text-slate-500">-</span>';
+      const maxProfit = s.max_profit_pct !== null && s.max_profit_pct !== undefined
+        ? `<span class="text-green-400">+${fmtNum(s.max_profit_pct)}%</span>`
+        : '<span class="text-slate-500">-</span>';
+      const maxCell = `<div class="text-xs leading-tight">${maxLoss}<br>${maxProfit}</div>`;
+
       return `<tr class="row-clickable" onclick="selectStrategy(${s.id})">
         <td>#${s.id}</td>
         <td class="font-mono text-blue-300">${s.symbol}</td>
         <td>${sideBadge(s.side)}</td>
         <td><span class="badge badge-${info.sig}">${info.icon} ${info.ko}</span></td>
+        <td>${modeBadge}</td>
         <td>${stage}</td>
         <td class="num">${startPx}</td>
         <td class="num">${entry}</td>
         <td class="num">${qty}</td>
         <td class="num">${pnl}</td>
+        <td class="num">${maxCell}</td>
         <td>${stopBtn}</td>
       </tr>`;
     }).join('');

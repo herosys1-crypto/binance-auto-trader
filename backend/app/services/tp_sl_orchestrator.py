@@ -25,11 +25,16 @@ class TPSLOrchestratorService:
                 if strategy.current_position_qty is None or Decimal(str(strategy.current_position_qty)) <= 0:
                     return
                 strategy_runs_total.labels(side=strategy.side, status=strategy.status).inc()
+                # 정상 모드 -50% 손절 검사 (크라이시스 Stage 2 의 -1% 손절은 evaluate_take_profit_level 가 처리)
                 if self.risk_service.evaluate_stop_loss(strategy.id):
                     self._execute_stop_loss(strategy)
                     return
                 tp_level = self.risk_service.evaluate_take_profit_level(strategy.id)
                 if tp_level is None:
+                    return
+                # 크라이시스 복구 모드 액션 — 우선 처리
+                if tp_level in {"CRISIS_TP1", "CRISIS_TRAIL_FULL", "CRISIS_HARD_SL"} and strategy.status != "COMPLETED":
+                    self._execute_crisis_action(strategy, tp_level)
                     return
                 # 이미 동일 단계 또는 더 높은 단계가 실행됐으면 스킵
                 done_levels_progression = ["TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL", "TP4_DONE_PARTIAL", "COMPLETED"]
@@ -98,3 +103,82 @@ class TPSLOrchestratorService:
         self.db.commit()
         self.notification_service.send_stop_loss_alert(strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side, total_capital=str(strategy.total_capital), current_loss_amount=str(strategy.realized_pnl + strategy.unrealized_pnl))
         self.risk_service.mark_reentry_ready(strategy.id)
+
+    # ──────────────── 크라이시스 복구 모드 액션 (Phase D-2) ────────────────
+    def _execute_crisis_action(self, strategy, action: str) -> None:
+        """크라이시스 모드 3 액션 처리 — TP1(+5%) / TRAIL_FULL / HARD_SL."""
+        from datetime import datetime, timezone
+        current_qty = Decimal(str(strategy.current_position_qty))
+        if current_qty <= 0:
+            return
+
+        if action == "CRISIS_TP1":
+            # 25% 청산 — 첫 TP 발동
+            close_qty = (current_qty * Decimal("0.25")).quantize(Decimal("0.00000001"))
+            if close_qty <= 0:
+                return
+            self.execution_service.emergency_close_position(strategy.id, quantity=close_qty)
+            strategy.status = "CRISIS_TP1_DONE"
+            strategy.crisis_first_tp_done_at = datetime.now(timezone.utc)
+            # 피크 PnL 초기화 (지금부터 추적 시작)
+            avg_entry = Decimal(str(strategy.avg_entry_price)) if strategy.avg_entry_price else None
+            try:
+                from app.repositories.position_repository import PositionRepository
+                latest_pos = PositionRepository(self.db).latest_by_strategy(strategy.id)
+                if latest_pos and latest_pos.mark_price and avg_entry:
+                    mark = Decimal(str(latest_pos.mark_price))
+                    cur_pnl = ((mark - avg_entry) / avg_entry * Decimal("100")) if strategy.side == "LONG" else ((avg_entry - mark) / avg_entry * Decimal("100"))
+                    strategy.peak_pnl_pct_after_first_tp = cur_pnl
+            except Exception:
+                pass
+            self.db.commit()
+            strategy_take_profit_total.labels(symbol=strategy.symbol, side=strategy.side, level="CRISIS_TP1").inc()
+            self.notification_service.send_crisis_first_tp(
+                strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+                pnl_pct=str(strategy.peak_pnl_pct_after_first_tp or "5"), closed_qty=close_qty,
+            )
+
+        elif action == "CRISIS_TRAIL_FULL":
+            # 남은 전량 청산 — 트레일링 보호 발동
+            self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
+            strategy.status = "COMPLETED"
+            strategy.reentry_ready = False
+            self.risk_service.reset_peak_pnl(strategy.id)
+            self.db.commit()
+            strategy_take_profit_total.labels(symbol=strategy.symbol, side=strategy.side, level="CRISIS_TRAIL_FULL").inc()
+            # 현재 PnL 추출
+            try:
+                from app.repositories.position_repository import PositionRepository
+                latest_pos = PositionRepository(self.db).latest_by_strategy(strategy.id)
+                cur_pnl = "?"
+                if latest_pos and latest_pos.mark_price and strategy.avg_entry_price:
+                    avg = Decimal(str(strategy.avg_entry_price))
+                    mark = Decimal(str(latest_pos.mark_price))
+                    cur_pnl = str((mark - avg) / avg * Decimal("100") if strategy.side == "LONG" else (avg - mark) / avg * Decimal("100"))
+            except Exception:
+                cur_pnl = "?"
+            self.notification_service.send_crisis_trailing_full(
+                strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+                peak_pnl_pct=str(strategy.peak_pnl_pct_after_first_tp or "?"), current_pnl_pct=cur_pnl,
+            )
+
+        elif action == "CRISIS_HARD_SL":
+            # 남은 전량 손절 — 빠른 손절
+            self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
+            strategy.status = "STOPPING"
+            self.db.commit()
+            strategy_stop_loss_total.labels(symbol=strategy.symbol, side=strategy.side).inc()
+            try:
+                from app.repositories.position_repository import PositionRepository
+                latest_pos = PositionRepository(self.db).latest_by_strategy(strategy.id)
+                cur_pnl = "?"
+                if latest_pos and latest_pos.mark_price and strategy.avg_entry_price:
+                    avg = Decimal(str(strategy.avg_entry_price))
+                    mark = Decimal(str(latest_pos.mark_price))
+                    cur_pnl = str((mark - avg) / avg * Decimal("100") if strategy.side == "LONG" else (avg - mark) / avg * Decimal("100"))
+            except Exception:
+                cur_pnl = "?"
+            self.notification_service.send_crisis_hard_sl(
+                strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side, pnl_pct=cur_pnl,
+            )
+            self.risk_service.mark_reentry_ready(strategy.id)

@@ -1,3 +1,4 @@
+from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
@@ -62,3 +63,9 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     realized_pnl: Decimal
     unrealized_pnl: Decimal
     liquidation_price: Decimal | None = None
+    # ─── 크라이시스 복구 모드 + PnL 추적 (Phase D) ───
+    max_loss_pct: Decimal | None = None
+    max_profit_pct: Decimal | None = None
+    crisis_mode_triggered_at: datetime | None = None
+    crisis_first_tp_done_at: datetime | None = None
+    peak_pnl_pct_after_first_tp: Decimal | None = None

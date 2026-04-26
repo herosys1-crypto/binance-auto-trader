@@ -29,6 +29,18 @@ class StrategyInstance(Base):
     last_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # ─────────── 크라이시스 복구 모드 + PnL 추적 (alembic 0006) ───────────
+    # 누적 최대 손실 % (음수, e.g. -32.5) — 진입 후 가장 깊었던 손실 기록
+    max_loss_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    # 누적 최대 이익 % — 진입 후 가장 컸던 이익 기록
+    max_profit_pct: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    # 크라이시스 모드 진입 시각 (NULL = 미진입)
+    crisis_mode_triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 크라이시스 모드의 첫 TP (+5%) 발동 시각 — Stage 2 보호 활성화 기준점
+    crisis_first_tp_done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 첫 TP 발동 후 피크 PnL % — 트레일링 -5% 계산용
+    peak_pnl_pct_after_first_tp: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
