@@ -141,6 +141,17 @@
     </div>
   </div>
 
+  <!-- 시스템 상태 -->
+  <div class="card rounded-lg mb-6">
+    <div class="card-header text-sm flex justify-between items-center">
+      <span>⚙️ 시스템 상태</span>
+      <span id="syshealth-overall" class="text-xs">-</span>
+    </div>
+    <div class="p-3 grid grid-cols-4 gap-3" id="syshealth-grid">
+      <p class="text-slate-500 text-sm col-span-4 text-center py-4">로딩 중...</p>
+    </div>
+  </div>
+
   <!-- 운영 통계 -->
   <div class="card rounded-lg mb-6">
     <div class="card-header text-sm">📊 운영 통계 (전체 누적)</div>
@@ -637,6 +648,7 @@ async function refreshAll() {
     refreshExchangeAccounts(),
     refreshStats(),
     refreshActivity(),
+    refreshSysHealth(),
   ]);
   document.getElementById('last-updated').textContent = '마지막 갱신: ' + new Date().toLocaleTimeString('ko-KR');
 }
@@ -669,6 +681,37 @@ async function refreshActivity() {
       </div>`;
     }).join('');
   } catch (err) { /* 실패는 무시 */ }
+}
+
+async function refreshSysHealth() {
+  try {
+    const data = await api('/admin/system-health');
+    const overallEl = document.getElementById('syshealth-overall');
+    const overallMap = {
+      ok: { ko: '🟢 모두 정상', cls: 'text-green-400' },
+      warn: { ko: '🟡 일부 주의', cls: 'text-yellow-400' },
+      down: { ko: '🔴 장애 발생', cls: 'text-red-400' },
+    };
+    const ov = overallMap[data.overall] || overallMap.ok;
+    overallEl.textContent = ov.ko;
+    overallEl.className = 'text-xs font-semibold ' + ov.cls;
+
+    const grid = document.getElementById('syshealth-grid');
+    const statusToDot = (s) => {
+      if (s === 'ok') return '<span class="sys-dot sys-dot-green"></span>';
+      if (s === 'warn') return '<span class="sys-dot sys-dot-yellow"></span>';
+      return '<span class="sys-dot sys-dot-red"></span>';
+    };
+    grid.innerHTML = Object.entries(data.components).map(([key, c]) => {
+      return `<div class="flex items-start gap-2 p-2 rounded bg-slate-900 border border-slate-700">
+        <div class="pt-1">${statusToDot(c.status)}</div>
+        <div class="flex-1 min-w-0">
+          <div class="text-sm font-semibold text-slate-200">${escapeHtml(c.label)}</div>
+          <div class="text-xs text-slate-400 truncate" title="${escapeHtml(c.detail)}">${escapeHtml(c.detail)}</div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (err) { /* 무시 */ }
 }
 
 async function refreshStats() {
@@ -1715,6 +1758,7 @@ if (token) {
       refreshHealth();
       refreshActivity();
       refreshStats();
+      refreshSysHealth();
     }
   }, 5000);
 }
