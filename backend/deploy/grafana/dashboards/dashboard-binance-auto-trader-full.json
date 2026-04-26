@@ -1,1 +1,112 @@
-﻿{"title":"Binance Auto Trader - Full Dashboard","schemaVersion":39,"version":1,"panels":[]}
+{
+  "title": "Binance Auto Trader — 운영 대시보드",
+  "tags": ["binance", "trading", "auto-trader"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "10s",
+  "time": {"from": "now-6h", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "User Stream 연결",
+      "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "user_stream_connected", "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "❌ 끊김"}, "1": {"text": "🟢 연결됨"}}, "type": "value"}]}}
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Scheduler Leader",
+      "gridPos": {"x": 4, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "scheduler_leader_status", "refId": "A"}],
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"text": "Standby"}, "1": {"text": "🟢 Leader"}}, "type": "value"}]}}
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Kill-Switch 활성 계정",
+      "gridPos": {"x": 8, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(kill_switch_enabled)", "refId": "A"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}, "color": {"mode": "thresholds"}}}
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "활성 포지션 (전 종목)",
+      "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(strategy_active_positions)", "refId": "A"}]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "TP 누적 (24h)",
+      "gridPos": {"x": 16, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(increase(strategy_take_profit_total[24h]))", "refId": "A"}]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "SL 누적 (24h)",
+      "gridPos": {"x": 20, "y": 0, "w": 4, "h": 4},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(increase(strategy_stop_loss_total[24h]))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}, "color": {"mode": "thresholds"}}}
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "전략 단계 트리거 추이 (per stage)",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (stage_no) (rate(strategy_stage_trigger_total[5m]))", "refId": "A", "legendFormat": "{{stage_no}}단계"}]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "TP 레벨별 실행 (per level)",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (level) (rate(strategy_take_profit_total[5m]))", "refId": "A", "legendFormat": "{{level}}"}]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Binance API 요청률 (per endpoint)",
+      "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (endpoint) (rate(binance_api_requests_total[5m]))", "refId": "A", "legendFormat": "{{endpoint}}"}]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Binance API 지연 (p95)",
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, endpoint) (rate(binance_api_request_latency_seconds_bucket[5m])))", "refId": "A", "legendFormat": "{{endpoint}} p95"}],
+      "fieldConfig": {"defaults": {"unit": "s"}}
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "User Stream 이벤트 (per type)",
+      "gridPos": {"x": 0, "y": 20, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (event_type) (rate(user_stream_events_total[5m]))", "refId": "A", "legendFormat": "{{event_type}}"}]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "단계 주문 실패 (reason 별)",
+      "gridPos": {"x": 12, "y": 20, "w": 12, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum by (reason_code, stage_no) (rate(strategy_stage_order_fail_total[5m]))", "refId": "A", "legendFormat": "{{stage_no}}단계 — {{reason_code}}"}]
+    }
+  ]
+}

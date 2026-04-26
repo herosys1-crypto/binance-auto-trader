@@ -36,6 +36,8 @@ class PreviewInlineRequest(BaseModel):
     tp1_percent: Decimal = Field(default=Decimal("10"))
     tp2_percent: Decimal = Field(default=Decimal("20"))
     tp3_percent: Decimal = Field(default=Decimal("30"))
+    tp4_percent: Decimal | None = Field(default=None)
+    tp5_percent: Decimal | None = Field(default=None)
     stop_loss_percent_of_capital: Decimal = Field(default=Decimal("50"))
     last_stage_trigger_mode: str | None = None
     last_stage_trigger_percent: Decimal | None = None
@@ -221,9 +223,13 @@ def get_strategy_blueprint(
         "tp1_percent": str(tpl.tp1_percent),
         "tp2_percent": str(tpl.tp2_percent),
         "tp3_percent": str(tpl.tp3_percent),
+        "tp4_percent": str(tpl.tp4_percent) if tpl.tp4_percent is not None else None,
+        "tp5_percent": str(tpl.tp5_percent) if tpl.tp5_percent is not None else None,
         "tp1_qty_ratio": str(tpl.tp1_qty_ratio),
         "tp2_qty_ratio": str(tpl.tp2_qty_ratio),
         "tp3_qty_ratio": str(tpl.tp3_qty_ratio),
+        "tp4_qty_ratio": str(tpl.tp4_qty_ratio) if tpl.tp4_qty_ratio is not None else None,
+        "tp5_qty_ratio": str(tpl.tp5_qty_ratio) if tpl.tp5_qty_ratio is not None else None,
         "stop_loss_percent_of_capital": str(tpl.stop_loss_percent_of_capital),
     }
 
@@ -260,6 +266,35 @@ def start_strategy(
         strategy_id=strategy.id,
         status=strategy.status,
         message="Stage 1 order submitted",
+    )
+
+
+@router.post("/{strategy_id}/force-stop", response_model=StrategyActionResponse)
+def force_stop_strategy(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyActionResponse:
+    """거래소 호출 없이 DB 상에서만 전략을 STOPPED 로 마킹한다.
+
+    사용 사례:
+    - 거래소 API 키가 깨져서 일반 /stop 이 실패하는 고립 전략
+    - 미체결 주문이 이미 거래소에서 사라진(만료/수동취소) 후 DB 만 남은 전략
+    - 테스트/실험용 미사용 strategy 정리
+
+    포지션이 거래소에 남아있을 수 있으니 운영자가 직접 확인 후 사용 권장.
+    """
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+    strategy.status = "STOPPED"
+    strategy.reentry_ready = False
+    db.commit()
+    db.refresh(strategy)
+    return StrategyActionResponse(
+        strategy_id=strategy.id,
+        status=strategy.status,
+        message="DB 상에서만 STOPPED 로 마킹됨 (거래소 호출 없음)",
     )
 
 

@@ -44,12 +44,17 @@ class StrategyTemplate(Base):
     stage4_trigger_percent: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
 
     # ---- TP/SL ----
+    # TP1~3 은 항상 채움(필수). TP4/5 는 선택적 — NULL 이면 미사용.
     tp1_percent: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     tp2_percent: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     tp3_percent: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    tp4_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    tp5_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     tp1_qty_ratio: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     tp2_qty_ratio: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     tp3_qty_ratio: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    tp4_qty_ratio: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    tp5_qty_ratio: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     stop_loss_percent_of_capital: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
 
     reentry_policy: Mapped[str] = mapped_column(String(30), default="manual_ready", nullable=False)

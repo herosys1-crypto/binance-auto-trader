@@ -35,12 +35,15 @@ class RiskService:
         """현재 PnL 기준 다음 익절 액션을 결정한다.
 
         반환 값:
-          - "TP1" : +10% 도달
-          - "TP2" : +20% 도달
-          - "TP3" : +30% 도달 (남은 전량 청산)
-          - "TRAILING_TP" : 피크가 +20% 위로 갔다가 다시 +20% 이하로 내려옴 (남은 전량 청산)
+          - "TP1"~"TP5" : 해당 단계 PnL% 도달
+          - "TRAILING_TP" : 피크가 +20% 위로 갔다가 다시 +20% 이하로 내려옴
           - None : 아직 익절 조건 미달
+
+        TP1~3 은 template 에 항상 채워져 있고, TP4/5 는 nullable — NULL 이면 미사용.
+        평가 우선순위: 가장 높은 % (TP5→TP4→TP3→...) 부터 검사.
         """
+        from app.models.strategy_template import StrategyTemplate
+
         strategy = self.strategy_repo.get_strategy(strategy_id)
         latest_position = self.position_repo.latest_by_strategy(strategy_id)
         if not strategy or not latest_position or latest_position.mark_price is None or strategy.avg_entry_price is None:
@@ -52,19 +55,23 @@ class RiskService:
         # 피크 갱신 (Redis 에 strategy 별 최고 PnL% 저장)
         peak = self._update_peak_pnl(strategy_id, pnl_ratio)
 
-        # 우선순위: TP3 > 트레일링 > TP2 > TP1
-        if pnl_ratio >= Decimal("30"):
-            return "TP3"
+        # 템플릿에서 모든 TP 임계치 가져오기
+        tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
+        tp_levels: list[tuple[str, Decimal]] = []
+        for label, attr in [("TP5", "tp5_percent"), ("TP4", "tp4_percent"), ("TP3", "tp3_percent"), ("TP2", "tp2_percent"), ("TP1", "tp1_percent")]:
+            val = getattr(tpl, attr, None) if tpl else None
+            if val is not None:
+                tp_levels.append((label, Decimal(str(val))))
+
+        # 가장 높은 도달 단계 선정 (descending sort 후 첫 번째 도달)
+        for label, threshold in tp_levels:
+            if pnl_ratio >= threshold:
+                return label
+
         # 트레일링: 피크가 임계치 이상 도달했고, 현재가 회귀 트리거 이하로 내려옴
         if peak >= TRAILING_TP_PEAK_THRESHOLD and pnl_ratio <= TRAILING_TP_RETRACE_TRIGGER and pnl_ratio < peak:
-            # 단, 아직 TP1/TP2 조차 안 한 상황은 신규 진입 직후이므로 트레일링 X
-            # → TP2_DONE_PARTIAL 이상 단계에서만 트레일링 발동
-            if (strategy.status or "").upper() in {"TP2_DONE_PARTIAL", "TP2_DONE", "TRAILING_ARMED"}:
+            if (strategy.status or "").upper() in {"TP2_DONE_PARTIAL", "TP2_DONE", "TP3_DONE_PARTIAL", "TP4_DONE_PARTIAL", "TRAILING_ARMED"}:
                 return "TRAILING_TP"
-        if pnl_ratio >= Decimal("20"):
-            return "TP2"
-        if pnl_ratio >= Decimal("10"):
-            return "TP1"
         return None
 
     @staticmethod

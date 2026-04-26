@@ -244,22 +244,34 @@ class NotificationService:
         return self.send(strategy_instance_id=strategy_instance_id, channel="TELEGRAM", title=title, body=body)
 
     # ------------------------------------------------------------------
-    # Telegram 발송 (HTML 모드)
+    # Telegram 발송 (plain text — 한국어/이모지/특수문자 안전)
     # ------------------------------------------------------------------
     def _send_telegram(self, *, title: str, body: str) -> str:
+        """parse_mode 미사용 (plain text). HTML/Markdown 의 특수문자 escape 부담 제거.
+
+        과거 HTML 모드에서 일부 메시지가 400 Bad Request 거부되던 문제 해결.
+        """
         if not settings.telegram_bot_token or not settings.telegram_chat_id:
             raise ValueError("Telegram settings are missing")
-        text = f"<b>{title}</b>\n\n<pre>{body}</pre>"
+        text = f"{title}\n\n{body}"
+        # Telegram 메시지 길이 제한 4096자
+        if len(text) > 4000:
+            text = text[:3997] + "..."
         response = requests.post(
             f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage",
             json={
                 "chat_id": settings.telegram_chat_id,
                 "text": text,
-                "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             },
             timeout=10,
         )
-        response.raise_for_status()
+        if not response.ok:
+            # 응답 본문에 정확한 에러 사유가 들어있음 (description 필드)
+            try:
+                err_detail = response.json().get("description", response.text)
+            except Exception:
+                err_detail = response.text
+            raise ValueError(f"Telegram API {response.status_code}: {err_detail}")
         data = response.json()
         return str(data.get("result", {}).get("message_id", ""))

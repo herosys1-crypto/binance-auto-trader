@@ -19,11 +19,16 @@ WS_BASE_URL_TESTNET = "wss://stream.binancefuture.com"
 def main() -> None:
     db = SessionLocal()
     try:
+        # 여러 active 계정이 있을 때 가장 작은 id (= 가장 먼저 등록된 계정) 사용.
+        # MultipleResultsFound 방지 + 신규 계정이 들어와도 stream 안정성 유지.
         account = db.execute(
-            select(ExchangeAccount).where(
+            select(ExchangeAccount)
+            .where(
                 ExchangeAccount.exchange_name == "binance",
                 ExchangeAccount.is_active.is_(True),
             )
+            .order_by(ExchangeAccount.id.asc())
+            .limit(1)
         ).scalar_one_or_none()
         if not account:
             raise RuntimeError("No active Binance exchange account found")

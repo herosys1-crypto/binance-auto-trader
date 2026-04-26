@@ -17,11 +17,12 @@ Side = Literal["LONG", "SHORT"]
 
 # 기본값 — stages_config 에 trigger_percents 가 명시 안 됐을 때 단계별 기본값.
 # 운영자 의도:
-#   - 2단계: 1단계 대비 +10% (방향에 따라 손실 방향)
-#   - 3단계 이후: 직전 단계 대비 +20% (동일 간격)
-#   - 마지막 단계는 별도: SHORT=LIQUIDATION_BUFFER 5%, LONG=PRICE_DOWN_PCT 20%
-DEFAULT_STAGE2_TRIGGER_PCT = Decimal("10")    # 2단계 기본값
-DEFAULT_STAGE3PLUS_TRIGGER_PCT = Decimal("20")  # 3단계 이후 기본값
+#   - 2/3/4단계: 직전 단계 대비 +10%
+#   - 5단계 이후: 직전 단계 대비 +20%
+#   - 마지막 단계: SHORT=LIQUIDATION_BUFFER 5%, LONG=PRICE_DOWN_PCT 20%
+DEFAULT_EARLY_TRIGGER_PCT = Decimal("10")    # 2/3/4단계 기본값
+DEFAULT_LATE_TRIGGER_PCT = Decimal("20")     # 5단계 이후 기본값
+EARLY_STAGE_THRESHOLD = 4                    # 이 단계 이하 = early
 
 DEFAULT_LAST_LONG_TRIGGER_PCT = Decimal("20")
 DEFAULT_LAST_SHORT_TRIGGER_PCT = Decimal("5")
@@ -33,10 +34,10 @@ MIN_STAGES = 1
 
 
 def _default_middle_trigger_pct(stage_no: int) -> Decimal:
-    """중간 단계의 기본 trigger_percent. 2단계=10%, 3단계 이후=20%."""
-    if stage_no <= 2:
-        return DEFAULT_STAGE2_TRIGGER_PCT
-    return DEFAULT_STAGE3PLUS_TRIGGER_PCT
+    """중간 단계의 기본 trigger_percent. 2/3/4단계=10%, 5단계 이후=20%."""
+    if stage_no <= EARLY_STAGE_THRESHOLD:
+        return DEFAULT_EARLY_TRIGGER_PCT
+    return DEFAULT_LATE_TRIGGER_PCT
 
 
 @dataclass(frozen=True)

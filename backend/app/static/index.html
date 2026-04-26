@@ -208,51 +208,82 @@
         <!-- 직접 입력 모드 -->
         <div id="cm-direct-panel">
           <p class="text-xs text-slate-400 mb-2">
-            단계별 USDT 투입금 + 트리거 % 를 직접 입력하세요. 빈 칸은 사용 안 함.<br>
-            기본값 — 2단계=+10%, 3단계 이후=+20% (수정 가능), 마지막 단계는 청산가 -5% 자동.
+            <strong class="text-slate-200">💵 수량 (USDT)</strong> = 각 단계에 투입할 USDT 금액. 1단계는 필수, 나머지는 사용할 단계만.<br>
+            <strong class="text-slate-200">📊 진입 조건</strong> = 직전 단계 대비 가격 변동 %. 기본값 (<strong>2/3/4단계 +10%</strong>, <strong>5단계 이후 +20%</strong>) 사용 가능, 직접 수정도 가능.<br>
+            <strong>1단계 진입가</strong> 는 아래 <strong>4️⃣ 시작가</strong> 에서 입력. 마지막 단계는 청산가 -5% 위치에 자동.
           </p>
           <div id="cm-capitals-grid" class="space-y-1"><!-- JS 로 10행 입력 채움 --></div>
           <p id="cm-capitals-summary" class="text-xs text-slate-400 mt-2">합계: 0 USDT (0단계)</p>
 
           <!-- TP / SL 가변 설정 -->
           <details class="mt-3 border border-slate-700 rounded">
-            <summary class="cursor-pointer px-3 py-2 text-sm bg-slate-800 rounded">⚙️ 익절/손절 설정 (기본값 사용 가능)</summary>
+            <summary class="cursor-pointer px-3 py-2 text-sm bg-slate-800 rounded">⚙️ 익절/손절 설정 (TP1~5, 비우면 미사용)</summary>
             <div class="p-3 space-y-2">
-              <div class="grid grid-cols-3 gap-2 text-xs">
-                <div>
-                  <label class="text-slate-400">TP1 이익 %</label>
-                  <input id="cm-tp1-pct" type="number" step="0.1" value="10" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+              <div class="grid grid-cols-12 gap-2 text-xs text-slate-500 pb-1 border-b border-slate-700">
+                <div class="col-span-2">단계</div>
+                <div class="col-span-5">📈 이익 %</div>
+                <div class="col-span-5">💵 청산 수량 % (of 남은)</div>
+              </div>
+              <div class="grid grid-cols-12 gap-2 items-center text-xs">
+                <div class="col-span-2 text-slate-300 font-semibold">TP1</div>
+                <div class="col-span-5">
+                  <input id="cm-tp1-pct" type="number" step="1" min="0" placeholder="필수"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
-                <div>
-                  <label class="text-slate-400">TP2 이익 %</label>
-                  <input id="cm-tp2-pct" type="number" step="0.1" value="20" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
-                </div>
-                <div>
-                  <label class="text-slate-400">TP3 이익 %</label>
-                  <input id="cm-tp3-pct" type="number" step="0.1" value="30" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                <div class="col-span-5">
+                  <input id="cm-tp1-qty" type="number" step="1" min="0" max="100" placeholder="필수"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
               </div>
-              <div class="grid grid-cols-3 gap-2 text-xs">
-                <div>
-                  <label class="text-slate-400">TP1 청산 수량 %</label>
-                  <input id="cm-tp1-qty" type="number" step="0.1" value="25" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+              <div class="grid grid-cols-12 gap-2 items-center text-xs">
+                <div class="col-span-2 text-slate-300 font-semibold">TP2</div>
+                <div class="col-span-5">
+                  <input id="cm-tp2-pct" type="number" step="1" min="0" placeholder="필수"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
-                <div>
-                  <label class="text-slate-400">TP2 청산 수량 %<span class="text-slate-600">(of 남은)</span></label>
-                  <input id="cm-tp2-qty" type="number" step="0.1" value="50" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
-                </div>
-                <div>
-                  <label class="text-slate-400">TP3 청산 수량 %<span class="text-slate-600">(of 남은)</span></label>
-                  <input id="cm-tp3-qty" type="number" step="0.1" value="100" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                <div class="col-span-5">
+                  <input id="cm-tp2-qty" type="number" step="1" min="0" max="100" placeholder="필수"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
               </div>
-              <div class="grid grid-cols-1 gap-2 text-xs">
-                <div>
-                  <label class="text-slate-400">손절 — 총 자본 대비 손실 %</label>
-                  <input id="cm-sl-pct" type="number" step="0.1" value="50" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+              <div class="grid grid-cols-12 gap-2 items-center text-xs">
+                <div class="col-span-2 text-slate-300 font-semibold">TP3</div>
+                <div class="col-span-5">
+                  <input id="cm-tp3-pct" type="number" step="1" min="0" placeholder="필수"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+                <div class="col-span-5">
+                  <input id="cm-tp3-qty" type="number" step="1" min="0" max="100" placeholder="필수"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
               </div>
-              <p class="text-xs text-slate-500">트레일링 익절은 별도 — 피크 ≥ TP2 % 이상 도달 후 다시 TP2 % 이하로 회귀 시 전량 청산 (자동, 코드 레벨).</p>
+              <div class="grid grid-cols-12 gap-2 items-center text-xs">
+                <div class="col-span-2 text-slate-300 font-semibold">TP4</div>
+                <div class="col-span-5">
+                  <input id="cm-tp4-pct" type="number" step="1" min="0" placeholder="선택 (비우면 미사용)"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+                <div class="col-span-5">
+                  <input id="cm-tp4-qty" type="number" step="1" min="0" max="100" placeholder="선택"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+              </div>
+              <div class="grid grid-cols-12 gap-2 items-center text-xs">
+                <div class="col-span-2 text-slate-300 font-semibold">TP5</div>
+                <div class="col-span-5">
+                  <input id="cm-tp5-pct" type="number" step="1" min="0" placeholder="선택 (비우면 미사용)"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+                <div class="col-span-5">
+                  <input id="cm-tp5-qty" type="number" step="1" min="0" max="100" placeholder="선택"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+              </div>
+              <div class="pt-2 border-t border-slate-700">
+                <label class="text-slate-400 text-xs">🛑 손절 — 총 자본 대비 손실 %</label>
+                <input id="cm-sl-pct" type="number" step="1" value="50" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+              </div>
+              <p class="text-xs text-slate-500">트레일링 익절은 별도 — 피크 ≥ +20% 이상 도달 후 다시 +20% 이하 회귀 시 전량 청산 (자동, 코드 레벨).</p>
             </div>
           </details>
         </div>
@@ -593,12 +624,44 @@ async function deleteTemplate(id, name) {
 }
 
 async function cleanupQuickTemplates() {
-  if (!confirm('이름이 _quick_* 인 미사용 템플릿을 일괄 삭제합니다. 진행할까요?')) return;
+  const cascade = confirm(
+    '_quick_* 템플릿 정리\n\n' +
+    '[확인] = 강제 정리 (cascade)\n' +
+    '   참조 strategy 가 모두 종료 상태면 strategy 까지 함께 삭제\n' +
+    '   active strategy 가 있으면 비활성화만\n\n' +
+    '[취소] = 안전 정리\n' +
+    '   미사용만 삭제, 사용 중은 비활성화만'
+  );
   try {
-    const res = await api('/admin/strategy-templates/cleanup-quick', { method: 'POST' });
+    const res = await api(`/admin/strategy-templates/cleanup-quick?cascade=${cascade}`, { method: 'POST' });
     toast(res.message || '정리 완료', 'success');
     refreshTemplates();
+    refreshStrategies();
   } catch (e) { toast('정리 실패: ' + e.message, 'error'); }
+}
+
+async function deleteTemplate(id, name) {
+  if (!confirm(`템플릿 '${name}' (#${id}) 을 삭제할까요?\n\n사용 중인 strategy 가 있으면 비활성화됩니다.`)) return;
+  try {
+    let res;
+    try {
+      res = await api(`/admin/strategy-templates/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      throw e;
+    }
+    // 비활성화로 끝났으면 cascade 재시도 제안
+    if (res.message && res.message.includes('비활성화')) {
+      if (confirm(`${res.message}\n\n참조 strategy 가 모두 종료 상태면 cascade 삭제로 정리할 수 있습니다.\n진행하시겠어요?`)) {
+        const cascadeRes = await api(`/admin/strategy-templates/${id}?cascade=true`, { method: 'DELETE' });
+        toast(cascadeRes.message || 'cascade 삭제 완료', 'success');
+        refreshTemplates();
+        refreshStrategies();
+        return;
+      }
+    }
+    toast(res.message || '삭제됨', 'success');
+    refreshTemplates();
+  } catch (e) { toast('삭제 실패: ' + e.message, 'error'); }
 }
 
 async function refreshStrategies() {
@@ -725,7 +788,16 @@ async function stopStrategy(id) {
     await api(`/strategies/${id}/stop`, {method: 'POST', body: {mode: 'cancel_only', reason: '대시보드에서 수동 정지'}});
     toast(`전략 #${id} 미체결 주문 취소 요청 발송`, 'success');
     refreshStrategies();
-  } catch (err) { toast('정지 실패: ' + err.message, 'error'); }
+  } catch (err) {
+    // 거래소 키 깨짐 등으로 정지 실패 시 강제 정지 옵션 제공
+    if (confirm(`정지 실패: ${err.message}\n\nDB 상에서만 STOPPED 로 강제 마킹하시겠어요?\n(거래소 호출 없음 — 거래소에 미체결 주문이 남아있을 수 있으니 직접 확인 필요)`)) {
+      try {
+        await api(`/strategies/${id}/force-stop`, { method: 'POST' });
+        toast(`전략 #${id} DB 강제 정지 완료`, 'success');
+        refreshStrategies();
+      } catch (e2) { toast('강제 정지 실패: ' + e2.message, 'error'); }
+    }
+  }
 }
 
 async function emergencyStop(id) {
@@ -824,18 +896,24 @@ async function openCreateModal(editStrategyId) {
   cmState = { accountId: null, side: 'SHORT', templateId: null, mode: 'direct',
               capitals: ['', '', '', '', '', '', '', '', '', ''], preview: null,
               editingStrategyId: editStrategyId || null };
-  buildCapitalsGrid();
-  // 입력값 초기화 (이전에 모달 열었던 잔재 제거)
+  buildCapitalsGrid();  // 트리거 % 는 기본값 (2~4=10, 5~9=20) pre-fill 된 상태로 생성됨
+  // capital 만 초기화 (트리거 기본값은 유지)
   for (let i = 1; i <= 10; i++) {
     const cap = document.getElementById('cm-cap-' + i); if (cap) cap.value = '';
-    const trg = document.getElementById('cm-trg-' + i); if (trg) trg.value = '';
   }
+  // 기본 TP/SL — 5단계 익절 점진적 분할
+  // TP1 +10% / 25%   TP2 +15% / 25%   TP3 +20% / 25%
+  // TP4 +25% / 50%   TP5 +30% / 100%  손절 -50%
   document.getElementById('cm-tp1-pct').value = '10';
-  document.getElementById('cm-tp2-pct').value = '20';
-  document.getElementById('cm-tp3-pct').value = '30';
+  document.getElementById('cm-tp2-pct').value = '15';
+  document.getElementById('cm-tp3-pct').value = '20';
+  document.getElementById('cm-tp4-pct').value = '25';
+  document.getElementById('cm-tp5-pct').value = '30';
   document.getElementById('cm-tp1-qty').value = '25';
-  document.getElementById('cm-tp2-qty').value = '50';
-  document.getElementById('cm-tp3-qty').value = '100';
+  document.getElementById('cm-tp2-qty').value = '25';
+  document.getElementById('cm-tp3-qty').value = '25';
+  document.getElementById('cm-tp4-qty').value = '50';
+  document.getElementById('cm-tp5-qty').value = '100';
   document.getElementById('cm-sl-pct').value = '50';
   document.getElementById('cm-start-price').value = '';
   await Promise.all([loadCmAccounts(), loadCmTemplates(), loadCmSymbols()]);
@@ -927,13 +1005,17 @@ async function loadPrevBlueprint(strategyId, silent) {
         document.getElementById('cm-trg-' + i).value = trg !== undefined && trg !== null ? trg : '';
       }
     }
-    // 4) TP/SL 채우기
-    document.getElementById('cm-tp1-pct').value = bp.tp1_percent;
-    document.getElementById('cm-tp2-pct').value = bp.tp2_percent;
-    document.getElementById('cm-tp3-pct').value = bp.tp3_percent;
-    document.getElementById('cm-tp1-qty').value = bp.tp1_qty_ratio;
-    document.getElementById('cm-tp2-qty').value = bp.tp2_qty_ratio;
-    document.getElementById('cm-tp3-qty').value = bp.tp3_qty_ratio;
+    // 4) TP/SL 채우기 (TP4/5 nullable)
+    document.getElementById('cm-tp1-pct').value = bp.tp1_percent || '';
+    document.getElementById('cm-tp2-pct').value = bp.tp2_percent || '';
+    document.getElementById('cm-tp3-pct').value = bp.tp3_percent || '';
+    document.getElementById('cm-tp4-pct').value = bp.tp4_percent || '';
+    document.getElementById('cm-tp5-pct').value = bp.tp5_percent || '';
+    document.getElementById('cm-tp1-qty').value = bp.tp1_qty_ratio || '';
+    document.getElementById('cm-tp2-qty').value = bp.tp2_qty_ratio || '';
+    document.getElementById('cm-tp3-qty').value = bp.tp3_qty_ratio || '';
+    document.getElementById('cm-tp4-qty').value = bp.tp4_qty_ratio || '';
+    document.getElementById('cm-tp5-qty').value = bp.tp5_qty_ratio || '';
     document.getElementById('cm-sl-pct').value = bp.stop_loss_percent_of_capital;
     // 5) 시작가 — 수정 모드면 원래 시작가 유지, 일반 불러오기는 비움
     if (cmState.editingStrategyId && bp.start_price) {
@@ -951,34 +1033,51 @@ async function loadPrevBlueprint(strategyId, silent) {
 }
 
 function _defaultTriggerPct(stageNo) {
-  // 1단계는 IMMEDIATE, 2단계=10, 3단계 이후=20
+  // 1단계는 IMMEDIATE, 2/3/4단계=10, 5단계 이후=20
   if (stageNo === 1) return '';
-  if (stageNo === 2) return '10';
+  if (stageNo <= 4) return '10';
   return '20';
 }
 
 function buildCapitalsGrid() {
   const grid = document.getElementById('cm-capitals-grid');
-  // 헤더 + 10행 (단계 / capital / trigger %)
-  let html = `<div class="grid grid-cols-12 gap-2 text-xs text-slate-500 px-1">
+  // 헤더 + 10행 (단계 / 수량 USDT / 진입 조건)
+  let html = `<div class="grid grid-cols-12 gap-2 text-xs text-slate-500 px-1 pb-1 border-b border-slate-700 mb-1">
     <div class="col-span-2">단계</div>
-    <div class="col-span-5">투입 자본 (USDT)</div>
-    <div class="col-span-5">트리거 %</div>
+    <div class="col-span-5">💵 수량 (USDT) — 직접 입력</div>
+    <div class="col-span-5">📊 진입 조건 (트리거 %)</div>
   </div>`;
   for (let i = 1; i <= 10; i++) {
-    const triggerPlaceholder = i === 1 ? '즉시 (자동)' : (i === 10 ? '청산가 -5% (자동)' : _defaultTriggerPct(i));
-    const triggerDisabled = i === 1 ? 'disabled' : '';
+    let triggerPlaceholder, triggerDisabled, triggerTitle, triggerValue;
+    if (i === 1) {
+      triggerPlaceholder = '시작가에 즉시 진입';
+      triggerDisabled = 'disabled';
+      triggerTitle = '1단계는 운영자가 입력한 시작가에 즉시 LIMIT 주문 발송';
+      triggerValue = '';
+    } else if (i === 10) {
+      triggerPlaceholder = '청산가 직전 -5%';
+      triggerDisabled = 'disabled';
+      triggerTitle = '마지막 단계는 청산가 -5% 위치에 자동 진입 (사용 시)';
+      triggerValue = '';
+    } else {
+      triggerPlaceholder = '';
+      triggerDisabled = '';
+      triggerTitle = `직전 단계 대비 +${_defaultTriggerPct(i)}% (▲▼ 1씩 조정)`;
+      triggerValue = _defaultTriggerPct(i);  // 기본값 미리 채움 → ▲▼ 즉시 동작
+    }
+    const capPlaceholder = i === 1 ? '예: 100 (필수)' : '비우면 사용 안 함';
     html += `<div class="grid grid-cols-12 gap-2 items-center">
-      <div class="col-span-2 text-sm text-slate-400">${i}단계</div>
+      <div class="col-span-2 text-sm text-slate-300 font-semibold">${i}단계</div>
       <div class="col-span-5">
-        <input type="number" min="0" step="any" id="cm-cap-${i}" placeholder="${i===1?'필수':''}"
+        <input type="number" min="0" step="any" id="cm-cap-${i}" placeholder="${capPlaceholder}"
           oninput="onCapitalsChange()"
           class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm" />
       </div>
       <div class="col-span-5">
-        <input type="number" min="0" step="0.1" id="cm-trg-${i}" placeholder="${triggerPlaceholder}" ${triggerDisabled}
+        <input type="number" min="0" step="1" id="cm-trg-${i}" placeholder="${triggerPlaceholder}" value="${triggerValue}" ${triggerDisabled}
+          title="${triggerTitle}"
           oninput="onCapitalsChange()"
-          class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm ${triggerDisabled?'opacity-50':''}" />
+          class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm ${triggerDisabled?'opacity-50 cursor-not-allowed':''}" />
       </div>
     </div>`;
   }
@@ -1020,14 +1119,21 @@ function _collectDirectInputs() {
 }
 
 function _collectTpSl() {
+  const get = id => document.getElementById(id).value;
+  const v = (raw, def) => raw && Number(raw) > 0 ? raw : def;
+  const opt = raw => raw && Number(raw) > 0 ? raw : null;
   return {
-    tp1_percent: document.getElementById('cm-tp1-pct').value || '10',
-    tp2_percent: document.getElementById('cm-tp2-pct').value || '20',
-    tp3_percent: document.getElementById('cm-tp3-pct').value || '30',
-    tp1_qty_ratio: document.getElementById('cm-tp1-qty').value || '25',
-    tp2_qty_ratio: document.getElementById('cm-tp2-qty').value || '50',
-    tp3_qty_ratio: document.getElementById('cm-tp3-qty').value || '100',
-    stop_loss_percent_of_capital: document.getElementById('cm-sl-pct').value || '50',
+    tp1_percent: v(get('cm-tp1-pct'), '10'),
+    tp2_percent: v(get('cm-tp2-pct'), '15'),
+    tp3_percent: v(get('cm-tp3-pct'), '20'),
+    tp4_percent: opt(get('cm-tp4-pct')),  // null 이면 미사용
+    tp5_percent: opt(get('cm-tp5-pct')),
+    tp1_qty_ratio: v(get('cm-tp1-qty'), '25'),
+    tp2_qty_ratio: v(get('cm-tp2-qty'), '25'),
+    tp3_qty_ratio: v(get('cm-tp3-qty'), '25'),
+    tp4_qty_ratio: opt(get('cm-tp4-qty')),
+    tp5_qty_ratio: opt(get('cm-tp5-qty')),
+    stop_loss_percent_of_capital: v(get('cm-sl-pct'), '50'),
   };
 }
 
@@ -1234,6 +1340,8 @@ async function calcPreview() {
           tp1_percent: tpsl.tp1_percent,
           tp2_percent: tpsl.tp2_percent,
           tp3_percent: tpsl.tp3_percent,
+          tp4_percent: tpsl.tp4_percent,
+          tp5_percent: tpsl.tp5_percent,
           stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
         },
       });
@@ -1329,9 +1437,13 @@ async function submitCreate() {
           tp1_percent: tpsl.tp1_percent,
           tp2_percent: tpsl.tp2_percent,
           tp3_percent: tpsl.tp3_percent,
+          tp4_percent: tpsl.tp4_percent,
+          tp5_percent: tpsl.tp5_percent,
           tp1_qty_ratio: tpsl.tp1_qty_ratio,
           tp2_qty_ratio: tpsl.tp2_qty_ratio,
           tp3_qty_ratio: tpsl.tp3_qty_ratio,
+          tp4_qty_ratio: tpsl.tp4_qty_ratio,
+          tp5_qty_ratio: tpsl.tp5_qty_ratio,
           stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
           reentry_policy: 'manual_ready',
         },
