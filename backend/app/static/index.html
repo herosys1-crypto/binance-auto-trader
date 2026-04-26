@@ -184,10 +184,33 @@
         </div>
       </div>
 
-      <!-- 3) 템플릿 -->
+      <!-- 3) 모드 선택 + 본문 -->
       <div class="mb-4">
-        <label class="block text-sm font-semibold mb-2 text-slate-300">3️⃣  전략 템플릿</label>
-        <div id="cm-templates" class="space-y-1"><span class="text-slate-500 text-sm">로딩 중...</span></div>
+        <label class="block text-sm font-semibold mb-2 text-slate-300">3️⃣  전략 구성</label>
+        <div class="flex gap-2 mb-3">
+          <button id="cm-mode-direct" onclick="setCmMode('direct')"
+            class="btn flex-1 btn-primary">📝 직접 입력 (1~10단계)</button>
+          <button id="cm-mode-template" onclick="setCmMode('template')"
+            class="btn flex-1 btn-ghost">📋 템플릿 선택</button>
+        </div>
+
+        <!-- 직접 입력 모드 -->
+        <div id="cm-direct-panel">
+          <p class="text-xs text-slate-400 mb-3">
+            각 단계에 투입할 USDT 금액을 입력하세요 (빈 칸은 그 단계 사용 안 함).<br>
+            트리거 가격: <strong>2단계=+10%</strong>, <strong>3단계 이후=+20%</strong>, <strong>마지막 단계=청산가 -5%</strong> 자동 적용.<br>
+            레버리지: <strong>숏=2x</strong>, <strong>롱=1x</strong> 자동 적용.
+          </p>
+          <div class="grid grid-cols-5 gap-2" id="cm-capitals-grid">
+            <!-- 10개 입력박스 JS 로 채움 -->
+          </div>
+          <p id="cm-capitals-summary" class="text-xs text-slate-400 mt-2">합계: 0 USDT (0단계)</p>
+        </div>
+
+        <!-- 템플릿 선택 모드 -->
+        <div id="cm-template-panel" class="hidden">
+          <div id="cm-templates" class="space-y-1"><span class="text-slate-500 text-sm">로딩 중...</span></div>
+        </div>
       </div>
 
       <!-- 4) 시작가 -->
@@ -223,7 +246,13 @@
 
   <!-- 진행 중인 전략 -->
   <div class="card rounded-lg mb-6">
-    <div class="card-header text-sm">🎯 진행 중인 전략</div>
+    <div class="card-header text-sm flex justify-between items-center">
+      <span>🎯 전략 인스턴스</span>
+      <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
+        <input type="checkbox" id="hide-terminated" onchange="refreshStrategies()" checked />
+        <span class="text-slate-300">종료된 전략 숨김</span>
+      </label>
+    </div>
     <div class="overflow-x-auto">
       <table>
         <thead>
@@ -236,7 +265,7 @@
             <th class="num">평균 진입가</th>
             <th class="num">포지션</th>
             <th class="num">미실현 손익</th>
-            <th style="width:120px">액션</th>
+            <th style="width:140px">액션</th>
           </tr>
         </thead>
         <tbody id="strategies-tbody"><tr><td colspan="9" class="text-center text-slate-500 py-6">로딩 중...</td></tr></tbody>
@@ -246,7 +275,16 @@
 
   <!-- 전략 템플릿 -->
   <div class="card rounded-lg mb-6">
-    <div class="card-header text-sm">📋 전략 템플릿 (운영자 사용 가능)</div>
+    <div class="card-header text-sm flex justify-between items-center">
+      <span>📋 전략 템플릿</span>
+      <div class="flex gap-2 items-center">
+        <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
+          <input type="checkbox" id="show-quick" onchange="refreshTemplates()" />
+          <span class="text-slate-300">_quick_* 표시</span>
+        </label>
+        <button onclick="cleanupQuickTemplates()" class="btn-ghost btn text-xs" style="padding:4px 10px">🧹 _quick_* 일괄 정리</button>
+      </div>
+    </div>
     <div class="overflow-x-auto">
       <table>
         <thead>
@@ -258,9 +296,10 @@
             <th class="num">총 자본</th>
             <th>단계 자본 구성</th>
             <th style="width:60px">활성</th>
+            <th style="width:50px">삭제</th>
           </tr>
         </thead>
-        <tbody id="templates-tbody"><tr><td colspan="7" class="text-center text-slate-500 py-6">로딩 중...</td></tr></tbody>
+        <tbody id="templates-tbody"><tr><td colspan="8" class="text-center text-slate-500 py-6">로딩 중...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -417,26 +456,56 @@ async function refreshTemplates() {
   try {
     const data = await api('/admin/strategy-templates');
     const active = data.filter(t => t.is_active).length;
-    setMetric('templates', data.length + '개', `사용 가능 ${active}개`, data.length ? 'green' : 'gray');
+    const showQuick = document.getElementById('show-quick')?.checked;
+    const visible = showQuick ? data : data.filter(t => !String(t.name).startsWith('_quick_'));
+    const hiddenCount = data.length - visible.length;
+
+    setMetric('templates', data.length + '개',
+      `사용 가능 ${active}개${hiddenCount > 0 ? ` (_quick_ ${hiddenCount}개 숨김)` : ''}`,
+      data.length ? 'green' : 'gray');
+
     const tbody = document.getElementById('templates-tbody');
-    if (data.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-slate-500 py-6">템플릿 없음</td></tr>';
+    if (visible.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-slate-500 py-6">표시할 템플릿 없음</td></tr>';
       return;
     }
-    tbody.innerHTML = data.map(t => {
+    tbody.innerHTML = visible.map(t => {
       const sc = t.stages_config || {};
       const stages = (sc.capitals || []).map(c => fmtNum(c)).join(' / ');
+      const isQuick = String(t.name).startsWith('_quick_');
+      const nameDisplay = isQuick
+        ? `<span class="font-mono text-slate-500">${escapeHtml(t.name)}</span>`
+        : `<span class="font-mono text-blue-300">${escapeHtml(t.name)}</span>`;
       return `<tr>
         <td>${t.id}</td>
-        <td class="font-mono text-blue-300">${escapeHtml(t.name)}</td>
+        <td>${nameDisplay}</td>
         <td>${sideBadge(t.side)}</td>
         <td class="num">${t.leverage}x</td>
         <td class="num">${fmtNum(t.total_capital)} <span class="text-slate-500">USDT</span></td>
         <td class="text-xs text-slate-400">${stages || '-'}</td>
         <td>${t.is_active ? '<span class="badge badge-green">활성</span>' : '<span class="badge badge-gray">중지</span>'}</td>
+        <td><button onclick="deleteTemplate(${t.id}, '${escapeHtml(t.name).replace(/'/g, "\\'")}')" class="btn-danger btn text-xs" style="padding:2px 8px" title="템플릿 삭제 (사용 중이면 비활성화)">🗑</button></td>
       </tr>`;
     }).join('');
   } catch (err) { toast('템플릿 조회 실패: ' + err.message, 'error'); }
+}
+
+async function deleteTemplate(id, name) {
+  if (!confirm(`템플릿 '${name}' (#${id}) 을 삭제할까요?\n\n사용 중인 strategy 가 있으면 비활성화됩니다.`)) return;
+  try {
+    const res = await api(`/admin/strategy-templates/${id}`, { method: 'DELETE' });
+    toast(res.message || '삭제됨', 'success');
+    refreshTemplates();
+  } catch (e) { toast('삭제 실패: ' + e.message, 'error'); }
+}
+
+async function cleanupQuickTemplates() {
+  if (!confirm('이름이 _quick_* 인 미사용 템플릿을 일괄 삭제합니다. 진행할까요?')) return;
+  try {
+    const res = await api('/admin/strategy-templates/cleanup-quick', { method: 'POST' });
+    toast(res.message || '정리 완료', 'success');
+    refreshTemplates();
+  } catch (e) { toast('정리 실패: ' + e.message, 'error'); }
 }
 
 async function refreshStrategies() {
@@ -470,8 +539,18 @@ async function refreshStrategies() {
       hideAlert();
     }
 
+    // 종료된 전략 숨김 토글
+    const hideTerm = document.getElementById('hide-terminated')?.checked;
+    let visible = data;
+    if (hideTerm) visible = data.filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()));
+    const hiddenCount = data.length - visible.length;
+    if (visible.length === 0 && hiddenCount > 0) {
+      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-slate-500 py-6">진행 중인 전략 없음 (종료 ${hiddenCount}건 숨김)</td></tr>`;
+      return;
+    }
+
     // 활성 전략 우선 정렬
-    const sorted = [...data].sort((a, b) => {
+    const sorted = [...visible].sort((a, b) => {
       const aTerm = TERMINAL_STATUSES.includes((a.status || '').toUpperCase()) ? 1 : 0;
       const bTerm = TERMINAL_STATUSES.includes((b.status || '').toUpperCase()) ? 1 : 0;
       return aTerm - bTerm || b.id - a.id;
@@ -635,6 +714,8 @@ let cmState = {
   accountId: null,
   side: 'SHORT',
   templateId: null,
+  mode: 'direct',  // 'direct' | 'template'
+  capitals: ['', '', '', '', '', '', '', '', '', ''],  // 1~10단계
   preview: null,
 };
 
@@ -642,9 +723,59 @@ async function openCreateModal() {
   document.getElementById('create-modal').classList.remove('hidden');
   document.getElementById('cm-preview').classList.add('hidden');
   document.getElementById('cm-submit').disabled = true;
-  cmState = { accountId: null, side: 'SHORT', templateId: null, preview: null };
+  cmState = { accountId: null, side: 'SHORT', templateId: null, mode: 'direct',
+              capitals: ['', '', '', '', '', '', '', '', '', ''], preview: null };
+  buildCapitalsGrid();
   await Promise.all([loadCmAccounts(), loadCmTemplates(), loadCmSymbols()]);
   setCmSide('SHORT');
+  setCmMode('direct');
+}
+
+function setCmMode(mode) {
+  cmState.mode = mode;
+  cmState.preview = null;
+  document.getElementById('cm-preview').classList.add('hidden');
+  if (mode === 'direct') {
+    document.getElementById('cm-mode-direct').className = 'btn flex-1 btn-primary';
+    document.getElementById('cm-mode-template').className = 'btn flex-1 btn-ghost';
+    document.getElementById('cm-direct-panel').classList.remove('hidden');
+    document.getElementById('cm-template-panel').classList.add('hidden');
+  } else {
+    document.getElementById('cm-mode-direct').className = 'btn flex-1 btn-ghost';
+    document.getElementById('cm-mode-template').className = 'btn flex-1 btn-primary';
+    document.getElementById('cm-direct-panel').classList.add('hidden');
+    document.getElementById('cm-template-panel').classList.remove('hidden');
+  }
+  updateCmSubmit();
+}
+
+function buildCapitalsGrid() {
+  const grid = document.getElementById('cm-capitals-grid');
+  let html = '';
+  for (let i = 1; i <= 10; i++) {
+    html += `<div>
+      <label class="block text-xs text-slate-500 mb-1">${i}단계</label>
+      <input type="number" min="0" step="any" id="cm-cap-${i}" placeholder="${i===1?'필수':''}"
+        oninput="onCapitalsChange()"
+        class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm" />
+    </div>`;
+  }
+  grid.innerHTML = html;
+}
+
+function onCapitalsChange() {
+  let total = 0;
+  let count = 0;
+  for (let i = 1; i <= 10; i++) {
+    const v = document.getElementById('cm-cap-' + i).value;
+    cmState.capitals[i-1] = v;
+    if (v && Number(v) > 0) { total += Number(v); count++; }
+  }
+  document.getElementById('cm-capitals-summary').innerHTML =
+    `합계: <strong>${fmtNum(total)} USDT</strong> (${count}단계 사용)`;
+  cmState.preview = null;
+  document.getElementById('cm-preview').classList.add('hidden');
+  updateCmSubmit();
 }
 
 function closeCreateModal() {
@@ -712,17 +843,57 @@ function setCmSide(side) {
   document.getElementById('cm-side-long').className = 'btn flex-1' + (side==='LONG' ? '' : ' btn-ghost');
   document.getElementById('cm-side-long').style.background = side==='LONG' ? '#10b981' : 'transparent';
   document.getElementById('cm-side-long').style.color = side==='LONG' ? '#fff' : '#cbd5e1';
+  // 방향 변경 시 미리보기 무효화
+  cmState.preview = null;
+  document.getElementById('cm-preview').classList.add('hidden');
+  updateCmSubmit();
 }
 
 function updateCmSubmit() {
-  const ok = cmState.accountId && cmState.templateId && cmState.preview;
+  let ok = cmState.accountId && cmState.preview;
+  if (cmState.mode === 'template') ok = ok && cmState.templateId;
+  if (cmState.mode === 'direct') ok = ok && cmState.capitals.some(c => c && Number(c) > 0);
   document.getElementById('cm-submit').disabled = !ok;
+}
+
+function _filledCapitals() {
+  // 직접 입력 모드 — 비어있지 않은 capital 수집 (앞에서부터 연속). 중간 빈 칸은 0 으로 처리하지 말고 컷오프.
+  // UX: 1단계만 채우거나, 1~5단계 채우거나... 사용자가 어디까지 채웠는지 자동 감지.
+  const arr = [];
+  for (let i = 0; i < 10; i++) {
+    const v = cmState.capitals[i];
+    if (v === '' || v === null || v === undefined || Number(v) === 0) break;  // 첫 빈/0 에서 컷오프
+    arr.push(String(v));
+  }
+  return arr;
 }
 
 async function calcPreview() {
   const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
   const startPrice = document.getElementById('cm-start-price').value;
   if (!symbol || !startPrice) return toast('심볼과 시작가를 입력하세요', 'warning');
+
+  if (cmState.mode === 'direct') {
+    // 직접 입력 모드 — 인라인 미리보기 (DB 에 템플릿 안 만듦)
+    const caps = _filledCapitals();
+    if (caps.length === 0) return toast('1단계 투자금액 이상을 입력하세요', 'warning');
+    try {
+      const data = await api('/strategies/preview-inline', {
+        method: 'POST',
+        body: {
+          symbol, side: cmState.side, start_price: startPrice,
+          capitals: caps,
+        },
+      });
+      cmState.preview = data;
+      cmState._directCaps = caps;  // submit 시 사용
+      _renderPreview(data);
+      updateCmSubmit();
+      return;
+    } catch (e) { return toast('미리보기 실패: '+e.message, 'error'); }
+  }
+
+  // 템플릿 모드
   if (!cmState.templateId) return toast('템플릿을 먼저 선택하세요', 'warning');
   try {
     const data = await api('/strategies/calculate', {
@@ -730,30 +901,34 @@ async function calcPreview() {
       body: { symbol, side: cmState.side, start_price: startPrice, strategy_template_id: cmState.templateId },
     });
     cmState.preview = data;
-    const triggerKo = (mode, pct) => {
-      if (mode === 'IMMEDIATE') return '즉시';
-      if (mode === 'PRICE_UP_PCT') return `+${pct}% 도달 시`;
-      if (mode === 'PRICE_DOWN_PCT') return `-${pct}% 도달 시`;
-      if (mode === 'LIQUIDATION_BUFFER') return `청산가 -${pct}% 전`;
-      return mode;
-    };
-    document.getElementById('cm-preview-tbody').innerHTML = data.stages.map(s => `
-      <tr>
-        <td>${s.stage_no}단계</td>
-        <td>${triggerKo(s.trigger_mode, s.trigger_percent)}</td>
-        <td class="num">${s.trigger_price ? fmtNum(s.trigger_price) : '-'}</td>
-        <td class="num">${fmtNum(s.planned_capital)}</td>
-        <td class="num">${s.planned_qty ? fmtQty(s.planned_qty) : '-'}</td>
-      </tr>
-    `).join('');
-    const totalCap = data.stages.reduce((sum, s) => sum + Number(s.planned_capital || 0), 0);
-    document.getElementById('cm-preview-meta').innerHTML =
-      `레버리지: ${data.leverage}x | 총 투입자본: <strong>${fmtNum(totalCap)} USDT</strong> | ` +
-      `TP: ${data.tp1_percent}/${data.tp2_percent}/${data.tp3_percent}% | ` +
-      `<span class="text-red-400">손절 한도: ${fmtNum(data.stop_loss_amount)} USDT</span>`;
-    document.getElementById('cm-preview').classList.remove('hidden');
+    _renderPreview(data);
     updateCmSubmit();
   } catch (e) { toast('미리보기 실패: '+e.message, 'error'); }
+}
+
+function _renderPreview(data) {
+  const triggerKo = (mode, pct) => {
+    if (mode === 'IMMEDIATE') return '즉시';
+    if (mode === 'PRICE_UP_PCT') return `+${pct}% 도달 시`;
+    if (mode === 'PRICE_DOWN_PCT') return `-${pct}% 도달 시`;
+    if (mode === 'LIQUIDATION_BUFFER') return `청산가 -${pct}% 전`;
+    return mode;
+  };
+  document.getElementById('cm-preview-tbody').innerHTML = data.stages.map(s => `
+    <tr>
+      <td>${s.stage_no}단계</td>
+      <td>${triggerKo(s.trigger_mode, s.trigger_percent)}</td>
+      <td class="num">${s.trigger_price ? fmtNum(s.trigger_price) : '-'}</td>
+      <td class="num">${fmtNum(s.planned_capital)}</td>
+      <td class="num">${s.planned_qty ? fmtQty(s.planned_qty) : '-'}</td>
+    </tr>
+  `).join('');
+  const totalCap = data.stages.reduce((sum, s) => sum + Number(s.planned_capital || 0), 0);
+  document.getElementById('cm-preview-meta').innerHTML =
+    `레버리지: ${data.leverage}x | 총 투입자본: <strong>${fmtNum(totalCap)} USDT</strong> | ` +
+    `TP: ${data.tp1_percent}/${data.tp2_percent}/${data.tp3_percent}% (25/50/25 분할 + 트레일링) | ` +
+    `<span class="text-red-400">손절 한도: ${fmtNum(data.stop_loss_amount)} USDT</span>`;
+  document.getElementById('cm-preview').classList.remove('hidden');
 }
 
 async function submitCreate() {
@@ -763,11 +938,35 @@ async function submitCreate() {
   try {
     document.getElementById('cm-submit').disabled = true;
     document.getElementById('cm-submit').textContent = '⏳ 생성 중...';
+
+    // 직접 입력 모드 — 이 시점에만 템플릿 1번 생성
+    let templateId = cmState.templateId;
+    if (cmState.mode === 'direct') {
+      const ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+      const leverage = cmState.side === 'SHORT' ? 2 : 1;
+      const tplCreated = await api('/admin/strategy-templates', {
+        method: 'POST',
+        body: {
+          name: `_quick_${ts}`,
+          strategy_type: cmState.side === 'SHORT' ? 'DYNAMIC_SHORT' : 'DYNAMIC_LONG',
+          side: cmState.side,
+          leverage,
+          capitals: cmState._directCaps || _filledCapitals(),
+          trigger_percents: null,
+          tp1_percent: '10', tp2_percent: '20', tp3_percent: '30',
+          tp1_qty_ratio: '25', tp2_qty_ratio: '50', tp3_qty_ratio: '25',
+          stop_loss_percent_of_capital: '50',
+          reentry_policy: 'manual_ready',
+        },
+      });
+      templateId = tplCreated.id;
+    }
+
     const created = await api('/strategies', {
       method: 'POST',
       body: {
         exchange_account_id: cmState.accountId,
-        strategy_template_id: cmState.templateId,
+        strategy_template_id: templateId,
         symbol, side: cmState.side, start_price: startPrice,
       },
     });
@@ -780,6 +979,7 @@ async function submitCreate() {
     }
     closeCreateModal();
     refreshStrategies();
+    refreshTemplates();
   } catch (e) {
     toast('전략 생성 실패: '+e.message, 'error');
     document.getElementById('cm-submit').disabled = false;

@@ -257,8 +257,8 @@ class StrategyCalculator:
                     )
                 continue
 
-            # 중간 단계
-            pct = trigger_percents[i] if trigger_percents[i] is not None else DEFAULT_MIDDLE_TRIGGER_PCT
+            # 중간 단계 — 2단계=10%, 3단계 이후=20% 자동 (명시값 있으면 그것 우선)
+            pct = trigger_percents[i] if trigger_percents[i] is not None else _default_middle_trigger_pct(stage_no)
             mode = "PRICE_UP_PCT" if side == "SHORT" else "PRICE_DOWN_PCT"
             multiplier = self._multiplier(side, pct)
             price = self._quantize_price(prev_anchor_price * multiplier)

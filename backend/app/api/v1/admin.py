@@ -132,6 +132,59 @@ def list_strategy_templates(
     return [StrategyTemplateResponse.model_validate(r) for r in rows]
 
 
+@router.delete("/strategy-templates/{template_id}", response_model=MessageResponse)
+def delete_strategy_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> MessageResponse:
+    """전략 템플릿 삭제. 이미 사용 중인(strategy_instances 가 참조하는) 템플릿은 비활성화만 수행."""
+    from app.models.strategy_instance import StrategyInstance
+
+    tpl = db.get(StrategyTemplate, template_id)
+    if not tpl:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+
+    in_use = db.query(StrategyInstance).filter(StrategyInstance.strategy_template_id == template_id).count()
+    if in_use > 0:
+        # 참조 무결성 보호 — 삭제 대신 비활성화
+        tpl.is_active = False
+        db.commit()
+        return MessageResponse(message=f"Template #{template_id} 비활성화됨 ({in_use}개 strategy 인스턴스가 참조 중)")
+
+    db.delete(tpl)
+    db.commit()
+    return MessageResponse(message=f"Template #{template_id} 삭제됨")
+
+
+@router.post("/strategy-templates/cleanup-quick", response_model=MessageResponse)
+def cleanup_quick_templates(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> MessageResponse:
+    """이름이 '_quick_' 로 시작하고 사용 안 된(인스턴스 없는) 템플릿 일괄 삭제."""
+    from app.models.strategy_instance import StrategyInstance
+
+    candidates = (
+        db.query(StrategyTemplate)
+        .filter(StrategyTemplate.name.like("\\_quick\\_%"))
+        .all()
+    )
+    deleted = 0
+    deactivated = 0
+    for tpl in candidates:
+        in_use = db.query(StrategyInstance).filter(StrategyInstance.strategy_template_id == tpl.id).count()
+        if in_use > 0:
+            if tpl.is_active:
+                tpl.is_active = False
+                deactivated += 1
+        else:
+            db.delete(tpl)
+            deleted += 1
+    db.commit()
+    return MessageResponse(message=f"_quick_* 템플릿 정리 완료 — 삭제 {deleted}개, 비활성화 {deactivated}개")
+
+
 @router.post("/test-telegram", response_model=MessageResponse)
 def test_telegram(
     db: Session = Depends(get_db),
