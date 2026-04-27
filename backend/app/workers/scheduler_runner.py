@@ -34,7 +34,20 @@ def _set_scheduler_health(is_leader: bool, redis_client=None) -> None:
         pass
 
 
+def _scheduler_heartbeat_loop(redis_client) -> None:
+    """30초마다 Redis 에 scheduler heartbeat 갱신 — 별도 thread."""
+    import time
+    while True:
+        try:
+            redis_client.setex(HEALTH_KEY_SCHEDULER_LEADER, HEALTH_TTL_SECONDS, "1")
+        except Exception as e:
+            logger.warning("scheduler heartbeat thread 실패: %s", e)
+        time.sleep(30)
+
+
 def start_scheduler() -> None:
+    import threading
+
     scheduler = BlockingScheduler(timezone="Asia/Seoul")
     redis_client = get_redis_client()
     guard = DistributedSchedulerGuard(redis_client)
@@ -46,6 +59,11 @@ def start_scheduler() -> None:
     print("[scheduler] became leader, registering jobs")
     scheduler_leader_status.set(1)
     _set_scheduler_health(True, redis_client)
+
+    # heartbeat thread (job 주기와 별개로 30초 보장)
+    hb_thread = threading.Thread(target=_scheduler_heartbeat_loop, args=(redis_client,), daemon=True, name="scheduler-heartbeat")
+    hb_thread.start()
+    print("[scheduler] heartbeat thread started")
 
     def guarded_job(job_name: str, ttl_seconds: int, fn):
         def _wrapped():

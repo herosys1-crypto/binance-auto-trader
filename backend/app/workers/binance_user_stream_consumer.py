@@ -18,14 +18,16 @@ HEALTH_TTL_SECONDS = 60
 
 
 def _set_user_stream_health(connected: bool) -> None:
+    """Redis heartbeat 키 갱신. 실패 시 로그 남기되 stream 동작은 계속."""
     try:
         client = get_redis_client()
         if connected:
             client.setex(HEALTH_KEY_USER_STREAM, HEALTH_TTL_SECONDS, "1")
         else:
             client.delete(HEALTH_KEY_USER_STREAM)
-    except Exception:  # pragma: no cover - Redis 장애 시 무시 (메트릭만 영향)
-        pass
+    except Exception as e:
+        # silent fail 안 함 — heartbeat 실패는 모니터링상 중요하므로 로그 남김
+        logger.warning("user-stream heartbeat redis 실패: %s", e)
 
 class BinanceUserStreamConsumer:
     def __init__(self, *, api_key: str, api_secret: str, is_testnet: bool, ws_base_url: str, on_disconnect_sleep_seconds: int = 5) -> None:
@@ -43,6 +45,9 @@ class BinanceUserStreamConsumer:
         while True:
             try:
                 self.listen_key = self.client.start_user_stream()["listenKey"]
+                # listen key 발급 성공 = Binance API 인증 + 네트워크 정상.
+                # _on_open 호출 전에도 heartbeat 한 번 set (이중 안전장치).
+                _set_user_stream_health(True)
                 ws_url = f"{self.ws_base_url}/ws/{self.listen_key}"
                 logger.info("Starting Binance user stream consumer: %s", ws_url)
                 self.ws = websocket.WebSocketApp(ws_url, on_open=self._on_open, on_message=self._on_message, on_error=self._on_error, on_close=self._on_close)
@@ -52,6 +57,8 @@ class BinanceUserStreamConsumer:
                 attempt += 1
                 delay = exponential_backoff(attempt, base=1.0, cap=60.0, jitter=True)
                 user_stream_reconnect_total.inc()
+                # 재연결 대기 중에는 heartbeat 키 만료시켜 "끊김" 표시
+                _set_user_stream_health(False)
                 self._notify_system_error(f"User stream consumer crashed: {e}; retry in {delay:.2f}s")
                 time.sleep(delay)
 
