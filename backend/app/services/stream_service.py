@@ -16,7 +16,7 @@ class StreamService:
         mapped = map_order_update_event(payload)
         order = self.db.execute(select(Order).where(Order.client_order_id == mapped["client_order_id"])).scalar_one_or_none()
         if not order:
-            self.db.add(RiskEvent(strategy_instance_id=0, event_type="ORDER_TRADE_UPDATE", severity="WARN", title="Unmatched stream event", message="No local order matched the incoming stream payload", event_payload=payload))
+            self.db.add(RiskEvent(strategy_instance_id=None, event_type="ORDER_TRADE_UPDATE", severity="WARN", title="Unmatched stream event", message="No local order matched the incoming stream payload", event_payload=payload))
             self.db.commit()
             return
         order.exchange_order_id = mapped["exchange_order_id"]
@@ -65,5 +65,5 @@ class StreamService:
 
     def handle_listen_key_expired(self, payload: dict) -> None:
         user_stream_events_total.labels(event_type="listenKeyExpired").inc()
-        self.db.add(RiskEvent(strategy_instance_id=0, event_type="LISTEN_KEY_EXPIRED", severity="CRITICAL", title="Binance listenKey expired", message="User data stream expired; new orders must be blocked until stream restarts", event_payload=payload))
+        self.db.add(RiskEvent(strategy_instance_id=None, event_type="LISTEN_KEY_EXPIRED", severity="CRITICAL", title="Binance listenKey expired", message="User data stream expired; new orders must be blocked until stream restarts", event_payload=payload))
         self.db.commit()

@@ -7,7 +7,8 @@ from app.db.base import Base
 class RiskEvent(Base):
     __tablename__ = "risk_events"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    strategy_instance_id: Mapped[int] = mapped_column(ForeignKey("strategy_instances.id", ondelete="CASCADE"), nullable=False, index=True)
+    # NULL 허용: listenKeyExpired, ORDER_TRADE_UPDATE 미매칭 등 특정 strategy 에 속하지 않는 시스템 이벤트용.
+    strategy_instance_id: Mapped[int | None] = mapped_column(ForeignKey("strategy_instances.id", ondelete="CASCADE"), nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(String(40), nullable=False)
     severity: Mapped[str] = mapped_column(String(20), nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
