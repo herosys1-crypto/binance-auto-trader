@@ -22,7 +22,10 @@ class TPSLOrchestratorService:
                 strategy = self.strategy_repo.get_strategy(strategy_id)
                 if not strategy or strategy.status in {"WAITING","REENTRY_READY","CLOSED","STOPPING"}:
                     return
-                if strategy.current_position_qty is None or Decimal(str(strategy.current_position_qty)) <= 0:
+                # SHORT 포지션은 current_position_qty 가 음수로 저장됨 (예: -0.002).
+                # 이전 버전은 `<= 0` 으로 체크해서 SHORT 전략을 모두 건너뛰는 버그가 있었음.
+                # abs() 로 바꿔 LONG/SHORT 양쪽 모두 정상 동작하도록 수정.
+                if strategy.current_position_qty is None or abs(Decimal(str(strategy.current_position_qty))) == 0:
                     return
                 strategy_runs_total.labels(side=strategy.side, status=strategy.status).inc()
                 # 정상 모드 -50% 손절 검사 (크라이시스 Stage 2 의 -1% 손절은 evaluate_take_profit_level 가 처리)
@@ -55,7 +58,8 @@ class TPSLOrchestratorService:
     def _execute_take_profit(self, strategy, level: str) -> None:
         from app.models.strategy_template import StrategyTemplate
 
-        current_qty = Decimal(str(strategy.current_position_qty))
+        # SHORT 면 음수로 저장되어 있으므로 abs() 로 양수 quantity 확보.
+        current_qty = abs(Decimal(str(strategy.current_position_qty)))
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
         # 템플릿의 qty_ratio 우선 사용. 없으면 기본값 폴백.
         ratio_attr = {
