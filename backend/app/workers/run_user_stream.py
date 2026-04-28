@@ -1,4 +1,6 @@
 import logging
+import threading
+import time
 
 from sqlalchemy import select
 
@@ -6,8 +8,26 @@ from sqlalchemy import select
 import app.core.logging  # noqa: F401
 from app.core.crypto import decrypt_text
 from app.core.database import SessionLocal
+from app.core.redis_client import get_redis_client
 from app.models.exchange_account import ExchangeAccount
 from app.workers.binance_user_stream_consumer import BinanceUserStreamConsumer
+
+logger = logging.getLogger(__name__)
+
+
+def _heartbeat_loop() -> None:
+    """별도 thread 에서 30초마다 Redis 에 heartbeat 갱신.
+
+    consumer 의 _on_open / _on_message 가 호출 안 되어도 worker 가 살아있으면
+    heartbeat 가 유지되도록 보장.
+    """
+    while True:
+        try:
+            client = get_redis_client()
+            client.setex("health:user_stream:connected", 60, "1")
+        except Exception as e:
+            logger.warning("user-stream heartbeat thread 실패: %s", e)
+        time.sleep(30)
 
 # Binance USDⓈ-M Futures user data stream WebSocket endpoints.
 #   mainnet : wss://fstream.binance.com
@@ -37,6 +57,11 @@ def main() -> None:
         api_secret = decrypt_text(account.api_secret_enc)
         ws_base_url = WS_BASE_URL_TESTNET if account.is_testnet else WS_BASE_URL_MAINNET
         print(f"[user-stream] is_testnet={account.is_testnet}, ws_base_url={ws_base_url}")
+
+        # heartbeat thread 시작 (consumer 와 별개로 worker 자체 생존 신호)
+        hb_thread = threading.Thread(target=_heartbeat_loop, daemon=True, name="user-stream-heartbeat")
+        hb_thread.start()
+        logger.info("[user-stream] heartbeat thread started")
 
         consumer = BinanceUserStreamConsumer(
             api_key=api_key,
