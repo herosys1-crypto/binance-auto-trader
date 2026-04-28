@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy import select
 from app.integrations.binance.mapper import map_order_update_event, map_account_update_event
@@ -5,6 +6,7 @@ from app.models.order import Order
 from app.models.position import Position
 from app.models.risk_event import RiskEvent
 from app.models.strategy_instance import StrategyInstance
+from app.models.strategy_stage_plan import StrategyStagePlan
 from app.observability.metrics import user_stream_events_total
 
 class StreamService:
@@ -26,6 +28,31 @@ class StreamService:
         strategy = self.db.get(StrategyInstance, order.strategy_instance_id)
         if strategy and order.purpose == "ENTRY" and order.status == "FILLED":
             strategy.status = {1: "STAGE1_OPEN", 2: "STAGE2_OPEN", 3: "STAGE3_OPEN", 4: "STAGE4_OPEN"}.get(order.stage_no, strategy.status)
+            # 단계별 계획 row 갱신
+            stage_plan = self.db.execute(
+                select(StrategyStagePlan)
+                .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+                .where(StrategyStagePlan.stage_no == order.stage_no)
+                .limit(1)
+            ).scalars().first()
+            if stage_plan and not stage_plan.is_triggered:
+                stage_plan.is_triggered = True
+                stage_plan.triggered_at = datetime.now(timezone.utc)
+            # Telegram 알림 발송 (단계 진입)
+            try:
+                from app.services.notification_service import NotificationService
+                NotificationService(self.db).send_stage_entered_alert(
+                    strategy_instance_id=strategy.id,
+                    symbol=strategy.symbol,
+                    side=strategy.side,
+                    stage_no=order.stage_no,
+                    entry_price=order.avg_price or order.price,
+                    qty=order.executed_qty,
+                    invested_capital=stage_plan.planned_capital if stage_plan else None,
+                    avg_entry_price=strategy.avg_entry_price,
+                )
+            except Exception:  # 알림 실패해도 거래 로직은 영향 없음
+                pass
         elif strategy and order.purpose == "EXIT" and order.status == "FILLED":
             strategy.status = "REENTRY_READY"
             strategy.reentry_ready = True
