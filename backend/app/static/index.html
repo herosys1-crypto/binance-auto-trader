@@ -2,7 +2,11 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#0b1120" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <title>Binance Auto Trader — 운영 대시보드</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
@@ -66,6 +70,26 @@
 
   /* 위험 알림 띠 */
   .alert-bar { background: linear-gradient(90deg, rgba(239,68,68,0.15), rgba(239,68,68,0.05)); border: 1px solid rgba(239,68,68,0.4); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: flex; gap: 12px; align-items: center; }
+
+  /* ===== 모바일 최적화 ===== */
+  /* 작은 화면(< 768px)에서는 테이블 폰트/패딩 축소 + 버튼 터치 영역 확대 */
+  @media (max-width: 767px) {
+    body { font-size: 13px; }
+    th { padding: 6px 8px; font-size: 10px; }
+    td { padding: 8px; font-size: 12px; }
+    .btn { min-height: 38px; }  /* iOS Apple Human Interface Guidelines: 최소 44pt 권장 */
+    .card-header { padding: 8px 10px; font-size: 12px; }
+    /* 모달 모바일 풀스크린 */
+    #create-modal > div { max-width: 100% !important; max-height: 100vh !important; border-radius: 0 !important; }
+  }
+
+  /* 입력 필드 — 모바일 자동 zoom 방지 (font-size 16px 이상) */
+  @media (max-width: 767px) {
+    input, select, textarea { font-size: 16px !important; }
+  }
+
+  /* 가로 스크롤 테이블 — 모바일에서 끝이 보이도록 그림자 */
+  .overflow-auto { -webkit-overflow-scrolling: touch; }
 </style>
 </head>
 <body class="min-h-screen">
@@ -92,108 +116,109 @@
 </div>
 
 <!-- ============ Dashboard ============ -->
-<div id="dashboard-screen" class="hidden p-6 max-w-7xl mx-auto">
+<div id="dashboard-screen" class="hidden p-3 max-w-full mx-auto">
 
-  <!-- Header -->
-  <div class="flex justify-between items-center mb-5">
-    <div>
-      <h1 class="text-2xl font-bold">🤖 운영 대시보드</h1>
-      <p id="last-updated" class="text-xs text-slate-400 mt-1">마지막 갱신: -</p>
+  <!-- Header (compact) -->
+  <div class="flex justify-between items-center mb-2">
+    <div class="flex items-baseline gap-3">
+      <h1 class="text-xl font-bold">🤖 운영 대시보드</h1>
+      <p id="last-updated" class="text-xs text-slate-400">마지막 갱신: -</p>
     </div>
     <div class="flex gap-2 items-center">
-      <span id="user-info" class="text-sm text-slate-300"></span>
-      <button onclick="refreshAll()" class="btn-ghost btn text-sm">↻ 새로고침</button>
-      <button onclick="logout()" class="btn-danger btn text-sm">로그아웃</button>
+      <span id="user-info" class="text-xs text-slate-300"></span>
+      <button onclick="refreshAll()" class="btn-ghost btn text-xs" style="padding:4px 10px">↻ 새로고침</button>
+      <button onclick="logout()" class="btn-danger btn text-xs" style="padding:4px 10px">로그아웃</button>
     </div>
   </div>
 
   <!-- 위험 알림 띠 (조건부 표시) -->
-  <div id="alert-bar" class="alert-bar hidden">
-    <span class="text-2xl">⚠️</span>
+  <div id="alert-bar" class="alert-bar hidden" style="margin-bottom:8px;padding:8px 12px">
+    <span class="text-xl">⚠️</span>
     <div class="flex-1">
-      <div class="font-semibold text-red-300" id="alert-title">위험 신호 감지</div>
-      <div class="text-sm text-slate-300" id="alert-detail">상세 내용</div>
+      <div class="font-semibold text-red-300 text-sm" id="alert-title">위험 신호 감지</div>
+      <div class="text-xs text-slate-300" id="alert-detail">상세 내용</div>
     </div>
     <button onclick="dismissAlert()" class="text-slate-400 hover:text-white">✕</button>
   </div>
 
-  <!-- 4-card metrics (운영자 중심) -->
-  <div class="grid grid-cols-4 gap-4 mb-6">
-    <div id="card-system" class="card rounded-lg p-4 signal-gray">
-      <p class="text-xs text-slate-400 mb-1">시스템 상태</p>
-      <p id="metric-system" class="text-2xl font-bold">-</p>
-      <p id="metric-system-detail" class="text-xs text-slate-500 mt-1">-</p>
+  <!-- 4-card metrics — 모바일 2단 / 데스크톱 4단 -->
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+    <div id="card-system" class="card rounded-lg p-2 signal-gray">
+      <p class="text-xs text-slate-400">시스템 상태</p>
+      <p id="metric-system" class="text-base sm:text-lg font-bold leading-tight">-</p>
+      <p id="metric-system-detail" class="text-xs text-slate-500">-</p>
     </div>
-    <div id="card-active" class="card rounded-lg p-4 signal-gray">
-      <p class="text-xs text-slate-400 mb-1">진행 중인 전략</p>
-      <p id="metric-active" class="text-2xl font-bold">-</p>
-      <p id="metric-active-detail" class="text-xs text-slate-500 mt-1">-</p>
+    <div id="card-active" class="card rounded-lg p-2 signal-gray">
+      <p class="text-xs text-slate-400">진행 중인 전략</p>
+      <p id="metric-active" class="text-base sm:text-lg font-bold leading-tight">-</p>
+      <p id="metric-active-detail" class="text-xs text-slate-500">-</p>
     </div>
-    <div id="card-pnl" class="card rounded-lg p-4 signal-gray">
-      <p class="text-xs text-slate-400 mb-1">미실현 손익 합계</p>
-      <p id="metric-pnl" class="text-2xl font-bold">-</p>
-      <p id="metric-pnl-detail" class="text-xs text-slate-500 mt-1">실시간</p>
+    <div id="card-pnl" class="card rounded-lg p-2 signal-gray">
+      <p class="text-xs text-slate-400">미실현 손익</p>
+      <p id="metric-pnl" class="text-base sm:text-lg font-bold leading-tight">-</p>
+      <p id="metric-pnl-detail" class="text-xs text-slate-500">실시간</p>
     </div>
-    <div id="card-templates" class="card rounded-lg p-4 signal-gray">
-      <p class="text-xs text-slate-400 mb-1">전략 템플릿</p>
-      <p id="metric-templates" class="text-2xl font-bold">-</p>
-      <p id="metric-templates-detail" class="text-xs text-slate-500 mt-1">-</p>
-    </div>
-  </div>
-
-  <!-- 시스템 상태 -->
-  <div class="card rounded-lg mb-6">
-    <div class="card-header text-sm flex justify-between items-center">
-      <span>⚙️ 시스템 상태</span>
-      <span id="syshealth-overall" class="text-xs">-</span>
-    </div>
-    <div class="p-3 grid grid-cols-4 gap-3" id="syshealth-grid">
-      <p class="text-slate-500 text-sm col-span-4 text-center py-4">로딩 중...</p>
+    <div id="card-templates" class="card rounded-lg p-2 signal-gray">
+      <p class="text-xs text-slate-400">전략 템플릿</p>
+      <p id="metric-templates" class="text-base sm:text-lg font-bold leading-tight">-</p>
+      <p id="metric-templates-detail" class="text-xs text-slate-500">-</p>
     </div>
   </div>
 
-  <!-- 운영 통계 -->
-  <div class="card rounded-lg mb-6">
-    <div class="card-header text-sm">📊 운영 통계 (전체 누적)</div>
-    <div class="p-4 grid grid-cols-6 gap-4 text-center">
-      <div>
-        <p class="text-xs text-slate-400">전체 전략</p>
-        <p id="stats-total" class="text-xl font-bold">-</p>
+  <!-- Row: 시스템 상태(좌) + 운영 통계(우) — 모바일 1단 / 데스크톱 2단 -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
+    <!-- 시스템 상태 -->
+    <div class="card rounded-lg">
+      <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
+        <span>⚙️ 시스템 상태</span>
+        <span id="syshealth-overall" class="text-xs">-</span>
       </div>
-      <div>
-        <p class="text-xs text-slate-400">완료(익절)</p>
-        <p id="stats-completed" class="text-xl font-bold pos">-</p>
+      <div class="p-2 grid grid-cols-2 sm:grid-cols-2 gap-2" id="syshealth-grid">
+        <p class="text-slate-500 text-xs col-span-2 text-center py-2">로딩 중...</p>
       </div>
-      <div>
-        <p class="text-xs text-slate-400">손절</p>
-        <p id="stats-sl" class="text-xl font-bold neg">-</p>
-      </div>
-      <div>
-        <p class="text-xs text-slate-400">승률</p>
-        <p id="stats-winrate" class="text-xl font-bold text-blue-300">-</p>
-      </div>
-      <div>
-        <p class="text-xs text-slate-400">누적 실현손익</p>
-        <p id="stats-realized" class="text-xl font-bold">-</p>
-      </div>
-      <div>
-        <p class="text-xs text-slate-400">크라이시스 발동</p>
-        <p id="stats-crisis" class="text-xl font-bold text-yellow-400">-</p>
+    </div>
+
+    <!-- 운영 통계 — 모바일 3x2, 데스크톱 6 -->
+    <div class="card rounded-lg">
+      <div class="card-header text-xs" style="padding:8px 12px">📊 운영 통계 (전체 누적)</div>
+      <div class="p-2 grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
+        <div>
+          <p class="text-xs text-slate-400">전체</p>
+          <p id="stats-total" class="text-base font-bold">-</p>
+        </div>
+        <div>
+          <p class="text-xs text-slate-400">익절</p>
+          <p id="stats-completed" class="text-base font-bold pos">-</p>
+        </div>
+        <div>
+          <p class="text-xs text-slate-400">손절</p>
+          <p id="stats-sl" class="text-base font-bold neg">-</p>
+        </div>
+        <div>
+          <p class="text-xs text-slate-400">승률</p>
+          <p id="stats-winrate" class="text-base font-bold text-blue-300">-</p>
+        </div>
+        <div>
+          <p class="text-xs text-slate-400">실현손익</p>
+          <p id="stats-realized" class="text-base font-bold">-</p>
+        </div>
+        <div>
+          <p class="text-xs text-slate-400">크라이시스</p>
+          <p id="stats-crisis" class="text-base font-bold text-yellow-400">-</p>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- 빠른 작업 -->
-  <div class="card rounded-lg mb-6">
-    <div class="card-header text-sm">⚡ 빠른 작업</div>
-    <div class="p-4 flex gap-2 flex-wrap">
-      <button class="btn-success btn" onclick="openCreateModal()">➕ 새 전략 시작</button>
-      <button class="btn-ghost btn" onclick="testTelegram()">📨 Telegram 테스트</button>
-      <button class="btn-ghost btn" onclick="window.open('http://localhost:3000','_blank')">📊 Grafana 모니터링</button>
-      <button class="btn-ghost btn" onclick="window.open('http://localhost:8000/docs','_blank')">🔧 API 문서</button>
-      <button class="btn-ghost btn" onclick="exportCsv('strategies')">📥 전략 CSV</button>
-      <button class="btn-ghost btn" onclick="exportCsv('orders')">📥 주문 CSV</button>
-    </div>
+  <!-- 빠른 작업 — 모바일 wrap + 터치 친화 -->
+  <div class="card rounded-lg mb-2 flex gap-2 items-center flex-wrap" style="padding:6px 10px">
+    <span class="text-xs font-semibold text-slate-300 mr-1 hidden sm:inline">⚡ 빠른 작업</span>
+    <button class="btn-success btn text-xs" style="padding:8px 12px;min-height:36px" onclick="openCreateModal()">➕ 새 전략</button>
+    <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="testTelegram()">📨 Telegram</button>
+    <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="window.open('http://localhost:3000','_blank')">📊 Grafana</button>
+    <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="window.open('http://localhost:8000/docs','_blank')">🔧 API</button>
+    <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('strategies')">📥 전략 CSV</button>
+    <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('orders')">📥 주문 CSV</button>
   </div>
 
   <!-- ===== 신규 전략 시작 모달 ===== -->
@@ -411,63 +436,63 @@
     </div>
   </div>
 
-  <!-- 최근 활동 피드 -->
-  <div class="card rounded-lg mb-6">
-    <div class="card-header text-sm flex justify-between items-center">
-      <span>📡 최근 활동 (전체 전략, 최신순 20건)</span>
-      <span class="text-xs text-slate-500" id="activity-updated">-</span>
+  <!-- Row: 최근 활동(좌) + 전략 인스턴스(우) — 모바일 1단 / 데스크톱 2단 -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
+    <!-- 최근 활동 피드 -->
+    <div class="card rounded-lg">
+      <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
+        <span>📡 최근 활동 (최신순 20건)</span>
+        <span class="text-xs text-slate-500" id="activity-updated">-</span>
+      </div>
+      <div id="activity-feed" class="p-2 overflow-y-auto" style="max-height:240px">
+        <p class="text-slate-500 text-xs text-center py-2">로딩 중...</p>
+      </div>
     </div>
-    <div id="activity-feed" class="p-3 max-h-64 overflow-y-auto">
-      <p class="text-slate-500 text-sm text-center py-4">로딩 중...</p>
+
+    <!-- 진행 중인 전략 — 모바일에선 가로 스크롤 -->
+    <div class="card rounded-lg">
+      <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
+        <span>🎯 전략 인스턴스</span>
+        <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
+          <input type="checkbox" id="hide-terminated" onchange="refreshStrategies()" checked />
+          <span class="text-slate-300">종료 숨김</span>
+        </label>
+      </div>
+      <div class="overflow-auto" style="max-height:240px">
+        <table class="min-w-max">
+          <thead>
+            <tr>
+              <th style="width:30px">#</th>
+              <th>심볼</th>
+              <th>방향</th>
+              <th>상태</th>
+              <th>단계</th>
+              <th class="num">평균 진입가</th>
+              <th class="num">포지션</th>
+              <th class="num">미실현</th>
+              <th style="width:100px">액션</th>
+            </tr>
+          </thead>
+          <tbody id="strategies-tbody"><tr><td colspan="9" class="text-center text-slate-500 py-3 text-xs">로딩 중...</td></tr></tbody>
+        </table>
+      </div>
     </div>
   </div>
 
-  <!-- 진행 중인 전략 -->
-  <div class="card rounded-lg mb-6">
-    <div class="card-header text-sm flex justify-between items-center">
-      <span>🎯 전략 인스턴스</span>
-      <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
-        <input type="checkbox" id="hide-terminated" onchange="refreshStrategies()" checked />
-        <span class="text-slate-300">종료된 전략 숨김</span>
-      </label>
-    </div>
-    <div class="overflow-x-auto">
-      <table>
-        <thead>
-          <tr>
-            <th style="width:40px">#</th>
-            <th>심볼</th>
-            <th>방향</th>
-            <th>상태</th>
-            <th>모드</th>
-            <th>단계 진행</th>
-            <th class="num">진입요청가</th>
-            <th class="num">평균 진입가</th>
-            <th class="num">포지션</th>
-            <th class="num">미실현 손익</th>
-            <th class="num" title="누적 최대 손실 / 최대 이익">최대손실/이익</th>
-            <th style="width:140px">액션</th>
-          </tr>
-        </thead>
-        <tbody id="strategies-tbody"><tr><td colspan="12" class="text-center text-slate-500 py-6">로딩 중...</td></tr></tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- 전략 템플릿 -->
-  <div class="card rounded-lg mb-6">
-    <div class="card-header text-sm flex justify-between items-center">
+  <!-- 전략 템플릿 — 모바일 가로 스크롤 -->
+  <div class="card rounded-lg mb-2">
+    <div class="card-header text-xs flex justify-between items-center flex-wrap gap-2" style="padding:8px 12px">
       <span>📋 전략 템플릿</span>
-      <div class="flex gap-2 items-center">
+      <div class="flex gap-2 items-center flex-wrap">
         <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
           <input type="checkbox" id="show-quick" onchange="refreshTemplates()" />
           <span class="text-slate-300">_quick_* 표시</span>
         </label>
-        <button onclick="cleanupQuickTemplates()" class="btn-ghost btn text-xs" style="padding:4px 10px">🧹 _quick_* 일괄 정리</button>
+        <button onclick="cleanupQuickTemplates()" class="btn-ghost btn text-xs" style="padding:3px 8px">🧹 _quick_* 정리</button>
       </div>
     </div>
-    <div class="overflow-x-auto">
-      <table>
+    <div class="overflow-auto" style="max-height:240px">
+      <table class="min-w-max">
         <thead>
           <tr>
             <th style="width:40px">#</th>
@@ -480,7 +505,7 @@
             <th style="width:50px">삭제</th>
           </tr>
         </thead>
-        <tbody id="templates-tbody"><tr><td colspan="8" class="text-center text-slate-500 py-6">로딩 중...</td></tr></tbody>
+        <tbody id="templates-tbody"><tr><td colspan="8" class="text-center text-slate-500 py-3 text-xs">로딩 중...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -851,7 +876,7 @@ async function refreshStrategies() {
 
     const tbody = document.getElementById('strategies-tbody');
     if (data.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="12" class="text-center text-slate-500 py-6">전략 없음</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500 py-3 text-xs">전략 없음</td></tr>';
       return;
     }
 
@@ -876,7 +901,7 @@ async function refreshStrategies() {
     if (hideTerm) visible = data.filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()));
     const hiddenCount = data.length - visible.length;
     if (visible.length === 0 && hiddenCount > 0) {
-      tbody.innerHTML = `<tr><td colspan="12" class="text-center text-slate-500 py-6">진행 중인 전략 없음 (종료 ${hiddenCount}건 숨김)</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="9" class="text-center text-slate-500 py-3 text-xs">진행 중인 전략 없음 (종료 ${hiddenCount}건 숨김)</td></tr>`;
       return;
     }
 
@@ -927,18 +952,21 @@ async function refreshStrategies() {
         : '<span class="text-slate-500">-</span>';
       const maxCell = `<div class="text-xs leading-tight">${maxLoss}<br>${maxProfit}</div>`;
 
+      // 상태 셀에 모드 배지 + 최대손익 tooltip 까지 합쳐 9 컬럼으로 압축.
+      const stateCell = `
+        <div class="flex flex-col gap-1" title="모드: ${modeBadge.replace(/<[^>]+>/g,'').trim()} / 진입요청가: ${s.start_price ? fmtNum(s.start_price) : '-'} / 최대 손실: ${s.max_loss_pct !== null && s.max_loss_pct !== undefined ? fmtNum(s.max_loss_pct)+'%' : '-'} / 최대 이익: ${s.max_profit_pct !== null && s.max_profit_pct !== undefined ? '+'+fmtNum(s.max_profit_pct)+'%' : '-'}">
+          <span class="badge badge-${info.sig}">${info.icon} ${info.ko}</span>
+          ${s.crisis_mode_triggered_at ? modeBadge : ''}
+        </div>`;
       return `<tr class="row-clickable" onclick="selectStrategy(${s.id})">
         <td>#${s.id}</td>
         <td class="font-mono text-blue-300">${s.symbol}</td>
         <td>${sideBadge(s.side)}</td>
-        <td><span class="badge badge-${info.sig}">${info.icon} ${info.ko}</span></td>
-        <td>${modeBadge}</td>
+        <td>${stateCell}</td>
         <td>${stage}</td>
-        <td class="num">${startPx}</td>
         <td class="num">${entry}</td>
         <td class="num">${qty}</td>
         <td class="num">${pnl}</td>
-        <td class="num">${maxCell}</td>
         <td>${stopBtn}</td>
       </tr>`;
     }).join('');
