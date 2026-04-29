@@ -56,6 +56,21 @@ class ExecutionService:
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
             raise ValueError("Strategy not found")
+        # Bug #8 fix (2026-04-29): 포지션이 0 인 전략에 대한 reduceOnly 주문은
+        # Binance 가 -2022 "ReduceOnly Order is rejected" 로 거절. 미체결 주문만
+        # 취소하고 status 를 STOPPED 로 마킹.
+        if quantity is None or abs(Decimal(str(quantity))) == 0:
+            # 미체결 주문 모두 취소 (try/best-effort)
+            try:
+                self.client.cancel_all_orders(symbol=strategy.symbol)
+            except Exception:
+                pass
+            strategy.status = "STOPPED"
+            self.db.commit()
+            raise ValueError(
+                "Position is already 0; cancelled pending orders and marked STOPPED. "
+                "No reduceOnly market order sent."
+            )
         side = "SELL" if strategy.side == "LONG" else "BUY"
         position_side = strategy.side
         client_order_id = self._new_client_order_id(strategy.symbol, "EXIT")

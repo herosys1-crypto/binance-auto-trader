@@ -35,8 +35,34 @@ def run_position_reconcile_once(decrypt_func) -> None:
                         matched = item
                         break
                 if not matched:
-                    db.add(RiskEvent(strategy_instance_id=strategy.id, event_type="POSITION_RECONCILE_MISS", severity="WARN", title="No matching position found on exchange", message=f"symbol={strategy.symbol}, side={strategy.side}", event_payload={"strategy_id": strategy.id}))
-                    position_reconcile_total.labels(status="miss").inc()
+                    # Bug #10 fix (2026-04-29): DB-only 잔재 자동 정리 — 단, 보수적으로
+                    # *_OPEN 상태(이미 체결되었던 상태)만 처리. PENDING 은 limit 주문이
+                    # 아직 미체결일 가능성이 있어 자동 STOPPED 하면 위험.
+                    _OPEN_STATES = {"STAGE1_OPEN", "STAGE2_OPEN", "STAGE3_OPEN", "STAGE4_OPEN",
+                                    "TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL"}
+                    if strategy.status in _OPEN_STATES:
+                        db.add(RiskEvent(
+                            strategy_instance_id=strategy.id,
+                            event_type="RECONCILE_AUTO_STOP_ORPHAN",
+                            severity="WARN",
+                            title="Auto-stopped DB-only orphan strategy",
+                            message=f"symbol={strategy.symbol}, side={strategy.side} — exchange position closed externally, marking STOPPED",
+                            event_payload={"strategy_id": strategy.id, "old_status": strategy.status},
+                        ))
+                        strategy.status = "STOPPED"
+                        strategy.current_position_qty = Decimal("0")
+                        position_reconcile_total.labels(status="orphan_stopped").inc()
+                    else:
+                        # PENDING 등 — 단순 RiskEvent 만 (사용자 모니터링용)
+                        db.add(RiskEvent(
+                            strategy_instance_id=strategy.id,
+                            event_type="POSITION_RECONCILE_MISS",
+                            severity="WARN",
+                            title="No matching position found on exchange",
+                            message=f"symbol={strategy.symbol}, side={strategy.side}",
+                            event_payload={"strategy_id": strategy.id},
+                        ))
+                        position_reconcile_total.labels(status="miss").inc()
                     continue
                 exchange_position_amt = Decimal(str(matched.get("positionAmt", "0")))
                 exchange_entry_price = Decimal(str(matched.get("entryPrice", "0")))
