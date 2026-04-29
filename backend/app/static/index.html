@@ -180,10 +180,11 @@
     </div>
   </div>
 
-  <!-- Row: [시스템상태 + 빠른작업 + 운영통계 좌측 스택] | [전략 인스턴스 우측] -->
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
-    <!-- LEFT 컬럼 — 3 패널 stacked. h-full + 시스템상태 flex-grow 로 우측 전략인스턴스 높이에 정확히 매치 -->
-    <div class="flex flex-col gap-2 h-full">
+  <!-- Row: [시스템상태 + 빠른작업 + 운영통계 좌측 25%] | [전략 인스턴스 우측 75%] -->
+  <!-- 비율 1:3 (좌측 좁게, 전략인스턴스 넓게) -->
+  <div class="grid grid-cols-1 md:grid-cols-4 gap-2 mb-2">
+    <!-- LEFT 컬럼 (25%) — 3 패널 stacked. h-full + 시스템상태 flex-grow 로 우측 전략인스턴스 높이에 정확히 매치 -->
+    <div class="md:col-span-1 flex flex-col gap-2 h-full">
       <!-- 시스템 상태 — flex-1 로 빈 공간 자동 채움 -->
       <div id="section-syshealth" class="card rounded-lg flex-1 flex flex-col">
         <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
@@ -261,8 +262,8 @@
       </div>
     </div>
 
-    <!-- RIGHT 컬럼 — 전략 인스턴스 (좌측 3패널 합친 높이만큼 자연스럽게 늘어남) -->
-    <div id="section-strategies" class="card rounded-lg">
+    <!-- RIGHT 컬럼 (75%) — 전략 인스턴스 (좌측 3패널 합친 높이만큼 자연스럽게 늘어남) -->
+    <div id="section-strategies" class="card rounded-lg md:col-span-3">
       <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
         <span>🎯 전략 인스턴스</span>
         <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
