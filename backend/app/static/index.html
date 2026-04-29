@@ -1185,7 +1185,16 @@ async function refreshStrategies() {
     const data = await api('/strategies');
     const active = data.filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()));
     let totalUnrealized = 0;
-    active.forEach(s => { totalUnrealized += Number(s.unrealized_pnl || 0); });
+    let totalMarginUsed = 0;  // 마진 합 = sum(capital / leverage) — 사용자 실제 사용 자본
+    active.forEach(s => {
+      const pnl = Number(s.unrealized_pnl || 0);
+      const cap = Number(s.total_capital || 0);
+      const lev = Number(s.leverage || 1) || 1;
+      totalUnrealized += pnl;
+      if (cap > 0 && lev > 0) totalMarginUsed += cap / lev;
+    });
+    // 전체 ROI % = 총 USD 손익 / 총 마진 × 100 (사용자 실제 자본 대비 수익률)
+    const overallRoiPct = totalMarginUsed > 0 ? (totalUnrealized / totalMarginUsed * 100) : 0;
 
     setMetric('active', active.length + '건',
       active.length === 0 ? '진행 중인 전략 없음' : `전체 ${data.length}건 중`,
@@ -1193,7 +1202,8 @@ async function refreshStrategies() {
 
     const pnlSig = totalUnrealized > 0 ? 'green' : totalUnrealized < 0 ? 'red' : 'gray';
     const pnlEl = document.getElementById('metric-pnl');
-    pnlEl.textContent = fmtPnL(totalUnrealized) + ' USDT';
+    const roiSign = overallRoiPct > 0 ? '+' : '';
+    pnlEl.innerHTML = `${fmtPnL(totalUnrealized)} USDT <span class="text-xs font-normal">(${roiSign}${overallRoiPct.toFixed(2)}%)</span>`;
     pnlEl.className = 'text-2xl font-bold ' + (totalUnrealized > 0 ? 'pos' : totalUnrealized < 0 ? 'neg' : '');
     setSignal('card-pnl', pnlSig);
 
@@ -1241,8 +1251,13 @@ async function refreshStrategies() {
       const entry = s.avg_entry_price ? fmtNum(s.avg_entry_price) : '<span class="text-slate-500">-</span>';
       const qty = s.current_position_qty && Number(s.current_position_qty) !== 0 ? fmtQty(s.current_position_qty) : '<span class="text-slate-500">-</span>';
       const pnlNum = Number(s.unrealized_pnl || 0);
+      // 사용자 실제 ROI % = USD pnl × leverage / capital × 100  (margin = capital / leverage 기준)
+      const sCap = Number(s.total_capital || 0);
+      const sLev = Number(s.leverage || 1) || 1;
+      const sPnlPct = (sCap > 0) ? (pnlNum * sLev / sCap * 100) : 0;
+      const pnlSign = sPnlPct > 0 ? '+' : '';
       const pnl = (s.unrealized_pnl !== null && s.unrealized_pnl !== undefined && Number(s.current_position_qty) !== 0)
-        ? `<span class="${pnlNum>0?'pos':pnlNum<0?'neg':''}">${fmtPnL(pnlNum)}</span>`
+        ? `<div class="text-xs leading-tight"><span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold">${fmtPnL(pnlNum)}</span><br><span class="${sPnlPct>0?'pos':sPnlPct<0?'neg':'text-slate-400'} text-xs">${pnlSign}${sPnlPct.toFixed(2)}%</span></div>`
         : '<span class="text-slate-500">-</span>';
       const isTerminal = TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
       // UX #17 (2026-04-29): 종료 상태이고 한번도 체결 안 된 전략 (대기 단계) 에는 삭제 버튼 노출
