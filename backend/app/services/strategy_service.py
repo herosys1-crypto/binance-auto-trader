@@ -71,6 +71,25 @@ class StrategyService:
         symbol_model = self.repo.get_symbol(symbol)
         if not template_model or not symbol_model:
             raise ValueError("Template or symbol not found")
+        # 중복 방지 (Critical): Binance 는 같은 심볼+방향에 대해 통합 포지션으로만 관리.
+        # 같은 계정/심볼/방향 활성 전략이 있으면 새 전략 생성을 거부 (TP/SL 충돌, qty 추적 오류 회피).
+        # 종료된 상태 (STOPPED/COMPLETED/CLOSED/REENTRY_READY) 는 제외 — 새로 시작 가능.
+        from sqlalchemy import select
+        _CLOSED_STATUSES = {"STOPPED", "COMPLETED", "CLOSED", "REENTRY_READY"}
+        existing = self.db.execute(
+            select(StrategyInstance)
+            .where(StrategyInstance.exchange_account_id == exchange_account_id)
+            .where(StrategyInstance.symbol == symbol)
+            .where(StrategyInstance.side == side)
+            .where(StrategyInstance.status.notin_(_CLOSED_STATUSES))
+            .limit(1)
+        ).scalar_one_or_none()
+        if existing:
+            raise ValueError(
+                f"같은 거래소/심볼/방향 ({symbol} {side}) 으로 활성 전략 #{existing.id} ({existing.status}) 가 이미 있습니다. "
+                "Binance 는 통합 포지션으로만 관리하므로 중복 전략은 TP/SL 충돌을 일으킵니다. "
+                "기존 전략을 종료한 후 새로 시작하시거나, 다른 심볼/방향을 선택해 주세요."
+            )
         preview = self.calculate_preview(symbol=symbol, side=side, start_price=start_price, strategy_template_id=strategy_template_id, leverage_override=leverage_override)
         instance = StrategyInstance(
             user_id=user_id,

@@ -1762,6 +1762,10 @@ async function _renderDetailChart(strategy, stagePlans) {
     wickUpColor: '#10b981',
     wickDownColor: '#ef4444',
     priceScaleId: 'left',  // UX #27
+    // 자동 last-close 가격 라벨/라인 비활성화 (1d 에서 어제 종가가 평단 옆에 따로 떠서 혼동 유발)
+    // 대신 아래에서 명시적으로 "현재가" 라벨 라인을 그려 모든 timeframe 에서 일관된 표시.
+    priceLineVisible: false,
+    lastValueVisible: false,
     priceFormat: {
       type: 'price',
       precision: 8,
@@ -1844,6 +1848,23 @@ async function _renderDetailChart(strategy, stagePlans) {
   // 4) 청산예정가 — 빨간 굵은 점선 (체결분 기준 isolated 계산). UX #28: 굵기 강화 4px (최대)
   if (liqPx) {
     addLine(liqPx, '#ef4444', 2, '청산예정', 4);
+  }
+
+  // 5) 현재가(마크) — 시안 실선. 모든 timeframe 에서 일관된 표시.
+  // 1d 차트는 Binance 가 어제 종가를 last 로 반환해 timeframe 마다 last 가 달라지는 문제.
+  // 따라서 candle.last 가 아닌 strategy 의 avg_entry + unrealized_pnl + qty 로 역산:
+  //   LONG : mark = avg + pnl / |qty|
+  //   SHORT: mark = avg - pnl / |qty|
+  let currentMark = null;
+  const sAvg = Number(strategy.avg_entry_price || 0);
+  const sQty = Math.abs(Number(strategy.current_position_qty || 0));
+  const sPnl = strategy.unrealized_pnl != null ? Number(strategy.unrealized_pnl) : null;
+  if (sAvg > 0 && sQty > 0 && sPnl !== null && !isNaN(sPnl)) {
+    currentMark = strategy.side === 'LONG' ? (sAvg + sPnl / sQty) : (sAvg - sPnl / sQty);
+  }
+  const markPriceForLine = currentMark || last;  // fallback: 캔들 close (포지션 없을 때)
+  if (markPriceForLine && markPriceForLine > 0) {
+    addLine(markPriceForLine, '#06b6d4', 1, '현재가');
   }
 
   // UX #24: 청산가 범위 밖일 때 HTML 오버레이 인디케이터 표시

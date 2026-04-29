@@ -14,6 +14,7 @@ from app.workers.distributed_scheduler_guard import DistributedSchedulerGuard
 from app.workers.keepalive_worker import run_keepalive_once
 from app.workers.reconcile_worker import run_position_reconcile_once
 from app.workers.run_workers import run_symbol_sync_once, run_tp_sl_once
+from app.workers.stage_trigger_worker import run_stage_trigger_once
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,8 @@ def start_scheduler() -> None:
     scheduler.add_job(guarded_job("symbol_sync_daily", 3600, run_symbol_sync_once), trigger=CronTrigger(hour=3, minute=0), id="symbol_sync_daily", replace_existing=True, max_instances=1, coalesce=True)
     # 재진입 자동화 — 매 30초마다 검사 (lock TTL 25s 로 중복 방지)
     scheduler.add_job(guarded_job("auto_reentry", 25, lambda: run_auto_reentry_once(decrypt_text)), trigger=IntervalTrigger(seconds=30), id="auto_reentry", replace_existing=True, max_instances=1, coalesce=True)
+    # Stage 2~N 자동 진입 트리거 감시 — 매 10초 (Critical: 이전엔 stage 1 만 자동, 2~N 은 수동 필요했던 버그 fix)
+    scheduler.add_job(guarded_job("stage_trigger", 8, lambda: run_stage_trigger_once(decrypt_text)), trigger=IntervalTrigger(seconds=10), id="stage_trigger", replace_existing=True, max_instances=1, coalesce=True)
     scheduler.start()
 
 if __name__ == "__main__":
