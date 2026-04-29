@@ -566,7 +566,7 @@
           <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="border-top:2px solid #3b82f6"></span>평단가</span>
           <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="border-top:2px dashed #ef4444"></span>청산예정가</span>
           <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="background:#a78bfa"></span>BB(20,2)</span>
-          <button onclick="toggleLiqIncluded()" class="btn-ghost btn text-xs ml-2" style="padding:2px 8px; font-size:11px">📐 청산가 포함 보기</button>
+          <button id="liq-toggle-btn" onclick="toggleLiqIncluded()" class="btn-primary btn text-xs ml-2" style="padding:2px 8px; font-size:11px">📐 청산가 포함됨 (끄기)</button>
           <span class="text-slate-500 ml-1">💡 휠=줌 · 드래그=팬 · 가격축 드래그=Y축 스크롤</span>
         </div>
 
@@ -1307,6 +1307,8 @@ async function refreshExchangeAccounts() {
 
 async function selectStrategy(id) {
   document.getElementById('detail-section').classList.remove('hidden');
+  // UX #25: 데이터 로드 전에 즉시 detail section 으로 스크롤 (block: start = 차트가 화면 상단에)
+  document.getElementById('detail-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
   try {
     const [timeline, stagePlans, orders, strategy] = await Promise.all([
       api('/strategies/' + id + '/timeline?limit=100').catch(() => []),
@@ -1403,7 +1405,7 @@ async function selectStrategy(id) {
       }).join('');
     }
 
-    document.getElementById('detail-section').scrollIntoView({behavior:'smooth', block:'center'});
+    // UX #25: 스크롤은 selectStrategy 시작 시점에 이미 처리됨 (block: 'start')
   } catch (err) { toast('상세 조회 실패: ' + err.message, 'error'); }
 }
 
@@ -1432,7 +1434,9 @@ let _detailChartState = {
   strategy: null, stagePlans: null, interval: '1d',
   chart: null, candleSeries: null, bbSeries: { upper: null, middle: null, lower: null },
   rsiChart: null, macdChart: null, obvChart: null,
-  liqIncluded: false,
+  // UX #25: 기본 ON — 청산라인이 항상 차트에 보이도록 (Y축 자동 확장).
+  // 청산가가 멀면 캔들이 압축돼 보이는 단점이 있어 toggle 로 끌 수 있게 함.
+  liqIncluded: true,
 };
 
 // ===== 보조지표 계산 함수 =====
@@ -1550,17 +1554,33 @@ function toggleLiqIncluded() {
     // 포함되었으니 OOR 인디케이터 숨김
     const ind = document.getElementById('liq-oor-indicator');
     if (ind) ind.classList.add('hidden');
+    _updateLiqToggleBtnLabel();
   } else {
     if (_detailChartState._liqPhantomSeries) {
       try { ch.removeSeries(_detailChartState._liqPhantomSeries); } catch (e) {}
       _detailChartState._liqPhantomSeries = null;
     }
-    toast('자동 스케일 복귀', 'success');
+    toast('자동 스케일 복귀 — 캔들 영역 확대됨', 'success');
+    _updateLiqToggleBtnLabel();
     // 자동 모드 복귀 시 다시 OOR 체크하려면 차트 재렌더 (간단히)
     if (_detailChartState.strategy) {
       _renderDetailChart(_detailChartState.strategy, _detailChartState.stagePlans).catch(e => console.warn(e));
     }
   }
+}
+
+function _updateLiqToggleBtnLabel() {
+  const btn = document.getElementById('liq-toggle-btn');
+  if (!btn) return;
+  if (_detailChartState.liqIncluded) {
+    btn.textContent = '📐 청산가 포함됨 (끄기)';
+    btn.className = 'btn-primary btn text-xs ml-2';
+  } else {
+    btn.textContent = '📐 청산가 포함 보기 (켜기)';
+    btn.className = 'btn-ghost btn text-xs ml-2';
+  }
+  btn.style.padding = '2px 8px';
+  btn.style.fontSize = '11px';
 }
 
 function setDetailChartInterval(interval) {
@@ -1636,8 +1656,10 @@ async function _renderDetailChart(strategy, stagePlans) {
     _detailChartState.chart = null;
     _detailChartState.candleSeries = null;
   }
-  // 컨테이너 비우기 (혹시 남은 DOM)
-  Array.from(container.children).forEach(ch => { if (ch.id !== 'detail-chart-loading') ch.remove(); });
+  // 컨테이너 비우기 (혹시 남은 DOM) — 단, 로딩 + OOR 인디케이터는 보존
+  Array.from(container.children).forEach(ch => {
+    if (ch.id !== 'detail-chart-loading' && ch.id !== 'liq-oor-indicator') ch.remove();
+  });
 
   const chart = LightweightCharts.createChart(container, {
     width: container.clientWidth,
@@ -1773,12 +1795,17 @@ async function _renderDetailChart(strategy, stagePlans) {
       const isOOR = liqPx > effMax || liqPx < effMin;
       if (isOOR && !_detailChartState.liqIncluded) {
         const arrow = liqPx > effMax ? '↑' : '↓';
-        const positionTop = liqPx > effMax ? '8px' : 'auto';
-        const positionBottom = liqPx > effMax ? 'auto' : '40px';  // 시간축 위
-        liqIndEl.innerHTML = `${arrow} 청산 ${fmtNum(liqPx)} (클릭=차트에 포함)`;
-        liqIndEl.style.top = positionTop;
-        liqIndEl.style.bottom = positionBottom;
-        liqIndEl.style.right = '60px';  // 가격축 라벨과 안 겹치게
+        // 청산가가 위에 있으면 차트 상단, 아래면 시간축 위쪽에 배치
+        liqIndEl.innerHTML = `${arrow} 청산 ${fmtNum(liqPx)}`;
+        liqIndEl.title = '클릭 시 차트 Y축이 청산가까지 자동 확장됩니다';
+        if (liqPx > effMax) {
+          liqIndEl.style.top = '8px';
+          liqIndEl.style.bottom = 'auto';
+        } else {
+          liqIndEl.style.top = 'auto';
+          liqIndEl.style.bottom = '38px';  // 시간축 라벨 위
+        }
+        liqIndEl.style.right = '80px';  // 가격축 라벨과 안 겹치게
         liqIndEl.classList.remove('hidden');
       } else {
         liqIndEl.classList.add('hidden');
@@ -1786,6 +1813,21 @@ async function _renderDetailChart(strategy, stagePlans) {
     } else {
       liqIndEl.classList.add('hidden');
     }
+  }
+
+  // UX #25: liqIncluded 모드 기본 ON — 청산라인이 항상 차트에 보이도록 phantom 시리즈 추가
+  if (_detailChartState.liqIncluded && liqPx && candleData.length > 0) {
+    const phantom = chart.addLineSeries({
+      color: 'rgba(0,0,0,0)',  // 투명
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    phantom.setData([
+      { time: candleData[0].time, value: liqPx },
+      { time: candleData[candleData.length - 1].time, value: liqPx },
+    ]);
+    _detailChartState._liqPhantomSeries = phantom;
   }
 
   // 시간축 fit (전체 캔들 보이게)
