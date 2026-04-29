@@ -402,6 +402,19 @@ def start_strategy(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Exchange error: {e}{hint}") from e
 
     db.refresh(strategy)
+    # 전략 시작 즉시 텔레그램 알림 (체결 무관 — 미체결로 한참 기다려도 사용자가 확인 가능).
+    try:
+        from app.services.notification_service import NotificationService
+        NotificationService(db).send_strategy_started_alert(
+            strategy_instance_id=strategy.id,
+            symbol=strategy.symbol,
+            side=strategy.side,
+            start_price=strategy.start_price,
+            leverage=strategy.leverage,
+            total_capital=strategy.total_capital,
+        )
+    except Exception:  # 알림 실패해도 거래 로직 영향 없음
+        pass
     return StrategyActionResponse(
         strategy_id=strategy.id,
         status=strategy.status,

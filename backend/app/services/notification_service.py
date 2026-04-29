@@ -87,6 +87,33 @@ class NotificationService:
         return self.send(strategy_instance_id=None, channel="TELEGRAM", title=title, body=body)
 
     # ------------------------------------------------------------------
+    # 전략 시작 알림 (NEW 2026-04-29) — 주문 발송 직후 (FILLED 무관)
+    # ------------------------------------------------------------------
+    def send_strategy_started_alert(
+        self,
+        *,
+        strategy_instance_id: int,
+        symbol: str,
+        side: str,
+        start_price: Any,
+        leverage: Any,
+        total_capital: Any,
+    ) -> Notification:
+        emoji = _side_emoji(side)
+        title = f"{emoji} [전략 시작] {symbol} {side}"
+        lines = [
+            f"📌 종목       : {symbol}",
+            f"🎯 방향       : {side}",
+            f"💵 시작가     : {_fmt_num(start_price)}",
+            f"⚖️  레버리지   : {leverage}x",
+            f"💰 총 자본    : {_fmt_num(total_capital)} USDT",
+            f"📋 1단계 LIMIT 주문 거래소에 발송됨",
+            f"⏳ 체결되면 별도 알림 발송됨",
+        ]
+        body = "\n".join(lines)
+        return self.send(strategy_instance_id=strategy_instance_id, channel="TELEGRAM", title=title, body=body)
+
+    # ------------------------------------------------------------------
     # 단계 진입 알림 (NEW)
     # ------------------------------------------------------------------
     def send_stage_entered_alert(
