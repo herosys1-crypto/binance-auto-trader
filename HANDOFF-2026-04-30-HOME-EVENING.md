@@ -161,6 +161,11 @@ docker compose up -d user-stream
 - B. user-stream WebSocket 이 재연결되며 같은 이벤트 replay. (heartbeat 30초마다 갱신은 정상이지만 WS 이벤트 자체가 중복)
 - C. NotificationService.send_stage_entered_alert 가 다른 곳에서도 호출됨 (stream_service.py 외) — 추가 grep 검색 필요
 
+### TP 알림 정보 보강 (2026-04-30 늦은 저녁 추가)
+- 알림에 **청산 단가 + 청산 수량 + 남은 수량 + 손익 금액 + 수익률** 모두 표시
+- 실제 청산 체결가 (close order avg_price) 기반 — mark_price 보다 정확
+- 파일: `tp_sl_orchestrator.py` `_execute_take_profit`, `notification_service.py` `send_take_profit_alert`
+
 ### 사무실에서 실행할 진단 명령
 ```powershell
 cd backend
