@@ -31,7 +31,12 @@ class RiskService:
         if not strategy:
             raise ValueError("Strategy not found")
         current_loss_amount = Decimal(str(strategy.realized_pnl)) + Decimal(str(strategy.unrealized_pnl))
-        threshold = Decimal(str(strategy.total_capital)) * Decimal("0.50")
+        # SL 은 레버리지 적용된 ROI -50% 기준.
+        # qty = capital/price (notional 모델) 이므로 raw price -50% = USD 손실 -capital*0.50.
+        # 레버리지 적용된 ROI = (USD 손실 / margin) × 100 = (USD 손실 × leverage / capital) × 100.
+        # ROI -50% 도달 → USD 손실 = -capital × 0.50 / leverage. (1x:가격-50%, 2x:가격-25%, 5x:가격-10%)
+        leverage = Decimal(str(strategy.leverage)) if strategy.leverage else Decimal("1")
+        threshold = (Decimal(str(strategy.total_capital)) * Decimal("0.50")) / leverage
         is_stop = current_loss_amount <= (-threshold)
         if is_stop:
             self.db.add(RiskEvent(strategy_instance_id=strategy.id, event_type="STOP_LOSS_TRIGGERED", severity="CRITICAL", title="Stop loss triggered", message=f"current_loss_amount={current_loss_amount}, threshold={-threshold}", event_payload={"current_loss_amount": str(current_loss_amount), "threshold": str(-threshold)}))
@@ -58,7 +63,12 @@ class RiskService:
             return None
         avg_entry = Decimal(str(strategy.avg_entry_price))
         mark_price = Decimal(str(latest_position.mark_price))
-        pnl_ratio = ((mark_price - avg_entry) / avg_entry) * Decimal("100") if strategy.side == "LONG" else ((avg_entry - mark_price) / avg_entry) * Decimal("100")
+        # raw 가격 변동률에 레버리지 곱해서 사용자 실제 ROI 로 변환.
+        # 이 한 곳에서 변환하면 TP1~5, 트레일링, 크라이시스, peak 추적, max_loss/profit 모두
+        # 자동으로 leveraged ROI 기준으로 동작.
+        raw_pnl_pct = ((mark_price - avg_entry) / avg_entry) * Decimal("100") if strategy.side == "LONG" else ((avg_entry - mark_price) / avg_entry) * Decimal("100")
+        leverage = Decimal(str(strategy.leverage)) if strategy.leverage else Decimal("1")
+        pnl_ratio = raw_pnl_pct * leverage
 
         # ─────────── PnL 추적 + 크라이시스 모드 검사 (Phase D-1) ───────────
         self._update_pnl_extremes(strategy, pnl_ratio)

@@ -114,7 +114,9 @@ class TPSLOrchestratorService:
         self.notification_service.send_take_profit_alert(strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side, level=level)
 
     def _execute_stop_loss(self, strategy) -> None:
-        current_qty = Decimal(str(strategy.current_position_qty))
+        # SHORT 포지션은 음수 qty 로 저장됨 — abs() 로 양수화 후 청산.
+        # 이전엔 `current_qty > 0` 이라 SHORT SL 이 실행되지 않는 버그가 있었음.
+        current_qty = abs(Decimal(str(strategy.current_position_qty)))
         if current_qty > 0:
             self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
         strategy.status = "STOPPING"
@@ -126,8 +128,10 @@ class TPSLOrchestratorService:
     def _execute_crisis_action(self, strategy, action: str) -> None:
         """크라이시스 모드 3 액션 처리 — TP1(+5%) / TRAIL_FULL / HARD_SL."""
         from datetime import datetime, timezone
-        current_qty = Decimal(str(strategy.current_position_qty))
-        if current_qty <= 0:
+        # SHORT 포지션은 음수 qty 로 저장됨 — abs() 로 양수화 후 청산.
+        # 이전엔 `current_qty <= 0` 이라 SHORT 크라이시스가 모두 return 되는 버그가 있었음.
+        current_qty = abs(Decimal(str(strategy.current_position_qty)))
+        if current_qty == 0:
             return
 
         if action == "CRISIS_TP1":
