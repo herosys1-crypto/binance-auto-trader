@@ -28,31 +28,38 @@ class StreamService:
         strategy = self.db.get(StrategyInstance, order.strategy_instance_id)
         if strategy and order.purpose == "ENTRY" and order.status == "FILLED":
             strategy.status = {1: "STAGE1_OPEN", 2: "STAGE2_OPEN", 3: "STAGE3_OPEN", 4: "STAGE4_OPEN"}.get(order.stage_no, strategy.status)
-            # 단계별 계획 row 갱신
+            # 단계별 계획 row 갱신 + 첫 진입 시점 추적 (알림 중복 방지)
             stage_plan = self.db.execute(
                 select(StrategyStagePlan)
                 .where(StrategyStagePlan.strategy_instance_id == strategy.id)
                 .where(StrategyStagePlan.stage_no == order.stage_no)
                 .limit(1)
             ).scalars().first()
+            # Bug fix (2026-04-30): Binance 가 같은 주문에 대해 ORDER_TRADE_UPDATE 를
+            # 여러 번 보내서 (NEW → PARTIALLY_FILLED → FILLED → trade settlement 등)
+            # 알림이 2~3번 중복 발송되는 문제. 이번에 처음 FILLED 인식한 경우 (= is_triggered
+            # 가 False → True 로 전환되는 순간) 에만 알림 발송.
+            just_triggered_now = False
             if stage_plan and not stage_plan.is_triggered:
                 stage_plan.is_triggered = True
                 stage_plan.triggered_at = datetime.now(timezone.utc)
-            # Telegram 알림 발송 (단계 진입)
-            try:
-                from app.services.notification_service import NotificationService
-                NotificationService(self.db).send_stage_entered_alert(
-                    strategy_instance_id=strategy.id,
-                    symbol=strategy.symbol,
-                    side=strategy.side,
-                    stage_no=order.stage_no,
-                    entry_price=order.avg_price or order.price,
-                    qty=order.executed_qty,
-                    invested_capital=stage_plan.planned_capital if stage_plan else None,
-                    avg_entry_price=strategy.avg_entry_price,
-                )
-            except Exception:  # 알림 실패해도 거래 로직은 영향 없음
-                pass
+                just_triggered_now = True
+            # Telegram 알림은 첫 FILLED 인식 시 1회만 발송 (중복 방지)
+            if just_triggered_now:
+                try:
+                    from app.services.notification_service import NotificationService
+                    NotificationService(self.db).send_stage_entered_alert(
+                        strategy_instance_id=strategy.id,
+                        symbol=strategy.symbol,
+                        side=strategy.side,
+                        stage_no=order.stage_no,
+                        entry_price=order.avg_price or order.price,
+                        qty=order.executed_qty,
+                        invested_capital=stage_plan.planned_capital if stage_plan else None,
+                        avg_entry_price=strategy.avg_entry_price,
+                    )
+                except Exception:  # 알림 실패해도 거래 로직은 영향 없음
+                    pass
         elif strategy and order.purpose == "EXIT" and order.status == "FILLED":
             strategy.status = "REENTRY_READY"
             strategy.reentry_ready = True
