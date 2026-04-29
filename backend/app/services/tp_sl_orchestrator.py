@@ -57,6 +57,8 @@ class TPSLOrchestratorService:
 
     def _execute_take_profit(self, strategy, level: str) -> None:
         from app.models.strategy_template import StrategyTemplate
+        from app.models.symbol import Symbol
+        from sqlalchemy import select
 
         # SHORT 면 음수로 저장되어 있으므로 abs() 로 양수 quantity 확보.
         current_qty = abs(Decimal(str(strategy.current_position_qty)))
@@ -74,7 +76,19 @@ class TPSLOrchestratorService:
             tpl_val = getattr(tpl, attr, None) if tpl and attr else None
             ratio_pct = Decimal(str(tpl_val)) if tpl_val is not None else default_ratio.get(level, Decimal("100"))
             close_ratio = ratio_pct / Decimal("100")
-        close_qty = current_qty if close_ratio >= Decimal("1.00") else (current_qty * close_ratio).quantize(Decimal("0.00000001"))
+        if close_ratio >= Decimal("1.00"):
+            close_qty = current_qty
+        else:
+            # Bug #11 fix (2026-04-29): step_size 단위로 floor.
+            # 이전 버전은 0.00000001 (8자리) 로 quantize 했는데, 실제 거래소는
+            # 심볼별 LOT_SIZE 의 stepSize 를 따라야 함 (예: BTCUSDT=0.001).
+            # 너무 정밀한 수량을 보내면 -1111 "Precision is over the maximum"
+            # 에러로 거절됨. 이제 심볼의 step_size 로 floor 한다.
+            raw_qty = current_qty * close_ratio
+            sym = self.db.execute(select(Symbol).where(Symbol.symbol == strategy.symbol)).scalars().first()
+            step = Decimal(str(sym.step_size)) if sym and sym.step_size and sym.step_size > 0 else Decimal("0.001")
+            # floor to step: floor(raw / step) * step
+            close_qty = (raw_qty // step) * step
         if close_qty <= 0:
             return
         self.execution_service.emergency_close_position(strategy.id, quantity=close_qty)

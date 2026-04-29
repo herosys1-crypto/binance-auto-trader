@@ -71,6 +71,19 @@
   /* 위험 알림 띠 */
   .alert-bar { background: linear-gradient(90deg, rgba(239,68,68,0.15), rgba(239,68,68,0.05)); border: 1px solid rgba(239,68,68,0.4); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: flex; gap: 12px; align-items: center; }
 
+  /* 메트릭 카드 — 클릭 가능 표시 + hover 효과 */
+  #card-system, #card-active, #card-pnl, #card-templates { cursor: pointer; transition: transform 0.1s, box-shadow 0.15s; }
+  #card-system:hover, #card-active:hover, #card-pnl:hover, #card-templates:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(59,130,246,0.25);
+  }
+  /* 클릭 시 대상 섹션 하이라이트 */
+  @keyframes section-flash {
+    0%, 100% { box-shadow: none; }
+    30% { box-shadow: 0 0 0 3px #3b82f6, 0 0 24px rgba(59,130,246,0.4); }
+  }
+  .section-highlight { animation: section-flash 1.4s ease-out; }
+
   /* ===== 모바일 최적화 ===== */
   /* 작은 화면(< 768px)에서는 테이블 폰트/패딩 축소 + 버튼 터치 영역 확대 */
   @media (max-width: 767px) {
@@ -141,25 +154,25 @@
     <button onclick="dismissAlert()" class="text-slate-400 hover:text-white">✕</button>
   </div>
 
-  <!-- 4-card metrics — 모바일 2단 / 데스크톱 4단 -->
+  <!-- 4-card metrics — 모바일 2단 / 데스크톱 4단 (클릭하면 해당 섹션으로 이동) -->
   <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
-    <div id="card-system" class="card rounded-lg p-2 signal-gray">
-      <p class="text-xs text-slate-400">시스템 상태</p>
+    <div id="card-system" class="card rounded-lg p-2 signal-gray" onclick="scrollToSection('section-syshealth')" title="클릭하면 시스템 상태로 이동">
+      <p class="text-xs text-slate-400">시스템 상태 ▾</p>
       <p id="metric-system" class="text-base sm:text-lg font-bold leading-tight">-</p>
       <p id="metric-system-detail" class="text-xs text-slate-500">-</p>
     </div>
-    <div id="card-active" class="card rounded-lg p-2 signal-gray">
-      <p class="text-xs text-slate-400">진행 중인 전략</p>
+    <div id="card-active" class="card rounded-lg p-2 signal-gray" onclick="scrollToSection('section-strategies')" title="클릭하면 전략 인스턴스로 이동">
+      <p class="text-xs text-slate-400">진행 중인 전략 ▾</p>
       <p id="metric-active" class="text-base sm:text-lg font-bold leading-tight">-</p>
       <p id="metric-active-detail" class="text-xs text-slate-500">-</p>
     </div>
-    <div id="card-pnl" class="card rounded-lg p-2 signal-gray">
-      <p class="text-xs text-slate-400">미실현 손익</p>
+    <div id="card-pnl" class="card rounded-lg p-2 signal-gray" onclick="openTradeHistoryModal()" title="클릭하면 거래 실적 상세">
+      <p class="text-xs text-slate-400">미실현 손익 📊</p>
       <p id="metric-pnl" class="text-base sm:text-lg font-bold leading-tight">-</p>
-      <p id="metric-pnl-detail" class="text-xs text-slate-500">실시간</p>
+      <p id="metric-pnl-detail" class="text-xs text-slate-500">실시간 (클릭: 실적)</p>
     </div>
-    <div id="card-templates" class="card rounded-lg p-2 signal-gray">
-      <p class="text-xs text-slate-400">전략 템플릿</p>
+    <div id="card-templates" class="card rounded-lg p-2 signal-gray" onclick="scrollToSection('section-templates')" title="클릭하면 전략 템플릿으로 이동">
+      <p class="text-xs text-slate-400">전략 템플릿 ▾</p>
       <p id="metric-templates" class="text-base sm:text-lg font-bold leading-tight">-</p>
       <p id="metric-templates-detail" class="text-xs text-slate-500">-</p>
     </div>
@@ -168,7 +181,7 @@
   <!-- Row: 시스템 상태(좌) + 운영 통계(우) — 모바일 1단 / 데스크톱 2단 -->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
     <!-- 시스템 상태 -->
-    <div class="card rounded-lg">
+    <div id="section-syshealth" class="card rounded-lg">
       <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
         <span>⚙️ 시스템 상태</span>
         <span id="syshealth-overall" class="text-xs">-</span>
@@ -450,7 +463,7 @@
     </div>
 
     <!-- 진행 중인 전략 — 모바일에선 가로 스크롤 -->
-    <div class="card rounded-lg">
+    <div id="section-strategies" class="card rounded-lg">
       <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
         <span>🎯 전략 인스턴스</span>
         <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
@@ -480,7 +493,7 @@
   </div>
 
   <!-- 전략 템플릿 — 모바일 가로 스크롤 -->
-  <div class="card rounded-lg mb-2">
+  <div id="section-templates" class="card rounded-lg mb-2">
     <div class="card-header text-xs flex justify-between items-center flex-wrap gap-2" style="padding:8px 12px">
       <span>📋 전략 템플릿</span>
       <div class="flex gap-2 items-center flex-wrap">
@@ -647,6 +660,10 @@ function showDashboard() {
 }
 
 // ==================== API helper ====================
+// 401 카운트 — 연속 3회 이상이면 진짜 토큰 만료로 판단하고 로그아웃.
+// 일시적 오류 (서버 재시작, 네트워크 hiccup 등) 는 1~2회 401 후 자동 회복.
+let _consecutive401 = 0;
+
 async function api(path, opts = {}) {
   const headers = opts.headers || {};
   if (token) headers['Authorization'] = 'Bearer ' + token;
@@ -656,14 +673,166 @@ async function api(path, opts = {}) {
   }
   const res = await fetch(API_BASE + path, {...opts, headers});
   if (res.status === 401) {
-    logout();
-    throw new Error('인증 만료. 다시 로그인 해주세요.');
+    _consecutive401 += 1;
+    if (_consecutive401 >= 3) {
+      // 진짜 토큰 만료 — 로그아웃
+      _consecutive401 = 0;
+      logout();
+      throw new Error('인증 만료 (3회 연속) — 다시 로그인 해주세요.');
+    }
+    // 일시적 에러로 판단 — 토큰 유지하고 에러만 표시
+    throw new Error(`인증 오류 (${_consecutive401}/3) — 일시적일 수 있으니 잠시 후 다시 시도해주세요.`);
   }
+  // 성공 응답 받으면 401 카운터 리셋
+  _consecutive401 = 0;
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${res.status}: ${text}`);
   }
   return res.json();
+}
+
+// ==================== UI 네비게이션 ====================
+function scrollToSection(sectionId) {
+  const el = document.getElementById(sectionId);
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // 하이라이트 애니메이션 (1.4초)
+  el.classList.remove('section-highlight');
+  void el.offsetWidth;  // reflow 트릭
+  el.classList.add('section-highlight');
+  setTimeout(() => el.classList.remove('section-highlight'), 1500);
+}
+
+// ==================== 거래 실적 상세 모달 ====================
+async function openTradeHistoryModal() {
+  // 모달 동적 생성 (한 번만)
+  let modal = document.getElementById('trade-history-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'trade-history-modal';
+    modal.className = 'hidden fixed inset-0 z-50 flex items-center justify-center';
+    modal.style.cssText = 'background:rgba(0,0,0,0.7); padding:10px;';
+    modal.innerHTML = `
+      <div class="card rounded-xl p-4" style="max-width:1000px; width:100%; max-height:92vh; overflow-y:auto;">
+        <div class="flex justify-between items-center mb-3">
+          <h2 class="text-lg font-bold">📊 거래 실적 상세</h2>
+          <button onclick="closeTradeHistoryModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
+        </div>
+        <!-- 기간 필터 -->
+        <div class="flex gap-2 mb-3 flex-wrap items-center">
+          <span class="text-xs text-slate-300">기간:</span>
+          <button class="btn-ghost btn text-xs" style="padding:4px 10px" onclick="loadTradeHistory(1)">오늘</button>
+          <button class="btn-ghost btn text-xs" style="padding:4px 10px" onclick="loadTradeHistory(7)">7일</button>
+          <button class="btn-ghost btn text-xs" style="padding:4px 10px" onclick="loadTradeHistory(30)">30일</button>
+          <button class="btn-ghost btn text-xs" style="padding:4px 10px" onclick="loadTradeHistory(0)">전체</button>
+          <span class="text-xs text-slate-500 ml-auto" id="th-summary">-</span>
+        </div>
+        <!-- 일별 합계 -->
+        <div class="card rounded mb-3" style="background:#0f172a">
+          <div class="card-header text-xs" style="padding:6px 10px">📅 일별 합계</div>
+          <div class="overflow-auto" style="max-height:160px">
+            <table class="min-w-max">
+              <thead>
+                <tr><th>날짜</th><th class="num">진입 건수</th><th class="num">청산 건수</th><th class="num">실현 PnL</th></tr>
+              </thead>
+              <tbody id="th-daily"><tr><td colspan="4" class="text-center text-slate-500 py-2 text-xs">로딩 중...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <!-- 거래 내역 (모든 ENTRY/EXIT 주문) -->
+        <div class="card rounded">
+          <div class="card-header text-xs" style="padding:6px 10px">📦 거래 내역 (최신순)</div>
+          <div class="overflow-auto" style="max-height:380px">
+            <table class="min-w-max">
+              <thead>
+                <tr>
+                  <th>시각</th>
+                  <th>전략 #</th>
+                  <th>심볼</th>
+                  <th>방향</th>
+                  <th>단계/유형</th>
+                  <th class="num">수량</th>
+                  <th class="num">평균가</th>
+                  <th class="num">실현 PnL</th>
+                  <th>상태</th>
+                </tr>
+              </thead>
+              <tbody id="th-orders"><tr><td colspan="9" class="text-center text-slate-500 py-2 text-xs">로딩 중...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  }
+  modal.classList.remove('hidden');
+  loadTradeHistory(7);  // 기본 7일
+}
+
+function closeTradeHistoryModal() {
+  const m = document.getElementById('trade-history-modal');
+  if (m) m.classList.add('hidden');
+}
+
+async function loadTradeHistory(days) {
+  try {
+    // /orders 엔드포인트로 전체 주문 조회 (필요시 페이지네이션 추가)
+    const data = await api('/orders?limit=500');
+    const cutoff = days > 0 ? new Date(Date.now() - days * 86400000) : null;
+    const filtered = cutoff
+      ? data.filter(o => new Date(o.created_at) >= cutoff)
+      : data;
+    // 상태가 FILLED 인 것만 실현 거래로 집계
+    const filled = filtered.filter(o => (o.status || '').toUpperCase() === 'FILLED');
+    // 일별 합계
+    const byDay = {};
+    filled.forEach(o => {
+      const d = (o.created_at || '').slice(0, 10);
+      if (!byDay[d]) byDay[d] = { date: d, entries: 0, exits: 0, pnl: 0 };
+      if (o.purpose === 'ENTRY') byDay[d].entries++;
+      else if (o.purpose === 'EXIT' || o.purpose === 'TAKE_PROFIT' || o.purpose === 'STOP_LOSS') byDay[d].exits++;
+      // 실현 PnL: avg_price * executed_qty 기반 단순 계산 (정확하진 않지만 참고용)
+      // 실제 정확한 실현PnL은 entry vs exit 페어링 필요 → 서버측 별도 API 필요 (TODO)
+    });
+    const days_arr = Object.values(byDay).sort((a, b) => b.date.localeCompare(a.date));
+    document.getElementById('th-daily').innerHTML = days_arr.length === 0
+      ? '<tr><td colspan="4" class="text-center text-slate-500 py-2 text-xs">데이터 없음</td></tr>'
+      : days_arr.map(d => `
+        <tr>
+          <td>${d.date}</td>
+          <td class="num">${d.entries}</td>
+          <td class="num">${d.exits}</td>
+          <td class="num text-slate-400">집계 (TODO)</td>
+        </tr>`).join('');
+
+    // 거래 내역
+    document.getElementById('th-orders').innerHTML = filled.length === 0
+      ? '<tr><td colspan="9" class="text-center text-slate-500 py-2 text-xs">FILLED 주문 없음</td></tr>'
+      : filled.slice(0, 200).map(o => {
+        const sideKo = o.side === 'BUY' ? '🟢 매수' : '🔴 매도';
+        const purposeMap = { ENTRY: '진입', TAKE_PROFIT: '익절', STOP_LOSS: '손절', EMERGENCY_CLOSE: '긴급청산', EXIT: '청산' };
+        const purpose = purposeMap[o.purpose] || o.purpose;
+        const stage = o.stage_no ? `${o.stage_no}단계` : '';
+        return `<tr>
+          <td class="text-xs">${(o.created_at || '').replace('T', ' ').slice(0, 19)}</td>
+          <td>#${o.strategy_instance_id || '-'}</td>
+          <td class="font-mono text-blue-300">${o.symbol}</td>
+          <td>${sideKo}</td>
+          <td>${stage} ${purpose}</td>
+          <td class="num">${o.executed_qty ? fmtQty(o.executed_qty) : '-'}</td>
+          <td class="num">${o.avg_price ? fmtNum(o.avg_price) : '-'}</td>
+          <td class="num text-slate-400">-</td>
+          <td>${o.status}</td>
+        </tr>`;
+      }).join('');
+
+    document.getElementById('th-summary').textContent =
+      `${days > 0 ? `최근 ${days}일` : '전체'} · FILLED ${filled.length}건 · 일자 ${days_arr.length}개`;
+  } catch (e) {
+    document.getElementById('th-orders').innerHTML =
+      `<tr><td colspan="9" class="text-center text-red-400 py-2 text-xs">조회 실패: ${e.message}</td></tr>`;
+  }
 }
 
 // ==================== Refresh ====================
@@ -1505,7 +1674,9 @@ async function loadCmTemplates() {
 
 async function loadCmSymbols() {
   try {
-    const data = await api('/symbols?only_trading=true&limit=200');
+    // limit 200 → 1000 으로 증가. testnet 에 586+ TRADING 심볼이 있어 200 제한 시
+    // 알파벳 순으로 SOL/XRP/DOGE 등 인기 코인이 자동완성에서 누락되는 문제 해결.
+    const data = await api('/symbols?only_trading=true&limit=1000');
     const list = document.getElementById('cm-symbol-list');
     list.innerHTML = data.map(s => `<option value="${s.symbol}"></option>`).join('');
   } catch { /* symbols 없으면 무시 — 사용자 직접 입력 가능 */ }
