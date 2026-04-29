@@ -2685,12 +2685,12 @@ function setCmSide(side) {
   document.getElementById('cm-side-long').className = 'btn flex-1' + (side==='LONG' ? '' : ' btn-ghost');
   document.getElementById('cm-side-long').style.background = side==='LONG' ? '#10b981' : 'transparent';
   document.getElementById('cm-side-long').style.color = side==='LONG' ? '#fff' : '#cbd5e1';
-  // UX #18: 사용자가 직접 수정 안 했을 때만 사이드 기본값으로 자동 갱신
-  if (!cmLeverageManuallyEdited) {
-    const lev = _defaultLeverageForSide(side);
-    const lvInp = document.getElementById('cm-leverage');
-    if (lvInp) lvInp.value = lev;
-  }
+  // Bug fix (2026-04-30): 사이드 변경 시 무조건 default leverage 로 reset.
+  // 이전 버전은 manualEdited=true 면 갱신 안 해서 SHORT 의 2 가 LONG 으로 유지되는 버그.
+  const lev = _defaultLeverageForSide(side);
+  const lvInp = document.getElementById('cm-leverage');
+  if (lvInp) lvInp.value = lev;
+  cmLeverageManuallyEdited = false;  // 사이드 바꿨으니 다시 자동 갱신 가능 상태로
   // 방향 변경 시 미리보기 무효화
   cmState.preview = null;
   document.getElementById('cm-preview').classList.add('hidden');
