@@ -451,6 +451,49 @@ def force_stop_strategy(
     )
 
 
+@router.delete("/{strategy_id}", response_model=StrategyActionResponse)
+def delete_strategy(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyActionResponse:
+    """대기 (current_stage=0) 상태의 종료된 전략을 DB 에서 삭제한다.
+
+    UX #17 (2026-04-29): 시작 실패한 전략 (-4164 등) 이 STOPPED 상태로
+    "수동 종료" 표시되어 대시보드에 쌓이는 문제. 한번도 체결된 적 없는
+    전략 (current_stage=0 AND avg_entry_price=NULL) 만 삭제 허용.
+
+    안전장치:
+    - 종료 상태가 아니면 거절 (실수로 활성 전략 삭제 방지)
+    - 1단계라도 진입했던 전략은 거절 (감사 로그 보존)
+    """
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+
+    terminal_statuses = {"STOPPED", "STOPPING", "CLOSED", "CLOSED_BY_SL", "CLOSED_BY_TP", "KILL_SWITCH_TRIGGERED"}
+    if strategy.status not in terminal_statuses:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"활성 전략은 삭제 불가. 먼저 종료(/stop)하세요. 현재 status={strategy.status}",
+        )
+
+    if (strategy.current_stage or 0) > 0 or (strategy.avg_entry_price and Decimal(str(strategy.avg_entry_price)) > 0):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="이미 1단계 이상 체결된 전략은 감사 로그 보존을 위해 삭제 불가. (대시보드 종료 숨김으로 가리세요)",
+        )
+
+    sid = strategy.id
+    db.delete(strategy)
+    db.commit()
+    return StrategyActionResponse(
+        strategy_id=sid,
+        status="DELETED",
+        message=f"전략 #{sid} 대기 상태에서 삭제됨 (포지션 미진입)",
+    )
+
+
 @router.post("/{strategy_id}/stop", response_model=StrategyActionResponse)
 def stop_strategy(
     strategy_id: int,

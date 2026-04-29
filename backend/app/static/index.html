@@ -409,12 +409,8 @@
         <div class="flex gap-2 mt-2 items-center text-xs">
           <span class="text-slate-400">시작가 자동:</span>
           <button onclick="fillStartPrice('current')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">현재가</button>
-          <button onclick="fillStartPrice('+1')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">+1%</button>
-          <button onclick="fillStartPrice('+5')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">+5%</button>
-          <button onclick="fillStartPrice('+10')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">+10%</button>
-          <button onclick="fillStartPrice('-1')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">-1%</button>
-          <button onclick="fillStartPrice('-5')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">-5%</button>
-          <button onclick="fillStartPrice('-10')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">-10%</button>
+          <button onclick="fillStartPrice('-0.1')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">-0.1%</button>
+          <button onclick="fillStartPrice('+0.1')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">+0.1%</button>
         </div>
       </div>
 
@@ -1151,8 +1147,12 @@ async function refreshStrategies() {
         ? `<span class="${pnlNum>0?'pos':pnlNum<0?'neg':''}">${fmtPnL(pnlNum)}</span>`
         : '<span class="text-slate-500">-</span>';
       const isTerminal = TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
+      // UX #17 (2026-04-29): 종료 상태이고 한번도 체결 안 된 전략 (대기 단계) 에는 삭제 버튼 노출
+      const neverEntered = (s.current_stage || 0) === 0 && (!s.avg_entry_price || Number(s.avg_entry_price) === 0);
       const stopBtn = isTerminal
-        ? '<span class="text-slate-500 text-xs">-</span>'
+        ? (neverEntered
+            ? `<button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="padding:4px 8px" title="대기 상태 전략 삭제 (DB 에서 영구 제거)">🗑</button>`
+            : '<span class="text-slate-500 text-xs">-</span>')
         : `<button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="padding:4px 8px" title="설정 수정 (기존 전략 종료 후 새 설정으로 재시작)">✏️</button>
            <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="padding:4px 8px" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
            <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="padding:4px 8px" title="긴급 종료 (포지션 시장가 청산)">🛑</button>`;
@@ -1330,6 +1330,16 @@ async function emergencyStop(id) {
     toast(`전략 #${id} 긴급 종료 요청 발송`, 'warning');
     refreshStrategies();
   } catch (err) { toast('긴급 종료 실패: ' + err.message, 'error'); }
+}
+
+// UX #17 (2026-04-29): 대기 상태 (한번도 체결 안 된) 종료 전략 영구 삭제
+async function deleteStrategy(id) {
+  if (!confirm(`🗑 전략 #${id} 영구 삭제\n\n이 전략은 한번도 진입하지 않은 대기 상태입니다.\nDB 에서 영구 제거하시겠습니까?\n(이 작업은 되돌릴 수 없음)`)) return;
+  try {
+    await api(`/strategies/${id}`, {method: 'DELETE'});
+    toast(`전략 #${id} 삭제 완료`, 'success');
+    refreshStrategies();
+  } catch (err) { toast('삭제 실패: ' + err.message, 'error'); }
 }
 
 async function testTelegram() {
