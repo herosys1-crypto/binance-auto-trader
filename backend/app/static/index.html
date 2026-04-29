@@ -542,7 +542,7 @@
     <!-- UX #20 (2026-04-29): 차트 + 단계별 진입가 가로선 + 청산예정가 (UX #21) -->
     <div class="card rounded-lg mb-4">
       <div class="card-header text-sm flex justify-between items-center flex-wrap gap-2">
-        <span>📈 차트 + 단계별 진입가 + 청산예정가</span>
+        <span>📈 차트 + 단계별 진입가 + 청산예정가 (체결분 기준)</span>
         <div class="flex items-center gap-2">
           <!-- 타임프레임 토글 -->
           <div class="flex gap-1" id="detail-chart-tf-buttons">
@@ -550,6 +550,8 @@
             <button onclick="setDetailChartInterval('4h')" data-tf="4h" class="btn-ghost btn text-xs" style="padding:2px 8px; font-size:11px">4h</button>
             <button onclick="setDetailChartInterval('1d')" data-tf="1d" class="btn-ghost btn text-xs" style="padding:2px 8px; font-size:11px">1d</button>
           </div>
+          <!-- UX #26: 차트 새로고침 (단계 체결 후 평단/청산가 갱신용) -->
+          <button onclick="refreshDetailChart()" class="btn-ghost btn text-xs" style="padding:2px 8px; font-size:11px" title="단계가 체결되면 평단/청산가 갱신을 위해 새로고침">🔄</button>
           <span id="detail-chart-info" class="text-xs text-slate-400">로딩 중...</span>
         </div>
       </div>
@@ -1524,6 +1526,47 @@ function _obv(closes, volumes) {
   return out;
 }
 
+// ===== UX #26: 체결분 기준 isolated 청산가 계산 =====
+// 거래소 cross-margin liquidation_price 는 잔고 전체 기준이라 매우 멀게 나옴.
+// 사용자가 원하는 건 "이 포지션만의 마진이 떨어지면 어디서 청산되는가" — isolated 방식.
+// 공식:
+//   SHORT: liq = avg_entry × (1 + 1/leverage - MMR)
+//   LONG : liq = avg_entry × (1 - 1/leverage + MMR)
+// MMR ≈ 0.005 (Tier 1 유지증거금율)
+function _computeIsolatedLiqPrice(strategy) {
+  if (!strategy) return null;
+  const avg = Number(strategy.avg_entry_price || 0);
+  const lev = Number(strategy.leverage || 0);
+  if (avg <= 0 || lev <= 0) return null;
+  const MMR = 0.005;
+  if (strategy.side === 'SHORT') {
+    return avg * (1 + 1 / lev - MMR);
+  } else {
+    return avg * (1 - 1 / lev + MMR);
+  }
+}
+
+// 차트 수동 새로고침 — 최신 strategy 데이터 (avg_entry 포함) 다시 가져와서 재렌더
+async function refreshDetailChart() {
+  if (!_detailChartState.strategy) return toast('전략이 선택되지 않았습니다', 'warning');
+  const id = _detailChartState.strategy.id;
+  try {
+    const [stagePlans, strategy] = await Promise.all([
+      api('/strategies/' + id + '/stage-plans').catch(() => []),
+      api('/strategies/' + id).catch(() => null),
+    ]);
+    if (strategy) {
+      await _renderDetailChart(strategy, stagePlans);
+      const liq = _computeIsolatedLiqPrice(strategy);
+      toast(`차트 갱신 완료 — 평단 ${fmtNum(strategy.avg_entry_price || 0)}, 청산예정 ${liq ? fmtNum(liq) : '-'}`, 'success');
+    } else {
+      toast('전략 정보 갱신 실패', 'error');
+    }
+  } catch (e) {
+    toast('차트 갱신 실패: ' + e.message, 'error');
+  }
+}
+
 // ===== 청산가 포함 보기 토글 =====
 // Lightweight Charts 는 가격축 직접 setRange 가 없으므로,
 // 청산가에 보이지 않는 phantom 라인 시리즈를 추가해 자동 스케일이 청산가까지 확장되도록 유도.
@@ -1532,8 +1575,10 @@ function toggleLiqIncluded() {
   const ch = _detailChartState.chart;
   if (!ch) return;
   if (_detailChartState.liqIncluded) {
-    const liq = _detailChartState.strategy && _detailChartState.strategy.liquidation_price
-      ? Number(_detailChartState.strategy.liquidation_price) : null;
+    // UX #26: isolated 청산가 우선 사용 (체결분 기준)
+    const liq = _computeIsolatedLiqPrice(_detailChartState.strategy)
+      || (_detailChartState.strategy && _detailChartState.strategy.liquidation_price
+        ? Number(_detailChartState.strategy.liquidation_price) : null);
     if (!liq) {
       _detailChartState.liqIncluded = false;
       return toast('청산가 정보 없음', 'warning');
@@ -1648,7 +1693,11 @@ async function _renderDetailChart(strategy, stagePlans) {
 
   const avgEntry = strategy.avg_entry_price ? Number(strategy.avg_entry_price) : null;
   const startPx = strategy.start_price ? Number(strategy.start_price) : null;
-  const liqPx = strategy.liquidation_price ? Number(strategy.liquidation_price) : null;
+  // UX #26: 체결분 기준 isolated 청산가 사용 (cross-margin DB값보다 직관적)
+  const isolatedLiq = _computeIsolatedLiqPrice(strategy);
+  const exchangeLiq = strategy.liquidation_price ? Number(strategy.liquidation_price) : null;
+  // 1순위: isolated 계산값 (체결분 기준), fallback: 거래소 값 (체결 전)
+  const liqPx = isolatedLiq !== null ? isolatedLiq : exchangeLiq;
 
   // 기존 차트 dispose
   if (_detailChartState.chart) {
@@ -1771,7 +1820,7 @@ async function _renderDetailChart(strategy, stagePlans) {
     addLine(avgEntry, '#3b82f6', 0, '평단', 2);
   }
 
-  // 4) 청산예정가 — 빨간 굵은 점선
+  // 4) 청산예정가 — 빨간 굵은 점선 (체결분 기준 isolated 계산)
   if (liqPx) {
     addLine(liqPx, '#ef4444', 2, '청산예정', 2);
   }
@@ -1844,7 +1893,16 @@ async function _renderDetailChart(strategy, stagePlans) {
   }
 
   const sideLabel = strategy.side === 'SHORT' ? '📉 숏' : '📈 롱';
-  const liqHint = liqPx ? ` · 청산 ${fmtNum(liqPx)}` : '';
+  // UX #26: isolated 청산가 우선 표시 + 거래소 cross 청산가도 비교용으로 작게 표시
+  let liqHint = '';
+  if (isolatedLiq) {
+    liqHint = ` · 청산예정 ${fmtNum(isolatedLiq)} (체결분 기준)`;
+    if (exchangeLiq && Math.abs(exchangeLiq - isolatedLiq) / isolatedLiq > 0.1) {
+      liqHint += ` · 거래소 ${fmtNum(exchangeLiq)}`;
+    }
+  } else if (exchangeLiq) {
+    liqHint = ` · 거래소 청산 ${fmtNum(exchangeLiq)}`;
+  }
   infoEl.textContent = `${symbol} · ${sideLabel} · ${strategy.leverage}x · 단계 ${strategy.current_stage}/${(stagePlans || []).length} · ${candleData.length}개 ${interval} 캔들${liqHint}`;
 }
 
