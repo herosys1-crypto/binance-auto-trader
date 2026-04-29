@@ -235,6 +235,29 @@
             <p id="stats-crisis" class="text-base font-bold text-yellow-400">-</p>
           </div>
         </div>
+        <!-- TP 단계별 카운트 (notification title 기준) -->
+        <div class="p-2 grid grid-cols-5 gap-1 text-center border-t border-slate-700" style="padding-top:6px">
+          <div>
+            <p class="text-xs text-slate-500" title="+10% 1차 익절">TP1</p>
+            <p id="stats-tp1" class="text-sm font-semibold pos">-</p>
+          </div>
+          <div>
+            <p class="text-xs text-slate-500" title="+15% 2차 익절">TP2</p>
+            <p id="stats-tp2" class="text-sm font-semibold pos">-</p>
+          </div>
+          <div>
+            <p class="text-xs text-slate-500" title="+20% 3차 익절">TP3</p>
+            <p id="stats-tp3" class="text-sm font-semibold pos">-</p>
+          </div>
+          <div>
+            <p class="text-xs text-slate-500" title="+25% / +30% 4차 익절">TP4</p>
+            <p id="stats-tp4" class="text-sm font-semibold pos">-</p>
+          </div>
+          <div>
+            <p class="text-xs text-slate-500" title="+30% 전량 익절 (legacy)">TP5</p>
+            <p id="stats-tp5" class="text-sm font-semibold pos">-</p>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1059,6 +1082,12 @@ async function refreshStats() {
     const crisisEl = document.getElementById('stats-crisis');
     crisisEl.textContent = s.crisis_total + (s.crisis_active > 0 ? ` (현재 ${s.crisis_active})` : '');
     crisisEl.className = 'text-xl font-bold ' + (s.crisis_active > 0 ? 'text-red-400' : 'text-yellow-400');
+    // TP 단계별 카운트 (notification 기준)
+    const tpb = s.tp_breakdown || {};
+    ['TP1','TP2','TP3','TP4','TP5'].forEach(k => {
+      const el = document.getElementById('stats-' + k.toLowerCase());
+      if (el) el.textContent = tpb[k] || 0;
+    });
   } catch (err) { /* 통계 조회 실패는 무시 — 다른 패널은 정상 동작 */ }
 }
 
@@ -1324,9 +1353,20 @@ async function refreshStrategies() {
           <span class="badge badge-${info.sig}">${info.icon} ${info.ko}</span>
           ${s.crisis_mode_triggered_at ? modeBadge : ''}
         </div>`;
+      // 진입일시 (created_at) — 짧게 MM/DD HH:MM 형식
+      const createdShort = s.created_at ? (() => {
+        const d = new Date(s.created_at);
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      })() : '-';
       return `<tr class="row-clickable" onclick="selectStrategy(${s.id})">
         <td>#${s.id}</td>
-        <td class="font-mono text-blue-300">${s.symbol}</td>
+        <td class="font-mono text-blue-300">
+          <div class="text-xs leading-tight">
+            <span>${s.symbol}</span><br>
+            <span class="text-slate-500" style="font-size:10px" title="전략 생성 일시">${createdShort}</span>
+          </div>
+        </td>
         <td>${sideBadge(s.side)}</td>
         <td>${stateCell}</td>
         <td>${stage}</td>

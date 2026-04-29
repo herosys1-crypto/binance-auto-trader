@@ -63,6 +63,7 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     avg_entry_price: Decimal | None = None
     current_position_qty: Decimal
     invested_capital: Decimal
+    total_capital: Decimal | None = None    # 템플릿의 총 자본 (모든 단계 합계) — 마진 계산용
     realized_pnl: Decimal
     unrealized_pnl: Decimal
     liquidation_price: Decimal | None = None
@@ -72,3 +73,5 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     crisis_mode_triggered_at: datetime | None = None
     crisis_first_tp_done_at: datetime | None = None
     peak_pnl_pct_after_first_tp: Decimal | None = None
+    # ─── 진입 일시 (대시보드 표시용) ───
+    created_at: datetime | None = None       # strategy 생성 시점

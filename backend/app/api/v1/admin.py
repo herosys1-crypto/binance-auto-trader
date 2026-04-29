@@ -638,6 +638,15 @@ def get_operation_stats(
         sa_select(func.coalesce(func.avg(StrategyInstance.max_profit_pct), 0))
     ).scalar_one() or Decimal("0")
 
+    # TP 단계별 카운트 — notification 의 title prefix 로 집계 ([TP1 익절 ... ~ [TP5 익절 ...)
+    from app.models.notification import Notification
+    tp_breakdown = {}
+    for level in ("TP1", "TP2", "TP3", "TP4", "TP5"):
+        tp_breakdown[level] = db.execute(
+            sa_select(func.count(Notification.id))
+            .where(Notification.title.like(f"%[{level} 익절%"))
+        ).scalar_one() or 0
+
     return {
         "total": total,
         "active": active_count,
@@ -650,6 +659,7 @@ def get_operation_stats(
         "avg_max_loss_pct": str(round(Decimal(str(avg_max_loss)), 2)),
         "avg_max_profit_pct": str(round(Decimal(str(avg_max_profit)), 2)),
         "status_breakdown": status_counts,
+        "tp_breakdown": tp_breakdown,
     }
 
 
