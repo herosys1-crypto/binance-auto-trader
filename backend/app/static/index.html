@@ -775,64 +775,124 @@ function closeTradeHistoryModal() {
   if (m) m.classList.add('hidden');
 }
 
+// 거래 실적 모달의 캐시 — 일별 필터링 시 재요청 안 하기 위해
+let _thCache = { allFilled: [], strategiesById: {}, currentFilter: null };
+
 async function loadTradeHistory(days) {
   try {
-    // /orders 엔드포인트로 전체 주문 조회 (필요시 페이지네이션 추가)
-    const data = await api('/orders?limit=500');
+    // 동시에 /orders + /strategies 가져옴 (PnL 계산에 strategy.side, avg_entry_price 필요)
+    const [orders, strategies] = await Promise.all([
+      api('/orders?limit=500'),
+      api('/strategies').catch(() => []),
+    ]);
+    _thCache.strategiesById = {};
+    strategies.forEach(s => { _thCache.strategiesById[s.id] = s; });
+
     const cutoff = days > 0 ? new Date(Date.now() - days * 86400000) : null;
-    const filtered = cutoff
-      ? data.filter(o => new Date(o.created_at) >= cutoff)
-      : data;
-    // 상태가 FILLED 인 것만 실현 거래로 집계
+    const filtered = cutoff ? orders.filter(o => new Date(o.created_at) >= cutoff) : orders;
     const filled = filtered.filter(o => (o.status || '').toUpperCase() === 'FILLED');
+
+    // 각 주문별 PnL 계산 (EXIT/TP/SL 만)
+    const _EXIT_PURPOSES = new Set(['EXIT', 'TAKE_PROFIT', 'STOP_LOSS', 'EMERGENCY_CLOSE']);
+    const annotated = filled.map(o => {
+      const strat = _thCache.strategiesById[o.strategy_instance_id];
+      let pnl = null;
+      if (strat && _EXIT_PURPOSES.has(o.purpose) && o.avg_price && o.executed_qty && strat.avg_entry_price) {
+        const exitP = Number(o.avg_price);
+        const entryP = Number(strat.avg_entry_price);
+        const qty = Number(o.executed_qty);
+        // LONG: exit - entry; SHORT: entry - exit
+        const direction = (strat.side === 'LONG') ? 1 : -1;
+        pnl = (exitP - entryP) * qty * direction;
+      }
+      return { ...o, _pnl: pnl, _side_long_short: strat?.side };
+    });
+    _thCache.allFilled = annotated;
+    _thCache.currentFilter = null;
+
     // 일별 합계
     const byDay = {};
-    filled.forEach(o => {
+    annotated.forEach(o => {
       const d = (o.created_at || '').slice(0, 10);
       if (!byDay[d]) byDay[d] = { date: d, entries: 0, exits: 0, pnl: 0 };
       if (o.purpose === 'ENTRY') byDay[d].entries++;
-      else if (o.purpose === 'EXIT' || o.purpose === 'TAKE_PROFIT' || o.purpose === 'STOP_LOSS') byDay[d].exits++;
-      // 실현 PnL: avg_price * executed_qty 기반 단순 계산 (정확하진 않지만 참고용)
-      // 실제 정확한 실현PnL은 entry vs exit 페어링 필요 → 서버측 별도 API 필요 (TODO)
+      else if (_EXIT_PURPOSES.has(o.purpose)) {
+        byDay[d].exits++;
+        if (o._pnl !== null) byDay[d].pnl += o._pnl;
+      }
     });
     const days_arr = Object.values(byDay).sort((a, b) => b.date.localeCompare(a.date));
+    const totalPnl = days_arr.reduce((s, d) => s + d.pnl, 0);
     document.getElementById('th-daily').innerHTML = days_arr.length === 0
       ? '<tr><td colspan="4" class="text-center text-slate-500 py-2 text-xs">데이터 없음</td></tr>'
-      : days_arr.map(d => `
-        <tr>
-          <td>${d.date}</td>
-          <td class="num">${d.entries}</td>
-          <td class="num">${d.exits}</td>
-          <td class="num text-slate-400">집계 (TODO)</td>
-        </tr>`).join('');
-
-    // 거래 내역
-    document.getElementById('th-orders').innerHTML = filled.length === 0
-      ? '<tr><td colspan="9" class="text-center text-slate-500 py-2 text-xs">FILLED 주문 없음</td></tr>'
-      : filled.slice(0, 200).map(o => {
-        const sideKo = o.side === 'BUY' ? '🟢 매수' : '🔴 매도';
-        const purposeMap = { ENTRY: '진입', TAKE_PROFIT: '익절', STOP_LOSS: '손절', EMERGENCY_CLOSE: '긴급청산', EXIT: '청산' };
-        const purpose = purposeMap[o.purpose] || o.purpose;
-        const stage = o.stage_no ? `${o.stage_no}단계` : '';
-        return `<tr>
-          <td class="text-xs">${(o.created_at || '').replace('T', ' ').slice(0, 19)}</td>
-          <td>#${o.strategy_instance_id || '-'}</td>
-          <td class="font-mono text-blue-300">${o.symbol}</td>
-          <td>${sideKo}</td>
-          <td>${stage} ${purpose}</td>
-          <td class="num">${o.executed_qty ? fmtQty(o.executed_qty) : '-'}</td>
-          <td class="num">${o.avg_price ? fmtNum(o.avg_price) : '-'}</td>
-          <td class="num text-slate-400">-</td>
-          <td>${o.status}</td>
+      : days_arr.map(d => {
+          const pnlCls = d.pnl > 0 ? 'pos' : (d.pnl < 0 ? 'neg' : 'text-slate-400');
+          const pnlText = d.pnl !== 0 ? `${d.pnl > 0 ? '+' : ''}${d.pnl.toFixed(4)}` : '-';
+          return `<tr class="row-clickable" onclick="filterTradeHistoryByDate('${d.date}')" title="클릭하면 ${d.date} 거래만 보기">
+            <td>${d.date} 🔍</td>
+            <td class="num">${d.entries}</td>
+            <td class="num">${d.exits}</td>
+            <td class="num ${pnlCls}">${pnlText}</td>
+          </tr>`;
+        }).join('') + `<tr style="border-top:2px solid #334155">
+          <td><strong>합계</strong></td>
+          <td class="num">${days_arr.reduce((s, d) => s + d.entries, 0)}</td>
+          <td class="num">${days_arr.reduce((s, d) => s + d.exits, 0)}</td>
+          <td class="num ${totalPnl > 0 ? 'pos' : (totalPnl < 0 ? 'neg' : 'text-slate-400')}"><strong>${totalPnl > 0 ? '+' : ''}${totalPnl.toFixed(4)}</strong></td>
         </tr>`;
-      }).join('');
 
+    _renderTradeOrdersTable(annotated);
     document.getElementById('th-summary').textContent =
-      `${days > 0 ? `최근 ${days}일` : '전체'} · FILLED ${filled.length}건 · 일자 ${days_arr.length}개`;
+      `${days > 0 ? `최근 ${days}일` : '전체'} · FILLED ${annotated.length}건 · 일자 ${days_arr.length}개 · 실현 PnL ${totalPnl > 0 ? '+' : ''}${totalPnl.toFixed(4)} USDT`;
   } catch (e) {
     document.getElementById('th-orders').innerHTML =
       `<tr><td colspan="9" class="text-center text-red-400 py-2 text-xs">조회 실패: ${e.message}</td></tr>`;
   }
+}
+
+function filterTradeHistoryByDate(date) {
+  // 일별 합계 row 클릭 시 해당 날짜만 거래 내역에 표시
+  if (_thCache.currentFilter === date) {
+    // 이미 필터링된 같은 날짜 다시 클릭 → 필터 해제
+    _thCache.currentFilter = null;
+    _renderTradeOrdersTable(_thCache.allFilled);
+    document.getElementById('th-summary').textContent += ' (필터 해제)';
+    return;
+  }
+  _thCache.currentFilter = date;
+  const filtered = _thCache.allFilled.filter(o => (o.created_at || '').slice(0, 10) === date);
+  _renderTradeOrdersTable(filtered);
+  const dayPnl = filtered.filter(o => o._pnl !== null).reduce((s, o) => s + o._pnl, 0);
+  document.getElementById('th-summary').textContent =
+    `📅 ${date} 만 표시 · ${filtered.length}건 · 실현 PnL ${dayPnl > 0 ? '+' : ''}${dayPnl.toFixed(4)} USDT (다시 클릭하면 해제)`;
+}
+
+function _renderTradeOrdersTable(orders) {
+  const _EXIT_PURPOSES = new Set(['EXIT', 'TAKE_PROFIT', 'STOP_LOSS', 'EMERGENCY_CLOSE']);
+  const purposeMap = { ENTRY: '진입', TAKE_PROFIT: '익절', STOP_LOSS: '손절', EMERGENCY_CLOSE: '긴급청산', EXIT: '청산' };
+  document.getElementById('th-orders').innerHTML = orders.length === 0
+    ? '<tr><td colspan="9" class="text-center text-slate-500 py-2 text-xs">조건 맞는 주문 없음</td></tr>'
+    : orders.slice(0, 300).map(o => {
+      const sideKo = o.side === 'BUY' ? '🟢 매수' : '🔴 매도';
+      const purpose = purposeMap[o.purpose] || o.purpose;
+      const stage = o.stage_no ? `${o.stage_no}단계` : '';
+      let pnlHtml = '<span class="text-slate-500">-</span>';
+      if (o._pnl !== null && o._pnl !== undefined) {
+        const cls = o._pnl > 0 ? 'pos' : (o._pnl < 0 ? 'neg' : '');
+        pnlHtml = `<span class="${cls}">${o._pnl > 0 ? '+' : ''}${o._pnl.toFixed(4)}</span>`;
+      }
+      return `<tr>
+        <td class="text-xs">${(o.created_at || '').replace('T', ' ').slice(0, 19)}</td>
+        <td>#${o.strategy_instance_id || '-'}</td>
+        <td class="font-mono text-blue-300">${o.symbol}</td>
+        <td>${sideKo}</td>
+        <td>${stage} ${purpose}</td>
+        <td class="num">${o.executed_qty ? fmtQty(o.executed_qty) : '-'}</td>
+        <td class="num">${o.avg_price ? fmtNum(o.avg_price) : '-'}</td>
+        <td class="num">${pnlHtml}</td>
+        <td>${o.status}</td>
+      </tr>`;
+    }).join('');
 }
 
 // ==================== Refresh ====================

@@ -380,9 +380,26 @@ def start_strategy(
         )
         execution_service.start_stage1(strategy.id)
     except ValueError as e:
+        # Bug #12 fix (2026-04-29): start_stage1 실패 시 DB 의 strategy 를 STOPPED
+        # 로 마킹해서 orphan WAITING/PENDING 안 남김. 사용자는 retry 시 새 전략 만들면 됨.
+        strategy.status = "STOPPED"
+        db.commit()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:  # pragma: no cover - upstream/network faults bubble up
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Exchange error: {e}") from e
+        # 거래소 에러 (PERCENT_PRICE filter, MIN_NOTIONAL 등) 시도 마찬가지
+        strategy.status = "STOPPED"
+        db.commit()
+        # 친화적 메시지로 자주 나오는 Binance 에러 코드 매핑
+        msg = str(e)
+        if "-4016" in msg or "Limit price" in msg:
+            hint = " (시작가가 현재 시세 대비 너무 멀어 거래소가 거절. 시작가를 현재가 ±1~2% 이내로 조정해주세요)"
+        elif "-1111" in msg or "Precision" in msg:
+            hint = " (수량 정밀도 문제. 자본 조정 필요)"
+        elif "-4131" in msg or "MIN_NOTIONAL" in msg:
+            hint = " (주문 금액이 최소 거래 금액 미만. 자본 늘리세요)"
+        else:
+            hint = ""
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Exchange error: {e}{hint}") from e
 
     db.refresh(strategy)
     return StrategyActionResponse(
