@@ -26,10 +26,29 @@ class RiskService:
         self.strategy_repo = StrategyRepository(db)
         self.position_repo = PositionRepository(db)
 
+    def _get_total_stages(self, strategy) -> int:
+        """Strategy 의 template stages_config 에서 총 단계 수 조회.
+
+        1~10 단계 동적 지원. 비어있는 단계는 capitals 에 없으므로 자동 제외됨.
+        Template 가 없거나 stages_config 가 없으면 legacy 4단계로 fallback.
+        """
+        from app.models.strategy_template import StrategyTemplate
+        tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
+        if not tpl:
+            return 4
+        cfg = tpl.stages_config or {}
+        capitals = cfg.get("capitals") or []
+        return len(capitals) if capitals else 4
+
     def evaluate_stop_loss(self, strategy_id: int) -> bool:
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
             raise ValueError("Strategy not found")
+        # 사용자 기획: SL 은 모든 단계가 진입된 후에만 발동.
+        # 진입할 단계가 남아있으면 추가 진입(평단가 평균화) 기회를 먼저 줌.
+        total_stages = self._get_total_stages(strategy)
+        if (strategy.current_stage or 0) < total_stages:
+            return False
         current_loss_amount = Decimal(str(strategy.realized_pnl)) + Decimal(str(strategy.unrealized_pnl))
         # SL 은 레버리지 적용된 ROI -50% 기준.
         # qty = capital/price (notional 모델) 이므로 raw price -50% = USD 손실 -capital*0.50.
@@ -72,15 +91,8 @@ class RiskService:
 
         # ─────────── PnL 추적 + 크라이시스 모드 검사 (Phase D-1) ───────────
         self._update_pnl_extremes(strategy, pnl_ratio)
-        if not strategy.crisis_mode_triggered_at and self._should_trigger_crisis_mode(strategy):
+        if not strategy.crisis_mode_triggered_at and self._should_trigger_crisis_mode(strategy, pnl_ratio):
             self._enter_crisis_mode(strategy)
-
-        # ─────────── 크라이시스 모드 활성 시 별도 평가 (Phase D-2) ───────────
-        if strategy.crisis_mode_triggered_at:
-            crisis_action = self._eval_crisis_mode_tp_sl(strategy, pnl_ratio)
-            if crisis_action is not None:
-                return crisis_action
-            # 크라이시스 액션 없어도 정상 모드의 TP2~5 룰은 평가 가능 (기존 코드로 폴스루)
 
         # 피크 갱신 (Redis 에 strategy 별 최고 PnL% 저장)
         peak = self._update_peak_pnl(strategy_id, pnl_ratio)
@@ -92,6 +104,18 @@ class RiskService:
             val = getattr(tpl, attr, None) if tpl else None
             if val is not None:
                 tp_levels.append((label, Decimal(str(val))))
+
+        # ─────────── 크라이시스 모드 — TP 임계치 override (사용자 기획) ───────────
+        # 정상 모드: TP1/2/3/4 = 10/15/20/30% (템플릿 값 사용)
+        # 크라이시스: TP1/2/3/4 = 5/10/15/20% (회복 시점에 더 빨리 익절)
+        # TP5 는 크라이시스 모드에서 사용 안 함 (4단계 TP 까지만)
+        if strategy.crisis_mode_triggered_at:
+            CRISIS_OVERRIDE = {
+                "TP1": Decimal("5"), "TP2": Decimal("10"),
+                "TP3": Decimal("15"), "TP4": Decimal("20"),
+            }
+            tp_levels = [(label, CRISIS_OVERRIDE[label]) for label, _ in tp_levels if label in CRISIS_OVERRIDE]
+            tp_levels.sort(key=lambda x: x[1], reverse=True)  # 내림차순 (TP4 부터 검사)
 
         # 가장 높은 도달 단계 선정 (descending sort 후 첫 번째 도달)
         for label, threshold in tp_levels:
@@ -139,20 +163,24 @@ class RiskService:
         if strategy.max_profit_pct is None or pnl_ratio > Decimal(str(strategy.max_profit_pct)):
             strategy.max_profit_pct = pnl_ratio
 
-    def _should_trigger_crisis_mode(self, strategy) -> bool:
-        """크라이시스 모드 진입 조건 — (5+ 단계 OR 마지막 단계) AND 누적 최대 손실 ≤ -30%."""
+    def _should_trigger_crisis_mode(self, strategy, current_pnl_pct: Decimal) -> bool:
+        """크라이시스 모드 진입 조건 (사용자 기획).
+
+        - 누적 최대 손실 ≤ -30% 도달했음 (max_loss_pct)
+        - 그 후 현재 PnL 이 양수 (>0%) 로 전환됨
+        - 단계 요구사항 제거 (이전에는 5+ 단계 필요했음)
+        """
         if strategy.crisis_mode_triggered_at:  # 이미 진입했으면 재트리거 안 함
             return False
         if strategy.max_loss_pct is None:
             return False
         max_loss = Decimal(str(strategy.max_loss_pct))
-        if max_loss > CRISIS_MAX_LOSS_THRESHOLD:  # -30% 미만 손실 (즉 -25% 같은 경우)
+        if max_loss > CRISIS_MAX_LOSS_THRESHOLD:  # -30% 미만 손실 (즉 -25% 같은 가벼운 손실)
             return False
-        # 5단계 이상 진입했거나 마지막 단계 진입 (단, total_stages 정보가 없으면 5단계 룰만 사용)
-        if strategy.current_stage >= CRISIS_MIN_STAGE:
-            return True
-        # TODO: total_stages 비교 — 템플릿의 stages_config["capitals"] 길이와 비교 가능. 현재는 5단계 룰만.
-        return False
+        # 손실 -30% 도달 후 현재 양수 PnL 로 전환되었는지 확인 (회복 시점 포착)
+        if current_pnl_pct <= 0:
+            return False
+        return True
 
     def _enter_crisis_mode(self, strategy) -> None:
         """크라이시스 모드 진입 — 시각 기록 + RiskEvent 생성 + Telegram 알림."""

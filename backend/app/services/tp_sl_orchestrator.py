@@ -35,10 +35,9 @@ class TPSLOrchestratorService:
                 tp_level = self.risk_service.evaluate_take_profit_level(strategy.id)
                 if tp_level is None:
                     return
-                # 크라이시스 복구 모드 액션 — 우선 처리
-                if tp_level in {"CRISIS_TP1", "CRISIS_TRAIL_FULL", "CRISIS_HARD_SL"} and strategy.status != "COMPLETED":
-                    self._execute_crisis_action(strategy, tp_level)
-                    return
+                # 사용자 기획 변경 (2026-04-29): 크라이시스 모드도 TP1~4 정규 경로 사용.
+                # _execute_take_profit 내부에서 크라이시스이면 qty ratio override (25/25/50/100).
+                # risk_service.evaluate_take_profit_level 이 크라이시스 시 임계치를 5/10/15/20% 로 override.
                 # 이미 동일 단계 또는 더 높은 단계가 실행됐으면 스킵
                 done_levels_progression = ["TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL", "TP4_DONE_PARTIAL", "COMPLETED"]
                 tp_level_index = {"TP1": 0, "TP2": 1, "TP3": 2, "TP4": 3, "TP5": 4}.get(tp_level, -1)
@@ -69,8 +68,13 @@ class TPSLOrchestratorService:
             "TP4": "tp4_qty_ratio", "TP5": "tp5_qty_ratio",
         }
         default_ratio = {"TP1": Decimal("25"), "TP2": Decimal("50"), "TP3": Decimal("100"), "TP4": Decimal("100"), "TP5": Decimal("100")}
+        # 크라이시스 모드 qty ratio override (사용자 기획):
+        # TP1=25%, TP2=25%, TP3=50% of remaining, TP4=100% of remaining
+        crisis_qty_ratio = {"TP1": Decimal("25"), "TP2": Decimal("25"), "TP3": Decimal("50"), "TP4": Decimal("100")}
         if level == "TRAILING_TP":
             close_ratio = Decimal("1.00")  # 전량 청산
+        elif strategy.crisis_mode_triggered_at and level in crisis_qty_ratio:
+            close_ratio = crisis_qty_ratio[level] / Decimal("100")
         else:
             attr = ratio_attr.get(level)
             tpl_val = getattr(tpl, attr, None) if tpl and attr else None
