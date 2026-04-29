@@ -35,6 +35,9 @@ class StrategyCreateRequest(BaseModel):
     symbol: str
     side: StrategySide
     start_price: Decimal = Field(..., gt=0)
+    # UX #18 (2026-04-29): 사용자가 템플릿 기본 레버리지를 override 할 수 있게 지원.
+    # None 이면 템플릿 leverage 사용. 1~125 범위.
+    leverage_override: int | None = Field(default=None, ge=1, le=125)
 
 class StrategyStopRequest(BaseModel):
     mode: Literal["cancel_only", "close_position_market", "emergency_stop"]

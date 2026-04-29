@@ -275,6 +275,22 @@
         </div>
       </div>
 
+      <!-- UX #18 (2026-04-29): 레버리지 별도 설정 — 기본값: SHORT=2x, LONG=1x.
+           템플릿 사용 시에도 이 값으로 override 됨. -->
+      <div class="mb-4">
+        <label class="block text-sm font-semibold mb-2 text-slate-300">⚖️  레버리지
+          <span class="text-xs text-slate-500 font-normal">(기본: 숏 2x · 롱 1x · 사이드 변경 시 자동 갱신, 직접 입력도 가능)</span>
+        </label>
+        <div class="flex gap-2 items-center">
+          <input id="cm-leverage" type="number" min="1" max="125" step="1" value="2"
+            oninput="cmLeverageManuallyEdited = true"
+            class="w-24 px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white text-center" />
+          <span class="text-slate-400 text-sm">배속</span>
+          <button onclick="resetCmLeverage()" class="btn-ghost btn text-xs" style="padding:3px 8px; font-size:11px"
+            title="현재 사이드의 기본값 (숏 2x / 롱 1x) 으로 복원">↺ 기본값</button>
+        </div>
+      </div>
+
       <!-- 3) 모드 선택 + 본문 -->
       <div class="mb-4">
         <label class="block text-sm font-semibold mb-2 text-slate-300">3️⃣  전략 구성</label>
@@ -1472,6 +1488,10 @@ async function openCreateModal(editStrategyId) {
   document.getElementById('cm-tp5-qty').value = '100';
   document.getElementById('cm-sl-pct').value = '50';
   document.getElementById('cm-start-price').value = '';
+  // UX #18: 레버리지 입력 + 수동수정 플래그 초기화 (모달 열 때마다)
+  cmLeverageManuallyEdited = false;
+  const _lvInit = document.getElementById('cm-leverage');
+  if (_lvInit) _lvInit.value = 2;  // SHORT 기본값 (다음 setCmSide 가 다시 적용)
   await Promise.all([loadCmAccounts(), loadCmTemplates(), loadCmSymbols()]);
   setCmSide('SHORT');
   setCmMode('direct');
@@ -1880,6 +1900,22 @@ function fillStartPrice(mode) {
   document.getElementById('cm-start-price').focus();
 }
 
+// UX #18: 사용자가 직접 레버리지를 수정했는지 추적. true 면 사이드 변경 시 자동 갱신 안 함.
+let cmLeverageManuallyEdited = false;
+
+function _defaultLeverageForSide(side) {
+  return side === 'SHORT' ? 2 : 1;
+}
+
+function resetCmLeverage() {
+  const lev = _defaultLeverageForSide(cmState.side);
+  document.getElementById('cm-leverage').value = lev;
+  cmLeverageManuallyEdited = false;
+  cmState.preview = null;
+  document.getElementById('cm-preview').classList.add('hidden');
+  updateCmSubmit();
+}
+
 function setCmSide(side) {
   cmState.side = side;
   document.getElementById('cm-side-short').className = 'btn flex-1' + (side==='SHORT' ? '' : ' btn-ghost');
@@ -1888,6 +1924,12 @@ function setCmSide(side) {
   document.getElementById('cm-side-long').className = 'btn flex-1' + (side==='LONG' ? '' : ' btn-ghost');
   document.getElementById('cm-side-long').style.background = side==='LONG' ? '#10b981' : 'transparent';
   document.getElementById('cm-side-long').style.color = side==='LONG' ? '#fff' : '#cbd5e1';
+  // UX #18: 사용자가 직접 수정 안 했을 때만 사이드 기본값으로 자동 갱신
+  if (!cmLeverageManuallyEdited) {
+    const lev = _defaultLeverageForSide(side);
+    const lvInp = document.getElementById('cm-leverage');
+    if (lvInp) lvInp.value = lev;
+  }
   // 방향 변경 시 미리보기 무효화
   cmState.preview = null;
   document.getElementById('cm-preview').classList.add('hidden');
@@ -2013,9 +2055,12 @@ async function submitCreate() {
 
     // 직접 입력 모드 — 이 시점에만 템플릿 1번 생성
     let templateId = cmState.templateId;
+    // UX #18: 레버리지는 입력 필드에서 가져옴. 비었으면 사이드 기본값.
+    const lvInpEl = document.getElementById('cm-leverage');
+    const leverageFromInput = lvInpEl && lvInpEl.value ? Number(lvInpEl.value) : _defaultLeverageForSide(cmState.side);
     if (cmState.mode === 'direct') {
       const ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-      const leverage = cmState.side === 'SHORT' ? 2 : 1;
+      const leverage = leverageFromInput;
       const inp = cmState._directInputs || _collectDirectInputs();
       const tpsl = cmState._directTpsl || _collectTpSl();
       const tplCreated = await api('/admin/strategy-templates', {
@@ -2050,6 +2095,8 @@ async function submitCreate() {
         exchange_account_id: cmState.accountId,
         strategy_template_id: templateId,
         symbol, side: cmState.side, start_price: startPrice,
+        // UX #18: 레버리지 override (템플릿 기본값을 덮어씀)
+        leverage_override: leverageFromInput,
       },
     });
     toast('✅ 전략 #' + created.id + ' 생성됨. 1단계 주문 발송 중...', 'success');

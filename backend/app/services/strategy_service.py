@@ -35,7 +35,7 @@ class StrategyService:
             "last_stage_trigger_percent": template_model.stage4_trigger_percent,
         }
 
-    def calculate_preview(self, *, symbol: str, side: str, start_price: Decimal, strategy_template_id: int):
+    def calculate_preview(self, *, symbol: str, side: str, start_price: Decimal, strategy_template_id: int, leverage_override: int | None = None):
         template_model = self.repo.get_template(strategy_template_id)
         symbol_model = self.repo.get_symbol(symbol)
         if not template_model or not symbol_model:
@@ -51,12 +51,14 @@ class StrategyService:
         )
         calculator = StrategyCalculator(symbol_rule)
         stages_config = self._resolve_stages_config(template_model)
+        # UX #18: leverage_override 가 있으면 그것을, 아니면 템플릿 기본값을 사용.
+        effective_leverage = leverage_override if leverage_override is not None else template_model.leverage
         return calculator.calculate_preview(
             symbol=symbol,
             side=side,
             start_price=start_price,
             stages_config=stages_config,
-            leverage=template_model.leverage,
+            leverage=effective_leverage,
             total_capital=Decimal(template_model.total_capital),
             tp1_percent=Decimal(template_model.tp1_percent),
             tp2_percent=Decimal(template_model.tp2_percent),
@@ -64,12 +66,12 @@ class StrategyService:
             stop_loss_percent_of_capital=Decimal(template_model.stop_loss_percent_of_capital),
         )
 
-    def create_strategy_instance(self, *, user_id: int, exchange_account_id: int, strategy_template_id: int, symbol: str, side: str, start_price: Decimal) -> StrategyInstance:
+    def create_strategy_instance(self, *, user_id: int, exchange_account_id: int, strategy_template_id: int, symbol: str, side: str, start_price: Decimal, leverage_override: int | None = None) -> StrategyInstance:
         template_model = self.repo.get_template(strategy_template_id)
         symbol_model = self.repo.get_symbol(symbol)
         if not template_model or not symbol_model:
             raise ValueError("Template or symbol not found")
-        preview = self.calculate_preview(symbol=symbol, side=side, start_price=start_price, strategy_template_id=strategy_template_id)
+        preview = self.calculate_preview(symbol=symbol, side=side, start_price=start_price, strategy_template_id=strategy_template_id, leverage_override=leverage_override)
         instance = StrategyInstance(
             user_id=user_id,
             exchange_account_id=exchange_account_id,

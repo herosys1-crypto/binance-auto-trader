@@ -152,6 +152,7 @@ def create_strategy(
             symbol=payload.symbol,
             side=payload.side,
             start_price=payload.start_price,
+            leverage_override=payload.leverage_override,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
