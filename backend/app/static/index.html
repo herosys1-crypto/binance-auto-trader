@@ -1757,6 +1757,7 @@ async function loadCmSymbols() {
 }
 
 let _cmCurrentPrice = null;
+let _cmTickSize = null;  // Bug #13 fix: 심볼별 tick_size 캐시 (시작가 정밀도용)
 
 async function loadCmMarketInfo() {
   const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
@@ -1764,6 +1765,10 @@ async function loadCmMarketInfo() {
   // 선택된 거래소 계정의 testnet 여부
   const checked = document.querySelector('input[name="cm-account"]:checked');
   const isTestnet = checked ? !!checked.closest('label').querySelector('.badge-yellow') : true;
+  // 심볼 정보 (tick_size) 도 함께 가져옴 — 시작가 +/- N% 버튼이 정확한 정밀도로 반올림되도록.
+  api(`/symbols/${symbol}`).then(s => {
+    if (s && s.tick_size) _cmTickSize = Number(s.tick_size);
+  }).catch(() => { _cmTickSize = null; });
   try {
     const [tk, kl] = await Promise.all([
       fetch(`${window.location.origin}/api/v1/market/ticker24h?symbol=${symbol}&testnet=${isTestnet}`).then(r => r.json()),
@@ -1831,7 +1836,29 @@ function fillStartPrice(mode) {
     const pct = Number(mode);  // '+5' → 5, '-3' → -3
     val = _cmCurrentPrice * (1 + pct / 100);
   }
-  document.getElementById('cm-start-price').value = val.toFixed(2);
+  // Bug #13 fix: 심볼의 tick_size 로 정확하게 floor.
+  // 이전 .toFixed(2) 는 BTC (1자리) 같은 큰 가격엔 OK 였지만,
+  // 작은 알트 (예: 0.17703) 는 0.18 로 너무 단순 반올림되어 +1% (= 0.17880) 의도와 어긋남.
+  let formatted;
+  if (_cmTickSize && _cmTickSize > 0) {
+    // tick_size 기준 floor + tick_size 의 소수점 자릿수만큼 표시
+    const stepped = Math.floor(val / _cmTickSize) * _cmTickSize;
+    const tickStr = String(_cmTickSize);
+    const dot = tickStr.indexOf('.');
+    const decimals = dot >= 0 ? tickStr.length - dot - 1 : 0;
+    formatted = stepped.toFixed(decimals);
+  } else {
+    // tick_size 없을 때는 가격 magnitude 기반 동적 정밀도
+    let decimals;
+    if (val >= 1000) decimals = 2;
+    else if (val >= 100) decimals = 3;
+    else if (val >= 1) decimals = 4;
+    else if (val >= 0.01) decimals = 5;
+    else if (val >= 0.0001) decimals = 6;
+    else decimals = 8;
+    formatted = val.toFixed(decimals);
+  }
+  document.getElementById('cm-start-price').value = formatted;
   document.getElementById('cm-start-price').focus();
 }
 
