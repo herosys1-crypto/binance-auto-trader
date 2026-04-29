@@ -537,11 +537,19 @@
 
   <!-- 선택 전략 — 활동 타임라인 + 단계별 계획 + 주문 내역 -->
   <div id="detail-section" class="hidden">
-    <!-- UX #20 (2026-04-29): 차트 + 단계별 진입가 가로선 -->
+    <!-- UX #20 (2026-04-29): 차트 + 단계별 진입가 가로선 + 청산예정가 (UX #21) -->
     <div class="card rounded-lg mb-4">
-      <div class="card-header text-sm flex justify-between items-center">
-        <span>📈 차트 + 단계별 진입가</span>
-        <span id="detail-chart-info" class="text-xs text-slate-400">로딩 중...</span>
+      <div class="card-header text-sm flex justify-between items-center flex-wrap gap-2">
+        <span>📈 차트 + 단계별 진입가 + 청산예정가</span>
+        <div class="flex items-center gap-2">
+          <!-- 타임프레임 토글 -->
+          <div class="flex gap-1" id="detail-chart-tf-buttons">
+            <button onclick="setDetailChartInterval('1h')" data-tf="1h" class="btn-ghost btn text-xs" style="padding:2px 8px; font-size:11px">1h</button>
+            <button onclick="setDetailChartInterval('4h')" data-tf="4h" class="btn-ghost btn text-xs" style="padding:2px 8px; font-size:11px">4h</button>
+            <button onclick="setDetailChartInterval('1d')" data-tf="1d" class="btn-ghost btn text-xs" style="padding:2px 8px; font-size:11px">1d</button>
+          </div>
+          <span id="detail-chart-info" class="text-xs text-slate-400">로딩 중...</span>
+        </div>
       </div>
       <div class="p-3">
         <svg id="detail-chart" viewBox="0 0 800 280" class="w-full" style="height:280px;background:#0f172a;border-radius:4px"></svg>
@@ -549,6 +557,7 @@
           <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="background:#10b981;border-top:2px solid #10b981"></span>체결 진입가</span>
           <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="background:transparent;border-top:1.5px dashed #fbbf24"></span>예정 진입가</span>
           <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="border-top:2px solid #3b82f6"></span>평단가</span>
+          <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="border-top:2px dashed #ef4444"></span>청산예정가</span>
           <span class="flex items-center gap-1"><span class="inline-block w-2 h-2 rounded-full bg-green-400"></span>현재가</span>
         </div>
       </div>
@@ -1382,12 +1391,48 @@ async function stopStrategy(id) {
   }
 }
 
-// UX #20 (2026-04-29): 선택 전략의 차트 + 단계별 진입가 가로선 렌더링.
-// Binance klines (100h × 1h 캔들) + stage_plans 의 trigger_price 를 결합해 시각화.
+// UX #20 (2026-04-29): 선택 전략의 차트 + 단계별 진입가 가로선 + 청산예정가 렌더링.
+// Binance klines + stage_plans + strategy.liquidation_price 를 결합해 시각화.
+// UX #21: 1h/4h/1d 타임프레임 토글 지원.
+let _detailChartState = { strategy: null, stagePlans: null, interval: '1h' };
+
+function setDetailChartInterval(interval) {
+  _detailChartState.interval = interval;
+  // 버튼 활성 표시
+  document.querySelectorAll('#detail-chart-tf-buttons button').forEach(btn => {
+    const isActive = btn.dataset.tf === interval;
+    btn.className = isActive
+      ? 'btn-primary btn text-xs'
+      : 'btn-ghost btn text-xs';
+    btn.style.padding = '2px 8px';
+    btn.style.fontSize = '11px';
+  });
+  if (_detailChartState.strategy) {
+    _renderDetailChart(_detailChartState.strategy, _detailChartState.stagePlans).catch(e => console.warn(e));
+  }
+}
+
 async function _renderDetailChart(strategy, stagePlans) {
+  // 상태 저장 (타임프레임 전환 시 재사용)
+  _detailChartState.strategy = strategy;
+  _detailChartState.stagePlans = stagePlans;
+  const interval = _detailChartState.interval || '1h';
+  // 버튼 활성 표시 동기화 (첫 진입 시)
+  document.querySelectorAll('#detail-chart-tf-buttons button').forEach(btn => {
+    const isActive = btn.dataset.tf === interval;
+    btn.className = isActive
+      ? 'btn-primary btn text-xs'
+      : 'btn-ghost btn text-xs';
+    btn.style.padding = '2px 8px';
+    btn.style.fontSize = '11px';
+  });
+
+  // 타임프레임별 캔들 수: 1h=100h(~4일), 4h=100×4h(~16일), 1d=90일
+  const limitFor = { '1h': 100, '4h': 100, '1d': 90 }[interval] || 100;
+
   const symbol = strategy.symbol;
   const klResp = await fetch(
-    `${window.location.origin}/api/v1/market/klines?symbol=${encodeURIComponent(symbol)}&interval=1h&limit=100`
+    `${window.location.origin}/api/v1/market/klines?symbol=${encodeURIComponent(symbol)}&interval=${interval}&limit=${limitFor}`
   ).then(r => r.json()).catch(() => null);
   const svg = document.getElementById('detail-chart');
   const infoEl = document.getElementById('detail-chart-info');
@@ -1406,9 +1451,13 @@ async function _renderDetailChart(strategy, stagePlans) {
     .map(s => Number(s.trigger_price));
   const avgEntry = strategy.avg_entry_price ? Number(strategy.avg_entry_price) : null;
   const startPx = strategy.start_price ? Number(strategy.start_price) : null;
+  const liqPx = strategy.liquidation_price ? Number(strategy.liquidation_price) : null;
   const allPrices = [...lows, ...highs, ...stagePrices];
   if (avgEntry) allPrices.push(avgEntry);
   if (startPx) allPrices.push(startPx);
+  // UX #21: 청산예정가도 Y축 범위에 포함 (단, 너무 멀면 제외 — 최근 가격 대비 50% 이내인 경우만)
+  const lastClose = closes[closes.length - 1];
+  if (liqPx && Math.abs(liqPx - lastClose) / lastClose < 0.5) allPrices.push(liqPx);
   const minP = Math.min(...allPrices);
   const maxP = Math.max(...allPrices);
   const rng = (maxP - minP) || 1;
@@ -1460,6 +1509,15 @@ async function _renderDetailChart(strategy, stagePlans) {
                <text x="${(ML + innerW + 5).toFixed(1)}" y="${(y + 3).toFixed(1)}" font-size="10" fill="#60a5fa" font-weight="700">평단 ${fmtNum(avgEntry)}</text>`;
   }
 
+  // UX #21: 청산예정가 — 빨간 굵은 점선 (위험 영역 강조)
+  let liqLine = '';
+  if (liqPx && liqPx >= cMin && liqPx <= cMax) {
+    const y = yFor(liqPx);
+    liqLine = `<line x1="${ML}" y1="${y.toFixed(1)}" x2="${(ML + innerW).toFixed(1)}" y2="${y.toFixed(1)}" stroke="#ef4444" stroke-width="2" stroke-dasharray="6,3" opacity="0.95"/>
+               <rect x="${(ML + innerW + 2).toFixed(1)}" y="${(y - 7).toFixed(1)}" width="100" height="14" fill="#0b1120" stroke="#ef4444" rx="2"/>
+               <text x="${(ML + innerW + 5).toFixed(1)}" y="${(y + 3).toFixed(1)}" font-size="10" fill="#f87171" font-weight="700">청산 ${fmtNum(liqPx)}</text>`;
+  }
+
   // 현재가 마커
   const lastY = points[points.length - 1][1];
   const curMarker = `<circle cx="${(ML + innerW).toFixed(1)}" cy="${lastY.toFixed(1)}" r="4" fill="${lineColor}" stroke="#0b1120" stroke-width="1"/>
@@ -1473,6 +1531,9 @@ async function _renderDetailChart(strategy, stagePlans) {
                  <text x="${(ML + 4).toFixed(1)}" y="${(y - 3).toFixed(1)}" font-size="9" fill="#94a3b8">시작가 ${fmtNum(startPx)}</text>`;
   }
 
+  // 인터벌별 라벨
+  const intervalLabel = { '1h': `${closes.length}시간 × 1h 캔들`, '4h': `${closes.length}×4h 캔들 (~${Math.round(closes.length/6)}일)`, '1d': `${closes.length}일 × 1d 캔들` }[interval] || `${closes.length} × ${interval}`;
+
   svg.innerHTML = `
     ${grid}
     <path d="${area}" fill="${fillColor}"/>
@@ -1480,12 +1541,14 @@ async function _renderDetailChart(strategy, stagePlans) {
     ${startLine}
     ${stageLines}
     ${avgLine}
+    ${liqLine}
     ${curMarker}
-    <text x="${ML}" y="${(H - 6).toFixed(1)}" font-size="10" fill="#64748b">최근 100시간 × 1h 캔들</text>
+    <text x="${ML}" y="${(H - 6).toFixed(1)}" font-size="10" fill="#64748b">${intervalLabel}</text>
     <text x="${(ML + innerW).toFixed(1)}" y="${(H - 6).toFixed(1)}" font-size="10" fill="#64748b" text-anchor="end">현재 ${fmtNum(last)}</text>
   `;
   const sideLabel = strategy.side === 'SHORT' ? '📉 숏' : '📈 롱';
-  infoEl.textContent = `${symbol} · ${sideLabel} · ${strategy.leverage}x · 단계 ${strategy.current_stage}/${(stagePlans || []).length}`;
+  const liqHint = liqPx ? ` · 청산 ${fmtNum(liqPx)}` : '';
+  infoEl.textContent = `${symbol} · ${sideLabel} · ${strategy.leverage}x · 단계 ${strategy.current_stage}/${(stagePlans || []).length}${liqHint}`;
 }
 
 async function emergencyStop(id) {
