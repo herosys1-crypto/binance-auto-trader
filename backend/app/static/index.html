@@ -256,9 +256,9 @@
               <th>방향</th>
               <th>상태</th>
               <th>단계</th>
-              <th class="num">평균 진입가</th>
-              <th class="num">포지션</th>
-              <th class="num">미실현</th>
+              <th class="num" title="평단 / 마크 / 청산예정">진입가/마크/청산</th>
+              <th class="num" title="포지션 수량 / 마진(USDT)">수량/마진</th>
+              <th class="num" title="미실현 USDT / leveraged ROI %">PnL / ROI</th>
               <th style="width:100px">액션</th>
             </tr>
           </thead>
@@ -1249,17 +1249,40 @@ async function refreshStrategies() {
     tbody.innerHTML = sorted.map(s => {
       const info = statusInfo(s.status);
       const stage = s.current_stage > 0 ? renderStageBar(s.current_stage, 4) : '<span class="text-slate-500">대기</span>';
-      const entry = s.avg_entry_price ? fmtNum(s.avg_entry_price) : '<span class="text-slate-500">-</span>';
-      const qty = s.current_position_qty && Number(s.current_position_qty) !== 0 ? fmtQty(s.current_position_qty) : '<span class="text-slate-500">-</span>';
       const pnlNum = Number(s.unrealized_pnl || 0);
-      // 사용자 실제 ROI % = USD pnl × leverage / capital × 100  (margin = capital / leverage 기준)
+      // 사용자 실제 ROI % = USD pnl × leverage / capital × 100 (margin 기준)
       const sCap = Number(s.total_capital || 0);
       const sLev = Number(s.leverage || 1) || 1;
       const sPnlPct = (sCap > 0) ? (pnlNum * sLev / sCap * 100) : 0;
+      const sQtyNum = Number(s.current_position_qty || 0);
+      const sQtyAbs = Math.abs(sQtyNum);
+      const sAvg = Number(s.avg_entry_price || 0);
+      const hasPosition = sQtyAbs > 0 && sAvg > 0;
+      // 마크 가격 = avg + pnl/qty (LONG) | avg - pnl/qty (SHORT)
+      const sMark = hasPosition ? (s.side === 'LONG' ? sAvg + pnlNum/sQtyAbs : sAvg - pnlNum/sQtyAbs) : 0;
+      // 청산예정가 = isolated 계산 (체결 평단 기반)
+      const MMR = 0.005;
+      const sLiq = hasPosition && sLev > 0 ? (s.side === 'SHORT' ? sAvg * (1 + 1/sLev - MMR) : sAvg * (1 - 1/sLev + MMR)) : 0;
+      // 마진 = capital / leverage (notional 모델 기준 사용자 실제 자본)
+      const sMargin = sCap > 0 && sLev > 0 ? sCap / sLev : 0;
+
+      // 평단/마크/청산 — 3 줄 stack (Binance 스타일)
+      const priceStack = hasPosition
+        ? `<div class="text-xs leading-tight"><span class="text-slate-300" title="평단가">${fmtNum(sAvg)}</span><br><span class="text-cyan-300" title="마크가">${fmtNum(sMark)}</span><br><span class="text-red-300" title="청산예정">${fmtNum(sLiq)}</span></div>`
+        : '<span class="text-slate-500">-</span>';
+      // 수량/마진 — 2 줄 stack
+      const qtyStack = hasPosition
+        ? `<div class="text-xs leading-tight"><span class="${sQtyNum<0?'neg':'pos'} font-semibold" title="포지션 수량">${fmtQty(sQtyNum)}</span><br><span class="text-slate-400" title="마진 (capital÷lev)">${sMargin.toFixed(2)} USDT</span></div>`
+        : `<div class="text-xs leading-tight"><span class="text-slate-500">-</span><br><span class="text-slate-400 text-xs" title="계획 마진">${sMargin > 0 ? sMargin.toFixed(2)+' USDT' : '-'}</span></div>`;
+      // PnL/ROI — 2 줄 stack
       const pnlSign = sPnlPct > 0 ? '+' : '';
-      const pnl = (s.unrealized_pnl !== null && s.unrealized_pnl !== undefined && Number(s.current_position_qty) !== 0)
+      const pnl = hasPosition
         ? `<div class="text-xs leading-tight"><span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold">${fmtPnL(pnlNum)}</span><br><span class="${sPnlPct>0?'pos':sPnlPct<0?'neg':'text-slate-400'} text-xs">${pnlSign}${sPnlPct.toFixed(2)}%</span></div>`
         : '<span class="text-slate-500">-</span>';
+
+      // 호환용 alias (기존 변수 사용 위치 보존)
+      const entry = priceStack;
+      const qty = qtyStack;
       const isTerminal = TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
       // UX #17 (2026-04-29): 종료 상태이고 한번도 체결 안 된 전략 (대기 단계) 에는 삭제 버튼 노출
       const neverEntered = (s.current_stage || 0) === 0 && (!s.avg_entry_price || Number(s.avg_entry_price) === 0);
