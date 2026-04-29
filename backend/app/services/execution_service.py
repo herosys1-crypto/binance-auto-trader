@@ -85,8 +85,18 @@ class ExecutionService:
                 f"Exchange has no {strategy.side} position for {strategy.symbol}; "
                 "cancelled pending orders and marked STOPPED. No reduceOnly market order sent."
             )
-        # 거래소에 실제로 포지션이 있으면 그 양으로 청산 (DB 보다 거래소 신뢰)
-        quantity = actual_position
+        # 거래소 실 포지션과 비교하여 cap 만 함 (요청 qty 가 더 크면 거래소 값으로 줄임).
+        # 이전 버전은 무조건 quantity = actual_position 으로 덮어쓰는 critical bug:
+        # 부분 TP1 요청 (25% = 199) 도 거래소 풀 포지션 (798) 으로 닫혀버림.
+        # 부분 TP/SL 정상 동작을 위해 over-close 만 방지하는 cap 으로 변경.
+        try:
+            req_qty = abs(Decimal(str(quantity))) if quantity else Decimal("0")
+        except Exception:
+            req_qty = Decimal("0")
+        if req_qty <= 0 or req_qty > actual_position:
+            quantity = actual_position  # 요청 없거나 실 포지션 초과 시 풀 청산
+        else:
+            quantity = req_qty  # 부분 청산 정상 진행 (TP1 25% 등)
         side = "SELL" if strategy.side == "LONG" else "BUY"
         position_side = strategy.side
         client_order_id = self._new_client_order_id(strategy.symbol, "EXIT")

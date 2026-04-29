@@ -28,23 +28,28 @@ class StreamService:
         strategy = self.db.get(StrategyInstance, order.strategy_instance_id)
         if strategy and order.purpose == "ENTRY" and order.status == "FILLED":
             strategy.status = {1: "STAGE1_OPEN", 2: "STAGE2_OPEN", 3: "STAGE3_OPEN", 4: "STAGE4_OPEN"}.get(order.stage_no, strategy.status)
-            # 단계별 계획 row 갱신 + 첫 진입 시점 추적 (알림 중복 방지)
+            # 단계별 계획 row 갱신 + 첫 진입 시점 추적 (알림 중복 방지).
+            # Bug fix (2026-04-30): race condition 해결을 위해 atomic UPDATE WHERE 로 변경.
+            # 이전엔 SELECT 후 in-memory mark + commit 이라 동시 처리되는 두 ORDER_TRADE_UPDATE
+            # 가 둘 다 is_triggered=False 로 읽고 둘 다 알림 발송하는 문제. atomic 으로 바꾸면
+            # rowcount=1 이 첫 FILLED 인식 1 회에만 나옴.
+            from sqlalchemy import update as sa_update
+            update_result = self.db.execute(
+                sa_update(StrategyStagePlan)
+                .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+                .where(StrategyStagePlan.stage_no == order.stage_no)
+                .where(StrategyStagePlan.is_triggered.is_(False))
+                .values(is_triggered=True, triggered_at=datetime.now(timezone.utc))
+            )
+            just_triggered_now = update_result.rowcount > 0
+            # 알림 본문에 쓸 stage_plan 데이터 (planned_capital 등) 는 다시 SELECT
             stage_plan = self.db.execute(
                 select(StrategyStagePlan)
                 .where(StrategyStagePlan.strategy_instance_id == strategy.id)
                 .where(StrategyStagePlan.stage_no == order.stage_no)
                 .limit(1)
             ).scalars().first()
-            # Bug fix (2026-04-30): Binance 가 같은 주문에 대해 ORDER_TRADE_UPDATE 를
-            # 여러 번 보내서 (NEW → PARTIALLY_FILLED → FILLED → trade settlement 등)
-            # 알림이 2~3번 중복 발송되는 문제. 이번에 처음 FILLED 인식한 경우 (= is_triggered
-            # 가 False → True 로 전환되는 순간) 에만 알림 발송.
-            just_triggered_now = False
-            if stage_plan and not stage_plan.is_triggered:
-                stage_plan.is_triggered = True
-                stage_plan.triggered_at = datetime.now(timezone.utc)
-                just_triggered_now = True
-            # Telegram 알림은 첫 FILLED 인식 시 1회만 발송 (중복 방지)
+            # Telegram 알림은 첫 FILLED 인식 시 1회만 발송 (atomic gate)
             if just_triggered_now:
                 try:
                     from app.services.notification_service import NotificationService
@@ -61,8 +66,29 @@ class StreamService:
                 except Exception:  # 알림 실패해도 거래 로직은 영향 없음
                     pass
         elif strategy and order.purpose == "EXIT" and order.status == "FILLED":
-            strategy.status = "REENTRY_READY"
-            strategy.reentry_ready = True
+            # COMPLETED 가 _execute_take_profit 에서 이미 설정됐으면 보존 (REENTRY_READY 로 덮어쓰지 않음)
+            if strategy.status != "COMPLETED":
+                strategy.status = "REENTRY_READY"
+                strategy.reentry_ready = True
+            # Bug fix (2026-04-30): EXIT FILLED 후 stale qty/pnl 리셋. 거래소 ACCOUNT_UPDATE 가
+            # 닫힌 포지션을 별도로 안 보내는 케이스 대비. 다음 ACCOUNT_UPDATE 가 와서 다른 값으로
+            # 덮어쓰면 그 값이 우선됨.
+            strategy.current_position_qty = Decimal("0")
+            strategy.unrealized_pnl = Decimal("0")
+            # 실현 손익 누적 (TP/SL 결과 청산 가격 기반)
+            try:
+                if order.avg_price and strategy.avg_entry_price and order.executed_qty:
+                    avg_entry = Decimal(str(strategy.avg_entry_price))
+                    exit_px = Decimal(str(order.avg_price))
+                    qty = Decimal(str(order.executed_qty))
+                    if strategy.side == "LONG":
+                        realized_delta = qty * (exit_px - avg_entry)
+                    else:
+                        realized_delta = qty * (avg_entry - exit_px)
+                    prev_realized = Decimal(str(strategy.realized_pnl or 0))
+                    strategy.realized_pnl = (prev_realized + realized_delta).quantize(Decimal("0.01"))
+            except Exception:
+                pass
         self.db.commit()
 
     def handle_account_update(self, payload: dict) -> None:
