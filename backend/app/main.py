@@ -54,7 +54,17 @@ if _STATIC_DIR.exists():
 
     @app.get("/admin-ui", include_in_schema=False)
     def admin_ui_root() -> FileResponse:
-        return FileResponse(str(_STATIC_DIR / "index.html"))
+        # 브라우저 캐시 무력화 — localhost / ngrok 양쪽 모두 항상 최신 HTML 받도록.
+        # HTML 자체는 작아서 매 요청 갱신해도 부하 적음. 정적 자산 (/static/*) 은
+        # 별도 mount 라 영향 없음.
+        return FileResponse(
+            str(_STATIC_DIR / "index.html"),
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
 
     @app.get("/", include_in_schema=False)
     def root_redirect() -> RedirectResponse:

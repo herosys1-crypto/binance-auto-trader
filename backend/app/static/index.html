@@ -180,60 +180,92 @@
     </div>
   </div>
 
-  <!-- Row: 시스템 상태(좌) + 운영 통계(우) — 모바일 1단 / 데스크톱 2단 -->
+  <!-- Row: [시스템상태 + 빠른작업 + 운영통계 좌측 스택] | [전략 인스턴스 우측] -->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
-    <!-- 시스템 상태 -->
-    <div id="section-syshealth" class="card rounded-lg">
+    <!-- LEFT 컬럼 — 3 패널 stacked. h-full + 시스템상태 flex-grow 로 우측 전략인스턴스 높이에 정확히 매치 -->
+    <div class="flex flex-col gap-2 h-full">
+      <!-- 시스템 상태 — flex-1 로 빈 공간 자동 채움 -->
+      <div id="section-syshealth" class="card rounded-lg flex-1 flex flex-col">
+        <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
+          <span>⚙️ 시스템 상태</span>
+          <span id="syshealth-overall" class="text-xs">-</span>
+        </div>
+        <div class="p-2 grid grid-cols-2 sm:grid-cols-2 gap-2 flex-1 auto-rows-fr" id="syshealth-grid">
+          <p class="text-slate-500 text-xs col-span-2 text-center py-2">로딩 중...</p>
+        </div>
+      </div>
+
+      <!-- 빠른 작업 — 시스템상태 아래 빈 공간 채움 -->
+      <div class="card rounded-lg flex gap-2 items-center flex-wrap" style="padding:6px 10px">
+        <span class="text-xs font-semibold text-slate-300 mr-1 hidden sm:inline">⚡ 빠른 작업</span>
+        <button class="btn-success btn text-xs" style="padding:8px 12px;min-height:36px" onclick="openCreateModal()">➕ 새 전략</button>
+        <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="testTelegram()">📨 Telegram</button>
+        <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="window.open('http://localhost:3000','_blank')">📊 Grafana</button>
+        <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="window.open('http://localhost:8000/docs','_blank')">🔧 API</button>
+        <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('strategies')">📥 전략 CSV</button>
+        <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('orders')">📥 주문 CSV</button>
+      </div>
+
+      <!-- 운영 통계 (전체 누적) — 빠른작업 아래 -->
+      <div class="card rounded-lg">
+        <div class="card-header text-xs" style="padding:6px 12px">📊 운영 통계 (전체 누적)</div>
+        <div class="p-2 grid grid-cols-3 sm:grid-cols-3 gap-2 text-center">
+          <div>
+            <p class="text-xs text-slate-400">전체</p>
+            <p id="stats-total" class="text-base font-bold">-</p>
+          </div>
+          <div>
+            <p class="text-xs text-slate-400">익절</p>
+            <p id="stats-completed" class="text-base font-bold pos">-</p>
+          </div>
+          <div>
+            <p class="text-xs text-slate-400">손절</p>
+            <p id="stats-sl" class="text-base font-bold neg">-</p>
+          </div>
+          <div>
+            <p class="text-xs text-slate-400">승률</p>
+            <p id="stats-winrate" class="text-base font-bold text-blue-300">-</p>
+          </div>
+          <div>
+            <p class="text-xs text-slate-400">실현손익</p>
+            <p id="stats-realized" class="text-base font-bold">-</p>
+          </div>
+          <div>
+            <p class="text-xs text-slate-400">크라이시스</p>
+            <p id="stats-crisis" class="text-base font-bold text-yellow-400">-</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT 컬럼 — 전략 인스턴스 (좌측 3패널 합친 높이만큼 자연스럽게 늘어남) -->
+    <div id="section-strategies" class="card rounded-lg">
       <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
-        <span>⚙️ 시스템 상태</span>
-        <span id="syshealth-overall" class="text-xs">-</span>
+        <span>🎯 전략 인스턴스</span>
+        <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
+          <input type="checkbox" id="hide-terminated" onchange="refreshStrategies()" checked />
+          <span class="text-slate-300">종료 숨김</span>
+        </label>
       </div>
-      <div class="p-2 grid grid-cols-2 sm:grid-cols-2 gap-2" id="syshealth-grid">
-        <p class="text-slate-500 text-xs col-span-2 text-center py-2">로딩 중...</p>
-      </div>
-    </div>
-
-    <!-- 운영 통계 — 모바일 3x2, 데스크톱 6 -->
-    <div class="card rounded-lg">
-      <div class="card-header text-xs" style="padding:8px 12px">📊 운영 통계 (전체 누적)</div>
-      <div class="p-2 grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
-        <div>
-          <p class="text-xs text-slate-400">전체</p>
-          <p id="stats-total" class="text-base font-bold">-</p>
-        </div>
-        <div>
-          <p class="text-xs text-slate-400">익절</p>
-          <p id="stats-completed" class="text-base font-bold pos">-</p>
-        </div>
-        <div>
-          <p class="text-xs text-slate-400">손절</p>
-          <p id="stats-sl" class="text-base font-bold neg">-</p>
-        </div>
-        <div>
-          <p class="text-xs text-slate-400">승률</p>
-          <p id="stats-winrate" class="text-base font-bold text-blue-300">-</p>
-        </div>
-        <div>
-          <p class="text-xs text-slate-400">실현손익</p>
-          <p id="stats-realized" class="text-base font-bold">-</p>
-        </div>
-        <div>
-          <p class="text-xs text-slate-400">크라이시스</p>
-          <p id="stats-crisis" class="text-base font-bold text-yellow-400">-</p>
-        </div>
+      <div class="overflow-auto" style="max-height:560px">
+        <table class="min-w-max">
+          <thead>
+            <tr>
+              <th style="width:30px">#</th>
+              <th>심볼</th>
+              <th>방향</th>
+              <th>상태</th>
+              <th>단계</th>
+              <th class="num">평균 진입가</th>
+              <th class="num">포지션</th>
+              <th class="num">미실현</th>
+              <th style="width:100px">액션</th>
+            </tr>
+          </thead>
+          <tbody id="strategies-tbody"><tr><td colspan="9" class="text-center text-slate-500 py-3 text-xs">로딩 중...</td></tr></tbody>
+        </table>
       </div>
     </div>
-  </div>
-
-  <!-- 빠른 작업 — 모바일 wrap + 터치 친화 -->
-  <div class="card rounded-lg mb-2 flex gap-2 items-center flex-wrap" style="padding:6px 10px">
-    <span class="text-xs font-semibold text-slate-300 mr-1 hidden sm:inline">⚡ 빠른 작업</span>
-    <button class="btn-success btn text-xs" style="padding:8px 12px;min-height:36px" onclick="openCreateModal()">➕ 새 전략</button>
-    <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="testTelegram()">📨 Telegram</button>
-    <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="window.open('http://localhost:3000','_blank')">📊 Grafana</button>
-    <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="window.open('http://localhost:8000/docs','_blank')">🔧 API</button>
-    <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('strategies')">📥 전략 CSV</button>
-    <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('orders')">📥 주문 CSV</button>
   </div>
 
   <!-- ===== 신규 전략 시작 모달 ===== -->
@@ -463,46 +495,14 @@
     </div>
   </div>
 
-  <!-- Row: 최근 활동(좌) + 전략 인스턴스(우) — 모바일 1단 / 데스크톱 2단 -->
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
-    <!-- 최근 활동 피드 -->
-    <div class="card rounded-lg">
-      <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
-        <span>📡 최근 활동 (최신순 20건)</span>
-        <span class="text-xs text-slate-500" id="activity-updated">-</span>
-      </div>
-      <div id="activity-feed" class="p-2 overflow-y-auto" style="max-height:240px">
-        <p class="text-slate-500 text-xs text-center py-2">로딩 중...</p>
-      </div>
+  <!-- 최근 활동 피드 — 전체폭 (전략 인스턴스는 상단 우측으로 이동됨) -->
+  <div class="card rounded-lg mb-2">
+    <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
+      <span>📡 최근 활동 (최신순 20건)</span>
+      <span class="text-xs text-slate-500" id="activity-updated">-</span>
     </div>
-
-    <!-- 진행 중인 전략 — 모바일에선 가로 스크롤 -->
-    <div id="section-strategies" class="card rounded-lg">
-      <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
-        <span>🎯 전략 인스턴스</span>
-        <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
-          <input type="checkbox" id="hide-terminated" onchange="refreshStrategies()" checked />
-          <span class="text-slate-300">종료 숨김</span>
-        </label>
-      </div>
-      <div class="overflow-auto" style="max-height:240px">
-        <table class="min-w-max">
-          <thead>
-            <tr>
-              <th style="width:30px">#</th>
-              <th>심볼</th>
-              <th>방향</th>
-              <th>상태</th>
-              <th>단계</th>
-              <th class="num">평균 진입가</th>
-              <th class="num">포지션</th>
-              <th class="num">미실현</th>
-              <th style="width:100px">액션</th>
-            </tr>
-          </thead>
-          <tbody id="strategies-tbody"><tr><td colspan="9" class="text-center text-slate-500 py-3 text-xs">로딩 중...</td></tr></tbody>
-        </table>
-      </div>
+    <div id="activity-feed" class="p-2 overflow-y-auto" style="max-height:280px">
+      <p class="text-slate-500 text-xs text-center py-2">로딩 중...</p>
     </div>
   </div>
 
