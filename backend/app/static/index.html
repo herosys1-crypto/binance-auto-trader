@@ -1838,8 +1838,10 @@ function fillStartPrice(mode) {
   }
   // Bug #13 fix: 심볼의 tick_size 로 정확하게 floor.
   // 이전 .toFixed(2) 는 BTC (1자리) 같은 큰 가격엔 OK 였지만,
-  // 작은 알트 (예: 0.17703) 는 0.18 로 너무 단순 반올림되어 +1% (= 0.17880) 의도와 어긋남.
+  // 작은 알트 (예: 0.17703 → +1% = 0.18, 0.01641 → -1% = 0.02) 처럼
+  // 너무 단순 반올림되어 의도와 크게 어긋남.
   let formatted;
+  let stepAttr = '0.01';
   if (_cmTickSize && _cmTickSize > 0) {
     // tick_size 기준 floor + tick_size 의 소수점 자릿수만큼 표시
     const stepped = Math.floor(val / _cmTickSize) * _cmTickSize;
@@ -1847,6 +1849,7 @@ function fillStartPrice(mode) {
     const dot = tickStr.indexOf('.');
     const decimals = dot >= 0 ? tickStr.length - dot - 1 : 0;
     formatted = stepped.toFixed(decimals);
+    stepAttr = tickStr;
   } else {
     // tick_size 없을 때는 가격 magnitude 기반 동적 정밀도
     let decimals;
@@ -1857,8 +1860,13 @@ function fillStartPrice(mode) {
     else if (val >= 0.0001) decimals = 6;
     else decimals = 8;
     formatted = val.toFixed(decimals);
+    stepAttr = '0.' + '0'.repeat(decimals - 1) + '1';
   }
-  document.getElementById('cm-start-price').value = formatted;
+  // input 의 step 속성도 동적 조정 — 작은 가격대 코인이 브라우저 spinner 가 0.01 단위로
+  // 만 움직이는 문제 회피.
+  const inp = document.getElementById('cm-start-price');
+  inp.step = stepAttr;
+  inp.value = formatted;
   document.getElementById('cm-start-price').focus();
 }
 
