@@ -115,7 +115,33 @@ class TPSLOrchestratorService:
             self.risk_service.reset_peak_pnl(strategy.id)
         self.db.commit()
         strategy_take_profit_total.labels(symbol=strategy.symbol, side=strategy.side, level=level).inc()
-        self.notification_service.send_take_profit_alert(strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side, level=level)
+
+        # 손익 금액 + 수익률 계산해서 알림에 첨부 (mark_price + avg_entry_price + leverage 사용)
+        avg_exit_price = None
+        realized_pnl_estimate = None
+        pnl_pct = None
+        try:
+            from app.repositories.position_repository import PositionRepository
+            latest_pos = PositionRepository(self.db).latest_by_strategy(strategy.id)
+            if latest_pos and latest_pos.mark_price and strategy.avg_entry_price:
+                avg_entry = Decimal(str(strategy.avg_entry_price))
+                mark_price = Decimal(str(latest_pos.mark_price))
+                leverage = Decimal(str(strategy.leverage)) if strategy.leverage else Decimal("1")
+                if strategy.side == "LONG":
+                    raw_pct = (mark_price - avg_entry) / avg_entry * Decimal("100")
+                    realized_pnl_estimate = (close_qty * (mark_price - avg_entry)).quantize(Decimal("0.01"))
+                else:  # SHORT
+                    raw_pct = (avg_entry - mark_price) / avg_entry * Decimal("100")
+                    realized_pnl_estimate = (close_qty * (avg_entry - mark_price)).quantize(Decimal("0.01"))
+                pnl_pct = (raw_pct * leverage).quantize(Decimal("0.01"))
+                avg_exit_price = mark_price
+        except Exception:
+            pass
+
+        self.notification_service.send_take_profit_alert(
+            strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side, level=level,
+            realized_pnl=realized_pnl_estimate, avg_exit_price=avg_exit_price, pnl_pct=pnl_pct,
+        )
 
     def _execute_stop_loss(self, strategy) -> None:
         # SHORT 포지션은 음수 qty 로 저장됨 — abs() 로 양수화 후 청산.
@@ -125,7 +151,25 @@ class TPSLOrchestratorService:
             self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
         strategy.status = "STOPPING"
         self.db.commit()
-        self.notification_service.send_stop_loss_alert(strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side, total_capital=str(strategy.total_capital), current_loss_amount=str(strategy.realized_pnl + strategy.unrealized_pnl))
+
+        # 손실률(%) 계산 — 사용자 마진 대비 leveraged ROI
+        # margin = capital / leverage → ROI = USD 손실 × leverage / capital × 100
+        loss_amount = Decimal(str(strategy.realized_pnl)) + Decimal(str(strategy.unrealized_pnl))
+        pnl_pct = None
+        try:
+            capital = Decimal(str(strategy.total_capital))
+            leverage = Decimal(str(strategy.leverage)) if strategy.leverage else Decimal("1")
+            if capital > 0:
+                pnl_pct = (loss_amount * leverage / capital * Decimal("100")).quantize(Decimal("0.01"))
+        except Exception:
+            pass
+
+        self.notification_service.send_stop_loss_alert(
+            strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+            total_capital=str(strategy.total_capital),
+            current_loss_amount=str(loss_amount.quantize(Decimal("0.01"))),
+            pnl_pct=pnl_pct,
+        )
         self.risk_service.mark_reentry_ready(strategy.id)
 
     # ──────────────── 크라이시스 복구 모드 액션 (Phase D-2) ────────────────

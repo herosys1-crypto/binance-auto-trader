@@ -155,6 +155,7 @@ class NotificationService:
         level: str,
         realized_pnl: Any | None = None,
         avg_exit_price: Any | None = None,
+        pnl_pct: Any | None = None,
     ) -> Notification:
         emoji = _side_emoji(side)
         title = f"✅ [{level} 익절 체결] {symbol} {side} {emoji}"
@@ -166,7 +167,17 @@ class NotificationService:
         if avg_exit_price is not None:
             lines.append(f"💵 청산 단가 : {_fmt_num(avg_exit_price)}")
         if realized_pnl is not None:
-            lines.append(f"💎 실현 손익 : {_fmt_num(realized_pnl)} USDT")
+            try:
+                sign = "+" if Decimal(str(realized_pnl)) >= 0 else ""
+            except Exception:
+                sign = ""
+            lines.append(f"💎 손익 금액 : {sign}{_fmt_num(realized_pnl)} USDT")
+        if pnl_pct is not None:
+            try:
+                sign = "+" if Decimal(str(pnl_pct)) >= 0 else ""
+            except Exception:
+                sign = ""
+            lines.append(f"📊 수익률    : {sign}{_fmt_num(pnl_pct)}%")
         body = "\n".join(lines)
         return self.send(strategy_instance_id=strategy_instance_id, channel="TELEGRAM", title=title, body=body)
 
@@ -181,18 +192,24 @@ class NotificationService:
         side: str,
         total_capital: Any,
         current_loss_amount: Any,
+        pnl_pct: Any | None = None,
     ) -> Notification:
         emoji = _side_emoji(side)
         title = f"🛑 [손절 발동] {symbol} {side} {emoji}"
-        body = "\n".join(
-            [
-                f"📌 종목       : {symbol}",
-                f"🎯 방향       : {side}",
-                f"💰 총 투자금  : {_fmt_num(total_capital)} USDT",
-                f"📉 누적 손실  : {_fmt_num(current_loss_amount)} USDT",
-                "🔁 상태       : 재진입 대기 (manual_ready)",
-            ]
-        )
+        lines = [
+            f"📌 종목       : {symbol}",
+            f"🎯 방향       : {side}",
+            f"💰 총 투자금  : {_fmt_num(total_capital)} USDT",
+            f"📉 손익 금액  : {_fmt_num(current_loss_amount)} USDT",
+        ]
+        if pnl_pct is not None:
+            try:
+                sign = "+" if Decimal(str(pnl_pct)) >= 0 else ""
+            except Exception:
+                sign = ""
+            lines.append(f"📊 수익률     : {sign}{_fmt_num(pnl_pct)}%")
+        lines.append("🔁 상태       : 재진입 대기 (manual_ready)")
+        body = "\n".join(lines)
         return self.send(strategy_instance_id=strategy_instance_id, channel="TELEGRAM", title=title, body=body)
 
     # ------------------------------------------------------------------
