@@ -566,7 +566,7 @@
           <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="background:#10b981;border-top:2px solid #10b981"></span>체결 진입가</span>
           <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="background:transparent;border-top:1.5px dashed #fbbf24"></span>예정 진입가</span>
           <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="border-top:2px solid #3b82f6"></span>평단가</span>
-          <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="border-top:2px dashed #ef4444"></span>청산예정가</span>
+          <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="border-top:4px dashed #ef4444"></span>청산예정가</span>
           <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="background:#a78bfa"></span>BB(20,2)</span>
           <button id="liq-toggle-btn" onclick="toggleLiqIncluded()" class="btn-primary btn text-xs ml-2" style="padding:2px 8px; font-size:11px">📐 청산가 포함됨 (끄기)</button>
           <span class="text-slate-500 ml-1">💡 휠=줌 · 드래그=팬 · 가격축 드래그=Y축 스크롤</span>
@@ -1826,9 +1826,9 @@ async function _renderDetailChart(strategy, stagePlans) {
     addLine(avgEntry, '#3b82f6', 0, '평단', 2);
   }
 
-  // 4) 청산예정가 — 빨간 굵은 점선 (체결분 기준 isolated 계산)
+  // 4) 청산예정가 — 빨간 굵은 점선 (체결분 기준 isolated 계산). UX #28: 굵기 강화 4px (최대)
   if (liqPx) {
-    addLine(liqPx, '#ef4444', 2, '청산예정', 2);
+    addLine(liqPx, '#ef4444', 2, '청산예정', 4);
   }
 
   // UX #24: 청산가 범위 밖일 때 HTML 오버레이 인디케이터 표시
