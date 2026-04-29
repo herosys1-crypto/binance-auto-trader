@@ -537,6 +537,23 @@
 
   <!-- 선택 전략 — 활동 타임라인 + 단계별 계획 + 주문 내역 -->
   <div id="detail-section" class="hidden">
+    <!-- UX #20 (2026-04-29): 차트 + 단계별 진입가 가로선 -->
+    <div class="card rounded-lg mb-4">
+      <div class="card-header text-sm flex justify-between items-center">
+        <span>📈 차트 + 단계별 진입가</span>
+        <span id="detail-chart-info" class="text-xs text-slate-400">로딩 중...</span>
+      </div>
+      <div class="p-3">
+        <svg id="detail-chart" viewBox="0 0 800 280" class="w-full" style="height:280px;background:#0f172a;border-radius:4px"></svg>
+        <div class="flex flex-wrap gap-4 mt-2 text-xs text-slate-400">
+          <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="background:#10b981;border-top:2px solid #10b981"></span>체결 진입가</span>
+          <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="background:transparent;border-top:1.5px dashed #fbbf24"></span>예정 진입가</span>
+          <span class="flex items-center gap-1"><span class="inline-block w-4 h-px" style="border-top:2px solid #3b82f6"></span>평단가</span>
+          <span class="flex items-center gap-1"><span class="inline-block w-2 h-2 rounded-full bg-green-400"></span>현재가</span>
+        </div>
+      </div>
+    </div>
+
     <!-- 활동 타임라인 -->
     <div class="card rounded-lg mb-4">
       <div class="card-header text-sm">📜 선택 전략 — 활동 타임라인 (최신순)</div>
@@ -1248,11 +1265,17 @@ async function refreshExchangeAccounts() {
 async function selectStrategy(id) {
   document.getElementById('detail-section').classList.remove('hidden');
   try {
-    const [timeline, stagePlans, orders] = await Promise.all([
+    const [timeline, stagePlans, orders, strategy] = await Promise.all([
       api('/strategies/' + id + '/timeline?limit=100').catch(() => []),
       api('/strategies/' + id + '/stage-plans').catch(() => []),
       api('/orders/by-strategy/' + id).catch(() => []),
+      api('/strategies/' + id).catch(() => null),
     ]);
+
+    // UX #20: 차트 + 가로선 렌더링 (실패해도 다른 섹션은 정상 표시)
+    if (strategy) {
+      _renderDetailChart(strategy, stagePlans).catch(e => console.warn('chart render fail', e));
+    }
 
     // 활동 타임라인 렌더링
     const tlEl = document.getElementById('timeline-container');
@@ -1357,6 +1380,112 @@ async function stopStrategy(id) {
       } catch (e2) { toast('강제 정지 실패: ' + e2.message, 'error'); }
     }
   }
+}
+
+// UX #20 (2026-04-29): 선택 전략의 차트 + 단계별 진입가 가로선 렌더링.
+// Binance klines (100h × 1h 캔들) + stage_plans 의 trigger_price 를 결합해 시각화.
+async function _renderDetailChart(strategy, stagePlans) {
+  const symbol = strategy.symbol;
+  const klResp = await fetch(
+    `${window.location.origin}/api/v1/market/klines?symbol=${encodeURIComponent(symbol)}&interval=1h&limit=100`
+  ).then(r => r.json()).catch(() => null);
+  const svg = document.getElementById('detail-chart');
+  const infoEl = document.getElementById('detail-chart-info');
+  if (!Array.isArray(klResp) || klResp.length < 2) {
+    infoEl.textContent = `${symbol} — 차트 데이터 없음`;
+    svg.innerHTML = '<text x="400" y="140" text-anchor="middle" fill="#64748b" font-size="14">차트 데이터를 가져올 수 없습니다</text>';
+    return;
+  }
+  const closes = klResp.map(c => Number(c[4]));
+  const highs = klResp.map(c => Number(c[2]));
+  const lows = klResp.map(c => Number(c[3]));
+
+  // 단계 가격 + 평단가 모두 포함해서 Y축 범위 계산 (잘리지 않도록)
+  const stagePrices = (stagePlans || [])
+    .filter(s => s.trigger_price)
+    .map(s => Number(s.trigger_price));
+  const avgEntry = strategy.avg_entry_price ? Number(strategy.avg_entry_price) : null;
+  const startPx = strategy.start_price ? Number(strategy.start_price) : null;
+  const allPrices = [...lows, ...highs, ...stagePrices];
+  if (avgEntry) allPrices.push(avgEntry);
+  if (startPx) allPrices.push(startPx);
+  const minP = Math.min(...allPrices);
+  const maxP = Math.max(...allPrices);
+  const rng = (maxP - minP) || 1;
+  const pad = rng * 0.04;
+  const cMin = minP - pad, cMax = maxP + pad, cRng = cMax - cMin;
+
+  const W = 800, H = 280, ML = 60, MR = 110, MT = 16, MB = 24;  // 좌/우/상/하 여백
+  const innerW = W - ML - MR, innerH = H - MT - MB;
+  const stepX = innerW / (closes.length - 1);
+  const yFor = p => MT + innerH * (1 - (p - cMin) / cRng);
+
+  const points = closes.map((c, i) => [ML + i * stepX, yFor(c)]);
+  const path = points.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+  const last = closes[closes.length - 1];
+  const isUp = last >= closes[0];
+  const lineColor = isUp ? '#10b981' : '#ef4444';
+  const fillColor = isUp ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)';
+  const area = `${path} L${(ML + innerW).toFixed(1)},${(MT + innerH).toFixed(1)} L${ML.toFixed(1)},${(MT + innerH).toFixed(1)} Z`;
+
+  // Y축 그리드 (5단계)
+  const grid = [0, 0.25, 0.5, 0.75, 1].map(t => {
+    const p = cMin + cRng * t;
+    const y = yFor(p);
+    return `<line x1="${ML}" y1="${y.toFixed(1)}" x2="${(ML + innerW).toFixed(1)}" y2="${y.toFixed(1)}" stroke="#1e293b" stroke-width="0.5"/>
+            <text x="${(ML - 4).toFixed(1)}" y="${(y + 3).toFixed(1)}" font-size="9" fill="#64748b" text-anchor="end">${fmtNum(p)}</text>`;
+  }).join('');
+
+  // 단계별 가로선 — 체결됨(초록 실선) / 예정(노랑 점선)
+  const stageLines = (stagePlans || []).map(s => {
+    if (!s.trigger_price) return '';
+    const price = Number(s.trigger_price);
+    if (price < cMin || price > cMax) return '';
+    const y = yFor(price);
+    const filled = s.is_triggered;
+    const color = filled ? '#10b981' : '#fbbf24';
+    const dash = filled ? '' : 'stroke-dasharray="5,3"';
+    const label = filled ? `${s.stage_no}단계 ✓` : `${s.stage_no}단계 ○`;
+    return `<line x1="${ML}" y1="${y.toFixed(1)}" x2="${(ML + innerW).toFixed(1)}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="1.2" ${dash} opacity="0.85"/>
+            <rect x="${(ML + innerW + 2).toFixed(1)}" y="${(y - 7).toFixed(1)}" width="100" height="14" fill="#0b1120" stroke="${color}" stroke-width="0.5" rx="2"/>
+            <text x="${(ML + innerW + 5).toFixed(1)}" y="${(y + 3).toFixed(1)}" font-size="10" fill="${color}" font-weight="600">${label} ${fmtNum(price)}</text>`;
+  }).join('');
+
+  // 평단가 (실제 체결 평단)
+  let avgLine = '';
+  if (avgEntry && avgEntry >= cMin && avgEntry <= cMax) {
+    const y = yFor(avgEntry);
+    avgLine = `<line x1="${ML}" y1="${y.toFixed(1)}" x2="${(ML + innerW).toFixed(1)}" y2="${y.toFixed(1)}" stroke="#3b82f6" stroke-width="2" opacity="0.95"/>
+               <rect x="${(ML + innerW + 2).toFixed(1)}" y="${(y - 7).toFixed(1)}" width="100" height="14" fill="#0b1120" stroke="#3b82f6" rx="2"/>
+               <text x="${(ML + innerW + 5).toFixed(1)}" y="${(y + 3).toFixed(1)}" font-size="10" fill="#60a5fa" font-weight="700">평단 ${fmtNum(avgEntry)}</text>`;
+  }
+
+  // 현재가 마커
+  const lastY = points[points.length - 1][1];
+  const curMarker = `<circle cx="${(ML + innerW).toFixed(1)}" cy="${lastY.toFixed(1)}" r="4" fill="${lineColor}" stroke="#0b1120" stroke-width="1"/>
+                     <line x1="${ML}" y1="${lastY.toFixed(1)}" x2="${(ML + innerW).toFixed(1)}" y2="${lastY.toFixed(1)}" stroke="${lineColor}" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.5"/>`;
+
+  // 시작가 (운영자가 입력한 1단계 LIMIT 가격) — 회색 점선
+  let startLine = '';
+  if (startPx && startPx >= cMin && startPx <= cMax && (!avgEntry || Math.abs(startPx - avgEntry) > rng * 0.005)) {
+    const y = yFor(startPx);
+    startLine = `<line x1="${ML}" y1="${y.toFixed(1)}" x2="${(ML + innerW).toFixed(1)}" y2="${y.toFixed(1)}" stroke="#94a3b8" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.5"/>
+                 <text x="${(ML + 4).toFixed(1)}" y="${(y - 3).toFixed(1)}" font-size="9" fill="#94a3b8">시작가 ${fmtNum(startPx)}</text>`;
+  }
+
+  svg.innerHTML = `
+    ${grid}
+    <path d="${area}" fill="${fillColor}"/>
+    <path d="${path}" fill="none" stroke="${lineColor}" stroke-width="1.5"/>
+    ${startLine}
+    ${stageLines}
+    ${avgLine}
+    ${curMarker}
+    <text x="${ML}" y="${(H - 6).toFixed(1)}" font-size="10" fill="#64748b">최근 100시간 × 1h 캔들</text>
+    <text x="${(ML + innerW).toFixed(1)}" y="${(H - 6).toFixed(1)}" font-size="10" fill="#64748b" text-anchor="end">현재 ${fmtNum(last)}</text>
+  `;
+  const sideLabel = strategy.side === 'SHORT' ? '📉 숏' : '📈 롱';
+  infoEl.textContent = `${symbol} · ${sideLabel} · ${strategy.leverage}x · 단계 ${strategy.current_stage}/${(stagePlans || []).length}`;
 }
 
 async function emergencyStop(id) {
