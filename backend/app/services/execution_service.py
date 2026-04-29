@@ -57,20 +57,36 @@ class ExecutionService:
         if not strategy:
             raise ValueError("Strategy not found")
         # Bug #8 fix (2026-04-29): 포지션이 0 인 전략에 대한 reduceOnly 주문은
-        # Binance 가 -2022 "ReduceOnly Order is rejected" 로 거절. 미체결 주문만
-        # 취소하고 status 를 STOPPED 로 마킹.
-        if quantity is None or abs(Decimal(str(quantity))) == 0:
-            # 미체결 주문 모두 취소 (try/best-effort)
+        # Binance 가 -2022 "ReduceOnly Order is rejected" 로 거절.
+        # Bug #8 강화 (2026-04-29 PM): DB 의 quantity 가 stale 일 수 있어 (예: REENTRY_READY
+        # 상태인데 current_position_qty 가 옛값) 진짜 거래소 포지션을 먼저 확인.
+        # 거래소가 0 이면 미체결 주문만 취소하고 STOPPED 마킹.
+        try:
+            position_risk = self.client.get_position_risk(symbol=strategy.symbol)
+            if isinstance(position_risk, dict):
+                position_risk = [position_risk]
+            actual_position = Decimal("0")
+            for item in position_risk:
+                if item.get("symbol") == strategy.symbol and item.get("positionSide") == strategy.side:
+                    actual_position = abs(Decimal(str(item.get("positionAmt", "0"))))
+                    break
+        except Exception:
+            actual_position = abs(Decimal(str(quantity))) if quantity else Decimal("0")
+        if actual_position == 0:
+            # 거래소에 포지션 없음 — 미체결 주문 취소만 + STOPPED
             try:
                 self.client.cancel_all_orders(symbol=strategy.symbol)
             except Exception:
                 pass
             strategy.status = "STOPPED"
+            strategy.current_position_qty = Decimal("0")
             self.db.commit()
             raise ValueError(
-                "Position is already 0; cancelled pending orders and marked STOPPED. "
-                "No reduceOnly market order sent."
+                f"Exchange has no {strategy.side} position for {strategy.symbol}; "
+                "cancelled pending orders and marked STOPPED. No reduceOnly market order sent."
             )
+        # 거래소에 실제로 포지션이 있으면 그 양으로 청산 (DB 보다 거래소 신뢰)
+        quantity = actual_position
         side = "SELL" if strategy.side == "LONG" else "BUY"
         position_side = strategy.side
         client_order_id = self._new_client_order_id(strategy.symbol, "EXIT")
