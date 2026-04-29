@@ -194,15 +194,21 @@ def delete_strategy_template(
 @router.post("/strategy-templates/cleanup-quick", response_model=MessageResponse)
 def cleanup_quick_templates(
     cascade: bool = False,
+    force: bool = False,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> MessageResponse:
     """이름이 '_quick_' 로 시작하는 템플릿 일괄 정리.
 
-    - cascade=False: 미사용(인스턴스 없는)은 삭제, 사용 중은 비활성화만.
-    - cascade=True : 참조 strategy 가 모두 terminal 이면 strategy 까지 함께 삭제. active 가 있으면 비활성화만.
+    - cascade=False, force=False : 미사용(인스턴스 없는)은 삭제, 사용 중은 비활성화만.
+    - cascade=True,  force=False : 참조 strategy 가 모두 terminal 이면 strategy 까지 함께 삭제. active 가 있으면 비활성화만.
+    - force=True (UX #19, 2026-04-29):
+        활성 전략까지 emergency_stop (cancel_all_orders + 시장가 청산) 후
+        strategy + template 모두 일괄 삭제. testnet 검증 종료 후 한 번에 깨끗이 정리하는 용도.
+        주의: mainnet 에서 사용 시 실제 포지션이 시장가 청산되어 손실 확정될 수 있음.
     """
     from app.models.strategy_instance import StrategyInstance
+    from app.services.execution_service import ExecutionService
 
     # Bug #14 fix (2026-04-29): PostgreSQL LIKE 의 underscore (_) 는 와일드카드라서
     # 단순히 \\_ 만으로는 매칭 안 됨 (ESCAPE 절 필요). startswith() 가 자동으로 처리해줌.
@@ -216,6 +222,47 @@ def cleanup_quick_templates(
     deactivated = 0
     cascaded_strategies = 0
     skipped_active = 0
+    force_closed = 0  # force 모드에서 시장가 청산한 전략 수
+    force_close_errors: list[str] = []
+
+    # UX #19: force 모드 — 활성 전략을 먼저 모두 종료시킴
+    if force:
+        for tpl in candidates:
+            refs = db.query(StrategyInstance).filter(StrategyInstance.strategy_template_id == tpl.id).all()
+            for r in refs:
+                if (r.status or "").upper() in terminal_statuses:
+                    continue
+                # 거래소 시장가 청산 + 미체결 취소
+                try:
+                    account = ExchangeAccountRepository(db).get(r.exchange_account_id)
+                    if not account:
+                        force_close_errors.append(f"#{r.id}: 거래소 계정 없음")
+                        continue
+                    exec_svc = ExecutionService(
+                        db,
+                        api_key=decrypt_text(account.api_key_enc),
+                        api_secret=decrypt_text(account.api_secret_enc),
+                        is_testnet=account.is_testnet,
+                    )
+                    try:
+                        exec_svc.client.cancel_all_orders(symbol=r.symbol)
+                    except Exception:
+                        pass  # 미체결 없을 수 있음
+                    qty = Decimal(str(r.current_position_qty or 0)).copy_abs()
+                    if qty > 0:
+                        try:
+                            exec_svc.emergency_close_position(r.id, quantity=qty)
+                        except ValueError:
+                            # Bug #8 fix: 거래소 포지션 0 일 때 ValueError. 정상 정리됨.
+                            pass
+                    r.status = "STOPPED"
+                    r.current_position_qty = Decimal("0")
+                    force_closed += 1
+                except Exception as e:
+                    force_close_errors.append(f"#{r.id}: {e!s}")
+        db.commit()
+        # force 모드는 자동으로 cascade=True 로 처리 (모든 전략이 terminal 이 됐으니)
+        cascade = True
 
     for tpl in candidates:
         refs = db.query(StrategyInstance).filter(StrategyInstance.strategy_template_id == tpl.id).all()
@@ -245,6 +292,10 @@ def cleanup_quick_templates(
     msg = f"삭제 {deleted}개, 비활성화 {deactivated}개"
     if cascade:
         msg += f", strategy 함께 삭제 {cascaded_strategies}개, active 있어 건너뜀 {skipped_active}개"
+    if force:
+        msg += f", 강제 청산 {force_closed}개"
+        if force_close_errors:
+            msg += f", 청산 에러 {len(force_close_errors)}건: {'; '.join(force_close_errors[:3])}"
     return MessageResponse(message=msg)
 
 

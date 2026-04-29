@@ -1057,18 +1057,38 @@ async function deleteTemplate(id, name) {
   } catch (e) { toast('삭제 실패: ' + e.message, 'error'); }
 }
 
+// UX #19 (2026-04-29): 3-way 선택 (안전 / 강제 / 완전(force))
 async function cleanupQuickTemplates() {
-  const cascade = confirm(
-    '_quick_* 템플릿 정리\n\n' +
-    '[확인] = 강제 정리 (cascade)\n' +
-    '   참조 strategy 가 모두 종료 상태면 strategy 까지 함께 삭제\n' +
-    '   active strategy 가 있으면 비활성화만\n\n' +
-    '[취소] = 안전 정리\n' +
-    '   미사용만 삭제, 사용 중은 비활성화만'
+  // prompt 로 모드 선택 (1/2/3)
+  const choice = prompt(
+    '_quick_* 템플릿 정리 — 모드 선택\n\n' +
+    '1 = 🟢 안전 정리\n' +
+    '    미사용만 삭제, 사용 중은 비활성화만\n\n' +
+    '2 = 🟡 강제 정리 (cascade)\n' +
+    '    종료된 strategy 까지 삭제, active 는 비활성화만\n\n' +
+    '3 = 🔴 완전 정리 (force)\n' +
+    '    활성 전략 시장가 청산 + 미체결 취소 → strategy + template 모두 삭제\n' +
+    '    ⚠️ 실제 포지션이 청산되어 손실 확정될 수 있음\n\n' +
+    '번호 입력 (1 / 2 / 3, 빈값=취소):',
+    '1'
   );
+  if (!choice) return;
+  let cascade = false, force = false, label = '';
+  if (choice.trim() === '1') { label = '안전 정리'; }
+  else if (choice.trim() === '2') { cascade = true; label = '강제 정리 (cascade)'; }
+  else if (choice.trim() === '3') {
+    force = true;
+    label = '완전 정리 (force)';
+    if (!confirm('🔴 완전 정리 — 최종 확인\n\n_quick_* 템플릿을 사용하는 활성 전략을 모두 시장가 청산하고\n strategy + template 을 모두 삭제합니다.\n\n실제 포지션이 시장가에 청산되어 손실이 확정될 수 있습니다.\n\n정말 진행할까요?')) return;
+  } else {
+    return toast('잘못된 입력. 1/2/3 중 선택해주세요.', 'warning');
+  }
   try {
-    const res = await api(`/admin/strategy-templates/cleanup-quick?cascade=${cascade}`, { method: 'POST' });
-    toast(res.message || '정리 완료', 'success');
+    const params = new URLSearchParams();
+    if (cascade) params.set('cascade', 'true');
+    if (force) params.set('force', 'true');
+    const res = await api(`/admin/strategy-templates/cleanup-quick?${params}`, { method: 'POST' });
+    toast(`${label}: ${res.message || '완료'}`, force ? 'warning' : 'success');
     refreshTemplates();
     refreshStrategies();
   } catch (e) { toast('정리 실패: ' + e.message, 'error'); }

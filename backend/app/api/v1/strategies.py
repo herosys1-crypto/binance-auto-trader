@@ -528,10 +528,24 @@ def stop_strategy(
             execution_service.client.cancel_all_orders(symbol=strategy.symbol)
             qty = Decimal(str(strategy.current_position_qty or 0)).copy_abs()
             if qty > 0:
-                execution_service.emergency_close_position(strategy.id, quantity=qty)
+                try:
+                    execution_service.emergency_close_position(strategy.id, quantity=qty)
+                except ValueError as ve:
+                    # UX (2026-04-29): Bug #8 fix 가 거래소 포지션 0 일 때 ValueError 를
+                    # 던짐 (cleanup 은 이미 완료). 이 경우 502 가 아닌 정상 응답으로 처리.
+                    if "no" in str(ve).lower() and "position" in str(ve).lower():
+                        db.refresh(strategy)
+                        return StrategyActionResponse(
+                            strategy_id=strategy.id,
+                            status=strategy.status,
+                            message=f"이미 청산된 상태였습니다. 미체결 주문 취소 + STOPPED 마킹 완료. ({ve})",
+                        )
+                    raise
             strategy.status = "STOPPING"
             db.commit()
             message = "Position closed at market"
+    except HTTPException:
+        raise
     except Exception as e:  # pragma: no cover
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Exchange error: {e}") from e
 
