@@ -95,7 +95,10 @@ class TPSLOrchestratorService:
             close_qty = (raw_qty // step) * step
         if close_qty <= 0:
             return
-        self.execution_service.emergency_close_position(strategy.id, quantity=close_qty)
+        # 실제 청산 체결 — 반환된 order 의 avg_price 가 진짜 청산 단가 (mark 보다 정확).
+        close_order = self.execution_service.emergency_close_position(strategy.id, quantity=close_qty)
+        # 청산 후 남은 수량 계산
+        remaining_qty = (current_qty - close_qty).quantize(Decimal("0.00000001"))
         # 상태 진행
         is_final = (level == "TRAILING_TP" or close_ratio >= Decimal("1.00"))
         if level == "TP1":
@@ -116,31 +119,36 @@ class TPSLOrchestratorService:
         self.db.commit()
         strategy_take_profit_total.labels(symbol=strategy.symbol, side=strategy.side, level=level).inc()
 
-        # 손익 금액 + 수익률 계산해서 알림에 첨부 (mark_price + avg_entry_price + leverage 사용)
+        # 손익 금액 + 수익률 계산 — 실제 청산가(close_order.avg_price) 기준 (mark 보다 정확)
         avg_exit_price = None
-        realized_pnl_estimate = None
+        realized_pnl = None
         pnl_pct = None
         try:
-            from app.repositories.position_repository import PositionRepository
-            latest_pos = PositionRepository(self.db).latest_by_strategy(strategy.id)
-            if latest_pos and latest_pos.mark_price and strategy.avg_entry_price:
-                avg_entry = Decimal(str(strategy.avg_entry_price))
-                mark_price = Decimal(str(latest_pos.mark_price))
+            avg_entry = Decimal(str(strategy.avg_entry_price)) if strategy.avg_entry_price else None
+            exit_px = Decimal(str(close_order.avg_price)) if close_order and close_order.avg_price else None
+            # 청산가 fallback: close_order 가 avg_price 못 가져왔으면 latest_position.mark_price
+            if exit_px is None:
+                from app.repositories.position_repository import PositionRepository
+                latest_pos = PositionRepository(self.db).latest_by_strategy(strategy.id)
+                if latest_pos and latest_pos.mark_price:
+                    exit_px = Decimal(str(latest_pos.mark_price))
+            if avg_entry and exit_px and avg_entry > 0:
                 leverage = Decimal(str(strategy.leverage)) if strategy.leverage else Decimal("1")
                 if strategy.side == "LONG":
-                    raw_pct = (mark_price - avg_entry) / avg_entry * Decimal("100")
-                    realized_pnl_estimate = (close_qty * (mark_price - avg_entry)).quantize(Decimal("0.01"))
+                    raw_pct = (exit_px - avg_entry) / avg_entry * Decimal("100")
+                    realized_pnl = (close_qty * (exit_px - avg_entry)).quantize(Decimal("0.01"))
                 else:  # SHORT
-                    raw_pct = (avg_entry - mark_price) / avg_entry * Decimal("100")
-                    realized_pnl_estimate = (close_qty * (avg_entry - mark_price)).quantize(Decimal("0.01"))
+                    raw_pct = (avg_entry - exit_px) / avg_entry * Decimal("100")
+                    realized_pnl = (close_qty * (avg_entry - exit_px)).quantize(Decimal("0.01"))
                 pnl_pct = (raw_pct * leverage).quantize(Decimal("0.01"))
-                avg_exit_price = mark_price
+                avg_exit_price = exit_px
         except Exception:
             pass
 
         self.notification_service.send_take_profit_alert(
             strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side, level=level,
-            realized_pnl=realized_pnl_estimate, avg_exit_price=avg_exit_price, pnl_pct=pnl_pct,
+            realized_pnl=realized_pnl, avg_exit_price=avg_exit_price, pnl_pct=pnl_pct,
+            closed_qty=close_qty, remaining_qty=remaining_qty,
         )
 
     def _execute_stop_loss(self, strategy) -> None:

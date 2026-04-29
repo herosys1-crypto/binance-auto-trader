@@ -156,6 +156,8 @@ class NotificationService:
         realized_pnl: Any | None = None,
         avg_exit_price: Any | None = None,
         pnl_pct: Any | None = None,
+        closed_qty: Any | None = None,
+        remaining_qty: Any | None = None,
     ) -> Notification:
         emoji = _side_emoji(side)
         title = f"✅ [{level} 익절 체결] {symbol} {side} {emoji}"
@@ -166,6 +168,15 @@ class NotificationService:
         ]
         if avg_exit_price is not None:
             lines.append(f"💵 청산 단가 : {_fmt_num(avg_exit_price)}")
+        if closed_qty is not None:
+            lines.append(f"📤 청산 수량 : {_fmt_num(closed_qty)}")
+        if remaining_qty is not None:
+            try:
+                rq = Decimal(str(remaining_qty))
+                rq_str = _fmt_num(rq) if rq > 0 else "0 (전량 청산)"
+            except Exception:
+                rq_str = _fmt_num(remaining_qty)
+            lines.append(f"📦 남은 수량 : {rq_str}")
         if realized_pnl is not None:
             try:
                 sign = "+" if Decimal(str(realized_pnl)) >= 0 else ""
