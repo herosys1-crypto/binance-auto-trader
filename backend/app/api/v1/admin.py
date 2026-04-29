@@ -204,9 +204,11 @@ def cleanup_quick_templates(
     """
     from app.models.strategy_instance import StrategyInstance
 
+    # Bug #14 fix (2026-04-29): PostgreSQL LIKE 의 underscore (_) 는 와일드카드라서
+    # 단순히 \\_ 만으로는 매칭 안 됨 (ESCAPE 절 필요). startswith() 가 자동으로 처리해줌.
     candidates = (
         db.query(StrategyTemplate)
-        .filter(StrategyTemplate.name.like("\\_quick\\_%"))
+        .filter(StrategyTemplate.name.startswith("_quick_"))
         .all()
     )
     terminal_statuses = {"STOPPED", "CLOSED", "CLOSED_BY_TP", "CLOSED_BY_SL", "COMPLETED", "STOPPING"}
