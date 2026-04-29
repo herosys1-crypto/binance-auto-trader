@@ -1586,6 +1586,7 @@ function toggleLiqIncluded() {
     if (!_detailChartState._liqPhantomSeries && _detailChartState._lastCandles && _detailChartState._lastCandles.length > 0) {
       const phantom = ch.addLineSeries({
         color: 'rgba(0,0,0,0)',  // 투명
+        priceScaleId: 'left',
         priceLineVisible: false,
         lastValueVisible: false,
         crosshairMarkerVisible: false,
@@ -1729,10 +1730,13 @@ async function _renderDetailChart(strategy, stagePlans) {
       timeVisible: interval !== '1d',
       secondsVisible: false,
     },
-    rightPriceScale: {
+    // UX #27: 가격축을 좌측으로 이동
+    leftPriceScale: {
+      visible: true,
       borderColor: '#334155',
       scaleMargins: { top: 0.1, bottom: 0.1 },
     },
+    rightPriceScale: { visible: false },
   });
 
   const candleSeries = chart.addCandlestickSeries({
@@ -1742,6 +1746,7 @@ async function _renderDetailChart(strategy, stagePlans) {
     borderDownColor: '#ef4444',
     wickUpColor: '#10b981',
     wickDownColor: '#ef4444',
+    priceScaleId: 'left',  // UX #27
     priceFormat: {
       type: 'price',
       precision: 8,
@@ -1753,12 +1758,13 @@ async function _renderDetailChart(strategy, stagePlans) {
   _detailChartState.candleSeries = candleSeries;
   _detailChartState._lastCandles = candleData;
 
-  // ===== UX #23: 볼린저 밴드 (BB 20,2) 오버레이 =====
+  // ===== UX #23: 볼린저 밴드 (BB 20,2) 오버레이 — 좌측 가격축 =====
   const bb = _bollingerBands(closes, 20, 2);
   const bbToData = (vals) => candleData.map((c, i) => vals[i] === null ? null : { time: c.time, value: vals[i] }).filter(v => v !== null);
-  const bbUpperSeries = chart.addLineSeries({ color: 'rgba(167,139,250,0.7)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-  const bbMiddleSeries = chart.addLineSeries({ color: 'rgba(167,139,250,0.5)', lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-  const bbLowerSeries = chart.addLineSeries({ color: 'rgba(167,139,250,0.7)', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  const bbCommon = { priceScaleId: 'left', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false };
+  const bbUpperSeries = chart.addLineSeries({ ...bbCommon, color: 'rgba(167,139,250,0.7)' });
+  const bbMiddleSeries = chart.addLineSeries({ ...bbCommon, color: 'rgba(167,139,250,0.5)', lineStyle: 2 });
+  const bbLowerSeries = chart.addLineSeries({ ...bbCommon, color: 'rgba(167,139,250,0.7)' });
   bbUpperSeries.setData(bbToData(bb.upper));
   bbMiddleSeries.setData(bbToData(bb.middle));
   bbLowerSeries.setData(bbToData(bb.lower));
@@ -1852,9 +1858,11 @@ async function _renderDetailChart(strategy, stagePlans) {
           liqIndEl.style.bottom = 'auto';
         } else {
           liqIndEl.style.top = 'auto';
-          liqIndEl.style.bottom = '38px';  // 시간축 라벨 위
+          liqIndEl.style.bottom = '38px';
         }
-        liqIndEl.style.right = '80px';  // 가격축 라벨과 안 겹치게
+        // UX #27: 가격축이 좌측으로 이동했으니 인디케이터는 우측 모서리에 (라벨과 안 겹침)
+        liqIndEl.style.right = '12px';
+        liqIndEl.style.left = 'auto';
         liqIndEl.classList.remove('hidden');
       } else {
         liqIndEl.classList.add('hidden');
@@ -1868,6 +1876,7 @@ async function _renderDetailChart(strategy, stagePlans) {
   if (_detailChartState.liqIncluded && liqPx && candleData.length > 0) {
     const phantom = chart.addLineSeries({
       color: 'rgba(0,0,0,0)',  // 투명
+      priceScaleId: 'left',
       priceLineVisible: false,
       lastValueVisible: false,
       crosshairMarkerVisible: false,
@@ -1924,11 +1933,14 @@ function _renderIndicatorChart(containerId, stateKey, candleData, values, opts) 
     grid: { vertLines: { color: 'rgba(148,163,184,0.05)' }, horzLines: { color: 'rgba(148,163,184,0.05)' } },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     timeScale: { borderColor: '#334155', timeVisible: false, visible: false },  // 메인 차트와 시간축 공유 의도
-    rightPriceScale: { borderColor: '#334155', scaleMargins: { top: 0.1, bottom: 0.1 } },
+    // UX #27: 가격축 좌측
+    leftPriceScale: { visible: true, borderColor: '#334155', scaleMargins: { top: 0.1, bottom: 0.1 } },
+    rightPriceScale: { visible: false },
   });
   const series = chart.addLineSeries({
     color: opts.color,
     lineWidth: 1.5,
+    priceScaleId: 'left',
     priceFormat: { type: 'price', precision: opts.precision, minMove: opts.minMove },
   });
   const data = candleData.map((c, i) => values[i] === null ? null : { time: c.time, value: values[i] }).filter(v => v !== null);
@@ -1969,20 +1981,22 @@ function _renderMacdChart(containerId, candleData, macdRes, infoElId) {
     grid: { vertLines: { color: 'rgba(148,163,184,0.05)' }, horzLines: { color: 'rgba(148,163,184,0.05)' } },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     timeScale: { borderColor: '#334155', timeVisible: false, visible: false },
-    rightPriceScale: { borderColor: '#334155', scaleMargins: { top: 0.1, bottom: 0.1 } },
+    // UX #27: 가격축 좌측
+    leftPriceScale: { visible: true, borderColor: '#334155', scaleMargins: { top: 0.1, bottom: 0.1 } },
+    rightPriceScale: { visible: false },
   });
   // Histogram (양/음 색 다르게)
-  const histSeries = chart.addHistogramSeries({ priceFormat: { type: 'price', precision: 6, minMove: 0.000001 }, color: '#10b981' });
+  const histSeries = chart.addHistogramSeries({ priceScaleId: 'left', priceFormat: { type: 'price', precision: 6, minMove: 0.000001 }, color: '#10b981' });
   const histData = candleData.map((c, i) => macdRes.histogram[i] === null ? null : {
     time: c.time, value: macdRes.histogram[i],
     color: macdRes.histogram[i] >= 0 ? 'rgba(16,185,129,0.6)' : 'rgba(239,68,68,0.6)',
   }).filter(v => v !== null);
   histSeries.setData(histData);
   // MACD line
-  const lineSeries = chart.addLineSeries({ color: '#60a5fa', lineWidth: 1.5, priceFormat: { type: 'price', precision: 6, minMove: 0.000001 } });
+  const lineSeries = chart.addLineSeries({ color: '#60a5fa', lineWidth: 1.5, priceScaleId: 'left', priceFormat: { type: 'price', precision: 6, minMove: 0.000001 } });
   lineSeries.setData(candleData.map((c, i) => macdRes.line[i] === null ? null : { time: c.time, value: macdRes.line[i] }).filter(v => v !== null));
   // Signal line
-  const sigSeries = chart.addLineSeries({ color: '#f97316', lineWidth: 1.5, priceFormat: { type: 'price', precision: 6, minMove: 0.000001 } });
+  const sigSeries = chart.addLineSeries({ color: '#f97316', lineWidth: 1.5, priceScaleId: 'left', priceFormat: { type: 'price', precision: 6, minMove: 0.000001 } });
   sigSeries.setData(candleData.map((c, i) => macdRes.signal[i] === null ? null : { time: c.time, value: macdRes.signal[i] }).filter(v => v !== null));
   // 0 기준선
   lineSeries.createPriceLine({ price: 0, color: 'rgba(148,163,184,0.3)', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
