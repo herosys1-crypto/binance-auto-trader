@@ -1992,11 +1992,24 @@ function _renderIndicatorChart(containerId, stateKey, candleData, values, opts) 
     const last = values[values.length - 1];
     document.getElementById(opts.infoEl).textContent = last !== null ? `${opts.name} = ${last.toFixed(opts.precision)}` : `${opts.name} = -`;
   }
-  // 메인 차트 시간축과 동기화
+  // 메인 차트 ↔ 보조 차트 양방향 시간축 동기화 (TIME range 기반).
+  // logical range 는 RSI(14)/MACD(26+9) 처럼 warmup 캔들 null 인 지표는 인덱스 어긋남.
+  // time range 는 절대 시간 기준이라 데이터 길이 무관하게 정확히 정렬됨.
+  // _isSyncing 플래그로 무한 루프 방지.
   if (_detailChartState.chart) {
-    chart.timeScale().setVisibleLogicalRange(_detailChartState.chart.timeScale().getVisibleLogicalRange());
-    _detailChartState.chart.timeScale().subscribeVisibleLogicalRangeChange((r) => {
-      if (r) chart.timeScale().setVisibleLogicalRange(r);
+    const initRange = _detailChartState.chart.timeScale().getVisibleRange();
+    if (initRange) chart.timeScale().setVisibleRange(initRange);
+    // main → this indicator
+    _detailChartState.chart.timeScale().subscribeVisibleTimeRangeChange((r) => {
+      if (_detailChartState._isSyncing || !r) return;
+      _detailChartState._isSyncing = true;
+      try { chart.timeScale().setVisibleRange(r); } finally { _detailChartState._isSyncing = false; }
+    });
+    // this indicator → main (양방향)
+    chart.timeScale().subscribeVisibleTimeRangeChange((r) => {
+      if (_detailChartState._isSyncing || !r) return;
+      _detailChartState._isSyncing = true;
+      try { _detailChartState.chart.timeScale().setVisibleRange(r); } finally { _detailChartState._isSyncing = false; }
     });
   }
 }
@@ -2047,11 +2060,19 @@ function _renderMacdChart(containerId, candleData, macdRes, infoElId) {
       ? `MACD ${lastL.toFixed(6)} / Signal ${lastS.toFixed(6)} / Hist ${lastH !== null ? lastH.toFixed(6) : '-'}`
       : 'MACD 데이터 부족';
   }
-  // 메인 차트와 시간축 동기화
+  // 메인 차트 ↔ MACD 양방향 TIME range 동기화 (RSI/OBV 와 동일 패턴)
   if (_detailChartState.chart) {
-    chart.timeScale().setVisibleLogicalRange(_detailChartState.chart.timeScale().getVisibleLogicalRange());
-    _detailChartState.chart.timeScale().subscribeVisibleLogicalRangeChange((r) => {
-      if (r) chart.timeScale().setVisibleLogicalRange(r);
+    const initRange = _detailChartState.chart.timeScale().getVisibleRange();
+    if (initRange) chart.timeScale().setVisibleRange(initRange);
+    _detailChartState.chart.timeScale().subscribeVisibleTimeRangeChange((r) => {
+      if (_detailChartState._isSyncing || !r) return;
+      _detailChartState._isSyncing = true;
+      try { chart.timeScale().setVisibleRange(r); } finally { _detailChartState._isSyncing = false; }
+    });
+    chart.timeScale().subscribeVisibleTimeRangeChange((r) => {
+      if (_detailChartState._isSyncing || !r) return;
+      _detailChartState._isSyncing = true;
+      try { _detailChartState.chart.timeScale().setVisibleRange(r); } finally { _detailChartState._isSyncing = false; }
     });
   }
 }
