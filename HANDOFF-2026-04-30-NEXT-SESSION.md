@@ -141,9 +141,51 @@ if is_full_close:
 
 #54/#55/#63 모두 **2026-04-29 기간** 청산. 이 시점의 코드는 `7bc188a` ("realized_pnl accumulator") fix 가 들어가기 전 (4월 30일 08:16 UTC commit). 즉 EXIT FILLED 처리는 됐지만 strategy.realized_pnl 갱신 로직 자체가 없어서 DB 0 으로 남음. 거래 자체는 정상.
 
-### 추가 발견 — `max_profit_pct == max_loss_pct`
+### 추가 발견 + fix — peak 추적 버그 (commit `69692d4`)
 
-#54 (10.71/10.71), #55 (12.26/12.26) — 두 컬럼이 정확히 같음. 보통 다른 값일 텐데. 코드의 다른 버그 의심 (peak 추적 로직). **부수적 — 다음 세션 안건**.
+#54 (10.71/10.71), #55 (12.26/12.26) — 두 컬럼 정확히 같음 패턴 분석 결과:
+
+**원인** (`risk_service.py:_update_pnl_extremes`):
+```python
+# 이전 (버그)
+if strategy.max_loss_pct is None or pnl_ratio < ...:
+    strategy.max_loss_pct = pnl_ratio   # ← None 일 때 양수 pnl 도 들어감 ❗
+if strategy.max_profit_pct is None or pnl_ratio > ...:
+    strategy.max_profit_pct = pnl_ratio  # ← None 일 때 음수 pnl 도 들어감 ❗
+```
+
+SHORT 진입 후 가격 하락만 (이익만) 발생 → 첫 호출 `pnl=+10.71%` → 두 if 모두 `is None=True` 분기 → **두 컬럼 다 +10.71%** ❗
+
+**Fix** (commit `69692d4`):
+```python
+if pnl_ratio < 0:
+    if strategy.max_loss_pct is None or pnl_ratio < ...:
+        strategy.max_loss_pct = pnl_ratio
+elif pnl_ratio > 0:
+    if strategy.max_profit_pct is None or pnl_ratio > ...:
+        strategy.max_profit_pct = pnl_ratio
+```
+
+음수만 max_loss 후보, 양수만 max_profit 후보. 0 은 둘 다 갱신 안 함.
+
+**Unit test 7개 신규** (`tests/unit/test_risk_service_pnl_extremes.py`):
+- `test_first_positive_pnl_does_not_set_max_loss` ⭐ #54/#55 패턴 직접 검증
+- `test_first_negative_pnl_does_not_set_max_profit`
+- `test_zero_pnl_does_not_update_either`
+- `test_max_loss_only_deepens` / `test_max_profit_only_grows`
+- `test_short_winning_scenario_no_loss_ever` ⭐ #54 SHORT 시나리오 정확 재현
+- `test_mixed_pnl_correctly_separated`
+
+**부작용**: `_should_trigger_crisis_mode` 가 `max_loss_pct < -30` 으로 비교하는데, 이전 버그 데이터 (max_loss=양수) 면 크라이시스 모드 진입 안 함. fix 후엔 정상. 단 옛 DB row 의 잘못된 양수 max_loss 는 cleanup 권장.
+
+### 옛 데이터 cleanup (선택)
+
+```sql
+UPDATE strategy_instances SET max_loss_pct = NULL WHERE max_loss_pct > 0;
+UPDATE strategy_instances SET max_profit_pct = NULL WHERE max_profit_pct < 0;
+```
+
+자세한 명령은 PowerShell cookbook 섹션 참고.
 
 ---
 
