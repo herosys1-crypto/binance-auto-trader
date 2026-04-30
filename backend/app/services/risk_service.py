@@ -168,11 +168,22 @@ class RiskService:
     # ─────────── 크라이시스 복구 모드 + PnL 추적 (Phase D-1) ───────────
 
     def _update_pnl_extremes(self, strategy, pnl_ratio: Decimal) -> None:
-        """매 PnL 평가 시 max_loss/max_profit 갱신. DB commit 은 호출자 또는 다음 commit 시점."""
-        if strategy.max_loss_pct is None or pnl_ratio < Decimal(str(strategy.max_loss_pct)):
-            strategy.max_loss_pct = pnl_ratio
-        if strategy.max_profit_pct is None or pnl_ratio > Decimal(str(strategy.max_profit_pct)):
-            strategy.max_profit_pct = pnl_ratio
+        """매 PnL 평가 시 max_loss/max_profit 갱신. DB commit 은 호출자 또는 다음 commit 시점.
+
+        Bug fix (2026-04-30 evening): 이전엔 max_loss_pct is None 인 첫 호출에 양수 pnl 이
+        들어가면 max_loss_pct 가 양수로 세팅되는 버그. #54 AIOTUSDT (max_loss=+10.71%) /
+        #55 SKYAIUSDT (max_loss=+12.26%) 사례. 의미상 max_loss 는 음수, max_profit 은 양수만.
+
+        - pnl_ratio < 0: max_loss_pct 후보 (더 깊은 손실로만 갱신)
+        - pnl_ratio > 0: max_profit_pct 후보 (더 큰 이익으로만 갱신)
+        - pnl_ratio == 0: 둘 다 갱신 안 함
+        """
+        if pnl_ratio < 0:
+            if strategy.max_loss_pct is None or pnl_ratio < Decimal(str(strategy.max_loss_pct)):
+                strategy.max_loss_pct = pnl_ratio
+        elif pnl_ratio > 0:
+            if strategy.max_profit_pct is None or pnl_ratio > Decimal(str(strategy.max_profit_pct)):
+                strategy.max_profit_pct = pnl_ratio
 
     def _should_trigger_crisis_mode(self, strategy, current_pnl_pct: Decimal) -> bool:
         """크라이시스 모드 진입 조건 (사용자 기획).
