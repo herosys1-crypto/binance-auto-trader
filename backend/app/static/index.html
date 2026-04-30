@@ -1278,7 +1278,11 @@ async function refreshStrategies() {
 
     tbody.innerHTML = sorted.map(s => {
       const info = statusInfo(s.status);
-      const stage = s.current_stage > 0 ? renderStageBar(s.current_stage, 4) : '<span class="text-slate-500">대기</span>';
+      // 단계 진행도 + TP 진행도 두 줄 stack (사용자 기획 4단계 TP)
+      const tpCount = _tpCountFromStatus(s);
+      const stageBar = s.current_stage > 0 ? renderStageBar(s.current_stage, 4) : '<span class="text-slate-500">대기</span>';
+      const tpBar = renderTpBar(tpCount, 4);
+      const stage = `<div class="text-xs leading-tight"><span class="text-slate-400" style="font-size:10px">진입</span> ${stageBar}<br><span class="text-slate-400" style="font-size:10px">익절</span> ${tpBar}</div>`;
       const pnlNum = Number(s.unrealized_pnl || 0);
       // 사용자 실제 ROI % = USD pnl × leverage / capital × 100 (margin 기준)
       const sCap = Number(s.total_capital || 0);
@@ -2211,6 +2215,28 @@ function renderStageBar(current, total) {
     dots += `<span class="${cls}"></span>`;
   }
   return `<span class="stage-bar">${dots} <span class="text-xs text-slate-400 ml-1">${current}/${total}</span></span>`;
+}
+
+// status 에서 TP 카운트 산출 (TP1_DONE_PARTIAL → 1, ..., COMPLETED/REENTRY_READY w/ realized>0 → 4)
+function _tpCountFromStatus(strat) {
+  const st = (strat.status || '').toUpperCase();
+  const m = { 'TP1_DONE_PARTIAL':1, 'TP2_DONE_PARTIAL':2, 'TP3_DONE_PARTIAL':3, 'TP4_DONE_PARTIAL':4, 'TP5_DONE_PARTIAL':4 };
+  if (st in m) return m[st];
+  if (st === 'COMPLETED') return 4;
+  if (st === 'REENTRY_READY' && Number(strat.realized_pnl || 0) > 0) return 4;  // 익절 결과 종료
+  return 0;  // 진행 중 / SL / 대기
+}
+
+// TP 진행도 바 — 색상 다르게 (시안 계열, 단계 바와 구분)
+function renderTpBar(current, total) {
+  const safeC = Math.max(0, Math.min(current, total));
+  let dots = '';
+  for (let i = 1; i <= total; i++) {
+    const filled = i <= safeC;
+    const color = filled ? '#06b6d4' : '#475569';  // 시안 (filled) / 회색 (empty)
+    dots += `<span class="inline-block rounded-full mr-1" style="width:8px;height:8px;background:${color}"></span>`;
+  }
+  return `<span class="inline-flex items-center" title="익절 진행도">${dots}<span class="text-xs text-cyan-300 ml-1">${safeC}/${total}</span></span>`;
 }
 
 function fmtNum(v) {
