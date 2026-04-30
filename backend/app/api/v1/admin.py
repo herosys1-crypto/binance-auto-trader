@@ -590,23 +590,24 @@ def get_operation_stats(
 
     terminal = {"STOPPED", "CLOSED", "CLOSED_BY_TP", "CLOSED_BY_SL", "COMPLETED", "STOPPING"}
     active_count = sum(c for s, c in status_counts.items() if (s or "").upper() not in terminal)
-    # 익절 카운트 (사용자 기획): COMPLETED + CLOSED_BY_TP + 부분 TP 진행중 + REENTRY_READY (수익 결과)
-    # 이전엔 COMPLETED 만 카운트해서 부분 익절/REENTRY_READY 가 모두 누락됐음.
-    tp_partial_statuses = ["TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL", "TP4_DONE_PARTIAL"]
-    completed_count = (
-        status_counts.get("COMPLETED", 0)
-        + status_counts.get("CLOSED_BY_TP", 0)
-        + sum(status_counts.get(s, 0) for s in tp_partial_statuses)
-    )
-    # REENTRY_READY 중 realized_pnl > 0 인 것 (TP 결과로 종료)
-    if status_counts.get("REENTRY_READY", 0) > 0:
-        reentry_winners = db.execute(
-            sa_select(func.count(StrategyInstance.id))
-            .where(StrategyInstance.status == "REENTRY_READY")
-            .where(StrategyInstance.realized_pnl > 0)
-        ).scalar_one() or 0
-        completed_count += reentry_winners
-    sl_count = status_counts.get("CLOSED_BY_SL", 0) + status_counts.get("STOPPING", 0)
+    # 익절 카운트 (사용자 기획 B 안, 2026-04-30): notification 의 TP 알림 합계.
+    # 자동 TP 만 익절로 분류 — 수동 emergency_stop 은 수익이 나도 익절 X.
+    # 이전 status 기반은 부분 TP 누락 + 수동 청산이 익절로 잘못 분류되는 문제 해결.
+    from app.models.notification import Notification as _Notif
+    completed_count = db.execute(
+        sa_select(func.count(_Notif.id))
+        .where(_Notif.title.like("%익절 체결%"))
+    ).scalar_one() or 0
+    # 손절 카운트 — 자동 SL 알림 기준. 수동 stopping 제외.
+    sl_count = db.execute(
+        sa_select(func.count(_Notif.id))
+        .where(_Notif.title.like("%[손절 발동]%"))
+    ).scalar_one() or 0
+    # 수동 종료 카운트 (참고용)
+    manual_stop_count = db.execute(
+        sa_select(func.count(StrategyInstance.id))
+        .where(StrategyInstance.status.in_(["STOPPED", "STOPPING"]))
+    ).scalar_one() or 0
 
     # 누적 실현 손익 합계
     realized_total = db.execute(
@@ -652,6 +653,7 @@ def get_operation_stats(
         "active": active_count,
         "completed": completed_count,
         "stop_loss": sl_count,
+        "manual_stop": manual_stop_count,
         "win_rate_pct": str(round(win_rate, 2)),
         "realized_pnl_total": str(realized_total),
         "crisis_total": crisis_total,
