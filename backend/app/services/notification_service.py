@@ -5,14 +5,19 @@ Telegram 은 HTML parse_mode 로 발송 (굵게/줄바꿈 안전 처리).
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
 import requests
+from sqlalchemy import select
 
 from app.core.config import settings
 from app.models.notification import Notification
+
+# 알림 dedup 윈도우 — 최근 N 초 내 동일 (strategy + title) 알림이 SENT 상태면 skip.
+# user-stream 다중 인스턴스 / Binance 이벤트 재전송으로 인한 중복 방어.
+NOTIFICATION_DEDUP_WINDOW_SECONDS = 60
 
 
 def _fmt_num(value: Any, *, decimals: int = 2) -> str:
@@ -55,7 +60,51 @@ class NotificationService:
     # ------------------------------------------------------------------
     # Core send (DB 기록 + Telegram 발송)
     # ------------------------------------------------------------------
+    def _is_recent_duplicate(self, *, strategy_instance_id: int | None, title: str) -> bool:
+        """최근 NOTIFICATION_DEDUP_WINDOW_SECONDS 초 내에 동일한
+        (strategy_instance_id, title) 로 SENT 또는 PENDING 인 알림이 있으면 True.
+
+        - SENT: 이미 발송 완료 → skip
+        - PENDING: 다른 트랜잭션이 발송 중 → skip (race condition 방어)
+
+        atomic UPDATE WHERE 가 있어도 다중 user-stream 인스턴스나 Binance
+        이벤트 재전송으로 인한 중복을 한 번 더 차단한다. DB 가 단일 source-of-truth
+        이므로 모든 인스턴스가 같은 결과를 보게 된다.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=NOTIFICATION_DEDUP_WINDOW_SECONDS)
+        # PENDING 은 created_at, SENT 는 sent_at 으로 비교하지만 조건을 OR 로 합치면
+        # 인덱스 사용이 어렵다. 단순화 — created_at 만으로 검사 (PENDING/SENT 둘 다 cover).
+        # NOTE: created_at 은 server_default=func.now() 이므로 Notification 생성 시점.
+        stmt = (
+            select(Notification.id)
+            .where(Notification.strategy_instance_id == strategy_instance_id)
+            .where(Notification.title == title)
+            .where(Notification.send_status.in_(["SENT", "PENDING"]))
+            .where(Notification.created_at >= cutoff)
+            .limit(1)
+        )
+        return self.db.execute(stmt).first() is not None
+
     def send(self, *, strategy_instance_id: int | None, channel: str, title: str, body: str) -> Notification:
+        # Bug fix (2026-04-30): 1단계 진입 알림 등이 2회 발송되는 문제 방어.
+        # atomic UPDATE WHERE (stage_plan.is_triggered) 만으로는 다중 user-stream
+        # 컨테이너 / Binance 이벤트 재전송 시 완전 차단 안 되는 경우 관측됨.
+        # 최근 60초 내 동일 (strategy + title) SENT 알림이 있으면 skip 하고
+        # 기존 row 를 그대로 반환한다 (Telegram 재발송 차단).
+        if channel == "TELEGRAM" and self._is_recent_duplicate(
+            strategy_instance_id=strategy_instance_id, title=title
+        ):
+            existing = self.db.execute(
+                select(Notification)
+                .where(Notification.strategy_instance_id == strategy_instance_id)
+                .where(Notification.title == title)
+                .where(Notification.send_status.in_(["SENT", "PENDING"]))
+                .order_by(Notification.id.desc())
+                .limit(1)
+            ).scalars().first()
+            if existing is not None:
+                return existing  # 중복 발송 차단
+
         notification = Notification(
             strategy_instance_id=strategy_instance_id,
             channel=channel,

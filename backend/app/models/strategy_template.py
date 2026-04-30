@@ -15,10 +15,13 @@ class StrategyTemplate(Base):
     stages_config 가 신규 동적 N단계 (1~10) 정의를 담는다. 형식:
         {
           "capitals": [100, 200, 350],
-          "trigger_percents": [null, 10, null],         # 선택 — None 이면 기본 10%
-          "last_stage_trigger_mode": "LIQUIDATION_BUFFER",  # SHORT 기본
-          "last_stage_trigger_percent": 5
+          "trigger_percents": [null, 10, null],         # 선택 — None 이면 단계별 기본값
+          "last_stage_trigger_mode": "PRICE_UP_PCT",    # SHORT/LONG 기본 (PRICE_UP_PCT/PRICE_DOWN_PCT)
+                                                          # "LIQUIDATION_BUFFER" 로 명시 시 청산가 기반
+          "last_stage_trigger_percent": 20              # 미지정 시 기본 20%
         }
+    사용자 기획 변경 (2026-04-30): SHORT 마지막 단계 default 가
+    LIQUIDATION_BUFFER → PRICE_UP_PCT (사용자 입력값 사용) 로 변경됨.
     stages_config 가 없는 (구) 템플릿은 stage1~4_capital 컬럼을 사용.
     """
 

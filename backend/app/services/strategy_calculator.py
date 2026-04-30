@@ -3,8 +3,11 @@
 stages_config 또는 (호환용) 4-단계 dataclass 둘 다 처리한다.
 첫 단계  : IMMEDIATE
 중간 단계 : SHORT 면 PRICE_UP_PCT, LONG 이면 PRICE_DOWN_PCT (기본 10%, stage 별 지정 가능)
-마지막 단계: SHORT 면 LIQUIDATION_BUFFER 5% (가격 미정, 청산가 기반 후속 산출)
-            LONG 이면 PRICE_DOWN_PCT 20%
+마지막 단계: 사용자가 별도로 last_stage_trigger_mode 를 지정하지 않으면
+            중간 단계와 동일한 모드/기본값을 사용 (PRICE_UP_PCT/PRICE_DOWN_PCT, 20%).
+            예전엔 SHORT 의 마지막 단계가 LIQUIDATION_BUFFER 였으나,
+            사용자 기획 변경 (2026-04-30): "마지막까지 금액이 있으면 정한 20% 상승에 진입"
+            → 사용자 입력값(예: 20%) 을 그대로 쓴다.
 """
 from __future__ import annotations
 
@@ -25,8 +28,10 @@ DEFAULT_LATE_TRIGGER_PCT = Decimal("20")     # 5단계 이후 기본값
 EARLY_STAGE_THRESHOLD = 4                    # 이 단계 이하 = early
 
 DEFAULT_LAST_LONG_TRIGGER_PCT = Decimal("20")
-DEFAULT_LAST_SHORT_TRIGGER_PCT = Decimal("5")
-DEFAULT_LAST_TRIGGER_MODE_SHORT = "LIQUIDATION_BUFFER"
+DEFAULT_LAST_SHORT_TRIGGER_PCT = Decimal("20")
+# 사용자 기획 (2026-04-30 변경): SHORT 마지막 단계도 사용자 설정값(% 상승) 으로 진입.
+# LIQUIDATION_BUFFER 모드는 호환성을 위해 last_stage_trigger_mode 로 명시 지정 시에만 사용.
+DEFAULT_LAST_TRIGGER_MODE_SHORT = "PRICE_UP_PCT"
 DEFAULT_LAST_TRIGGER_MODE_LONG = "PRICE_DOWN_PCT"
 
 MAX_STAGES = 10

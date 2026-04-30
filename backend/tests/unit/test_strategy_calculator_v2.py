@@ -97,13 +97,19 @@ class TestTenStages:
         assert len(preview.stages) == 10
         # 1: IMMEDIATE
         assert preview.stages[0].trigger_mode == "IMMEDIATE"
-        # 2~9: PRICE_UP_PCT default 10%
-        for i in range(1, 9):
+        # 2~4: early stages → default 10%
+        for i in range(1, 4):
             assert preview.stages[i].trigger_mode == "PRICE_UP_PCT"
             assert preview.stages[i].trigger_percent == Decimal("10")
-        # 10: 마지막은 LIQUIDATION_BUFFER (default for SHORT)
-        assert preview.stages[9].trigger_mode == "LIQUIDATION_BUFFER"
-        assert preview.stages[9].trigger_price is None
+        # 5~9: late stages → default 20%
+        for i in range(4, 9):
+            assert preview.stages[i].trigger_mode == "PRICE_UP_PCT"
+            assert preview.stages[i].trigger_percent == Decimal("20")
+        # 10: 마지막 — 기획 변경 (2026-04-30) 으로 SHORT 기본도 PRICE_UP_PCT 20%
+        # (사용자가 last_stage_trigger_mode=LIQUIDATION_BUFFER 로 명시할 때만 청산가 기반)
+        assert preview.stages[9].trigger_mode == "PRICE_UP_PCT"
+        assert preview.stages[9].trigger_percent == Decimal("20")
+        assert preview.stages[9].trigger_price is not None
 
 
 class TestLongSide:

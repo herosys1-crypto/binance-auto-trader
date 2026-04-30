@@ -34,11 +34,11 @@ class StrategyTemplateCreate(BaseModel):
     )
     last_stage_trigger_mode: str | None = Field(
         default=None,
-        description="마지막 단계 trigger_mode. 미지정 시 SHORT=LIQUIDATION_BUFFER, LONG=PRICE_DOWN_PCT",
+        description="마지막 단계 trigger_mode. 미지정 시 SHORT=PRICE_UP_PCT, LONG=PRICE_DOWN_PCT (2026-04-30 변경)",
     )
     last_stage_trigger_percent: Decimal | None = Field(
         default=None,
-        description="마지막 단계 trigger_percent. 미지정 시 SHORT=5, LONG=20",
+        description="마지막 단계 trigger_percent. 미지정 시 SHORT=20, LONG=20 (2026-04-30 변경)",
     )
     tp1_percent: Decimal = Field(..., gt=0)
     tp2_percent: Decimal = Field(..., gt=0)

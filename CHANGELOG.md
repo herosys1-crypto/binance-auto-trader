@@ -4,6 +4,27 @@
 
 ---
 
+## [2026-04-30] — 마지막 단계 트리거 + 트레일링 -5% 기획 반영 (Option C)
+
+### 🎯 운영자 의도 반영
+- **마지막 단계 진입 로직 변경** — 사용자 기획: "마지막까지 금액이 있으면 정한 20% 상승에 진입".
+  - SHORT 마지막 단계 default 가 `LIQUIDATION_BUFFER` → `PRICE_UP_PCT` 로 변경.
+  - 기본 % 도 `5%` → `20%` 로 변경 (LONG 과 동일).
+  - 사용자가 명시적으로 `last_stage_trigger_mode=LIQUIDATION_BUFFER` 지정 시에만 청산가 기반 동작 (호환성 유지).
+- **트레일링 익절 -5% 변경** — 사용자 기획: "익절을 단계별로 진행하는 중에 -5% 하락하면 모두 청산익절".
+  - 기존: 절대 임계 (피크 ≥ 20% AND 현재 ≤ 20%) → 신규: 피크 대비 -5% 회귀 시 발동.
+  - 활성 조건: 피크 ≥ +5% (TP1 임계 도달) AND 현재 ≤ 피크 - 5%.
+  - 활성 status 에 `TP1_DONE_PARTIAL` 추가 (이전엔 TP2 부터만 활성).
+
+### 🔧 코드 변경
+- `services/strategy_calculator.py` — `DEFAULT_LAST_TRIGGER_MODE_SHORT`, `DEFAULT_LAST_SHORT_TRIGGER_PCT` 변경.
+- `services/risk_service.py` — `TRAILING_TP_RETRACE_TRIGGER` (절대) → `TRAILING_TP_RETRACE_AMOUNT` (피크 대비) 로 의미 변경. 임계 5% 로 하향.
+- `static/index.html` — `_collectDirectInputs` 가 마지막 단계의 사용자 입력값을 `last_stage_trigger_percent` 로 분리 전달. 미리보기/생성 API 양쪽에서 사용.
+- `models/strategy_template.py`, `api/v1/admin.py` — 문서/필드 설명 업데이트.
+- `tests/unit/test_strategy_calculator_v2.py` — `test_10_stage_short_default_pct` 가 신규 default 에 맞게 갱신.
+
+---
+
 ## [2026-04-25 ~ 2026-04-26] — Phase B + C + D 풀 구현
 
 ### 🎯 운영자 의도 반영

@@ -370,7 +370,7 @@
           <p class="text-xs text-slate-400 mb-2">
             <strong class="text-slate-200">💵 수량 (USDT)</strong> = 각 단계에 투입할 USDT 금액. 1단계는 필수, 나머지는 사용할 단계만.<br>
             <strong class="text-slate-200">📊 진입 조건</strong> = 직전 단계 대비 가격 변동 %. 기본값 (<strong>2/3/4단계 +10%</strong>, <strong>5단계 이후 +20%</strong>) 사용 가능, 직접 수정도 가능.<br>
-            <strong>1단계 진입가</strong> 는 아래 <strong>4️⃣ 시작가</strong> 에서 입력. 마지막 단계는 청산가 -5% 위치에 자동.
+            <strong>1단계 진입가</strong> 는 아래 <strong>4️⃣ 시작가</strong> 에서 입력. 마지막 단계도 사용자가 입력한 % 상승/하락 시 진입 (예: +20%).
           </p>
           <div id="cm-capitals-grid" class="space-y-1"><!-- JS 로 10행 입력 채움 --></div>
           <p id="cm-capitals-summary" class="text-xs text-slate-400 mt-2">합계: 0 USDT (0단계)</p>
@@ -2464,12 +2464,9 @@ function buildCapitalsGrid() {
       triggerDisabled = 'disabled';
       triggerTitle = '1단계는 운영자가 입력한 시작가에 즉시 LIMIT 주문 발송';
       triggerValue = '';
-    } else if (i === 10) {
-      triggerPlaceholder = '청산가 직전 -5%';
-      triggerDisabled = 'disabled';
-      triggerTitle = '마지막 단계는 청산가 -5% 위치에 자동 진입 (사용 시)';
-      triggerValue = '';
     } else {
+      // 사용자 기획 변경 (2026-04-30): 10단계도 직접 입력 가능 (PRICE_UP_PCT/DOWN_PCT).
+      // 이전엔 LIQUIDATION_BUFFER 라 disabled 였음.
       triggerPlaceholder = '';
       triggerDisabled = '';
       triggerTitle = `직전 단계 대비 +${_defaultTriggerPct(i)}% (▲▼ 1씩 조정)`;
@@ -2523,9 +2520,16 @@ function _collectDirectInputs() {
       triggers.push(t === '' ? null : String(t));
     }
   }
-  // 마지막 단계의 trigger 는 LIQUIDATION_BUFFER 로 처리되므로 None
-  if (triggers.length > 1) triggers[triggers.length - 1] = null;
-  return { capitals: caps, trigger_percents: triggers };
+  // 사용자 기획 변경 (2026-04-30): 마지막 단계도 사용자 입력값(예: 20%) 으로 진입.
+  // 이전엔 LIQUIDATION_BUFFER 라 null 로 덮었으나, 이제는 PRICE_UP_PCT/PRICE_DOWN_PCT
+  // 의 % 값으로 분리 전달. 백엔드 기본 mode = PRICE_UP_PCT (SHORT) / PRICE_DOWN_PCT (LONG).
+  let last_stage_trigger_percent = null;
+  if (triggers.length > 1) {
+    const last = triggers[triggers.length - 1];
+    last_stage_trigger_percent = last;  // 사용자 입력값 (null 이면 backend 기본 20%)
+    triggers[triggers.length - 1] = null;  // trigger_percents 배열에선 last 는 무시되므로 null
+  }
+  return { capitals: caps, trigger_percents: triggers, last_stage_trigger_percent };
 }
 
 function _collectTpSl() {
@@ -2734,244 +2738,4 @@ function fillStartPrice(mode) {
   document.getElementById('cm-start-price').focus();
 }
 
-// UX #18: 사용자가 직접 레버리지를 수정했는지 추적. true 면 사이드 변경 시 자동 갱신 안 함.
-let cmLeverageManuallyEdited = false;
-
-function _defaultLeverageForSide(side) {
-  return side === 'SHORT' ? 2 : 1;
-}
-
-function resetCmLeverage() {
-  const lev = _defaultLeverageForSide(cmState.side);
-  document.getElementById('cm-leverage').value = lev;
-  cmLeverageManuallyEdited = false;
-  cmState.preview = null;
-  document.getElementById('cm-preview').classList.add('hidden');
-  updateCmSubmit();
-}
-
-function setCmSide(side) {
-  cmState.side = side;
-  document.getElementById('cm-side-short').className = 'btn flex-1' + (side==='SHORT' ? '' : ' btn-ghost');
-  document.getElementById('cm-side-short').style.background = side==='SHORT' ? '#ef4444' : 'transparent';
-  document.getElementById('cm-side-short').style.color = side==='SHORT' ? '#fff' : '#cbd5e1';
-  document.getElementById('cm-side-long').className = 'btn flex-1' + (side==='LONG' ? '' : ' btn-ghost');
-  document.getElementById('cm-side-long').style.background = side==='LONG' ? '#10b981' : 'transparent';
-  document.getElementById('cm-side-long').style.color = side==='LONG' ? '#fff' : '#cbd5e1';
-  // Bug fix (2026-04-30): 사이드 변경 시 무조건 default leverage 로 reset.
-  // 이전 버전은 manualEdited=true 면 갱신 안 해서 SHORT 의 2 가 LONG 으로 유지되는 버그.
-  const lev = _defaultLeverageForSide(side);
-  const lvInp = document.getElementById('cm-leverage');
-  if (lvInp) lvInp.value = lev;
-  cmLeverageManuallyEdited = false;  // 사이드 바꿨으니 다시 자동 갱신 가능 상태로
-  // 방향 변경 시 미리보기 무효화
-  cmState.preview = null;
-  document.getElementById('cm-preview').classList.add('hidden');
-  updateCmSubmit();
-}
-
-function updateCmSubmit() {
-  let ok = cmState.accountId && cmState.preview;
-  if (cmState.mode === 'template') ok = ok && cmState.templateId;
-  if (cmState.mode === 'direct') ok = ok && cmState.capitals.some(c => c && Number(c) > 0);
-  document.getElementById('cm-submit').disabled = !ok;
-}
-
-function _filledCapitals() {
-  // 직접 입력 모드 — 비어있지 않은 capital 수집 (앞에서부터 연속). 중간 빈 칸은 0 으로 처리하지 말고 컷오프.
-  // UX: 1단계만 채우거나, 1~5단계 채우거나... 사용자가 어디까지 채웠는지 자동 감지.
-  const arr = [];
-  for (let i = 0; i < 10; i++) {
-    const v = cmState.capitals[i];
-    if (v === '' || v === null || v === undefined || Number(v) === 0) break;  // 첫 빈/0 에서 컷오프
-    arr.push(String(v));
-  }
-  return arr;
-}
-
-async function calcPreview() {
-  const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
-  const startPrice = document.getElementById('cm-start-price').value;
-  if (!symbol || !startPrice) return toast('심볼과 시작가를 입력하세요', 'warning');
-
-  if (cmState.mode === 'direct') {
-    // 직접 입력 모드 — 인라인 미리보기 (DB 에 템플릿 안 만듦)
-    const inp = _collectDirectInputs();
-    if (inp.capitals.length === 0) return toast('1단계 투자금액 이상을 입력하세요', 'warning');
-    const tpsl = _collectTpSl();
-    try {
-      const data = await api('/strategies/preview-inline', {
-        method: 'POST',
-        body: {
-          symbol, side: cmState.side, start_price: startPrice,
-          capitals: inp.capitals,
-          trigger_percents: inp.trigger_percents,
-          tp1_percent: tpsl.tp1_percent,
-          tp2_percent: tpsl.tp2_percent,
-          tp3_percent: tpsl.tp3_percent,
-          tp4_percent: tpsl.tp4_percent,
-          tp5_percent: tpsl.tp5_percent,
-          stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
-        },
-      });
-      cmState.preview = data;
-      cmState._directInputs = inp;
-      cmState._directTpsl = tpsl;
-      _renderPreview(data);
-      updateCmSubmit();
-      return;
-    } catch (e) { return toast('미리보기 실패: '+e.message, 'error'); }
-  }
-
-  // 템플릿 모드
-  if (!cmState.templateId) return toast('템플릿을 먼저 선택하세요', 'warning');
-  try {
-    const data = await api('/strategies/calculate', {
-      method: 'POST',
-      body: { symbol, side: cmState.side, start_price: startPrice, strategy_template_id: cmState.templateId },
-    });
-    cmState.preview = data;
-    _renderPreview(data);
-    updateCmSubmit();
-  } catch (e) { toast('미리보기 실패: '+e.message, 'error'); }
-}
-
-function _renderPreview(data) {
-  const triggerKo = (mode, pct) => {
-    if (mode === 'IMMEDIATE') return '즉시';
-    if (mode === 'PRICE_UP_PCT') return `+${pct}% 도달 시`;
-    if (mode === 'PRICE_DOWN_PCT') return `-${pct}% 도달 시`;
-    if (mode === 'LIQUIDATION_BUFFER') return `청산가 -${pct}% 전`;
-    return mode;
-  };
-  document.getElementById('cm-preview-tbody').innerHTML = data.stages.map(s => `
-    <tr>
-      <td>${s.stage_no}단계</td>
-      <td>${triggerKo(s.trigger_mode, s.trigger_percent)}</td>
-      <td class="num">${s.trigger_price ? fmtNum(s.trigger_price) : '-'}</td>
-      <td class="num">${fmtNum(s.planned_capital)}</td>
-      <td class="num">${s.planned_qty ? fmtQty(s.planned_qty) : '-'}</td>
-    </tr>
-  `).join('');
-  const totalCap = data.stages.reduce((sum, s) => sum + Number(s.planned_capital || 0), 0);
-  document.getElementById('cm-preview-meta').innerHTML =
-    `레버리지: ${data.leverage}x | 총 투입자본: <strong>${fmtNum(totalCap)} USDT</strong> | ` +
-    `TP: ${data.tp1_percent}/${data.tp2_percent}/${data.tp3_percent}% (25/50/25 분할 + 트레일링) | ` +
-    `<span class="text-red-400">손절 한도: ${fmtNum(data.stop_loss_amount)} USDT</span>`;
-  document.getElementById('cm-preview').classList.remove('hidden');
-}
-
-async function submitCreate() {
-  const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
-  const startPrice = document.getElementById('cm-start-price').value;
-  const editingId = cmState.editingStrategyId;
-  const confirmMsg = editingId
-    ? `🔄 전략 #${editingId} 수정\n\n1. 기존 미체결 주문 자동 취소\n2. 새 설정으로 ${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략 시작\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요?`
-    : `${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략을 시작합니다.\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요? (testnet 거래소면 실거래 발생)`;
-  if (!confirm(confirmMsg)) return;
-  try {
-    document.getElementById('cm-submit').disabled = true;
-    document.getElementById('cm-submit').textContent = editingId ? '⏳ 종료 + 재시작 중...' : '⏳ 생성 중...';
-
-    // 수정 모드 — 기존 전략 먼저 cancel_only 로 정지
-    if (editingId) {
-      try {
-        await api(`/strategies/${editingId}/stop`, {
-          method: 'POST',
-          body: { mode: 'cancel_only', reason: '수정 모드 — 새 설정으로 재시작' },
-        });
-        toast(`전략 #${editingId} 미체결 주문 취소 완료`, 'success');
-      } catch (e) {
-        // 이미 종료됐거나 주문 없으면 무시하고 계속
-        console.warn('Cancel old strategy:', e.message);
-      }
-    }
-
-    // 직접 입력 모드 — 이 시점에만 템플릿 1번 생성
-    let templateId = cmState.templateId;
-    // UX #18: 레버리지는 입력 필드에서 가져옴. 비었으면 사이드 기본값.
-    const lvInpEl = document.getElementById('cm-leverage');
-    const leverageFromInput = lvInpEl && lvInpEl.value ? Number(lvInpEl.value) : _defaultLeverageForSide(cmState.side);
-    if (cmState.mode === 'direct') {
-      const ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-      const leverage = leverageFromInput;
-      const inp = cmState._directInputs || _collectDirectInputs();
-      const tpsl = cmState._directTpsl || _collectTpSl();
-      const tplCreated = await api('/admin/strategy-templates', {
-        method: 'POST',
-        body: {
-          name: `_quick_${ts}`,
-          strategy_type: cmState.side === 'SHORT' ? 'DYNAMIC_SHORT' : 'DYNAMIC_LONG',
-          side: cmState.side,
-          leverage,
-          capitals: inp.capitals,
-          trigger_percents: inp.trigger_percents,
-          tp1_percent: tpsl.tp1_percent,
-          tp2_percent: tpsl.tp2_percent,
-          tp3_percent: tpsl.tp3_percent,
-          tp4_percent: tpsl.tp4_percent,
-          tp5_percent: tpsl.tp5_percent,
-          tp1_qty_ratio: tpsl.tp1_qty_ratio,
-          tp2_qty_ratio: tpsl.tp2_qty_ratio,
-          tp3_qty_ratio: tpsl.tp3_qty_ratio,
-          tp4_qty_ratio: tpsl.tp4_qty_ratio,
-          tp5_qty_ratio: tpsl.tp5_qty_ratio,
-          stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
-          reentry_policy: 'manual_ready',
-        },
-      });
-      templateId = tplCreated.id;
-    }
-
-    const created = await api('/strategies', {
-      method: 'POST',
-      body: {
-        exchange_account_id: cmState.accountId,
-        strategy_template_id: templateId,
-        symbol, side: cmState.side, start_price: startPrice,
-        // UX #18: 레버리지 override (템플릿 기본값을 덮어씀)
-        leverage_override: leverageFromInput,
-      },
-    });
-    toast('✅ 전략 #' + created.id + ' 생성됨. 1단계 주문 발송 중...', 'success');
-    try {
-      await api('/strategies/' + created.id + '/start', { method: 'POST' });
-      toast('🚀 전략 #' + created.id + ' 시작 완료. 1단계 주문 발송됨.', 'success');
-    } catch (startErr) {
-      toast('전략 생성됐지만 시작 실패: ' + startErr.message + ' (수동으로 다시 시도하세요)', 'warning');
-    }
-    closeCreateModal();
-    refreshStrategies();
-    refreshTemplates();
-  } catch (e) {
-    toast('전략 생성 실패: '+e.message, 'error');
-    document.getElementById('cm-submit').disabled = false;
-    document.getElementById('cm-submit').textContent = '🚀 전략 시작';
-  }
-}
-
-function toast(msg, type) {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.className = 'toast toast-' + (type || 'success');
-  el.classList.remove('hidden');
-  setTimeout(() => el.classList.add('hidden'), 3500);
-}
-
-// ==================== Init ====================
-if (token) {
-  showDashboard();
-  refreshAll();
-  setInterval(() => {
-    if (!document.hidden) {
-      refreshStrategies();
-      refreshHealth();
-      refreshActivity();
-      refreshStats();
-      refreshSysHealth();
-    }
-  }, 5000);
-}
-</script>
-</body>
-</html>
+// UX #18: 사용자가 직접 레버리지를 수정했는지 추적. true 면 사이드

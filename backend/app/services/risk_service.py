@@ -9,8 +9,11 @@ from app.repositories.strategy_repository import StrategyRepository
 from app.services.strategy_calculator import StrategyCalculator, SymbolRule
 
 # 트레일링 익절 임계치 (정상 모드)
-TRAILING_TP_PEAK_THRESHOLD = Decimal("20")  # 피크가 이 % 이상 도달했어야 트레일링 활성화
-TRAILING_TP_RETRACE_TRIGGER = Decimal("20")  # 현재 PnL% 가 이 값 이하로 내려오면 발동
+# 사용자 기획 (2026-04-30): "익절을 단계별로 진행하는 중에 -5% 하락하면 모두 청산익절".
+# 기존엔 절대 임계치 (피크 ≥ 20% AND 현재 ≤ 20%) 였으나, 사용자 기획대로
+# 피크 대비 -5% 회귀 (relative drop) 로 변경. TP1 발동 후부터 활성화.
+TRAILING_TP_PEAK_THRESHOLD = Decimal("5")    # 피크가 이 % 이상 도달했어야 트레일링 활성화 (TP1+5% 시점)
+TRAILING_TP_RETRACE_AMOUNT = Decimal("5")    # 피크 대비 이 % 만큼 하락하면 발동 (예: peak 25% → 20% 시 청산)
 PEAK_REDIS_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
 # 크라이시스 복구 모드 임계치
@@ -122,9 +125,17 @@ class RiskService:
             if pnl_ratio >= threshold:
                 return label
 
-        # 트레일링: 피크가 임계치 이상 도달했고, 현재가 회귀 트리거 이하로 내려옴
-        if peak >= TRAILING_TP_PEAK_THRESHOLD and pnl_ratio <= TRAILING_TP_RETRACE_TRIGGER and pnl_ratio < peak:
-            if (strategy.status or "").upper() in {"TP2_DONE_PARTIAL", "TP2_DONE", "TP3_DONE_PARTIAL", "TP4_DONE_PARTIAL", "TRAILING_ARMED"}:
+        # 트레일링: 피크 대비 -5% 회귀 시 전량 청산 (사용자 기획 2026-04-30).
+        # 활성 조건: 피크 ≥ +5% (즉 TP1 임계 도달했음) AND 현재 ≤ peak - 5%.
+        # 어느 TP 든 1회라도 부분 익절된 후부터 활성화 (TP1 포함).
+        if peak >= TRAILING_TP_PEAK_THRESHOLD and pnl_ratio <= (peak - TRAILING_TP_RETRACE_AMOUNT) and pnl_ratio < peak:
+            if (strategy.status or "").upper() in {
+                "TP1_DONE_PARTIAL",
+                "TP2_DONE_PARTIAL", "TP2_DONE",
+                "TP3_DONE_PARTIAL",
+                "TP4_DONE_PARTIAL",
+                "TRAILING_ARMED",
+            }:
                 return "TRAILING_TP"
         return None
 
