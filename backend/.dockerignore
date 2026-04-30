@@ -1,0 +1,49 @@
+# DB 백업 — 런타임에 volume mount 로 처리. image 에 포함하지 않음.
+# (symbolic link 가 Windows Docker build context 에서 깨지는 문제 회피)
+db_backups/
+
+# Git / VCS
+.git/
+.gitignore
+.gitattributes
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+pytest-cache-files-*/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# 가상환경
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 비밀: image 빌드 시 .env 가 들어가지 않도록. env_file 로 런타임에 주입.
+.env
+.env.local
+
+# Docker 자체
+.dockerignore
+Dockerfile
+
+# 문서 (image 크기 절감용)
+*.md
+.github/
+
+# 로컬 테스트 산출물
+*.log
