@@ -79,8 +79,18 @@ class StreamService:
                 # 전체 청산 — qty/unrealized 0, status 전환
                 strategy.current_position_qty = Decimal("0")
                 strategy.unrealized_pnl = Decimal("0")
-                # COMPLETED 가 _execute_take_profit 에서 이미 설정됐으면 보존 (REENTRY_READY 로 덮어쓰지 않음)
-                if strategy.status != "COMPLETED":
+                # status 전환 — 사용자 의도에 따라 분기:
+                #   COMPLETED  : _execute_take_profit 가 이미 마킹 → 보존
+                #   STOPPING   : 사용자가 「수동 정지/청산」 클릭 → STOPPED (재진입 안 함). 좀비 방지.
+                #                (기존엔 REENTRY_READY 로 잘못 덮어쓰거나 STOPPING 으로 stuck 되는
+                #                 케이스 둘 다 발생 — 핸드오프 좀비 7개 사례)
+                #   기타       : TP/SL 등 자동 청산 → REENTRY_READY (재진입 가능)
+                if strategy.status == "COMPLETED":
+                    pass
+                elif strategy.status == "STOPPING":
+                    strategy.status = "STOPPED"
+                    strategy.stopped_at = datetime.now(timezone.utc)
+                else:
                     strategy.status = "REENTRY_READY"
                     strategy.reentry_ready = True
             else:

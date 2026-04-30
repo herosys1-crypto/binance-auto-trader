@@ -249,3 +249,45 @@ class TestExitFilledPartialClose:
         # 70-100=-30 → ≤ 1e-8 → full close
         assert strategy.current_position_qty == Decimal("0")
         assert strategy.status == "REENTRY_READY"
+
+    def test_stopping_status_transitions_to_stopped_on_full_close(self) -> None:
+        """사용자가 「수동 정지/청산」 누른 후 EXIT FILLED 가 오면 STOPPED 로 전환 (REENTRY_READY 가 아님).
+
+        좀비 STOPPING 방지 fix (2026-04-30 evening, 핸드오프의 만성 좀비 7개 케이스).
+        사용자 정지 의도를 보존: REENTRY_READY 로 가면 자동 재진입 후보가 됨 → 의도 위반.
+        """
+        strategy = SimpleNamespace(
+            id=68,
+            symbol="ALGOUSDT",
+            side="SHORT",
+            current_position_qty=Decimal("-1814.8"),
+            avg_entry_price=Decimal("0.2"),
+            unrealized_pnl=Decimal("-1.85"),
+            realized_pnl=Decimal("0"),
+            status="STOPPING",  # 사용자가 「수동 정지/청산」 누름
+            reentry_ready=False,
+            stopped_at=None,
+        )
+        order = SimpleNamespace(
+            client_order_id="exit-stop-68",
+            exchange_order_id=None,
+            status="NEW",
+            executed_qty=Decimal("0"),
+            avg_price=Decimal("0"),
+            price=Decimal("0"),
+            purpose="EXIT",
+            stage_no=None,
+            strategy_instance_id=68,
+        )
+        order.executed_qty = Decimal("1814.8")
+        order.avg_price = Decimal("0.21")
+        order.status = "FILLED"
+
+        service = _build_service(strategy, order)
+        service.handle_order_trade_update(_make_payload("exit-stop-68", "FILLED", "1814.8", "0.21"))
+
+        # STOPPED 로 전환 (REENTRY_READY 가 아님), stopped_at 채워짐, qty 0
+        assert strategy.status == "STOPPED"
+        assert strategy.reentry_ready is False  # 재진입 안 함
+        assert strategy.current_position_qty == Decimal("0")
+        assert strategy.stopped_at is not None  # datetime.now() 로 채워짐

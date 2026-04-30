@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy import select
 from app.core.database import SessionLocal
@@ -20,6 +21,8 @@ def run_position_reconcile_once(decrypt_func) -> None:
                 "STAGE1_OPEN_PENDING", "STAGE2_OPEN_PENDING", "STAGE3_OPEN_PENDING", "STAGE4_OPEN_PENDING",
                 "STAGE1_OPEN", "STAGE2_OPEN", "STAGE3_OPEN", "STAGE4_OPEN",
                 "TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL",
+                # 좀비 STOPPING 자동 정리 — 거래소 포지션 0 이면 STOPPED 로 전환 (stream 이벤트 놓친 안전망)
+                "STOPPING",
             ]))
             .where(ExchangeAccount.is_active.is_(True))
         ).all()
@@ -35,6 +38,23 @@ def run_position_reconcile_once(decrypt_func) -> None:
                         matched = item
                         break
                 if not matched:
+                    # 좀비 STOPPING 자동 정리: status=STOPPING + 거래소 포지션 0 → STOPPED 로 승격.
+                    # 사용자가 「수동 정지」 누른 후 stream 이벤트 (EXIT FILLED) 를 놓치면 좀비
+                    # 발생. reconcile 한 사이클 안에 자동 회복.
+                    if strategy.status == "STOPPING":
+                        db.add(RiskEvent(
+                            strategy_instance_id=strategy.id,
+                            event_type="RECONCILE_STOPPING_ZOMBIE_CLEANUP",
+                            severity="INFO",
+                            title="STOPPING zombie auto-promoted to STOPPED",
+                            message=f"symbol={strategy.symbol}, side={strategy.side} — exchange position 0, promoting STOPPING → STOPPED",
+                            event_payload={"strategy_id": strategy.id},
+                        ))
+                        strategy.status = "STOPPED"
+                        strategy.current_position_qty = Decimal("0")
+                        strategy.stopped_at = datetime.now(timezone.utc)
+                        position_reconcile_total.labels(status="zombie_stopped").inc()
+                        continue
                     # Bug #10 fix (2026-04-29): DB-only 잔재 자동 정리 — 단, 보수적으로
                     # *_OPEN 상태(이미 체결되었던 상태)만 처리. PENDING 은 limit 주문이
                     # 아직 미체결일 가능성이 있어 자동 STOPPED 하면 위험.
