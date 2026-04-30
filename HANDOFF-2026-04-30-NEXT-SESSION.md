@@ -115,17 +115,35 @@ if is_full_close:
 | 77 | INTCUSDT | STOPPED | **+2.56** | 사용자 수동 청산 |
 | 68 | ALGOUSDT | STOPPED | **−4.72** | 사용자 수동 청산 (약관 동의 후) |
 
-### 누적 통계
+### 누적 통계 (좀비 통계 보정 후)
 
 | 항목 | 값 |
 |---|---|
 | Finished | 15 |
-| Profit count (realized > 0) | 7 |
-| Loss count (realized < 0) | 2 (#68, #59) |
-| Zero (REENTRY_READY 등 TP 미발동) | 6 |
-| **Total realized** | **+132.89 USDT** |
+| Profit count (realized > 0) | **10** ← 이전 핸드오프의 "익절 10건" 과 정확히 일치 |
+| Loss count (realized < 0) | 2 (#68 −4.72, #59 −22.78 — manual stop) |
+| Zero | 3 |
+| **Total realized** | **+196.58 USDT** |
 
-이전 핸드오프 (+117.75) → 지금 (+132.89) = **+15.14** (#78 +17.30 + #77 +2.56 + #68 −4.72 = +15.14 ✅).
+진행 흐름:
+1. 이전 핸드오프 통계 +117.75 — 그 시점은 #54/#55/#63 의 realized_pnl 이 누락 (코드 버그) 상태에서 카운팅됨. 익절 알림은 정상 발송됐지만 DB 누적 안 됨.
+2. 오늘 청산 추가 +15.14 (#78 +17.30 / #77 +2.56 / #68 −4.72)
+3. **좀비 통계 보정** +63.69:
+   - #63 SKYAIUSDT (SHORT, raw): **+31.08** (entry 0.25155 → exit 0.21260, qty 798)
+   - #54 AIOTUSDT (SHORT, raw): **+20.81** (entry 0.12010 → exit 0.10760, qty 1665)
+   - #55 SKYAIUSDT (SHORT, raw): **+11.80** (entry 0.24992 → exit 0.23517, qty 800)
+
+→ 117.75 + 15.14 + 63.69 = **+196.58 USDT** ✅
+
+> 보정값은 fee/funding 미반영 raw PnL. Binance Trade History 와 1~2 USDT 차이 가능.
+
+### 통계 누락 원인
+
+#54/#55/#63 모두 **2026-04-29 기간** 청산. 이 시점의 코드는 `7bc188a` ("realized_pnl accumulator") fix 가 들어가기 전 (4월 30일 08:16 UTC commit). 즉 EXIT FILLED 처리는 됐지만 strategy.realized_pnl 갱신 로직 자체가 없어서 DB 0 으로 남음. 거래 자체는 정상.
+
+### 추가 발견 — `max_profit_pct == max_loss_pct`
+
+#54 (10.71/10.71), #55 (12.26/12.26) — 두 컬럼이 정확히 같음. 보통 다른 값일 텐데. 코드의 다른 버그 의심 (peak 추적 로직). **부수적 — 다음 세션 안건**.
 
 ---
 
@@ -170,9 +188,13 @@ if is_full_close:
 
 위 보안 섹션 참고.
 
-### 3. (선택) 좀비 통계 보정 #63 SKYAIUSDT
+### 3. (완료) 좀비 통계 보정 — #63, #54, #55
 
-이전 핸드오프 4번. `max_profit_pct=22.83%` 인데 `realized_pnl=0` 인 케이스. Binance Trade History 에서 진짜 익절됐는지 확인. 운영 통계 정확도 원할 때만.
+이번 세션에서 raw 계산값으로 보정 완료 (위 누적 통계 섹션 참고). **이전 핸드오프 4번 항목 closed.**
+
+후속:
+- (선택) Binance Trade History 로 fee/funding 포함 정확값 재보정
+- (다음 세션 안건) `max_profit_pct == max_loss_pct` 의심 — peak 추적 로직 버그?
 
 ### 4. (장기) ENCRYPTION_KEY 마이그레이션
 
