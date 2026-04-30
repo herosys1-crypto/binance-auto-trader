@@ -220,8 +220,12 @@
             <p id="stats-completed" class="text-base font-bold pos">-</p>
           </div>
           <div>
-            <p class="text-xs text-slate-400">손절</p>
-            <p id="stats-sl" class="text-base font-bold neg">-</p>
+            <p class="text-xs text-slate-400">손절 <span class="text-slate-500" style="font-size:9px">/ 수동</span></p>
+            <p class="text-base font-bold leading-tight">
+              <span id="stats-sl" class="neg">-</span>
+              <span class="text-slate-500 font-normal" style="font-size:11px"> / </span>
+              <span id="stats-manual" class="text-slate-400" style="font-size:13px;font-weight:600">-</span>
+            </p>
           </div>
           <div>
             <p class="text-xs text-slate-400">승률</p>
@@ -1075,6 +1079,8 @@ async function refreshStats() {
     document.getElementById('stats-total').textContent = s.total;
     document.getElementById('stats-completed').textContent = s.completed;
     document.getElementById('stats-sl').textContent = s.stop_loss;
+    const manualEl = document.getElementById('stats-manual');
+    if (manualEl) manualEl.textContent = (s.manual_stop != null) ? s.manual_stop : '-';
     document.getElementById('stats-winrate').textContent = s.win_rate_pct + '%';
     const realizedNum = Number(s.realized_pnl_total || 0);
     const realizedEl = document.getElementById('stats-realized');
