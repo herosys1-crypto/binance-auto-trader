@@ -66,15 +66,28 @@ class StreamService:
                 except Exception:  # 알림 실패해도 거래 로직은 영향 없음
                     pass
         elif strategy and order.purpose == "EXIT" and order.status == "FILLED":
-            # COMPLETED 가 _execute_take_profit 에서 이미 설정됐으면 보존 (REENTRY_READY 로 덮어쓰지 않음)
-            if strategy.status != "COMPLETED":
-                strategy.status = "REENTRY_READY"
-                strategy.reentry_ready = True
-            # Bug fix (2026-04-30): EXIT FILLED 후 stale qty/pnl 리셋. 거래소 ACCOUNT_UPDATE 가
-            # 닫힌 포지션을 별도로 안 보내는 케이스 대비. 다음 ACCOUNT_UPDATE 가 와서 다른 값으로
-            # 덮어쓰면 그 값이 우선됨.
-            strategy.current_position_qty = Decimal("0")
-            strategy.unrealized_pnl = Decimal("0")
+            # 부분 청산 (TP1/2/3 partial) vs 전체 청산을 구분.
+            # Bug fix (2026-04-30 PM, #58 NAORISUSDT 사례): TP1 부분 청산이 전체 청산처럼 처리되어
+            # current_position_qty 가 잘못 0 으로 리셋되고 status 가 REENTRY_READY 로 빠져
+            # 잔량 (예: 6,011 lots) 이 자동 모니터링에서 빠지던 문제.
+            cur_qty_abs = Decimal(str(strategy.current_position_qty or 0)).copy_abs()
+            exec_qty_abs = Decimal(str(order.executed_qty or 0)).copy_abs()
+            remaining_abs = cur_qty_abs - exec_qty_abs
+            is_full_close = remaining_abs <= Decimal("0.00000001")  # dust 임계
+
+            if is_full_close:
+                # 전체 청산 — qty/unrealized 0, status 전환
+                strategy.current_position_qty = Decimal("0")
+                strategy.unrealized_pnl = Decimal("0")
+                # COMPLETED 가 _execute_take_profit 에서 이미 설정됐으면 보존 (REENTRY_READY 로 덮어쓰지 않음)
+                if strategy.status != "COMPLETED":
+                    strategy.status = "REENTRY_READY"
+                    strategy.reentry_ready = True
+            else:
+                # 부분 청산 — 잔량 유지 (부호 보존). status/reentry_ready 는 그대로 (TP partial 진행 중).
+                sign = Decimal("-1") if strategy.side == "SHORT" else Decimal("1")
+                strategy.current_position_qty = (remaining_abs * sign).quantize(Decimal("0.00000001"))
+                # unrealized_pnl 은 다음 ACCOUNT_UPDATE 가 갱신하므로 그대로 둠
             # 실현 손익 누적 (TP/SL 결과 청산 가격 기반)
             try:
                 if order.avg_price and strategy.avg_entry_price and order.executed_qty:
