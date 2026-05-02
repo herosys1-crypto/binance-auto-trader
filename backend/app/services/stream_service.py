@@ -21,10 +21,21 @@ class StreamService:
             self.db.add(RiskEvent(strategy_instance_id=None, event_type="ORDER_TRADE_UPDATE", severity="WARN", title="Unmatched stream event", message="No local order matched the incoming stream payload", event_payload=payload))
             self.db.commit()
             return
+        # Bug fix (2026-05-02 evening, #79 -665.18 USDT 중복 누적 사례):
+        # Binance 가 같은 trade settlement 에 대해 multiple ORDER_TRADE_UPDATE 를 보내는
+        # 케이스가 있어, 우리 handle 이 매번 strategy.realized_pnl 을 또 누적하고
+        # status 분기를 또 실행해서 잘못된 상태/금액으로 빠지는 문제.
+        # → order.status 가 이미 FILLED 였으면 (이번 이벤트도 FILLED) 이 trade 는
+        #    이미 처리됐으므로 갱신만 하고 누적/status 분기는 skip.
+        prev_status = order.status
         order.exchange_order_id = mapped["exchange_order_id"]
         order.status = mapped["status"]
         order.executed_qty = Decimal(str(mapped["executed_qty"] or "0"))
         order.avg_price = Decimal(str(mapped["avg_price"])) if mapped["avg_price"] else order.avg_price
+        # idempotent gate — 이미 FILLED 처리된 order 의 후속 stream event 무시
+        if prev_status == "FILLED":
+            self.db.commit()
+            return
         strategy = self.db.get(StrategyInstance, order.strategy_instance_id)
         if strategy and order.purpose == "ENTRY" and order.status == "FILLED":
             strategy.status = {1: "STAGE1_OPEN", 2: "STAGE2_OPEN", 3: "STAGE3_OPEN", 4: "STAGE4_OPEN"}.get(order.stage_no, strategy.status)

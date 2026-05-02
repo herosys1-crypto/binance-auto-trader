@@ -100,10 +100,21 @@ class ExecutionService:
         side = "SELL" if strategy.side == "LONG" else "BUY"
         position_side = strategy.side
         client_order_id = self._new_client_order_id(strategy.symbol, "EXIT")
+        # Bug fix (2026-05-02 evening, #79 race condition 사례):
+        # 이전 흐름:
+        #   1) place_market_order → 즉시 체결 + Binance stream EXIT FILLED 이벤트 발송
+        #   2) Order DB 추가
+        #   3) strategy.status = STOPPING
+        #   4) commit
+        # user-stream worker 가 1)의 stream event 를 받았을 때 우리 transaction 이
+        # 4)의 commit 전이라 다른 session 에서는 옛 status (예: TP3_DONE_PARTIAL) 를 봄
+        # → stream_service 의 STOPPING 분기 못 타고 else (REENTRY_READY) 로 잘못 빠짐.
+        # 새 흐름: status 변경을 먼저 commit 해서 외부 worker 에게 노출한 뒤 거래소 호출.
+        strategy.status = "STOPPING"
+        self.db.commit()
         response = self.trade_client.place_market_order(symbol=strategy.symbol, side=side, position_side=position_side, quantity=quantity, new_client_order_id=client_order_id)
         order = Order(strategy_instance_id=strategy.id, stage_no=None, purpose="EXIT", symbol=strategy.symbol, side=side, position_side=position_side, order_type="MARKET", time_in_force=None, client_order_id=client_order_id, exchange_order_id=response.get("orderId"), trigger_price=None, price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, orig_qty=quantity, executed_qty=Decimal(str(response.get("executedQty", "0"))), avg_price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, status=response.get("status", "NEW"), raw_request={"symbol": strategy.symbol, "side": side, "positionSide": position_side, "type": "MARKET", "quantity": str(quantity), "newClientOrderId": client_order_id}, raw_response=response)
         self.order_repo.create(order)
-        strategy.status = "STOPPING"
         self.db.commit()
         return order
 

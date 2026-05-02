@@ -92,9 +92,7 @@ class TestExitFilledPartialClose:
 
         # when: TP1 2003 lots 부분 청산 FILLED 이벤트
         service = _build_service(strategy, order)
-        order.executed_qty = Decimal("2003")
-        order.avg_price = Decimal("0.11687")
-        order.status = "FILLED"
+        # order.status 는 default "NEW" 유지 — handle_ 안의 mapped 가 FILLED 로 갱신
         service.handle_order_trade_update(_make_payload("exit-tp1-58", "FILLED", "2003", "0.11687"))
 
         # then: 잔량 -6011 보존 (== 비교, quantize 결과도 동일), status 그대로,
@@ -128,10 +126,7 @@ class TestExitFilledPartialClose:
             stage_no=None,
             strategy_instance_id=58,
         )
-        order.executed_qty = Decimal("6011")
-        order.avg_price = Decimal("0.11684")
-        order.status = "FILLED"
-
+        # order.status 는 default "NEW" — handle_ 안의 mapped 가 FILLED 로 갱신
         service = _build_service(strategy, order)
         service.handle_order_trade_update(_make_payload("exit-manual-58", "FILLED", "6011", "0.11684"))
 
@@ -165,10 +160,7 @@ class TestExitFilledPartialClose:
             stage_no=None,
             strategy_instance_id=99,
         )
-        order.executed_qty = Decimal("30")
-        order.avg_price = Decimal("51000")
-        order.status = "FILLED"
-
+        # order.status 는 default "NEW" — handle_ 안의 mapped 가 FILLED 로 갱신
         service = _build_service(strategy, order)
         service.handle_order_trade_update(_make_payload("exit-tp-99", "FILLED", "30", "51000"))
 
@@ -202,10 +194,7 @@ class TestExitFilledPartialClose:
             stage_no=None,
             strategy_instance_id=42,
         )
-        order.executed_qty = Decimal("10")
-        order.avg_price = Decimal("3100")
-        order.status = "FILLED"
-
+        # order.status 는 default "NEW" — handle_ 안의 mapped 가 FILLED 로 갱신
         service = _build_service(strategy, order)
         service.handle_order_trade_update(_make_payload("exit-completed-42", "FILLED", "10", "3100"))
 
@@ -239,16 +228,51 @@ class TestExitFilledPartialClose:
             stage_no=None,
             strategy_instance_id=11,
         )
-        order.executed_qty = Decimal("100")  # 원래 청산 주문 전체량
-        order.avg_price = Decimal("0.55")
-        order.status = "FILLED"
-
+        # order.status 는 default "NEW" — handle_ 안의 mapped 가 FILLED 로 갱신
         service = _build_service(strategy, order)
         service.handle_order_trade_update(_make_payload("exit-overexec-11", "FILLED", "100", "0.55"))
 
         # 70-100=-30 → ≤ 1e-8 → full close
         assert strategy.current_position_qty == Decimal("0")
         assert strategy.status == "REENTRY_READY"
+
+    def test_duplicate_exit_filled_event_is_ignored(self) -> None:
+        """동일 EXIT 에 대한 중복 FILLED stream event 가 와도 realized_pnl 두 번 누적 안 함.
+
+        2026-05-02 #79 LABUSDT 사례 — 강제 청산 -665.18 USDT 가 두 번 누적되어 -1263.20 으로
+        잘못 기록된 버그. order.status 가 이미 FILLED 였으면 후속 이벤트는 idempotent 처리.
+        """
+        strategy = SimpleNamespace(
+            id=79,
+            symbol="LABUSDT",
+            side="SHORT",
+            current_position_qty=Decimal("0"),
+            avg_entry_price=Decimal("1.19534"),
+            unrealized_pnl=Decimal("0"),
+            realized_pnl=Decimal("-597.96"),  # 정상 청산 결과
+            status="REENTRY_READY",
+            reentry_ready=True,
+            stopped_at=None,
+        )
+        order = SimpleNamespace(
+            client_order_id="exit-79-final",
+            exchange_order_id=999,
+            status="FILLED",  # ← 이미 FILLED 처리된 order
+            executed_qty=Decimal("606.30"),
+            avg_price=Decimal("2.29250"),
+            price=Decimal("2.29250"),
+            purpose="EXIT",
+            stage_no=None,
+            strategy_instance_id=79,
+        )
+
+        service = _build_service(strategy, order)
+        # 같은 FILLED 이벤트 또 도달
+        service.handle_order_trade_update(_make_payload("exit-79-final", "FILLED", "606.30", "2.29250"))
+
+        # idempotent — realized_pnl 그대로
+        assert strategy.realized_pnl == Decimal("-597.96")  # ⭐ 두 번 누적 안 됨
+        assert strategy.current_position_qty == Decimal("0")  # 변경 없음
 
     def test_stopping_status_transitions_to_stopped_on_full_close(self) -> None:
         """사용자가 「수동 정지/청산」 누른 후 EXIT FILLED 가 오면 STOPPED 로 전환 (REENTRY_READY 가 아님).
@@ -279,10 +303,7 @@ class TestExitFilledPartialClose:
             stage_no=None,
             strategy_instance_id=68,
         )
-        order.executed_qty = Decimal("1814.8")
-        order.avg_price = Decimal("0.21")
-        order.status = "FILLED"
-
+        # order.status 는 default "NEW" — handle_ 안의 mapped 가 FILLED 로 갱신
         service = _build_service(strategy, order)
         service.handle_order_trade_update(_make_payload("exit-stop-68", "FILLED", "1814.8", "0.21"))
 
