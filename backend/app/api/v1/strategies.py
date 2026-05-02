@@ -57,6 +57,57 @@ def _enrich_response(resp: StrategyDetailResponse, tpl) -> StrategyDetailRespons
     return resp
 
 
+def _fetch_tp_counts_batch(db: Session, strategy_ids: set[int]) -> dict[int, dict]:
+    """notifications 에서 strategy 별 TP 발동 카운트 + TRAILING 여부 batch fetch.
+
+    N+1 방지: 모든 strategy 한 번에 query.
+    Returns: {strategy_id: {"tp_count": int, "has_trailing": bool}}
+    """
+    if not strategy_ids:
+        return {}
+    from sqlalchemy import text
+    # title 패턴:
+    #   "[TP1 익절 체결]" / "[TP2 익절 체결]" / ... / "[TP5 익절 체결]"
+    #   "[TRAILING_TP 익절 체결]"
+    rows = db.execute(
+        text("""
+            SELECT strategy_instance_id,
+                   COUNT(*) FILTER (
+                     WHERE title ~ '\\[TP[1-5] 익절' AND title NOT LIKE '%TRAILING%'
+                   ) AS tp_count,
+                   BOOL_OR(title LIKE '%TRAILING_TP%') AS has_trailing
+            FROM notifications
+            WHERE strategy_instance_id = ANY(:ids)
+              AND send_status IN ('SENT', 'PENDING')
+            GROUP BY strategy_instance_id
+        """),
+        {"ids": list(strategy_ids)},
+    ).all()
+    return {r.strategy_instance_id: {"tp_count": r.tp_count or 0, "has_trailing": bool(r.has_trailing)} for r in rows}
+
+
+def _resolve_close_reason(strategy, counts: dict, total_active_tps: int) -> str:
+    """status + 발동 카운트로 마지막 종료 사유 추론.
+
+    Returns: TP_FINAL / TRAILING / SL / MANUAL / NONE
+    """
+    st = (strategy.status or "").upper()
+    tp_count = counts.get("tp_count", 0) if counts else 0
+    has_trailing = counts.get("has_trailing", False) if counts else False
+    if st in ("CLOSED_BY_SL", "STOPPED_BY_SL"):
+        return "SL"
+    if st == "STOPPED":
+        return "MANUAL"
+    if st == "COMPLETED" or st == "REENTRY_READY":
+        if has_trailing:
+            return "TRAILING"
+        if tp_count >= total_active_tps:
+            return "TP_FINAL"
+        # 진입했는데 종료, TP/Trail 없음 → 기타 (예: SL fast path)
+        return "SL" if tp_count == 0 else "TRAILING"
+    return "NONE"
+
+
 class PreviewInlineRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=30)
     side: Literal["LONG", "SHORT"]
@@ -206,10 +257,18 @@ def list_strategies(
         {t.id: t for t in db.query(StrategyTemplate).filter(StrategyTemplate.id.in_(template_ids)).all()}
         if template_ids else {}
     )
-    return [
-        _enrich_response(StrategyDetailResponse.model_validate(r), templates.get(r.strategy_template_id))
-        for r in rows
-    ]
+    # TP 발동 카운트 + TRAILING 여부 batch fetch (UI 정확 표시용)
+    strategy_ids = {r.id for r in rows}
+    tp_counts = _fetch_tp_counts_batch(db, strategy_ids)
+    out = []
+    for r in rows:
+        tpl = templates.get(r.strategy_template_id)
+        resp = _enrich_response(StrategyDetailResponse.model_validate(r), tpl)
+        cnt = tp_counts.get(r.id, {})
+        resp.tp_triggered_count = cnt.get("tp_count", 0)
+        resp.last_close_reason = _resolve_close_reason(r, cnt, resp.total_active_tps)
+        out.append(resp)
+    return out
 
 
 @router.get("/{strategy_id}", response_model=StrategyDetailResponse)
@@ -223,7 +282,11 @@ def get_strategy(
     if not strategy or strategy.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
     tpl = db.get(StrategyTemplate, strategy.strategy_template_id) if strategy.strategy_template_id else None
-    return _enrich_response(StrategyDetailResponse.model_validate(strategy), tpl)
+    resp = _enrich_response(StrategyDetailResponse.model_validate(strategy), tpl)
+    counts = _fetch_tp_counts_batch(db, {strategy.id}).get(strategy.id, {})
+    resp.tp_triggered_count = counts.get("tp_count", 0)
+    resp.last_close_reason = _resolve_close_reason(strategy, counts, resp.total_active_tps)
+    return resp
 
 
 @router.get("/{strategy_id}/timeline")

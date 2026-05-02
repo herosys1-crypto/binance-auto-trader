@@ -1288,9 +1288,14 @@ async function refreshStrategies() {
       // backend 응답의 total_active_stages / total_active_tps 사용. 옛 backend 호환: fallback 4.
       const totalStages = s.total_active_stages || 4;
       const totalTps = s.total_active_tps || 4;
-      const tpCount = _tpCountFromStatus(s, totalTps);
+      // 2026-05-03 fix: backend 의 실제 발동 카운트 (tp_triggered_count) 우선 사용.
+      // 옛 backend 면 status 추론 fallback. 종료 사유 (last_close_reason) 도 표시.
+      const tpCount = (s.tp_triggered_count !== undefined && s.tp_triggered_count !== null)
+        ? s.tp_triggered_count
+        : _tpCountFromStatus(s, totalTps);
+      const closeReason = s.last_close_reason || 'NONE';
       const stageBar = s.current_stage > 0 ? renderStageBar(s.current_stage, totalStages) : '<span class="text-slate-500">대기</span>';
-      const tpBar = renderTpBar(tpCount, totalTps);
+      const tpBar = renderTpBar(tpCount, totalTps, closeReason);
       const stage = `<div class="text-xs leading-tight"><span class="text-slate-400" style="font-size:10px">진입</span> ${stageBar}<br><span class="text-slate-400" style="font-size:10px">익절</span> ${tpBar}</div>`;
       const pnlNum = Number(s.unrealized_pnl || 0);
       // 사용자 실제 ROI % = USD pnl × leverage / capital × 100 (margin 기준)
@@ -2239,15 +2244,31 @@ function _tpCountFromStatus(strat, totalTps) {
 }
 
 // TP 진행도 바 — 색상 다르게 (시안 계열, 단계 바와 구분)
-function renderTpBar(current, total) {
+// 2026-05-03 fix: closeReason 인자로 종료 사유 마크 표시
+//   TP_FINAL → 마지막 TP 까지 발동 (정상 종료)
+//   TRAILING → 트레일링 -5% 회귀로 조기 종료 (TP 일부만 발동)
+//   SL → 손절
+//   MANUAL → 사용자 수동 정지
+function renderTpBar(current, total, closeReason) {
   const safeC = Math.max(0, Math.min(current, total));
   let dots = '';
   for (let i = 1; i <= total; i++) {
     const filled = i <= safeC;
-    const color = filled ? '#06b6d4' : '#475569';  // 시안 (filled) / 회색 (empty)
+    const color = filled ? '#06b6d4' : '#475569';
     dots += `<span class="inline-block rounded-full mr-1" style="width:8px;height:8px;background:${color}"></span>`;
   }
-  return `<span class="inline-flex items-center" title="익절 진행도">${dots}<span class="text-xs text-cyan-300 ml-1">${safeC}/${total}</span></span>`;
+  // 종료 사유 마크 (COMPLETED / REENTRY_READY / STOPPED 일 때만 의미 있음)
+  let reasonBadge = '';
+  if (closeReason === 'TRAILING') {
+    reasonBadge = ` <span class="text-xs px-1 rounded bg-purple-900 text-purple-300" title="트레일링 -5% 회귀로 조기 종료">🌀 트레일링</span>`;
+  } else if (closeReason === 'TP_FINAL') {
+    reasonBadge = ` <span class="text-xs px-1 rounded bg-emerald-900 text-emerald-300" title="모든 활성 TP 발동 후 종료">✅ 완료</span>`;
+  } else if (closeReason === 'SL') {
+    reasonBadge = ` <span class="text-xs px-1 rounded bg-red-900 text-red-300" title="손절 발동">🛑 손절</span>`;
+  } else if (closeReason === 'MANUAL') {
+    reasonBadge = ` <span class="text-xs px-1 rounded bg-amber-900 text-amber-300" title="수동 정지/청산">✋ 수동</span>`;
+  }
+  return `<span class="inline-flex items-center" title="익절 진행도">${dots}<span class="text-xs text-cyan-300 ml-1">${safeC}/${total}</span>${reasonBadge}</span>`;
 }
 
 function fmtNum(v) {

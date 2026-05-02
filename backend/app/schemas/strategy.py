@@ -81,3 +81,8 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # default 4 로 두면 backward-compat (이전 frontend 도 동작)
     total_active_stages: int = 4
     total_active_tps: int = 4
+    # ─── 실제 TP 발동 카운트 + 종료 사유 (UI 정확 표시용, 2026-05-03 fix) ───
+    # tp_triggered_count: notifications 의 [TPN 익절 체결] 카운트 (TRAILING 제외)
+    # last_close_reason: TP_FINAL / TRAILING / SL / MANUAL / NONE
+    tp_triggered_count: int = 0
+    last_close_reason: str = "NONE"
