@@ -350,7 +350,7 @@
         </label>
         <div class="flex gap-2 items-center">
           <input id="cm-leverage" type="number" min="1" max="125" step="1" value="2"
-            oninput="cmLeverageManuallyEdited = true"
+            oninput="cmLeverageManuallyEdited = true; if(typeof _refreshLiveCalc==='function')_refreshLiveCalc()"
             class="w-24 px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white text-center" />
           <span class="text-slate-400 text-sm">배속</span>
           <button onclick="resetCmLeverage()" class="btn-ghost btn text-xs" style="padding:3px 8px; font-size:11px"
@@ -501,7 +501,8 @@
       <div class="mb-4">
         <label class="block text-sm font-semibold mb-2 text-slate-300">4️⃣  시작가 (LIMIT 1단계 가격)</label>
         <div class="flex gap-2">
-          <input id="cm-start-price" type="number" step="0.01" placeholder="예: 100000"
+          <input id="cm-start-price" type="number" step="any" placeholder="예: 100000 또는 0.0011208"
+            oninput="if(typeof _refreshLiveCalc==='function')_refreshLiveCalc()"
             class="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
           <button onclick="calcPreview()" class="btn-primary btn">📋 미리보기</button>
         </div>
@@ -513,7 +514,7 @@
         <div class="text-sm font-semibold mb-2 text-blue-300">📊 단계별 계산 결과</div>
         <table class="text-xs">
           <thead>
-            <tr><th>단계</th><th>조건</th><th class="num">트리거가</th><th class="num">투입 자본</th><th class="num">수량</th></tr>
+            <tr><th>단계</th><th>조건</th><th class="num">트리거가</th><th class="num">투입 자본</th><th class="num">수량</th><th class="num text-cyan-400" title="누적 평균 진입가">평균진입</th><th class="num text-orange-400" title="Isolated 모드 보수적 근사">예상 청산가</th></tr>
           </thead>
           <tbody id="cm-preview-tbody"></tbody>
         </table>
@@ -2541,22 +2542,94 @@ function buildCapitalsGrid() {
       triggerValue = _defaultTriggerPct(i);  // 기본값 미리 채움 → ▲▼ 즉시 동작
     }
     const capPlaceholder = i === 1 ? '예: 100 (필수)' : '비우면 사용 안 함';
-    html += `<div class="grid grid-cols-12 gap-2 items-center">
-      <div class="col-span-2 text-sm text-slate-300 font-semibold">${i}단계</div>
-      <div class="col-span-5">
+    // 단계별 실시간 평균진입/청산가 표시 컬럼 (2026-05-03 추가)
+    html += `<div class="grid grid-cols-12 gap-1 items-center">
+      <div class="col-span-1 text-xs text-slate-300 font-semibold">${i}단계</div>
+      <div class="col-span-3">
         <input type="number" min="0" step="any" id="cm-cap-${i}" placeholder="${capPlaceholder}"
-          oninput="onCapitalsChange()"
+          oninput="onCapitalsChange(); _refreshLiveCalc()"
           class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm" />
       </div>
-      <div class="col-span-5">
+      <div class="col-span-2">
         <input type="number" min="0" step="1" id="cm-trg-${i}" placeholder="${triggerPlaceholder}" value="${triggerValue}" ${triggerDisabled}
           title="${triggerTitle}"
-          oninput="onCapitalsChange()"
+          oninput="onCapitalsChange(); _refreshLiveCalc()"
           class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm ${triggerDisabled?'opacity-50 cursor-not-allowed':''}" />
       </div>
+      <div class="col-span-3 text-xs text-cyan-300 text-right" id="cm-stage-avg-${i}" title="누적 평균 진입가">-</div>
+      <div class="col-span-3 text-xs text-orange-300 text-right" id="cm-stage-liq-${i}" title="예상 청산가 (Isolated 모드 보수적)">-</div>
     </div>`;
   }
   grid.innerHTML = html;
+}
+
+// 단계별 input 변경 시 실시간 평균/청산가 계산 + 표시 (미리보기 클릭 전에도)
+function _refreshLiveCalc() {
+  try {
+    const startPriceStr = document.getElementById('cm-start-price').value;
+    const startPrice = Number(startPriceStr);
+    if (!startPrice || startPrice <= 0) {
+      // 시작가 없으면 모든 단계 표시 클리어
+      for (let i = 1; i <= 10; i++) {
+        const a = document.getElementById('cm-stage-avg-' + i);
+        const l = document.getElementById('cm-stage-liq-' + i);
+        if (a) a.textContent = '-';
+        if (l) l.textContent = '-';
+      }
+      return;
+    }
+    const lvInpEl = document.getElementById('cm-leverage');
+    const lev = lvInpEl && lvInpEl.value ? Number(lvInpEl.value) : 2;
+    const side = (cmState.side || 'SHORT').toUpperCase();
+    let prevPrice = startPrice;
+    let cumQty = 0, cumNotional = 0;
+    let prevLiq = null;
+    for (let i = 1; i <= 10; i++) {
+      const capEl = document.getElementById('cm-cap-' + i);
+      const trgEl = document.getElementById('cm-trg-' + i);
+      const avgEl = document.getElementById('cm-stage-avg-' + i);
+      const liqEl = document.getElementById('cm-stage-liq-' + i);
+      if (!capEl || !avgEl || !liqEl) continue;
+      const cap = Number(capEl.value);
+      if (!cap || cap <= 0) {
+        avgEl.textContent = '-';
+        liqEl.textContent = '-';
+        continue;
+      }
+      // 단계 진입가 계산
+      let entryPrice;
+      if (i === 1) {
+        entryPrice = startPrice;
+      } else {
+        const trgPct = Number(trgEl ? trgEl.value : 0) || 0;
+        if (side === 'SHORT') {
+          entryPrice = prevPrice * (1 + trgPct / 100);
+        } else {
+          entryPrice = prevPrice * (1 - trgPct / 100);
+        }
+      }
+      const qty = (cap * lev) / entryPrice;
+      cumQty += qty;
+      cumNotional += qty * entryPrice;
+      const avg = cumNotional / cumQty;
+      const liq = _estimateLiquidationPrice(side, avg, lev);
+      // 다음 단계 trigger 가 청산가 넘으면 빨간 경고
+      let liqColor = 'text-orange-300';
+      // 자신의 trigger 가 이전 단계의 청산가 위 (SHORT) 면 위험
+      if (prevLiq !== null && i > 1) {
+        if (side === 'SHORT' && entryPrice >= prevLiq) liqColor = 'text-red-400 font-bold';
+        if (side === 'LONG' && entryPrice <= prevLiq) liqColor = 'text-red-400 font-bold';
+      }
+      const decimals = _decimalsForPrice(avg);
+      avgEl.textContent = avg.toFixed(decimals);
+      liqEl.textContent = liq.toFixed(decimals);
+      liqEl.className = 'col-span-3 text-xs text-right ' + liqColor;
+      prevPrice = entryPrice;
+      prevLiq = liq;
+    }
+  } catch (e) {
+    // silent — 입력 중 일시적 NaN 등 무시
+  }
 }
 
 function onCapitalsChange() {
@@ -2763,6 +2836,18 @@ function _drawCmChart(closes) {
   `;
 }
 
+// 가격 magnitude 에 따른 동적 소수점 정밀도 (작은 알트 0 표시 방지)
+function _decimalsForPrice(val) {
+  const v = Math.abs(Number(val) || 0);
+  if (v >= 1000) return 2;
+  if (v >= 100) return 3;
+  if (v >= 1) return 4;
+  if (v >= 0.01) return 5;
+  if (v >= 0.0001) return 6;
+  if (v >= 0.000001) return 7;
+  return 8;
+}
+
 function fillStartPrice(mode) {
   if (_cmCurrentPrice === null || isNaN(_cmCurrentPrice)) {
     return toast('현재가 조회가 안 됩니다. 직접 입력하세요', 'warning');
@@ -2772,37 +2857,33 @@ function fillStartPrice(mode) {
     const pct = Number(mode);  // '+5' → 5, '-3' → -3
     val = _cmCurrentPrice * (1 + pct / 100);
   }
-  // Bug #13 fix: 심볼의 tick_size 로 정확하게 floor.
-  // 이전 .toFixed(2) 는 BTC (1자리) 같은 큰 가격엔 OK 였지만,
-  // 작은 알트 (예: 0.17703 → +1% = 0.18, 0.01641 → -1% = 0.02) 처럼
-  // 너무 단순 반올림되어 의도와 크게 어긋남.
+  // Bug #13 fix + 2026-05-03 강화: 심볼의 tick_size 로 정확하게 floor.
+  // 단, floor 결과가 0 이 되면 (가격이 tick_size 보다 작은 edge case) magnitude 기반 fallback.
   let formatted;
-  let stepAttr = '0.01';
+  let stepAttr = 'any';  // any 로 두면 브라우저 step 검증 우회 (작은 가격 호환)
   if (_cmTickSize && _cmTickSize > 0) {
-    // tick_size 기준 floor + tick_size 의 소수점 자릿수만큼 표시
     const stepped = Math.floor(val / _cmTickSize) * _cmTickSize;
-    const tickStr = String(_cmTickSize);
-    const dot = tickStr.indexOf('.');
-    const decimals = dot >= 0 ? tickStr.length - dot - 1 : 0;
-    formatted = stepped.toFixed(decimals);
-    stepAttr = tickStr;
+    if (stepped > 0) {
+      const tickStr = String(_cmTickSize);
+      const dot = tickStr.indexOf('.');
+      const decimals = dot >= 0 ? tickStr.length - dot - 1 : 0;
+      formatted = stepped.toFixed(decimals);
+      stepAttr = tickStr;
+    } else {
+      // tick_size 가 가격보다 커서 floor=0 — magnitude 기반으로 fallback
+      const decimals = _decimalsForPrice(val);
+      formatted = val.toFixed(decimals);
+    }
   } else {
     // tick_size 없을 때는 가격 magnitude 기반 동적 정밀도
-    let decimals;
-    if (val >= 1000) decimals = 2;
-    else if (val >= 100) decimals = 3;
-    else if (val >= 1) decimals = 4;
-    else if (val >= 0.01) decimals = 5;
-    else if (val >= 0.0001) decimals = 6;
-    else decimals = 8;
+    const decimals = _decimalsForPrice(val);
     formatted = val.toFixed(decimals);
-    stepAttr = '0.' + '0'.repeat(decimals - 1) + '1';
   }
-  // input 의 step 속성도 동적 조정 — 작은 가격대 코인이 브라우저 spinner 가 0.01 단위로
-  // 만 움직이는 문제 회피.
   const inp = document.getElementById('cm-start-price');
   inp.step = stepAttr;
   inp.value = formatted;
+  // 입력값이 바뀌었으니 미리보기 청산 위험 재계산용 trigger
+  if (typeof _refreshLiveCalc === 'function') _refreshLiveCalc();
   document.getElementById('cm-start-price').focus();
 }
 
@@ -2848,6 +2929,8 @@ function updateCmSubmit() {
   if (cmState.mode === 'direct') ok = ok && cmState.capitals.some(c => c && Number(c) > 0);
   // 잔액 부족 감지된 경우 차단 (2026-05-03)
   if (cmState._balanceInsufficient) ok = false;
+  // 청산 위험 (다음 단계 도달 불가) 감지된 경우도 차단 (2026-05-03)
+  if (cmState._liquidationRisk) ok = false;
   document.getElementById('cm-submit').disabled = !ok;
 }
 
@@ -2988,6 +3071,22 @@ async function calcPreview() {
   } catch (e) { toast('미리보기 실패: '+e.message, 'error'); }
 }
 
+// 청산가 근사 계산 — Binance USDⓢ-M Isolated, Hedge mode (2026-05-03 추가)
+// 정확한 공식은 maintenance margin tier 따라 다름. 보수적 근사값 (small position 기준).
+//   SHORT: liq = avg_entry × (1 + (1 - mmr) / leverage)
+//   LONG : liq = avg_entry × (1 - (1 - mmr) / leverage)
+// mmr (maintenance margin rate) = 0.4% (small) ~ 5% (large). 보수 위해 0.5% 사용.
+function _estimateLiquidationPrice(side, avgEntry, leverage) {
+  const mmr = 0.005;  // 0.5% — 보수적
+  const lev = Math.max(1, Number(leverage) || 1);
+  const factor = (1 - mmr) / lev;
+  if (side === 'SHORT') {
+    return avgEntry * (1 + factor);
+  } else {
+    return avgEntry * (1 - factor);
+  }
+}
+
 function _renderPreview(data) {
   const triggerKo = (mode, pct) => {
     if (mode === 'IMMEDIATE') return '즉시';
@@ -2996,20 +3095,65 @@ function _renderPreview(data) {
     if (mode === 'LIQUIDATION_BUFFER') return `청산가 -${pct}% 전`;
     return mode;
   };
-  document.getElementById('cm-preview-tbody').innerHTML = data.stages.map(s => `
-    <tr>
-      <td>${s.stage_no}단계</td>
+  // 단계별 누적 평균 진입가 + 예상 청산가 + 다음 단계 위험 분석 (2026-05-03)
+  const side = (cmState.side || 'SHORT').toUpperCase();
+  const lev = Number(data.leverage || 1) || 1;
+  let cumQty = 0, cumNotional = 0;
+  let firstUnreachable = null;  // 청산 후 도달 못하는 첫 단계
+  const enriched = data.stages.map((s, idx) => {
+    const qty = Number(s.planned_qty || 0);
+    const price = Number(s.trigger_price || 0);
+    cumQty += qty;
+    cumNotional += qty * price;
+    const avgEntry = cumQty > 0 ? (cumNotional / cumQty) : 0;
+    const liqPrice = avgEntry > 0 ? _estimateLiquidationPrice(side, avgEntry, lev) : 0;
+    // 다음 단계 trigger 가 청산가 넘으면 도달 불가 (SHORT 의 경우)
+    const nextStage = data.stages[idx + 1];
+    const nextTrigger = nextStage ? Number(nextStage.trigger_price || 0) : 0;
+    let unreachable = false;
+    if (nextTrigger > 0 && liqPrice > 0) {
+      if (side === 'SHORT' && nextTrigger >= liqPrice) unreachable = true;
+      if (side === 'LONG' && nextTrigger <= liqPrice) unreachable = true;
+    }
+    if (unreachable && firstUnreachable === null) firstUnreachable = idx + 2;  // 다음 단계 번호
+    return { ...s, _avgEntry: avgEntry, _liqPrice: liqPrice, _unreachable: unreachable };
+  });
+  document.getElementById('cm-preview-tbody').innerHTML = enriched.map((s, idx) => {
+    const isAfterUnreach = firstUnreachable !== null && (idx + 1) >= firstUnreachable;
+    const rowClass = s._unreachable ? 'class="bg-red-950"' : (isAfterUnreach ? 'class="opacity-50"' : '');
+    return `
+    <tr ${rowClass}>
+      <td>${s.stage_no}단계${isAfterUnreach ? ' ⚠️' : ''}</td>
       <td>${triggerKo(s.trigger_mode, s.trigger_percent)}</td>
       <td class="num">${s.trigger_price ? fmtNum(s.trigger_price) : '-'}</td>
       <td class="num">${fmtNum(s.planned_capital)}</td>
       <td class="num">${s.planned_qty ? fmtQty(s.planned_qty) : '-'}</td>
+      <td class="num text-cyan-300">${s._avgEntry > 0 ? fmtNum(s._avgEntry) : '-'}</td>
+      <td class="num text-orange-300" title="Isolated 2x SHORT 기준 보수적 근사">${s._liqPrice > 0 ? fmtNum(s._liqPrice) : '-'}</td>
     </tr>
-  `).join('');
+  `}).join('');
   const totalCap = data.stages.reduce((sum, s) => sum + Number(s.planned_capital || 0), 0);
+
+  // 청산 위험 경고 박스
+  let liqWarning = '';
+  if (firstUnreachable !== null) {
+    const unreachableStage = enriched.find(s => s._unreachable);
+    liqWarning = `
+      <div class="mt-2 p-2 rounded bg-red-950 border border-red-700 text-xs text-red-300">
+        <div class="font-semibold">⛔ 청산 위험 — ${firstUnreachable}단계부터 도달 불가</div>
+        <div class="mt-1">${unreachableStage.stage_no}단계 진입 후 평균진입가 <strong>${fmtNum(unreachableStage._avgEntry)}</strong>,
+          예상 청산가 <strong class="text-orange-300">${fmtNum(unreachableStage._liqPrice)}</strong>.
+          다음 단계 trigger <strong>${fmtNum(Number(data.stages[firstUnreachable - 1].trigger_price))}</strong> 가 청산가 위 → 가격 도달 전 강제 청산.</div>
+        <div class="mt-1 text-red-400">권장: 레버리지를 낮추거나 (예: 1x) / 단계별 trigger % 줄이거나 / 후반 단계 자본 줄이세요.</div>
+      </div>`;
+  }
   document.getElementById('cm-preview-meta').innerHTML =
     `레버리지: ${data.leverage}x | 총 투입자본: <strong>${fmtNum(totalCap)} USDT</strong> | ` +
     `TP: ${data.tp1_percent}/${data.tp2_percent}/${data.tp3_percent}% (25/50/25 분할 + 트레일링) | ` +
-    `<span class="text-red-400">손절 한도: ${fmtNum(data.stop_loss_amount)} USDT</span>`;
+    `<span class="text-red-400">손절 한도: ${fmtNum(data.stop_loss_amount)} USDT</span>` +
+    liqWarning;
+  // 청산 위험 시 「전략 시작」 비활성화 (사용자 인지 후 수정하도록 강제)
+  cmState._liquidationRisk = (firstUnreachable !== null);
   document.getElementById('cm-preview').classList.remove('hidden');
 }
 
