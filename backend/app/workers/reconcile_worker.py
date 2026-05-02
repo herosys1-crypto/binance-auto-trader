@@ -1,7 +1,10 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+import logging
 from sqlalchemy import select
 from app.core.database import SessionLocal
+from app.core.redis_client import get_redis_client
+from app.core.redis_lock import redis_lock, RedisLockError
 from app.integrations.binance.client import BinanceClient
 from app.models.exchange_account import ExchangeAccount
 from app.models.position import Position
@@ -9,7 +12,30 @@ from app.models.risk_event import RiskEvent
 from app.models.strategy_instance import StrategyInstance
 from app.observability.metrics import position_reconcile_total, position_qty_mismatch_total
 
+logger = logging.getLogger(__name__)
+
+# A07 fix (audit 2026-05-02): 다중 instance / re-entrant 호출 방지.
+# distributed_scheduler_guard 가 이미 있지만, ad-hoc 호출 (admin endpoint 등) 도 있을 수 있어
+# 한 번에 한 reconcile 사이클만 실행되도록 redis lock 추가.
+RECONCILE_LOCK_KEY = "lock:reconcile_worker"
+RECONCILE_LOCK_TTL = 60  # 한 사이클 최대 60초 (정상 30초 cycle 의 2배 헤드룸)
+
+
 def run_position_reconcile_once(decrypt_func) -> None:
+    try:
+        redis_client = get_redis_client()
+    except Exception:
+        # Redis 장애 시 lock 없이 진행 (기존 동작 유지)
+        return _do_reconcile(decrypt_func)
+    try:
+        with redis_lock(redis_client, RECONCILE_LOCK_KEY, ttl_seconds=RECONCILE_LOCK_TTL, wait_timeout_seconds=0):
+            _do_reconcile(decrypt_func)
+    except RedisLockError:
+        # 다른 인스턴스가 동시에 reconcile 중 — skip (정상)
+        logger.debug("reconcile_worker skip — another instance holds lock")
+
+
+def _do_reconcile(decrypt_func) -> None:
     db = SessionLocal()
     try:
         # 활성 전략 조회. *_PENDING 상태도 포함 — user-stream 이 죽어 체결 이벤트를

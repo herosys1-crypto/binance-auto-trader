@@ -36,23 +36,18 @@ ACTIVE_STAGE_STATUSES = {
 }
 
 
-def _get_total_stages(strategy) -> int:
-    """Strategy 의 template stages_config 에서 총 단계 수 산출.
+def _count_total_stages_from_template(tpl) -> int:
+    """Template 의 stages_config 에서 총 활성 단계 수 산출 (1~10 동적).
 
-    1~10 단계 동적 지원. 비어있는 단계는 capitals 에 없으므로 자동 제외됨.
-    Template 가 없거나 stages_config 가 없으면 legacy 4단계로 fallback.
+    A08 fix (audit 2026-05-02): 이전엔 _get_total_stages 가 매번 새 SessionLocal
+    + db.get 호출 → N+1 쿼리 (활성 전략 N개 × 새 세션). 이제 호출자가 미리 batch
+    fetch 한 tpl 객체를 전달하면 세션 추가 호출 없음.
     """
-    from app.models.strategy_template import StrategyTemplate
-    db = SessionLocal()
-    try:
-        tpl = db.get(StrategyTemplate, strategy.strategy_template_id)
-        if not tpl:
-            return 4
-        cfg = tpl.stages_config or {}
-        capitals = cfg.get("capitals") or []
-        return len(capitals) if capitals else 4
-    finally:
-        db.close()
+    if not tpl:
+        return 4
+    cfg = tpl.stages_config or {}
+    capitals = cfg.get("capitals") or []
+    return len(capitals) if capitals else 4
 
 
 def run_stage_trigger_once(decrypt_text) -> None:
@@ -62,16 +57,24 @@ def run_stage_trigger_once(decrypt_text) -> None:
     """
     db = SessionLocal()
     try:
+        from app.models.strategy_template import StrategyTemplate
         rows = db.execute(
             select(StrategyInstance, ExchangeAccount)
             .join(ExchangeAccount, StrategyInstance.exchange_account_id == ExchangeAccount.id)
             .where(StrategyInstance.status.in_(ACTIVE_STAGE_STATUSES))
             .where(ExchangeAccount.is_active.is_(True))
         ).all()
+        # A08 fix: N+1 방지 — 모든 strategy 의 template 을 한 번에 batch fetch.
+        # 이전엔 strategy 마다 SessionLocal() + db.get() 호출 → 활성 N개일 때 N개 세션.
+        template_ids = {s.strategy_template_id for s, _ in rows if s.strategy_template_id}
+        templates = (
+            {t.id: t for t in db.query(StrategyTemplate).filter(StrategyTemplate.id.in_(template_ids)).all()}
+            if template_ids else {}
+        )
         for strategy, account in rows:
             try:
                 next_stage_no = (strategy.current_stage or 0) + 1
-                total_stages = _get_total_stages(strategy)
+                total_stages = _count_total_stages_from_template(templates.get(strategy.strategy_template_id))
                 if next_stage_no > total_stages:
                     continue  # 모든 단계 진입 완료
                 # Stage plans 조회 (lazy load 회피 위해 새 쿼리)
