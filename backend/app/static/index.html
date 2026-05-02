@@ -2538,11 +2538,16 @@ function _defaultTriggerPct(stageNo) {
 
 function buildCapitalsGrid() {
   const grid = document.getElementById('cm-capitals-grid');
-  // 헤더 + 10행 (단계 / 수량 USDT / 진입 조건)
-  let html = `<div class="grid grid-cols-12 gap-2 text-xs text-slate-500 px-1 pb-1 border-b border-slate-700 mb-1">
-    <div class="col-span-2">단계</div>
-    <div class="col-span-5">💵 수량 (USDT) — 직접 입력</div>
-    <div class="col-span-5">📊 진입 조건 (트리거 %)</div>
+  // 헤더 + 10행 — 단계 / 자본 / 트리거% / 단계 진입가 / 누적 평균진입 / 청산가 / 누적 손실%
+  // (실시간 계산 — 입력 즉시 갱신)
+  let html = `<div class="grid grid-cols-12 gap-1 text-xs text-slate-500 px-1 pb-1 border-b border-slate-700 mb-1">
+    <div class="col-span-1">단계</div>
+    <div class="col-span-2">💵 자본</div>
+    <div class="col-span-1">📊 트리거%</div>
+    <div class="col-span-2 text-right text-purple-400" title="이 단계의 LIMIT 진입 가격 (이전 단계 × (1±trigger%))">단계 진입가</div>
+    <div class="col-span-2 text-right text-cyan-400" title="이 단계까지 누적 가중평균 진입가">평균 진입</div>
+    <div class="col-span-2 text-right text-orange-400" title="누적 평균 기준 예상 청산가 (Isolated 보수적)">청산가</div>
+    <div class="col-span-2 text-right text-red-400" title="이 단계 진입 시점의 누적 ROI (margin 대비, leverage 적용)">손실율%</div>
   </div>`;
   for (let i = 1; i <= 10; i++) {
     let triggerPlaceholder, triggerDisabled, triggerTitle, triggerValue;
@@ -2560,42 +2565,43 @@ function buildCapitalsGrid() {
       triggerValue = _defaultTriggerPct(i);  // 기본값 미리 채움 → ▲▼ 즉시 동작
     }
     const capPlaceholder = i === 1 ? '예: 100 (필수)' : '비우면 사용 안 함';
-    // 단계별 실시간 평균진입/청산가 표시 컬럼 (2026-05-03 추가)
     html += `<div class="grid grid-cols-12 gap-1 items-center">
       <div class="col-span-1 text-xs text-slate-300 font-semibold">${i}단계</div>
-      <div class="col-span-3">
+      <div class="col-span-2">
         <input type="number" min="0" step="any" id="cm-cap-${i}" placeholder="${capPlaceholder}"
           oninput="onCapitalsChange(); _refreshLiveCalc()"
           class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm" />
       </div>
-      <div class="col-span-2">
+      <div class="col-span-1">
         <input type="number" min="0" step="1" id="cm-trg-${i}" placeholder="${triggerPlaceholder}" value="${triggerValue}" ${triggerDisabled}
           title="${triggerTitle}"
           oninput="onCapitalsChange(); _refreshLiveCalc()"
           class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm ${triggerDisabled?'opacity-50 cursor-not-allowed':''}" />
       </div>
-      <div class="col-span-3 text-xs text-cyan-300 text-right" id="cm-stage-avg-${i}" title="누적 평균 진입가">-</div>
-      <div class="col-span-3 text-xs text-orange-300 text-right" id="cm-stage-liq-${i}" title="예상 청산가 (Isolated 모드 보수적)">-</div>
+      <div class="col-span-2 text-xs text-purple-300 text-right" id="cm-stage-entry-${i}" title="이 단계의 LIMIT 진입가">-</div>
+      <div class="col-span-2 text-xs text-cyan-300 text-right" id="cm-stage-avg-${i}" title="이 단계까지 누적 평균 진입가">-</div>
+      <div class="col-span-2 text-xs text-orange-300 text-right" id="cm-stage-liq-${i}" title="평균 기준 예상 청산가">-</div>
+      <div class="col-span-2 text-xs text-red-400 text-right" id="cm-stage-loss-${i}" title="이 단계 진입 시점의 누적 손실율 (margin 기준 ROI, leverage 적용)">-</div>
     </div>`;
   }
   grid.innerHTML = html;
 }
 
-// 단계별 input 변경 시 실시간 평균/청산가 계산 + 표시 (미리보기 클릭 전에도)
+// 단계별 input 변경 시 실시간 단계 진입가 + 평균진입가 + 청산가 + 손실율 계산
+// (미리보기 클릭 전에도 즉시 표시)
 function _refreshLiveCalc() {
   try {
     const startPriceStr = document.getElementById('cm-start-price').value;
     const startPrice = Number(startPriceStr);
-    if (!startPrice || startPrice <= 0) {
-      // 시작가 없으면 모든 단계 표시 클리어
+    const clearAll = () => {
       for (let i = 1; i <= 10; i++) {
-        const a = document.getElementById('cm-stage-avg-' + i);
-        const l = document.getElementById('cm-stage-liq-' + i);
-        if (a) a.textContent = '-';
-        if (l) l.textContent = '-';
+        ['cm-stage-entry-', 'cm-stage-avg-', 'cm-stage-liq-', 'cm-stage-loss-'].forEach(prefix => {
+          const el = document.getElementById(prefix + i);
+          if (el) el.textContent = '-';
+        });
       }
-      return;
-    }
+    };
+    if (!startPrice || startPrice <= 0) { clearAll(); return; }
     const lvInpEl = document.getElementById('cm-leverage');
     const lev = lvInpEl && lvInpEl.value ? Number(lvInpEl.value) : 2;
     const side = (cmState.side || 'SHORT').toUpperCase();
@@ -2605,16 +2611,20 @@ function _refreshLiveCalc() {
     for (let i = 1; i <= 10; i++) {
       const capEl = document.getElementById('cm-cap-' + i);
       const trgEl = document.getElementById('cm-trg-' + i);
+      const entryEl = document.getElementById('cm-stage-entry-' + i);
       const avgEl = document.getElementById('cm-stage-avg-' + i);
       const liqEl = document.getElementById('cm-stage-liq-' + i);
-      if (!capEl || !avgEl || !liqEl) continue;
+      const lossEl = document.getElementById('cm-stage-loss-' + i);
+      if (!capEl || !avgEl) continue;
       const cap = Number(capEl.value);
       if (!cap || cap <= 0) {
-        avgEl.textContent = '-';
-        liqEl.textContent = '-';
+        if (entryEl) entryEl.textContent = '-';
+        if (avgEl) avgEl.textContent = '-';
+        if (liqEl) liqEl.textContent = '-';
+        if (lossEl) lossEl.textContent = '-';
         continue;
       }
-      // 단계 진입가 계산
+      // 1) 이 단계 진입가 (raw, leverage 무관)
       let entryPrice;
       if (i === 1) {
         entryPrice = startPrice;
@@ -2626,22 +2636,42 @@ function _refreshLiveCalc() {
           entryPrice = prevPrice * (1 - trgPct / 100);
         }
       }
+      // 2) 누적 — qty (capital × lev / price), notional (qty × price)
       const qty = (cap * lev) / entryPrice;
       cumQty += qty;
       cumNotional += qty * entryPrice;
       const avg = cumNotional / cumQty;
+      // 3) 청산가 (누적 평균 기준)
       const liq = _estimateLiquidationPrice(side, avg, lev);
-      // 다음 단계 trigger 가 청산가 넘으면 빨간 경고
+      // 4) 이 단계 진입 시점 손실율 (누적 ROI, margin 대비, leverage 적용)
+      //    SHORT: ROI = (avg - entry) / avg × leverage × 100  (entry > avg 면 손실 음수)
+      //    LONG:  ROI = (entry - avg) / avg × leverage × 100
+      let roi;
+      if (side === 'SHORT') {
+        roi = (avg - entryPrice) / avg * lev * 100;
+      } else {
+        roi = (entryPrice - avg) / avg * lev * 100;
+      }
+      // 청산 위험 색상 (이 단계 진입가가 이전 단계의 청산가 위 → SHORT 도달 불가)
       let liqColor = 'text-orange-300';
-      // 자신의 trigger 가 이전 단계의 청산가 위 (SHORT) 면 위험
       if (prevLiq !== null && i > 1) {
         if (side === 'SHORT' && entryPrice >= prevLiq) liqColor = 'text-red-400 font-bold';
         if (side === 'LONG' && entryPrice <= prevLiq) liqColor = 'text-red-400 font-bold';
       }
       const decimals = _decimalsForPrice(avg);
-      avgEl.textContent = avg.toFixed(decimals);
-      liqEl.textContent = liq.toFixed(decimals);
-      liqEl.className = 'col-span-3 text-xs text-right ' + liqColor;
+      if (entryEl) entryEl.textContent = entryPrice.toFixed(decimals);
+      if (avgEl) avgEl.textContent = avg.toFixed(decimals);
+      if (liqEl) {
+        liqEl.textContent = liq.toFixed(decimals);
+        liqEl.className = 'col-span-2 text-xs text-right ' + liqColor;
+      }
+      if (lossEl) {
+        // 손실율 표시 (음수면 손실, 양수면 이득). 절대값 -50% 넘으면 굵게.
+        const lossText = (roi >= 0 ? '+' : '') + roi.toFixed(2) + '%';
+        const lossColor = roi < -50 ? 'text-red-500 font-bold' : (roi < 0 ? 'text-red-300' : 'text-emerald-300');
+        lossEl.textContent = lossText;
+        lossEl.className = 'col-span-2 text-xs text-right ' + lossColor;
+      }
       prevPrice = entryPrice;
       prevLiq = liq;
     }
