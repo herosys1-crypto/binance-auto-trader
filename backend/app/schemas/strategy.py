@@ -75,3 +75,9 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     peak_pnl_pct_after_first_tp: Decimal | None = None
     # ─── 진입 일시 (대시보드 표시용) ───
     created_at: datetime | None = None       # strategy 생성 시점
+    # ─── UI 진행도 표시 분모 (동적) ───
+    # template 의 활성 단계 수 (stages_config.capitals 의 NOT NULL/0 카운트, 1~10)
+    # template 의 활성 TP 수 (tp1~5_percent 의 NOT NULL 카운트, 1~5)
+    # default 4 로 두면 backward-compat (이전 frontend 도 동작)
+    total_active_stages: int = 4
+    total_active_tps: int = 4

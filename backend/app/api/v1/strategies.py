@@ -26,6 +26,37 @@ from app.services.strategy_service import StrategyService
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
 
+def _count_active_stages(tpl) -> int:
+    """Template 의 활성 단계 수 — stages_config.capitals 중 0/None 아닌 항목 카운트.
+
+    옵션 C (1~10단계 동적). 결과 fallback 4 (backward-compat).
+    """
+    if not tpl:
+        return 4
+    cfg = getattr(tpl, "stages_config", None) or {}
+    capitals = cfg.get("capitals") or []
+    n = sum(1 for c in capitals if c not in (None, "") and Decimal(str(c)) > 0)
+    return n if n > 0 else 4
+
+
+def _count_active_tps(tpl) -> int:
+    """Template 의 활성 TP 수 — tp1~5_percent 중 NOT NULL 카운트.
+
+    1~5 동적. 결과 fallback 4 (backward-compat).
+    """
+    if not tpl:
+        return 4
+    n = sum(1 for i in range(1, 6) if getattr(tpl, f"tp{i}_percent", None) is not None)
+    return n if n > 0 else 4
+
+
+def _enrich_response(resp: StrategyDetailResponse, tpl) -> StrategyDetailResponse:
+    """응답에 template 기반 카운트 채우기."""
+    resp.total_active_stages = _count_active_stages(tpl)
+    resp.total_active_tps = _count_active_tps(tpl)
+    return resp
+
+
 class PreviewInlineRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=30)
     side: Literal["LONG", "SHORT"]
@@ -167,8 +198,18 @@ def list_strategies(
     user_id: int = Depends(get_current_user_id),
 ) -> list[StrategyDetailResponse]:
     """전략 인스턴스 목록 — 대시보드 표시를 위해 detail 필드까지 포함."""
+    from app.models.strategy_template import StrategyTemplate
     rows = StrategyRepository(db).list_strategies(user_id=user_id, status=status_filter, symbol=symbol)
-    return [StrategyDetailResponse.model_validate(r) for r in rows]
+    # N+1 방지: distinct template_id 들을 한 번에 fetch.
+    template_ids = {r.strategy_template_id for r in rows if r.strategy_template_id}
+    templates = (
+        {t.id: t for t in db.query(StrategyTemplate).filter(StrategyTemplate.id.in_(template_ids)).all()}
+        if template_ids else {}
+    )
+    return [
+        _enrich_response(StrategyDetailResponse.model_validate(r), templates.get(r.strategy_template_id))
+        for r in rows
+    ]
 
 
 @router.get("/{strategy_id}", response_model=StrategyDetailResponse)
@@ -177,10 +218,12 @@ def get_strategy(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> StrategyDetailResponse:
+    from app.models.strategy_template import StrategyTemplate
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
-    return StrategyDetailResponse.model_validate(strategy)
+    tpl = db.get(StrategyTemplate, strategy.strategy_template_id) if strategy.strategy_template_id else None
+    return _enrich_response(StrategyDetailResponse.model_validate(strategy), tpl)
 
 
 @router.get("/{strategy_id}/timeline")
