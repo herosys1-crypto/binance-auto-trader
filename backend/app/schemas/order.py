@@ -22,3 +22,8 @@ class OrderResponse(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+    # ─── EXIT 주문 손익 표시용 (2026-05-03 추가) ───
+    # ENTRY 는 0/None. EXIT (TP/SL/수동청산) 는 실현 손익 + ROI %.
+    realized_pnl: Decimal | None = None
+    pnl_pct: Decimal | None = None
+    avg_entry_price: Decimal | None = None  # 청산 시점의 strategy 평균 진입가 (참고)

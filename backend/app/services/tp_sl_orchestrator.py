@@ -141,13 +141,26 @@ class TPSLOrchestratorService:
         strategy_take_profit_total.labels(symbol=strategy.symbol, side=strategy.side, level=level).inc()
 
         # 손익 금액 + 수익률 계산 — 실제 청산가(close_order.avg_price) 기준 (mark 보다 정확)
+        # 2026-05-03 강화: fallback chain 확장 + DB refresh 후 재조회
         avg_exit_price = None
         realized_pnl = None
         pnl_pct = None
         try:
             avg_entry = Decimal(str(strategy.avg_entry_price)) if strategy.avg_entry_price else None
-            exit_px = Decimal(str(close_order.avg_price)) if close_order and close_order.avg_price else None
-            # 청산가 fallback: close_order 가 avg_price 못 가져왔으면 latest_position.mark_price
+            exit_px = None
+            if close_order:
+                # 1순위: close_order.avg_price (place_market_order 응답)
+                if close_order.avg_price and Decimal(str(close_order.avg_price)) > 0:
+                    exit_px = Decimal(str(close_order.avg_price))
+                # 2순위: close_order.price
+                elif close_order.price and Decimal(str(close_order.price)) > 0:
+                    exit_px = Decimal(str(close_order.price))
+                # 3순위: DB refresh (stream EXIT FILLED 이벤트가 그 사이 갱신했을 수도)
+                else:
+                    self.db.refresh(close_order)
+                    if close_order.avg_price and Decimal(str(close_order.avg_price)) > 0:
+                        exit_px = Decimal(str(close_order.avg_price))
+            # 4순위: latest_position.mark_price
             if exit_px is None:
                 from app.repositories.position_repository import PositionRepository
                 latest_pos = PositionRepository(self.db).latest_by_strategy(strategy.id)

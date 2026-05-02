@@ -680,6 +680,8 @@
             <tr>
               <th>#</th><th>단계</th><th>유형</th><th>방향</th><th>주문 타입</th>
               <th class="num">가격</th><th class="num">수량</th><th class="num">체결</th><th>상태</th>
+              <th class="num text-cyan-300" title="EXIT 시 실현 손익 (USDT)">손익</th>
+              <th class="num text-cyan-300" title="EXIT 시 ROI % (leverage 적용)">ROI %</th>
             </tr>
           </thead>
           <tbody id="orders-tbody"></tbody>
@@ -1528,12 +1530,26 @@ async function selectStrategy(id) {
     // 주문 내역 렌더링
     const tbody = document.getElementById('orders-tbody');
     if (orders.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="9" class="text-center text-slate-500 py-6">주문 없음</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="11" class="text-center text-slate-500 py-6">주문 없음</td></tr>';
     } else {
       tbody.innerHTML = orders.map(o => {
         const oInfo = ORDER_STATUS_MAP[o.status] || { ko: o.status, sig: 'gray' };
         const purpose = PURPOSE_MAP[o.purpose] || o.purpose;
         const sideKo = o.side === 'SELL' ? '매도 📉' : '매수 📈';
+        // EXIT 손익 + ROI 표시 (2026-05-03 추가) — backend 가 계산해서 응답
+        const isExit = ['EXIT', 'TAKE_PROFIT', 'STOP_LOSS', 'EMERGENCY_CLOSE'].includes(o.purpose);
+        let pnlCell = '<td class="num text-slate-600">-</td>';
+        let pctCell = '<td class="num text-slate-600">-</td>';
+        if (isExit && o.realized_pnl !== null && o.realized_pnl !== undefined) {
+          const pnlNum = Number(o.realized_pnl);
+          const color = pnlNum >= 0 ? 'text-green-400' : 'text-red-400';
+          pnlCell = `<td class="num ${color} font-semibold">${fmtPnL(pnlNum)}</td>`;
+          if (o.pnl_pct !== null && o.pnl_pct !== undefined) {
+            const pctNum = Number(o.pnl_pct);
+            const pctColor = pctNum >= 0 ? 'text-green-400' : 'text-red-400';
+            pctCell = `<td class="num ${pctColor}">${fmtPnL(pctNum)}%</td>`;
+          }
+        }
         return `<tr>
           <td>#${o.id}</td>
           <td>${o.stage_no || '-'}</td>
@@ -1544,6 +1560,8 @@ async function selectStrategy(id) {
           <td class="num">${fmtQty(o.orig_qty)}</td>
           <td class="num">${fmtQty(o.executed_qty)}</td>
           <td><span class="badge badge-${oInfo.sig}">${oInfo.ko}</span></td>
+          ${pnlCell}
+          ${pctCell}
         </tr>`;
       }).join('');
     }
