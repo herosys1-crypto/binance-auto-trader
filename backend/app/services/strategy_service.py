@@ -73,15 +73,21 @@ class StrategyService:
             raise ValueError("Template or symbol not found")
         # 중복 방지 (Critical): Binance 는 같은 심볼+방향에 대해 통합 포지션으로만 관리.
         # 같은 계정/심볼/방향 활성 전략이 있으면 새 전략 생성을 거부 (TP/SL 충돌, qty 추적 오류 회피).
-        # 종료된 상태 (STOPPED/COMPLETED/CLOSED/REENTRY_READY) 는 제외 — 새로 시작 가능.
+        # 종료된 상태 (모두 _CLOSED_STATUSES 에 포함) 는 제외 — 새로 시작 가능.
+        # 2026-05-03 강화: STOPPING / CLOSED_BY_TP/SL / KILL_SWITCH_TRIGGERED 도 종료 분류 추가.
         from sqlalchemy import select
-        _CLOSED_STATUSES = {"STOPPED", "COMPLETED", "CLOSED", "REENTRY_READY"}
+        _CLOSED_STATUSES = {
+            "STOPPED", "STOPPING", "COMPLETED", "CLOSED",
+            "CLOSED_BY_TP", "CLOSED_BY_SL", "REENTRY_READY",
+            "KILL_SWITCH_TRIGGERED",
+        }
         existing = self.db.execute(
             select(StrategyInstance)
             .where(StrategyInstance.exchange_account_id == exchange_account_id)
             .where(StrategyInstance.symbol == symbol)
             .where(StrategyInstance.side == side)
             .where(StrategyInstance.status.notin_(_CLOSED_STATUSES))
+            .order_by(StrategyInstance.id.desc())
             .limit(1)
         ).scalar_one_or_none()
         if existing:
@@ -134,6 +140,28 @@ class StrategyService:
                 f"거래소 잔액 확인 실패 (안전상 신규 전략 차단): {e}. "
                 "잠시 후 다시 시도하거나 거래소 API 상태를 확인하세요."
             )
+
+        # 거래소 실 포지션 사전 체크 (2026-05-03 강화):
+        # DB status race 시 (예: STAGE1_OPEN_PENDING → REENTRY_READY 일시 전환 → 다시 active)
+        # 같은 (symbol, position_side) 의 거래소 실 포지션이 있으면 중복 차단.
+        # Binance hedge mode 의 통합 포지션 보호 — 가장 강력한 마지막 방어선.
+        try:
+            positions = acct.get("positions") or []
+            for p in positions:
+                if (
+                    p.get("symbol") == symbol
+                    and p.get("positionSide") == side
+                    and abs(D(str(p.get("positionAmt", "0")))) > 0
+                ):
+                    raise ValueError(
+                        f"거래소에 이미 {symbol} {side} 포지션 {p.get('positionAmt')} 가 존재합니다. "
+                        "(우리 시스템에 활성 strategy 가 없어도 거래소 포지션이 있으면 중복) "
+                        "기존 포지션을 정리한 후 새 전략을 시작하세요."
+                    )
+        except ValueError:
+            raise
+        except Exception as e:
+            _logger.warning("exchange position pre-check failed (proceeding): %s", e)
 
         available = D(str(acct.get("availableBalance", "0")))
         total_margin = D(str(acct.get("totalMarginBalance", "0")))

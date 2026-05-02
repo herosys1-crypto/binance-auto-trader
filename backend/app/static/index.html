@@ -2949,6 +2949,8 @@ function updateCmSubmit() {
   if (cmState._balanceInsufficient) ok = false;
   // 청산 위험 (다음 단계 도달 불가) 감지된 경우도 차단 (2026-05-03)
   if (cmState._liquidationRisk) ok = false;
+  // 중복 활성 전략 감지된 경우도 차단 (2026-05-03)
+  if (cmState._duplicateActive) ok = false;
   document.getElementById('cm-submit').disabled = !ok;
 }
 
@@ -2986,6 +2988,23 @@ async function loadBalanceForPreview() {
     const fmt = (n) => Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 });
     statusEl.innerHTML = bal.is_testnet ? '<span class="text-amber-400">testnet</span>' : '<span class="text-emerald-400">mainnet</span>';
 
+    // 같은 (symbol, side) 거래소 활성 포지션 / 시스템 활성 전략 검사 (2026-05-03)
+    const symbol = (document.getElementById('cm-symbol').value || '').toUpperCase().trim();
+    const side = (cmState.side || 'SHORT').toUpperCase();
+    let dupWarning = '';
+    if (symbol) {
+      try {
+        const allStrats = await api('/strategies').catch(() => []);
+        const closedSet = new Set(['STOPPED','STOPPING','COMPLETED','CLOSED','CLOSED_BY_TP','CLOSED_BY_SL','REENTRY_READY','KILL_SWITCH_TRIGGERED']);
+        const dup = (allStrats || []).find(s =>
+          s.symbol === symbol && s.side === side && !closedSet.has(s.status) && s.exchange_account_id === cmState.accountId
+        );
+        if (dup) {
+          dupWarning = `<div class="col-span-2 text-red-400 font-semibold">⛔ 같은 ${symbol} ${side} 활성 전략 #${dup.id} (${dup.status}) 존재 — 새 전략 차단</div>`;
+        }
+      } catch (e) {}
+    }
+
     detailEl.innerHTML = `
       <div>지갑 잔액: <span class="text-slate-200">${fmt(wallet)} USDT</span></div>
       <div>가용 잔액: <span class="text-slate-200">${fmt(available)} USDT</span></div>
@@ -2993,7 +3012,10 @@ async function loadBalanceForPreview() {
       <div>사용 마진 (미체결): <span class="text-slate-300">${fmt(usedOrder)}</span></div>
       <div>이 전략 필요 마진: <span class="text-cyan-300 font-semibold">${fmt(requiredMargin)} USDT</span></div>
       <div>예상 진입 후 잔액: <span class="${remaining >= 0 ? 'text-emerald-300' : 'text-red-400'} font-semibold">${fmt(remaining)} USDT</span></div>
+      ${dupWarning}
     `;
+    // 중복 활성 전략 발견 시 차단 플래그 (전략시작 비활성화)
+    cmState._duplicateActive = !!dupWarning;
 
     if (remaining < 0) {
       // 잔액 부족 — 빨간 경고
