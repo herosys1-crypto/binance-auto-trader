@@ -71,8 +71,24 @@ class TPSLOrchestratorService:
         # 크라이시스 모드 qty ratio override (사용자 기획):
         # TP1=25%, TP2=25%, TP3=50% of remaining, TP4=100% of remaining
         crisis_qty_ratio = {"TP1": Decimal("25"), "TP2": Decimal("25"), "TP3": Decimal("50"), "TP4": Decimal("100")}
+
+        # 사용자 기획 (2026-04-30 evening, #80 사례 검토 후):
+        # "4/4 익절 모두 종료되면 전략 인스턴스 모두 종료. 1단계만 진입했어도 모든 활성 TP
+        #  발동 시 나머지 잔량까지 전부 청산하고 종료."
+        # 활성 TP = template 의 tp1~5_percent 중 NOT NULL 인 레벨. 가장 큰 번호 = 마지막 TP.
+        # 마지막 TP 발동 시 사용자 ratio 무시하고 잔량 100% 청산 + COMPLETED.
+        active_tps = []
+        if tpl:
+            for n in range(1, 6):
+                if getattr(tpl, f"tp{n}_percent", None) is not None:
+                    active_tps.append(f"TP{n}")
+        last_active_tp = active_tps[-1] if active_tps else None
+
         if level == "TRAILING_TP":
             close_ratio = Decimal("1.00")  # 전량 청산
+        elif last_active_tp and level == last_active_tp:
+            # 마지막 활성 TP 발동 — 잔량 전부 청산 (사용자 ratio 무시)
+            close_ratio = Decimal("1.00")
         elif strategy.crisis_mode_triggered_at and level in crisis_qty_ratio:
             close_ratio = crisis_qty_ratio[level] / Decimal("100")
         else:
