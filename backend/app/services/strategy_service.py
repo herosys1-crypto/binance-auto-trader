@@ -90,6 +90,40 @@ class StrategyService:
                 "Binance 는 통합 포지션으로만 관리하므로 중복 전략은 TP/SL 충돌을 일으킵니다. "
                 "기존 전략을 종료한 후 새로 시작하시거나, 다른 심볼/방향을 선택해 주세요."
             )
+        # 잔액 사전 체크 (2026-05-03 추가):
+        # 새 전략의 총 자본이 거래소 가용 잔액 (availableBalance) 을 초과하면 거부.
+        # mainnet 에서 자본 부족 진입은 거래소가 -2019 (Margin is insufficient) 로 거절하고
+        # 우리 시스템은 STAGE1_OPEN_PENDING 좀비로 빠짐 → 사전 차단이 안전.
+        # 마진 = total_capital / leverage 기준으로 계산.
+        try:
+            from app.integrations.binance.client import BinanceClient
+            from app.core.crypto import decrypt_text
+            from decimal import Decimal as D
+            ex_account = self.db.get(self.repo.ExchangeAccount, exchange_account_id) if hasattr(self.repo, "ExchangeAccount") else None
+            from app.models.exchange_account import ExchangeAccount as _EA
+            ex_account = self.db.get(_EA, exchange_account_id)
+            if ex_account:
+                client = BinanceClient(
+                    api_key=decrypt_text(ex_account.api_key_enc),
+                    api_secret=decrypt_text(ex_account.api_secret_enc),
+                    is_testnet=ex_account.is_testnet,
+                )
+                acct = client.get_account()
+                available = D(str(acct.get("availableBalance", "0")))
+                lev = D(str(template_model.leverage)) if template_model.leverage else D("1")
+                required_margin = (D(str(template_model.total_capital)) / lev).quantize(D("0.01"))
+                if required_margin > available:
+                    raise ValueError(
+                        f"잔액 부족: 필요 마진 {required_margin} USDT > 가용 잔액 {available} USDT. "
+                        f"(자본 {template_model.total_capital} ÷ 레버리지 {lev}x). "
+                        "거래소에 입금하거나 자본을 줄이세요."
+                    )
+        except ValueError:
+            raise
+        except Exception as e:
+            # 거래소 API 일시적 장애는 무시 (warn 만), 거래 차단 안 함
+            import logging
+            logging.getLogger(__name__).warning("balance pre-check failed (skipping): %s", e)
         preview = self.calculate_preview(symbol=symbol, side=side, start_price=start_price, strategy_template_id=strategy_template_id, leverage_override=leverage_override)
         instance = StrategyInstance(
             user_id=user_id,

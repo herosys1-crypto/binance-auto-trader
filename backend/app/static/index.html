@@ -156,12 +156,17 @@
     <button onclick="dismissAlert()" class="text-slate-400 hover:text-white">✕</button>
   </div>
 
-  <!-- 4-card metrics — 모바일 2단 / 데스크톱 4단 (클릭하면 해당 섹션으로 이동) -->
-  <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-2">
+  <!-- 5-card metrics — 모바일 2단 / 데스크톱 5단. 거래소 잔액 카드 추가 (2026-05-03) -->
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-2">
     <div id="card-system" class="card rounded-lg p-2 signal-gray" onclick="scrollToSection('section-syshealth')" title="클릭하면 시스템 상태로 이동">
       <p class="text-xs text-slate-400">시스템 상태 ▾</p>
       <p id="metric-system" class="text-base sm:text-lg font-bold leading-tight">-</p>
       <p id="metric-system-detail" class="text-xs text-slate-500">-</p>
+    </div>
+    <div id="card-balance" class="card rounded-lg p-2 signal-gray" onclick="loadBalance()" title="클릭하면 잔액 새로고침">
+      <p class="text-xs text-slate-400">💰 거래소 잔액</p>
+      <p id="metric-balance" class="text-base sm:text-lg font-bold leading-tight">-</p>
+      <p id="metric-balance-detail" class="text-xs text-slate-500">가용 / 마진비율</p>
     </div>
     <div id="card-active" class="card rounded-lg p-2 signal-gray" onclick="scrollToSection('section-strategies')" title="클릭하면 전략 인스턴스로 이동">
       <p class="text-xs text-slate-400">진행 중인 전략 ▾</p>
@@ -1008,6 +1013,7 @@ async function refreshAll() {
     refreshStats(),
     refreshActivity(),
     refreshSysHealth(),
+    loadBalance(),  // 거래소 잔액 카드 (2026-05-03 추가)
   ]);
   document.getElementById('last-updated').textContent = '마지막 갱신: ' + new Date().toLocaleTimeString('ko-KR');
 }
@@ -1106,6 +1112,32 @@ async function refreshHealth() {
     setMetric('system', ok ? '🟢 정상' : '🔴 오류',  ok ? 'API + DB 연결됨' : '연결 실패', ok ? 'green' : 'red');
   } catch {
     setMetric('system', '🔴 오류', 'API 응답 없음', 'red');
+  }
+}
+
+// 거래소 잔액 카드 — 첫 active 거래소 계정 기준 (다중 계정이면 별도 처리 필요)
+async function loadBalance() {
+  try {
+    const accounts = await api('/exchange-accounts').catch(() => []);
+    if (!accounts || !accounts.length) {
+      setMetric('balance', '-', '거래소 계정 없음', 'gray');
+      return;
+    }
+    const active = accounts.find(a => a.is_active) || accounts[0];
+    const data = await api(`/exchange-accounts/${active.id}/balance`);
+    const wallet = Number(data.total_wallet_balance || 0);
+    const available = Number(data.available_balance || 0);
+    const ratio = Number(data.margin_ratio_pct || 0);
+    // 마진 비율 기반 신호: < 50% green, 50~80% yellow, > 80% red
+    const sig = ratio < 50 ? 'green' : ratio < 80 ? 'yellow' : 'red';
+    setMetric(
+      'balance',
+      `${available.toLocaleString('en-US', {maximumFractionDigits: 2})} USDT`,
+      `wallet ${wallet.toLocaleString('en-US', {maximumFractionDigits: 2})} / ${ratio.toFixed(2)}%${data.is_testnet ? ' (testnet)' : ''}`,
+      sig,
+    );
+  } catch (e) {
+    setMetric('balance', '-', '잔액 조회 실패', 'red');
   }
 }
 
