@@ -39,7 +39,11 @@ class TPSLOrchestratorService:
                 # _execute_take_profit 내부에서 크라이시스이면 qty ratio override (25/25/50/100).
                 # risk_service.evaluate_take_profit_level 이 크라이시스 시 임계치를 5/10/15/20% 로 override.
                 # 이미 동일 단계 또는 더 높은 단계가 실행됐으면 스킵
-                done_levels_progression = ["TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL", "TP4_DONE_PARTIAL", "COMPLETED"]
+                # A12 fix (audit 2026-05-02): TP5_DONE_PARTIAL 누락 — TP5 가 마지막 활성 TP 가
+                # 아닌 케이스 (예: tp1~5 모두 활성 + 사용자 ratio < 100%) 에서 부분 청산 후
+                # progression 추적이 끊어지는 미세 버그. 이전엔 TP5 발동 후 status="COMPLETED" 만
+                # 처리되어 TP5_DONE_PARTIAL 상태가 빠져있었음.
+                done_levels_progression = ["TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL", "TP4_DONE_PARTIAL", "TP5_DONE_PARTIAL", "COMPLETED"]
                 tp_level_index = {"TP1": 0, "TP2": 1, "TP3": 2, "TP4": 3, "TP5": 4}.get(tp_level, -1)
                 cur_status = (strategy.status or "").upper()
                 cur_index = -1
@@ -126,7 +130,8 @@ class TPSLOrchestratorService:
         elif level == "TP4":
             strategy.status = "TP4_DONE_PARTIAL" if not is_final else "COMPLETED"
         elif level == "TP5":
-            strategy.status = "COMPLETED"
+            # A12 fix: TP5 가 마지막 활성 TP 가 아닐 수도 있음 (이론적으로). is_final 따라 분기.
+            strategy.status = "TP5_DONE_PARTIAL" if not is_final else "COMPLETED"
         else:  # TRAILING_TP
             strategy.status = "COMPLETED"
         if strategy.status == "COMPLETED":

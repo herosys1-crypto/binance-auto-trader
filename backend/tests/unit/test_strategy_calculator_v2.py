@@ -86,6 +86,75 @@ class TestFiveStages:
         assert preview.stages[4].trigger_mode == "LIQUIDATION_BUFFER"
 
 
+class TestOptionCSixStages:
+    """A17 fix (audit 2026-05-02): 옵션 C 시그니처 시나리오 — 6단계 직접 입력.
+
+    핵심 검증: 사용자 기획 변경 (2026-04-30) 후 마지막 단계가 LIQUIDATION_BUFFER 가 아닌
+    PRICE_UP_PCT (SHORT) / PRICE_DOWN_PCT (LONG) 로 사용자 입력값 적용.
+    """
+
+    def test_option_c_6_stage_short_last_price_up_pct_20(self) -> None:
+        """SHORT 6단계 — 마지막 단계 +20% 도달 시 진입 (사용자 #75 시나리오)."""
+        calc = StrategyCalculator(_btc_rule())
+        preview = calc.calculate_preview(
+            **_common_kwargs(start_price="100000"),
+            stages_config={
+                "capitals": ["200", "300", "500", "700", "900", "1200"],
+                "trigger_percents": [None, 10, 10, 10, 20, 20],
+                # last_stage_trigger_mode 미지정 → SHORT 기본 PRICE_UP_PCT
+                "last_stage_trigger_percent": "20",
+            },
+        )
+        assert len(preview.stages) == 6
+        # 1단계: IMMEDIATE, 사용자 시작가
+        assert preview.stages[0].trigger_mode == "IMMEDIATE"
+        assert preview.stages[0].planned_capital == Decimal("200")
+        # 6단계 (마지막): PRICE_UP_PCT, 20% (옵션 C 기획 — LIQUIDATION_BUFFER 아님!)
+        assert preview.stages[5].trigger_mode == "PRICE_UP_PCT"
+        assert preview.stages[5].trigger_percent == Decimal("20")
+        assert preview.stages[5].planned_capital == Decimal("1200")
+
+    def test_option_c_6_stage_long_last_price_down_pct_20(self) -> None:
+        """LONG 6단계 — 마지막 단계 -20% 도달 시 진입 (LONG 의 거울 시나리오)."""
+        calc = StrategyCalculator(_btc_rule())
+        preview = calc.calculate_preview(
+            **_common_kwargs(start_price="100000", side="LONG"),
+            stages_config={
+                "capitals": ["200", "300", "500", "700", "900", "1200"],
+                "last_stage_trigger_percent": "20",
+            },
+        )
+        assert len(preview.stages) == 6
+        assert preview.stages[5].trigger_mode == "PRICE_DOWN_PCT"
+        assert preview.stages[5].trigger_percent == Decimal("20")
+
+    def test_option_c_6_stage_capital_sum_matches(self) -> None:
+        """capitals 합계가 그대로 planned_capital 합계로 반영."""
+        calc = StrategyCalculator(_btc_rule())
+        capitals = ["200", "300", "500", "700", "900", "1200"]
+        preview = calc.calculate_preview(
+            **_common_kwargs(start_price="100000"),
+            stages_config={"capitals": capitals, "last_stage_trigger_percent": "20"},
+        )
+        total_cap = sum(s.planned_capital for s in preview.stages)
+        assert total_cap == sum(Decimal(c) for c in capitals)  # 3,800
+
+    def test_option_c_explicit_last_stage_mode_override(self) -> None:
+        """사용자가 마지막 단계 모드를 명시적으로 LIQUIDATION_BUFFER 지정 시 그것 사용 (legacy 호환)."""
+        calc = StrategyCalculator(_btc_rule())
+        preview = calc.calculate_preview(
+            **_common_kwargs(start_price="100000"),
+            stages_config={
+                "capitals": ["200", "300", "500", "700", "900", "1200"],
+                "last_stage_trigger_mode": "LIQUIDATION_BUFFER",
+                "last_stage_trigger_percent": "5",
+            },
+        )
+        assert preview.stages[5].trigger_mode == "LIQUIDATION_BUFFER"
+        assert preview.stages[5].trigger_percent == Decimal("5")
+        assert preview.stages[5].trigger_price is None  # LIQUIDATION_BUFFER 는 가격 None
+
+
 class TestTenStages:
     def test_10_stage_short_default_pct(self) -> None:
         calc = StrategyCalculator(_btc_rule())

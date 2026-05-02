@@ -1,0 +1,91 @@
+# =============================================================================
+# Docker Compose Override for Production (DigitalOcean VPS, Neon Cloud DB)
+# =============================================================================
+# 사용법:
+#   cd backend
+#   docker compose -f docker-compose.yml -f ../docker-compose.production.yml up -d --build
+#
+# 또는 docker-compose.override.yml 로 복사하면 자동 적용:
+#   cp ../docker-compose.production.yml docker-compose.override.yml
+#   docker compose up -d --build
+#
+# 차이점:
+#   - 로컬 postgres (db) 비활성화 — Neon Cloud 사용
+#   - db-backup 비활성화 — Neon 자동 백업 사용
+#   - api 만 외부 8000 노출 (Nginx 가 reverse proxy)
+#   - 메모리 제한 적용
+# =============================================================================
+
+services:
+  # 로컬 postgres 비활성화 (Neon Cloud 사용)
+  db:
+    profiles: ["disabled"]
+
+  # 로컬 DB backup 비활성화 (Neon 이 처리)
+  db-backup:
+    profiles: ["disabled"]
+
+  # api — 8000 은 127.0.0.1 만 (Nginx 가 proxy)
+  api:
+    ports: !override
+      - "127.0.0.1:8000:8000"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    environment:
+      APP_ENV: production
+    depends_on: !override
+      - redis
+
+  scheduler:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    depends_on: !override
+      - redis
+
+  user-stream:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    depends_on: !override
+      - redis
+
+  redis:
+    ports: !override
+      - "127.0.0.1:6380:6379"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # Prometheus — 외부 노출 차단 (SSH tunnel 권장)
+  prometheus:
+    ports: !override
+      - "127.0.0.1:9090:9090"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    depends_on: !override
+      - api
+
+  # Grafana — 외부 노출 차단 (SSH tunnel 권장)
+  grafana:
+    ports: !override
+      - "127.0.0.1:3000:3000"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      # GF_SECURITY_ADMIN_PASSWORD 는 .env 에서 주입 권장 (또는 environment 직접)
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"

@@ -1,3 +1,4 @@
+import logging
 from decimal import Decimal
 from uuid import uuid4
 from app.integrations.binance.client import BinanceClient
@@ -5,9 +6,12 @@ from app.integrations.binance.futures_trade import BinanceFuturesTradeClient
 from app.integrations.binance.execution.router import ExecutionAdapterRouter
 from app.integrations.binance.execution.plain_order_adapter import PlainOrderAdapter
 from app.models.order import Order
+from app.models.risk_event import RiskEvent
 from app.repositories.order_repository import OrderRepository
 from app.repositories.strategy_repository import StrategyRepository
 from app.services.account_kill_switch_service import AccountKillSwitchService
+
+logger = logging.getLogger(__name__)
 
 class ExecutionService:
     def __init__(self, db, *, api_key: str, api_secret: str, is_testnet: bool = False) -> None:
@@ -112,7 +116,25 @@ class ExecutionService:
         # 새 흐름: status 변경을 먼저 commit 해서 외부 worker 에게 노출한 뒤 거래소 호출.
         strategy.status = "STOPPING"
         self.db.commit()
-        response = self.trade_client.place_market_order(symbol=strategy.symbol, side=side, position_side=position_side, quantity=quantity, new_client_order_id=client_order_id)
+        # A03 fix (audit 2026-05-02): 거래소 호출 실패 시 명시적 로깅 + RiskEvent 기록.
+        # 이전엔 raw exception 만 던짐 → 운영자가 원인 추적 어려움.
+        try:
+            response = self.trade_client.place_market_order(symbol=strategy.symbol, side=side, position_side=position_side, quantity=quantity, new_client_order_id=client_order_id)
+        except Exception as e:
+            logger.error(
+                "emergency_close place_market_order failed: strategy_id=%s symbol=%s qty=%s side=%s error=%s",
+                strategy.id, strategy.symbol, quantity, side, e,
+            )
+            self.db.add(RiskEvent(
+                strategy_instance_id=strategy.id,
+                event_type="EMERGENCY_CLOSE_PLACE_FAILED",
+                severity="ERROR",
+                title="Emergency close 시장가 주문 발송 실패",
+                message=f"symbol={strategy.symbol} qty={quantity} side={side} error={e}",
+                event_payload={"strategy_id": strategy.id, "quantity": str(quantity), "side": side, "error": str(e)},
+            ))
+            self.db.commit()
+            raise
         order = Order(strategy_instance_id=strategy.id, stage_no=None, purpose="EXIT", symbol=strategy.symbol, side=side, position_side=position_side, order_type="MARKET", time_in_force=None, client_order_id=client_order_id, exchange_order_id=response.get("orderId"), trigger_price=None, price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, orig_qty=quantity, executed_qty=Decimal(str(response.get("executedQty", "0"))), avg_price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, status=response.get("status", "NEW"), raw_request={"symbol": strategy.symbol, "side": side, "positionSide": position_side, "type": "MARKET", "quantity": str(quantity), "newClientOrderId": client_order_id}, raw_response=response)
         self.order_repo.create(order)
         self.db.commit()

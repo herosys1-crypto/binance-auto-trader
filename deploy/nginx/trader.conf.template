@@ -1,0 +1,77 @@
+# =============================================================================
+# Nginx reverse proxy + HTTPS for binance-auto-trader
+# =============================================================================
+# 위치: /etc/nginx/sites-available/trader
+# 활성화: ln -s /etc/nginx/sites-available/trader /etc/nginx/sites-enabled/
+# HTTPS 자동: certbot --nginx -d trader.yourdomain.com
+# =============================================================================
+
+# HTTP → HTTPS 자동 리다이렉트는 certbot 이 추가
+server {
+    listen 80;
+    listen [::]:80;
+    server_name trader.yourdomain.com;
+
+    # 보안 헤더
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    # Body size (큰 payload 처리, 보통 1MB 면 충분)
+    client_max_body_size 1m;
+
+    # 타임아웃
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+    proxy_connect_timeout 60s;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket 지원 (필요 시)
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    # health check 는 인증 안 함 (UptimeRobot 등)
+    location = /health {
+        proxy_pass http://127.0.0.1:8000/health;
+        access_log off;
+    }
+
+    # /metrics 는 외부 노출 차단 (prometheus 만 접근)
+    location = /metrics {
+        deny all;
+        return 403;
+    }
+
+    # 정적 파일 직접 제공 (선택, 성능)
+    # location /static/ {
+    #     alias /home/trader/binance-auto-trader/backend/app/static/;
+    #     expires 7d;
+    #     add_header Cache-Control "public, immutable";
+    # }
+}
+
+# Grafana 외부 노출 시 별도 server block + Basic Auth 권장
+# server {
+#     listen 443 ssl;
+#     server_name grafana.yourdomain.com;
+#     # certbot 발급 인증서
+#     ssl_certificate /etc/letsencrypt/live/grafana.yourdomain.com/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/grafana.yourdomain.com/privkey.pem;
+#
+#     auth_basic "Restricted";
+#     auth_basic_user_file /etc/nginx/.htpasswd;
+#
+#     location / {
+#         proxy_pass http://127.0.0.1:3000;
+#         proxy_set_header Host $host;
+#     }
+# }
