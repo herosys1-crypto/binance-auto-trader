@@ -793,12 +793,13 @@ const PURPOSE_MAP = {
   'EMERGENCY_CLOSE':  '긴급 청산',
 };
 
-// Backend `_CLOSED_STATUSES` (services/strategy_service.py, api/v1/strategies.py) 와 정렬.
-// 2026-05-04 v2: STOPPING 의도적 제외 — backend 가 STOPPING 을 active 로 분류해 신규
-// 진입을 차단함 (race window 보호, commit 6133072). 프론트에서도 같이 보이게 해야
-// "왜 새 전략 못 만들지?" 라는 사용자 혼란 제거 + 「수동 stop 후 30초 자동 정리 대기」
-// 가시성 확보. STOPPING 자동 정리는 reconcile_worker 30초 사이클이 처리.
-const TERMINAL_STATUSES = ['STOPPED', 'COMPLETED', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'REENTRY_READY', 'KILL_SWITCH_TRIGGERED'];
+// Backend `_CLOSED_STATUSES` (services/strategy_service.py, api/v1/strategies.py) + STOPPING.
+// 2026-05-04 v3 (사용자 피드백): "종료 숨김" 은 진행 중 전략만 보이게 — STOPPING (종료 중)
+// 도 사용자 관점에선 "끝낸 거" 라 숨겨야 함. backend 의 race-window 보호 (STOPPING 도
+// active 로 보고 신규 진입 차단) 는 그대로 유지하되 프론트에서는 정리 진행 중 행을
+// 가린다. duplicate-prevention 에러 메시지가 offending strategy id 알려주므로 사용자가
+// 어떤 행이 막는지 알 수 있음.
+const TERMINAL_STATUSES = ['STOPPED', 'STOPPING', 'COMPLETED', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'REENTRY_READY', 'KILL_SWITCH_TRIGGERED'];
 
 // ==================== Auth ====================
 document.getElementById('login-form').addEventListener('submit', async (e) => {

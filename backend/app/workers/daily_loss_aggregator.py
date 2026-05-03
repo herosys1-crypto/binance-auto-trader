@@ -51,13 +51,35 @@ _ACTIVE_STATUSES_FOR_PNL = (
 )
 
 
-def run_daily_loss_check_once() -> None:
-    """1회 daily loss 체크 + 필요 시 kill-switch 발동."""
-    limit_value = settings.daily_loss_limit_usdt
-    if not limit_value or limit_value <= 0:
-        return  # 기능 비활성 (deploy-safe default)
-    limit = Decimal(str(limit_value))
+def _resolve_account_limit(acc: ExchangeAccount) -> Decimal | None:
+    """계정별 한도 우선 → global → None (비활성).
 
+    - acc.daily_loss_limit_usdt > 0 → 그 값 사용 (계정 override)
+    - 그 외 (NULL / 0 / 음수) → settings.daily_loss_limit_usdt (global)
+    - global 도 None / 0 → None (비활성)
+    """
+    acc_limit = acc.daily_loss_limit_usdt
+    if acc_limit is not None:
+        try:
+            v = Decimal(str(acc_limit))
+            if v > 0:
+                return v
+        except Exception:
+            pass
+    global_limit = settings.daily_loss_limit_usdt
+    if global_limit and global_limit > 0:
+        return Decimal(str(global_limit))
+    return None
+
+
+def run_daily_loss_check_once() -> None:
+    """1회 daily loss 체크 + 필요 시 kill-switch 발동.
+
+    한도 해석 (2026-05-04 v3):
+    - ExchangeAccount.daily_loss_limit_usdt 가 양수면 그것 우선
+    - 아니면 settings.daily_loss_limit_usdt (global) 사용
+    - 둘 다 None/0 이면 그 계정 skip (기능 비활성)
+    """
     db = SessionLocal()
     try:
         kill_switch = AccountKillSwitchService(db)
@@ -66,6 +88,11 @@ def run_daily_loss_check_once() -> None:
         ).scalars().all()
         for acc in accounts:
             try:
+                # 계정별 한도 우선 → global → 비활성.
+                limit = _resolve_account_limit(acc)
+                if limit is None:
+                    continue  # 이 계정 한도 비활성
+
                 # kill-switch 가 이미 활성이면 재트리거 불필요 (idempotent 이지만 노이즈 ↓).
                 if kill_switch.is_enabled(acc.id):
                     continue
