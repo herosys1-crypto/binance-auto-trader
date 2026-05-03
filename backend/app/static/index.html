@@ -754,7 +754,10 @@ const PURPOSE_MAP = {
   'EMERGENCY_CLOSE':  '긴급 청산',
 };
 
-const TERMINAL_STATUSES = ['STOPPED', 'STOPPING', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'KILL_SWITCH_TRIGGERED'];
+// Backend `_CLOSED_STATUSES` (services/strategy_service.py, api/v1/strategies.py) 와 일치 +
+// UI 편의로 STOPPING 도 추가 (= "닫는 중" 도 종료 숨김 필터에 포함). COMPLETED / REENTRY_READY 가
+// 빠져 있어 "종료 숨김" 체크해도 보이는 + active 액션 버튼이 잘못 노출되는 버그 (2026-05-04 fix).
+const TERMINAL_STATUSES = ['STOPPED', 'STOPPING', 'COMPLETED', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'REENTRY_READY', 'KILL_SWITCH_TRIGGERED'];
 
 // ==================== Auth ====================
 document.getElementById('login-form').addEventListener('submit', async (e) => {

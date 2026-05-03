@@ -585,7 +585,14 @@ def delete_strategy(
     if not strategy or strategy.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
 
-    terminal_statuses = {"STOPPED", "STOPPING", "CLOSED", "CLOSED_BY_SL", "CLOSED_BY_TP", "KILL_SWITCH_TRIGGERED"}
+    # 2026-05-04 fix: 같은 모듈 내 stop_strategy 의 _TERMINAL 과 일치시킴.
+    # 이전: COMPLETED / REENTRY_READY 가 빠져있어 정상 종료된 전략 삭제 시도 시
+    # "활성 전략 삭제 불가" 잘못된 메시지. STOPPING 은 "닫는 중" 이라 의도적으로 제외 (포지션 잔재 가능).
+    terminal_statuses = {
+        "STOPPED", "COMPLETED", "CLOSED",
+        "CLOSED_BY_TP", "CLOSED_BY_SL",
+        "REENTRY_READY", "KILL_SWITCH_TRIGGERED",
+    }
     if strategy.status not in terminal_statuses:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
