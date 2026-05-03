@@ -9,6 +9,7 @@ from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.api.router import api_router
 from app.core.config import settings
+from app.core.crypto import validate_encryption_key
 from app.core.redis_client import get_redis_client
 from app.core.sentry import init_sentry
 from app.middleware.idempotency import IdempotencyMiddleware
@@ -38,6 +39,8 @@ async def _poll_health_metrics() -> None:
 
 
 init_sentry()
+# 2026-05-04: encryption_key 가 invalid 면 startup 실패 — 첫 거래 시점에 crash 방지.
+validate_encryption_key()
 app = FastAPI(title=settings.app_name)
 app.add_middleware(IdempotencyMiddleware)
 app.include_router(api_router)

@@ -31,6 +31,14 @@ class ExchangeAccountCreate(BaseModel):
     passphrase: str | None = Field(default=None, max_length=200, description="OKX 등 일부 거래소가 요구하는 추가 비밀번호. Binance 는 None")
     is_testnet: bool = Field(default=False, description="True 이면 testnet, False 이면 mainnet")
     hedge_mode_enabled: bool = Field(default=True, description="헤지모드 사용 여부 (Binance Futures 양방향 포지션)")
+    daily_loss_limit_usdt: Decimal | None = Field(
+        default=None, ge=0,
+        description=(
+            "이 계정 전용 일일 손실 한도 (USDT). 양수면 daily_loss_aggregator 가 발동 시 "
+            "kill-switch 자동 활성. NULL/0 이면 settings.daily_loss_limit_usdt (global) "
+            "폴백, global 도 없으면 기능 비활성."
+        ),
+    )
 
 
 class ExchangeAccountResponse(BaseModel):
@@ -43,6 +51,16 @@ class ExchangeAccountResponse(BaseModel):
     is_testnet: bool
     hedge_mode_enabled: bool
     is_active: bool
+    daily_loss_limit_usdt: Decimal | None = None
+
+
+class ExchangeAccountDailyLimitUpdate(BaseModel):
+    """daily_loss_limit_usdt 만 부분 수정. NULL 보내면 global 폴백 모드로 전환."""
+
+    daily_loss_limit_usdt: Decimal | None = Field(
+        default=None, ge=0,
+        description="None 이면 global 폴백, 양수면 계정 override, 0 이면 비활성.",
+    )
 
 
 @router.post("", response_model=ExchangeAccountResponse, status_code=status.HTTP_201_CREATED)
@@ -72,6 +90,7 @@ def create_exchange_account(
         is_testnet=payload.is_testnet,
         hedge_mode_enabled=payload.hedge_mode_enabled,
         is_active=True,
+        daily_loss_limit_usdt=payload.daily_loss_limit_usdt,
     )
     db.add(account)
     try:
@@ -95,6 +114,30 @@ def list_exchange_accounts(
         .order_by(ExchangeAccount.id.desc())
     ).scalars().all()
     return [ExchangeAccountResponse.model_validate(r) for r in rows]
+
+
+@router.patch("/{exchange_account_id}/daily-loss-limit", response_model=ExchangeAccountResponse)
+def update_daily_loss_limit(
+    exchange_account_id: int,
+    payload: ExchangeAccountDailyLimitUpdate,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> ExchangeAccountResponse:
+    """계정 전용 일일 손실 한도 수정. NULL → global 폴백, 양수 → override, 0 → 비활성.
+
+    daily_loss_aggregator 가 다음 사이클 (1분 내) 에 새 값으로 반영.
+    """
+    account = db.execute(
+        select(ExchangeAccount)
+        .where(ExchangeAccount.id == exchange_account_id)
+        .where(ExchangeAccount.user_id == user_id)
+    ).scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exchange account not found")
+    account.daily_loss_limit_usdt = payload.daily_loss_limit_usdt
+    db.commit()
+    db.refresh(account)
+    return ExchangeAccountResponse.model_validate(account)
 
 
 class BalanceResponse(BaseModel):

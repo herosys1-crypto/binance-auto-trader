@@ -32,7 +32,10 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=data["status_code"], content=data["response_body"])
 
         response = await call_next(request)
-        if response.status_code < 500:
+        # 2026-05-04 fix: 이전엔 < 500 캐시 (4xx 도 포함) → 사용자가 input 고쳐서 같은
+        # Idempotency-Key 로 재시도해도 캐시된 400 받음. 이제 2xx 만 캐시.
+        # 4xx/5xx 는 업스트림 응답 그대로 반환 + 다음 요청 시 재시도 허용.
+        if 200 <= response.status_code < 300:
             response_body = b""
             async for chunk in response.body_iterator:
                 response_body += chunk
