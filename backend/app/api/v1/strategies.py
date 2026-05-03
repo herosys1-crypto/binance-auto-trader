@@ -529,6 +529,49 @@ def start_strategy(
     )
 
 
+class AddMarginRequest(BaseModel):
+    amount: Decimal = Field(..., gt=0, description="추가할 증거금 (USDT, 양수). 거래소 ISOLATED 모드 포지션에만 가능.")
+
+
+@router.post("/{strategy_id}/add-margin", response_model=StrategyActionResponse)
+def add_margin_to_strategy(
+    strategy_id: int,
+    payload: AddMarginRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyActionResponse:
+    """ISOLATED 모드 포지션에 증거금 추가 — 청산가 완화.
+
+    검증:
+    - strategy 존재 + 본인 소유
+    - 포지션 보유 (qty != 0)
+    - amount > 0 (Pydantic 가드)
+    - 거래소 마진 모드가 CROSS 면 -4046 거절 (친절 에러 메시지)
+    """
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+    account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
+    if not account:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exchange account not found")
+    try:
+        execution_service = ExecutionService(
+            db,
+            api_key=decrypt_text(account.api_key_enc),
+            api_secret=decrypt_text(account.api_secret_enc),
+            is_testnet=account.is_testnet,
+        )
+        execution_service.add_position_margin(strategy.id, amount=payload.amount)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    db.refresh(strategy)
+    return StrategyActionResponse(
+        strategy_id=strategy.id,
+        status=strategy.status,
+        message=f"증거금 {payload.amount} USDT 추가 완료. 거래소에서 새 청산가 확인.",
+    )
+
+
 @router.post("/{strategy_id}/force-stop", response_model=StrategyActionResponse)
 def force_stop_strategy(
     strategy_id: int,

@@ -167,6 +167,95 @@ class ExecutionService:
     def cancel_exchange_order(self, *, symbol: str, order_id: int | None = None, orig_client_order_id: str | None = None) -> dict:
         return self.client.cancel_order(symbol=symbol, order_id=order_id, orig_client_order_id=orig_client_order_id)
 
+    def add_position_margin(self, strategy_id: int, *, amount: Decimal) -> dict:
+        """ISOLATED 모드 포지션에 증거금 추가.
+
+        검증:
+        - strategy 존재 + 포지션 보유 (qty != 0)
+        - amount > 0
+        - 거래소 호출 실패 시 명확한 에러 메시지 (CROSS 모드면 -4046 에러)
+
+        성공 시 RiskEvent + Telegram 알림 발송.
+        """
+        if amount is None or amount <= 0:
+            raise ValueError(f"증거금 추가 금액은 양수여야 합니다 (입력: {amount})")
+        strategy = self.strategy_repo.get_strategy(strategy_id)
+        if not strategy:
+            raise ValueError("Strategy not found")
+        current_qty = abs(Decimal(str(strategy.current_position_qty or 0)))
+        if current_qty == 0:
+            raise ValueError(
+                f"포지션 없음 (qty=0) — 증거금 추가 불가. "
+                f"strategy={strategy.id} status={strategy.status}"
+            )
+        try:
+            response = self.client.add_position_margin(
+                symbol=strategy.symbol,
+                position_side=strategy.side,  # hedge mode: LONG/SHORT
+                amount=str(amount.quantize(Decimal("0.00000001"))),
+                margin_type=1,  # 1 = add
+            )
+        except Exception as e:
+            err_msg = str(e)
+            # 흔한 에러 친절 매핑
+            if "-4046" in err_msg or "marginType" in err_msg.lower() or "CROSS" in err_msg.upper():
+                hint = " (CROSS 모드 포지션은 증거금 직접 추가 불가 — Binance UI 또는 별도 절차로 ISOLATED 변경 필요)"
+            elif "-2027" in err_msg or "margin balance" in err_msg.lower():
+                hint = " (지갑 잔액 부족 — Binance 계정에 USDT 입금 필요)"
+            else:
+                hint = ""
+            logger.error(
+                "add_position_margin failed: strategy=%s symbol=%s amount=%s error=%s",
+                strategy.id, strategy.symbol, amount, e,
+            )
+            self.db.add(RiskEvent(
+                strategy_instance_id=strategy.id,
+                event_type="ADD_MARGIN_FAILED",
+                severity="ERROR",
+                title="🛡 증거금 추가 실패",
+                message=f"symbol={strategy.symbol} amount={amount} error={e}{hint}",
+                event_payload={"amount": str(amount), "error": str(e)},
+            ))
+            self.db.commit()
+            capture_strategy_event(
+                "add_position_margin failed",
+                level="error",
+                strategy_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+                account_id=strategy.exchange_account_id, error=e,
+                extras={"amount": str(amount)},
+                tags={"event_type": "ADD_MARGIN_FAILED"},
+            )
+            raise ValueError(f"증거금 추가 실패: {e}{hint}") from e
+
+        # 성공 — RiskEvent + Telegram 알림
+        self.db.add(RiskEvent(
+            strategy_instance_id=strategy.id,
+            event_type="ADD_MARGIN_SUCCESS",
+            severity="INFO",
+            title="🛡 증거금 추가 완료",
+            message=(
+                f"{strategy.symbol} {strategy.side} 포지션에 {amount} USDT 추가 — "
+                f"청산가 완화 효과."
+            ),
+            event_payload={
+                "amount": str(amount),
+                "exchange_response": response,
+            },
+        ))
+        self.db.commit()
+        # Telegram (실패해도 거래 흐름 영향 없음)
+        try:
+            from app.services.notification_service import NotificationService
+            NotificationService(self.db).send_margin_added_alert(
+                strategy_instance_id=strategy.id,
+                symbol=strategy.symbol,
+                side=strategy.side,
+                amount=amount,
+            )
+        except Exception:
+            pass
+        return response
+
     def _place_stage_entry_order(self, strategy, stage_plan) -> Order:
         if stage_plan.planned_qty is None or stage_plan.trigger_price is None:
             raise ValueError(f"Stage {stage_plan.stage_no} planned_qty/trigger_price is missing")

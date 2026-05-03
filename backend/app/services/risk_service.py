@@ -23,6 +23,11 @@ CRISIS_TP1_THRESHOLD = Decimal("5")         # 크라이시스 모드 첫 TP +5%
 CRISIS_TRAILING_DROP = Decimal("5")         # 첫 TP 후 피크 -5% 회귀 시 전량 청산
 CRISIS_HARD_SL_THRESHOLD = Decimal("-1")    # 첫 TP 후 PnL -1% 이하 시 전량 손절
 
+# 손실 알림 임계 (2026-05-04 신규) — 강제 청산 (-50%) 도달 시 1회 알림.
+# 도달 = max_loss_pct 가 처음 이 임계 이하로 내려가는 사이클.
+# 상태는 strategy.max_loss_pct 의 prev/new 비교로 판정 (별도 컬럼 불필요).
+LOSS_ALERT_THRESHOLD = Decimal("-50")
+
 class RiskService:
     def __init__(self, db) -> None:
         self.db = db
@@ -93,7 +98,12 @@ class RiskService:
         pnl_ratio = raw_pnl_pct * leverage
 
         # ─────────── PnL 추적 + 크라이시스 모드 검사 (Phase D-1) ───────────
+        # 2026-05-04: -50% 임계 알림 — _update_pnl_extremes 가 max_loss_pct 갱신하므로
+        # 호출 전 prev 값 캡처해서 임계 교차 (prev > -50, new ≤ -50) 1회 감지.
+        prev_max_loss = strategy.max_loss_pct
         self._update_pnl_extremes(strategy, pnl_ratio)
+        new_max_loss = strategy.max_loss_pct
+        self._maybe_send_loss_threshold_alert(strategy, prev_max_loss, new_max_loss)
         if not strategy.crisis_mode_triggered_at and self._should_trigger_crisis_mode(strategy, pnl_ratio):
             self._enter_crisis_mode(strategy)
 
@@ -203,6 +213,61 @@ class RiskService:
         if current_pnl_pct <= 0:
             return False
         return True
+
+    def _maybe_send_loss_threshold_alert(
+        self, strategy, prev_max_loss, new_max_loss
+    ) -> None:
+        """max_loss_pct 가 -50% 임계를 처음 교차한 사이클에 1회 알림.
+
+        prev / new 모두 Decimal 또는 None.
+        - prev=None or prev > -50 AND new ≤ -50 → 교차 ✓
+        - 이미 교차한 후 (prev ≤ -50) 는 다시 알림 안 함
+        - new > -50 이면 미교차 (회복 중)
+        """
+        if new_max_loss is None:
+            return
+        new_d = Decimal(str(new_max_loss))
+        if new_d > LOSS_ALERT_THRESHOLD:
+            return  # 임계 미도달
+        # new ≤ -50: 임계 도달. prev 가 None 또는 > -50 인 경우만 첫 교차 → 알림.
+        if prev_max_loss is not None:
+            try:
+                prev_d = Decimal(str(prev_max_loss))
+                if prev_d <= LOSS_ALERT_THRESHOLD:
+                    return  # 이미 교차한 적 있음 — 재알림 안 함
+            except Exception:
+                pass
+
+        # 첫 교차 — RiskEvent + Telegram 알림
+        try:
+            self.db.add(RiskEvent(
+                strategy_instance_id=strategy.id,
+                event_type="LOSS_THRESHOLD_50PCT_REACHED",
+                severity="WARNING",
+                title=f"⚠️ 손실 {LOSS_ALERT_THRESHOLD}% 도달 — 강제 청산 임박",
+                message=(
+                    f"{strategy.symbol} {strategy.side} ROI {new_d}% — "
+                    f"임계 {LOSS_ALERT_THRESHOLD}% 도달. 증거금 추가 또는 수동 청산 검토."
+                ),
+                event_payload={
+                    "pnl_pct": str(new_d),
+                    "threshold_pct": str(LOSS_ALERT_THRESHOLD),
+                },
+            ))
+            self.db.flush()
+        except Exception:
+            pass
+        try:
+            from app.services.notification_service import NotificationService
+            NotificationService(self.db).send_loss_threshold_alert(
+                strategy_instance_id=strategy.id,
+                symbol=strategy.symbol,
+                side=strategy.side,
+                pnl_pct=str(new_d),
+                threshold_pct=str(LOSS_ALERT_THRESHOLD),
+            )
+        except Exception:
+            pass
 
     def _enter_crisis_mode(self, strategy) -> None:
         """크라이시스 모드 진입 — 시각 기록 + RiskEvent 생성 + Telegram 알림."""

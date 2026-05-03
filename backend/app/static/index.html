@@ -1547,11 +1547,17 @@ async function refreshStrategies() {
       // 2026-05-04 v2 (재진입 UX): 1단계 이상 체결됐던 종료 전략 (COMPLETED/REENTRY_READY/STOPPED 등)
       // 에는 "🔄 다시 시작" 버튼 노출 — 같은 설정으로 새 전략 즉시 생성. (이전엔 「🟢 새 전략 시작」
       // 모달 → "이전 전략 불러오기" 탭 → 선택 3단계 — 너무 번거로움)
+      // 2026-05-04 (사용자 요청): 「🛡 증거금 추가」 버튼 — 포지션 보유 시만.
+      // ISOLATED 모드 포지션의 청산가 완화. CROSS 면 backend 가 -4046 거절.
+      const addMarginBtn = (!isTerminal && hasPosition)
+        ? `<button onclick="event.stopPropagation(); addMargin(${s.id}, '${s.symbol}', '${s.side}')" class="btn-ghost btn text-xs" style="padding:4px 8px" title="증거금 추가 — ISOLATED 모드 포지션의 청산가 완화 (CROSS 면 거래소 거절)">🛡</button>`
+        : '';
       const stopBtn = isTerminal
         ? (neverEntered
             ? `<button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="padding:4px 8px" title="대기 상태 전략 삭제 (DB 에서 영구 제거)">🗑</button>`
             : `<button onclick="event.stopPropagation(); restartStrategy(${s.id})" class="btn-ghost btn text-xs" style="padding:4px 8px" title="같은 설정으로 새 전략 시작 (이 전략은 그대로 보존)">🔄 다시 시작</button>`)
         : `<button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="padding:4px 8px" title="설정 수정 (기존 전략 종료 후 새 설정으로 재시작)">✏️</button>
+           ${addMarginBtn}
            <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="padding:4px 8px" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
            <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="padding:4px 8px" title="긴급 종료 (포지션 시장가 청산)">🛑</button>`;
       const startPx = s.start_price && Number(s.start_price) > 0
@@ -2638,6 +2644,35 @@ async function editStrategy(id) {
 async function restartStrategy(id) {
   if (!confirm(`전략 #${id} 의 설정으로 새 전략을 시작합니다.\n\n- 이 종료된 전략은 그대로 보존됩니다 (감사 로그).\n- 같은 심볼/방향/단계 설정으로 새 strategy 가 생성됩니다.\n- 모달에서 시작가/자본 등을 조정한 후 시작 가능합니다.`)) return;
   await openCreateModal(id);
+}
+
+// 2026-05-04 (사용자 요청): 증거금 추가 — ISOLATED 모드 포지션 청산가 완화.
+// prompt 로 USDT 금액 입력 → POST /strategies/{id}/add-margin → 결과 토스트.
+// 거래소가 CROSS 모드면 backend 가 -4046 친절 에러 메시지로 거절.
+async function addMargin(id, symbol, side) {
+  const input = prompt(
+    `🛡 증거금 추가\n\n전략 #${id} ${symbol} ${side}\n\n` +
+    `추가할 증거금 (USDT, 양수 입력):\n\n` +
+    `※ ISOLATED 모드 포지션만 가능. CROSS 모드면 거래소가 거절합니다.\n` +
+    `※ 추가 후 거래소 UI 에서 새 청산가를 확인하세요.`,
+    "10"
+  );
+  if (input === null) return;  // 취소
+  const amount = parseFloat(input);
+  if (isNaN(amount) || amount <= 0) {
+    toast(`잘못된 금액: ${input}. 양수 USDT 값을 입력하세요.`, 'error');
+    return;
+  }
+  try {
+    const resp = await api(`/strategies/${id}/add-margin`, {
+      method: 'POST',
+      body: { amount: amount },
+    });
+    toast(`✅ ${resp.message || `증거금 ${amount} USDT 추가 완료`}`, 'success');
+    refreshStrategies();
+  } catch (err) {
+    toast(`증거금 추가 실패: ${err.message}`, 'error');
+  }
 }
 
 function setCmMode(mode) {

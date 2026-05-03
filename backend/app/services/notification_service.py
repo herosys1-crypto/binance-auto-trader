@@ -136,6 +136,56 @@ class NotificationService:
         return self.send(strategy_instance_id=None, channel="TELEGRAM", title=title, body=body)
 
     # ------------------------------------------------------------------
+    # 증거금 추가 완료 (2026-05-04 신규)
+    # ------------------------------------------------------------------
+    def send_margin_added_alert(
+        self,
+        *,
+        strategy_instance_id: int,
+        symbol: str,
+        side: str,
+        amount: Any,
+    ) -> Notification:
+        emoji = _side_emoji(side)
+        title = f"🛡 [증거금 추가] {symbol} {side}"
+        lines = [
+            f"{emoji} 종목         : {symbol} {side}",
+            f"💵 추가 금액   : {_fmt_num(amount)} USDT",
+            f"✅ 청산가 완화 효과 — 거래소 UI 에서 새 청산가 확인",
+        ]
+        body = "\n".join(lines)
+        return self.send(
+            strategy_instance_id=strategy_instance_id,
+            channel="TELEGRAM", title=title, body=body,
+        )
+
+    # ------------------------------------------------------------------
+    # 손실 임계 알림 (2026-05-04 신규) — -50% ROI 도달 시 1회
+    # ------------------------------------------------------------------
+    def send_loss_threshold_alert(
+        self,
+        *,
+        strategy_instance_id: int,
+        symbol: str,
+        side: str,
+        pnl_pct: Any,
+        threshold_pct: Any,
+    ) -> Notification:
+        emoji = _side_emoji(side)
+        title = f"⚠️ [손실 {_fmt_num(threshold_pct)}% 도달] {symbol} {side}"
+        lines = [
+            f"{emoji} 종목       : {symbol} {side}",
+            f"📉 현재 ROI : {_fmt_num(pnl_pct)}% (임계 {_fmt_num(threshold_pct)}%)",
+            f"⚠️ 강제 청산 (-50%) 임박 — 증거금 추가 또는 수동 청산 검토",
+            f"💡 대시보드 → 해당 전략 → 「🛡 증거금 추가」 버튼으로 청산가 완화 가능",
+        ]
+        body = "\n".join(lines)
+        return self.send(
+            strategy_instance_id=strategy_instance_id,
+            channel="TELEGRAM", title=title, body=body,
+        )
+
+    # ------------------------------------------------------------------
     # 전략 시작 알림 (NEW 2026-04-29) — 주문 발송 직후 (FILLED 무관)
     # ------------------------------------------------------------------
     def send_strategy_started_alert(
