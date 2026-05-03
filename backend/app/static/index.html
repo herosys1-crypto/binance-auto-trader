@@ -793,10 +793,12 @@ const PURPOSE_MAP = {
   'EMERGENCY_CLOSE':  '긴급 청산',
 };
 
-// Backend `_CLOSED_STATUSES` (services/strategy_service.py, api/v1/strategies.py) 와 일치 +
-// UI 편의로 STOPPING 도 추가 (= "닫는 중" 도 종료 숨김 필터에 포함). COMPLETED / REENTRY_READY 가
-// 빠져 있어 "종료 숨김" 체크해도 보이는 + active 액션 버튼이 잘못 노출되는 버그 (2026-05-04 fix).
-const TERMINAL_STATUSES = ['STOPPED', 'STOPPING', 'COMPLETED', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'REENTRY_READY', 'KILL_SWITCH_TRIGGERED'];
+// Backend `_CLOSED_STATUSES` (services/strategy_service.py, api/v1/strategies.py) 와 정렬.
+// 2026-05-04 v2: STOPPING 의도적 제외 — backend 가 STOPPING 을 active 로 분류해 신규
+// 진입을 차단함 (race window 보호, commit 6133072). 프론트에서도 같이 보이게 해야
+// "왜 새 전략 못 만들지?" 라는 사용자 혼란 제거 + 「수동 stop 후 30초 자동 정리 대기」
+// 가시성 확보. STOPPING 자동 정리는 reconcile_worker 30초 사이클이 처리.
+const TERMINAL_STATUSES = ['STOPPED', 'COMPLETED', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'REENTRY_READY', 'KILL_SWITCH_TRIGGERED'];
 
 // ==================== Auth ====================
 document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -1525,10 +1527,13 @@ async function refreshStrategies() {
       const isTerminal = TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
       // UX #17 (2026-04-29): 종료 상태이고 한번도 체결 안 된 전략 (대기 단계) 에는 삭제 버튼 노출
       const neverEntered = (s.current_stage || 0) === 0 && (!s.avg_entry_price || Number(s.avg_entry_price) === 0);
+      // 2026-05-04 v2 (재진입 UX): 1단계 이상 체결됐던 종료 전략 (COMPLETED/REENTRY_READY/STOPPED 등)
+      // 에는 "🔄 다시 시작" 버튼 노출 — 같은 설정으로 새 전략 즉시 생성. (이전엔 「🟢 새 전략 시작」
+      // 모달 → "이전 전략 불러오기" 탭 → 선택 3단계 — 너무 번거로움)
       const stopBtn = isTerminal
         ? (neverEntered
             ? `<button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="padding:4px 8px" title="대기 상태 전략 삭제 (DB 에서 영구 제거)">🗑</button>`
-            : '<span class="text-slate-500 text-xs">-</span>')
+            : `<button onclick="event.stopPropagation(); restartStrategy(${s.id})" class="btn-ghost btn text-xs" style="padding:4px 8px" title="같은 설정으로 새 전략 시작 (이 전략은 그대로 보존)">🔄 다시 시작</button>`)
         : `<button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="padding:4px 8px" title="설정 수정 (기존 전략 종료 후 새 설정으로 재시작)">✏️</button>
            <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="padding:4px 8px" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
            <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="padding:4px 8px" title="긴급 종료 (포지션 시장가 청산)">🛑</button>`;
@@ -2607,6 +2612,14 @@ async function openCreateModal(editStrategyId) {
 
 async function editStrategy(id) {
   if (!confirm(`전략 #${id} 의 설정을 수정하시겠어요?\n\n- 기존 전략의 미체결 주문은 모두 취소됩니다.\n- 이미 체결된 포지션은 그대로 유지됩니다.\n- 새 설정으로 새 전략이 시작됩니다.`)) return;
+  await openCreateModal(id);
+}
+
+// 2026-05-04 v2 (재진입 UX): 종료된 전략 행에서 「🔄 다시 시작」 클릭 시 호출.
+// 이전엔 「🟢 새 전략 시작」 모달 → "이전 전략 불러오기" 탭 → 선택 — 3 단계.
+// editStrategy 와 다른 점: 정리할 게 없으므로 "기존 전략 종료" 안내 빠짐.
+async function restartStrategy(id) {
+  if (!confirm(`전략 #${id} 의 설정으로 새 전략을 시작합니다.\n\n- 이 종료된 전략은 그대로 보존됩니다 (감사 로그).\n- 같은 심볼/방향/단계 설정으로 새 strategy 가 생성됩니다.\n- 모달에서 시작가/자본 등을 조정한 후 시작 가능합니다.`)) return;
   await openCreateModal(id);
 }
 

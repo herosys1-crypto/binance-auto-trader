@@ -96,10 +96,22 @@ class StrategyService:
             .limit(1)
         ).scalar_one_or_none()
         if existing:
+            # 2026-05-04 fix: STOPPING 인 경우 사용자가 어떻게 해결할지 명확한 가이드 제공.
+            # backend 가 STOPPING 을 active 로 분류하는 건 race window 보호 (commit 6133072).
+            # 사용자는 reconcile 자동 정리 (30초) 또는 force-stop 으로 즉시 해결 가능.
+            if existing.status == "STOPPING":
+                hint = (
+                    f" 현재 #{existing.id} 는 STOPPING (청산 진행 중) — reconcile_worker 가 30초마다 "
+                    f"거래소 포지션 0 확인 시 자동으로 STOPPED 승격합니다. "
+                    f"잠시 후 다시 시도하거나, 거래소에 잔재 포지션이 없는 게 확실하면 "
+                    f"`POST /api/v1/strategies/{existing.id}/force-stop` 으로 즉시 STOPPED 마킹 가능."
+                )
+            else:
+                hint = " 기존 전략을 종료(/stop) 한 후 새로 시작하시거나, 다른 심볼/방향을 선택해 주세요."
             raise ValueError(
                 f"같은 거래소/심볼/방향 ({symbol} {side}) 으로 활성 전략 #{existing.id} ({existing.status}) 가 이미 있습니다. "
-                "Binance 는 통합 포지션으로만 관리하므로 중복 전략은 TP/SL 충돌을 일으킵니다. "
-                "기존 전략을 종료한 후 새로 시작하시거나, 다른 심볼/방향을 선택해 주세요."
+                "Binance 는 통합 포지션으로만 관리하므로 중복 전략은 TP/SL 충돌을 일으킵니다."
+                + hint
             )
         # 잔액/마진 사전 안전 체크 (2026-05-03 강화):
         # 1) 가용 잔액 < 필요 마진 → 거부 (자본 부족)
