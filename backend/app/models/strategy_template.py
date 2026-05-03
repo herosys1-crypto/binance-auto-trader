@@ -60,6 +60,12 @@ class StrategyTemplate(Base):
     tp5_qty_ratio: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     stop_loss_percent_of_capital: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
 
+    # ---- 크라이시스 모드 qty ratio override (선택, alembic 0009) ----
+    # NULL 이면 기본값 {"TP1":25,"TP2":25,"TP3":50,"TP4":100} 사용 (사용자 spec).
+    # JSON 형식: {"TP1": 30, "TP2": 30, "TP3": 40, "TP4": 100}
+    # 일부 키만 채우면 나머지는 기본값. 키는 TP1~TP4 만 허용 (TP5 는 크라이시스 미사용).
+    crisis_qty_ratios: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
     reentry_policy: Mapped[str] = mapped_column(String(30), default="manual_ready", nullable=False)
     # auto 정책 — SL 후 자동 재시작 대기 시간 (초). 기본 600 (10분).
     reentry_delay_seconds: Mapped[int] = mapped_column(Integer, default=600, nullable=False)

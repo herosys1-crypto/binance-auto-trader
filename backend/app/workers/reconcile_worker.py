@@ -19,6 +19,7 @@ from sqlalchemy import select
 from app.core.database import SessionLocal
 from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
+from app.core.sentry import capture_strategy_event
 from app.integrations.binance.client import BinanceClient
 from app.models.exchange_account import ExchangeAccount
 from app.models.position import Position
@@ -67,6 +68,13 @@ def _do_reconcile(decrypt_func) -> None:
         except Exception as e:
             logger.error("pre_pass_dedup 실패: %s", e)
             db.rollback()
+            # Phase 1 자동회복 실패는 좀비 정리가 한 사이클 누락된다는 의미.
+            # 30초 뒤 다음 사이클에 재시도되지만 운영자 가시성 위해 Sentry 캡처.
+            capture_strategy_event(
+                "Zombie Guardian pre_pass_dedup failed",
+                level="error", error=e,
+                tags={"event_type": "PRE_PASS_DEDUP_FAILED"},
+            )
 
         # (b) 종료 상태 qty 잔재 정리
         try:
@@ -77,6 +85,11 @@ def _do_reconcile(decrypt_func) -> None:
         except Exception as e:
             logger.error("enforce_terminal_qty_zero 실패: %s", e)
             db.rollback()
+            capture_strategy_event(
+                "Zombie Guardian enforce_terminal_qty_zero failed",
+                level="error", error=e,
+                tags={"event_type": "ENFORCE_TERMINAL_QTY_ZERO_FAILED"},
+            )
 
         # ===== Main loop — active strategy 별 거래소 sync + 자동 회복 =====
         # 활성 전략 조회. *_PENDING 상태도 포함 — user-stream 이 죽어 체결 이벤트를
@@ -268,6 +281,15 @@ def _do_reconcile(decrypt_func) -> None:
                     event_payload={"strategy_id": strategy.id},
                 ))
                 position_reconcile_total.labels(status="error").inc()
+                # Sentry: per-strategy reconcile 실패 — 거래소 API 일시 장애 또는
+                # 권한 문제일 수 있음. strategy_id 태그로 빈도 추적.
+                capture_strategy_event(
+                    "Position reconcile failed for strategy",
+                    level="error", error=e,
+                    strategy_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+                    account_id=strategy.exchange_account_id,
+                    tags={"event_type": "POSITION_RECONCILE_ERROR"},
+                )
         db.commit()
 
         # ===== Phase 2 안전망 — 거래소 orphan 포지션 감지 =====
@@ -281,5 +303,11 @@ def _do_reconcile(decrypt_func) -> None:
         except Exception as e:
             logger.error("detect_orphan_exchange_positions 실패: %s", e)
             db.rollback()
+            # Sentry: orphan detection 자체 실패 — Phase 2 안전망이 한 사이클 작동 안 함.
+            capture_strategy_event(
+                "detect_orphan_exchange_positions failed",
+                level="error", error=e,
+                tags={"event_type": "ORPHAN_DETECTION_LOOP_FAILED"},
+            )
     finally:
         db.close()

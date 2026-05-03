@@ -3,6 +3,7 @@ import json, logging, time
 import websocket
 from app.core.database import SessionLocal
 from app.core.redis_client import get_redis_client
+from app.core.sentry import capture_strategy_event
 from app.integrations.binance.client import BinanceClient
 from app.observability.metrics import user_stream_connected, user_stream_reconnect_total
 from app.services.notification_service import NotificationService
@@ -60,6 +61,15 @@ class BinanceUserStreamConsumer:
                 # 재연결 대기 중에는 heartbeat 키 만료시켜 "끊김" 표시
                 _set_user_stream_health(False)
                 self._notify_system_error(f"User stream consumer crashed: {e}; retry in {delay:.2f}s")
+                # Sentry: 첫 reconnect 는 일시적 네트워크 이슈일 수 있으니 warning,
+                # 5회 이상 연속이면 백엔드 장애 신호 → error.
+                capture_strategy_event(
+                    f"Binance user stream crashed (attempt {attempt})",
+                    level="warning" if attempt < 5 else "error",
+                    error=e,
+                    extras={"attempt": attempt, "retry_delay_s": round(delay, 2)},
+                    tags={"event_type": "USER_STREAM_CRASH", "is_testnet": str(self.is_testnet)},
+                )
                 time.sleep(delay)
 
     def _on_open(self, ws) -> None:
@@ -87,6 +97,15 @@ class BinanceUserStreamConsumer:
 
     def _on_error(self, ws, error) -> None:
         logger.error("Binance user stream error: %s", error)
+        # WebSocket 콜백 에러 (예: 인증 실패, listenKeyExpired race) — Sentry 캡처.
+        # error 가 Exception 객체인 경우와 문자열인 경우 모두 처리.
+        err_obj = error if isinstance(error, BaseException) else None
+        capture_strategy_event(
+            f"Binance user stream WS error: {error}",
+            level="error",
+            error=err_obj,
+            tags={"event_type": "USER_STREAM_WS_ERROR", "is_testnet": str(self.is_testnet)},
+        )
 
     def _on_close(self, ws, close_status_code, close_msg) -> None:
         user_stream_connected.set(0)
