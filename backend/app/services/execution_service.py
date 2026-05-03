@@ -10,6 +10,7 @@ from app.models.risk_event import RiskEvent
 from app.repositories.order_repository import OrderRepository
 from app.repositories.strategy_repository import StrategyRepository
 from app.services.account_kill_switch_service import AccountKillSwitchService
+from app.core.sentry import capture_strategy_event
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,14 @@ class ExecutionService:
                 event_payload={"strategy_id": strategy.id, "quantity": str(quantity), "side": side, "error": str(e)},
             ))
             self.db.commit()
+            capture_strategy_event(
+                "emergency_close place_market_order failed",
+                level="error",
+                strategy_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+                account_id=strategy.exchange_account_id, error=e,
+                extras={"quantity": str(quantity), "exit_side": side},
+                tags={"event_type": "EMERGENCY_CLOSE_PLACE_FAILED"},
+            )
             raise
         order = Order(strategy_instance_id=strategy.id, stage_no=None, purpose="EXIT", symbol=strategy.symbol, side=side, position_side=position_side, order_type="MARKET", time_in_force=None, client_order_id=client_order_id, exchange_order_id=response.get("orderId"), trigger_price=None, price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, orig_qty=quantity, executed_qty=Decimal(str(response.get("executedQty", "0"))), avg_price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, status=response.get("status", "NEW"), raw_request={"symbol": strategy.symbol, "side": side, "positionSide": position_side, "type": "MARKET", "quantity": str(quantity), "newClientOrderId": client_order_id}, raw_response=response)
         self.order_repo.create(order)

@@ -33,6 +33,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.sentry import capture_strategy_event
 from app.models.exchange_account import ExchangeAccount
 from app.models.risk_event import RiskEvent
 from app.models.strategy_instance import StrategyInstance
@@ -279,6 +280,22 @@ def escalate_stuck_strategy(
     _stuck_clear(strategy.id)
     position_reconcile_total.labels(status="zombie_force_stop_escalation").inc()
 
+    # Sentry 캡처 — 운영 알림 (DSN 설정 시 자동 전송, 미설정 시 no-op).
+    capture_strategy_event(
+        f"Zombie Guardian force-stop: {reason_code}",
+        level="fatal",
+        strategy_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+        account_id=strategy.exchange_account_id,
+        extras={
+            "reason_code": reason_code,
+            "reason_detail": reason_detail,
+            "old_status": old_status,
+            "old_qty": str(old_qty),
+            "exchange_snapshot": exchange_snapshot,
+        },
+        tags={"event_type": "ZOMBIE_GUARDIAN_FORCE_STOP"},
+    )
+
 
 def detect_orphan_exchange_positions(
     db: Session,
@@ -385,6 +402,20 @@ def detect_orphan_exchange_positions(
                 except Exception as e:
                     logger.error("Orphan exchange position: Telegram 실패: %s", e)
                 position_reconcile_total.labels(status="orphan_exchange_position").inc()
+                # Sentry 캡처 — orphan 은 거래소-시스템 정합성 깨진 가장 위험한 신호.
+                capture_strategy_event(
+                    f"Zombie Guardian orphan exchange position: {symbol} {position_side}",
+                    level="fatal",
+                    symbol=symbol, side=position_side, account_id=acc.id,
+                    extras={"exchange_snapshot": snapshot, "amount": str(amt)},
+                    tags={"event_type": "ZOMBIE_ORPHAN_EXCHANGE_POSITION"},
+                )
         except Exception as e:
             logger.error("Orphan exchange detect 실패 acc=%s: %s", acc.id, e)
+            capture_strategy_event(
+                "detect_orphan_exchange_positions failed",
+                level="error",
+                account_id=acc.id, error=e,
+                tags={"event_type": "ORPHAN_DETECT_FAILED"},
+            )
     return found
