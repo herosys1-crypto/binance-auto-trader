@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     sentry_traces_sample_rate: float = 0.1
     sentry_profiles_sample_rate: float = 0.0
 
+    # 일일 손실 한도 (USDT) — 양수. None 또는 0 이면 기능 비활성 (deploy-safe default).
+    # daily_loss_aggregator 가 active 계정의 unrealized 합산이 이 값을 넘기면 kill-switch 발동.
+    # 운영자가 `.env` 의 DAILY_LOSS_LIMIT_USDT=50 같은 식으로 설정.
+    daily_loss_limit_usdt: float | None = None
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
