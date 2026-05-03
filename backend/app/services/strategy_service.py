@@ -122,9 +122,19 @@ class StrategyService:
         from app.integrations.binance.client import BinanceClient
         from app.core.crypto import decrypt_text
         from app.models.exchange_account import ExchangeAccount as _EA
+        from app.services.account_kill_switch_service import AccountKillSwitchService
         from decimal import Decimal as D
         import logging
         _logger = logging.getLogger(__name__)
+
+        # 0) Kill switch 사전 체크 (2026-05-04 fix):
+        # 이전엔 start_stage1 단계에서만 체크 → strategy DB row 가 만들어진 후 차단되어
+        # WAITING 상태 잔재 발생. 이제 create 시점에 차단해 DB 깨끗.
+        if AccountKillSwitchService(self.db).is_enabled(exchange_account_id):
+            raise ValueError(
+                f"거래소 계정 #{exchange_account_id} 의 Kill-Switch 가 활성화돼 있습니다. "
+                "신규 전략 생성 차단. Kill-Switch 를 해제한 후 재시도하세요."
+            )
 
         # 동시 활성 전략 수 한도 (예: 한 계정당 최대 8개) — 거래소 부담 + 모니터링 단순화
         MAX_CONCURRENT_PER_ACCOUNT = 10

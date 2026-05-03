@@ -47,6 +47,14 @@ class ExecutionService:
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
             raise ValueError("Strategy not found")
+        # 2026-05-04 fix: kill-switch 가 stage 1 (start_stage1) 에만 체크되던 버그.
+        # stage 2~10 자동 진입은 신규 거래임에도 차단 안 돼 kill-switch 안전장치 부분 무력.
+        # 이제는 모든 stage 진입에서 차단.
+        if AccountKillSwitchService(self.db).is_enabled(strategy.exchange_account_id):
+            raise ValueError(
+                f"Account kill-switch is enabled; stage {stage_no} entry blocked. "
+                "Kill-switch 를 해제한 후 재시도하세요."
+            )
         stage_plan = next((p for p in strategy.stage_plans if p.stage_no == stage_no), None)
         if not stage_plan:
             raise ValueError(f"Stage {stage_no} plan not found")
