@@ -142,6 +142,20 @@ class StreamService:
                         realized_delta = qty * (avg_entry - exit_px)
                     prev_realized = Decimal(str(strategy.realized_pnl or 0))
                     strategy.realized_pnl = (prev_realized + realized_delta).quantize(Decimal("0.01"))
+                    # 2026-05-04 v2: 일일 손실 한도 incremental 누적.
+                    # daily_loss_aggregator 의 v1 한계 (realized 누적 안 됨) 보완.
+                    # account_daily_risk_limit 의 오늘 row 에 realized_delta 추가.
+                    # 누적 실패해도 ledger 본 흐름은 정상 처리 (try/except 격리).
+                    try:
+                        from app.services.account_daily_loss_limiter import (
+                            AccountDailyLossLimiterService,
+                        )
+                        AccountDailyLossLimiterService(self.db).add_realized_delta(
+                            exchange_account_id=strategy.exchange_account_id,
+                            realized_delta=realized_delta,
+                        )
+                    except Exception:
+                        pass
             except Exception:
                 pass
         self.db.commit()
