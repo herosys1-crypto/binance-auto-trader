@@ -94,15 +94,17 @@ def _do_reconcile(decrypt_func) -> None:
         # ===== Main loop — active strategy 별 거래소 sync + 자동 회복 =====
         # 활성 전략 조회. *_PENDING 상태도 포함 — user-stream 이 죽어 체결 이벤트를
         # 놓친 경우 reconcile 이 거래소 상태를 보고 PENDING -> OPEN 으로 자가 회복.
+        # 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 STAGE1~4_OPEN_PENDING/OPEN 만 active 분류라
+        # 5+ stage 진입한 strategy 가 reconcile main loop 에서 누락되는 버그.
+        _ACTIVE_PENDING = [f"STAGE{n}_OPEN_PENDING" for n in range(1, 11)]
+        _ACTIVE_OPEN = [f"STAGE{n}_OPEN" for n in range(1, 11)]
+        _ACTIVE_TP_PARTIAL = [f"TP{n}_DONE_PARTIAL" for n in range(1, 6)]
         rows = db.execute(
             select(StrategyInstance, ExchangeAccount)
             .join(ExchangeAccount, StrategyInstance.exchange_account_id == ExchangeAccount.id)
-            .where(StrategyInstance.status.in_([
-                "STAGE1_OPEN_PENDING", "STAGE2_OPEN_PENDING", "STAGE3_OPEN_PENDING", "STAGE4_OPEN_PENDING",
-                "STAGE1_OPEN", "STAGE2_OPEN", "STAGE3_OPEN", "STAGE4_OPEN",
-                "TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL", "TP4_DONE_PARTIAL", "TP5_DONE_PARTIAL",
-                "STOPPING",
-            ]))
+            .where(StrategyInstance.status.in_(
+                _ACTIVE_PENDING + _ACTIVE_OPEN + _ACTIVE_TP_PARTIAL + ["STOPPING"]
+            ))
             .where(ExchangeAccount.is_active.is_(True))
         ).all()
         for strategy, account in rows:
@@ -139,12 +141,11 @@ def _do_reconcile(decrypt_func) -> None:
                         position_reconcile_total.labels(status="zombie_stopped").inc()
                         _stuck_clear(strategy.id)
                         continue
-                    # *_OPEN orphan 자동 정리
-                    _OPEN_STATES = {
-                        "STAGE1_OPEN", "STAGE2_OPEN", "STAGE3_OPEN", "STAGE4_OPEN",
-                        "TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL",
-                        "TP4_DONE_PARTIAL", "TP5_DONE_PARTIAL",
-                    }
+                    # *_OPEN orphan 자동 정리 — 1~10단계 + TP 1~5 PARTIAL.
+                    _OPEN_STATES = (
+                        {f"STAGE{n}_OPEN" for n in range(1, 11)}
+                        | {f"TP{n}_DONE_PARTIAL" for n in range(1, 6)}
+                    )
                     if strategy.status in _OPEN_STATES:
                         db.add(RiskEvent(
                             strategy_instance_id=strategy.id,
@@ -248,11 +249,10 @@ def _do_reconcile(decrypt_func) -> None:
                 strategy.unrealized_pnl = exchange_unrealized_pnl
                 strategy.liquidation_price = exchange_liquidation_price if exchange_liquidation_price > 0 else strategy.liquidation_price
                 # 자가 회복: *_OPEN_PENDING + 거래소에 실 포지션 → *_OPEN 전이
+                # 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 1~4 만 처리 → 5+ stage
+                # PENDING 이 자가 회복 안 돼 stuck.
                 _PENDING_TO_OPEN = {
-                    "STAGE1_OPEN_PENDING": "STAGE1_OPEN",
-                    "STAGE2_OPEN_PENDING": "STAGE2_OPEN",
-                    "STAGE3_OPEN_PENDING": "STAGE3_OPEN",
-                    "STAGE4_OPEN_PENDING": "STAGE4_OPEN",
+                    f"STAGE{n}_OPEN_PENDING": f"STAGE{n}_OPEN" for n in range(1, 11)
                 }
                 if strategy.status in _PENDING_TO_OPEN and exchange_position_amt != 0:
                     new_status = _PENDING_TO_OPEN[strategy.status]

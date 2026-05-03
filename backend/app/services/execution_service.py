@@ -52,7 +52,10 @@ class ExecutionService:
             raise ValueError(f"Stage {stage_no} plan not found")
         order = self._place_stage_entry_order(strategy, stage_plan)
         strategy.current_stage = stage_no
-        strategy.status = {2: "STAGE2_OPEN_PENDING", 3: "STAGE3_OPEN_PENDING", 4: "STAGE4_OPEN_PENDING"}.get(stage_no, strategy.status)
+        # 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 2/3/4 만 dict 있어 5+ stage 진입 시
+        # status 변경 안 됨. f-string 으로 N단계 모두 STAGE{N}_OPEN_PENDING 처리.
+        if 2 <= stage_no <= 10:
+            strategy.status = f"STAGE{stage_no}_OPEN_PENDING"
         self.db.commit()
         self.db.refresh(order)
         return order

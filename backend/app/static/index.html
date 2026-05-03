@@ -714,28 +714,67 @@ const API_BASE = window.location.origin + '/api/v1';
 let token = localStorage.getItem('access_token');
 
 // ==================== 상태 매핑 ====================
+// 옵션 C 1~10단계 동적 + TP 1~5 동적 + 크라이시스 모드 모두 커버.
+// 라벨은 의미 명확화 (2026-05-04):
+//   STAGE_X_OPEN_PENDING → "X단계 주문 발송됨, 체결 대기" (LIMIT 미체결)
+//   STAGE_X_OPEN         → "X단계 보유 중" (체결됨, 다음 단계 trigger 대기)
+//   STAGE_X_FILLED       → 호환용 (legacy, 현재 stream_service 가 STAGE_X_OPEN 으로 직행)
 const STATUS_MAP = {
-  'WAITING':                    { ko: '대기 중',           sig: 'gray',   icon: '⚪' },
-  'STAGE1_OPEN_PENDING':        { ko: '1단계 주문 발송 중', sig: 'yellow', icon: '⏳' },
-  'STAGE1_OPEN':                { ko: '1단계 체결 대기',    sig: 'yellow', icon: '⏳' },
-  'STAGE1_FILLED':              { ko: '1단계 진입 완료',    sig: 'green',  icon: '✅' },
-  'ACTIVE':                     { ko: '진행 중',           sig: 'green',  icon: '🟢' },
-  'STAGE2_OPEN_PENDING':        { ko: '2단계 주문 발송 중', sig: 'yellow', icon: '⏳' },
-  'STAGE2_OPEN':                { ko: '2단계 체결 대기',    sig: 'yellow', icon: '⏳' },
-  'STAGE2_FILLED':              { ko: '2단계 진입 완료',    sig: 'green',  icon: '✅' },
-  'STAGE3_OPEN_PENDING':        { ko: '3단계 주문 발송 중', sig: 'yellow', icon: '⏳' },
-  'STAGE3_OPEN':                { ko: '3단계 체결 대기',    sig: 'yellow', icon: '⏳' },
-  'STAGE3_FILLED':              { ko: '3단계 진입 완료',    sig: 'green',  icon: '✅' },
-  'TP1_FILLED':                 { ko: '1차 익절 체결',     sig: 'green',  icon: '💎' },
-  'TP2_FILLED':                 { ko: '2차 익절 체결',     sig: 'green',  icon: '💎' },
-  'TP3_FILLED':                 { ko: '3차 익절 체결',     sig: 'green',  icon: '💎' },
-  'CLOSED':                     { ko: '정상 종료',         sig: 'gray',   icon: '✓' },
-  'CLOSED_BY_TP':               { ko: '익절 종료',         sig: 'green',  icon: '💎' },
-  'CLOSED_BY_SL':               { ko: '손절 종료',         sig: 'red',    icon: '🛑' },
-  'STOPPING':                   { ko: '종료 중',           sig: 'gray',   icon: '⏸' },
-  'STOPPED':                    { ko: '수동 종료',         sig: 'gray',   icon: '⏹' },
-  'LIQUIDATION_IMMINENT':       { ko: '⚠️ 청산 임박',      sig: 'red',    icon: '🚨' },
-  'KILL_SWITCH_TRIGGERED':      { ko: '🚨 긴급 정지',      sig: 'red',    icon: '🛑' },
+  'WAITING':                    { ko: '대기 중',              sig: 'gray',   icon: '⚪' },
+  // 1~10단계 진입 (PENDING + OPEN). FILLED 는 legacy 호환.
+  'STAGE1_OPEN_PENDING':        { ko: '1단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE1_OPEN':                { ko: '1단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE1_FILLED':              { ko: '1단계 진입 완료',      sig: 'green',  icon: '✅' },
+  'STAGE2_OPEN_PENDING':        { ko: '2단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE2_OPEN':                { ko: '2단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE2_FILLED':              { ko: '2단계 진입 완료',      sig: 'green',  icon: '✅' },
+  'STAGE3_OPEN_PENDING':        { ko: '3단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE3_OPEN':                { ko: '3단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE3_FILLED':              { ko: '3단계 진입 완료',      sig: 'green',  icon: '✅' },
+  'STAGE4_OPEN_PENDING':        { ko: '4단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE4_OPEN':                { ko: '4단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE4_FILLED':              { ko: '4단계 진입 완료',      sig: 'green',  icon: '✅' },
+  'STAGE5_OPEN_PENDING':        { ko: '5단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE5_OPEN':                { ko: '5단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE6_OPEN_PENDING':        { ko: '6단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE6_OPEN':                { ko: '6단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE7_OPEN_PENDING':        { ko: '7단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE7_OPEN':                { ko: '7단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE8_OPEN_PENDING':        { ko: '8단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE8_OPEN':                { ko: '8단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE9_OPEN_PENDING':        { ko: '9단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE9_OPEN':                { ko: '9단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE10_OPEN_PENDING':       { ko: '10단계 주문 발송됨',    sig: 'yellow', icon: '⏳' },
+  'STAGE10_OPEN':               { ko: '10단계 보유 중',       sig: 'green',  icon: '🟢' },
+  'ACTIVE':                     { ko: '진행 중',              sig: 'green',  icon: '🟢' },
+  // TP 익절 — 부분/전체. PARTIAL 은 잔량 보유 중, FILLED 는 legacy.
+  'TP1_FILLED':                 { ko: '1차 익절 체결',         sig: 'green',  icon: '💎' },
+  'TP2_FILLED':                 { ko: '2차 익절 체결',         sig: 'green',  icon: '💎' },
+  'TP3_FILLED':                 { ko: '3차 익절 체결',         sig: 'green',  icon: '💎' },
+  'TP4_FILLED':                 { ko: '4차 익절 체결',         sig: 'green',  icon: '💎' },
+  'TP5_FILLED':                 { ko: '5차 익절 체결',         sig: 'green',  icon: '💎' },
+  'TP1_DONE_PARTIAL':           { ko: '1차 익절 (잔량 보유)', sig: 'green',  icon: '💎' },
+  'TP2_DONE_PARTIAL':           { ko: '2차 익절 (잔량 보유)', sig: 'green',  icon: '💎' },
+  'TP3_DONE_PARTIAL':           { ko: '3차 익절 (잔량 보유)', sig: 'green',  icon: '💎' },
+  'TP4_DONE_PARTIAL':           { ko: '4차 익절 (잔량 보유)', sig: 'green',  icon: '💎' },
+  'TP5_DONE_PARTIAL':           { ko: '5차 익절 (잔량 보유)', sig: 'green',  icon: '💎' },
+  'TP2_DONE':                   { ko: '2차 익절 완료',         sig: 'green',  icon: '💎' },
+  'TRAILING_ARMED':             { ko: '트레일링 발동 대기',     sig: 'green',  icon: '📈' },
+  // 크라이시스 복구 모드
+  'CRISIS_TP1_DONE':            { ko: '🚨 크라이시스 TP1 완료', sig: 'yellow', icon: '🛡' },
+  // 자동 재진입 사이클
+  'REENTRY_DONE':               { ko: '재진입 완료',           sig: 'green',  icon: '🔄' },
+  'REENTRY_FAILED':             { ko: '재진입 실패',           sig: 'red',    icon: '⚠️' },
+  // 종료 상태
+  'COMPLETED':                  { ko: '✅ 정상 종료 (전체 익절)', sig: 'green',  icon: '🎯' },
+  'REENTRY_READY':              { ko: '재진입 대기 (수동 시작 또는 자동)', sig: 'gray', icon: '🔄' },
+  'CLOSED':                     { ko: '정상 종료',            sig: 'gray',   icon: '✓' },
+  'CLOSED_BY_TP':               { ko: '익절 종료',            sig: 'green',  icon: '💎' },
+  'CLOSED_BY_SL':               { ko: '손절 종료',            sig: 'red',    icon: '🛑' },
+  'STOPPING':                   { ko: '종료 중 (청산 진행)',  sig: 'yellow', icon: '⏸' },
+  'STOPPED':                    { ko: '수동 종료',            sig: 'gray',   icon: '⏹' },
+  'LIQUIDATION_IMMINENT':       { ko: '⚠️ 청산 임박',         sig: 'red',    icon: '🚨' },
+  'KILL_SWITCH_TRIGGERED':      { ko: '🚨 긴급 정지 (Kill-Switch)', sig: 'red', icon: '🛑' },
 };
 
 const ORDER_STATUS_MAP = {

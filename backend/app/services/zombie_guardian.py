@@ -46,19 +46,17 @@ logger = logging.getLogger(__name__)
 
 # ===== 상태 분류 =====
 
-# 거래소에 실제 포지션이 있어야 하는 active 상태
-ACTIVE_WITH_POSITION = {
-    "STAGE1_OPEN", "STAGE2_OPEN", "STAGE3_OPEN", "STAGE4_OPEN",
-    "TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL",
-    "TP4_DONE_PARTIAL", "TP5_DONE_PARTIAL",
-    "STOPPING",  # 청산 진행 중 (포지션 아직 남아있을 수 있음)
-}
+# 거래소에 실제 포지션이 있어야 하는 active 상태.
+# 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 1~4 만이라 5+ stage strategy 가
+# zombie 분류에서 누락되는 버그 (중복 active 강등 / orphan 감지 미작동).
+ACTIVE_WITH_POSITION = (
+    {f"STAGE{n}_OPEN" for n in range(1, 11)}
+    | {f"TP{n}_DONE_PARTIAL" for n in range(1, 6)}
+    | {"STOPPING"}  # 청산 진행 중 (포지션 아직 남아있을 수 있음)
+)
 
 # 거래소 포지션 미확정 (LIMIT 미체결)
-ACTIVE_WAITING = {
-    "STAGE1_OPEN_PENDING", "STAGE2_OPEN_PENDING",
-    "STAGE3_OPEN_PENDING", "STAGE4_OPEN_PENDING",
-}
+ACTIVE_WAITING = {f"STAGE{n}_OPEN_PENDING" for n in range(1, 11)}
 
 # 모든 "active" — 신규 strategy 진입 차단해야 할 상태
 ACTIVE_LIKE = ACTIVE_WITH_POSITION | ACTIVE_WAITING
