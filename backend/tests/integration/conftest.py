@@ -358,3 +358,161 @@ def _no_telegram(monkeypatch):
     """
     monkeypatch.setattr("app.core.config.settings.telegram_bot_token", None, raising=False)
     monkeypatch.setattr("app.core.config.settings.telegram_chat_id", None, raising=False)
+
+
+# ---------------------------------------------------------------------------
+# FakeRedis — redis_lock + peak_pnl 추적용 in-process 대체
+# ---------------------------------------------------------------------------
+class FakeRedis:
+    """get/set/setex/delete/incr/expire/exists 만 지원하는 최소 Redis 대체.
+
+    redis_lock.set(key, token, nx=True, ex=ttl_seconds) 의 nx 의미를 정확히 보존.
+    """
+
+    def __init__(self) -> None:
+        self._store: dict[str, str] = {}
+
+    def set(self, key, value, nx: bool = False, ex: int | None = None):  # noqa: ARG002
+        if nx and key in self._store:
+            return False
+        self._store[key] = str(value)
+        return True
+
+    def setex(self, key, ttl: int, value) -> bool:  # noqa: ARG002
+        self._store[key] = str(value)
+        return True
+
+    def get(self, key):
+        v = self._store.get(key)
+        return v if v is not None else None
+
+    def delete(self, key) -> int:
+        return 1 if self._store.pop(key, None) is not None else 0
+
+    def incr(self, key) -> int:
+        cur = int(self._store.get(key, "0")) + 1
+        self._store[key] = str(cur)
+        return cur
+
+    def expire(self, key, ttl: int) -> bool:  # noqa: ARG002
+        return key in self._store
+
+    def exists(self, key) -> int:
+        return 1 if key in self._store else 0
+
+
+@pytest.fixture
+def fake_redis(monkeypatch) -> FakeRedis:
+    """get_redis_client 가 호출되는 모든 위치에서 FakeRedis 반환.
+
+    redis_client.py / redis_lock 사용 모듈 / risk_service / zombie_guardian 등
+    어디서 호출하든 같은 FakeRedis 인스턴스를 받게 한다.
+    """
+    instance = FakeRedis()
+
+    def _factory():
+        return instance
+
+    monkeypatch.setattr("app.core.redis_client.get_redis_client", _factory)
+    # 일부 모듈은 직접 import 했을 수 있으니 같이 패치
+    for mod in (
+        "app.services.tp_sl_orchestrator",
+        "app.services.risk_service",
+        "app.services.zombie_guardian",
+    ):
+        try:
+            monkeypatch.setattr(f"{mod}.get_redis_client", _factory, raising=False)
+        except (AttributeError, ImportError):
+            pass
+    return instance
+
+
+# ---------------------------------------------------------------------------
+# 거래소 주문 결과 mock — BinanceFuturesTradeClient.place_market_order
+# ---------------------------------------------------------------------------
+class FakeTradeClient:
+    """ExecutionService 가 사용하는 trade_client 의 fake.
+
+    place_market_order 호출을 기록 + 항상 FILLED 응답 반환. 호출자는
+    placed_orders 리스트를 검사해 의도한 호출이 일어났는지 확인.
+    """
+
+    placed_orders: list[dict] = []
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    def place_market_order(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        position_side: str,
+        quantity,
+        new_client_order_id: str,
+        reduce_only: bool | None = None,  # noqa: ARG002
+    ) -> dict:
+        order = {
+            "symbol": symbol,
+            "side": side,
+            "positionSide": position_side,
+            "quantity": str(quantity),
+            "newClientOrderId": new_client_order_id,
+        }
+        self.__class__.placed_orders.append(order)
+        # Binance 응답 형태 모사
+        return {
+            "orderId": 9000 + len(self.__class__.placed_orders),
+            "clientOrderId": new_client_order_id,
+            "executedQty": str(quantity),
+            "avgPrice": "0",  # market order 즉시 응답에는 0 일 수 있음 (stream 이 채움)
+            "status": "FILLED",
+        }
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.placed_orders = []
+
+
+@pytest.fixture
+def fake_trade_client(monkeypatch) -> FakeTradeClient:
+    """ExecutionService 가 인스턴스화하는 BinanceFuturesTradeClient 를 fake 로 교체."""
+    FakeTradeClient.reset()
+    monkeypatch.setattr(
+        "app.services.execution_service.BinanceFuturesTradeClient",
+        FakeTradeClient,
+    )
+    yield FakeTradeClient
+    FakeTradeClient.reset()
+
+
+# ---------------------------------------------------------------------------
+# Position snapshot 주입 헬퍼 — risk_service 가 latest position 을 보도록
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def make_position(db_session):
+    from app.models.position import Position
+
+    def _factory(
+        strategy,
+        *,
+        mark_price: Decimal | str | int | float,
+        position_amt: Decimal | str | int | float | None = None,
+        entry_price: Decimal | str | int | float | None = None,
+        source: str = "TEST_FIXTURE",
+    ) -> Position:
+        p = Position(
+            strategy_instance_id=strategy.id,
+            symbol=strategy.symbol,
+            side=strategy.side,
+            position_side=strategy.side,
+            entry_price=Decimal(str(entry_price)) if entry_price is not None else strategy.avg_entry_price,
+            mark_price=Decimal(str(mark_price)),
+            position_amt=Decimal(str(position_amt)) if position_amt is not None else strategy.current_position_qty,
+            source=source,
+        )
+        db_session.add(p)
+        db_session.commit()
+        db_session.refresh(p)
+        return p
+    return _factory

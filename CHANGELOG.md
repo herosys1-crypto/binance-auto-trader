@@ -4,6 +4,71 @@
 
 ---
 
+## [2026-05-04] — Option B + C 회귀/관측성 강화 (PR #1)
+
+### 🎯 의도
+mainnet 직전 시점에 (1) 좀비 6패턴 fix 의 회귀 방어를 만들고 (2) 운영 가시성을
+높이고 (3) 전략 튜닝 유연성을 추가. 코드 동작 변경 없는 보강 위주 (default 보존).
+
+### ✨ 신규
+- **`crisis_qty_ratios` JSONB 컬럼** (`alembic 0009`) — 전략별 크라이시스 모드 TP qty
+  override. NULL 또는 일부 키만 채워도 안전 fallback (default 25/25/50/100 보존).
+- **`_resolve_crisis_qty_ratios` 헬퍼** + `_CRISIS_QTY_RATIO_DEFAULT` 상수 — invalid
+  값/범위 밖/비숫자/non-dict 모두 default 폴백.
+- **`capture_strategy_event` 헬퍼** (`app/core/sentry.py`) — sentry-sdk 2.x `new_scope`,
+  DSN 미설정 시 no-op. tag (strategy_id/symbol/side/account_id/event_type) 로
+  Sentry 알림 필터링 가능.
+- **integration test 스캐폴드** (`backend/tests/integration/`) — sqlite in-memory +
+  JSONB→JSON compiles directive + factory fixtures + FakeBinanceClient/FakeTradeClient/
+  FakeRedis. postgres 없이도 종단간 시나리오 실행 가능.
+
+### 🔧 코드 변경
+- `services/tp_sl_orchestrator.py` — `crisis_qty_ratio` 가 hardcoded → template override.
+- `services/execution_service.py` — `emergency_close_position` place_market_order 실패
+  시 Sentry capture (level=error).
+- `services/zombie_guardian.py` — `escalate_stuck_strategy` (level=fatal) +
+  `detect_orphan_exchange_positions` (level=fatal) Sentry capture.
+- `workers/binance_user_stream_consumer.py` — reconnect crash + WS error capture
+  (5회 미만은 warning, 이상은 error).
+- `workers/reconcile_worker.py` — Phase 1 (pre_pass_dedup, enforce_terminal_qty_zero,
+  detect_orphan_exchange_positions) 실패 + per-strategy 실패 capture.
+
+### 🧪 테스트 (110 passed, 0 warnings)
+**Unit (99)** — 기존 70 + 신규 29:
+- `test_zombie_guardian.py` (16) — Phase 1 자동 회복 + escalation 안전망
+- `test_crisis_qty_ratios_resolver.py` (13) — JSONB override 머지 + invalid fallback
+
+**Integration (11) — 신규 카테고리:**
+- `test_reconcile_zombie_cleanup.py` (5) — STOPPING 좀비 / orphan / 정상 sync /
+  PENDING 자가 회복 / terminal qty 잔재
+- `test_reconcile_orphan_position.py` (4) — orphan + Kill-Switch / matched 정상 /
+  amt=0 무시 / STOPPED + 거래소 포지션
+- `test_reconcile_duplicate_active.py` (2) — 중복 active dedup / 다른 account 격리
+- `test_tp_sl_orchestrator_lifecycle.py` (5) — TP1 부분 청산 종단간 / 임계 미달 /
+  마지막 활성 TP COMPLETED / 낮은 TP refire 방지 / Redis lock skip
+
+### 📚 문서
+- `AUDIT-FINDINGS.md` — A01~A17 상태 모두 ✅/DEFERRED 표기 + 신규 row 2개
+  (zombie_guardian tests, sentry observability).
+- `CHANGELOG.md` — 이 항목 추가.
+
+### 🚦 운영 사용 예시
+```sql
+-- 보수적 회복 (TP1 에서 더 많이 청산)
+UPDATE strategy_templates SET crisis_qty_ratios = '{"TP1":40,"TP2":30,"TP3":30}'
+WHERE name = 'aggressive_recovery';
+```
+production 에서 `SENTRY_DSN` env 만 설정하면 알림 자동 활성. 알림은
+`strategy_id` / `symbol` / `side` / `event_type` / `is_testnet` tag 로 필터링.
+
+### 🔖 Reviewer notes
+- reconcile_worker 의 STOPPING 자동정리는 **matched=None 경로**에만 1사이클로 발동.
+  Binance hedge mode 가 `amt=0` placeholder 를 보내는 케이스는 **5사이클 stuck
+  escalation** 으로 처리됨 (별도 코드 경로) — integration test 가 두 경로의 차이를 명시.
+- A14/A15/A16 은 audit 자체가 deferred 권장 (변경 가치 낮음), mainnet 후 재검토.
+
+---
+
 ## [2026-04-30] — 마지막 단계 트리거 + 트레일링 -5% 기획 반영 (Option C)
 
 ### 🎯 운영자 의도 반영
