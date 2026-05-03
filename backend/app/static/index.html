@@ -1491,10 +1491,8 @@ async function refreshStrategies() {
       const tpBar = renderTpBar(tpCount, totalTps, closeReason);
       const stage = `<div class="text-xs leading-tight"><span class="text-slate-400" style="font-size:10px">진입</span> ${stageBar}<br><span class="text-slate-400" style="font-size:10px">익절</span> ${tpBar}</div>`;
       const pnlNum = Number(s.unrealized_pnl || 0);
-      // 사용자 실제 ROI % = USD pnl × leverage / capital × 100 (margin 기준)
       const sCap = Number(s.total_capital || 0);
       const sLev = Number(s.leverage || 1) || 1;
-      const sPnlPct = (sCap > 0) ? (pnlNum * sLev / sCap * 100) : 0;
       const sQtyNum = Number(s.current_position_qty || 0);
       const sQtyAbs = Math.abs(sQtyNum);
       const sAvg = Number(s.avg_entry_price || 0);
@@ -1504,21 +1502,39 @@ async function refreshStrategies() {
       // 청산예정가 = isolated 계산 (체결 평단 기반)
       const MMR = 0.005;
       const sLiq = hasPosition && sLev > 0 ? (s.side === 'SHORT' ? sAvg * (1 + 1/sLev - MMR) : sAvg * (1 - 1/sLev + MMR)) : 0;
-      // 마진 = capital / leverage (notional 모델 기준 사용자 실제 자본)
-      const sMargin = sCap > 0 && sLev > 0 ? sCap / sLev : 0;
+
+      // 2026-05-04 v3 (Binance ROI 일치): 두 가지 ROI 분리.
+      //   포지션 ROI = pnl / 현재_사용_마진 × 100  ← Binance UI 와 일치 (실제 진입한 부분만).
+      //   전략 ROI   = pnl × leverage / total_capital × 100  ← 전체 전략 자본 대비.
+      // 마지막까지 모든 단계 진입하면 두 값이 같아짐 (현재_사용_마진 == 계획_총_마진).
+      // 1단계만 진입한 6단계 전략은 두 값이 크게 다름 — 사용자 비교 혼란 원인이었음.
+      const positionNotional = hasPosition ? sQtyAbs * sAvg : 0;
+      const positionMargin = positionNotional > 0 && sLev > 0 ? positionNotional / sLev : 0;
+      const positionRoi = positionMargin > 0 ? (pnlNum / positionMargin * 100) : 0;
+      const strategyRoi = sCap > 0 ? (pnlNum * sLev / sCap * 100) : 0;
+      // 계획된 마진 (전체 단계 진입 시) — 「수량/마진」 컬럼의 보조 정보용.
+      const plannedMargin = sCap > 0 && sLev > 0 ? sCap / sLev : 0;
 
       // 평단/마크/청산 — 3 줄 stack (Binance 스타일)
       const priceStack = hasPosition
         ? `<div class="text-xs leading-tight"><span class="text-slate-300" title="평단가">${fmtNum(sAvg)}</span><br><span class="text-cyan-300" title="마크가">${fmtNum(sMark)}</span><br><span class="text-red-300" title="청산예정">${fmtNum(sLiq)}</span></div>`
         : '<span class="text-slate-500">-</span>';
-      // 수량/마진 — 2 줄 stack
+      // 수량/마진 — 2 줄 stack. 마진은 「현재 사용 마진 / 계획 총 마진」 형식.
+      // 1단계만 진입한 다단계 전략은 둘이 다름 (e.g. 10.58 / 3275 USDT).
       const qtyStack = hasPosition
-        ? `<div class="text-xs leading-tight"><span class="${sQtyNum<0?'neg':'pos'} font-semibold" title="포지션 수량">${fmtQty(sQtyNum)}</span><br><span class="text-slate-400" title="마진 (capital÷lev)">${sMargin.toFixed(2)} USDT</span></div>`
-        : `<div class="text-xs leading-tight"><span class="text-slate-500">-</span><br><span class="text-slate-400 text-xs" title="계획 마진">${sMargin > 0 ? sMargin.toFixed(2)+' USDT' : '-'}</span></div>`;
-      // PnL/ROI — 2 줄 stack
-      const pnlSign = sPnlPct > 0 ? '+' : '';
+        ? `<div class="text-xs leading-tight"><span class="${sQtyNum<0?'neg':'pos'} font-semibold" title="포지션 수량">${fmtQty(sQtyNum)}</span><br><span class="text-slate-400" title="현재 사용 마진 (qty×평단÷lev) / 계획 총 마진 (전체 자본÷lev)">${positionMargin.toFixed(2)} / ${plannedMargin.toFixed(2)} USDT</span></div>`
+        : `<div class="text-xs leading-tight"><span class="text-slate-500">-</span><br><span class="text-slate-400 text-xs" title="계획 총 마진">${plannedMargin > 0 ? plannedMargin.toFixed(2)+' USDT' : '-'}</span></div>`;
+      // PnL/ROI — 3 줄 stack: PnL + 포지션 ROI (Binance 일치) + 전략 ROI (전체 자본 대비, 보조)
+      const posSign = positionRoi > 0 ? '+' : '';
+      const stratSign = strategyRoi > 0 ? '+' : '';
+      const posTooltip = `포지션 ROI = pnl ÷ 현재 사용 마진 × 100 (Binance UI 와 일치). 마진=${positionMargin.toFixed(2)} USDT`;
+      const stratTooltip = `전략 ROI = pnl × 레버리지 ÷ 전체 전략 자본 × 100 (전체 단계 모두 진입 시 = 포지션 ROI). 자본=${sCap.toFixed(2)} USDT, lev=${sLev}x`;
       const pnl = hasPosition
-        ? `<div class="text-xs leading-tight"><span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold">${fmtPnL(pnlNum)}</span><br><span class="${sPnlPct>0?'pos':sPnlPct<0?'neg':'text-slate-400'} text-xs">${pnlSign}${sPnlPct.toFixed(2)}%</span></div>`
+        ? `<div class="text-xs leading-tight">
+            <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span><br>
+            <span class="${positionRoi>0?'pos':positionRoi<0?'neg':'text-slate-400'} text-xs" title="${posTooltip}">${posSign}${positionRoi.toFixed(2)}%</span><br>
+            <span class="${strategyRoi>0?'pos':strategyRoi<0?'neg':'text-slate-500'} text-xs" style="font-size:10px; opacity:0.7" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>
+          </div>`
         : '<span class="text-slate-500">-</span>';
 
       // 호환용 alias (기존 변수 사용 위치 보존)
