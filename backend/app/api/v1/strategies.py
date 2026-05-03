@@ -619,6 +619,20 @@ def stop_strategy(
     if not strategy or strategy.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
 
+    # Terminal status guard (2026-05-04 fix):
+    # COMPLETED / STOPPED / REENTRY_READY 등 이미 종료된 strategy 에 stop 누르면
+    # 무조건 STOPPING 으로 덮어쓰던 버그 → 좀비 발생 (#90 사례).
+    # 종료 상태에서는 noop 으로 응답.
+    _TERMINAL = {"STOPPED", "COMPLETED", "CLOSED",
+                 "CLOSED_BY_TP", "CLOSED_BY_SL",
+                 "REENTRY_READY", "KILL_SWITCH_TRIGGERED"}
+    if strategy.status in _TERMINAL:
+        return StrategyActionResponse(
+            strategy_id=strategy.id,
+            status=strategy.status,
+            message=f"이미 종료된 전략 ({strategy.status}) 입니다. 추가 정지 불필요.",
+        )
+
     account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
     if not account:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exchange account not found")

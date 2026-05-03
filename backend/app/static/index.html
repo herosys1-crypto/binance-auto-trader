@@ -1992,11 +1992,10 @@ async function _renderDetailChart(strategy, stagePlans) {
       borderColor: '#334155',
       timeVisible: interval !== '1d',
       secondsVisible: false,
-      // UX (2026-05-04): 우측 여백 — 차트가 우측 모서리에 붙어있으면 최신 캔들이 잘림.
-      // 12 캔들 분량의 빈 공간을 우측에 두어 향후 가격 흐름을 시각화할 여유 확보.
+      // UX (2026-05-04): 우측 여백 — 차트가 우측 모서리에 붙어있지 않게.
       rightOffset: 12,
-      // 모든 timeframe 에서 동일한 캔들 폭 (5px) 으로 일관된 시각.
-      barSpacing: 5,
+      // barSpacing 은 fitContent 가 자동 계산 — 폭/캔들 수에 맞게 적응.
+      // 고정값 (예 5) 으로 박으면 컨테이너 폭에 따라 좌측이 비고 우측 몰림 발생.
       fixLeftEdge: false,
       fixRightEdge: false,
     },
@@ -2031,6 +2030,9 @@ async function _renderDetailChart(strategy, stagePlans) {
   _detailChartState.chart = chart;
   _detailChartState.candleSeries = candleSeries;
   _detailChartState._lastCandles = candleData;
+  // 데이터 bound 에 자동 정렬 — 옛 visible range stuck 방지 (1h↔4h↔1d 전환 시).
+  // 그 후 rightOffset (12 캔들) 만큼 자동 우측 여백.
+  try { chart.timeScale().fitContent(); } catch (e) {}
 
   // ===== UX #23: 볼린저 밴드 (BB 20,2) 오버레이 — 좌측 가격축 =====
   const bb = _bollingerBands(closes, 20, 2);
@@ -2235,8 +2237,9 @@ function _renderIndicatorChart(containerId, stateKey, candleData, values, opts) 
     layout: { background: { type: 'solid', color: '#0f172a' }, textColor: '#94a3b8', fontSize: 10 },
     grid: { vertLines: { color: 'rgba(148,163,184,0.05)' }, horzLines: { color: 'rgba(148,163,184,0.05)' } },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    timeScale: { borderColor: '#334155', timeVisible: false, visible: false },  // 메인 차트와 시간축 공유 의도
-    // UX #27: 가격축 좌측
+    // 메인 차트와 동일 timeScale 옵션 (rightOffset 등) — 시각 정렬 일관.
+    // visible:false 이지만 내부 timeScale 은 살아있어 동기화에 사용.
+    timeScale: { borderColor: '#334155', timeVisible: false, visible: false, rightOffset: 12 },
     leftPriceScale: { visible: true, borderColor: '#334155', scaleMargins: { top: 0.1, bottom: 0.1 } },
     rightPriceScale: { visible: false },
   });
@@ -2246,38 +2249,49 @@ function _renderIndicatorChart(containerId, stateKey, candleData, values, opts) 
     priceScaleId: 'left',
     priceFormat: { type: 'price', precision: opts.precision, minMove: opts.minMove },
   });
-  const data = candleData.map((c, i) => values[i] === null ? null : { time: c.time, value: values[i] }).filter(v => v !== null);
+  // RSI/OBV: warmup null 채워서 sub-chart 의 candleData 와 길이/타임스탬프 정확 일치 보장.
+  // 이래야 logical range (인덱스 기반) 동기화 시 메인 차트와 정확히 정렬됨.
+  // null 은 setData 가 자동 무시 (선이 갭으로 표시).
+  const data = candleData.map((c, i) => values[i] == null
+    ? { time: c.time }                       // whitespace point — x 자리는 차지하되 y 안 그림
+    : { time: c.time, value: values[i] }
+  );
   series.setData(data);
-  // 가로 기준선 (예: RSI 30/70)
   (opts.horizontalLines || []).forEach(hl => {
     series.createPriceLine({ price: hl.price, color: hl.color, lineWidth: 1, lineStyle: 2, axisLabelVisible: !!hl.title, title: hl.title });
   });
   _detailChartState[stateKey] = chart;
-  // 정보 라벨 — 마지막 값
   if (opts.infoEl) {
     const last = values[values.length - 1];
-    document.getElementById(opts.infoEl).textContent = last !== null ? `${opts.name} = ${last.toFixed(opts.precision)}` : `${opts.name} = -`;
+    document.getElementById(opts.infoEl).textContent = last != null ? `${opts.name} = ${last.toFixed(opts.precision)}` : `${opts.name} = -`;
   }
-  // 메인 차트 ↔ 보조 차트 양방향 시간축 동기화 (TIME range 기반).
-  // logical range 는 RSI(14)/MACD(26+9) 처럼 warmup 캔들 null 인 지표는 인덱스 어긋남.
-  // time range 는 절대 시간 기준이라 데이터 길이 무관하게 정확히 정렬됨.
-  // _isSyncing 플래그로 무한 루프 방지.
-  if (_detailChartState.chart) {
-    const initRange = _detailChartState.chart.timeScale().getVisibleRange();
-    if (initRange) chart.timeScale().setVisibleRange(initRange);
-    // main → this indicator
-    _detailChartState.chart.timeScale().subscribeVisibleTimeRangeChange((r) => {
-      if (_detailChartState._isSyncing || !r) return;
-      _detailChartState._isSyncing = true;
-      try { chart.timeScale().setVisibleRange(r); } finally { _detailChartState._isSyncing = false; }
-    });
-    // this indicator → main (양방향)
-    chart.timeScale().subscribeVisibleTimeRangeChange((r) => {
-      if (_detailChartState._isSyncing || !r) return;
-      _detailChartState._isSyncing = true;
-      try { _detailChartState.chart.timeScale().setVisibleRange(r); } finally { _detailChartState._isSyncing = false; }
-    });
-  }
+  _attachSubChartSync(chart);
+}
+
+// 메인 차트 ↔ 보조차트 동기화 (logical range 기반 — 인덱스로 정렬).
+// 이전엔 time range 사용했는데, RSI/MACD warmup null 이 있으면 sub-chart 의
+// 내부 시간 범위가 메인과 달라져 동기화 어긋남. 이제 모든 sub-chart 가 메인과
+// 동일한 candleData 길이로 setData 하므로 logical range 정확.
+function _attachSubChartSync(subChart) {
+  const main = _detailChartState.chart;
+  if (!main || !subChart) return;
+  // 초기 range 메인에서 가져와 적용
+  try {
+    const init = main.timeScale().getVisibleLogicalRange();
+    if (init) subChart.timeScale().setVisibleLogicalRange(init);
+  } catch (e) {}
+  // main → this sub
+  main.timeScale().subscribeVisibleLogicalRangeChange((r) => {
+    if (_detailChartState._isSyncing || !r) return;
+    _detailChartState._isSyncing = true;
+    try { subChart.timeScale().setVisibleLogicalRange(r); } finally { _detailChartState._isSyncing = false; }
+  });
+  // this sub → main (양방향)
+  subChart.timeScale().subscribeVisibleLogicalRangeChange((r) => {
+    if (_detailChartState._isSyncing || !r) return;
+    _detailChartState._isSyncing = true;
+    try { main.timeScale().setVisibleLogicalRange(r); } finally { _detailChartState._isSyncing = false; }
+  });
 }
 
 // MACD 전용 (line + signal + histogram)
@@ -2296,24 +2310,29 @@ function _renderMacdChart(containerId, candleData, macdRes, infoElId) {
     layout: { background: { type: 'solid', color: '#0f172a' }, textColor: '#94a3b8', fontSize: 10 },
     grid: { vertLines: { color: 'rgba(148,163,184,0.05)' }, horzLines: { color: 'rgba(148,163,184,0.05)' } },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    timeScale: { borderColor: '#334155', timeVisible: false, visible: false },
-    // UX #27: 가격축 좌측
+    // 메인 차트와 동일 timeScale 옵션 — sub-chart 동기화 일관성.
+    timeScale: { borderColor: '#334155', timeVisible: false, visible: false, rightOffset: 12 },
     leftPriceScale: { visible: true, borderColor: '#334155', scaleMargins: { top: 0.1, bottom: 0.1 } },
     rightPriceScale: { visible: false },
   });
-  // Histogram (양/음 색 다르게)
+  // Histogram (양/음 색 다르게). null 자리는 whitespace point 로 채워 길이 일치.
   const histSeries = chart.addHistogramSeries({ priceScaleId: 'left', priceFormat: { type: 'price', precision: 6, minMove: 0.000001 }, color: '#10b981' });
-  const histData = candleData.map((c, i) => macdRes.histogram[i] === null ? null : {
-    time: c.time, value: macdRes.histogram[i],
-    color: macdRes.histogram[i] >= 0 ? 'rgba(16,185,129,0.6)' : 'rgba(239,68,68,0.6)',
-  }).filter(v => v !== null);
+  const histData = candleData.map((c, i) => macdRes.histogram[i] == null
+    ? { time: c.time }
+    : { time: c.time, value: macdRes.histogram[i],
+        color: macdRes.histogram[i] >= 0 ? 'rgba(16,185,129,0.6)' : 'rgba(239,68,68,0.6)' }
+  );
   histSeries.setData(histData);
   // MACD line
   const lineSeries = chart.addLineSeries({ color: '#60a5fa', lineWidth: 1.5, priceScaleId: 'left', priceFormat: { type: 'price', precision: 6, minMove: 0.000001 } });
-  lineSeries.setData(candleData.map((c, i) => macdRes.line[i] === null ? null : { time: c.time, value: macdRes.line[i] }).filter(v => v !== null));
+  lineSeries.setData(candleData.map((c, i) => macdRes.line[i] == null
+    ? { time: c.time } : { time: c.time, value: macdRes.line[i] }
+  ));
   // Signal line
   const sigSeries = chart.addLineSeries({ color: '#f97316', lineWidth: 1.5, priceScaleId: 'left', priceFormat: { type: 'price', precision: 6, minMove: 0.000001 } });
-  sigSeries.setData(candleData.map((c, i) => macdRes.signal[i] === null ? null : { time: c.time, value: macdRes.signal[i] }).filter(v => v !== null));
+  sigSeries.setData(candleData.map((c, i) => macdRes.signal[i] == null
+    ? { time: c.time } : { time: c.time, value: macdRes.signal[i] }
+  ));
   // 0 기준선
   lineSeries.createPriceLine({ price: 0, color: 'rgba(148,163,184,0.3)', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
   _detailChartState.macdChart = chart;
@@ -2326,21 +2345,8 @@ function _renderMacdChart(containerId, candleData, macdRes, infoElId) {
       ? `MACD ${lastL.toFixed(6)} / Signal ${lastS.toFixed(6)} / Hist ${lastH !== null ? lastH.toFixed(6) : '-'}`
       : 'MACD 데이터 부족';
   }
-  // 메인 차트 ↔ MACD 양방향 TIME range 동기화 (RSI/OBV 와 동일 패턴)
-  if (_detailChartState.chart) {
-    const initRange = _detailChartState.chart.timeScale().getVisibleRange();
-    if (initRange) chart.timeScale().setVisibleRange(initRange);
-    _detailChartState.chart.timeScale().subscribeVisibleTimeRangeChange((r) => {
-      if (_detailChartState._isSyncing || !r) return;
-      _detailChartState._isSyncing = true;
-      try { chart.timeScale().setVisibleRange(r); } finally { _detailChartState._isSyncing = false; }
-    });
-    chart.timeScale().subscribeVisibleTimeRangeChange((r) => {
-      if (_detailChartState._isSyncing || !r) return;
-      _detailChartState._isSyncing = true;
-      try { _detailChartState.chart.timeScale().setVisibleRange(r); } finally { _detailChartState._isSyncing = false; }
-    });
-  }
+  // 메인 ↔ MACD 동기화 — RSI/OBV 와 동일 헬퍼 사용 (logical range 기반)
+  _attachSubChartSync(chart);
 }
 
 async function emergencyStop(id) {
