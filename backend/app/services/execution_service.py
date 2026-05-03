@@ -114,10 +114,14 @@ class ExecutionService:
         # 4)의 commit 전이라 다른 session 에서는 옛 status (예: TP3_DONE_PARTIAL) 를 봄
         # → stream_service 의 STOPPING 분기 못 타고 else (REENTRY_READY) 로 잘못 빠짐.
         # 새 흐름: status 변경을 먼저 commit 해서 외부 worker 에게 노출한 뒤 거래소 호출.
-        strategy.status = "STOPPING"
+        # 단, _execute_take_profit 에서 호출되는 경우 status 가 이미 TP/COMPLETED 로 갔으므로
+        # 무조건 STOPPING 으로 덮어쓰지 않게 — current status 가 STAGE_X_OPEN 류일 때만.
+        if strategy.status not in ("COMPLETED", "REENTRY_READY", "STOPPED",
+                                    "TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL",
+                                    "TP4_DONE_PARTIAL", "TP5_DONE_PARTIAL"):
+            strategy.status = "STOPPING"
         self.db.commit()
         # A03 fix (audit 2026-05-02): 거래소 호출 실패 시 명시적 로깅 + RiskEvent 기록.
-        # 이전엔 raw exception 만 던짐 → 운영자가 원인 추적 어려움.
         try:
             response = self.trade_client.place_market_order(symbol=strategy.symbol, side=side, position_side=position_side, quantity=quantity, new_client_order_id=client_order_id)
         except Exception as e:

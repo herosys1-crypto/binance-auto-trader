@@ -1,3 +1,4 @@
+import time
 from decimal import Decimal
 from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
@@ -141,7 +142,9 @@ class TPSLOrchestratorService:
         strategy_take_profit_total.labels(symbol=strategy.symbol, side=strategy.side, level=level).inc()
 
         # 손익 금액 + 수익률 계산 — 실제 청산가(close_order.avg_price) 기준 (mark 보다 정확)
-        # 2026-05-03 강화: fallback chain 확장 + DB refresh 후 재조회
+        # 2026-05-03 강화 v2: stream EXIT FILLED 이벤트 도착 대기 (최대 1초 retry)
+        # 시장가 즉시 체결 시 Binance 응답이 avgPrice=0 으로 올 수도. stream 이 0.5~1초
+        # 안에 갱신함. 그 동안 짧게 wait + db.refresh 로 정확값 확보.
         avg_exit_price = None
         realized_pnl = None
         pnl_pct = None
@@ -149,18 +152,24 @@ class TPSLOrchestratorService:
             avg_entry = Decimal(str(strategy.avg_entry_price)) if strategy.avg_entry_price else None
             exit_px = None
             if close_order:
-                # 1순위: close_order.avg_price (place_market_order 응답)
-                if close_order.avg_price and Decimal(str(close_order.avg_price)) > 0:
-                    exit_px = Decimal(str(close_order.avg_price))
-                # 2순위: close_order.price
-                elif close_order.price and Decimal(str(close_order.price)) > 0:
-                    exit_px = Decimal(str(close_order.price))
-                # 3순위: DB refresh (stream EXIT FILLED 이벤트가 그 사이 갱신했을 수도)
-                else:
-                    self.db.refresh(close_order)
+                # Retry chain: 200ms 간격으로 5회 (총 최대 1초) — stream EXIT FILLED 이벤트 대기
+                for attempt in range(5):
+                    # 1순위: close_order.avg_price
                     if close_order.avg_price and Decimal(str(close_order.avg_price)) > 0:
                         exit_px = Decimal(str(close_order.avg_price))
-            # 4순위: latest_position.mark_price
+                        break
+                    # 2순위: close_order.price (market order 즉시 체결 시 fill price)
+                    if close_order.price and Decimal(str(close_order.price)) > 0:
+                        exit_px = Decimal(str(close_order.price))
+                        break
+                    # 다음 시도 전 대기 + DB refresh (stream 갱신 기다림)
+                    if attempt < 4:
+                        time.sleep(0.2)
+                        try:
+                            self.db.refresh(close_order)
+                        except Exception:
+                            pass
+            # 마지막 fallback: latest_position.mark_price (stream 까지 fail 시 추정)
             if exit_px is None:
                 from app.repositories.position_repository import PositionRepository
                 latest_pos = PositionRepository(self.db).latest_by_strategy(strategy.id)

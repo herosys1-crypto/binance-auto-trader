@@ -72,8 +72,8 @@ def _do_reconcile(decrypt_func) -> None:
                             strategy_instance_id=strategy.id,
                             event_type="RECONCILE_STOPPING_ZOMBIE_CLEANUP",
                             severity="INFO",
-                            title="STOPPING zombie auto-promoted to STOPPED",
-                            message=f"symbol={strategy.symbol}, side={strategy.side} — exchange position 0, promoting STOPPING → STOPPED",
+                            title="✅ 좀비 STOPPING 자동 정리 (STOPPED 전환)",
+                            message=f"{strategy.symbol} {strategy.side} — 거래소 포지션 0 확인됨, STOPPING → STOPPED 자동 승격",
                             event_payload={"strategy_id": strategy.id},
                         ))
                         strategy.status = "STOPPED"
@@ -91,8 +91,8 @@ def _do_reconcile(decrypt_func) -> None:
                             strategy_instance_id=strategy.id,
                             event_type="RECONCILE_AUTO_STOP_ORPHAN",
                             severity="WARN",
-                            title="Auto-stopped DB-only orphan strategy",
-                            message=f"symbol={strategy.symbol}, side={strategy.side} — exchange position closed externally, marking STOPPED",
+                            title="🧹 외부 청산된 전략 자동 정리 (STOPPED)",
+                            message=f"{strategy.symbol} {strategy.side} — 거래소에서 외부 청산되어 시스템에만 잔재. STOPPED 마킹",
                             event_payload={"strategy_id": strategy.id, "old_status": strategy.status},
                         ))
                         strategy.status = "STOPPED"
@@ -104,8 +104,8 @@ def _do_reconcile(decrypt_func) -> None:
                             strategy_instance_id=strategy.id,
                             event_type="POSITION_RECONCILE_MISS",
                             severity="WARN",
-                            title="No matching position found on exchange",
-                            message=f"symbol={strategy.symbol}, side={strategy.side}",
+                            title="⚠️ 거래소에 매칭 포지션 없음",
+                            message=f"{strategy.symbol} {strategy.side} — DB 는 active 인데 거래소엔 포지션 없음 (확인 필요)",
                             event_payload={"strategy_id": strategy.id},
                         ))
                         position_reconcile_total.labels(status="miss").inc()
@@ -118,7 +118,7 @@ def _do_reconcile(decrypt_func) -> None:
                 db.add(Position(strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side, position_side=strategy.side, entry_price=exchange_entry_price if exchange_entry_price > 0 else None, break_even_price=Decimal(str(matched.get("breakEvenPrice", "0"))) or None, mark_price=exchange_mark_price if exchange_mark_price > 0 else None, liquidation_price=exchange_liquidation_price if exchange_liquidation_price > 0 else None, position_amt=exchange_position_amt, isolated_margin=Decimal(str(matched.get("isolatedMargin", "0"))), unrealized_pnl=exchange_unrealized_pnl, margin_type=matched.get("marginType"), leverage=int(matched.get("leverage", strategy.leverage)) if matched.get("leverage") else strategy.leverage, source="POSITION_RISK_SYNC"))
                 local_qty = Decimal(str(strategy.current_position_qty or 0))
                 if local_qty != exchange_position_amt:
-                    db.add(RiskEvent(strategy_instance_id=strategy.id, event_type="POSITION_QTY_MISMATCH", severity="WARN", title="Local/exchange position quantity mismatch", message=f"local={local_qty}, exchange={exchange_position_amt}", event_payload={"local_qty": str(local_qty), "exchange_qty": str(exchange_position_amt)}))
+                    db.add(RiskEvent(strategy_instance_id=strategy.id, event_type="POSITION_QTY_MISMATCH", severity="WARN", title="⚠️ 포지션 수량 불일치 (DB ↔ 거래소)", message=f"시스템 기록 {local_qty} vs 거래소 실 포지션 {exchange_position_amt} — reconcile 이 자동 동기화함", event_payload={"local_qty": str(local_qty), "exchange_qty": str(exchange_position_amt)}))
                     position_qty_mismatch_total.labels(symbol=strategy.symbol, side=strategy.side).inc()
                 strategy.avg_entry_price = exchange_entry_price if exchange_entry_price > 0 else strategy.avg_entry_price
                 strategy.current_position_qty = exchange_position_amt

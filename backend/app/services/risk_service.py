@@ -61,7 +61,7 @@ class RiskService:
         threshold = (Decimal(str(strategy.total_capital)) * Decimal("0.50")) / leverage
         is_stop = current_loss_amount <= (-threshold)
         if is_stop:
-            self.db.add(RiskEvent(strategy_instance_id=strategy.id, event_type="STOP_LOSS_TRIGGERED", severity="CRITICAL", title="Stop loss triggered", message=f"current_loss_amount={current_loss_amount}, threshold={-threshold}", event_payload={"current_loss_amount": str(current_loss_amount), "threshold": str(-threshold)}))
+            self.db.add(RiskEvent(strategy_instance_id=strategy.id, event_type="STOP_LOSS_TRIGGERED", severity="CRITICAL", title="🛑 손절 발동 (Stop Loss)", message=f"현재 손실 {current_loss_amount} USDT 가 한도 {-threshold} USDT 초과 → 강제 전량 청산", event_payload={"current_loss_amount": str(current_loss_amount), "threshold": str(-threshold)}))
             strategy_stop_loss_total.labels(symbol=strategy.symbol, side=strategy.side).inc()
             self.db.flush()
         return is_stop
