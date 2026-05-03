@@ -2546,8 +2546,9 @@ function buildCapitalsGrid() {
     <div class="col-span-1">📊 트리거%</div>
     <div class="col-span-2 text-right text-purple-400" title="이 단계의 LIMIT 진입 가격 (이전 단계 × (1±trigger%))">단계 진입가</div>
     <div class="col-span-2 text-right text-cyan-400" title="이 단계까지 누적 가중평균 진입가">평균 진입</div>
-    <div class="col-span-2 text-right text-orange-400" title="누적 평균 기준 예상 청산가 (Isolated 보수적)">청산가</div>
-    <div class="col-span-2 text-right text-red-400" title="이 단계 진입 시점의 누적 ROI (margin 대비, leverage 적용)">손실율%</div>
+    <div class="col-span-1 text-right text-orange-400" title="누적 평균 기준 예상 청산가 (Isolated 보수적)">청산가</div>
+    <div class="col-span-1 text-right text-red-400" title="이 단계 진입 직전(왼쪽) → 직후(오른쪽) 누적 ROI %. 직전이 -85% 이하면 청산 임박 ⚠️">손실율 (직전→직후)</div>
+    <div class="col-span-2 text-right text-red-300" title="이 단계 진입 시점의 누적 손실 USDT (직전과 직후 동일 — 진입 직후엔 새 자본만 추가, 손실 변화 X)">누적 손실$</div>
   </div>`;
   for (let i = 1; i <= 10; i++) {
     let triggerPlaceholder, triggerDisabled, triggerTitle, triggerValue;
@@ -2580,8 +2581,9 @@ function buildCapitalsGrid() {
       </div>
       <div class="col-span-2 text-xs text-purple-300 text-right" id="cm-stage-entry-${i}" title="이 단계의 LIMIT 진입가">-</div>
       <div class="col-span-2 text-xs text-cyan-300 text-right" id="cm-stage-avg-${i}" title="이 단계까지 누적 평균 진입가">-</div>
-      <div class="col-span-2 text-xs text-orange-300 text-right" id="cm-stage-liq-${i}" title="평균 기준 예상 청산가">-</div>
-      <div class="col-span-2 text-xs text-red-400 text-right" id="cm-stage-loss-${i}" title="이 단계 진입 시점의 누적 손실율 (margin 기준 ROI, leverage 적용)">-</div>
+      <div class="col-span-1 text-xs text-orange-300 text-right" id="cm-stage-liq-${i}" title="평균 기준 예상 청산가">-</div>
+      <div class="col-span-1 text-xs text-red-400 text-right" id="cm-stage-loss-${i}" title="이 단계 진입 시점의 누적 ROI %">-</div>
+      <div class="col-span-2 text-xs text-red-300 text-right" id="cm-stage-lossusd-${i}" title="이 단계 진입 시점의 누적 손실 USDT (단조 증가)">-</div>
     </div>`;
   }
   grid.innerHTML = html;
@@ -2595,7 +2597,7 @@ function _refreshLiveCalc() {
     const startPrice = Number(startPriceStr);
     const clearAll = () => {
       for (let i = 1; i <= 10; i++) {
-        ['cm-stage-entry-', 'cm-stage-avg-', 'cm-stage-liq-', 'cm-stage-loss-'].forEach(prefix => {
+        ['cm-stage-entry-', 'cm-stage-avg-', 'cm-stage-liq-', 'cm-stage-loss-', 'cm-stage-lossusd-'].forEach(prefix => {
           const el = document.getElementById(prefix + i);
           if (el) el.textContent = '-';
         });
@@ -2606,7 +2608,7 @@ function _refreshLiveCalc() {
     const lev = lvInpEl && lvInpEl.value ? Number(lvInpEl.value) : 2;
     const side = (cmState.side || 'SHORT').toUpperCase();
     let prevPrice = startPrice;
-    let cumQty = 0, cumNotional = 0;
+    let cumQty = 0, cumNotional = 0, cumMargin = 0;
     let prevLiq = null;
     for (let i = 1; i <= 10; i++) {
       const capEl = document.getElementById('cm-cap-' + i);
@@ -2615,6 +2617,7 @@ function _refreshLiveCalc() {
       const avgEl = document.getElementById('cm-stage-avg-' + i);
       const liqEl = document.getElementById('cm-stage-liq-' + i);
       const lossEl = document.getElementById('cm-stage-loss-' + i);
+      const lossUsdEl = document.getElementById('cm-stage-lossusd-' + i);
       if (!capEl || !avgEl) continue;
       const cap = Number(capEl.value);
       if (!cap || cap <= 0) {
@@ -2622,6 +2625,7 @@ function _refreshLiveCalc() {
         if (avgEl) avgEl.textContent = '-';
         if (liqEl) liqEl.textContent = '-';
         if (lossEl) lossEl.textContent = '-';
+        if (lossUsdEl) lossUsdEl.textContent = '-';
         continue;
       }
       // 1) 이 단계 진입가 (raw, leverage 무관)
@@ -2636,10 +2640,26 @@ function _refreshLiveCalc() {
           entryPrice = prevPrice * (1 - trgPct / 100);
         }
       }
-      // 2) 누적 — qty (capital × lev / price), notional (qty × price)
+
+      // ★ 직전 ROI 계산 — 이 단계 진입 *직전* (이전 단계까지 누적, 가격은 entryPrice)
+      // 의미: 가격이 이 단계 trigger 도달했지만 아직 자본 추가 안 한 시점
+      let preRoi = null;
+      let preUsd = null;
+      if (i > 1 && cumQty > 0 && cumMargin > 0) {
+        const preAvg = cumNotional / cumQty;  // 이전 단계까지 평균 (현재 cumQty/cumNotional)
+        if (side === 'SHORT') {
+          preUsd = cumQty * (preAvg - entryPrice);
+        } else {
+          preUsd = cumQty * (entryPrice - preAvg);
+        }
+        preRoi = preUsd / cumMargin * 100;
+      }
+
+      // 2) 누적 — qty (capital × lev / price), notional (qty × price), margin (cap)
       const qty = (cap * lev) / entryPrice;
       cumQty += qty;
       cumNotional += qty * entryPrice;
+      cumMargin += cap;
       const avg = cumNotional / cumQty;
       // 3) 청산가 (누적 평균 기준)
       const liq = _estimateLiquidationPrice(side, avg, lev);
@@ -2666,11 +2686,43 @@ function _refreshLiveCalc() {
         liqEl.className = 'col-span-2 text-xs text-right ' + liqColor;
       }
       if (lossEl) {
-        // 손실율 표시 (음수면 손실, 양수면 이득). 절대값 -50% 넘으면 굵게.
-        const lossText = (roi >= 0 ? '+' : '') + roi.toFixed(2) + '%';
-        const lossColor = roi < -50 ? 'text-red-500 font-bold' : (roi < 0 ? 'text-red-300' : 'text-emerald-300');
-        lossEl.textContent = lossText;
-        lossEl.className = 'col-span-2 text-xs text-right ' + lossColor;
+        // 직전 → 직후 ROI 표시 (1단계는 직전 없음)
+        const postTxt = (roi >= 0 ? '+' : '') + roi.toFixed(2) + '%';
+        const postColor = roi < -50 ? 'text-red-400 font-semibold' : (roi < 0 ? 'text-red-300' : 'text-emerald-300');
+        let html;
+        let dangerWarn = '';
+        if (preRoi !== null) {
+          const preTxt = (preRoi >= 0 ? '+' : '') + preRoi.toFixed(2) + '%';
+          // 직전 ROI < -85% 면 청산 임박 ⚠️
+          let preColor;
+          if (preRoi < -85) {
+            preColor = 'text-red-500 font-bold';
+            dangerWarn = '⚠️';
+          } else if (preRoi < -50) {
+            preColor = 'text-red-400 font-semibold';
+          } else {
+            preColor = 'text-red-300';
+          }
+          html = `<span class="${preColor}">${preTxt}</span><span class="text-slate-500"> → </span><span class="${postColor}">${postTxt}</span>${dangerWarn}`;
+        } else {
+          html = `<span class="${postColor}">${postTxt}</span>`;
+        }
+        lossEl.innerHTML = html;
+        lossEl.className = 'col-span-1 text-xs text-right';
+      }
+      // USDT 누적 손실 — 단조 증가, 직관적 절대 위험도
+      // SHORT 손실 USDT = cumQty × (avg - entry)  (음수면 손실)
+      if (lossUsdEl) {
+        let pnlUsd;
+        if (side === 'SHORT') {
+          pnlUsd = cumQty * (avg - entryPrice);
+        } else {
+          pnlUsd = cumQty * (entryPrice - avg);
+        }
+        const usdText = (pnlUsd >= 0 ? '+' : '') + pnlUsd.toLocaleString('en-US', { maximumFractionDigits: 2 }) + ' $';
+        const usdColor = pnlUsd < 0 ? 'text-red-300' : 'text-emerald-300';
+        lossUsdEl.textContent = usdText;
+        lossUsdEl.className = 'col-span-2 text-xs text-right ' + usdColor;
       }
       prevPrice = entryPrice;
       prevLiq = liq;
