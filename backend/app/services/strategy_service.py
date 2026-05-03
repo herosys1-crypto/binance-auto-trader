@@ -74,10 +74,15 @@ class StrategyService:
         # 중복 방지 (Critical): Binance 는 같은 심볼+방향에 대해 통합 포지션으로만 관리.
         # 같은 계정/심볼/방향 활성 전략이 있으면 새 전략 생성을 거부 (TP/SL 충돌, qty 추적 오류 회피).
         # 종료된 상태 (모두 _CLOSED_STATUSES 에 포함) 는 제외 — 새로 시작 가능.
-        # 2026-05-03 강화: STOPPING / CLOSED_BY_TP/SL / KILL_SWITCH_TRIGGERED 도 종료 분류 추가.
+        # 2026-05-03 강화: CLOSED_BY_TP/SL / KILL_SWITCH_TRIGGERED 도 종료 분류 추가.
+        # 2026-05-03 PM 좀비 사례 수정: STOPPING 은 "닫는 중" — 거래소 청산이 아직
+        # 진행/완료 미확인 상태이므로 closed 가 아닌 "active" 로 봐야 신규 진입 충돌 방지.
+        # (이전엔 STOPPING 을 closed 로 분류 → reconcile 청산 완료 직전 race window 에서
+        #  신규 strategy 가 같은 symbol+side 로 진입해 거래소 통합 포지션을 두 strategy 가
+        #  점유하는 좀비 발생 — #89/#90 LABUSDT 사례)
         from sqlalchemy import select
         _CLOSED_STATUSES = {
-            "STOPPED", "STOPPING", "COMPLETED", "CLOSED",
+            "STOPPED", "COMPLETED", "CLOSED",
             "CLOSED_BY_TP", "CLOSED_BY_SL", "REENTRY_READY",
             "KILL_SWITCH_TRIGGERED",
         }

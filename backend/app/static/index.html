@@ -133,6 +133,22 @@
 <!-- ============ Dashboard ============ -->
 <div id="dashboard-screen" class="hidden p-3 max-w-full mx-auto">
 
+  <!-- ⚠️ Zombie Guardian 경고 배너 (좀비/Kill-Switch/Critical 발생 시 표시) -->
+  <div id="zg-banner" class="hidden mb-2 rounded-lg border-2 border-red-500 bg-red-950/70 p-3 text-sm">
+    <div class="flex items-start gap-2">
+      <div class="text-2xl leading-none">🚨</div>
+      <div class="flex-1">
+        <div class="font-bold text-red-300 mb-1" id="zg-banner-title">시스템 경고</div>
+        <div class="text-slate-200" id="zg-banner-body"></div>
+        <div class="mt-2 flex gap-2">
+          <button onclick="loadSystemStatus(true)" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 rounded">↻ 새로고침</button>
+          <button onclick="document.getElementById('zg-banner-detail').classList.toggle('hidden')" class="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 rounded">상세 ▼</button>
+        </div>
+        <div id="zg-banner-detail" class="hidden mt-2 p-2 bg-slate-950/70 rounded text-xs font-mono whitespace-pre-wrap text-slate-300"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Header (compact) -->
   <div class="flex justify-between items-center mb-2">
     <div class="flex items-baseline gap-3">
@@ -1027,8 +1043,70 @@ async function refreshAll() {
     refreshActivity(),
     refreshSysHealth(),
     loadBalance(),  // 거래소 잔액 카드 (2026-05-03 추가)
+    loadSystemStatus(),  // ⚠️ Zombie Guardian 배너 (2026-05-03 추가)
   ]);
   document.getElementById('last-updated').textContent = '마지막 갱신: ' + new Date().toLocaleTimeString('ko-KR');
+}
+
+// ==================== Zombie Guardian Banner ====================
+// 좀비/Kill-Switch/Critical 이벤트를 통합해서 상단 배너로 표시.
+// 백엔드 /admin/system-status 엔드포인트가 통합 dump 제공.
+async function loadSystemStatus(forceRefresh = false) {
+  try {
+    const data = await api('/admin/system-status');
+    const banner = document.getElementById('zg-banner');
+    const titleEl = document.getElementById('zg-banner-title');
+    const bodyEl = document.getElementById('zg-banner-body');
+    const detailEl = document.getElementById('zg-banner-detail');
+    if (!banner) return;
+    if (data.is_healthy) {
+      banner.classList.add('hidden');
+      return;
+    }
+    banner.classList.remove('hidden');
+    const parts = [];
+    if (data.kill_switches_active && data.kill_switches_active.length > 0) {
+      const accs = data.kill_switches_active.map(k => `account #${k.exchange_account_id} (${k.reason_code})`).join(', ');
+      parts.push(`🔒 <b>Kill-Switch 활성</b>: ${accs} — 신규 주문 자동 차단 중`);
+    }
+    if (data.stuck_zombie_count > 0) {
+      parts.push(`🧟 <b>좀비 stuck 카운터</b>: ${data.stuck_zombie_count}건 — reconcile 이 자동 회복 시도 중`);
+    }
+    if (data.critical_events_recent && data.critical_events_recent.length > 0) {
+      parts.push(`🚨 <b>최근 1시간 CRITICAL 이벤트</b>: ${data.critical_events_recent.length}건`);
+    }
+    titleEl.textContent = '🚨 시스템 경고 — Zombie Guardian 발동';
+    bodyEl.innerHTML = parts.join('<br>');
+    // 상세 (펼치면 보임)
+    const lines = [];
+    if (data.kill_switches_active.length > 0) {
+      lines.push('=== Kill-Switch 활성 계정 ===');
+      data.kill_switches_active.forEach(k => {
+        lines.push(`  account #${k.exchange_account_id}`);
+        lines.push(`    code: ${k.reason_code}`);
+        lines.push(`    msg : ${k.reason_message || ''}`);
+        lines.push(`    at  : ${(k.triggered_at || '').replace('T', ' ').slice(0, 19)}`);
+      });
+    }
+    if (data.critical_events_recent.length > 0) {
+      lines.push('');
+      lines.push('=== 최근 CRITICAL 이벤트 ===');
+      data.critical_events_recent.slice(0, 10).forEach(e => {
+        const t = (e.created_at || '').replace('T', ' ').slice(0, 19);
+        lines.push(`  [${t}] sid=${e.strategy_id || '-'} ${e.event_type}`);
+        lines.push(`    ${e.title}`);
+        if (e.message) lines.push(`    └ ${e.message.slice(0, 200)}`);
+      });
+    }
+    detailEl.textContent = lines.join('\n');
+    if (forceRefresh) {
+      // 사용자가 「↻ 새로고침」 누른 경우 짧은 시각 강조
+      banner.classList.add('ring-2', 'ring-red-400');
+      setTimeout(() => banner.classList.remove('ring-2', 'ring-red-400'), 1500);
+    }
+  } catch (e) {
+    // 인증 만료 등은 silent — 다음 사이클 재시도
+  }
 }
 
 // 영문 RiskEvent / 활동 메시지를 한글로 매핑 (옛 DB 데이터 호환, 2026-05-03)
@@ -1914,6 +1992,13 @@ async function _renderDetailChart(strategy, stagePlans) {
       borderColor: '#334155',
       timeVisible: interval !== '1d',
       secondsVisible: false,
+      // UX (2026-05-04): 우측 여백 — 차트가 우측 모서리에 붙어있으면 최신 캔들이 잘림.
+      // 12 캔들 분량의 빈 공간을 우측에 두어 향후 가격 흐름을 시각화할 여유 확보.
+      rightOffset: 12,
+      // 모든 timeframe 에서 동일한 캔들 폭 (5px) 으로 일관된 시각.
+      barSpacing: 5,
+      fixLeftEdge: false,
+      fixRightEdge: false,
     },
     // UX #27: 가격축을 좌측으로 이동
     leftPriceScale: {
@@ -2021,18 +2106,30 @@ async function _renderDetailChart(strategy, stagePlans) {
   }
 
   // 5) 현재가(마크) — 시안 실선. 모든 timeframe 에서 일관된 표시.
-  // 1d 차트는 Binance 가 어제 종가를 last 로 반환해 timeframe 마다 last 가 달라지는 문제.
-  // 따라서 candle.last 가 아닌 strategy 의 avg_entry + unrealized_pnl + qty 로 역산:
-  //   LONG : mark = avg + pnl / |qty|
-  //   SHORT: mark = avg - pnl / |qty|
+  // 우선순위:
+  //   (a) ticker24h 의 lastPrice  ← 가장 정확 (실시간)
+  //   (b) avg_entry + uPnL / qty 역산 (포지션 있을 때)
+  //   (c) candle close (마지막 fallback)
+  // 1d 차트는 Binance 가 어제 종가를 last 로 반환해 timeframe 마다 다른 문제 → ticker24h 로 해결.
   let currentMark = null;
-  const sAvg = Number(strategy.avg_entry_price || 0);
-  const sQty = Math.abs(Number(strategy.current_position_qty || 0));
-  const sPnl = strategy.unrealized_pnl != null ? Number(strategy.unrealized_pnl) : null;
-  if (sAvg > 0 && sQty > 0 && sPnl !== null && !isNaN(sPnl)) {
-    currentMark = strategy.side === 'LONG' ? (sAvg + sPnl / sQty) : (sAvg - sPnl / sQty);
+  try {
+    const isTestnet = (strategy.is_testnet === true) || (strategy.exchange_account_is_testnet === true);
+    const tickResp = await fetch(
+      `${window.location.origin}/api/v1/market/ticker24h?symbol=${encodeURIComponent(symbol)}&testnet=${isTestnet}`
+    ).then(r => r.json()).catch(() => null);
+    if (tickResp && (tickResp.lastPrice || tickResp.last_price)) {
+      currentMark = Number(tickResp.lastPrice || tickResp.last_price);
+    }
+  } catch (e) { /* fallback 아래 */ }
+  if (!currentMark) {
+    const sAvg = Number(strategy.avg_entry_price || 0);
+    const sQty = Math.abs(Number(strategy.current_position_qty || 0));
+    const sPnl = strategy.unrealized_pnl != null ? Number(strategy.unrealized_pnl) : null;
+    if (sAvg > 0 && sQty > 0 && sPnl !== null && !isNaN(sPnl)) {
+      currentMark = strategy.side === 'LONG' ? (sAvg + sPnl / sQty) : (sAvg - sPnl / sQty);
+    }
   }
-  const markPriceForLine = currentMark || last;  // fallback: 캔들 close (포지션 없을 때)
+  const markPriceForLine = currentMark || last;
   if (markPriceForLine && markPriceForLine > 0) {
     addLine(markPriceForLine, '#06b6d4', 1, '현재가');
   }

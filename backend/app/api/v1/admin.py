@@ -742,3 +742,87 @@ def disable_kill_switch(
 ) -> MessageResponse:
     AccountKillSwitchService(db).clear(exchange_account_id)
     return MessageResponse(message=f"Kill switch cleared on account {exchange_account_id}")
+
+
+# =====================================================================
+# 시스템 상태 통합 (대시보드 배너용) — 좀비/Kill-Switch/Critical 이벤트 한 번에
+# =====================================================================
+@router.get("/system-status")
+def get_system_status(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """대시보드 상단 경고 배너용 통합 시스템 상태.
+
+    응답:
+      {
+        "kill_switches_active": [{exchange_account_id, reason_code, reason_message, triggered_at}, ...],
+        "critical_events_recent": [{id, event_type, title, message, created_at, strategy_id}, ...],
+        "stuck_zombie_count": int,   # Redis 의 zombie:stuck_count:* 키 개수
+        "is_healthy": bool,           # 위 셋 다 비어있고 stuck=0 이면 true
+      }
+    """
+    from datetime import timedelta
+    from sqlalchemy import select
+    from app.models.account_kill_switch import AccountKillSwitch
+    from app.models.risk_event import RiskEvent
+
+    # 1) 활성 Kill-Switch
+    ks_rows = db.execute(
+        select(AccountKillSwitch).where(AccountKillSwitch.is_enabled.is_(True))
+    ).scalars().all()
+    kill_switches = [
+        {
+            "exchange_account_id": r.exchange_account_id,
+            "reason_code": r.reason_code,
+            "reason_message": r.reason_message,
+            "triggered_at": r.triggered_at.isoformat() if r.triggered_at else None,
+        }
+        for r in ks_rows
+    ]
+
+    # 2) 최근 1시간 CRITICAL 이벤트
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+    crit_rows = db.execute(
+        select(RiskEvent)
+        .where(RiskEvent.severity == "CRITICAL")
+        .where(RiskEvent.created_at >= cutoff)
+        .order_by(RiskEvent.id.desc())
+        .limit(20)
+    ).scalars().all()
+    critical_events = [
+        {
+            "id": r.id,
+            "event_type": r.event_type,
+            "title": r.title,
+            "message": r.message,
+            "strategy_id": r.strategy_instance_id,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in crit_rows
+    ]
+
+    # 3) Redis stuck zombie counter
+    stuck_count = 0
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+        # SCAN 으로 키 개수 (KEYS 는 production 에서 비권장)
+        count = 0
+        for _ in r.scan_iter(match="zombie:stuck_count:*", count=100):
+            count += 1
+        stuck_count = count
+    except Exception:
+        pass
+
+    is_healthy = (
+        len(kill_switches) == 0
+        and len(critical_events) == 0
+        and stuck_count == 0
+    )
+    return {
+        "kill_switches_active": kill_switches,
+        "critical_events_recent": critical_events,
+        "stuck_zombie_count": stuck_count,
+        "is_healthy": is_healthy,
+    }

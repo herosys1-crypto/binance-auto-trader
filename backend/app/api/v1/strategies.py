@@ -549,12 +549,19 @@ def force_stop_strategy(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
     strategy.status = "STOPPED"
     strategy.reentry_ready = False
+    # 좀비 방지 (2026-05-03): force-stop 시에도 qty=0 보장 — UI/통계 잔재 방지.
+    # 실제 거래소 포지션은 운영자가 직접 정리해야 함 (force-stop 본 의도).
+    from decimal import Decimal as _D
+    strategy.current_position_qty = _D("0")
+    if not strategy.stopped_at:
+        from datetime import datetime as _dt, timezone as _tz
+        strategy.stopped_at = _dt.now(_tz.utc)
     db.commit()
     db.refresh(strategy)
     return StrategyActionResponse(
         strategy_id=strategy.id,
         status=strategy.status,
-        message="DB 상에서만 STOPPED 로 마킹됨 (거래소 호출 없음)",
+        message="DB 상에서만 STOPPED + qty=0 마킹됨 (거래소 호출 없음 — 거래소 잔재는 운영자가 직접 확인)",
     )
 
 
