@@ -86,6 +86,42 @@ class TestTriggerNextStageManually:
             trigger_next_stage_manually(strategy_id=s.id, db=db_session, user_id=s.user_id)
         assert ei.value.status_code == 400
 
+    def test_existing_pending_limit_blocks_duplicate(
+        self, db_session, make_strategy, make_template
+    ) -> None:
+        """사용자 #96 사례: 같은 stage 의 NEW LIMIT 가 거래소에 이미 있으면 거부.
+        is_triggered=False 인 plan 이라도 Order NEW 가 있으면 중복 차단."""
+        from app.models.order import Order
+        from app.models.strategy_stage_plan import StrategyStagePlan
+        tpl = make_template(stages_config={"capitals": [50, 50, 50]})
+        s = make_strategy(
+            symbol_str="BTCUSDT", side="SHORT", status="STAGE1_OPEN",
+            current_position_qty=Decimal("-0.5"), current_stage=1,
+            template=tpl,
+        )
+        # stage 2 plan + NEW Order 미리 (이전 「▶」 클릭으로 발송된 LIMIT 시뮬)
+        db_session.add(StrategyStagePlan(
+            strategy_instance_id=s.id, stage_no=2, side="SHORT",
+            trigger_mode="PRICE_UP_PCT", trigger_percent=Decimal("10"),
+            trigger_price=Decimal("55000"), planned_capital=Decimal("100"),
+            planned_qty=Decimal("0.001"), is_triggered=False,
+        ))
+        db_session.add(Order(
+            strategy_instance_id=s.id, stage_no=2, purpose="ENTRY",
+            symbol="BTCUSDT", side="SELL", position_side="SHORT",
+            order_type="LIMIT", time_in_force="GTC",
+            client_order_id="prev-limit-stage2",
+            orig_qty=Decimal("0.001"), price=Decimal("55000"),
+            status="NEW",
+        ))
+        db_session.commit()
+
+        with pytest.raises(HTTPException) as ei:
+            trigger_next_stage_manually(strategy_id=s.id, db=db_session, user_id=s.user_id)
+        assert ei.value.status_code == 400
+        assert "이미 거래소에 미체결" in ei.value.detail
+        assert "Stage 2" in ei.value.detail or "stage 2" in ei.value.detail.lower()
+
 
 # ============================================================================
 # Feature 1 — PATCH /settings 의 trigger_percents 부분 갱신

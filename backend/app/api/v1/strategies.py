@@ -777,6 +777,7 @@ def trigger_next_stage_manually(
         )
     # stage_plan 존재 + 미발동 확인
     from app.models.strategy_stage_plan import StrategyStagePlan
+    from app.models.order import Order
     from sqlalchemy import select as sa_select
     plan = db.execute(
         sa_select(StrategyStagePlan)
@@ -787,6 +788,26 @@ def trigger_next_stage_manually(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Stage {next_stage_no} plan 없음")
     if plan.is_triggered:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Stage {next_stage_no} 이미 진입됨")
+    # 2026-05-04 fix v2 (사용자 #96 사례): 거래소 NEW LIMIT 중복 방지.
+    # is_triggered 는 FILLED 시점에만 True 가 되므로, LIMIT 발송 후 미체결 (NEW) 상태에선
+    # is_triggered=False. 이전엔 사용자가 「▶」 또 누르면 같은 stage 의 LIMIT 가 또 발송됐음.
+    # → 가격 도달 시 양쪽 다 fill = 포지션 더블링. 이 가드로 차단.
+    existing_pending = db.execute(
+        sa_select(Order)
+        .where(Order.strategy_instance_id == strategy.id)
+        .where(Order.stage_no == next_stage_no)
+        .where(Order.purpose == "ENTRY")
+        .where(Order.status == "NEW")
+    ).scalar_one_or_none()
+    if existing_pending is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Stage {next_stage_no} 의 LIMIT 주문이 이미 거래소에 미체결 상태로 있음 "
+                f"(Order #{existing_pending.id}, qty={existing_pending.orig_qty}, price={existing_pending.price}). "
+                "가격 도달 시 자동 체결되거나, 「⏸」 로 취소 후 재발송하세요."
+            ),
+        )
 
     account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
     if not account:
