@@ -235,6 +235,9 @@ class TestTrailingDoesNotShortcutTPLogic:
         patched_redis_for_risk.store[f"strategy:{strategy.id}:peak_pnl_pct"] = "10"
 
         result = RiskService(db_session).evaluate_take_profit_level(strategy.id)
-        # drop 4% < 임계 5% → 트레일링 발동 안 함. TP1 (이미 done) 또는 TP2 (10% 도달) 반환.
-        # 현재 6% < TP2 (10%), >= TP1 (5%) → "TP1" 반환
-        assert result == "TP1"
+        # 2026-05-04 v2 기준 (TP skip fix 후):
+        # - 트레일링: drop 4% < 임계 5% → 미발동
+        # - TP loop: status=TP1_PARTIAL → cur_done_idx=0 → TP1 재발동 안 함 (idx 0 > 0 false).
+        #   pnl 6% < TP2 (10%) → TP2 도 미발동.
+        # → None 반환 (정확한 동작 — 발동할 TP 없음)
+        assert result is None

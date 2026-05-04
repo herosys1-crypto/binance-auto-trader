@@ -132,15 +132,8 @@ class RiskService:
 
         # 2026-05-04 critical fix (사용자 #98 LABUSDT 사례):
         # 트레일링 체크가 TP threshold loop 보다 우선해야 함.
-        #
-        # 이전 버그: TP loop 가 먼저 → pnl_ratio >= 직전_TP_threshold (e.g. 19.76% >= TP3 15%)
-        # 면 즉시 "TP3" 반환. orchestrator 가 status TP3_DONE_PARTIAL 보고 skip → 트레일링
-        # 체크 영원히 도달 안 함. 한번 익절 후 가격이 약간 retrace 됐지만 여전히 직전
-        # TP threshold 위에 있는 모든 케이스에서 트레일링 무력화 (잔량 영구 보유).
-        #
-        # 수정: 트레일링 체크를 TP loop 앞으로 이동.
-        # 사용자 의도: "이미 익절 진행 중이고 5%+ retrace 면 전량 청산 = lock-in" —
-        # 부분 TP 보다 우선순위 높음 (안전 우선).
+        # 한번 익절 후 가격이 약간 retrace 됐지만 여전히 직전 TP threshold 위에 있는
+        # 모든 케이스에서 트레일링 무력화되던 버그 (잔량 영구 보유) fix.
         TRAILING_ARMED_STATUSES = {
             "TP1_DONE_PARTIAL",
             "TP2_DONE_PARTIAL", "TP2_DONE",
@@ -156,10 +149,28 @@ class RiskService:
         ):
             return "TRAILING_TP"
 
-        # 가장 높은 도달 단계 선정 (descending sort 후 첫 번째 도달).
-        # 트레일링 미발동 시에만 도달 — 처음 TP 진입 또는 추가 TP 진입 모두 처리.
-        for label, threshold in tp_levels:
-            if pnl_ratio >= threshold:
+        # 2026-05-04 critical fix #2 (사용자 #98 — TP2 silent skip 사례):
+        # 이전 로직은 descending sort 라 한 tick 에 여러 TP 임계 통과 시
+        # (e.g. pnl 22% 인데 TP1=10/TP2=15/TP3=20 모두 도달) "TP3" 즉시 반환.
+        # orchestrator 가 cur_done_idx (TP1=0) < tp_idx (TP3=2) 면 fire — TP2 skip!
+        # → TP2 의 청산 비율 (25%) 영구 누락.
+        #
+        # Fix: ascending + 다음 미발동 TP 만 반환.
+        # status 의 cur_done_idx 를 여기서 직접 참고해 다음 단계 TP 1개씩 반환.
+        # 한 tick 1회 발동, 다음 tick 다음 TP — 점진적이지만 누락 없음.
+        TP_DONE_INDEX = {
+            "TP1_DONE_PARTIAL": 0,
+            "TP2_DONE_PARTIAL": 1, "TP2_DONE": 1,
+            "TP3_DONE_PARTIAL": 2,
+            "TP4_DONE_PARTIAL": 3,
+            "TP5_DONE_PARTIAL": 4,
+        }
+        TP_LABEL_TO_IDX = {"TP1": 0, "TP2": 1, "TP3": 2, "TP4": 3, "TP5": 4}
+        cur_done_idx = TP_DONE_INDEX.get((strategy.status or "").upper(), -1)
+
+        # ascending — 가장 낮은 임계 먼저
+        for label, threshold in sorted(tp_levels, key=lambda x: x[1]):
+            if pnl_ratio >= threshold and TP_LABEL_TO_IDX.get(label, -1) > cur_done_idx:
                 return label
 
         return None
