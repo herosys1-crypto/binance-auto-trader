@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db
 from app.core.crypto import decrypt_text
+from app.core.strategy_status import TERMINAL_STATUSES
 from app.repositories.exchange_account_repository import ExchangeAccountRepository
 from app.repositories.strategy_repository import StrategyRepository
 from app.schemas.strategy import (
@@ -628,15 +629,8 @@ def delete_strategy(
     if not strategy or strategy.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
 
-    # 2026-05-04 fix: 같은 모듈 내 stop_strategy 의 _TERMINAL 과 일치시킴.
-    # 이전: COMPLETED / REENTRY_READY 가 빠져있어 정상 종료된 전략 삭제 시도 시
-    # "활성 전략 삭제 불가" 잘못된 메시지. STOPPING 은 "닫는 중" 이라 의도적으로 제외 (포지션 잔재 가능).
-    terminal_statuses = {
-        "STOPPED", "COMPLETED", "CLOSED",
-        "CLOSED_BY_TP", "CLOSED_BY_SL",
-        "REENTRY_READY", "KILL_SWITCH_TRIGGERED",
-    }
-    if strategy.status not in terminal_statuses:
+    # 2026-05-04: 공통 TERMINAL_STATUSES 사용 (이전엔 inline set 이라 다른 곳과 drift).
+    if strategy.status not in TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"활성 전략은 삭제 불가. 먼저 종료(/stop)하세요. 현재 status={strategy.status}",
@@ -673,10 +667,7 @@ def stop_strategy(
     # COMPLETED / STOPPED / REENTRY_READY 등 이미 종료된 strategy 에 stop 누르면
     # 무조건 STOPPING 으로 덮어쓰던 버그 → 좀비 발생 (#90 사례).
     # 종료 상태에서는 noop 으로 응답.
-    _TERMINAL = {"STOPPED", "COMPLETED", "CLOSED",
-                 "CLOSED_BY_TP", "CLOSED_BY_SL",
-                 "REENTRY_READY", "KILL_SWITCH_TRIGGERED"}
-    if strategy.status in _TERMINAL:
+    if strategy.status in TERMINAL_STATUSES:
         return StrategyActionResponse(
             strategy_id=strategy.id,
             status=strategy.status,

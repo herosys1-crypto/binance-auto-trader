@@ -1,6 +1,7 @@
 from decimal import Decimal
 from typing import Any
 
+from app.core.strategy_status import TERMINAL_STATUSES
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_stage_plan import StrategyStagePlan
 from app.repositories.strategy_repository import StrategyRepository
@@ -81,11 +82,8 @@ class StrategyService:
         #  신규 strategy 가 같은 symbol+side 로 진입해 거래소 통합 포지션을 두 strategy 가
         #  점유하는 좀비 발생 — #89/#90 LABUSDT 사례)
         from sqlalchemy import select
-        _CLOSED_STATUSES = {
-            "STOPPED", "COMPLETED", "CLOSED",
-            "CLOSED_BY_TP", "CLOSED_BY_SL", "REENTRY_READY",
-            "KILL_SWITCH_TRIGGERED",
-        }
+        # 2026-05-04: 공통 TERMINAL_STATUSES 사용 (이전엔 inline set 이라 admin.py 와 drift).
+        _CLOSED_STATUSES = TERMINAL_STATUSES
         existing = self.db.execute(
             select(StrategyInstance)
             .where(StrategyInstance.exchange_account_id == exchange_account_id)
