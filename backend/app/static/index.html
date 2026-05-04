@@ -572,6 +572,8 @@
       <!-- 액션 버튼 -->
       <div class="flex justify-end gap-2 pt-3 border-t border-slate-700">
         <button onclick="closeCreateModal()" class="btn-ghost btn">취소</button>
+        <!-- 2026-05-04: 수정 모드일 때만 노출 — TP/SL 만 in-place 갱신 (포지션/단계 유지) -->
+        <button id="cm-submit-inplace" onclick="submitInPlaceSettings()" class="btn-ghost btn hidden" title="포지션/단계 유지하고 TP/SL 만 즉시 적용 (거래소 호출 없음)">↻ 설정만 수정</button>
         <button id="cm-submit" onclick="submitCreate()" class="btn-success btn" disabled>🚀 전략 시작</button>
       </div>
     </div>
@@ -2641,17 +2643,21 @@ async function openCreateModal(editStrategyId) {
   const banner = document.getElementById('cm-edit-banner');
   const title = document.getElementById('cm-title');
   const submit = document.getElementById('cm-submit');
+  const inplaceBtn = document.getElementById('cm-submit-inplace');
   if (editStrategyId) {
     banner.classList.remove('hidden');
     document.getElementById('cm-edit-banner-detail').textContent =
-      `전략 #${editStrategyId} 의 미체결 주문이 모두 취소된 후, 아래 설정으로 새 전략이 시작됩니다.`;
+      `「↻ 설정만 수정」 — 포지션/단계 유지, TP/SL만 즉시 갱신 (거래소 호출 없음).` +
+      `\n「🔄 종료 후 새로 시작」 — 미체결 주문 취소 + 1단계부터 새 전략 시작.`;
     title.textContent = `✏️ 전략 #${editStrategyId} 수정`;
     submit.textContent = '🔄 종료 후 새로 시작';
+    if (inplaceBtn) inplaceBtn.classList.remove('hidden');  // in-place 버튼 노출
     await loadPrevBlueprint(editStrategyId, /*silent=*/true);
   } else {
     banner.classList.add('hidden');
     title.textContent = '➕ 새 전략 시작';
     submit.textContent = '🚀 전략 시작';
+    if (inplaceBtn) inplaceBtn.classList.add('hidden');  // 신규 모드엔 숨김
   }
 }
 
@@ -3636,6 +3642,49 @@ function _renderPreview(data) {
   // 청산 위험 시 「전략 시작」 비활성화 (사용자 인지 후 수정하도록 강제)
   cmState._liquidationRisk = (firstUnreachable !== null);
   document.getElementById('cm-preview').classList.remove('hidden');
+}
+
+// 2026-05-04 (in-place 수정): 종료 없이 TP/SL 만 갱신.
+// 포지션/단계/평균 진입가 모두 유지. 거래소 호출 없음 (DB 만 변경).
+// PATCH /strategies/{id}/settings → 새 template (clone + override) 생성 + 기존 strategy 의
+// strategy_template_id 갱신.
+async function submitInPlaceSettings() {
+  const editingId = cmState.editingStrategyId;
+  if (!editingId) {
+    toast('수정 대상 전략 ID 없음 — 「🔄 다시 시작」 으로만 가능', 'error');
+    return;
+  }
+  const tpsl = _collectTpSl();
+  const confirmMsg =
+    `↻ 전략 #${editingId} 설정만 수정\n\n` +
+    `포지션/단계/평균 진입가 모두 유지됩니다.\n` +
+    `다음 사이클부터 새 TP/SL 적용 (거래소 호출 없음):\n\n` +
+    `  TP1=${tpsl.tp1_percent}% (${tpsl.tp1_qty_ratio}%)\n` +
+    `  TP2=${tpsl.tp2_percent}% (${tpsl.tp2_qty_ratio}%)\n` +
+    `  TP3=${tpsl.tp3_percent}% (${tpsl.tp3_qty_ratio}%)\n` +
+    (tpsl.tp4_percent ? `  TP4=${tpsl.tp4_percent}% (${tpsl.tp4_qty_ratio}%)\n` : '') +
+    (tpsl.tp5_percent ? `  TP5=${tpsl.tp5_percent}% (${tpsl.tp5_qty_ratio}%)\n` : '') +
+    `  SL=${tpsl.stop_loss_percent_of_capital}%\n\n` +
+    `진행할까요?`;
+  if (!confirm(confirmMsg)) return;
+  const inplaceBtn = document.getElementById('cm-submit-inplace');
+  const submit = document.getElementById('cm-submit');
+  if (inplaceBtn) { inplaceBtn.disabled = true; inplaceBtn.textContent = '⏳ 갱신 중...'; }
+  if (submit) submit.disabled = true;
+  try {
+    await api(`/strategies/${editingId}/settings`, {
+      method: 'PATCH',
+      body: tpsl,
+    });
+    toast(`✅ 전략 #${editingId} TP/SL 갱신 완료 — 다음 tick 부터 적용`, 'success');
+    closeCreateModal();
+    refreshStrategies();
+  } catch (e) {
+    toast('설정 수정 실패: ' + e.message, 'error');
+  } finally {
+    if (inplaceBtn) { inplaceBtn.disabled = false; inplaceBtn.textContent = '↻ 설정만 수정'; }
+    if (submit) submit.disabled = false;
+  }
 }
 
 async function submitCreate() {

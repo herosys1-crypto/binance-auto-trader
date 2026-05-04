@@ -530,6 +530,119 @@ def start_strategy(
     )
 
 
+class StrategySettingsUpdate(BaseModel):
+    """In-place 수정 — 활성 strategy 의 TP/SL 만 변경 (포지션/단계 유지).
+
+    제외된 필드 (활성 strategy 에 변경 위험):
+    - side, leverage: 거래소 포지션 충돌
+    - stages_config: 이미 진입한 단계와 inconsistency
+    """
+    tp1_percent: Decimal | None = Field(default=None, gt=0)
+    tp2_percent: Decimal | None = Field(default=None, gt=0)
+    tp3_percent: Decimal | None = Field(default=None, gt=0)
+    tp4_percent: Decimal | None = Field(default=None, gt=0)
+    tp5_percent: Decimal | None = Field(default=None, gt=0)
+    tp1_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp2_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp3_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp4_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp5_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    stop_loss_percent_of_capital: Decimal | None = Field(default=None, gt=0, le=100)
+    crisis_qty_ratios: dict | None = None
+
+
+@router.patch("/{strategy_id}/settings", response_model=StrategyDetailResponse)
+def update_strategy_settings_in_place(
+    strategy_id: int,
+    payload: StrategySettingsUpdate,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyDetailResponse:
+    """활성 strategy 의 TP/SL 만 in-place 수정 (포지션/단계 유지).
+
+    구현: 기존 template 복사 + payload 의 TP/SL 만 override → 새 template insert
+    → strategy.strategy_template_id 갱신. side/leverage/stages 등은 보존.
+
+    제약:
+    - 종료된 strategy 는 거부 (재시작이 의미 — /stop 후 새 전략 시작이 정확)
+    - side / leverage / stages_config 변경 거부 (위험)
+    """
+    from app.models.strategy_template import StrategyTemplate
+    from datetime import datetime as _dt
+
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+    if strategy.status in TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"이미 종료된 전략 (status={strategy.status}) 은 in-place 수정 불가. "
+                "「🔄 다시 시작」 또는 「🟢 새 전략 시작」 으로 새 strategy 를 만드세요."
+            ),
+        )
+
+    old_tpl = db.get(StrategyTemplate, strategy.strategy_template_id)
+    if not old_tpl:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Original template not found")
+
+    # 새 template 생성 — 모든 필드 복사 + payload override.
+    # name 에 strategy id + timestamp 부착 → 중복 회피 + 추적 용이.
+    ts = int(_dt.now().timestamp())
+    new_tpl = StrategyTemplate(
+        name=f"{old_tpl.name}_inplace_s{strategy.id}_{ts}"[:120],
+        strategy_type=old_tpl.strategy_type,
+        side=old_tpl.side,
+        leverage=old_tpl.leverage,
+        total_capital=old_tpl.total_capital,
+        stages_config=dict(old_tpl.stages_config) if old_tpl.stages_config else None,
+        # legacy 4단계 호환 필드 (있으면 유지)
+        stage1_capital=old_tpl.stage1_capital,
+        stage2_capital=old_tpl.stage2_capital,
+        stage3_capital=old_tpl.stage3_capital,
+        stage4_capital=old_tpl.stage4_capital,
+        stage2_trigger_percent=old_tpl.stage2_trigger_percent,
+        stage3_trigger_percent=old_tpl.stage3_trigger_percent,
+        stage4_trigger_mode=old_tpl.stage4_trigger_mode,
+        stage4_trigger_percent=old_tpl.stage4_trigger_percent,
+        # TP/SL — payload 우선, 없으면 원본
+        tp1_percent=payload.tp1_percent if payload.tp1_percent is not None else old_tpl.tp1_percent,
+        tp2_percent=payload.tp2_percent if payload.tp2_percent is not None else old_tpl.tp2_percent,
+        tp3_percent=payload.tp3_percent if payload.tp3_percent is not None else old_tpl.tp3_percent,
+        tp4_percent=payload.tp4_percent if payload.tp4_percent is not None else old_tpl.tp4_percent,
+        tp5_percent=payload.tp5_percent if payload.tp5_percent is not None else old_tpl.tp5_percent,
+        tp1_qty_ratio=payload.tp1_qty_ratio if payload.tp1_qty_ratio is not None else old_tpl.tp1_qty_ratio,
+        tp2_qty_ratio=payload.tp2_qty_ratio if payload.tp2_qty_ratio is not None else old_tpl.tp2_qty_ratio,
+        tp3_qty_ratio=payload.tp3_qty_ratio if payload.tp3_qty_ratio is not None else old_tpl.tp3_qty_ratio,
+        tp4_qty_ratio=payload.tp4_qty_ratio if payload.tp4_qty_ratio is not None else old_tpl.tp4_qty_ratio,
+        tp5_qty_ratio=payload.tp5_qty_ratio if payload.tp5_qty_ratio is not None else old_tpl.tp5_qty_ratio,
+        stop_loss_percent_of_capital=(
+            payload.stop_loss_percent_of_capital
+            if payload.stop_loss_percent_of_capital is not None
+            else old_tpl.stop_loss_percent_of_capital
+        ),
+        crisis_qty_ratios=(
+            payload.crisis_qty_ratios
+            if payload.crisis_qty_ratios is not None
+            else (dict(old_tpl.crisis_qty_ratios) if old_tpl.crisis_qty_ratios else None)
+        ),
+        reentry_policy=old_tpl.reentry_policy,
+        reentry_delay_seconds=old_tpl.reentry_delay_seconds,
+        reentry_offset_pct=old_tpl.reentry_offset_pct,
+        is_active=False,  # in-place 수정용 — 다른 신규 strategy 가 이걸 선택하면 안 됨
+    )
+    db.add(new_tpl)
+    db.flush()
+    strategy.strategy_template_id = new_tpl.id
+    db.commit()
+    db.refresh(strategy)
+
+    # response — template 기반 enrichment 만 (tp_count batch 는 list endpoint 가 처리).
+    # _fetch_tp_counts_batch 는 postgres regex 라 sqlite 호환 X — 굳이 여기서 안 부름.
+    resp = _enrich_response(StrategyDetailResponse.model_validate(strategy), new_tpl)
+    return resp
+
+
 class AddMarginRequest(BaseModel):
     amount: Decimal = Field(..., gt=0, description="추가할 증거금 (USDT, 양수). 거래소 ISOLATED 모드 포지션에만 가능.")
 
