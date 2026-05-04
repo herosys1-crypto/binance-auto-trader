@@ -130,23 +130,38 @@ class RiskService:
             tp_levels = [(label, CRISIS_OVERRIDE[label]) for label, _ in tp_levels if label in CRISIS_OVERRIDE]
             tp_levels.sort(key=lambda x: x[1], reverse=True)  # 내림차순 (TP4 부터 검사)
 
-        # 가장 높은 도달 단계 선정 (descending sort 후 첫 번째 도달)
+        # 2026-05-04 critical fix (사용자 #98 LABUSDT 사례):
+        # 트레일링 체크가 TP threshold loop 보다 우선해야 함.
+        #
+        # 이전 버그: TP loop 가 먼저 → pnl_ratio >= 직전_TP_threshold (e.g. 19.76% >= TP3 15%)
+        # 면 즉시 "TP3" 반환. orchestrator 가 status TP3_DONE_PARTIAL 보고 skip → 트레일링
+        # 체크 영원히 도달 안 함. 한번 익절 후 가격이 약간 retrace 됐지만 여전히 직전
+        # TP threshold 위에 있는 모든 케이스에서 트레일링 무력화 (잔량 영구 보유).
+        #
+        # 수정: 트레일링 체크를 TP loop 앞으로 이동.
+        # 사용자 의도: "이미 익절 진행 중이고 5%+ retrace 면 전량 청산 = lock-in" —
+        # 부분 TP 보다 우선순위 높음 (안전 우선).
+        TRAILING_ARMED_STATUSES = {
+            "TP1_DONE_PARTIAL",
+            "TP2_DONE_PARTIAL", "TP2_DONE",
+            "TP3_DONE_PARTIAL",
+            "TP4_DONE_PARTIAL",
+            "TRAILING_ARMED",
+        }
+        if (
+            (strategy.status or "").upper() in TRAILING_ARMED_STATUSES
+            and peak >= TRAILING_TP_PEAK_THRESHOLD
+            and pnl_ratio <= (peak - TRAILING_TP_RETRACE_AMOUNT)
+            and pnl_ratio < peak
+        ):
+            return "TRAILING_TP"
+
+        # 가장 높은 도달 단계 선정 (descending sort 후 첫 번째 도달).
+        # 트레일링 미발동 시에만 도달 — 처음 TP 진입 또는 추가 TP 진입 모두 처리.
         for label, threshold in tp_levels:
             if pnl_ratio >= threshold:
                 return label
 
-        # 트레일링: 피크 대비 -5% 회귀 시 전량 청산 (사용자 기획 2026-04-30).
-        # 활성 조건: 피크 ≥ +5% (즉 TP1 임계 도달했음) AND 현재 ≤ peak - 5%.
-        # 어느 TP 든 1회라도 부분 익절된 후부터 활성화 (TP1 포함).
-        if peak >= TRAILING_TP_PEAK_THRESHOLD and pnl_ratio <= (peak - TRAILING_TP_RETRACE_AMOUNT) and pnl_ratio < peak:
-            if (strategy.status or "").upper() in {
-                "TP1_DONE_PARTIAL",
-                "TP2_DONE_PARTIAL", "TP2_DONE",
-                "TP3_DONE_PARTIAL",
-                "TP4_DONE_PARTIAL",
-                "TRAILING_ARMED",
-            }:
-                return "TRAILING_TP"
         return None
 
     @staticmethod
