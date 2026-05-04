@@ -334,3 +334,236 @@ class TestSettingsUpdateWithTriggerPercents:
         new_tpl = db_session.get(StrategyTemplate, s2.strategy_template_id)
         assert new_tpl.tp1_percent == Decimal("7")
         assert new_tpl.stages_config["trigger_percents"][1] == "12"
+
+
+# ============================================================================
+# Phase 3b — capitals in-place 변경 (2026-05-05)
+# ============================================================================
+class TestSettingsUpdateWithCapitals:
+    def _create(self, db_session, make_strategy, make_template, make_symbol,
+                *, current_stage: int = 1, n_stages: int = 3, capitals_str=None):
+        sym = make_symbol("BTCUSDT")
+        capitals_str = capitals_str or [str(50 * (i + 1)) for i in range(n_stages)]
+        tpl = make_template(
+            stages_config={
+                "capitals": capitals_str,
+                "trigger_percents": [None] + ["10"] * (n_stages - 1),
+            },
+        )
+        s = make_strategy(
+            symbol_str="BTCUSDT", side="SHORT", status=f"STAGE{current_stage}_OPEN",
+            current_position_qty=Decimal("-0.5"),
+            current_stage=current_stage,
+            avg_entry_price=Decimal("50000"),
+            template=tpl, symbol_obj=sym,
+        )
+        for i in range(n_stages):
+            stage_no = i + 1
+            db_session.add(StrategyStagePlan(
+                strategy_instance_id=s.id,
+                stage_no=stage_no,
+                side=s.side,
+                trigger_mode="IMMEDIATE" if stage_no == 1 else "PRICE_UP_PCT",
+                trigger_percent=Decimal("10") if stage_no > 1 else None,
+                trigger_price=Decimal("50000") + Decimal(stage_no - 1) * Decimal("5000"),
+                planned_capital=Decimal(capitals_str[i]),
+                planned_qty=Decimal("0.001"),
+                is_triggered=stage_no <= current_stage,
+            ))
+        db_session.commit()
+        return s, tpl
+
+    def test_change_unentered_stage_capital(
+        self, db_session, make_strategy, make_template, make_symbol
+    ) -> None:
+        """current_stage=1, stage 2/3 capital 변경 → planned_capital 재계산."""
+        s, _ = self._create(db_session, make_strategy, make_template, make_symbol,
+                            current_stage=1, n_stages=3)
+        update_strategy_settings_in_place(
+            strategy_id=s.id,
+            payload=StrategySettingsUpdate(
+                capitals=[None, Decimal("200"), Decimal("300")],
+            ),
+            db=db_session, user_id=s.user_id,
+        )
+        db_session.expire_all()
+        s2 = db_session.get(StrategyInstance, s.id)
+        new_tpl = db_session.get(StrategyTemplate, s2.strategy_template_id)
+        assert new_tpl.stages_config["capitals"][1] == "200"
+        assert new_tpl.stages_config["capitals"][2] == "300"
+        # plan 의 planned_capital 도 갱신됐어야
+        plans = db_session.execute(
+            select(StrategyStagePlan).where(StrategyStagePlan.strategy_instance_id == s.id)
+        ).scalars().all()
+        for p in plans:
+            if p.stage_no == 1:
+                assert p.is_triggered is True  # 발동된 plan 보존
+            elif p.stage_no == 2:
+                assert p.planned_capital == Decimal("200")
+            elif p.stage_no == 3:
+                assert p.planned_capital == Decimal("300")
+
+    def test_capital_already_entered_rejected(
+        self, db_session, make_strategy, make_template, make_symbol
+    ) -> None:
+        """current_stage=2, stage 2 capital 변경 시도 → 400."""
+        s, _ = self._create(db_session, make_strategy, make_template, make_symbol,
+                            current_stage=2, n_stages=3)
+        with pytest.raises(HTTPException) as ei:
+            update_strategy_settings_in_place(
+                strategy_id=s.id,
+                payload=StrategySettingsUpdate(
+                    capitals=[None, Decimal("999"), None],  # stage 2 변경 시도
+                ),
+                db=db_session, user_id=s.user_id,
+            )
+        assert ei.value.status_code == 400
+        assert "이미 진입한 단계" in ei.value.detail
+
+    def test_capitals_and_triggers_length_mismatch_rejected(
+        self, db_session, make_strategy, make_template, make_symbol
+    ) -> None:
+        s, _ = self._create(db_session, make_strategy, make_template, make_symbol,
+                            current_stage=1, n_stages=3)
+        with pytest.raises(HTTPException) as ei:
+            update_strategy_settings_in_place(
+                strategy_id=s.id,
+                payload=StrategySettingsUpdate(
+                    capitals=[None, Decimal("200"), Decimal("300"), Decimal("400")],  # 길이 4
+                    trigger_percents=[None, Decimal("10"), Decimal("15")],  # 길이 3
+                ),
+                db=db_session, user_id=s.user_id,
+            )
+        assert ei.value.status_code == 400
+        assert "일치" in ei.value.detail
+
+
+# ============================================================================
+# Phase 3c — 단계 수 변경 (추가/제거) (2026-05-05)
+# ============================================================================
+class TestSettingsUpdateWithStageCountChange:
+    def _create(self, db_session, make_strategy, make_template, make_symbol,
+                *, current_stage: int = 1, n_stages: int = 3):
+        sym = make_symbol("BTCUSDT")
+        tpl = make_template(
+            stages_config={
+                "capitals": [str(50 * (i + 1)) for i in range(n_stages)],
+                "trigger_percents": [None] + ["10"] * (n_stages - 1),
+            },
+        )
+        s = make_strategy(
+            symbol_str="BTCUSDT", side="SHORT", status=f"STAGE{current_stage}_OPEN",
+            current_position_qty=Decimal("-0.5"),
+            current_stage=current_stage,
+            avg_entry_price=Decimal("50000"),
+            template=tpl, symbol_obj=sym,
+        )
+        for i in range(n_stages):
+            stage_no = i + 1
+            db_session.add(StrategyStagePlan(
+                strategy_instance_id=s.id,
+                stage_no=stage_no,
+                side=s.side,
+                trigger_mode="IMMEDIATE" if stage_no == 1 else "PRICE_UP_PCT",
+                trigger_percent=Decimal("10") if stage_no > 1 else None,
+                trigger_price=Decimal("50000") + Decimal(stage_no - 1) * Decimal("5000"),
+                planned_capital=Decimal(str(50 * stage_no)),
+                planned_qty=Decimal("0.001"),
+                is_triggered=stage_no <= current_stage,
+            ))
+        db_session.commit()
+        return s, tpl
+
+    def test_add_stage_increases_count(
+        self, db_session, make_strategy, make_template, make_symbol
+    ) -> None:
+        """3단계 → 4단계 (capital 4 추가) → stage 4 plan 신규 생성."""
+        s, _ = self._create(db_session, make_strategy, make_template, make_symbol,
+                            current_stage=1, n_stages=3)
+        update_strategy_settings_in_place(
+            strategy_id=s.id,
+            payload=StrategySettingsUpdate(
+                capitals=[None, None, None, Decimal("400")],  # 길이 4, 새 stage 4
+                trigger_percents=[None, None, None, Decimal("20")],
+            ),
+            db=db_session, user_id=s.user_id,
+        )
+        db_session.expire_all()
+        s2 = db_session.get(StrategyInstance, s.id)
+        new_tpl = db_session.get(StrategyTemplate, s2.strategy_template_id)
+        assert len(new_tpl.stages_config["capitals"]) == 4
+        assert new_tpl.stages_config["capitals"][3] == "400"
+        # 신규 plan 생성됐어야
+        plans = db_session.execute(
+            select(StrategyStagePlan).where(StrategyStagePlan.strategy_instance_id == s.id)
+        ).scalars().all()
+        stage_nos = sorted(p.stage_no for p in plans)
+        assert stage_nos == [1, 2, 3, 4]
+        plan4 = next(p for p in plans if p.stage_no == 4)
+        assert plan4.is_triggered is False
+        assert plan4.planned_capital == Decimal("400")
+
+    def test_remove_stage_decreases_count(
+        self, db_session, make_strategy, make_template, make_symbol
+    ) -> None:
+        """3단계 → 2단계 (current_stage=1) → stage 3 plan 삭제."""
+        s, _ = self._create(db_session, make_strategy, make_template, make_symbol,
+                            current_stage=1, n_stages=3)
+        update_strategy_settings_in_place(
+            strategy_id=s.id,
+            payload=StrategySettingsUpdate(
+                capitals=[None, None],  # 길이 2 (stage 3 제거)
+                trigger_percents=[None, None],
+            ),
+            db=db_session, user_id=s.user_id,
+        )
+        db_session.expire_all()
+        s2 = db_session.get(StrategyInstance, s.id)
+        new_tpl = db_session.get(StrategyTemplate, s2.strategy_template_id)
+        assert len(new_tpl.stages_config["capitals"]) == 2
+        plans = db_session.execute(
+            select(StrategyStagePlan).where(StrategyStagePlan.strategy_instance_id == s.id)
+        ).scalars().all()
+        stage_nos = sorted(p.stage_no for p in plans)
+        assert stage_nos == [1, 2]  # stage 3 삭제됨
+
+    def test_remove_below_current_stage_rejected(
+        self, db_session, make_strategy, make_template, make_symbol
+    ) -> None:
+        """current_stage=2, capitals 길이 1 시도 → 400 (이미 발동한 stage 보존 필수)."""
+        s, _ = self._create(db_session, make_strategy, make_template, make_symbol,
+                            current_stage=2, n_stages=3)
+        with pytest.raises(HTTPException) as ei:
+            update_strategy_settings_in_place(
+                strategy_id=s.id,
+                payload=StrategySettingsUpdate(
+                    capitals=[None],
+                    trigger_percents=[None],
+                ),
+                db=db_session, user_id=s.user_id,
+            )
+        assert ei.value.status_code == 400
+        assert "current_stage" in ei.value.detail
+        # plan 들 보존됐어야 — DB 상태 변경 X
+        plans = db_session.execute(
+            select(StrategyStagePlan).where(StrategyStagePlan.strategy_instance_id == s.id)
+        ).scalars().all()
+        assert len(plans) == 3
+
+    def test_new_stage_capital_required(
+        self, db_session, make_strategy, make_template, make_symbol
+    ) -> None:
+        """3단계 → 4단계인데 stage 4 capital 가 None → 400."""
+        s, _ = self._create(db_session, make_strategy, make_template, make_symbol,
+                            current_stage=1, n_stages=3)
+        with pytest.raises(HTTPException) as ei:
+            update_strategy_settings_in_place(
+                strategy_id=s.id,
+                payload=StrategySettingsUpdate(
+                    capitals=[None, None, None, None],  # 길이 4 인데 신규 stage 4 capital None
+                    trigger_percents=[None, None, None, Decimal("20")],
+                ),
+                db=db_session, user_id=s.user_id,
+            )
+        assert ei.value.status_code == 400
+        assert "신규 stage" in ei.value.detail or "capital" in ei.value.detail.lower()

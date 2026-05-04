@@ -3870,11 +3870,17 @@ async function submitInPlaceSettings() {
     return;
   }
   const tpsl = _collectTpSl();
-  // 미발동 stage 의 trigger_percent 도 같이 갱신 (backend 가 current_stage 이하 변경은 자동 거부).
-  // 직접 입력 모드에서만 trigger_percents 수집 (템플릿 모드면 trigger 변경 의미 X).
+  // 미발동 stage 의 trigger_percent + capital 도 같이 갱신.
+  // 직접 입력 모드에서만 capitals/triggers 수집 (템플릿 모드면 변경 의미 X).
   const inp = (cmState.mode === 'direct') ? _collectDirectInputs() : null;
   const triggerSummary = inp && inp.trigger_percents.length > 0
     ? `\n  Trigger%: [${inp.trigger_percents.map((t,i) => t === null ? '—' : `${i+1}=${t}`).join(', ')}]`
+    : '';
+  const capitalsSummary = inp && inp.capitals.length > 0
+    ? `\n  Capitals: [${inp.capitals.map((c,i) => `${i+1}=${c}`).join(', ')}]`
+    : '';
+  const stageCountNote = inp && inp.capitals.length > 0
+    ? `\n  단계 수: ${inp.capitals.length}`
     : '';
   const confirmMsg =
     `↻ 전략 #${editingId} 설정만 수정\n\n` +
@@ -3887,8 +3893,10 @@ async function submitInPlaceSettings() {
     (tpsl.tp5_percent ? `  TP5=${tpsl.tp5_percent}% (${tpsl.tp5_qty_ratio}%)\n` : '') +
     `  SL=${tpsl.stop_loss_percent_of_capital}%` +
     triggerSummary +
-    `\n\n※ 미발동 stage 의 trigger% 만 갱신됨 (이미 진입한 단계는 보존).` +
-    `\n※ Capital (자본) 변경은 in-place 미지원 — 「종료 후 새로 시작」 사용.` +
+    capitalsSummary +
+    stageCountNote +
+    `\n\n※ 미발동 stage 만 trigger% / capital 변경 가능 (이미 진입한 단계는 보존).` +
+    `\n※ 단계 수 변경: 줄이면 미발동 stage 삭제, 늘리면 신규 stage_plan 생성. current_stage 미만 X.` +
     `\n\n진행할까요?`;
   if (!confirm(confirmMsg)) return;
   const inplaceBtn = document.getElementById('cm-submit-inplace');
@@ -3897,28 +3905,44 @@ async function submitInPlaceSettings() {
   if (submit) submit.disabled = true;
   try {
     const body = { ...tpsl };
-    if (inp && inp.trigger_percents.length > 0) {
-      // backend 는 길이 = 전체 단계 수 의 list 를 기대. 각 element None=변경 X, 양수=새 값.
-      // backend 가 current_stage 이하 단계의 변경 시도를 거부하므로, 미발동 stage 만 값 보내고
-      // 발동된 stage 는 null 로 마스킹. current_stage 를 strategy API 로 조회.
-      let curStage = 0;
+    // current_stage 조회 — 미발동 stage 만 값 보내고 발동된 stage 는 null 마스킹.
+    let curStage = 0;
+    if (inp && (inp.trigger_percents.length > 0 || inp.capitals.length > 0)) {
       try {
         const strategyInfo = await api(`/strategies/${editingId}`);
         curStage = Number(strategyInfo.current_stage || 0);
       } catch (e) {
-        console.warn('Failed to fetch strategy.current_stage; sending all triggers (backend will validate)', e);
+        console.warn('Failed to fetch strategy.current_stage; sending all (backend will validate)', e);
       }
+    }
+    if (inp && inp.trigger_percents.length > 0) {
+      // backend 는 capitals 와 trigger_percents 길이 일치 요구.
+      // current_stage 이하는 null, 그 외는 값 (단계 수 변경 시 새 length 의 배열).
       body.trigger_percents = inp.trigger_percents.map((t, i) => {
         const stageNo = i + 1;
-        if (stageNo <= curStage) return null;  // 발동된 stage 는 마스킹
+        if (stageNo <= curStage) return null;
         return t === null ? null : Number(t);
       });
+    }
+    if (inp && inp.capitals.length > 0) {
+      // capitals 도 동일 패턴 — 발동된 stage 는 null, 신규/미발동은 양수.
+      body.capitals = inp.capitals.map((c, i) => {
+        const stageNo = i + 1;
+        if (stageNo <= curStage) return null;
+        return c === null || c === undefined ? null : Number(c);
+      });
+    }
+    if (inp && inp.last_stage_trigger_percent != null) {
+      body.last_stage_trigger_percent = Number(inp.last_stage_trigger_percent);
     }
     await api(`/strategies/${editingId}/settings`, {
       method: 'PATCH',
       body,
     });
-    toast(`✅ 전략 #${editingId} 설정 갱신 완료 — TP/SL${inp && inp.trigger_percents.length > 0 ? ' + trigger%' : ''} 다음 tick 부터 적용`, 'success');
+    const changedParts = ['TP/SL'];
+    if (inp && inp.trigger_percents.length > 0) changedParts.push('trigger%');
+    if (inp && inp.capitals.length > 0) changedParts.push('capital');
+    toast(`✅ 전략 #${editingId} 설정 갱신 완료 — ${changedParts.join(' + ')} 다음 tick 부터 적용`, 'success');
     closeCreateModal();
     refreshStrategies();
   } catch (e) {

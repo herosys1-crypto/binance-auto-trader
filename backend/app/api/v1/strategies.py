@@ -531,16 +531,23 @@ def start_strategy(
 
 
 class StrategySettingsUpdate(BaseModel):
-    """In-place 수정 — 활성 strategy 의 TP/SL + 미발동 단계 trigger_percent 변경.
+    """In-place 수정 — 활성 strategy 의 TP/SL + 미발동 단계 trigger_percent + capitals + 단계 수 변경.
 
     안전 정책:
-    - side, leverage, capitals: 변경 거부 (활성 포지션과 inconsistency 위험)
-    - 이미 진입한 단계 (stage_no <= current_stage): 변경 거부
-    - 미발동 단계 (stage_no > current_stage): trigger_percent 변경 가능 → trigger_price 자동 재계산
+    - side, leverage: 변경 거부 (활성 포지션과 inconsistency 위험)
+    - 이미 진입한 단계 (stage_no <= current_stage): trigger_percent / capital 변경 거부
+    - 미발동 단계 (stage_no > current_stage): trigger_percent + planned_capital 변경 가능
+    - 단계 수 (capitals 길이) 변경: current_stage 이상 유지 필수 (감소 시 미발동 stage 삭제, 증가 시 신규 stage 생성)
 
-    trigger_percents 형식: list[Decimal | None], 길이 = 전체 단계 수.
-    각 element 가 None 이면 그 단계는 변경 안 함. 양수면 그 stage 의 trigger_percent 갱신.
-    예: [None, None, 8] → 3단계 trigger 만 8% 로.
+    배열 형식 (모두 길이 = 전체 단계 수):
+    - trigger_percents: 양수=변경, None=유지. current_stage 이하는 None 이어야 함.
+    - capitals: 양수=변경, None=유지. current_stage 이하는 변경 거부.
+    - capitals 와 trigger_percents 모두 보내면 길이 일치 필요.
+    - 둘 중 하나만 길이 변경하면 안 됨 (둘 다 새 길이로 보내야 함).
+
+    Phase 3a (2026-05-04) — trigger_percents 부분 갱신.
+    Phase 3b (2026-05-05) — capitals 부분 갱신.
+    Phase 3c (2026-05-05) — 단계 수 변경 (추가/제거).
     """
     tp1_percent: Decimal | None = Field(default=None, gt=0)
     tp2_percent: Decimal | None = Field(default=None, gt=0)
@@ -554,12 +561,21 @@ class StrategySettingsUpdate(BaseModel):
     tp5_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     stop_loss_percent_of_capital: Decimal | None = Field(default=None, gt=0, le=100)
     crisis_qty_ratios: dict | None = None
-    # 2026-05-04: 미발동 단계 trigger_percent 부분 갱신.
-    # 길이가 전체 단계 수와 같아야 함. 각 element None=변경 없음, 양수=새 trigger_percent.
-    # current_stage 이하 단계의 변경 시도는 거부.
     trigger_percents: list[Decimal | None] | None = Field(
         default=None,
         description="단계별 trigger_percent (양수=변경, None=유지). current_stage 이하 단계는 None 이어야 함.",
+    )
+    capitals: list[Decimal | None] | None = Field(
+        default=None,
+        description=(
+            "단계별 planned_capital (양수=변경, None=유지). current_stage 이하 단계는 None 이어야 함. "
+            "길이가 current_stage 보다 작으면 거부 (이미 발동한 단계는 보존 필수). "
+            "trigger_percents 와 함께 보내면 길이 일치 필요."
+        ),
+    )
+    last_stage_trigger_percent: Decimal | None = Field(
+        default=None, gt=0,
+        description="마지막 단계 trigger_percent override (옵션). 단계 수 변경 시 마지막 항목에 적용.",
     )
 
 
@@ -643,48 +659,117 @@ def update_strategy_settings_in_place(
         reentry_offset_pct=old_tpl.reentry_offset_pct,
         is_active=False,  # in-place 수정용 — 다른 신규 strategy 가 이걸 선택하면 안 됨
     )
-    # 2026-05-04: stages_config trigger_percents 부분 갱신 (미발동 단계만)
-    if payload.trigger_percents is not None:
+    # 2026-05-04 (Phase 3a) + 2026-05-05 (Phase 3b/3c):
+    #   stages_config = trigger_percents (3a) + capitals (3b) + 단계 수 변경 (3c) 통합 처리.
+    #
+    # 입력 정규화: 둘 다 None 이면 stages_config 변경 안 함. 하나라도 있으면 길이 새 N 결정.
+    stages_changed = (payload.trigger_percents is not None) or (payload.capitals is not None)
+    if stages_changed:
         old_cfg = dict(old_tpl.stages_config) if old_tpl.stages_config else {}
-        old_capitals = old_cfg.get("capitals") or []
+        old_capitals = list(old_cfg.get("capitals") or [])
         old_triggers = list(old_cfg.get("trigger_percents") or [None] * len(old_capitals))
-        if len(payload.trigger_percents) != len(old_capitals):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"trigger_percents 길이 ({len(payload.trigger_percents)}) 가 "
-                    f"전체 단계 수 ({len(old_capitals)}) 와 달라야 함. "
-                    "변경 안 할 단계는 None 으로 채우세요."
-                ),
-            )
-        cur_stage_idx = (strategy.current_stage or 0)  # 1-based; current_stage=2 면 stage 1,2 발동됨
-        # 미발동 단계 (idx >= cur_stage_idx, 0-based stage_no = idx+1) 만 갱신.
-        # cur_stage_idx 이하 (이미 진입) 단계 변경 시도 거부.
-        for i, new_pct in enumerate(payload.trigger_percents):
-            if new_pct is None:
-                continue
-            stage_no = i + 1
-            if stage_no <= cur_stage_idx:
+        cur_stage_idx = (strategy.current_stage or 0)  # 1-based
+
+        # 새 길이 결정 — payload 가 길이를 결정. 둘 다 보내면 일치 필수.
+        if payload.capitals is not None and payload.trigger_percents is not None:
+            if len(payload.capitals) != len(payload.trigger_percents):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=(
-                        f"이미 진입한 단계 (stage {stage_no}, current_stage={cur_stage_idx}) 의 "
-                        "trigger_percent 는 변경 불가. 이 인덱스는 None 으로 두세요."
+                        f"capitals 길이 ({len(payload.capitals)}) 와 trigger_percents 길이 "
+                        f"({len(payload.trigger_percents)}) 가 일치해야 함."
                     ),
                 )
-            old_triggers[i] = str(new_pct)
-        old_cfg["trigger_percents"] = old_triggers
+            new_n = len(payload.capitals)
+        elif payload.capitals is not None:
+            new_n = len(payload.capitals)
+        else:
+            # trigger_percents 만 — 길이가 기존 capitals 길이와 같아야 (단계 수 변경 X)
+            new_n = len(payload.trigger_percents)
+            if new_n != len(old_capitals):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"trigger_percents 길이 ({new_n}) 가 전체 단계 수 ({len(old_capitals)}) 와 다름. "
+                        "단계 수 변경하려면 capitals 도 함께 보내세요."
+                    ),
+                )
+
+        # current_stage 이상 길이 보장 (이미 발동한 단계 보존)
+        if new_n < cur_stage_idx:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"단계 수 ({new_n}) 가 current_stage ({cur_stage_idx}) 보다 작음. "
+                    "이미 발동한 단계는 보존돼야 합니다."
+                ),
+            )
+
+        # 새 capitals/triggers 배열 구성 — 미발동 stage 만 변경, 발동 stage 는 거부 검사
+        new_capitals: list = list(old_capitals[:new_n])
+        new_triggers: list = list(old_triggers[:new_n])
+        # 길이 증가 시 padding (None → 검증에서 채워야 함)
+        while len(new_capitals) < new_n:
+            new_capitals.append(None)
+        while len(new_triggers) < new_n:
+            new_triggers.append(None)
+
+        if payload.capitals is not None:
+            for i, new_cap in enumerate(payload.capitals):
+                if new_cap is None:
+                    continue
+                stage_no = i + 1
+                if stage_no <= cur_stage_idx:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=(
+                            f"이미 진입한 단계 (stage {stage_no}, current_stage={cur_stage_idx}) 의 "
+                            "capital 변경 불가. 이 인덱스는 None 으로 두세요."
+                        ),
+                    )
+                new_capitals[i] = str(new_cap)
+        if payload.trigger_percents is not None:
+            for i, new_pct in enumerate(payload.trigger_percents):
+                if new_pct is None:
+                    continue
+                stage_no = i + 1
+                if stage_no <= cur_stage_idx:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=(
+                            f"이미 진입한 단계 (stage {stage_no}, current_stage={cur_stage_idx}) 의 "
+                            "trigger_percent 변경 불가. 이 인덱스는 None 으로 두세요."
+                        ),
+                    )
+                new_triggers[i] = str(new_pct)
+
+        # 신규 stage (i >= len(old_capitals)) 는 capital 필수 검사 (None 이면 invalid)
+        for i in range(len(old_capitals), new_n):
+            if new_capitals[i] is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"신규 stage {i+1} 의 capital 이 None — 새 단계 추가 시 capitals 배열에 "
+                        f"양수 값 필요 (capitals[{i}])."
+                    ),
+                )
+
+        old_cfg["capitals"] = new_capitals
+        old_cfg["trigger_percents"] = new_triggers
+        if payload.last_stage_trigger_percent is not None:
+            old_cfg["last_stage_trigger_percent"] = str(payload.last_stage_trigger_percent)
         new_tpl.stages_config = old_cfg
 
     db.add(new_tpl)
     db.flush()
     strategy.strategy_template_id = new_tpl.id
 
-    # 미발동 단계 plan 의 trigger_price 재계산 (trigger_percents 변경 시).
-    if payload.trigger_percents is not None:
+    # 미발동 plan 재계산 + 신규/제거 stage 처리 (stages_changed 시).
+    if stages_changed:
         from app.models.strategy_stage_plan import StrategyStagePlan
         from app.services.strategy_calculator import StrategyCalculator, SymbolRule
         from app.repositories.strategy_repository import StrategyRepository as _SR
+        from sqlalchemy import select as _s, delete as _del
         sym_model = _SR(db).get_symbol(strategy.symbol)
         if sym_model:
             sym_rule = SymbolRule(
@@ -709,24 +794,52 @@ def update_strategy_settings_in_place(
                     tp3_percent=Decimal(str(new_tpl.tp3_percent)),
                     stop_loss_percent_of_capital=Decimal(str(new_tpl.stop_loss_percent_of_capital)),
                 )
-                # 미발동 단계의 plan 만 새 trigger_price/percent 로 갱신
-                from sqlalchemy import select as _s
+                preview_by_stage = {x.stage_no: x for x in preview.stages}
+                new_n = len(new_tpl.stages_config["capitals"])
+                # 기존 plans 조회
                 plans = db.execute(
                     _s(StrategyStagePlan)
                     .where(StrategyStagePlan.strategy_instance_id == strategy.id)
                 ).scalars().all()
+                # 1) 기존 plans 갱신 또는 삭제
                 for p in plans:
                     if p.is_triggered:
                         continue  # 이미 발동된 plan 보존
-                    new_plan = next((x for x in preview.stages if x.stage_no == p.stage_no), None)
+                    if p.stage_no > new_n:
+                        # 단계 수 감소 — 미발동 stage_plan 삭제
+                        db.delete(p)
+                        continue
+                    new_plan = preview_by_stage.get(p.stage_no)
                     if new_plan:
                         p.trigger_percent = new_plan.trigger_percent
                         p.trigger_price = new_plan.trigger_price
+                        p.planned_capital = new_plan.planned_capital
                         p.planned_qty = new_plan.planned_qty
+                # 2) 신규 stage plan 생성 (단계 수 증가)
+                existing_stage_nos = {p.stage_no for p in plans}
+                for stage_no in range(1, new_n + 1):
+                    if stage_no in existing_stage_nos:
+                        continue
+                    new_plan = preview_by_stage.get(stage_no)
+                    if not new_plan:
+                        continue
+                    db.add(StrategyStagePlan(
+                        strategy_instance_id=strategy.id,
+                        stage_no=stage_no,
+                        side=strategy.side,
+                        trigger_mode=new_plan.trigger_mode,
+                        trigger_percent=new_plan.trigger_percent,
+                        trigger_price=new_plan.trigger_price,
+                        planned_capital=new_plan.planned_capital,
+                        planned_qty=new_plan.planned_qty,
+                        is_triggered=False,
+                    ))
+            except HTTPException:
+                raise
             except Exception as e:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"새 trigger_percents 로 trigger_price 재계산 실패: {e}",
+                    detail=f"새 stages_config 로 plan 재계산 실패: {e}",
                 ) from e
 
     db.commit()
