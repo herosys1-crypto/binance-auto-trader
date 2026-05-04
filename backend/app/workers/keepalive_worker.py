@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from app.core.database import SessionLocal
+from app.core.sentry import capture_strategy_event
 from app.integrations.binance.client import BinanceClient
 from app.models.exchange_account import ExchangeAccount
 from app.models.stream_session import StreamSession
@@ -62,13 +63,28 @@ def run_keepalive_once(decrypt_func) -> None:
                 # 알림은 invalid API key 같은 영구적 실패에만 보내고,
                 # 일시적 네트워크 오류는 silent 하게 처리하여 알림 폭탄 방지.
                 error_msg = str(e)
-                if any(s in error_msg for s in ["API-key format invalid", "Invalid API-key", "-2014", "-2015"]):
-                    # Account 자체가 깨진 경우 — 30분마다 한 번 알림 (지나치게 많지 않음)
+                is_permanent_credential_error = any(
+                    s in error_msg
+                    for s in ["API-key format invalid", "Invalid API-key", "-2014", "-2015"]
+                )
+                if is_permanent_credential_error:
                     notifier.send_system_alert(
                         title="[시스템 경고] listenKey keepalive 실패 (API 키 문제)",
                         body=f"exchange_account_id={account.id}, error={error_msg}",
                     )
-                # 그 외 일시 오류는 메트릭만 카운트, 알림 안 보냄.
+                # 2026-05-04: Sentry 캡처 — 영구 실패 (API 키 깨짐) 는 error,
+                # 일시적 (네트워크) 는 warning. 운영 가시성 ↑ + DSN 미설정 시 no-op.
+                capture_strategy_event(
+                    f"listenKey keepalive failed for account {account.id}",
+                    level="error" if is_permanent_credential_error else "warning",
+                    error=e,
+                    account_id=account.id,
+                    extras={"is_testnet": account.is_testnet},
+                    tags={
+                        "event_type": "LISTEN_KEY_KEEPALIVE_FAILED",
+                        "permanent": str(is_permanent_credential_error),
+                    },
+                )
         db.commit()
     finally:
         db.close()

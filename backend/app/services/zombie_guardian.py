@@ -33,6 +33,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.sentry import capture_strategy_event
 from app.models.exchange_account import ExchangeAccount
 from app.models.risk_event import RiskEvent
 from app.models.strategy_instance import StrategyInstance
@@ -45,19 +46,17 @@ logger = logging.getLogger(__name__)
 
 # ===== 상태 분류 =====
 
-# 거래소에 실제 포지션이 있어야 하는 active 상태
-ACTIVE_WITH_POSITION = {
-    "STAGE1_OPEN", "STAGE2_OPEN", "STAGE3_OPEN", "STAGE4_OPEN",
-    "TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL",
-    "TP4_DONE_PARTIAL", "TP5_DONE_PARTIAL",
-    "STOPPING",  # 청산 진행 중 (포지션 아직 남아있을 수 있음)
-}
+# 거래소에 실제 포지션이 있어야 하는 active 상태.
+# 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 1~4 만이라 5+ stage strategy 가
+# zombie 분류에서 누락되는 버그 (중복 active 강등 / orphan 감지 미작동).
+ACTIVE_WITH_POSITION = (
+    {f"STAGE{n}_OPEN" for n in range(1, 11)}
+    | {f"TP{n}_DONE_PARTIAL" for n in range(1, 6)}
+    | {"STOPPING"}  # 청산 진행 중 (포지션 아직 남아있을 수 있음)
+)
 
 # 거래소 포지션 미확정 (LIMIT 미체결)
-ACTIVE_WAITING = {
-    "STAGE1_OPEN_PENDING", "STAGE2_OPEN_PENDING",
-    "STAGE3_OPEN_PENDING", "STAGE4_OPEN_PENDING",
-}
+ACTIVE_WAITING = {f"STAGE{n}_OPEN_PENDING" for n in range(1, 11)}
 
 # 모든 "active" — 신규 strategy 진입 차단해야 할 상태
 ACTIVE_LIKE = ACTIVE_WITH_POSITION | ACTIVE_WAITING
@@ -279,6 +278,22 @@ def escalate_stuck_strategy(
     _stuck_clear(strategy.id)
     position_reconcile_total.labels(status="zombie_force_stop_escalation").inc()
 
+    # Sentry 캡처 — 운영 알림 (DSN 설정 시 자동 전송, 미설정 시 no-op).
+    capture_strategy_event(
+        f"Zombie Guardian force-stop: {reason_code}",
+        level="fatal",
+        strategy_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+        account_id=strategy.exchange_account_id,
+        extras={
+            "reason_code": reason_code,
+            "reason_detail": reason_detail,
+            "old_status": old_status,
+            "old_qty": str(old_qty),
+            "exchange_snapshot": exchange_snapshot,
+        },
+        tags={"event_type": "ZOMBIE_GUARDIAN_FORCE_STOP"},
+    )
+
 
 def detect_orphan_exchange_positions(
     db: Session,
@@ -385,6 +400,20 @@ def detect_orphan_exchange_positions(
                 except Exception as e:
                     logger.error("Orphan exchange position: Telegram 실패: %s", e)
                 position_reconcile_total.labels(status="orphan_exchange_position").inc()
+                # Sentry 캡처 — orphan 은 거래소-시스템 정합성 깨진 가장 위험한 신호.
+                capture_strategy_event(
+                    f"Zombie Guardian orphan exchange position: {symbol} {position_side}",
+                    level="fatal",
+                    symbol=symbol, side=position_side, account_id=acc.id,
+                    extras={"exchange_snapshot": snapshot, "amount": str(amt)},
+                    tags={"event_type": "ZOMBIE_ORPHAN_EXCHANGE_POSITION"},
+                )
         except Exception as e:
             logger.error("Orphan exchange detect 실패 acc=%s: %s", acc.id, e)
+            capture_strategy_event(
+                "detect_orphan_exchange_positions failed",
+                level="error",
+                account_id=acc.id, error=e,
+                tags={"event_type": "ORPHAN_DETECT_FAILED"},
+            )
     return found

@@ -224,6 +224,7 @@
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="testTelegram()">📨 Telegram</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="window.open('http://localhost:3000','_blank')">📊 Grafana</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="window.open('http://localhost:8000/docs','_blank')">🔧 API</button>
+        <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="openAccountsModal()" title="거래소 계정 + 일일 손실 한도 관리">💼 계정</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('strategies')">📥 전략 CSV</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('orders')">📥 주문 CSV</button>
       </div>
@@ -308,11 +309,32 @@
               <th class="num" title="평단 / 마크 / 청산예정">진입가/마크/청산</th>
               <th class="num" title="포지션 수량 / 마진(USDT)">수량/마진</th>
               <th class="num" title="미실현 USDT / leveraged ROI %">PnL / ROI</th>
-              <th style="width:100px">액션</th>
+              <th style="width:130px">액션</th>
             </tr>
           </thead>
           <tbody id="strategies-tbody"><tr><td colspan="9" class="text-center text-slate-500 py-3 text-xs">로딩 중...</td></tr></tbody>
         </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 거래소 계정 관리 모달 (2026-05-04 신규) =====
+       표시: 등록된 계정 목록 + daily_loss_limit_usdt 인라인 수정.
+       계정 등록은 Swagger UI (/docs) 에서 진행 — 보안상 평문 API key 입력은 별도. -->
+  <div id="accounts-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
+       style="background:rgba(0,0,0,0.7); padding:20px;">
+    <div class="card rounded-xl p-6" style="max-width:720px; width:100%; max-height:90vh; overflow-y:auto;">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-bold">💼 거래소 계정 + 일일 손실 한도</h2>
+        <button onclick="closeAccountsModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
+      </div>
+      <div class="text-xs text-slate-400 mb-3">
+        💡 일일 손실 한도 = 설정한 USDT 만큼 손실 시 그 계정의 신규 거래 자동 차단 (kill-switch).
+        NULL 입력 → global 설정 (.env DAILY_LOSS_LIMIT_USDT) 사용. 0 → 비활성.
+        <br>📌 신규 계정 등록은 <a href="/docs#/exchange-accounts/create_exchange_account_api_v1_exchange_accounts_post" target="_blank" class="text-blue-400 underline">Swagger UI</a> 에서.
+      </div>
+      <div id="accounts-modal-body">
+        <div class="text-center text-slate-500 py-8">로딩 중...</div>
       </div>
     </div>
   </div>
@@ -550,6 +572,8 @@
       <!-- 액션 버튼 -->
       <div class="flex justify-end gap-2 pt-3 border-t border-slate-700">
         <button onclick="closeCreateModal()" class="btn-ghost btn">취소</button>
+        <!-- 2026-05-04: 수정 모드일 때만 노출 — TP/SL 만 in-place 갱신 (포지션/단계 유지) -->
+        <button id="cm-submit-inplace" onclick="submitInPlaceSettings()" class="btn-ghost btn hidden" title="포지션/단계 유지하고 TP/SL 만 즉시 적용 (거래소 호출 없음)">↻ 설정만 수정</button>
         <button id="cm-submit" onclick="submitCreate()" class="btn-success btn" disabled>🚀 전략 시작</button>
       </div>
     </div>
@@ -714,28 +738,67 @@ const API_BASE = window.location.origin + '/api/v1';
 let token = localStorage.getItem('access_token');
 
 // ==================== 상태 매핑 ====================
+// 옵션 C 1~10단계 동적 + TP 1~5 동적 + 크라이시스 모드 모두 커버.
+// 라벨은 의미 명확화 (2026-05-04):
+//   STAGE_X_OPEN_PENDING → "X단계 주문 발송됨, 체결 대기" (LIMIT 미체결)
+//   STAGE_X_OPEN         → "X단계 보유 중" (체결됨, 다음 단계 trigger 대기)
+//   STAGE_X_FILLED       → 호환용 (legacy, 현재 stream_service 가 STAGE_X_OPEN 으로 직행)
 const STATUS_MAP = {
-  'WAITING':                    { ko: '대기 중',           sig: 'gray',   icon: '⚪' },
-  'STAGE1_OPEN_PENDING':        { ko: '1단계 주문 발송 중', sig: 'yellow', icon: '⏳' },
-  'STAGE1_OPEN':                { ko: '1단계 체결 대기',    sig: 'yellow', icon: '⏳' },
-  'STAGE1_FILLED':              { ko: '1단계 진입 완료',    sig: 'green',  icon: '✅' },
-  'ACTIVE':                     { ko: '진행 중',           sig: 'green',  icon: '🟢' },
-  'STAGE2_OPEN_PENDING':        { ko: '2단계 주문 발송 중', sig: 'yellow', icon: '⏳' },
-  'STAGE2_OPEN':                { ko: '2단계 체결 대기',    sig: 'yellow', icon: '⏳' },
-  'STAGE2_FILLED':              { ko: '2단계 진입 완료',    sig: 'green',  icon: '✅' },
-  'STAGE3_OPEN_PENDING':        { ko: '3단계 주문 발송 중', sig: 'yellow', icon: '⏳' },
-  'STAGE3_OPEN':                { ko: '3단계 체결 대기',    sig: 'yellow', icon: '⏳' },
-  'STAGE3_FILLED':              { ko: '3단계 진입 완료',    sig: 'green',  icon: '✅' },
-  'TP1_FILLED':                 { ko: '1차 익절 체결',     sig: 'green',  icon: '💎' },
-  'TP2_FILLED':                 { ko: '2차 익절 체결',     sig: 'green',  icon: '💎' },
-  'TP3_FILLED':                 { ko: '3차 익절 체결',     sig: 'green',  icon: '💎' },
-  'CLOSED':                     { ko: '정상 종료',         sig: 'gray',   icon: '✓' },
-  'CLOSED_BY_TP':               { ko: '익절 종료',         sig: 'green',  icon: '💎' },
-  'CLOSED_BY_SL':               { ko: '손절 종료',         sig: 'red',    icon: '🛑' },
-  'STOPPING':                   { ko: '종료 중',           sig: 'gray',   icon: '⏸' },
-  'STOPPED':                    { ko: '수동 종료',         sig: 'gray',   icon: '⏹' },
-  'LIQUIDATION_IMMINENT':       { ko: '⚠️ 청산 임박',      sig: 'red',    icon: '🚨' },
-  'KILL_SWITCH_TRIGGERED':      { ko: '🚨 긴급 정지',      sig: 'red',    icon: '🛑' },
+  'WAITING':                    { ko: '대기 중',              sig: 'gray',   icon: '⚪' },
+  // 1~10단계 진입 (PENDING + OPEN). FILLED 는 legacy 호환.
+  'STAGE1_OPEN_PENDING':        { ko: '1단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE1_OPEN':                { ko: '1단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE1_FILLED':              { ko: '1단계 진입 완료',      sig: 'green',  icon: '✅' },
+  'STAGE2_OPEN_PENDING':        { ko: '2단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE2_OPEN':                { ko: '2단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE2_FILLED':              { ko: '2단계 진입 완료',      sig: 'green',  icon: '✅' },
+  'STAGE3_OPEN_PENDING':        { ko: '3단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE3_OPEN':                { ko: '3단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE3_FILLED':              { ko: '3단계 진입 완료',      sig: 'green',  icon: '✅' },
+  'STAGE4_OPEN_PENDING':        { ko: '4단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE4_OPEN':                { ko: '4단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE4_FILLED':              { ko: '4단계 진입 완료',      sig: 'green',  icon: '✅' },
+  'STAGE5_OPEN_PENDING':        { ko: '5단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE5_OPEN':                { ko: '5단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE6_OPEN_PENDING':        { ko: '6단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE6_OPEN':                { ko: '6단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE7_OPEN_PENDING':        { ko: '7단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE7_OPEN':                { ko: '7단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE8_OPEN_PENDING':        { ko: '8단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE8_OPEN':                { ko: '8단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE9_OPEN_PENDING':        { ko: '9단계 주문 발송됨',     sig: 'yellow', icon: '⏳' },
+  'STAGE9_OPEN':                { ko: '9단계 보유 중',        sig: 'green',  icon: '🟢' },
+  'STAGE10_OPEN_PENDING':       { ko: '10단계 주문 발송됨',    sig: 'yellow', icon: '⏳' },
+  'STAGE10_OPEN':               { ko: '10단계 보유 중',       sig: 'green',  icon: '🟢' },
+  'ACTIVE':                     { ko: '진행 중',              sig: 'green',  icon: '🟢' },
+  // TP 익절 — 부분/전체. PARTIAL 은 잔량 보유 중, FILLED 는 legacy.
+  'TP1_FILLED':                 { ko: '1차 익절 체결',         sig: 'green',  icon: '💎' },
+  'TP2_FILLED':                 { ko: '2차 익절 체결',         sig: 'green',  icon: '💎' },
+  'TP3_FILLED':                 { ko: '3차 익절 체결',         sig: 'green',  icon: '💎' },
+  'TP4_FILLED':                 { ko: '4차 익절 체결',         sig: 'green',  icon: '💎' },
+  'TP5_FILLED':                 { ko: '5차 익절 체결',         sig: 'green',  icon: '💎' },
+  'TP1_DONE_PARTIAL':           { ko: '1차 익절 (잔량 보유)', sig: 'green',  icon: '💎' },
+  'TP2_DONE_PARTIAL':           { ko: '2차 익절 (잔량 보유)', sig: 'green',  icon: '💎' },
+  'TP3_DONE_PARTIAL':           { ko: '3차 익절 (잔량 보유)', sig: 'green',  icon: '💎' },
+  'TP4_DONE_PARTIAL':           { ko: '4차 익절 (잔량 보유)', sig: 'green',  icon: '💎' },
+  'TP5_DONE_PARTIAL':           { ko: '5차 익절 (잔량 보유)', sig: 'green',  icon: '💎' },
+  'TP2_DONE':                   { ko: '2차 익절 완료',         sig: 'green',  icon: '💎' },
+  'TRAILING_ARMED':             { ko: '트레일링 발동 대기',     sig: 'green',  icon: '📈' },
+  // 크라이시스 복구 모드
+  'CRISIS_TP1_DONE':            { ko: '🚨 크라이시스 TP1 완료', sig: 'yellow', icon: '🛡' },
+  // 자동 재진입 사이클
+  'REENTRY_DONE':               { ko: '재진입 완료',           sig: 'green',  icon: '🔄' },
+  'REENTRY_FAILED':             { ko: '재진입 실패',           sig: 'red',    icon: '⚠️' },
+  // 종료 상태
+  'COMPLETED':                  { ko: '✅ 정상 종료 (전체 익절)', sig: 'green',  icon: '🎯' },
+  'REENTRY_READY':              { ko: '재진입 대기 (수동 시작 또는 자동)', sig: 'gray', icon: '🔄' },
+  'CLOSED':                     { ko: '정상 종료',            sig: 'gray',   icon: '✓' },
+  'CLOSED_BY_TP':               { ko: '익절 종료',            sig: 'green',  icon: '💎' },
+  'CLOSED_BY_SL':               { ko: '손절 종료',            sig: 'red',    icon: '🛑' },
+  'STOPPING':                   { ko: '종료 중 (청산 진행)',  sig: 'yellow', icon: '⏸' },
+  'STOPPED':                    { ko: '수동 종료',            sig: 'gray',   icon: '⏹' },
+  'LIQUIDATION_IMMINENT':       { ko: '⚠️ 청산 임박',         sig: 'red',    icon: '🚨' },
+  'KILL_SWITCH_TRIGGERED':      { ko: '🚨 긴급 정지 (Kill-Switch)', sig: 'red', icon: '🛑' },
 };
 
 const ORDER_STATUS_MAP = {
@@ -754,7 +817,13 @@ const PURPOSE_MAP = {
   'EMERGENCY_CLOSE':  '긴급 청산',
 };
 
-const TERMINAL_STATUSES = ['STOPPED', 'STOPPING', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'KILL_SWITCH_TRIGGERED'];
+// Backend `_CLOSED_STATUSES` (services/strategy_service.py, api/v1/strategies.py) + STOPPING.
+// 2026-05-04 v3 (사용자 피드백): "종료 숨김" 은 진행 중 전략만 보이게 — STOPPING (종료 중)
+// 도 사용자 관점에선 "끝낸 거" 라 숨겨야 함. backend 의 race-window 보호 (STOPPING 도
+// active 로 보고 신규 진입 차단) 는 그대로 유지하되 프론트에서는 정리 진행 중 행을
+// 가린다. duplicate-prevention 에러 메시지가 offending strategy id 알려주므로 사용자가
+// 어떤 행이 막는지 알 수 있음.
+const TERMINAL_STATUSES = ['STOPPED', 'STOPPING', 'COMPLETED', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'REENTRY_READY', 'KILL_SWITCH_TRIGGERED'];
 
 // ==================== Auth ====================
 document.getElementById('login-form').addEventListener('submit', async (e) => {
@@ -1447,10 +1516,8 @@ async function refreshStrategies() {
       const tpBar = renderTpBar(tpCount, totalTps, closeReason);
       const stage = `<div class="text-xs leading-tight"><span class="text-slate-400" style="font-size:10px">진입</span> ${stageBar}<br><span class="text-slate-400" style="font-size:10px">익절</span> ${tpBar}</div>`;
       const pnlNum = Number(s.unrealized_pnl || 0);
-      // 사용자 실제 ROI % = USD pnl × leverage / capital × 100 (margin 기준)
       const sCap = Number(s.total_capital || 0);
       const sLev = Number(s.leverage || 1) || 1;
-      const sPnlPct = (sCap > 0) ? (pnlNum * sLev / sCap * 100) : 0;
       const sQtyNum = Number(s.current_position_qty || 0);
       const sQtyAbs = Math.abs(sQtyNum);
       const sAvg = Number(s.avg_entry_price || 0);
@@ -1460,21 +1527,52 @@ async function refreshStrategies() {
       // 청산예정가 = isolated 계산 (체결 평단 기반)
       const MMR = 0.005;
       const sLiq = hasPosition && sLev > 0 ? (s.side === 'SHORT' ? sAvg * (1 + 1/sLev - MMR) : sAvg * (1 - 1/sLev + MMR)) : 0;
-      // 마진 = capital / leverage (notional 모델 기준 사용자 실제 자본)
-      const sMargin = sCap > 0 && sLev > 0 ? sCap / sLev : 0;
+
+      // 2026-05-04 v3 (Binance ROI 일치): 두 가지 ROI 분리.
+      //   포지션 ROI = pnl / 현재_사용_마진 × 100  ← Binance UI 와 일치 (실제 진입한 부분만).
+      //   전략 ROI   = pnl × leverage / total_capital × 100  ← 전체 전략 자본 대비.
+      // 마지막까지 모든 단계 진입하면 두 값이 같아짐 (현재_사용_마진 == 계획_총_마진).
+      // 1단계만 진입한 6단계 전략은 두 값이 크게 다름 — 사용자 비교 혼란 원인이었음.
+      const positionNotional = hasPosition ? sQtyAbs * sAvg : 0;
+      const positionMargin = positionNotional > 0 && sLev > 0 ? positionNotional / sLev : 0;
+      const positionRoi = positionMargin > 0 ? (pnlNum / positionMargin * 100) : 0;
+      const strategyRoi = sCap > 0 ? (pnlNum * sLev / sCap * 100) : 0;
+      // 계획된 마진 (전체 단계 진입 시) — 「수량/마진」 컬럼의 보조 정보용.
+      const plannedMargin = sCap > 0 && sLev > 0 ? sCap / sLev : 0;
 
       // 평단/마크/청산 — 3 줄 stack (Binance 스타일)
       const priceStack = hasPosition
         ? `<div class="text-xs leading-tight"><span class="text-slate-300" title="평단가">${fmtNum(sAvg)}</span><br><span class="text-cyan-300" title="마크가">${fmtNum(sMark)}</span><br><span class="text-red-300" title="청산예정">${fmtNum(sLiq)}</span></div>`
         : '<span class="text-slate-500">-</span>';
-      // 수량/마진 — 2 줄 stack
+      // 수량/마진 — 2 줄 stack + 「💰 증거금 추가」 버튼 (포지션 보유 시).
+      // 마진은 「현재 사용 마진 / 계획 총 마진」 형식.
+      // 1단계만 진입한 다단계 전략은 둘이 다름 (e.g. 10.58 / 3275 USDT).
+      // 2026-05-04 (사용자 요청): 증거금 추가 버튼을 가시성 높은 위치 + 명확한 라벨로
+      // 마진 옆에 직접 노출 (이전 액션 컬럼의 🛡 아이콘만 — 발견 어려움 개선).
+      const addMarginBtnInQty = hasPosition
+        ? `<button onclick="event.stopPropagation(); addMargin(${s.id}, '${s.symbol}', '${s.side}')"
+                  class="btn-warning btn text-xs mt-1"
+                  style="padding:2px 6px;font-size:10px;line-height:1.2"
+                  title="증거금 추가 — ISOLATED 모드 포지션의 청산가 완화 (CROSS 면 거래소 거절)">💰 증거금 추가</button>`
+        : '';
       const qtyStack = hasPosition
-        ? `<div class="text-xs leading-tight"><span class="${sQtyNum<0?'neg':'pos'} font-semibold" title="포지션 수량">${fmtQty(sQtyNum)}</span><br><span class="text-slate-400" title="마진 (capital÷lev)">${sMargin.toFixed(2)} USDT</span></div>`
-        : `<div class="text-xs leading-tight"><span class="text-slate-500">-</span><br><span class="text-slate-400 text-xs" title="계획 마진">${sMargin > 0 ? sMargin.toFixed(2)+' USDT' : '-'}</span></div>`;
-      // PnL/ROI — 2 줄 stack
-      const pnlSign = sPnlPct > 0 ? '+' : '';
+        ? `<div class="text-xs leading-tight">
+            <span class="${sQtyNum<0?'neg':'pos'} font-semibold" title="포지션 수량">${fmtQty(sQtyNum)}</span><br>
+            <span class="text-slate-400" title="현재 사용 마진 (qty×평단÷lev) / 계획 총 마진 (전체 자본÷lev)">${positionMargin.toFixed(2)} / ${plannedMargin.toFixed(2)} USDT</span>
+            <br>${addMarginBtnInQty}
+          </div>`
+        : `<div class="text-xs leading-tight"><span class="text-slate-500">-</span><br><span class="text-slate-400 text-xs" title="계획 총 마진">${plannedMargin > 0 ? plannedMargin.toFixed(2)+' USDT' : '-'}</span></div>`;
+      // PnL/ROI — 3 줄 stack: PnL + 포지션 ROI (Binance 일치) + 전략 ROI (전체 자본 대비, 보조)
+      const posSign = positionRoi > 0 ? '+' : '';
+      const stratSign = strategyRoi > 0 ? '+' : '';
+      const posTooltip = `포지션 ROI = pnl ÷ 현재 사용 마진 × 100 (Binance UI 와 일치). 마진=${positionMargin.toFixed(2)} USDT`;
+      const stratTooltip = `전략 ROI = pnl × 레버리지 ÷ 전체 전략 자본 × 100 (전체 단계 모두 진입 시 = 포지션 ROI). 자본=${sCap.toFixed(2)} USDT, lev=${sLev}x`;
       const pnl = hasPosition
-        ? `<div class="text-xs leading-tight"><span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold">${fmtPnL(pnlNum)}</span><br><span class="${sPnlPct>0?'pos':sPnlPct<0?'neg':'text-slate-400'} text-xs">${pnlSign}${sPnlPct.toFixed(2)}%</span></div>`
+        ? `<div class="text-xs leading-tight">
+            <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span><br>
+            <span class="${positionRoi>0?'pos':positionRoi<0?'neg':'text-slate-400'} text-xs" title="${posTooltip}">${posSign}${positionRoi.toFixed(2)}%</span><br>
+            <span class="${strategyRoi>0?'pos':strategyRoi<0?'neg':'text-slate-500'} text-xs" style="font-size:10px; opacity:0.7" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>
+          </div>`
         : '<span class="text-slate-500">-</span>';
 
       // 호환용 alias (기존 변수 사용 위치 보존)
@@ -1483,13 +1581,28 @@ async function refreshStrategies() {
       const isTerminal = TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
       // UX #17 (2026-04-29): 종료 상태이고 한번도 체결 안 된 전략 (대기 단계) 에는 삭제 버튼 노출
       const neverEntered = (s.current_stage || 0) === 0 && (!s.avg_entry_price || Number(s.avg_entry_price) === 0);
+      // 2026-05-04 v2 (재진입 UX): 1단계 이상 체결됐던 종료 전략 (COMPLETED/REENTRY_READY/STOPPED 등)
+      // 에는 "🔄 다시 시작" 버튼 노출 — 같은 설정으로 새 전략 즉시 생성. (이전엔 「🟢 새 전략 시작」
+      // 모달 → "이전 전략 불러오기" 탭 → 선택 3단계 — 너무 번거로움)
+      // 2026-05-04: 증거금 추가 버튼은 수량/마진 column 으로 이동 (위 addMarginBtnInQty).
+      // 「▶ 다음 단계 즉시 진입」 — 활성 strategy + 다음 단계 미발동 시. trigger_price 무시, planned_capital 그대로.
+      // 2026-05-04 (사용자 피드백): 액션 버튼 컴팩트화 — 아이콘만 + nowrap + flex inline.
+      const totalStagesForBtn = s.total_active_stages || 4;
+      const canTriggerNext = !isTerminal && (s.current_stage || 0) < totalStagesForBtn;
+      const btnStyle = "padding:3px 6px;font-size:11px;white-space:nowrap;line-height:1.3";
+      const triggerNextBtn = canTriggerNext
+        ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="현재가에서 다음 단계 즉시 진입 (trigger_price 무시, 사전 계획된 자본 그대로)">▶</button>`
+        : '';
       const stopBtn = isTerminal
         ? (neverEntered
-            ? `<button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="padding:4px 8px" title="대기 상태 전략 삭제 (DB 에서 영구 제거)">🗑</button>`
-            : '<span class="text-slate-500 text-xs">-</span>')
-        : `<button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="padding:4px 8px" title="설정 수정 (기존 전략 종료 후 새 설정으로 재시작)">✏️</button>
-           <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="padding:4px 8px" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
-           <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="padding:4px 8px" title="긴급 종료 (포지션 시장가 청산)">🛑</button>`;
+            ? `<button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="대기 상태 전략 삭제 (DB 에서 영구 제거)">🗑</button>`
+            : `<button onclick="event.stopPropagation(); restartStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="같은 설정으로 새 전략 시작 (이 전략은 그대로 보존)">🔄</button>`)
+        : `<div class="flex flex-wrap gap-1" style="max-width:130px">
+            <button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="설정 수정 (in-place 또는 종료+재시작)">✏️</button>
+            ${triggerNextBtn}
+            <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="${btnStyle}" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
+            <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="긴급 종료 (포지션 시장가 청산)">🛑</button>
+          </div>`;
       const startPx = s.start_price && Number(s.start_price) > 0
         ? `<span class="text-yellow-400" title="운영자가 입력한 1단계 LIMIT 가격">${fmtNum(s.start_price)}</span>`
         : '<span class="text-slate-500">-</span>';
@@ -2549,23 +2662,185 @@ async function openCreateModal(editStrategyId) {
   const banner = document.getElementById('cm-edit-banner');
   const title = document.getElementById('cm-title');
   const submit = document.getElementById('cm-submit');
+  const inplaceBtn = document.getElementById('cm-submit-inplace');
   if (editStrategyId) {
     banner.classList.remove('hidden');
     document.getElementById('cm-edit-banner-detail').textContent =
-      `전략 #${editStrategyId} 의 미체결 주문이 모두 취소된 후, 아래 설정으로 새 전략이 시작됩니다.`;
+      `「↻ 설정만 수정」 — 포지션/단계 유지, TP/SL만 즉시 갱신 (거래소 호출 없음).` +
+      `\n「🔄 종료 후 새로 시작」 — 미체결 주문 취소 + 1단계부터 새 전략 시작.`;
     title.textContent = `✏️ 전략 #${editStrategyId} 수정`;
     submit.textContent = '🔄 종료 후 새로 시작';
+    if (inplaceBtn) inplaceBtn.classList.remove('hidden');  // in-place 버튼 노출
     await loadPrevBlueprint(editStrategyId, /*silent=*/true);
   } else {
     banner.classList.add('hidden');
     title.textContent = '➕ 새 전략 시작';
     submit.textContent = '🚀 전략 시작';
+    if (inplaceBtn) inplaceBtn.classList.add('hidden');  // 신규 모드엔 숨김
   }
 }
 
 async function editStrategy(id) {
   if (!confirm(`전략 #${id} 의 설정을 수정하시겠어요?\n\n- 기존 전략의 미체결 주문은 모두 취소됩니다.\n- 이미 체결된 포지션은 그대로 유지됩니다.\n- 새 설정으로 새 전략이 시작됩니다.`)) return;
   await openCreateModal(id);
+}
+
+// 2026-05-04 v2 (재진입 UX): 종료된 전략 행에서 「🔄 다시 시작」 클릭 시 호출.
+// 이전엔 「🟢 새 전략 시작」 모달 → "이전 전략 불러오기" 탭 → 선택 — 3 단계.
+// editStrategy 와 다른 점: 정리할 게 없으므로 "기존 전략 종료" 안내 빠짐.
+async function restartStrategy(id) {
+  if (!confirm(`전략 #${id} 의 설정으로 새 전략을 시작합니다.\n\n- 이 종료된 전략은 그대로 보존됩니다 (감사 로그).\n- 같은 심볼/방향/단계 설정으로 새 strategy 가 생성됩니다.\n- 모달에서 시작가/자본 등을 조정한 후 시작 가능합니다.`)) return;
+  await openCreateModal(id);
+}
+
+// 2026-05-04 (P): 거래소 계정 관리 모달 — daily_loss_limit_usdt 인라인 수정.
+async function openAccountsModal() {
+  document.getElementById('accounts-modal').classList.remove('hidden');
+  await renderAccountsModalBody();
+}
+
+function closeAccountsModal() {
+  document.getElementById('accounts-modal').classList.add('hidden');
+}
+
+async function renderAccountsModalBody() {
+  const body = document.getElementById('accounts-modal-body');
+  try {
+    const accounts = await api('/exchange-accounts');
+    if (!accounts.length) {
+      body.innerHTML = `
+        <div class="text-center py-8">
+          <div class="text-yellow-300 mb-2">⚠️ 등록된 거래소 계정이 없습니다.</div>
+          <div class="text-slate-400 text-xs">
+            <a href="/docs#/exchange-accounts/create_exchange_account_api_v1_exchange_accounts_post" target="_blank" class="text-blue-400 underline">Swagger UI</a> 에서 등록하세요.
+          </div>
+        </div>`;
+      return;
+    }
+    const rows = accounts.map(a => {
+      const limit = a.daily_loss_limit_usdt;
+      const limitText = limit === null || limit === undefined
+        ? `<span class="text-slate-400" title="settings.daily_loss_limit_usdt 폴백">global 폴백</span>`
+        : Number(limit) === 0
+          ? `<span class="text-red-400" title="0 = 한도 비활성">비활성</span>`
+          : `<span class="text-green-400">${limit} USDT</span>`;
+      const envBadge = a.is_testnet
+        ? '<span class="badge badge-yellow">testnet</span>'
+        : '<span class="badge badge-red">mainnet</span>';
+      const activeBadge = a.is_active
+        ? '<span class="badge badge-green">active</span>'
+        : '<span class="badge badge-gray">inactive</span>';
+      return `
+        <tr>
+          <td class="text-xs">#${a.id}</td>
+          <td class="text-xs">${a.exchange_name}</td>
+          <td>${envBadge}</td>
+          <td>${activeBadge}</td>
+          <td class="text-xs">${limitText}</td>
+          <td>
+            <button class="btn-ghost btn text-xs" style="padding:4px 8px"
+                    onclick="updateAccountLimit(${a.id})">✏️ 한도 수정</button>
+          </td>
+        </tr>`;
+    }).join('');
+    body.innerHTML = `
+      <table class="min-w-full">
+        <thead>
+          <tr class="text-slate-400 text-xs">
+            <th class="text-left p-2">#</th>
+            <th class="text-left p-2">거래소</th>
+            <th class="text-left p-2">환경</th>
+            <th class="text-left p-2">상태</th>
+            <th class="text-left p-2">일일 손실 한도</th>
+            <th class="text-left p-2">액션</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  } catch (err) {
+    body.innerHTML = `<div class="text-red-400 text-sm">계정 조회 실패: ${err.message}</div>`;
+  }
+}
+
+async function updateAccountLimit(accountId) {
+  const input = prompt(
+    `💼 계정 #${accountId} 일일 손실 한도 수정\n\n` +
+    `USDT 금액 입력:\n` +
+    `  • 양수 (예: 100) → 이 계정 전용 한도 (global 무시)\n` +
+    `  • 0 → 비활성 (한도 없음, 위험)\n` +
+    `  • 비워두면 global 폴백 (.env DAILY_LOSS_LIMIT_USDT 사용)`,
+    ""
+  );
+  if (input === null) return;  // 취소
+  let amount;
+  if (input.trim() === "") {
+    amount = null;  // global 폴백
+  } else {
+    amount = parseFloat(input);
+    if (isNaN(amount) || amount < 0) {
+      toast(`잘못된 값: ${input}. 양수 또는 빈값 (global 폴백) 입력하세요.`, 'error');
+      return;
+    }
+  }
+  try {
+    await api(`/exchange-accounts/${accountId}/daily-loss-limit`, {
+      method: 'PATCH',
+      body: { daily_loss_limit_usdt: amount },
+    });
+    toast(`✅ 계정 #${accountId} 한도 갱신 완료`, 'success');
+    await renderAccountsModalBody();  // 모달 다시 렌더
+  } catch (err) {
+    toast(`한도 갱신 실패: ${err.message}`, 'error');
+  }
+}
+
+// 2026-05-04 (사용자 요청): 다음 단계 수동 즉시 진입.
+// trigger_price 도달 안 했어도 사용자가 즉시 진입 결정 — sub-stage_plan 의 planned_capital
+// 그대로 사용. 자동 stage_trigger_worker 와 동일 흐름이지만 가격 trigger 검증 skip.
+async function triggerNextStage(id) {
+  if (!confirm(
+    `▶ 전략 #${id} 다음 단계 즉시 진입\n\n` +
+    `- 자동 trigger_price 도달 안 해도 지금 진입\n` +
+    `- 사전 계획된 단계 자본 (planned_capital) 그대로 사용\n` +
+    `- 거래소에 LIMIT 주문 발송 (즉시 체결 또는 book 대기)\n\n` +
+    `진행할까요?`
+  )) return;
+  try {
+    const resp = await api(`/strategies/${id}/trigger-next-stage`, { method: 'POST' });
+    toast(`✅ ${resp.message || '다음 단계 진입 요청 발송'}`, 'success');
+    refreshStrategies();
+  } catch (err) {
+    toast(`다음 단계 진입 실패: ${err.message}`, 'error');
+  }
+}
+
+// 2026-05-04 (사용자 요청): 증거금 추가 — ISOLATED 모드 포지션 청산가 완화.
+// prompt 로 USDT 금액 입력 → POST /strategies/{id}/add-margin → 결과 토스트.
+// 거래소가 CROSS 모드면 backend 가 -4046 친절 에러 메시지로 거절.
+async function addMargin(id, symbol, side) {
+  const input = prompt(
+    `🛡 증거금 추가\n\n전략 #${id} ${symbol} ${side}\n\n` +
+    `추가할 증거금 (USDT, 양수 입력):\n\n` +
+    `※ ISOLATED 모드 포지션만 가능. CROSS 모드면 거래소가 거절합니다.\n` +
+    `※ 추가 후 거래소 UI 에서 새 청산가를 확인하세요.`,
+    "10"
+  );
+  if (input === null) return;  // 취소
+  const amount = parseFloat(input);
+  if (isNaN(amount) || amount <= 0) {
+    toast(`잘못된 금액: ${input}. 양수 USDT 값을 입력하세요.`, 'error');
+    return;
+  }
+  try {
+    const resp = await api(`/strategies/${id}/add-margin`, {
+      method: 'POST',
+      body: { amount: amount },
+    });
+    toast(`✅ ${resp.message || `증거금 ${amount} USDT 추가 완료`}`, 'success');
+    refreshStrategies();
+  } catch (err) {
+    toast(`증거금 추가 실패: ${err.message}`, 'error');
+  }
 }
 
 function setCmMode(mode) {
@@ -3024,6 +3299,13 @@ async function loadCmMarketInfo() {
       document.getElementById('cm-mkt-high').textContent = fmtNum(tk.highPrice);
       document.getElementById('cm-mkt-low').textContent = fmtNum(tk.lowPrice);
       document.getElementById('cm-mkt-vol').textContent = fmtNum(Number(tk.quoteVolume || 0)) + ' USDT';
+      // 2026-05-04 (사용자 요청): 시세 로드 직후 시작가 input 이 비어있거나 0 이면
+      // 자동으로 현재가 채움. 사용자가 이미 입력한 양수 값은 보존 (덮어쓰지 않음).
+      // 이전: 매번 「현재가」 버튼 클릭 필요 → 사용자 미리보기 422 (start_price=0).
+      const startInp = document.getElementById('cm-start-price');
+      if (startInp && (!startInp.value || Number(startInp.value) <= 0)) {
+        fillStartPrice('current');
+      }
     } else {
       document.getElementById('cm-mkt-price').textContent = '-';
     }
@@ -3406,6 +3688,49 @@ function _renderPreview(data) {
   // 청산 위험 시 「전략 시작」 비활성화 (사용자 인지 후 수정하도록 강제)
   cmState._liquidationRisk = (firstUnreachable !== null);
   document.getElementById('cm-preview').classList.remove('hidden');
+}
+
+// 2026-05-04 (in-place 수정): 종료 없이 TP/SL 만 갱신.
+// 포지션/단계/평균 진입가 모두 유지. 거래소 호출 없음 (DB 만 변경).
+// PATCH /strategies/{id}/settings → 새 template (clone + override) 생성 + 기존 strategy 의
+// strategy_template_id 갱신.
+async function submitInPlaceSettings() {
+  const editingId = cmState.editingStrategyId;
+  if (!editingId) {
+    toast('수정 대상 전략 ID 없음 — 「🔄 다시 시작」 으로만 가능', 'error');
+    return;
+  }
+  const tpsl = _collectTpSl();
+  const confirmMsg =
+    `↻ 전략 #${editingId} 설정만 수정\n\n` +
+    `포지션/단계/평균 진입가 모두 유지됩니다.\n` +
+    `다음 사이클부터 새 TP/SL 적용 (거래소 호출 없음):\n\n` +
+    `  TP1=${tpsl.tp1_percent}% (${tpsl.tp1_qty_ratio}%)\n` +
+    `  TP2=${tpsl.tp2_percent}% (${tpsl.tp2_qty_ratio}%)\n` +
+    `  TP3=${tpsl.tp3_percent}% (${tpsl.tp3_qty_ratio}%)\n` +
+    (tpsl.tp4_percent ? `  TP4=${tpsl.tp4_percent}% (${tpsl.tp4_qty_ratio}%)\n` : '') +
+    (tpsl.tp5_percent ? `  TP5=${tpsl.tp5_percent}% (${tpsl.tp5_qty_ratio}%)\n` : '') +
+    `  SL=${tpsl.stop_loss_percent_of_capital}%\n\n` +
+    `진행할까요?`;
+  if (!confirm(confirmMsg)) return;
+  const inplaceBtn = document.getElementById('cm-submit-inplace');
+  const submit = document.getElementById('cm-submit');
+  if (inplaceBtn) { inplaceBtn.disabled = true; inplaceBtn.textContent = '⏳ 갱신 중...'; }
+  if (submit) submit.disabled = true;
+  try {
+    await api(`/strategies/${editingId}/settings`, {
+      method: 'PATCH',
+      body: tpsl,
+    });
+    toast(`✅ 전략 #${editingId} TP/SL 갱신 완료 — 다음 tick 부터 적용`, 'success');
+    closeCreateModal();
+    refreshStrategies();
+  } catch (e) {
+    toast('설정 수정 실패: ' + e.message, 'error');
+  } finally {
+    if (inplaceBtn) { inplaceBtn.disabled = false; inplaceBtn.textContent = '↻ 설정만 수정'; }
+    if (submit) submit.disabled = false;
+  }
 }
 
 async function submitCreate() {

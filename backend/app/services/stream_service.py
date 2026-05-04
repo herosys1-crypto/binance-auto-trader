@@ -51,7 +51,11 @@ class StreamService:
 
         strategy = self.db.get(StrategyInstance, order.strategy_instance_id)
         if strategy and order.purpose == "ENTRY" and order.status == "FILLED":
-            strategy.status = {1: "STAGE1_OPEN", 2: "STAGE2_OPEN", 3: "STAGE3_OPEN", 4: "STAGE4_OPEN"}.get(order.stage_no, strategy.status)
+            # 2026-05-04 fix: 옵션 C 1~10단계 동적 지원. 이전엔 1~4단계 dict lookup 이라
+            # 5+ 단계 진입 시 status 가 STAGE4_OPEN 에 stuck → UI 잘못 + reconcile 자가
+            # 회복도 STAGE5+ 미지원이라 stuck 가중. f-string 으로 N단계 모두 처리.
+            if order.stage_no and 1 <= order.stage_no <= 10:
+                strategy.status = f"STAGE{order.stage_no}_OPEN"
             # 단계별 계획 row 갱신 + 첫 진입 시점 추적 (알림 중복 방지).
             # Bug fix (2026-04-30): race condition 해결을 위해 atomic UPDATE WHERE 로 변경.
             # 이전엔 SELECT 후 in-memory mark + commit 이라 동시 처리되는 두 ORDER_TRADE_UPDATE
@@ -138,6 +142,20 @@ class StreamService:
                         realized_delta = qty * (avg_entry - exit_px)
                     prev_realized = Decimal(str(strategy.realized_pnl or 0))
                     strategy.realized_pnl = (prev_realized + realized_delta).quantize(Decimal("0.01"))
+                    # 2026-05-04 v2: 일일 손실 한도 incremental 누적.
+                    # daily_loss_aggregator 의 v1 한계 (realized 누적 안 됨) 보완.
+                    # account_daily_risk_limit 의 오늘 row 에 realized_delta 추가.
+                    # 누적 실패해도 ledger 본 흐름은 정상 처리 (try/except 격리).
+                    try:
+                        from app.services.account_daily_loss_limiter import (
+                            AccountDailyLossLimiterService,
+                        )
+                        AccountDailyLossLimiterService(self.db).add_realized_delta(
+                            exchange_account_id=strategy.exchange_account_id,
+                            realized_delta=realized_delta,
+                        )
+                    except Exception:
+                        pass
             except Exception:
                 pass
         self.db.commit()

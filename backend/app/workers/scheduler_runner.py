@@ -10,6 +10,7 @@ from app.core.crypto import decrypt_text
 from app.core.redis_client import get_redis_client
 from app.observability.metrics import scheduler_leader_status
 from app.workers.auto_reentry_worker import run_auto_reentry_once
+from app.workers.daily_loss_aggregator import run_daily_loss_check_once
 from app.workers.distributed_scheduler_guard import DistributedSchedulerGuard
 from app.workers.keepalive_worker import run_keepalive_once
 from app.workers.reconcile_worker import run_position_reconcile_once
@@ -87,6 +88,9 @@ def start_scheduler() -> None:
     scheduler.add_job(guarded_job("auto_reentry", 25, lambda: run_auto_reentry_once(decrypt_text)), trigger=IntervalTrigger(seconds=30), id="auto_reentry", replace_existing=True, max_instances=1, coalesce=True)
     # Stage 2~N 자동 진입 트리거 감시 — 매 10초 (Critical: 이전엔 stage 1 만 자동, 2~N 은 수동 필요했던 버그 fix)
     scheduler.add_job(guarded_job("stage_trigger", 8, lambda: run_stage_trigger_once(decrypt_text)), trigger=IntervalTrigger(seconds=10), id="stage_trigger", replace_existing=True, max_instances=1, coalesce=True)
+    # Daily loss limit 체크 — 매 1분 (settings.daily_loss_limit_usdt 미설정 시 no-op).
+    # audit 2026-05-04: AccountDailyLossLimiter 가 호출되는 곳 0건이라 안전장치 무력 상태였음.
+    scheduler.add_job(guarded_job("daily_loss_check", 50, run_daily_loss_check_once), trigger=IntervalTrigger(minutes=1), id="daily_loss_check", replace_existing=True, max_instances=1, coalesce=True)
     scheduler.start()
 
 if __name__ == "__main__":

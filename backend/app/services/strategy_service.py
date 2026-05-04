@@ -1,6 +1,7 @@
 from decimal import Decimal
 from typing import Any
 
+from app.core.strategy_status import TERMINAL_STATUSES
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_stage_plan import StrategyStagePlan
 from app.repositories.strategy_repository import StrategyRepository
@@ -81,11 +82,8 @@ class StrategyService:
         #  신규 strategy 가 같은 symbol+side 로 진입해 거래소 통합 포지션을 두 strategy 가
         #  점유하는 좀비 발생 — #89/#90 LABUSDT 사례)
         from sqlalchemy import select
-        _CLOSED_STATUSES = {
-            "STOPPED", "COMPLETED", "CLOSED",
-            "CLOSED_BY_TP", "CLOSED_BY_SL", "REENTRY_READY",
-            "KILL_SWITCH_TRIGGERED",
-        }
+        # 2026-05-04: 공통 TERMINAL_STATUSES 사용 (이전엔 inline set 이라 admin.py 와 drift).
+        _CLOSED_STATUSES = TERMINAL_STATUSES
         existing = self.db.execute(
             select(StrategyInstance)
             .where(StrategyInstance.exchange_account_id == exchange_account_id)
@@ -96,10 +94,22 @@ class StrategyService:
             .limit(1)
         ).scalar_one_or_none()
         if existing:
+            # 2026-05-04 fix: STOPPING 인 경우 사용자가 어떻게 해결할지 명확한 가이드 제공.
+            # backend 가 STOPPING 을 active 로 분류하는 건 race window 보호 (commit 6133072).
+            # 사용자는 reconcile 자동 정리 (30초) 또는 force-stop 으로 즉시 해결 가능.
+            if existing.status == "STOPPING":
+                hint = (
+                    f" 현재 #{existing.id} 는 STOPPING (청산 진행 중) — reconcile_worker 가 30초마다 "
+                    f"거래소 포지션 0 확인 시 자동으로 STOPPED 승격합니다. "
+                    f"잠시 후 다시 시도하거나, 거래소에 잔재 포지션이 없는 게 확실하면 "
+                    f"`POST /api/v1/strategies/{existing.id}/force-stop` 으로 즉시 STOPPED 마킹 가능."
+                )
+            else:
+                hint = " 기존 전략을 종료(/stop) 한 후 새로 시작하시거나, 다른 심볼/방향을 선택해 주세요."
             raise ValueError(
                 f"같은 거래소/심볼/방향 ({symbol} {side}) 으로 활성 전략 #{existing.id} ({existing.status}) 가 이미 있습니다. "
-                "Binance 는 통합 포지션으로만 관리하므로 중복 전략은 TP/SL 충돌을 일으킵니다. "
-                "기존 전략을 종료한 후 새로 시작하시거나, 다른 심볼/방향을 선택해 주세요."
+                "Binance 는 통합 포지션으로만 관리하므로 중복 전략은 TP/SL 충돌을 일으킵니다."
+                + hint
             )
         # 잔액/마진 사전 안전 체크 (2026-05-03 강화):
         # 1) 가용 잔액 < 필요 마진 → 거부 (자본 부족)
@@ -110,9 +120,19 @@ class StrategyService:
         from app.integrations.binance.client import BinanceClient
         from app.core.crypto import decrypt_text
         from app.models.exchange_account import ExchangeAccount as _EA
+        from app.services.account_kill_switch_service import AccountKillSwitchService
         from decimal import Decimal as D
         import logging
         _logger = logging.getLogger(__name__)
+
+        # 0) Kill switch 사전 체크 (2026-05-04 fix):
+        # 이전엔 start_stage1 단계에서만 체크 → strategy DB row 가 만들어진 후 차단되어
+        # WAITING 상태 잔재 발생. 이제 create 시점에 차단해 DB 깨끗.
+        if AccountKillSwitchService(self.db).is_enabled(exchange_account_id):
+            raise ValueError(
+                f"거래소 계정 #{exchange_account_id} 의 Kill-Switch 가 활성화돼 있습니다. "
+                "신규 전략 생성 차단. Kill-Switch 를 해제한 후 재시도하세요."
+            )
 
         # 동시 활성 전략 수 한도 (예: 한 계정당 최대 8개) — 거래소 부담 + 모니터링 단순화
         MAX_CONCURRENT_PER_ACCOUNT = 10

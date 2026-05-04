@@ -24,6 +24,7 @@ import requests
 from sqlalchemy import select
 
 from app.core.database import SessionLocal
+from app.core.sentry import capture_strategy_event
 from app.models.exchange_account import ExchangeAccount
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_template import StrategyTemplate
@@ -32,6 +33,10 @@ from app.services.notification_service import NotificationService
 from app.services.strategy_service import StrategyService
 
 logger = logging.getLogger(__name__)
+
+
+# 명시 export — 테스트 헬퍼가 patch 할 때 좀 더 안정적인 lookup 보장.
+__all__ = ["run_auto_reentry_once"]
 
 
 def _fetch_current_price(symbol: str, is_testnet: bool) -> Decimal | None:
@@ -69,6 +74,10 @@ def run_auto_reentry_once(decrypt_text: Callable[[str], str]) -> None:
             stopped = strategy.stopped_at or strategy.updated_at
             if stopped is None:
                 continue
+            # postgres 는 DateTime(timezone=True) 로 tz-aware 반환, sqlite 는 naive 반환.
+            # `now` 가 tz-aware 이라 비교 시 type mismatch 가능 — 방어적으로 normalize.
+            if stopped.tzinfo is None:
+                stopped = stopped.replace(tzinfo=timezone.utc)
             delay = timedelta(seconds=int(tpl.reentry_delay_seconds or 600))
             if now < stopped + delay:
                 # 아직 대기 시간 미경과
@@ -80,6 +89,9 @@ def run_auto_reentry_once(decrypt_text: Callable[[str], str]) -> None:
                 logger.warning("auto_reentry: skip strategy %s — exchange account inactive", strategy.id)
                 strategy.status = "REENTRY_FAILED"
                 strategy.last_error_message = "Exchange account inactive"
+                # 2026-05-04 fix: status 변경을 즉시 commit — 다음 strategy 처리 중 rollback
+                # 발생 시 같이 lost 되지 않도록.
+                db.commit()
                 continue
 
             # 현재가 → 새 start_price
@@ -133,7 +145,32 @@ def run_auto_reentry_once(decrypt_text: Callable[[str], str]) -> None:
                            strategy.id, new_strategy.id, new_start_price)
             except Exception as e:
                 logger.exception("auto_reentry: failed for strategy #%s: %s", strategy.id, e)
-                strategy.last_error_message = f"auto_reentry failed: {e}"[:500]
+                # 2026-05-04 fix: 이전 코드 버그 — last_error_message 설정 후 rollback 하면
+                # 그 변경도 같이 rollback 되어 영구히 lost. 또 status 가 REENTRY_READY 그대로
+                # 남아 다음 사이클에 무한 retry 됨 (영구 실패 케이스).
+                # 이제: rollback 으로 진행 중 변경 (StrategyService.create_strategy_instance 의
+                # 부분 commit 등) 정리 후, 명시적으로 REENTRY_FAILED + last_error_message 를
+                # 새로 set + commit.
                 db.rollback()
+                # rollback 후 strategy 객체가 detached 일 수 있어 새로 fetch.
+                _refetched = db.get(StrategyInstance, strategy.id)
+                if _refetched is not None:
+                    _refetched.status = "REENTRY_FAILED"
+                    _refetched.last_error_message = f"auto_reentry failed: {e}"[:500]
+                    db.commit()
+                # Sentry 캡처 — 운영 가시성 (DSN 미설정 시 no-op).
+                capture_strategy_event(
+                    "auto_reentry failed for strategy",
+                    level="error", error=e,
+                    strategy_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+                    account_id=strategy.exchange_account_id,
+                    tags={"event_type": "AUTO_REENTRY_FAILED"},
+                )
+        # 2026-05-04 fix: 루프 끝에서 명시적 commit (방어적). 만약 위 분기에서 누락된
+        # 변경이 있어도 함수 종료 시 persist 보장.
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
     finally:
         db.close()

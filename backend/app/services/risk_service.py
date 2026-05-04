@@ -23,6 +23,11 @@ CRISIS_TP1_THRESHOLD = Decimal("5")         # 크라이시스 모드 첫 TP +5%
 CRISIS_TRAILING_DROP = Decimal("5")         # 첫 TP 후 피크 -5% 회귀 시 전량 청산
 CRISIS_HARD_SL_THRESHOLD = Decimal("-1")    # 첫 TP 후 PnL -1% 이하 시 전량 손절
 
+# 손실 알림 임계 (2026-05-04 신규) — 강제 청산 (-50%) 도달 시 1회 알림.
+# 도달 = max_loss_pct 가 처음 이 임계 이하로 내려가는 사이클.
+# 상태는 strategy.max_loss_pct 의 prev/new 비교로 판정 (별도 컬럼 불필요).
+LOSS_ALERT_THRESHOLD = Decimal("-50")
+
 class RiskService:
     def __init__(self, db) -> None:
         self.db = db
@@ -93,7 +98,12 @@ class RiskService:
         pnl_ratio = raw_pnl_pct * leverage
 
         # ─────────── PnL 추적 + 크라이시스 모드 검사 (Phase D-1) ───────────
+        # 2026-05-04: -50% 임계 알림 — _update_pnl_extremes 가 max_loss_pct 갱신하므로
+        # 호출 전 prev 값 캡처해서 임계 교차 (prev > -50, new ≤ -50) 1회 감지.
+        prev_max_loss = strategy.max_loss_pct
         self._update_pnl_extremes(strategy, pnl_ratio)
+        new_max_loss = strategy.max_loss_pct
+        self._maybe_send_loss_threshold_alert(strategy, prev_max_loss, new_max_loss)
         if not strategy.crisis_mode_triggered_at and self._should_trigger_crisis_mode(strategy, pnl_ratio):
             self._enter_crisis_mode(strategy)
 
@@ -120,23 +130,49 @@ class RiskService:
             tp_levels = [(label, CRISIS_OVERRIDE[label]) for label, _ in tp_levels if label in CRISIS_OVERRIDE]
             tp_levels.sort(key=lambda x: x[1], reverse=True)  # 내림차순 (TP4 부터 검사)
 
-        # 가장 높은 도달 단계 선정 (descending sort 후 첫 번째 도달)
-        for label, threshold in tp_levels:
-            if pnl_ratio >= threshold:
+        # 2026-05-04 critical fix (사용자 #98 LABUSDT 사례):
+        # 트레일링 체크가 TP threshold loop 보다 우선해야 함.
+        # 한번 익절 후 가격이 약간 retrace 됐지만 여전히 직전 TP threshold 위에 있는
+        # 모든 케이스에서 트레일링 무력화되던 버그 (잔량 영구 보유) fix.
+        TRAILING_ARMED_STATUSES = {
+            "TP1_DONE_PARTIAL",
+            "TP2_DONE_PARTIAL", "TP2_DONE",
+            "TP3_DONE_PARTIAL",
+            "TP4_DONE_PARTIAL",
+            "TRAILING_ARMED",
+        }
+        if (
+            (strategy.status or "").upper() in TRAILING_ARMED_STATUSES
+            and peak >= TRAILING_TP_PEAK_THRESHOLD
+            and pnl_ratio <= (peak - TRAILING_TP_RETRACE_AMOUNT)
+            and pnl_ratio < peak
+        ):
+            return "TRAILING_TP"
+
+        # 2026-05-04 critical fix #2 (사용자 #98 — TP2 silent skip 사례):
+        # 이전 로직은 descending sort 라 한 tick 에 여러 TP 임계 통과 시
+        # (e.g. pnl 22% 인데 TP1=10/TP2=15/TP3=20 모두 도달) "TP3" 즉시 반환.
+        # orchestrator 가 cur_done_idx (TP1=0) < tp_idx (TP3=2) 면 fire — TP2 skip!
+        # → TP2 의 청산 비율 (25%) 영구 누락.
+        #
+        # Fix: ascending + 다음 미발동 TP 만 반환.
+        # status 의 cur_done_idx 를 여기서 직접 참고해 다음 단계 TP 1개씩 반환.
+        # 한 tick 1회 발동, 다음 tick 다음 TP — 점진적이지만 누락 없음.
+        TP_DONE_INDEX = {
+            "TP1_DONE_PARTIAL": 0,
+            "TP2_DONE_PARTIAL": 1, "TP2_DONE": 1,
+            "TP3_DONE_PARTIAL": 2,
+            "TP4_DONE_PARTIAL": 3,
+            "TP5_DONE_PARTIAL": 4,
+        }
+        TP_LABEL_TO_IDX = {"TP1": 0, "TP2": 1, "TP3": 2, "TP4": 3, "TP5": 4}
+        cur_done_idx = TP_DONE_INDEX.get((strategy.status or "").upper(), -1)
+
+        # ascending — 가장 낮은 임계 먼저
+        for label, threshold in sorted(tp_levels, key=lambda x: x[1]):
+            if pnl_ratio >= threshold and TP_LABEL_TO_IDX.get(label, -1) > cur_done_idx:
                 return label
 
-        # 트레일링: 피크 대비 -5% 회귀 시 전량 청산 (사용자 기획 2026-04-30).
-        # 활성 조건: 피크 ≥ +5% (즉 TP1 임계 도달했음) AND 현재 ≤ peak - 5%.
-        # 어느 TP 든 1회라도 부분 익절된 후부터 활성화 (TP1 포함).
-        if peak >= TRAILING_TP_PEAK_THRESHOLD and pnl_ratio <= (peak - TRAILING_TP_RETRACE_AMOUNT) and pnl_ratio < peak:
-            if (strategy.status or "").upper() in {
-                "TP1_DONE_PARTIAL",
-                "TP2_DONE_PARTIAL", "TP2_DONE",
-                "TP3_DONE_PARTIAL",
-                "TP4_DONE_PARTIAL",
-                "TRAILING_ARMED",
-            }:
-                return "TRAILING_TP"
         return None
 
     @staticmethod
@@ -203,6 +239,61 @@ class RiskService:
         if current_pnl_pct <= 0:
             return False
         return True
+
+    def _maybe_send_loss_threshold_alert(
+        self, strategy, prev_max_loss, new_max_loss
+    ) -> None:
+        """max_loss_pct 가 -50% 임계를 처음 교차한 사이클에 1회 알림.
+
+        prev / new 모두 Decimal 또는 None.
+        - prev=None or prev > -50 AND new ≤ -50 → 교차 ✓
+        - 이미 교차한 후 (prev ≤ -50) 는 다시 알림 안 함
+        - new > -50 이면 미교차 (회복 중)
+        """
+        if new_max_loss is None:
+            return
+        new_d = Decimal(str(new_max_loss))
+        if new_d > LOSS_ALERT_THRESHOLD:
+            return  # 임계 미도달
+        # new ≤ -50: 임계 도달. prev 가 None 또는 > -50 인 경우만 첫 교차 → 알림.
+        if prev_max_loss is not None:
+            try:
+                prev_d = Decimal(str(prev_max_loss))
+                if prev_d <= LOSS_ALERT_THRESHOLD:
+                    return  # 이미 교차한 적 있음 — 재알림 안 함
+            except Exception:
+                pass
+
+        # 첫 교차 — RiskEvent + Telegram 알림
+        try:
+            self.db.add(RiskEvent(
+                strategy_instance_id=strategy.id,
+                event_type="LOSS_THRESHOLD_50PCT_REACHED",
+                severity="WARNING",
+                title=f"⚠️ 손실 {LOSS_ALERT_THRESHOLD}% 도달 — 강제 청산 임박",
+                message=(
+                    f"{strategy.symbol} {strategy.side} ROI {new_d}% — "
+                    f"임계 {LOSS_ALERT_THRESHOLD}% 도달. 증거금 추가 또는 수동 청산 검토."
+                ),
+                event_payload={
+                    "pnl_pct": str(new_d),
+                    "threshold_pct": str(LOSS_ALERT_THRESHOLD),
+                },
+            ))
+            self.db.flush()
+        except Exception:
+            pass
+        try:
+            from app.services.notification_service import NotificationService
+            NotificationService(self.db).send_loss_threshold_alert(
+                strategy_instance_id=strategy.id,
+                symbol=strategy.symbol,
+                side=strategy.side,
+                pnl_pct=str(new_d),
+                threshold_pct=str(LOSS_ALERT_THRESHOLD),
+            )
+        except Exception:
+            pass
 
     def _enter_crisis_mode(self, strategy) -> None:
         """크라이시스 모드 진입 — 시각 기록 + RiskEvent 생성 + Telegram 알림."""

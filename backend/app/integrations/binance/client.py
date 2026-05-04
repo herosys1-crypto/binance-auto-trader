@@ -116,6 +116,35 @@ class BinanceClient:
             signed=True,
         )
 
+    def add_position_margin(
+        self,
+        *,
+        symbol: str,
+        position_side: str,
+        amount: str,
+        margin_type: int = 1,
+    ) -> dict[str, Any]:
+        """ISOLATED 마진 모드 포지션에 증거금 추가/감소.
+
+        Binance Futures: POST /fapi/v1/positionMargin/modify
+        - margin_type=1 → 증거금 추가 (add)
+        - margin_type=2 → 증거금 감소 (reduce)
+        - position_side: hedge mode 시 LONG/SHORT, one-way 시 BOTH
+        - **CROSS 모드 포지션은 -4046 에러 ("No need to change margin type")** 비슷한 거절.
+          호출자가 사전에 isolated 인지 확인하거나 거래소 응답 에러로 처리.
+        """
+        return self._request(
+            "POST",
+            "/fapi/v1/positionMargin/modify",
+            params={
+                "symbol": symbol,
+                "positionSide": position_side,
+                "amount": amount,
+                "type": margin_type,
+            },
+            signed=True,
+        )
+
     # ------------------------------------------------------------------
     # Orders
     # ------------------------------------------------------------------

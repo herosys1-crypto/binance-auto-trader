@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db
 from app.core.crypto import decrypt_text
+from app.core.strategy_status import TERMINAL_STATUSES
 from app.integrations.binance.client import BinanceClient
 from app.models.strategy_template import StrategyTemplate
 from app.repositories.exchange_account_repository import ExchangeAccountRepository
@@ -165,7 +166,8 @@ def delete_strategy_template(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
 
     refs = db.query(StrategyInstance).filter(StrategyInstance.strategy_template_id == template_id).all()
-    terminal_statuses = {"STOPPED", "CLOSED", "CLOSED_BY_TP", "CLOSED_BY_SL", "COMPLETED", "STOPPING"}
+    # 2026-05-04 fix: 공통 TERMINAL_STATUSES 사용 (REENTRY_READY, KILL_SWITCH_TRIGGERED 빠짐 + STOPPING 포함은 위험).
+    terminal_statuses = TERMINAL_STATUSES
     if not refs:
         db.delete(tpl)
         db.commit()
@@ -217,7 +219,8 @@ def cleanup_quick_templates(
         .filter(StrategyTemplate.name.startswith("_quick_"))
         .all()
     )
-    terminal_statuses = {"STOPPED", "CLOSED", "CLOSED_BY_TP", "CLOSED_BY_SL", "COMPLETED", "STOPPING"}
+    # 2026-05-04 fix: 공통 TERMINAL_STATUSES 사용 (이전엔 항목 누락 + STOPPING 위험 포함).
+    terminal_statuses = TERMINAL_STATUSES
     deleted = 0
     deactivated = 0
     cascaded_strategies = 0
@@ -706,9 +709,10 @@ def symbol_sync(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> MessageResponse:
-    account = ExchangeAccountRepository(db).get_first_active_binance()
+    # 2026-05-04 audit fix: user_id 전달 — 다른 user 의 API key 로 symbol-sync 하던 결함 차단.
+    account = ExchangeAccountRepository(db).get_first_active_binance(user_id=user_id)
     if not account:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active Binance account")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active Binance account for current user")
     client = BinanceClient(
         api_key=decrypt_text(account.api_key_enc),
         api_secret=decrypt_text(account.api_secret_enc),
@@ -716,6 +720,26 @@ def symbol_sync(
     )
     count = SymbolSyncService(db, client).sync()
     return MessageResponse(message=f"Synced {count} symbols")
+
+
+def _verify_account_ownership(db: Session, exchange_account_id: int, user_id: int) -> None:
+    """2026-05-04 audit fix: 인증된 user 라도 자기 계정만 조작 가능하도록.
+
+    이전엔 admin endpoint 라고 user_id 검증 없이 모든 계정의 kill-switch 조작 가능.
+    multi-user 시 다른 user 의 계정을 임의로 enable/disable 할 수 있는 보안 결함.
+    """
+    from app.models.exchange_account import ExchangeAccount
+    from sqlalchemy import select
+    acc = db.execute(
+        select(ExchangeAccount)
+        .where(ExchangeAccount.id == exchange_account_id)
+        .where(ExchangeAccount.user_id == user_id)
+    ).scalar_one_or_none()
+    if not acc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Exchange account #{exchange_account_id} not found (또는 본인 소유 아님)",
+        )
 
 
 @router.post("/kill-switch/{exchange_account_id}/enable", response_model=MessageResponse)
@@ -726,6 +750,7 @@ def enable_kill_switch(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> MessageResponse:
+    _verify_account_ownership(db, exchange_account_id, user_id)
     AccountKillSwitchService(db).trigger(
         exchange_account_id=exchange_account_id,
         reason_code=reason_code,
@@ -740,6 +765,7 @@ def disable_kill_switch(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> MessageResponse:
+    _verify_account_ownership(db, exchange_account_id, user_id)
     AccountKillSwitchService(db).clear(exchange_account_id)
     return MessageResponse(message=f"Kill switch cleared on account {exchange_account_id}")
 

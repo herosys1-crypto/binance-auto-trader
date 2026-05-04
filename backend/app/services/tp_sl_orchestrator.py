@@ -1,5 +1,6 @@
 import time
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+from typing import Any
 from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
 from app.observability.metrics import strategy_runs_total, strategy_take_profit_total
@@ -7,6 +8,43 @@ from app.repositories.strategy_repository import StrategyRepository
 from app.services.execution_service import ExecutionService
 from app.services.notification_service import NotificationService
 from app.services.risk_service import RiskService
+
+
+# 크라이시스 모드 qty ratio default (사용자 spec — 2026-04-30 변경 이후 고정).
+# template.crisis_qty_ratios 가 NULL 또는 일부 키만 채웠을 때 fallback.
+_CRISIS_QTY_RATIO_DEFAULT: dict[str, Decimal] = {
+    "TP1": Decimal("25"),
+    "TP2": Decimal("25"),
+    "TP3": Decimal("50"),
+    "TP4": Decimal("100"),
+}
+_CRISIS_RATIO_KEYS = ("TP1", "TP2", "TP3", "TP4")
+
+
+def _resolve_crisis_qty_ratios(override: Any) -> dict[str, Decimal]:
+    """template.crisis_qty_ratios JSONB → {TP1..TP4: Decimal} 머지.
+
+    - override 가 None / 빈 dict → 전체 default
+    - 일부 키만 있으면 나머지는 default
+    - invalid 값 (음수, 100 초과, 비숫자) 도 default fallback
+    - 알 수 없는 키는 무시 (TP5 등은 크라이시스에서 사용 안 함)
+    """
+    out = dict(_CRISIS_QTY_RATIO_DEFAULT)
+    if not override or not isinstance(override, dict):
+        return out
+    for key in _CRISIS_RATIO_KEYS:
+        if key not in override:
+            continue
+        raw = override[key]
+        try:
+            val = Decimal(str(raw))
+        except (InvalidOperation, TypeError, ValueError):
+            continue  # invalid → default 유지
+        if val < 0 or val > 100:
+            continue  # 범위 밖 → default 유지
+        out[key] = val
+    return out
+
 
 class TPSLOrchestratorService:
     def __init__(self, db, *, api_key: str, api_secret: str, is_testnet: bool = False) -> None:
@@ -73,9 +111,11 @@ class TPSLOrchestratorService:
             "TP4": "tp4_qty_ratio", "TP5": "tp5_qty_ratio",
         }
         default_ratio = {"TP1": Decimal("25"), "TP2": Decimal("50"), "TP3": Decimal("100"), "TP4": Decimal("100"), "TP5": Decimal("100")}
-        # 크라이시스 모드 qty ratio override (사용자 기획):
+        # 크라이시스 모드 qty ratio (사용자 기획 default):
         # TP1=25%, TP2=25%, TP3=50% of remaining, TP4=100% of remaining
-        crisis_qty_ratio = {"TP1": Decimal("25"), "TP2": Decimal("25"), "TP3": Decimal("50"), "TP4": Decimal("100")}
+        # 2026-05-04 (alembic 0009): template.crisis_qty_ratios JSONB override 가능.
+        # 일부 키만 채워도 나머지는 default 사용. invalid 값은 default fallback.
+        crisis_qty_ratio = _resolve_crisis_qty_ratios(getattr(tpl, "crisis_qty_ratios", None))
 
         # 사용자 기획 (2026-04-30 evening, #80 사례 검토 후):
         # "4/4 익절 모두 종료되면 전략 인스턴스 모두 종료. 1단계만 진입했어도 모든 활성 TP

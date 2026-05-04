@@ -10,6 +10,7 @@ from app.models.risk_event import RiskEvent
 from app.repositories.order_repository import OrderRepository
 from app.repositories.strategy_repository import StrategyRepository
 from app.services.account_kill_switch_service import AccountKillSwitchService
+from app.core.sentry import capture_strategy_event
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +47,23 @@ class ExecutionService:
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
             raise ValueError("Strategy not found")
+        # 2026-05-04 fix: kill-switch 가 stage 1 (start_stage1) 에만 체크되던 버그.
+        # stage 2~10 자동 진입은 신규 거래임에도 차단 안 돼 kill-switch 안전장치 부분 무력.
+        # 이제는 모든 stage 진입에서 차단.
+        if AccountKillSwitchService(self.db).is_enabled(strategy.exchange_account_id):
+            raise ValueError(
+                f"Account kill-switch is enabled; stage {stage_no} entry blocked. "
+                "Kill-switch 를 해제한 후 재시도하세요."
+            )
         stage_plan = next((p for p in strategy.stage_plans if p.stage_no == stage_no), None)
         if not stage_plan:
             raise ValueError(f"Stage {stage_no} plan not found")
         order = self._place_stage_entry_order(strategy, stage_plan)
         strategy.current_stage = stage_no
-        strategy.status = {2: "STAGE2_OPEN_PENDING", 3: "STAGE3_OPEN_PENDING", 4: "STAGE4_OPEN_PENDING"}.get(stage_no, strategy.status)
+        # 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 2/3/4 만 dict 있어 5+ stage 진입 시
+        # status 변경 안 됨. f-string 으로 N단계 모두 STAGE{N}_OPEN_PENDING 처리.
+        if 2 <= stage_no <= 10:
+            strategy.status = f"STAGE{stage_no}_OPEN_PENDING"
         self.db.commit()
         self.db.refresh(order)
         return order
@@ -138,6 +150,14 @@ class ExecutionService:
                 event_payload={"strategy_id": strategy.id, "quantity": str(quantity), "side": side, "error": str(e)},
             ))
             self.db.commit()
+            capture_strategy_event(
+                "emergency_close place_market_order failed",
+                level="error",
+                strategy_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+                account_id=strategy.exchange_account_id, error=e,
+                extras={"quantity": str(quantity), "exit_side": side},
+                tags={"event_type": "EMERGENCY_CLOSE_PLACE_FAILED"},
+            )
             raise
         order = Order(strategy_instance_id=strategy.id, stage_no=None, purpose="EXIT", symbol=strategy.symbol, side=side, position_side=position_side, order_type="MARKET", time_in_force=None, client_order_id=client_order_id, exchange_order_id=response.get("orderId"), trigger_price=None, price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, orig_qty=quantity, executed_qty=Decimal(str(response.get("executedQty", "0"))), avg_price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, status=response.get("status", "NEW"), raw_request={"symbol": strategy.symbol, "side": side, "positionSide": position_side, "type": "MARKET", "quantity": str(quantity), "newClientOrderId": client_order_id}, raw_response=response)
         self.order_repo.create(order)
@@ -146,6 +166,95 @@ class ExecutionService:
 
     def cancel_exchange_order(self, *, symbol: str, order_id: int | None = None, orig_client_order_id: str | None = None) -> dict:
         return self.client.cancel_order(symbol=symbol, order_id=order_id, orig_client_order_id=orig_client_order_id)
+
+    def add_position_margin(self, strategy_id: int, *, amount: Decimal) -> dict:
+        """ISOLATED 모드 포지션에 증거금 추가.
+
+        검증:
+        - strategy 존재 + 포지션 보유 (qty != 0)
+        - amount > 0
+        - 거래소 호출 실패 시 명확한 에러 메시지 (CROSS 모드면 -4046 에러)
+
+        성공 시 RiskEvent + Telegram 알림 발송.
+        """
+        if amount is None or amount <= 0:
+            raise ValueError(f"증거금 추가 금액은 양수여야 합니다 (입력: {amount})")
+        strategy = self.strategy_repo.get_strategy(strategy_id)
+        if not strategy:
+            raise ValueError("Strategy not found")
+        current_qty = abs(Decimal(str(strategy.current_position_qty or 0)))
+        if current_qty == 0:
+            raise ValueError(
+                f"포지션 없음 (qty=0) — 증거금 추가 불가. "
+                f"strategy={strategy.id} status={strategy.status}"
+            )
+        try:
+            response = self.client.add_position_margin(
+                symbol=strategy.symbol,
+                position_side=strategy.side,  # hedge mode: LONG/SHORT
+                amount=str(amount.quantize(Decimal("0.00000001"))),
+                margin_type=1,  # 1 = add
+            )
+        except Exception as e:
+            err_msg = str(e)
+            # 흔한 에러 친절 매핑
+            if "-4046" in err_msg or "marginType" in err_msg.lower() or "CROSS" in err_msg.upper():
+                hint = " (CROSS 모드 포지션은 증거금 직접 추가 불가 — Binance UI 또는 별도 절차로 ISOLATED 변경 필요)"
+            elif "-2027" in err_msg or "margin balance" in err_msg.lower():
+                hint = " (지갑 잔액 부족 — Binance 계정에 USDT 입금 필요)"
+            else:
+                hint = ""
+            logger.error(
+                "add_position_margin failed: strategy=%s symbol=%s amount=%s error=%s",
+                strategy.id, strategy.symbol, amount, e,
+            )
+            self.db.add(RiskEvent(
+                strategy_instance_id=strategy.id,
+                event_type="ADD_MARGIN_FAILED",
+                severity="ERROR",
+                title="🛡 증거금 추가 실패",
+                message=f"symbol={strategy.symbol} amount={amount} error={e}{hint}",
+                event_payload={"amount": str(amount), "error": str(e)},
+            ))
+            self.db.commit()
+            capture_strategy_event(
+                "add_position_margin failed",
+                level="error",
+                strategy_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+                account_id=strategy.exchange_account_id, error=e,
+                extras={"amount": str(amount)},
+                tags={"event_type": "ADD_MARGIN_FAILED"},
+            )
+            raise ValueError(f"증거금 추가 실패: {e}{hint}") from e
+
+        # 성공 — RiskEvent + Telegram 알림
+        self.db.add(RiskEvent(
+            strategy_instance_id=strategy.id,
+            event_type="ADD_MARGIN_SUCCESS",
+            severity="INFO",
+            title="🛡 증거금 추가 완료",
+            message=(
+                f"{strategy.symbol} {strategy.side} 포지션에 {amount} USDT 추가 — "
+                f"청산가 완화 효과."
+            ),
+            event_payload={
+                "amount": str(amount),
+                "exchange_response": response,
+            },
+        ))
+        self.db.commit()
+        # Telegram (실패해도 거래 흐름 영향 없음)
+        try:
+            from app.services.notification_service import NotificationService
+            NotificationService(self.db).send_margin_added_alert(
+                strategy_instance_id=strategy.id,
+                symbol=strategy.symbol,
+                side=strategy.side,
+                amount=amount,
+            )
+        except Exception:
+            pass
+        return response
 
     def _place_stage_entry_order(self, strategy, stage_plan) -> Order:
         if stage_plan.planned_qty is None or stage_plan.trigger_price is None:

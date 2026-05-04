@@ -19,6 +19,7 @@ from sqlalchemy import select
 from app.core.database import SessionLocal
 from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
+from app.core.sentry import capture_strategy_event
 from app.integrations.binance.client import BinanceClient
 from app.models.exchange_account import ExchangeAccount
 from app.models.position import Position
@@ -67,6 +68,13 @@ def _do_reconcile(decrypt_func) -> None:
         except Exception as e:
             logger.error("pre_pass_dedup 실패: %s", e)
             db.rollback()
+            # Phase 1 자동회복 실패는 좀비 정리가 한 사이클 누락된다는 의미.
+            # 30초 뒤 다음 사이클에 재시도되지만 운영자 가시성 위해 Sentry 캡처.
+            capture_strategy_event(
+                "Zombie Guardian pre_pass_dedup failed",
+                level="error", error=e,
+                tags={"event_type": "PRE_PASS_DEDUP_FAILED"},
+            )
 
         # (b) 종료 상태 qty 잔재 정리
         try:
@@ -77,19 +85,26 @@ def _do_reconcile(decrypt_func) -> None:
         except Exception as e:
             logger.error("enforce_terminal_qty_zero 실패: %s", e)
             db.rollback()
+            capture_strategy_event(
+                "Zombie Guardian enforce_terminal_qty_zero failed",
+                level="error", error=e,
+                tags={"event_type": "ENFORCE_TERMINAL_QTY_ZERO_FAILED"},
+            )
 
         # ===== Main loop — active strategy 별 거래소 sync + 자동 회복 =====
         # 활성 전략 조회. *_PENDING 상태도 포함 — user-stream 이 죽어 체결 이벤트를
         # 놓친 경우 reconcile 이 거래소 상태를 보고 PENDING -> OPEN 으로 자가 회복.
+        # 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 STAGE1~4_OPEN_PENDING/OPEN 만 active 분류라
+        # 5+ stage 진입한 strategy 가 reconcile main loop 에서 누락되는 버그.
+        _ACTIVE_PENDING = [f"STAGE{n}_OPEN_PENDING" for n in range(1, 11)]
+        _ACTIVE_OPEN = [f"STAGE{n}_OPEN" for n in range(1, 11)]
+        _ACTIVE_TP_PARTIAL = [f"TP{n}_DONE_PARTIAL" for n in range(1, 6)]
         rows = db.execute(
             select(StrategyInstance, ExchangeAccount)
             .join(ExchangeAccount, StrategyInstance.exchange_account_id == ExchangeAccount.id)
-            .where(StrategyInstance.status.in_([
-                "STAGE1_OPEN_PENDING", "STAGE2_OPEN_PENDING", "STAGE3_OPEN_PENDING", "STAGE4_OPEN_PENDING",
-                "STAGE1_OPEN", "STAGE2_OPEN", "STAGE3_OPEN", "STAGE4_OPEN",
-                "TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL", "TP4_DONE_PARTIAL", "TP5_DONE_PARTIAL",
-                "STOPPING",
-            ]))
+            .where(StrategyInstance.status.in_(
+                _ACTIVE_PENDING + _ACTIVE_OPEN + _ACTIVE_TP_PARTIAL + ["STOPPING"]
+            ))
             .where(ExchangeAccount.is_active.is_(True))
         ).all()
         for strategy, account in rows:
@@ -126,12 +141,11 @@ def _do_reconcile(decrypt_func) -> None:
                         position_reconcile_total.labels(status="zombie_stopped").inc()
                         _stuck_clear(strategy.id)
                         continue
-                    # *_OPEN orphan 자동 정리
-                    _OPEN_STATES = {
-                        "STAGE1_OPEN", "STAGE2_OPEN", "STAGE3_OPEN", "STAGE4_OPEN",
-                        "TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL",
-                        "TP4_DONE_PARTIAL", "TP5_DONE_PARTIAL",
-                    }
+                    # *_OPEN orphan 자동 정리 — 1~10단계 + TP 1~5 PARTIAL.
+                    _OPEN_STATES = (
+                        {f"STAGE{n}_OPEN" for n in range(1, 11)}
+                        | {f"TP{n}_DONE_PARTIAL" for n in range(1, 6)}
+                    )
                     if strategy.status in _OPEN_STATES:
                         db.add(RiskEvent(
                             strategy_instance_id=strategy.id,
@@ -234,29 +248,41 @@ def _do_reconcile(decrypt_func) -> None:
                 strategy.current_position_qty = exchange_position_amt
                 strategy.unrealized_pnl = exchange_unrealized_pnl
                 strategy.liquidation_price = exchange_liquidation_price if exchange_liquidation_price > 0 else strategy.liquidation_price
-                # 자가 회복: *_OPEN_PENDING + 거래소에 실 포지션 → *_OPEN 전이
+                # 자가 회복: *_OPEN_PENDING + 거래소에 실 포지션 → *_OPEN 전이.
+                # 2026-05-04 fix v2 (사용자 #96 TSTUSDT 사례):
+                # 이전 버그 — 단순히 "exchange_position != 0" 만 보고 promote → 다단계 strategy 의
+                # stage N (N>=2) LIMIT 가 미체결인데도 reconcile 이 status 를 STAGE_N_OPEN 으로
+                # 잘못 승격. 거래소 포지션은 stage 1~(N-1) 합 (= 이전 fills) 이라 != 0 인 게 당연.
+                # 해당 stage 의 LIMIT 가 실제로 fill 됐는지 확인하려면 stage_plan.is_triggered 검사.
+                # is_triggered 는 stream_service 가 ENTRY FILLED 처리 시 atomic UPDATE 함.
                 _PENDING_TO_OPEN = {
-                    "STAGE1_OPEN_PENDING": "STAGE1_OPEN",
-                    "STAGE2_OPEN_PENDING": "STAGE2_OPEN",
-                    "STAGE3_OPEN_PENDING": "STAGE3_OPEN",
-                    "STAGE4_OPEN_PENDING": "STAGE4_OPEN",
+                    f"STAGE{n}_OPEN_PENDING": (f"STAGE{n}_OPEN", n) for n in range(1, 11)
                 }
                 if strategy.status in _PENDING_TO_OPEN and exchange_position_amt != 0:
-                    new_status = _PENDING_TO_OPEN[strategy.status]
-                    db.add(RiskEvent(
-                        strategy_instance_id=strategy.id,
-                        event_type="RECONCILE_RECOVERED_PENDING",
-                        severity="WARN",
-                        title="Reconciled stuck PENDING -> OPEN",
-                        message=f"status {strategy.status} -> {new_status} (exchange position={exchange_position_amt})",
-                        event_payload={
-                            "strategy_id": strategy.id,
-                            "old_status": strategy.status,
-                            "new_status": new_status,
-                            "position_amt": str(exchange_position_amt),
-                        },
-                    ))
-                    strategy.status = new_status
+                    new_status, pending_stage_no = _PENDING_TO_OPEN[strategy.status]
+                    # 그 stage 의 plan 이 실제 fill 됐는지 확인 (stream 누락 회복용 가드).
+                    from app.models.strategy_stage_plan import StrategyStagePlan
+                    plan = db.execute(
+                        select(StrategyStagePlan)
+                        .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+                        .where(StrategyStagePlan.stage_no == pending_stage_no)
+                    ).scalar_one_or_none()
+                    if plan is not None and plan.is_triggered:
+                        db.add(RiskEvent(
+                            strategy_instance_id=strategy.id,
+                            event_type="RECONCILE_RECOVERED_PENDING",
+                            severity="WARN",
+                            title="Reconciled stuck PENDING -> OPEN",
+                            message=f"status {strategy.status} -> {new_status} (stage_plan triggered, position={exchange_position_amt})",
+                            event_payload={
+                                "strategy_id": strategy.id,
+                                "old_status": strategy.status,
+                                "new_status": new_status,
+                                "position_amt": str(exchange_position_amt),
+                            },
+                        ))
+                        strategy.status = new_status
+                    # else: stage_plan 미발동 — LIMIT 가 아직 거래소 book 에 대기 중. 그대로 PENDING 유지.
                 position_reconcile_total.labels(status="success").inc()
             except Exception as e:
                 db.add(RiskEvent(
@@ -268,6 +294,15 @@ def _do_reconcile(decrypt_func) -> None:
                     event_payload={"strategy_id": strategy.id},
                 ))
                 position_reconcile_total.labels(status="error").inc()
+                # Sentry: per-strategy reconcile 실패 — 거래소 API 일시 장애 또는
+                # 권한 문제일 수 있음. strategy_id 태그로 빈도 추적.
+                capture_strategy_event(
+                    "Position reconcile failed for strategy",
+                    level="error", error=e,
+                    strategy_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+                    account_id=strategy.exchange_account_id,
+                    tags={"event_type": "POSITION_RECONCILE_ERROR"},
+                )
         db.commit()
 
         # ===== Phase 2 안전망 — 거래소 orphan 포지션 감지 =====
@@ -281,5 +316,11 @@ def _do_reconcile(decrypt_func) -> None:
         except Exception as e:
             logger.error("detect_orphan_exchange_positions 실패: %s", e)
             db.rollback()
+            # Sentry: orphan detection 자체 실패 — Phase 2 안전망이 한 사이클 작동 안 함.
+            capture_strategy_event(
+                "detect_orphan_exchange_positions failed",
+                level="error", error=e,
+                tags={"event_type": "ORPHAN_DETECTION_LOOP_FAILED"},
+            )
     finally:
         db.close()
