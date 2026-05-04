@@ -531,11 +531,16 @@ def start_strategy(
 
 
 class StrategySettingsUpdate(BaseModel):
-    """In-place 수정 — 활성 strategy 의 TP/SL 만 변경 (포지션/단계 유지).
+    """In-place 수정 — 활성 strategy 의 TP/SL + 미발동 단계 trigger_percent 변경.
 
-    제외된 필드 (활성 strategy 에 변경 위험):
-    - side, leverage: 거래소 포지션 충돌
-    - stages_config: 이미 진입한 단계와 inconsistency
+    안전 정책:
+    - side, leverage, capitals: 변경 거부 (활성 포지션과 inconsistency 위험)
+    - 이미 진입한 단계 (stage_no <= current_stage): 변경 거부
+    - 미발동 단계 (stage_no > current_stage): trigger_percent 변경 가능 → trigger_price 자동 재계산
+
+    trigger_percents 형식: list[Decimal | None], 길이 = 전체 단계 수.
+    각 element 가 None 이면 그 단계는 변경 안 함. 양수면 그 stage 의 trigger_percent 갱신.
+    예: [None, None, 8] → 3단계 trigger 만 8% 로.
     """
     tp1_percent: Decimal | None = Field(default=None, gt=0)
     tp2_percent: Decimal | None = Field(default=None, gt=0)
@@ -549,6 +554,13 @@ class StrategySettingsUpdate(BaseModel):
     tp5_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     stop_loss_percent_of_capital: Decimal | None = Field(default=None, gt=0, le=100)
     crisis_qty_ratios: dict | None = None
+    # 2026-05-04: 미발동 단계 trigger_percent 부분 갱신.
+    # 길이가 전체 단계 수와 같아야 함. 각 element None=변경 없음, 양수=새 trigger_percent.
+    # current_stage 이하 단계의 변경 시도는 거부.
+    trigger_percents: list[Decimal | None] | None = Field(
+        default=None,
+        description="단계별 trigger_percent (양수=변경, None=유지). current_stage 이하 단계는 None 이어야 함.",
+    )
 
 
 @router.patch("/{strategy_id}/settings", response_model=StrategyDetailResponse)
@@ -631,16 +643,172 @@ def update_strategy_settings_in_place(
         reentry_offset_pct=old_tpl.reentry_offset_pct,
         is_active=False,  # in-place 수정용 — 다른 신규 strategy 가 이걸 선택하면 안 됨
     )
+    # 2026-05-04: stages_config trigger_percents 부분 갱신 (미발동 단계만)
+    if payload.trigger_percents is not None:
+        old_cfg = dict(old_tpl.stages_config) if old_tpl.stages_config else {}
+        old_capitals = old_cfg.get("capitals") or []
+        old_triggers = list(old_cfg.get("trigger_percents") or [None] * len(old_capitals))
+        if len(payload.trigger_percents) != len(old_capitals):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"trigger_percents 길이 ({len(payload.trigger_percents)}) 가 "
+                    f"전체 단계 수 ({len(old_capitals)}) 와 달라야 함. "
+                    "변경 안 할 단계는 None 으로 채우세요."
+                ),
+            )
+        cur_stage_idx = (strategy.current_stage or 0)  # 1-based; current_stage=2 면 stage 1,2 발동됨
+        # 미발동 단계 (idx >= cur_stage_idx, 0-based stage_no = idx+1) 만 갱신.
+        # cur_stage_idx 이하 (이미 진입) 단계 변경 시도 거부.
+        for i, new_pct in enumerate(payload.trigger_percents):
+            if new_pct is None:
+                continue
+            stage_no = i + 1
+            if stage_no <= cur_stage_idx:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"이미 진입한 단계 (stage {stage_no}, current_stage={cur_stage_idx}) 의 "
+                        "trigger_percent 는 변경 불가. 이 인덱스는 None 으로 두세요."
+                    ),
+                )
+            old_triggers[i] = str(new_pct)
+        old_cfg["trigger_percents"] = old_triggers
+        new_tpl.stages_config = old_cfg
+
     db.add(new_tpl)
     db.flush()
     strategy.strategy_template_id = new_tpl.id
+
+    # 미발동 단계 plan 의 trigger_price 재계산 (trigger_percents 변경 시).
+    if payload.trigger_percents is not None:
+        from app.models.strategy_stage_plan import StrategyStagePlan
+        from app.services.strategy_calculator import StrategyCalculator, SymbolRule
+        from app.repositories.strategy_repository import StrategyRepository as _SR
+        sym_model = _SR(db).get_symbol(strategy.symbol)
+        if sym_model:
+            sym_rule = SymbolRule(
+                symbol=sym_model.symbol,
+                tick_size=Decimal(str(sym_model.tick_size or 0)),
+                step_size=Decimal(str(sym_model.step_size or 0)),
+                min_qty=Decimal(str(sym_model.min_qty or 0)),
+                price_precision=sym_model.price_precision or 8,
+                quantity_precision=sym_model.quantity_precision or 8,
+            )
+            calc = StrategyCalculator(sym_rule)
+            try:
+                preview = calc.calculate_preview(
+                    symbol=strategy.symbol,
+                    side=strategy.side,
+                    start_price=Decimal(str(strategy.start_price)),
+                    stages_config=new_tpl.stages_config,
+                    leverage=int(strategy.leverage),
+                    total_capital=Decimal(str(strategy.total_capital)),
+                    tp1_percent=Decimal(str(new_tpl.tp1_percent)),
+                    tp2_percent=Decimal(str(new_tpl.tp2_percent)),
+                    tp3_percent=Decimal(str(new_tpl.tp3_percent)),
+                    stop_loss_percent_of_capital=Decimal(str(new_tpl.stop_loss_percent_of_capital)),
+                )
+                # 미발동 단계의 plan 만 새 trigger_price/percent 로 갱신
+                from sqlalchemy import select as _s
+                plans = db.execute(
+                    _s(StrategyStagePlan)
+                    .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+                ).scalars().all()
+                for p in plans:
+                    if p.is_triggered:
+                        continue  # 이미 발동된 plan 보존
+                    new_plan = next((x for x in preview.stages if x.stage_no == p.stage_no), None)
+                    if new_plan:
+                        p.trigger_percent = new_plan.trigger_percent
+                        p.trigger_price = new_plan.trigger_price
+                        p.planned_qty = new_plan.planned_qty
+            except Exception as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"새 trigger_percents 로 trigger_price 재계산 실패: {e}",
+                ) from e
+
     db.commit()
     db.refresh(strategy)
 
     # response — template 기반 enrichment 만 (tp_count batch 는 list endpoint 가 처리).
-    # _fetch_tp_counts_batch 는 postgres regex 라 sqlite 호환 X — 굳이 여기서 안 부름.
     resp = _enrich_response(StrategyDetailResponse.model_validate(strategy), new_tpl)
     return resp
+
+
+@router.post("/{strategy_id}/trigger-next-stage", response_model=StrategyActionResponse)
+def trigger_next_stage_manually(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyActionResponse:
+    """현재 전략의 다음 단계를 수동으로 즉시 진입 (가격 trigger 무시).
+
+    사용자 요청 (2026-05-04): "현재 포지션에서 추가로 진입할 수 있는 옵션".
+    안전한 구현: 새 임의 주문이 아니라 기존 stage_plan 의 다음 단계를 trigger_price
+    체크 없이 즉시 발동. capital/qty 는 stage_plan 에 사전 계산된 값 그대로 사용
+    (template 의 단계 자본 분배 보존).
+
+    검증:
+    - 본인 소유 strategy
+    - 활성 status (TERMINAL 거부)
+    - kill-switch 미발동 (execution_service.trigger_next_stage 가 자체 검증)
+    - 다음 단계가 아직 trigger 안 됐어야 함
+    - stage_plan 존재
+    """
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+    if strategy.status in TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"종료된 strategy ({strategy.status}) 는 추가 단계 진입 불가.",
+        )
+    next_stage_no = (strategy.current_stage or 0) + 1
+    # template 의 활성 단계 수 확인
+    from app.models.strategy_template import StrategyTemplate
+    tpl = db.get(StrategyTemplate, strategy.strategy_template_id)
+    total_stages = _count_active_stages(tpl)
+    if next_stage_no > total_stages:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"이미 모든 단계 ({total_stages}/{total_stages}) 진입 완료. 추가 진입 불가.",
+        )
+    # stage_plan 존재 + 미발동 확인
+    from app.models.strategy_stage_plan import StrategyStagePlan
+    from sqlalchemy import select as sa_select
+    plan = db.execute(
+        sa_select(StrategyStagePlan)
+        .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+        .where(StrategyStagePlan.stage_no == next_stage_no)
+    ).scalar_one_or_none()
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Stage {next_stage_no} plan 없음")
+    if plan.is_triggered:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Stage {next_stage_no} 이미 진입됨")
+
+    account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
+    if not account:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exchange account not found")
+    try:
+        execution_service = ExecutionService(
+            db,
+            api_key=decrypt_text(account.api_key_enc),
+            api_secret=decrypt_text(account.api_secret_enc),
+            is_testnet=account.is_testnet,
+        )
+        execution_service.trigger_next_stage(strategy.id, stage_no=next_stage_no)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Exchange error: {e}") from e
+    db.refresh(strategy)
+    return StrategyActionResponse(
+        strategy_id=strategy.id,
+        status=strategy.status,
+        message=f"수동 진입 — stage {next_stage_no} LIMIT 주문 발송됨 (planned_capital={plan.planned_capital}).",
+    )
 
 
 class AddMarginRequest(BaseModel):
