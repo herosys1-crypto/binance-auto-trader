@@ -269,6 +269,242 @@ class ExecutionService:
         self.order_repo.create(order)
         return order
 
+    # 2026-05-04 (사용자 요청): 수동 「▶ 다음 단계」 = 시장가 즉시 진입.
+    # 기존 trigger_next_stage 는 LIMIT @ trigger_price 라서 자동 워커와 동일 — 수동의 의미 없음.
+    # 새 메서드: 현재가에 MARKET 주문 + planned_capital 기준 수량 재계산 + stage_plan.is_triggered=True.
+    def enter_stage_at_market(self, strategy_id: int, stage_no: int) -> Order:
+        """수동 ▶: 트리거 비율 무시, planned_capital 로 현재가 시장가 즉시 진입.
+
+        검증/효과:
+        - kill-switch 차단 (trigger_next_stage 동일)
+        - stage_plan 존재 + is_triggered=False
+        - 거래소 ticker 에서 현재가 조회 → qty = planned_capital × leverage / current_price (step_size 절사)
+        - MARKET 주문 (price 필드 없음, GTC 무관)
+        - stage_plan.is_triggered = True (trigger_price 무시 표시)
+        - strategy.current_stage = stage_no, status = STAGE{n}_OPEN_PENDING
+        """
+        strategy = self.strategy_repo.get_strategy(strategy_id)
+        if not strategy:
+            raise ValueError("Strategy not found")
+        if AccountKillSwitchService(self.db).is_enabled(strategy.exchange_account_id):
+            raise ValueError(
+                f"Account kill-switch is enabled; stage {stage_no} entry blocked. "
+                "Kill-switch 를 해제한 후 재시도하세요."
+            )
+        stage_plan = next((p for p in strategy.stage_plans if p.stage_no == stage_no), None)
+        if not stage_plan:
+            raise ValueError(f"Stage {stage_no} plan not found")
+        if stage_plan.planned_capital is None:
+            raise ValueError(f"Stage {stage_no} planned_capital is missing")
+        # 현재가 조회 + 수량 계산
+        current_price = self._fetch_current_mark_price(strategy.symbol)
+        leverage = Decimal(str(strategy.leverage or 1))
+        capital = Decimal(str(stage_plan.planned_capital))
+        raw_qty = (capital * leverage) / current_price
+        qty = self._floor_qty_to_step(strategy.symbol, raw_qty)
+        if qty <= 0:
+            raise ValueError(
+                f"계산된 수량이 0 — capital={capital} USDT, current_price={current_price}, leverage={leverage}x. "
+                "더 큰 자본 입력 필요."
+            )
+        order = self._place_market_entry(
+            strategy,
+            stage_no=stage_no,
+            qty=qty,
+            current_price=current_price,
+            suffix=f"ENTRY{stage_no}M",  # M = market
+        )
+        # stage_plan 갱신: trigger 비율 무시 → is_triggered=True 마킹.
+        stage_plan.is_triggered = True
+        strategy.current_stage = stage_no
+        if 2 <= stage_no <= 10:
+            strategy.status = f"STAGE{stage_no}_OPEN_PENDING"
+        elif stage_no == 1:
+            strategy.status = "STAGE1_OPEN_PENDING"
+        self.db.commit()
+        self.db.refresh(order)
+        return order
+
+    # 2026-05-04 (사용자 요청): 「💉 포지션 추가」 — ad-hoc 자유 금액 진입.
+    # stage_plans 와 무관하게 사용자가 즉시 추가 자본 투입.
+    # MARKET (현재가) 또는 LIMIT (지정가) 선택. stream_service 가 평단/qty 자동 갱신.
+    def add_position_now(
+        self,
+        strategy_id: int,
+        *,
+        amount_usdt: Decimal,
+        order_type: str,
+        limit_price: Decimal | None = None,
+    ) -> Order:
+        """사용자 지정 USDT 금액으로 즉시 포지션 추가.
+
+        Args:
+            amount_usdt: 추가 자본 (margin, USDT). 양수.
+            order_type: "MARKET" 또는 "LIMIT".
+            limit_price: order_type=LIMIT 일 때 지정가. MARKET 이면 무시.
+
+        효과:
+            - qty = amount_usdt × leverage / price (MARKET 은 현재가, LIMIT 은 지정가)
+            - 주문 발송 (MARKET 또는 LIMIT GTC)
+            - stage_no=NULL (ad-hoc 표시), purpose='ENTRY'
+            - 체결 시 stream_service 가 strategy.current_position_qty/avg_entry_price 자동 갱신
+        """
+        strategy = self.strategy_repo.get_strategy(strategy_id)
+        if not strategy:
+            raise ValueError("Strategy not found")
+        if AccountKillSwitchService(self.db).is_enabled(strategy.exchange_account_id):
+            raise ValueError(
+                "Account kill-switch is enabled; new position entry blocked. "
+                "Kill-switch 를 해제한 후 재시도하세요."
+            )
+        if amount_usdt is None or Decimal(str(amount_usdt)) <= 0:
+            raise ValueError(f"amount_usdt must be > 0, got {amount_usdt}")
+        order_type_u = (order_type or "").upper()
+        if order_type_u not in ("MARKET", "LIMIT"):
+            raise ValueError(f"order_type must be MARKET or LIMIT, got {order_type}")
+        # 가격 결정
+        if order_type_u == "LIMIT":
+            if limit_price is None or Decimal(str(limit_price)) <= 0:
+                raise ValueError("LIMIT 주문에는 limit_price (양수) 가 필요합니다")
+            ref_price = Decimal(str(limit_price))
+        else:
+            ref_price = self._fetch_current_mark_price(strategy.symbol)
+        # 수량 계산
+        leverage = Decimal(str(strategy.leverage or 1))
+        amount = Decimal(str(amount_usdt))
+        raw_qty = (amount * leverage) / ref_price
+        qty = self._floor_qty_to_step(strategy.symbol, raw_qty)
+        if qty <= 0:
+            raise ValueError(
+                f"계산된 수량이 0 — amount={amount} USDT, price={ref_price}, leverage={leverage}x. "
+                "더 큰 자본 입력 필요."
+            )
+        if order_type_u == "MARKET":
+            order = self._place_market_entry(
+                strategy,
+                stage_no=None,  # ad-hoc — stage_no 없음
+                qty=qty,
+                current_price=ref_price,
+                suffix="ADHOC_M",
+            )
+        else:
+            order = self._place_limit_entry(
+                strategy,
+                stage_no=None,  # ad-hoc
+                qty=qty,
+                limit_price=ref_price,
+                suffix="ADHOC_L",
+            )
+        self.db.commit()
+        self.db.refresh(order)
+        return order
+
+    # ───────── 내부 헬퍼 ─────────
+    def _fetch_current_mark_price(self, symbol: str) -> Decimal:
+        """거래소에서 현재 mark price 조회 — get_position_risk 의 markPrice 사용 (인증 + 인스턴스용).
+
+        Binance fapi/v1/positionRisk 는 markPrice 를 항상 반환하므로 ticker 별도 호출 불필요.
+        포지션이 없어도 markPrice 는 받음.
+        """
+        try:
+            position_risk = self.client.get_position_risk(symbol=symbol)
+            if isinstance(position_risk, dict):
+                position_risk = [position_risk]
+            for item in position_risk:
+                if item.get("symbol") == symbol:
+                    mark = item.get("markPrice")
+                    if mark and Decimal(str(mark)) > 0:
+                        return Decimal(str(mark))
+            raise ValueError(f"markPrice not found in position_risk response for {symbol}")
+        except Exception as e:
+            raise ValueError(f"현재가 조회 실패 ({symbol}): {e}") from e
+
+    def _floor_qty_to_step(self, symbol: str, raw_qty: Decimal) -> Decimal:
+        """심볼 step_size 로 qty 절사. step_size 못 찾으면 0.001 fallback."""
+        from app.models.symbol import Symbol
+        from sqlalchemy import select
+        sym = self.db.execute(select(Symbol).where(Symbol.symbol == symbol)).scalars().first()
+        step = Decimal(str(sym.step_size)) if sym and sym.step_size and Decimal(str(sym.step_size)) > 0 else Decimal("0.001")
+        return (raw_qty // step) * step
+
+    def _place_market_entry(self, strategy, *, stage_no: int | None, qty: Decimal, current_price: Decimal, suffix: str) -> Order:
+        """공통 MARKET 진입 주문 (stage 또는 ad-hoc)."""
+        side = "BUY" if strategy.side == "LONG" else "SELL"
+        position_side = strategy.side
+        client_order_id = self._new_client_order_id(strategy.symbol, suffix)
+        payload = {
+            "symbol": strategy.symbol,
+            "side": side,
+            "positionSide": position_side,
+            "type": "MARKET",
+            "quantity": str(qty),
+            "newClientOrderId": client_order_id,
+        }
+        adapter = self.execution_router.route_for_type(payload["type"])
+        response = adapter.place_order(payload)
+        order = Order(
+            strategy_instance_id=strategy.id,
+            stage_no=stage_no,
+            purpose="ENTRY",
+            symbol=strategy.symbol,
+            side=side,
+            position_side=position_side,
+            order_type="MARKET",
+            time_in_force=None,
+            client_order_id=client_order_id,
+            exchange_order_id=response.get("orderId"),
+            trigger_price=None,
+            price=current_price,  # 참고용 (체결가는 avg_price 가 정확)
+            orig_qty=qty,
+            executed_qty=Decimal(str(response.get("executedQty", "0"))),
+            avg_price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None,
+            status=response.get("status", "NEW"),
+            raw_request=payload,
+            raw_response=response,
+        )
+        self.order_repo.create(order)
+        return order
+
+    def _place_limit_entry(self, strategy, *, stage_no: int | None, qty: Decimal, limit_price: Decimal, suffix: str) -> Order:
+        """공통 LIMIT 진입 주문 (ad-hoc 지정가 진입용)."""
+        side = "BUY" if strategy.side == "LONG" else "SELL"
+        position_side = strategy.side
+        client_order_id = self._new_client_order_id(strategy.symbol, suffix)
+        payload = {
+            "symbol": strategy.symbol,
+            "side": side,
+            "positionSide": position_side,
+            "type": "LIMIT",
+            "quantity": str(qty),
+            "price": str(limit_price),
+            "timeInForce": "GTC",
+            "newClientOrderId": client_order_id,
+        }
+        adapter = self.execution_router.route_for_type(payload["type"])
+        response = adapter.place_order(payload)
+        order = Order(
+            strategy_instance_id=strategy.id,
+            stage_no=stage_no,
+            purpose="ENTRY",
+            symbol=strategy.symbol,
+            side=side,
+            position_side=position_side,
+            order_type="LIMIT",
+            time_in_force="GTC",
+            client_order_id=client_order_id,
+            exchange_order_id=response.get("orderId"),
+            trigger_price=limit_price,
+            price=limit_price,
+            orig_qty=qty,
+            executed_qty=Decimal(str(response.get("executedQty", "0"))),
+            avg_price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None,
+            status=response.get("status", "NEW"),
+            raw_request=payload,
+            raw_response=response,
+        )
+        self.order_repo.create(order)
+        return order
+
     @staticmethod
     def _new_client_order_id(symbol: str, suffix: str) -> str:
         return f"{symbol}-{suffix}-{uuid4().hex[:18]}"
