@@ -309,7 +309,7 @@
               <th class="num" title="평단 / 마크 / 청산예정">진입가/마크/청산</th>
               <th class="num" title="포지션 수량 / 마진(USDT)">수량/마진</th>
               <th class="num" title="미실현 USDT / leveraged ROI %">PnL / ROI</th>
-              <th style="width:100px">액션</th>
+              <th style="width:130px">액션</th>
             </tr>
           </thead>
           <tbody id="strategies-tbody"><tr><td colspan="9" class="text-center text-slate-500 py-3 text-xs">로딩 중...</td></tr></tbody>
@@ -1586,19 +1586,23 @@ async function refreshStrategies() {
       // 모달 → "이전 전략 불러오기" 탭 → 선택 3단계 — 너무 번거로움)
       // 2026-05-04: 증거금 추가 버튼은 수량/마진 column 으로 이동 (위 addMarginBtnInQty).
       // 「▶ 다음 단계 즉시 진입」 — 활성 strategy + 다음 단계 미발동 시. trigger_price 무시, planned_capital 그대로.
+      // 2026-05-04 (사용자 피드백): 액션 버튼 컴팩트화 — 아이콘만 + nowrap + flex inline.
       const totalStagesForBtn = s.total_active_stages || 4;
       const canTriggerNext = !isTerminal && (s.current_stage || 0) < totalStagesForBtn;
+      const btnStyle = "padding:3px 6px;font-size:11px;white-space:nowrap;line-height:1.3";
       const triggerNextBtn = canTriggerNext
-        ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="padding:4px 8px" title="현재가에서 다음 단계 즉시 진입 (trigger_price 무시, 사전 계획된 자본 그대로)">▶ 다음 단계</button>`
+        ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="현재가에서 다음 단계 즉시 진입 (trigger_price 무시, 사전 계획된 자본 그대로)">▶</button>`
         : '';
       const stopBtn = isTerminal
         ? (neverEntered
-            ? `<button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="padding:4px 8px" title="대기 상태 전략 삭제 (DB 에서 영구 제거)">🗑</button>`
-            : `<button onclick="event.stopPropagation(); restartStrategy(${s.id})" class="btn-ghost btn text-xs" style="padding:4px 8px" title="같은 설정으로 새 전략 시작 (이 전략은 그대로 보존)">🔄 다시 시작</button>`)
-        : `<button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="padding:4px 8px" title="설정 수정 (기존 전략 종료 후 새 설정으로 재시작)">✏️</button>
-           ${triggerNextBtn}
-           <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="padding:4px 8px" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
-           <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="padding:4px 8px" title="긴급 종료 (포지션 시장가 청산)">🛑</button>`;
+            ? `<button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="대기 상태 전략 삭제 (DB 에서 영구 제거)">🗑</button>`
+            : `<button onclick="event.stopPropagation(); restartStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="같은 설정으로 새 전략 시작 (이 전략은 그대로 보존)">🔄</button>`)
+        : `<div class="flex flex-wrap gap-1" style="max-width:130px">
+            <button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="설정 수정 (in-place 또는 종료+재시작)">✏️</button>
+            ${triggerNextBtn}
+            <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="${btnStyle}" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
+            <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="긴급 종료 (포지션 시장가 청산)">🛑</button>
+          </div>`;
       const startPx = s.start_price && Number(s.start_price) > 0
         ? `<span class="text-yellow-400" title="운영자가 입력한 1단계 LIMIT 가격">${fmtNum(s.start_price)}</span>`
         : '<span class="text-slate-500">-</span>';
