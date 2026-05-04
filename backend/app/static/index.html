@@ -224,6 +224,7 @@
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="testTelegram()">📨 Telegram</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="window.open('http://localhost:3000','_blank')">📊 Grafana</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="window.open('http://localhost:8000/docs','_blank')">🔧 API</button>
+        <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="openAccountsModal()" title="거래소 계정 + 일일 손실 한도 관리">💼 계정</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('strategies')">📥 전략 CSV</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('orders')">📥 주문 CSV</button>
       </div>
@@ -313,6 +314,27 @@
           </thead>
           <tbody id="strategies-tbody"><tr><td colspan="9" class="text-center text-slate-500 py-3 text-xs">로딩 중...</td></tr></tbody>
         </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 거래소 계정 관리 모달 (2026-05-04 신규) =====
+       표시: 등록된 계정 목록 + daily_loss_limit_usdt 인라인 수정.
+       계정 등록은 Swagger UI (/docs) 에서 진행 — 보안상 평문 API key 입력은 별도. -->
+  <div id="accounts-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
+       style="background:rgba(0,0,0,0.7); padding:20px;">
+    <div class="card rounded-xl p-6" style="max-width:720px; width:100%; max-height:90vh; overflow-y:auto;">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-xl font-bold">💼 거래소 계정 + 일일 손실 한도</h2>
+        <button onclick="closeAccountsModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
+      </div>
+      <div class="text-xs text-slate-400 mb-3">
+        💡 일일 손실 한도 = 설정한 USDT 만큼 손실 시 그 계정의 신규 거래 자동 차단 (kill-switch).
+        NULL 입력 → global 설정 (.env DAILY_LOSS_LIMIT_USDT) 사용. 0 → 비활성.
+        <br>📌 신규 계정 등록은 <a href="/docs#/exchange-accounts/create_exchange_account_api_v1_exchange_accounts_post" target="_blank" class="text-blue-400 underline">Swagger UI</a> 에서.
+      </div>
+      <div id="accounts-modal-body">
+        <div class="text-center text-slate-500 py-8">로딩 중...</div>
       </div>
     </div>
   </div>
@@ -2644,6 +2666,107 @@ async function editStrategy(id) {
 async function restartStrategy(id) {
   if (!confirm(`전략 #${id} 의 설정으로 새 전략을 시작합니다.\n\n- 이 종료된 전략은 그대로 보존됩니다 (감사 로그).\n- 같은 심볼/방향/단계 설정으로 새 strategy 가 생성됩니다.\n- 모달에서 시작가/자본 등을 조정한 후 시작 가능합니다.`)) return;
   await openCreateModal(id);
+}
+
+// 2026-05-04 (P): 거래소 계정 관리 모달 — daily_loss_limit_usdt 인라인 수정.
+async function openAccountsModal() {
+  document.getElementById('accounts-modal').classList.remove('hidden');
+  await renderAccountsModalBody();
+}
+
+function closeAccountsModal() {
+  document.getElementById('accounts-modal').classList.add('hidden');
+}
+
+async function renderAccountsModalBody() {
+  const body = document.getElementById('accounts-modal-body');
+  try {
+    const accounts = await api('/exchange-accounts');
+    if (!accounts.length) {
+      body.innerHTML = `
+        <div class="text-center py-8">
+          <div class="text-yellow-300 mb-2">⚠️ 등록된 거래소 계정이 없습니다.</div>
+          <div class="text-slate-400 text-xs">
+            <a href="/docs#/exchange-accounts/create_exchange_account_api_v1_exchange_accounts_post" target="_blank" class="text-blue-400 underline">Swagger UI</a> 에서 등록하세요.
+          </div>
+        </div>`;
+      return;
+    }
+    const rows = accounts.map(a => {
+      const limit = a.daily_loss_limit_usdt;
+      const limitText = limit === null || limit === undefined
+        ? `<span class="text-slate-400" title="settings.daily_loss_limit_usdt 폴백">global 폴백</span>`
+        : Number(limit) === 0
+          ? `<span class="text-red-400" title="0 = 한도 비활성">비활성</span>`
+          : `<span class="text-green-400">${limit} USDT</span>`;
+      const envBadge = a.is_testnet
+        ? '<span class="badge badge-yellow">testnet</span>'
+        : '<span class="badge badge-red">mainnet</span>';
+      const activeBadge = a.is_active
+        ? '<span class="badge badge-green">active</span>'
+        : '<span class="badge badge-gray">inactive</span>';
+      return `
+        <tr>
+          <td class="text-xs">#${a.id}</td>
+          <td class="text-xs">${a.exchange_name}</td>
+          <td>${envBadge}</td>
+          <td>${activeBadge}</td>
+          <td class="text-xs">${limitText}</td>
+          <td>
+            <button class="btn-ghost btn text-xs" style="padding:4px 8px"
+                    onclick="updateAccountLimit(${a.id})">✏️ 한도 수정</button>
+          </td>
+        </tr>`;
+    }).join('');
+    body.innerHTML = `
+      <table class="min-w-full">
+        <thead>
+          <tr class="text-slate-400 text-xs">
+            <th class="text-left p-2">#</th>
+            <th class="text-left p-2">거래소</th>
+            <th class="text-left p-2">환경</th>
+            <th class="text-left p-2">상태</th>
+            <th class="text-left p-2">일일 손실 한도</th>
+            <th class="text-left p-2">액션</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  } catch (err) {
+    body.innerHTML = `<div class="text-red-400 text-sm">계정 조회 실패: ${err.message}</div>`;
+  }
+}
+
+async function updateAccountLimit(accountId) {
+  const input = prompt(
+    `💼 계정 #${accountId} 일일 손실 한도 수정\n\n` +
+    `USDT 금액 입력:\n` +
+    `  • 양수 (예: 100) → 이 계정 전용 한도 (global 무시)\n` +
+    `  • 0 → 비활성 (한도 없음, 위험)\n` +
+    `  • 비워두면 global 폴백 (.env DAILY_LOSS_LIMIT_USDT 사용)`,
+    ""
+  );
+  if (input === null) return;  // 취소
+  let amount;
+  if (input.trim() === "") {
+    amount = null;  // global 폴백
+  } else {
+    amount = parseFloat(input);
+    if (isNaN(amount) || amount < 0) {
+      toast(`잘못된 값: ${input}. 양수 또는 빈값 (global 폴백) 입력하세요.`, 'error');
+      return;
+    }
+  }
+  try {
+    await api(`/exchange-accounts/${accountId}/daily-loss-limit`, {
+      method: 'PATCH',
+      body: { daily_loss_limit_usdt: amount },
+    });
+    toast(`✅ 계정 #${accountId} 한도 갱신 완료`, 'success');
+    await renderAccountsModalBody();  // 모달 다시 렌더
+  } catch (err) {
+    toast(`한도 갱신 실패: ${err.message}`, 'error');
+  }
 }
 
 // 2026-05-04 (사용자 요청): 증거금 추가 — ISOLATED 모드 포지션 청산가 완화.
