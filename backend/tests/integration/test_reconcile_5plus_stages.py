@@ -28,13 +28,26 @@ class TestReconcile5PlusStages:
         identity_decrypt,
         patched_sessionlocal,
     ) -> None:
-        """STAGE5~10_OPEN_PENDING + 거래소 실 포지션 → STAGE{N}_OPEN 자가 회복."""
+        """STAGE5~10_OPEN_PENDING + stage_plan.is_triggered=True → STAGE{N}_OPEN 자가 회복.
+
+        2026-05-04 v2: stage_plan 이 triggered 인 경우만 promote (stream race window).
+        plan 미triggered 면 LIMIT 거래소 book 대기로 보고 promote 안 함.
+        """
+        from app.models.strategy_stage_plan import StrategyStagePlan
         strategy = make_strategy(
             symbol_str="BTCUSDT", side="SHORT",
             status=f"STAGE{stage_no}_OPEN_PENDING",
             current_position_qty=Decimal("0"),
             current_stage=stage_no,
         )
+        # plan 미리 생성 — triggered=True 로 stream FILLED 처리됨 가정
+        db_session.add(StrategyStagePlan(
+            strategy_instance_id=strategy.id, stage_no=stage_no, side="SHORT",
+            trigger_mode="PRICE_UP_PCT", trigger_percent=Decimal("20"),
+            trigger_price=Decimal("48000"), planned_capital=Decimal("100"),
+            planned_qty=Decimal("0.4"), is_triggered=True,
+        ))
+        db_session.commit()
         fake_binance.set_position(
             "BTCUSDT", position_amt="-0.4", entry_price="48000",
             mark_price="48000", position_side="SHORT",
@@ -45,7 +58,7 @@ class TestReconcile5PlusStages:
         db_session.expire_all()
         s = db_session.get(StrategyInstance, strategy.id)
         assert s.status == f"STAGE{stage_no}_OPEN", (
-            f"STAGE{stage_no}_OPEN_PENDING 가 거래소 매칭 시 STAGE{stage_no}_OPEN 으로 자가 회복돼야 함"
+            f"STAGE{stage_no}_OPEN_PENDING 가 plan triggered + 거래소 매칭 시 STAGE{stage_no}_OPEN 으로 자가 회복돼야 함"
         )
         assert s.current_position_qty == Decimal("-0.4")
 

@@ -248,28 +248,41 @@ def _do_reconcile(decrypt_func) -> None:
                 strategy.current_position_qty = exchange_position_amt
                 strategy.unrealized_pnl = exchange_unrealized_pnl
                 strategy.liquidation_price = exchange_liquidation_price if exchange_liquidation_price > 0 else strategy.liquidation_price
-                # 자가 회복: *_OPEN_PENDING + 거래소에 실 포지션 → *_OPEN 전이
-                # 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 1~4 만 처리 → 5+ stage
-                # PENDING 이 자가 회복 안 돼 stuck.
+                # 자가 회복: *_OPEN_PENDING + 거래소에 실 포지션 → *_OPEN 전이.
+                # 2026-05-04 fix v2 (사용자 #96 TSTUSDT 사례):
+                # 이전 버그 — 단순히 "exchange_position != 0" 만 보고 promote → 다단계 strategy 의
+                # stage N (N>=2) LIMIT 가 미체결인데도 reconcile 이 status 를 STAGE_N_OPEN 으로
+                # 잘못 승격. 거래소 포지션은 stage 1~(N-1) 합 (= 이전 fills) 이라 != 0 인 게 당연.
+                # 해당 stage 의 LIMIT 가 실제로 fill 됐는지 확인하려면 stage_plan.is_triggered 검사.
+                # is_triggered 는 stream_service 가 ENTRY FILLED 처리 시 atomic UPDATE 함.
                 _PENDING_TO_OPEN = {
-                    f"STAGE{n}_OPEN_PENDING": f"STAGE{n}_OPEN" for n in range(1, 11)
+                    f"STAGE{n}_OPEN_PENDING": (f"STAGE{n}_OPEN", n) for n in range(1, 11)
                 }
                 if strategy.status in _PENDING_TO_OPEN and exchange_position_amt != 0:
-                    new_status = _PENDING_TO_OPEN[strategy.status]
-                    db.add(RiskEvent(
-                        strategy_instance_id=strategy.id,
-                        event_type="RECONCILE_RECOVERED_PENDING",
-                        severity="WARN",
-                        title="Reconciled stuck PENDING -> OPEN",
-                        message=f"status {strategy.status} -> {new_status} (exchange position={exchange_position_amt})",
-                        event_payload={
-                            "strategy_id": strategy.id,
-                            "old_status": strategy.status,
-                            "new_status": new_status,
-                            "position_amt": str(exchange_position_amt),
-                        },
-                    ))
-                    strategy.status = new_status
+                    new_status, pending_stage_no = _PENDING_TO_OPEN[strategy.status]
+                    # 그 stage 의 plan 이 실제 fill 됐는지 확인 (stream 누락 회복용 가드).
+                    from app.models.strategy_stage_plan import StrategyStagePlan
+                    plan = db.execute(
+                        select(StrategyStagePlan)
+                        .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+                        .where(StrategyStagePlan.stage_no == pending_stage_no)
+                    ).scalar_one_or_none()
+                    if plan is not None and plan.is_triggered:
+                        db.add(RiskEvent(
+                            strategy_instance_id=strategy.id,
+                            event_type="RECONCILE_RECOVERED_PENDING",
+                            severity="WARN",
+                            title="Reconciled stuck PENDING -> OPEN",
+                            message=f"status {strategy.status} -> {new_status} (stage_plan triggered, position={exchange_position_amt})",
+                            event_payload={
+                                "strategy_id": strategy.id,
+                                "old_status": strategy.status,
+                                "new_status": new_status,
+                                "position_amt": str(exchange_position_amt),
+                            },
+                        ))
+                        strategy.status = new_status
+                    # else: stage_plan 미발동 — LIMIT 가 아직 거래소 book 에 대기 중. 그대로 PENDING 유지.
                 position_reconcile_total.labels(status="success").inc()
             except Exception as e:
                 db.add(RiskEvent(

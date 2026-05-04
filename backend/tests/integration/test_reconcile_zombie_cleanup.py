@@ -142,7 +142,7 @@ class TestPositionSyncHappyPath:
         assert positions[0].source == "POSITION_RISK_SYNC"
         assert positions[0].mark_price == Decimal("47500")
 
-    def test_pending_status_recovers_to_open_when_exchange_has_position(
+    def test_pending_status_recovers_to_open_when_stage_plan_triggered(
         self,
         db_session,
         make_strategy,
@@ -150,19 +150,29 @@ class TestPositionSyncHappyPath:
         identity_decrypt,
         patched_sessionlocal,
     ) -> None:
-        """STAGE2_OPEN_PENDING + 거래소 실 포지션 → STAGE2_OPEN 자가 회복."""
+        """STAGE2_OPEN_PENDING + stage_plan.is_triggered=True → STAGE2_OPEN 자가 회복.
+
+        2026-05-04 v2 (#96 사용자 사례 fix): stream 이 FILLED 처리하며 plan.is_triggered=True
+        atomic UPDATE 했으나 status 갱신과 race — 이 케이스만 reconcile 이 promote.
+        plan 미triggered 면 LIMIT 미체결로 보고 promote 안 함 (#96 다단계 manual trigger 보호).
+        """
+        from app.models.strategy_stage_plan import StrategyStagePlan
         strategy = make_strategy(
-            symbol_str="BTCUSDT",
-            side="SHORT",
+            symbol_str="BTCUSDT", side="SHORT",
             status="STAGE2_OPEN_PENDING",
-            current_position_qty=Decimal("0"),  # PENDING 단계엔 qty 미반영
+            current_position_qty=Decimal("0"),
         )
+        # stage_plan 미리 생성 — stage 2 가 fill 됐다고 marking
+        db_session.add(StrategyStagePlan(
+            strategy_instance_id=strategy.id, stage_no=2, side="SHORT",
+            trigger_mode="PRICE_UP_PCT", trigger_percent=Decimal("10"),
+            trigger_price=Decimal("48000"), planned_capital=Decimal("100"),
+            planned_qty=Decimal("0.4"), is_triggered=True,
+        ))
+        db_session.commit()
         fake_binance.set_position(
-            "BTCUSDT",
-            position_amt="-0.4",
-            entry_price="48000",
-            mark_price="48000",
-            position_side="SHORT",
+            "BTCUSDT", position_amt="-0.4", entry_price="48000",
+            mark_price="48000", position_side="SHORT",
         )
 
         _do_reconcile(identity_decrypt)
@@ -172,11 +182,58 @@ class TestPositionSyncHappyPath:
         assert s.status == "STAGE2_OPEN"  # PENDING → OPEN 자가 회복
         assert s.current_position_qty == Decimal("-0.4")  # 거래소 값 sync
 
-        # 회복 RiskEvent 1건
         events = db_session.execute(
             select(RiskEvent).where(RiskEvent.event_type == "RECONCILE_RECOVERED_PENDING")
         ).scalars().all()
         assert len(events) == 1
+
+    def test_pending_NOT_promoted_when_stage_plan_not_triggered(
+        self,
+        db_session,
+        make_strategy,
+        fake_binance,
+        identity_decrypt,
+        patched_sessionlocal,
+    ) -> None:
+        """사용자 #96 사례: STAGE4_OPEN_PENDING + 거래소 포지션 (이전 stages 의 합) +
+        stage 4 plan is_triggered=False → reconcile 가 promote 안 함.
+
+        이전 버그: 단순히 exchange_position != 0 만 보고 promote → manual 다단계 trigger 시
+        잘못된 status 갱신.
+        """
+        from app.models.strategy_stage_plan import StrategyStagePlan
+        strategy = make_strategy(
+            symbol_str="BTCUSDT", side="SHORT",
+            status="STAGE4_OPEN_PENDING",
+            current_position_qty=Decimal("-0.5"),  # stages 1+2+3 합 가정
+            current_stage=4,
+        )
+        # stage 1~3 triggered, stage 4 LIMIT placed but not filled
+        for stage_no, triggered in [(1, True), (2, True), (3, True), (4, False)]:
+            db_session.add(StrategyStagePlan(
+                strategy_instance_id=strategy.id, stage_no=stage_no, side="SHORT",
+                trigger_mode="PRICE_UP_PCT", trigger_percent=Decimal("10"),
+                trigger_price=Decimal("50000"), planned_capital=Decimal("100"),
+                planned_qty=Decimal("0.1"), is_triggered=triggered,
+            ))
+        db_session.commit()
+        fake_binance.set_position(
+            "BTCUSDT", position_amt="-0.5", entry_price="48000",
+            mark_price="48000", position_side="SHORT",
+        )
+
+        _do_reconcile(identity_decrypt)
+
+        db_session.expire_all()
+        s = db_session.get(StrategyInstance, strategy.id)
+        # promote 안 함 — stage 4 plan 미triggered (LIMIT 거래소 book 대기)
+        assert s.status == "STAGE4_OPEN_PENDING"
+
+        # RECONCILE_RECOVERED_PENDING 이벤트 없음
+        events = db_session.execute(
+            select(RiskEvent).where(RiskEvent.event_type == "RECONCILE_RECOVERED_PENDING")
+        ).scalars().all()
+        assert len(events) == 0
 
 
 # ============================================================================
