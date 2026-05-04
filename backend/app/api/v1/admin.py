@@ -709,9 +709,10 @@ def symbol_sync(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> MessageResponse:
-    account = ExchangeAccountRepository(db).get_first_active_binance()
+    # 2026-05-04 audit fix: user_id 전달 — 다른 user 의 API key 로 symbol-sync 하던 결함 차단.
+    account = ExchangeAccountRepository(db).get_first_active_binance(user_id=user_id)
     if not account:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active Binance account")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active Binance account for current user")
     client = BinanceClient(
         api_key=decrypt_text(account.api_key_enc),
         api_secret=decrypt_text(account.api_secret_enc),
