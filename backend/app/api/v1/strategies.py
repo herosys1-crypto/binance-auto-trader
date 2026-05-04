@@ -775,10 +775,10 @@ def trigger_next_stage_manually(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"이미 모든 단계 ({total_stages}/{total_stages}) 진입 완료. 추가 진입 불가.",
         )
-    # stage_plan 존재 + 미발동 확인
+    # stage_plan 존재 확인 (atomic claim 전 plan 자체가 있는지)
     from app.models.strategy_stage_plan import StrategyStagePlan
     from app.models.order import Order
-    from sqlalchemy import select as sa_select
+    from sqlalchemy import select as sa_select, update as sa_update
     plan = db.execute(
         sa_select(StrategyStagePlan)
         .where(StrategyStagePlan.strategy_instance_id == strategy.id)
@@ -786,12 +786,9 @@ def trigger_next_stage_manually(
     ).scalar_one_or_none()
     if not plan:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Stage {next_stage_no} plan 없음")
-    if plan.is_triggered:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Stage {next_stage_no} 이미 진입됨")
     # 2026-05-04 fix v2 (사용자 #96 사례): 거래소 NEW LIMIT 중복 방지.
-    # is_triggered 는 FILLED 시점에만 True 가 되므로, LIMIT 발송 후 미체결 (NEW) 상태에선
-    # is_triggered=False. 이전엔 사용자가 「▶」 또 누르면 같은 stage 의 LIMIT 가 또 발송됐음.
-    # → 가격 도달 시 양쪽 다 fill = 포지션 더블링. 이 가드로 차단.
+    # 자동 워커가 LIMIT 을 placed (NEW 상태) 한 stage 에 사용자가 ▶ (MARKET) 추가 시
+    # 가격 도달 시 자동 LIMIT 도 fill → 포지션 더블링. 이 가드로 차단.
     existing_pending = db.execute(
         sa_select(Order)
         .where(Order.strategy_instance_id == strategy.id)
@@ -808,9 +805,38 @@ def trigger_next_stage_manually(
                 "가격 도달 시 자동 체결되거나, 「⏸」 로 취소 후 재발송하세요."
             ),
         )
+    # 2026-05-04 fix v3 (Phase 1 race condition): 빠르게 ▶ 더블 클릭 시
+    # 1차 호출이 commit 되기 전 2차 호출이 같은 stage 의 is_triggered=False 를 보고 통과 →
+    # 같은 stage 에 MARKET 더블 발송 = 포지션 더블링.
+    # Atomic UPDATE 로 점유: WHERE is_triggered=False AND ... → 0 rows 면 race 차단.
+    # PostgreSQL 의 UPDATE 는 implicit row lock 이라, 동시 트랜잭션은 직렬화됨.
+    claim_result = db.execute(
+        sa_update(StrategyStagePlan)
+        .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+        .where(StrategyStagePlan.stage_no == next_stage_no)
+        .where(StrategyStagePlan.is_triggered == False)  # noqa: E712
+        .values(is_triggered=True)
+    )
+    if claim_result.rowcount == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Stage {next_stage_no} 가 이미 진입됨 또는 다른 요청이 처리 중. "
+                "잠시 후 화면을 새로고침해 진행 상황을 확인하세요."
+            ),
+        )
+    db.commit()  # claim 영구화 — 다른 동시 요청이 위 UPDATE 에서 0 rows 보도록.
 
     account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
     if not account:
+        # claim 롤백 (account 검증 실패는 거래소 호출 전이라 안전하게 풀어줌)
+        db.execute(
+            sa_update(StrategyStagePlan)
+            .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+            .where(StrategyStagePlan.stage_no == next_stage_no)
+            .values(is_triggered=False)
+        )
+        db.commit()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exchange account not found")
     try:
         execution_service = ExecutionService(
@@ -820,12 +846,28 @@ def trigger_next_stage_manually(
             is_testnet=account.is_testnet,
         )
         # 2026-05-04 (사용자 요청): 수동 「▶ 다음 단계」 = 시장가 즉시 진입.
-        # 기존엔 LIMIT @ trigger_price 라 자동 워커와 동일 — 수동의 의미가 없음.
-        # 새 enter_stage_at_market: 현재가 MARKET, planned_capital 로 qty 재계산, is_triggered=True.
+        # enter_stage_at_market: 현재가 MARKET, planned_capital 로 qty 재계산.
+        # 자체 is_triggered=True 마킹은 우리가 위에서 이미 처리 → no-op.
         execution_service.enter_stage_at_market(strategy.id, stage_no=next_stage_no)
     except ValueError as e:
+        # claim 롤백 — kill-switch / qty=0 등 사용자 수정 가능 에러
+        db.execute(
+            sa_update(StrategyStagePlan)
+            .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+            .where(StrategyStagePlan.stage_no == next_stage_no)
+            .values(is_triggered=False)
+        )
+        db.commit()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
+        # claim 롤백 — 거래소 통신 실패 등
+        db.execute(
+            sa_update(StrategyStagePlan)
+            .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+            .where(StrategyStagePlan.stage_no == next_stage_no)
+            .values(is_triggered=False)
+        )
+        db.commit()
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Exchange error: {e}") from e
     db.refresh(strategy)
     return StrategyActionResponse(

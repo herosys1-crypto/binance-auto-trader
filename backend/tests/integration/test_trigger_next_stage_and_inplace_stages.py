@@ -122,6 +122,80 @@ class TestTriggerNextStageManually:
         assert "이미 거래소에 미체결" in ei.value.detail
         assert "Stage 2" in ei.value.detail or "stage 2" in ei.value.detail.lower()
 
+    def test_atomic_claim_blocks_double_market_when_already_triggered(
+        self, db_session, make_strategy, make_template
+    ) -> None:
+        """2026-05-04 fix v3 (Phase 1 race): is_triggered=True 인 plan 에 ▶ 호출 시
+        atomic UPDATE 가 0 rows → 400. (race window 의 두 번째 호출 시뮬)."""
+        from app.models.strategy_stage_plan import StrategyStagePlan
+        tpl = make_template(stages_config={"capitals": [50, 50, 50]})
+        s = make_strategy(
+            symbol_str="BTCUSDT", side="SHORT", status="STAGE1_OPEN",
+            current_position_qty=Decimal("-0.5"), current_stage=1,
+            template=tpl,
+        )
+        # 1차 호출이 이미 처리한 결과: stage 2 plan.is_triggered=True (race window 의 후속)
+        db_session.add(StrategyStagePlan(
+            strategy_instance_id=s.id, stage_no=2, side="SHORT",
+            trigger_mode="PRICE_UP_PCT", trigger_percent=Decimal("10"),
+            trigger_price=Decimal("55000"), planned_capital=Decimal("100"),
+            planned_qty=Decimal("0.001"), is_triggered=True,
+        ))
+        db_session.commit()
+
+        with pytest.raises(HTTPException) as ei:
+            trigger_next_stage_manually(strategy_id=s.id, db=db_session, user_id=s.user_id)
+        assert ei.value.status_code == 400
+        assert "이미 진입됨" in ei.value.detail or "다른 요청이 처리" in ei.value.detail
+
+    def test_market_failure_rolls_back_atomic_claim(
+        self, db_session, make_strategy, make_template, make_exchange_account, monkeypatch
+    ) -> None:
+        """enter_stage_at_market 실패 시 is_triggered=False 로 롤백 → 다시 시도 가능.
+        atomic claim 이 'stuck triggered' 상태로 잠그면 안 됨."""
+        from app.models.strategy_stage_plan import StrategyStagePlan
+        from app.services.execution_service import ExecutionService
+
+        tpl = make_template(stages_config={"capitals": [50, 50, 50]})
+        ea = make_exchange_account()
+        s = make_strategy(
+            symbol_str="BTCUSDT", side="SHORT", status="STAGE1_OPEN",
+            current_position_qty=Decimal("-0.5"), current_stage=1,
+            template=tpl, exchange_account=ea,
+        )
+        db_session.add(StrategyStagePlan(
+            strategy_instance_id=s.id, stage_no=2, side="SHORT",
+            trigger_mode="PRICE_UP_PCT", trigger_percent=Decimal("10"),
+            trigger_price=Decimal("55000"), planned_capital=Decimal("100"),
+            planned_qty=Decimal("0.001"), is_triggered=False,
+        ))
+        db_session.commit()
+
+        # decrypt_text 우회 — fake account
+        from app.api.v1 import strategies as strategies_mod
+        monkeypatch.setattr(strategies_mod, "decrypt_text", lambda x: "fake")
+        # ExecutionService.enter_stage_at_market 가 거래소 통신 실패 raise 라고 시뮬
+        def _boom(self, strategy_id, stage_no):  # noqa: ANN001, ARG001
+            raise RuntimeError("Binance API timeout")
+        monkeypatch.setattr(ExecutionService, "enter_stage_at_market", _boom)
+
+        with pytest.raises(HTTPException) as ei:
+            trigger_next_stage_manually(strategy_id=s.id, db=db_session, user_id=s.user_id)
+        assert ei.value.status_code == 502  # Exchange error
+        assert "Binance API timeout" in ei.value.detail
+
+        # 롤백 검증: stage 2 plan 의 is_triggered 가 False 로 복구됐어야 함
+        db_session.expire_all()
+        plan = db_session.execute(
+            select(StrategyStagePlan)
+            .where(StrategyStagePlan.strategy_instance_id == s.id)
+            .where(StrategyStagePlan.stage_no == 2)
+        ).scalar_one()
+        assert plan.is_triggered is False, (
+            "enter_stage_at_market 실패 시 atomic claim (is_triggered=True) 이 "
+            "롤백돼야 stuck 상태 회피 + 재시도 가능"
+        )
+
 
 # ============================================================================
 # Feature 1 — PATCH /settings 의 trigger_percents 부분 갱신
