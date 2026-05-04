@@ -3295,6 +3295,13 @@ async function loadCmMarketInfo() {
       document.getElementById('cm-mkt-high').textContent = fmtNum(tk.highPrice);
       document.getElementById('cm-mkt-low').textContent = fmtNum(tk.lowPrice);
       document.getElementById('cm-mkt-vol').textContent = fmtNum(Number(tk.quoteVolume || 0)) + ' USDT';
+      // 2026-05-04 (사용자 요청): 시세 로드 직후 시작가 input 이 비어있거나 0 이면
+      // 자동으로 현재가 채움. 사용자가 이미 입력한 양수 값은 보존 (덮어쓰지 않음).
+      // 이전: 매번 「현재가」 버튼 클릭 필요 → 사용자 미리보기 422 (start_price=0).
+      const startInp = document.getElementById('cm-start-price');
+      if (startInp && (!startInp.value || Number(startInp.value) <= 0)) {
+        fillStartPrice('current');
+      }
     } else {
       document.getElementById('cm-mkt-price').textContent = '-';
     }
