@@ -819,7 +819,10 @@ def trigger_next_stage_manually(
             api_secret=decrypt_text(account.api_secret_enc),
             is_testnet=account.is_testnet,
         )
-        execution_service.trigger_next_stage(strategy.id, stage_no=next_stage_no)
+        # 2026-05-04 (사용자 요청): 수동 「▶ 다음 단계」 = 시장가 즉시 진입.
+        # 기존엔 LIMIT @ trigger_price 라 자동 워커와 동일 — 수동의 의미가 없음.
+        # 새 enter_stage_at_market: 현재가 MARKET, planned_capital 로 qty 재계산, is_triggered=True.
+        execution_service.enter_stage_at_market(strategy.id, stage_no=next_stage_no)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
@@ -828,7 +831,7 @@ def trigger_next_stage_manually(
     return StrategyActionResponse(
         strategy_id=strategy.id,
         status=strategy.status,
-        message=f"수동 진입 — stage {next_stage_no} LIMIT 주문 발송됨 (planned_capital={plan.planned_capital}).",
+        message=f"수동 진입 — stage {next_stage_no} 시장가 즉시 진입 (capital={plan.planned_capital} USDT). 체결되면 평단/qty 자동 갱신됨.",
     )
 
 
@@ -872,6 +875,67 @@ def add_margin_to_strategy(
         strategy_id=strategy.id,
         status=strategy.status,
         message=f"증거금 {payload.amount} USDT 추가 완료. 거래소에서 새 청산가 확인.",
+    )
+
+
+# 2026-05-04 (사용자 요청): 「💉 포지션 추가」 — 자유 금액 즉시 진입 (시장가 또는 지정가).
+class AddPositionRequest(BaseModel):
+    amount_usdt: Decimal = Field(..., gt=0, description="추가할 자본 (USDT, margin). qty = amount × leverage / price.")
+    order_type: str = Field(..., description="MARKET 또는 LIMIT")
+    limit_price: Decimal | None = Field(None, gt=0, description="LIMIT 주문일 때 지정가 (양수). MARKET 이면 무시.")
+
+
+@router.post("/{strategy_id}/add-position", response_model=StrategyActionResponse)
+def add_position_to_strategy(
+    strategy_id: int,
+    payload: AddPositionRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyActionResponse:
+    """ad-hoc 포지션 추가 — 사용자가 입력한 USDT 금액을 시장가/지정가로 즉시 진입.
+
+    증거금 추가 (마진만 늘림) 와 다름: qty 도 늘어남 + 평단 갱신 + invested_capital 증가.
+
+    검증:
+    - 본인 소유 strategy
+    - kill-switch 미발동
+    - amount_usdt > 0 (Pydantic 가드)
+    - order_type ∈ {MARKET, LIMIT}
+    - LIMIT 면 limit_price 필수
+    """
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+    account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
+    if not account:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exchange account not found")
+    try:
+        execution_service = ExecutionService(
+            db,
+            api_key=decrypt_text(account.api_key_enc),
+            api_secret=decrypt_text(account.api_secret_enc),
+            is_testnet=account.is_testnet,
+        )
+        order = execution_service.add_position_now(
+            strategy.id,
+            amount_usdt=payload.amount_usdt,
+            order_type=payload.order_type,
+            limit_price=payload.limit_price,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Exchange error: {e}") from e
+    db.refresh(strategy)
+    order_type_label = payload.order_type.upper()
+    msg = (
+        f"포지션 추가 — {order_type_label} 주문 발송됨 (amount={payload.amount_usdt} USDT, qty={order.orig_qty}). "
+        f"체결되면 평단/qty 자동 갱신."
+    )
+    return StrategyActionResponse(
+        strategy_id=strategy.id,
+        status=strategy.status,
+        message=msg,
     )
 
 

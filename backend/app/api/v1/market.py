@@ -21,6 +21,28 @@ def _base_url(testnet: bool) -> str:
     return TESTNET_BASE if testnet else MAINNET_BASE
 
 
+# 2026-05-04 (사용자 요청): 「💉 포지션 추가」 모달의 현재가 표시용 — 가벼운 단일 가격 endpoint.
+@router.get("/ticker")
+def ticker_price(
+    symbol: str = Query(..., min_length=1, max_length=30),
+    testnet: bool = Query(default=True),
+) -> dict[str, Any]:
+    """단일 가격 (lastPrice). 「💉 포지션 추가」 모달의 미리보기용."""
+    try:
+        r = requests.get(
+            f"{_base_url(testnet)}/fapi/v1/ticker/price",
+            params={"symbol": symbol.upper()},
+            timeout=5,
+        )
+        r.raise_for_status()
+        return r.json()  # {"symbol": "...", "price": "...", "time": ...}
+    except requests.RequestException as e:  # pragma: no cover
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Binance ticker API error: {e}",
+        ) from e
+
+
 @router.get("/ticker24h")
 def ticker_24hr(
     symbol: str = Query(..., min_length=1, max_length=30),
