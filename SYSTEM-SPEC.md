@@ -619,8 +619,48 @@ limit_breached_at nullable, created_at, updated_at
 - [ ] race condition (수동 정지 후 STOPPED 정확 전환)
 - [ ] reconcile worker 30초 사이클 (좀비 자동 회복)
 - [ ] kill switch 시뮬레이션
-- [ ] 일일 손실 한도 시뮬레이션
+- [ ] 일일 손실 한도 시뮬레이션 — 계정별 override 가 settings 보다 우선 (5-04 신규)
+- [ ] 「▶ 다음 단계」 중복 클릭 = NEW LIMIT 거부 (#96 회귀 방지, 5-04 신규)
+- [ ] 「↻ 설정만 수정」 — 미발동 stage 만 trigger_percent 갱신 (5-04 신규)
+- [ ] 트레일링 TP — 피크 +30% 후 -10% 회귀 시 잔량 100% (#98 회귀, 5-04 신규)
+- [ ] TP 중간 단계 ascending — TP1→TP2→TP3 빠짐 없이 발동 (#98 회귀, 5-04 신규)
+- [ ] -50% ROI 도달 시 텔레그램 알림 1회 (5-04 신규)
 - [ ] DB backup 복원 시뮬레이션
+
+---
+
+## 📜 리비전 노트
+
+### 2026-05-04 보강 (PR #1, 26개 commit)
+이 세션에 추가된 spec 변경 + 안전망 강화 (코드는 PR #1 / handoff 참조).
+
+**기획 변경 (사용자 승인됨)**
+- 「▶ 다음 단계」 = 옵션 A 유지 (사용자가 명시한 trigger_percent 위치에 LIMIT 발송, 즉시 시장가 진입 X). 중복 클릭 시 NEW LIMIT 가드.
+- 「↻ 설정만 수정」 = 포지션/단계 보존하고 미발동 stage 의 trigger_percent + TP/SL 만 in-place 갱신 (새 strategy_template 생성 후 strategy.template_id 교체).
+- 「💰 증거금 추가」 = 전략별 추가 증거금 (margin call 회피용, position 변경 없음).
+- -50% ROI = max_loss_pct 가 임계 -50 을 넘는 순간 (one-time crossing) 텔레그램 알림 1회.
+- 일일 손실 한도 = global setting < per-account override (`exchange_accounts.daily_loss_limit_usdt`) 우선.
+
+**안전망 추가**
+- `app/core/strategy_status.py` — `TERMINAL_STATUSES` frozenset 공통화 (5 모듈에서 import). UI 와 backend 분류 일치.
+- `app/core/sentry.py` — `capture_strategy_event(level, event_type, strategy, **tags)` 헬퍼. `SENTRY_DSN` 미설정 시 no-op. Hooks: zombie_guardian, reconcile_worker, execution_service emergency_close, auto_reentry_worker, daily_loss_aggregator, binance_user_stream_consumer.
+- `app/workers/daily_loss_aggregator.py` — 1분 주기. 활성 strategy 별 `unrealized_pnl + 일일 누적 realized_pnl` 합 → 한도 초과 시 자동 STOPPING + Kill Switch.
+- `app/services/account_daily_loss_limiter.py` — `_resolve_account_limit(acc) = acc.daily_loss_limit_usdt or settings.DAILY_LOSS_LIMIT_USDT or None`.
+
+**버그 수정 회귀 가드 (테스트가 핵심)**
+- `risk_service.evaluate_take_profit_level` — trailing 체크가 TP loop **앞**에 있어야 함 (2026-05-04 #98 사례). `test_trailing_tp_priority.py` 회귀 방어.
+- `risk_service.evaluate_take_profit_level` — TP loop 는 ascending sort + `cur_done_idx` 비교 (descending 시 중간 단계 silent skip). `test_tp_intermediate_skip.py` 회귀 방어.
+- `reconcile_worker._PENDING_TO_OPEN` — promote 전에 `stage_plan.is_triggered=True` 검증 필수. `test_reconcile_zombie_cleanup.py::test_pending_NOT_promoted_when_stage_plan_not_triggered` 회귀 방어.
+- `api/v1/strategies.trigger_next_stage_manually` — 같은 stage 의 `Order.status='NEW'` 가 있으면 HTTPException(400). `test_trigger_next_stage_and_inplace_stages.py::test_existing_pending_limit_blocks_duplicate` 회귀 방어.
+- `stream_service / execution_service / reconcile_worker / zombie_guardian / stage_trigger_worker` — 5+ 단계 status 매핑 모두 `range(1, 11)` 동적 (이전 1~4 hardcoded).
+
+**신규 데이터 스키마**
+- `alembic 0009` — `strategy_templates.crisis_qty_ratios JSONB NULL` (default 25/25/50/100 보존).
+- `alembic 0010` — `exchange_accounts.daily_loss_limit_usdt DECIMAL(20,8) NULL` (계정별 override).
+
+**테스트 카버리지 110 → 292 (+182)**
+- 신규 integration 카테고리 + sqlite/Binance mock 스캐폴드 = postgres 없이도 종단간 시나리오 실행 가능.
+- 자세한 파일 list: `HANDOFF-2026-05-04-HOME-TO-OFFICE.md` 참조.
 
 ---
 

@@ -69,6 +69,119 @@ production 에서 `SENTRY_DSN` env 만 설정하면 알림 자동 활성. 알림
 
 ---
 
+## [2026-05-04] (보강) — 운영 사례 fix + UX 보강 + 안전망 강화 (PR #1, +18 commits)
+
+위 5-04 항목이 Option B+C 회귀/관측성 (전반부 8 commits) 만 다뤘다면, 이 항목은
+같은 날 후반부에 운영 사례 (#96/#98) fix 와 신규 사용자 요청 기능 18개 commit 을 정리.
+
+### 🔴 CRITICAL — 사용자 #98 (LABUSDT 트레일링 미발동)
+- **`fix(risk_service)` 트레일링 TP 가 TP loop 뒤에 있어 무력화** (`534c690`)
+  - 증상: 피크 +30% 후 -10% 회귀했는데 잔량 청산 안 되어 +193 USDT 미실현 미잠금.
+  - 원인: `evaluate_take_profit_level` 에서 TP loop 가 먼저 평가 → trailing 까지 도달 X.
+  - Fix: trailing 체크를 TP loop **이전** + `TRAILING_ARMED_STATUSES` 에 모든
+    `TP{N}_DONE_PARTIAL/TP{N}_DONE` 포함.
+  - 회귀 방어: `test_trailing_tp_priority.py` 5건.
+- **`fix(risk_service)` TP 중간 단계 silent skip** (`5bbda50`)
+  - 증상: TP1 부분 청산 후 가격이 TP3 까지 점프 시 TP2 한 번도 발동 안 되고 건너뜀.
+  - 원인: TP loop 가 descending 정렬로 가장 높은 임계 일치하는 라벨만 발동.
+  - Fix: ascending sort + `TP_DONE_INDEX[status]` 비교로 한 단계씩만 발동.
+  - 회귀 방어: `test_tp_intermediate_skip.py` 5건.
+
+### 🔴 CRITICAL — 사용자 #96 (TSTUSDT 다단계 수동 진입)
+- **`fix(reconcile)` PENDING→OPEN 자동 승격이 stage_plan 검증 없이 발동** (`787709c`)
+  - 증상: STAGE4_OPEN_PENDING + 거래소 (이전 stages 합) → reconcile 가 promote → 잘못된 status.
+  - 원인: `_PENDING_TO_OPEN` 가 `exchange_position_amt != 0` 만 보고 promote.
+  - Fix: promote 전에 해당 stage 의 `StrategyStagePlan.is_triggered=True` 검증.
+    `is_triggered` 는 stream_service 가 FILLED 시점에 atomic UPDATE 하는 ground truth.
+  - 회귀 방어: `test_reconcile_zombie_cleanup.py::test_pending_NOT_promoted_when_stage_plan_not_triggered` +
+    `test_reconcile_5plus_stages.py` parametrized 5~10단계.
+- **`fix(api)` trigger_next_stage_manually NEW LIMIT 중복 차단** (`f9bbe16`)
+  - 증상: 「▶ 다음 단계」 중복 클릭 → 같은 stage 의 LIMIT 이 거래소에 다중 발송 →
+    가격 도달 시 동시 체결 → 포지션 더블링.
+  - 원인: `is_triggered` 는 FILLED 시점에만 True, NEW 상태에선 False → plan 검증으론
+    중복 차단 불가능.
+  - Fix: `Order.stage_no == next_stage_no AND Order.status == 'NEW' AND purpose='ENTRY'`
+    중복 가드. 메시지에 Order id/qty/price 포함.
+  - 회귀 방어: `test_trigger_next_stage_and_inplace_stages.py::test_existing_pending_limit_blocks_duplicate`.
+
+### ✨ 신규 기능 (사용자 요청)
+- **「↻ 설정만 수정」 in-place** (`3c57bb2` + `3d96d89`)
+  - 포지션/단계 보존. TP/SL/trigger_percents 만 갱신 → 새 strategy_template 생성 후
+    `strategy.strategy_template_id` 교체. 미발동 stage 의 `StrategyStagePlan.trigger_price`
+    재계산. 이미 진입한 stage 의 trigger_percent 변경 시도는 400.
+  - API: `PATCH /strategies/{id}/settings` 가 `tp1~5_percent / sl_percent /
+    trailing_tp_*  / trigger_percents` 모두 받음.
+- **「▶ 다음 단계」 수동 진입** (`3d96d89`)
+  - `POST /strategies/{id}/trigger-next-stage` — 옵션 A 유지 (사용자 입력 trigger_price
+    위치에 LIMIT 발송, 시장가 즉시 진입 X).
+  - 거부 케이스: terminal status / 다른 user / 모든 단계 진입 완료 / plan 없음 / NEW LIMIT 중복.
+- **「💰 증거금 추가」** (`d88f41d`)
+  - `POST /strategies/{id}/add-margin` — 포지션 변경 없이 isolated margin 만 증가.
+  - margin call 회피용. UI 에서 수량/마진 컬럼에 노출.
+- **-50% ROI 손실 임계 알림** (`d88f41d`)
+  - `_maybe_send_loss_threshold_alert` 가 `prev_max_loss > -50 AND new_max_loss <= -50`
+    one-time crossing 검출 → 텔레그램 + 푸시.
+- **일일 손실 한도 v3** — 계정별 override (`016b678` → `9c0ef1f` → `4ca52d8` → `9611304`)
+  - `daily_loss_aggregator` worker (1분 주기) 가 활성 strategy 의
+    `unrealized + 일일 누적 realized` 합 → 한도 초과 시 자동 STOPPING + Kill Switch.
+  - `exchange_accounts.daily_loss_limit_usdt` (alembic 0010) — 계정별 override.
+  - UI 「💼 계정」 모달에서 관리.
+- **Kill Switch 사각지대 fix** (`c79f3aa`) — stage 2+ 진입 + create 양쪽 모두 차단.
+- **auto_reentry 실패 persist** (`12d47d5`) — REENTRY_FAILED status + Sentry capture + tz 방어.
+
+### 🔧 UX 개선
+- **STOPPING 가시성 + COMPLETED 「🔄 다시 시작」** (`8b521a3`)
+- **PnL/ROI 셀 = Binance 일치** (`b40401f`) — 포지션 ROI + 전략 ROI 분리 표시.
+- **COMPLETED/REENTRY_READY 종료 분류 누락 fix** (`89f779d` + `6de84a4`) —
+  `app/core/strategy_status.py` 공통 frozenset.
+- **옵션 C 5+ 단계 status 매핑 보강** (`b28c92f`) — 5 모듈 모두 `range(1, 11)` 동적.
+- **모달 시세 로드 후 시작가 자동 채움** (`074619f`) — TAGUSDT 422 사용자 보고.
+- **액션 버튼 컴팩트화** (`e5da3d7`) — 「▶」 icon-only + nowrap.
+
+### 🛡️ Audit fixes
+- `27bc852` — `get_first_active_binance` user 필터 + `RiskEventResponse` Optional schema.
+- `10dd208` — idempotency 2xx-only 캐시 + ENCRYPTION_KEY startup 검증 + ExchangeAccount
+  daily_limit API 노출.
+
+### 🧪 테스트 (110 → 292, +182)
+**신규 integration 카테고리 (15개 파일)** — `tests/integration/conftest.py` (sqlite +
+JSONB→JSON + factory + FakeBinance/Trade/Redis), `test_reconcile_5plus_stages.py`,
+`test_strategy_settings_inplace.py`, `test_trigger_next_stage_and_inplace_stages.py`,
+`test_add_margin_and_loss_alert.py`, `test_daily_loss_aggregator.py`,
+`test_daily_loss_per_account_limit.py`, `test_daily_loss_realized_accumulation.py`,
+`test_exchange_accounts_daily_limit.py`, `test_kill_switch_coverage.py`,
+`test_kill_switch_endpoint_ownership.py`, `test_auto_reentry_worker.py`,
+`test_create_strategy_duplicate_prevention.py`, `test_audit_repos_schemas.py`,
+`test_strategies_endpoint_terminal_handling.py`, `test_tp_intermediate_skip.py`,
+`test_trailing_tp_priority.py`, `test_tp_sl_orchestrator_lifecycle.py`,
+`test_reconcile_orphan_position.py`, `test_reconcile_duplicate_active.py`,
+`test_reconcile_zombie_cleanup.py`.
+
+**신규 unit (5개 파일)** — `test_strategy_status_constants.py`, `test_audit_fixes.py`,
+`test_stream_service_dynamic_stages.py` 외 기존 보강.
+
+### 🚦 운영 사용 예시
+```bash
+# 일일 손실 한도 — 계정별 override
+psql $DATABASE_URL -c "UPDATE exchange_accounts SET daily_loss_limit_usdt = 1000
+                       WHERE id = (SELECT id FROM exchange_accounts WHERE label='메인');"
+# settings 의 글로벌 한도보다 우선 적용됨
+```
+
+```bash
+# 「▶ 다음 단계」 중복 차단 검증 (testnet)
+curl -X POST .../strategies/96/trigger-next-stage  # 1번 → 200 OK
+curl -X POST .../strategies/96/trigger-next-stage  # 2번 → 400 "이미 거래소에 미체결"
+```
+
+### 🔖 Reviewer notes
+- 「▶ 다음 단계」 = 옵션 A (LIMIT 발송) 유지 — 사용자 명시 결정. 옵션 B (즉시 시장가
+  진입) 는 보류. 중복 클릭 방지 가드만 추가.
+- 모든 fix 가 회귀 테스트 동반 — 다음 회귀 발생 시 테스트 추가만으로도 spec 보강 가능.
+- 자세한 commit hash + 시간순 정리는 `HANDOFF-2026-05-04-HOME-TO-OFFICE.md` 참조.
+
+---
+
 ## [2026-04-30] — 마지막 단계 트리거 + 트레일링 -5% 기획 반영 (Option C)
 
 ### 🎯 운영자 의도 반영
