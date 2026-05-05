@@ -47,17 +47,28 @@ class StrategyTemplate(Base):
     stage4_trigger_percent: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
 
     # ---- TP/SL ----
-    # TP1~3 은 항상 채움(필수). TP4/5 는 선택적 — NULL 이면 미사용.
+    # TP1~3 은 항상 채움(필수). TP4~10 은 선택적 — NULL 이면 미사용.
+    # 2026-05-06 (alembic 0012): TP6~10 컬럼 추가 (10단계 익절 확장).
     tp1_percent: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     tp2_percent: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     tp3_percent: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     tp4_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     tp5_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    tp6_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    tp7_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    tp8_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    tp9_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    tp10_percent: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     tp1_qty_ratio: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     tp2_qty_ratio: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     tp3_qty_ratio: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     tp4_qty_ratio: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     tp5_qty_ratio: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    tp6_qty_ratio: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    tp7_qty_ratio: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    tp8_qty_ratio: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    tp9_qty_ratio: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    tp10_qty_ratio: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     stop_loss_percent_of_capital: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
 
     # ---- 크라이시스 모드 qty ratio override (선택, alembic 0009) ----

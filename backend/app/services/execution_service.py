@@ -128,9 +128,9 @@ class ExecutionService:
         # 새 흐름: status 변경을 먼저 commit 해서 외부 worker 에게 노출한 뒤 거래소 호출.
         # 단, _execute_take_profit 에서 호출되는 경우 status 가 이미 TP/COMPLETED 로 갔으므로
         # 무조건 STOPPING 으로 덮어쓰지 않게 — current status 가 STAGE_X_OPEN 류일 때만.
-        if strategy.status not in ("COMPLETED", "REENTRY_READY", "STOPPED",
-                                    "TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL",
-                                    "TP4_DONE_PARTIAL", "TP5_DONE_PARTIAL"):
+        # 2026-05-06: TP1~10_DONE_PARTIAL 모두 보호 (10단계 익절 확장).
+        _TP_PARTIAL_SET = {f"TP{n}_DONE_PARTIAL" for n in range(1, 11)}
+        if strategy.status not in ({"COMPLETED", "REENTRY_READY", "STOPPED"} | _TP_PARTIAL_SET):
             strategy.status = "STOPPING"
         self.db.commit()
         # A03 fix (audit 2026-05-02): 거래소 호출 실패 시 명시적 로깅 + RiskEvent 기록.

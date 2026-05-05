@@ -82,8 +82,9 @@ class TPSLOrchestratorService:
                 # 아닌 케이스 (예: tp1~5 모두 활성 + 사용자 ratio < 100%) 에서 부분 청산 후
                 # progression 추적이 끊어지는 미세 버그. 이전엔 TP5 발동 후 status="COMPLETED" 만
                 # 처리되어 TP5_DONE_PARTIAL 상태가 빠져있었음.
-                done_levels_progression = ["TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL", "TP4_DONE_PARTIAL", "TP5_DONE_PARTIAL", "COMPLETED"]
-                tp_level_index = {"TP1": 0, "TP2": 1, "TP3": 2, "TP4": 3, "TP5": 4}.get(tp_level, -1)
+                # 2026-05-06: TP1~10 progression 동적 (10단계 익절 확장).
+                done_levels_progression = [f"TP{n}_DONE_PARTIAL" for n in range(1, 11)] + ["COMPLETED"]
+                tp_level_index = {f"TP{n}": n - 1 for n in range(1, 11)}.get(tp_level, -1)
                 cur_status = (strategy.status or "").upper()
                 cur_index = -1
                 for i, lab in enumerate(done_levels_progression):
@@ -105,12 +106,15 @@ class TPSLOrchestratorService:
         # SHORT 면 음수로 저장되어 있으므로 abs() 로 양수 quantity 확보.
         current_qty = abs(Decimal(str(strategy.current_position_qty)))
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
-        # 템플릿의 qty_ratio 우선 사용. 없으면 기본값 폴백.
-        ratio_attr = {
-            "TP1": "tp1_qty_ratio", "TP2": "tp2_qty_ratio", "TP3": "tp3_qty_ratio",
-            "TP4": "tp4_qty_ratio", "TP5": "tp5_qty_ratio",
+        # 템플릿의 qty_ratio 우선 사용. 없으면 기본값 폴백 (2026-05-06: TP1~10 확장).
+        ratio_attr = {f"TP{n}": f"tp{n}_qty_ratio" for n in range(1, 11)}
+        # default: 잔량의 25% (기존 TP1~3 의미 유지). 단, TP1~3 는 기존 호환 위해 그대로.
+        default_ratio = {
+            "TP1": Decimal("25"), "TP2": Decimal("50"), "TP3": Decimal("100"),
+            "TP4": Decimal("100"), "TP5": Decimal("100"),
+            "TP6": Decimal("25"), "TP7": Decimal("25"), "TP8": Decimal("25"),
+            "TP9": Decimal("25"), "TP10": Decimal("100"),
         }
-        default_ratio = {"TP1": Decimal("25"), "TP2": Decimal("50"), "TP3": Decimal("100"), "TP4": Decimal("100"), "TP5": Decimal("100")}
         # 크라이시스 모드 qty ratio (사용자 기획 default):
         # TP1=25%, TP2=25%, TP3=50% of remaining, TP4=100% of remaining
         # 2026-05-04 (alembic 0009): template.crisis_qty_ratios JSONB override 가능.
@@ -122,9 +126,10 @@ class TPSLOrchestratorService:
         #  발동 시 나머지 잔량까지 전부 청산하고 종료."
         # 활성 TP = template 의 tp1~5_percent 중 NOT NULL 인 레벨. 가장 큰 번호 = 마지막 TP.
         # 마지막 TP 발동 시 사용자 ratio 무시하고 잔량 100% 청산 + COMPLETED.
+        # 2026-05-06: TP1~10 동적 (10단계 익절 확장). 사용자가 채운 가장 높은 단계가 마지막.
         active_tps = []
         if tpl:
-            for n in range(1, 6):
+            for n in range(1, 11):
                 if getattr(tpl, f"tp{n}_percent", None) is not None:
                     active_tps.append(f"TP{n}")
         last_active_tp = active_tps[-1] if active_tps else None
@@ -160,20 +165,17 @@ class TPSLOrchestratorService:
         close_order = self.execution_service.emergency_close_position(strategy.id, quantity=close_qty)
         # 청산 후 남은 수량 계산
         remaining_qty = (current_qty - close_qty).quantize(Decimal("0.00000001"))
-        # 상태 진행
+        # 상태 진행 — 2026-05-06: TP1~10 동적 (10단계 익절 확장).
         is_final = (level == "TRAILING_TP" or close_ratio >= Decimal("1.00"))
-        if level == "TP1":
-            strategy.status = "TP1_DONE_PARTIAL" if not is_final else "COMPLETED"
-        elif level == "TP2":
-            strategy.status = "TP2_DONE_PARTIAL" if not is_final else "COMPLETED"
-        elif level == "TP3":
-            strategy.status = "TP3_DONE_PARTIAL" if not is_final else "COMPLETED"
-        elif level == "TP4":
-            strategy.status = "TP4_DONE_PARTIAL" if not is_final else "COMPLETED"
-        elif level == "TP5":
-            # A12 fix: TP5 가 마지막 활성 TP 가 아닐 수도 있음 (이론적으로). is_final 따라 분기.
-            strategy.status = "TP5_DONE_PARTIAL" if not is_final else "COMPLETED"
-        else:  # TRAILING_TP
+        if level == "TRAILING_TP":
+            strategy.status = "COMPLETED"
+        elif level.startswith("TP") and level[2:].isdigit():
+            n = int(level[2:])
+            if 1 <= n <= 10:
+                strategy.status = f"TP{n}_DONE_PARTIAL" if not is_final else "COMPLETED"
+            else:
+                strategy.status = "COMPLETED"  # 알 수 없는 level → safe COMPLETED
+        else:
             strategy.status = "COMPLETED"
         if strategy.status == "COMPLETED":
             strategy.reentry_ready = False

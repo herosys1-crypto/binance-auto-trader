@@ -41,13 +41,13 @@ def _count_active_stages(tpl) -> int:
 
 
 def _count_active_tps(tpl) -> int:
-    """Template 의 활성 TP 수 — tp1~5_percent 중 NOT NULL 카운트.
+    """Template 의 활성 TP 수 — tp1~10_percent 중 NOT NULL 카운트.
 
-    1~5 동적. 결과 fallback 4 (backward-compat).
+    2026-05-06: 1~10 동적 (사용자 요청 10단계 익절 확장). fallback 4 (backward-compat).
     """
     if not tpl:
         return 4
-    n = sum(1 for i in range(1, 6) if getattr(tpl, f"tp{i}_percent", None) is not None)
+    n = sum(1 for i in range(1, 11) if getattr(tpl, f"tp{i}_percent", None) is not None)
     return n if n > 0 else 4
 
 
@@ -121,6 +121,12 @@ class PreviewInlineRequest(BaseModel):
     tp3_percent: Decimal = Field(default=Decimal("30"))
     tp4_percent: Decimal | None = Field(default=None)
     tp5_percent: Decimal | None = Field(default=None)
+    # 2026-05-06: 10단계 익절 확장 (사용자 요청).
+    tp6_percent: Decimal | None = Field(default=None)
+    tp7_percent: Decimal | None = Field(default=None)
+    tp8_percent: Decimal | None = Field(default=None)
+    tp9_percent: Decimal | None = Field(default=None)
+    tp10_percent: Decimal | None = Field(default=None)
     stop_loss_percent_of_capital: Decimal = Field(default=Decimal("50"))
     last_stage_trigger_mode: str | None = None
     last_stage_trigger_percent: Decimal | None = None
@@ -451,16 +457,17 @@ def get_strategy_blueprint(
         "trigger_percents": sc.get("trigger_percents") or [],
         "last_stage_trigger_mode": sc.get("last_stage_trigger_mode"),
         "last_stage_trigger_percent": sc.get("last_stage_trigger_percent"),
-        "tp1_percent": str(tpl.tp1_percent),
-        "tp2_percent": str(tpl.tp2_percent),
-        "tp3_percent": str(tpl.tp3_percent),
-        "tp4_percent": str(tpl.tp4_percent) if tpl.tp4_percent is not None else None,
-        "tp5_percent": str(tpl.tp5_percent) if tpl.tp5_percent is not None else None,
-        "tp1_qty_ratio": str(tpl.tp1_qty_ratio),
-        "tp2_qty_ratio": str(tpl.tp2_qty_ratio),
-        "tp3_qty_ratio": str(tpl.tp3_qty_ratio),
-        "tp4_qty_ratio": str(tpl.tp4_qty_ratio) if tpl.tp4_qty_ratio is not None else None,
-        "tp5_qty_ratio": str(tpl.tp5_qty_ratio) if tpl.tp5_qty_ratio is not None else None,
+        # 2026-05-06: TP1~10 동적 (10단계 익절 확장).
+        **{
+            f"tp{n}_percent": (
+                str(getattr(tpl, f"tp{n}_percent")) if getattr(tpl, f"tp{n}_percent", None) is not None else None
+            ) for n in range(1, 11)
+        },
+        **{
+            f"tp{n}_qty_ratio": (
+                str(getattr(tpl, f"tp{n}_qty_ratio")) if getattr(tpl, f"tp{n}_qty_ratio", None) is not None else None
+            ) for n in range(1, 11)
+        },
         "stop_loss_percent_of_capital": str(tpl.stop_loss_percent_of_capital),
     }
 
@@ -554,11 +561,22 @@ class StrategySettingsUpdate(BaseModel):
     tp3_percent: Decimal | None = Field(default=None, gt=0)
     tp4_percent: Decimal | None = Field(default=None, gt=0)
     tp5_percent: Decimal | None = Field(default=None, gt=0)
+    # 2026-05-06: 10단계 익절 확장 (사용자 요청).
+    tp6_percent: Decimal | None = Field(default=None, gt=0)
+    tp7_percent: Decimal | None = Field(default=None, gt=0)
+    tp8_percent: Decimal | None = Field(default=None, gt=0)
+    tp9_percent: Decimal | None = Field(default=None, gt=0)
+    tp10_percent: Decimal | None = Field(default=None, gt=0)
     tp1_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     tp2_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     tp3_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     tp4_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     tp5_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp6_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp7_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp8_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp9_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp10_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     stop_loss_percent_of_capital: Decimal | None = Field(default=None, gt=0, le=100)
     crisis_qty_ratios: dict | None = None
     trigger_percents: list[Decimal | None] | None = Field(
@@ -634,16 +652,21 @@ def update_strategy_settings_in_place(
         stage4_trigger_mode=old_tpl.stage4_trigger_mode,
         stage4_trigger_percent=old_tpl.stage4_trigger_percent,
         # TP/SL — payload 우선, 없으면 원본
-        tp1_percent=payload.tp1_percent if payload.tp1_percent is not None else old_tpl.tp1_percent,
-        tp2_percent=payload.tp2_percent if payload.tp2_percent is not None else old_tpl.tp2_percent,
-        tp3_percent=payload.tp3_percent if payload.tp3_percent is not None else old_tpl.tp3_percent,
-        tp4_percent=payload.tp4_percent if payload.tp4_percent is not None else old_tpl.tp4_percent,
-        tp5_percent=payload.tp5_percent if payload.tp5_percent is not None else old_tpl.tp5_percent,
-        tp1_qty_ratio=payload.tp1_qty_ratio if payload.tp1_qty_ratio is not None else old_tpl.tp1_qty_ratio,
-        tp2_qty_ratio=payload.tp2_qty_ratio if payload.tp2_qty_ratio is not None else old_tpl.tp2_qty_ratio,
-        tp3_qty_ratio=payload.tp3_qty_ratio if payload.tp3_qty_ratio is not None else old_tpl.tp3_qty_ratio,
-        tp4_qty_ratio=payload.tp4_qty_ratio if payload.tp4_qty_ratio is not None else old_tpl.tp4_qty_ratio,
-        tp5_qty_ratio=payload.tp5_qty_ratio if payload.tp5_qty_ratio is not None else old_tpl.tp5_qty_ratio,
+        # 2026-05-06: TP1~10 동적 (10단계 익절 확장).
+        **{
+            f"tp{n}_percent": (
+                getattr(payload, f"tp{n}_percent")
+                if getattr(payload, f"tp{n}_percent", None) is not None
+                else getattr(old_tpl, f"tp{n}_percent", None)
+            ) for n in range(1, 11)
+        },
+        **{
+            f"tp{n}_qty_ratio": (
+                getattr(payload, f"tp{n}_qty_ratio")
+                if getattr(payload, f"tp{n}_qty_ratio", None) is not None
+                else getattr(old_tpl, f"tp{n}_qty_ratio", None)
+            ) for n in range(1, 11)
+        },
         stop_loss_percent_of_capital=(
             payload.stop_loss_percent_of_capital
             if payload.stop_loss_percent_of_capital is not None

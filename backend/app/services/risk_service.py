@@ -111,13 +111,15 @@ class RiskService:
         # 2026-05-06 fix (#103): Redis key 휘발 시 DB historical peak 으로 fallback.
         peak = self._update_peak_pnl(strategy_id, pnl_ratio, strategy.max_profit_pct)
 
-        # 템플릿에서 모든 TP 임계치 가져오기
+        # 템플릿에서 모든 TP 임계치 가져오기 (TP1~TP10, 2026-05-06 사용자 요청).
+        # NULL 인 단계는 미사용 — 활성 단계만 평가.
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
         tp_levels: list[tuple[str, Decimal]] = []
-        for label, attr in [("TP5", "tp5_percent"), ("TP4", "tp4_percent"), ("TP3", "tp3_percent"), ("TP2", "tp2_percent"), ("TP1", "tp1_percent")]:
+        for n in range(10, 0, -1):  # TP10..TP1
+            attr = f"tp{n}_percent"
             val = getattr(tpl, attr, None) if tpl else None
             if val is not None:
-                tp_levels.append((label, Decimal(str(val))))
+                tp_levels.append((f"TP{n}", Decimal(str(val))))
 
         # ─────────── 크라이시스 모드 — TP 임계치 override (사용자 기획) ───────────
         # 정상 모드: TP1/2/3/4 = 10/15/20/30% (템플릿 값 사용)
@@ -135,13 +137,11 @@ class RiskService:
         # 트레일링 체크가 TP threshold loop 보다 우선해야 함.
         # 한번 익절 후 가격이 약간 retrace 됐지만 여전히 직전 TP threshold 위에 있는
         # 모든 케이스에서 트레일링 무력화되던 버그 (잔량 영구 보유) fix.
-        TRAILING_ARMED_STATUSES = {
-            "TP1_DONE_PARTIAL",
-            "TP2_DONE_PARTIAL", "TP2_DONE",
-            "TP3_DONE_PARTIAL",
-            "TP4_DONE_PARTIAL",
-            "TRAILING_ARMED",
-        }
+        # 2026-05-06: TP1~10_DONE_PARTIAL 모두 trailing armed (10단계 확장).
+        TRAILING_ARMED_STATUSES = (
+            {f"TP{n}_DONE_PARTIAL" for n in range(1, 11)}
+            | {"TP2_DONE", "TRAILING_ARMED"}
+        )
         if (
             (strategy.status or "").upper() in TRAILING_ARMED_STATUSES
             and peak >= TRAILING_TP_PEAK_THRESHOLD
@@ -159,14 +159,10 @@ class RiskService:
         # Fix: ascending + 다음 미발동 TP 만 반환.
         # status 의 cur_done_idx 를 여기서 직접 참고해 다음 단계 TP 1개씩 반환.
         # 한 tick 1회 발동, 다음 tick 다음 TP — 점진적이지만 누락 없음.
-        TP_DONE_INDEX = {
-            "TP1_DONE_PARTIAL": 0,
-            "TP2_DONE_PARTIAL": 1, "TP2_DONE": 1,
-            "TP3_DONE_PARTIAL": 2,
-            "TP4_DONE_PARTIAL": 3,
-            "TP5_DONE_PARTIAL": 4,
-        }
-        TP_LABEL_TO_IDX = {"TP1": 0, "TP2": 1, "TP3": 2, "TP4": 3, "TP5": 4}
+        # 2026-05-06: TP1~10 단계 동적 (사용자 요청 10단계 확장).
+        TP_DONE_INDEX = {f"TP{n}_DONE_PARTIAL": n - 1 for n in range(1, 11)}
+        TP_DONE_INDEX["TP2_DONE"] = 1  # legacy 호환
+        TP_LABEL_TO_IDX = {f"TP{n}": n - 1 for n in range(1, 11)}
         cur_done_idx = TP_DONE_INDEX.get((strategy.status or "").upper(), -1)
 
         # ascending — 가장 낮은 임계 먼저
