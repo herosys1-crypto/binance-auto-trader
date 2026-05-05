@@ -617,9 +617,28 @@ def get_operation_stats(
         sa_select(func.coalesce(func.sum(StrategyInstance.realized_pnl), 0))
     ).scalar_one() or Decimal("0")
 
-    # 승률 (COMPLETED / (COMPLETED + CLOSED_BY_SL)) — 진행 중 제외
-    decided = completed_count + sl_count
-    win_rate = (Decimal(completed_count) / Decimal(decided) * Decimal("100")) if decided > 0 else Decimal("0")
+    # 2026-05-06 fix (사용자 보고): strategy 단위 손익 분류 — 알림 기반 승률은 부정확.
+    # 손실 strategy 가 「[손절 발동]」 알림 없이 STOPPED 되면 (수동 정리 또는 -50% 임계
+    # 미달) 분모에서 빠져 승률 100% 잘못 계산됐음. 실제 strategy.realized_pnl 부호 기준.
+    profit_strategy_count = db.execute(
+        sa_select(func.count(StrategyInstance.id))
+        .where(StrategyInstance.realized_pnl > 0)
+    ).scalar_one() or 0
+    loss_strategy_count = db.execute(
+        sa_select(func.count(StrategyInstance.id))
+        .where(StrategyInstance.realized_pnl < 0)
+    ).scalar_one() or 0
+    decided_strategy_count = profit_strategy_count + loss_strategy_count
+    win_rate = (
+        Decimal(profit_strategy_count) / Decimal(decided_strategy_count) * Decimal("100")
+        if decided_strategy_count > 0 else Decimal("0")
+    )
+    # 알림 기반 승률 (이전 호환 + tooltip 노출용) — 명칭 명확화.
+    decided_alert = completed_count + sl_count
+    win_rate_alert_based = (
+        Decimal(completed_count) / Decimal(decided_alert) * Decimal("100")
+        if decided_alert > 0 else Decimal("0")
+    )
 
     # 크라이시스 모드 진입 횟수
     crisis_total = db.execute(
@@ -654,10 +673,15 @@ def get_operation_stats(
     return {
         "total": total,
         "active": active_count,
-        "completed": completed_count,
-        "stop_loss": sl_count,
+        "completed": completed_count,  # 익절 알림 건수 (한 strategy 가 다단계 거치면 중복)
+        "stop_loss": sl_count,         # 손절 발동 알림 건수
         "manual_stop": manual_stop_count,
-        "win_rate_pct": str(round(win_rate, 2)),
+        "win_rate_pct": str(round(win_rate, 2)),  # 2026-05-06 부터 strategy 단위
+        "win_rate_alert_based_pct": str(round(win_rate_alert_based, 2)),  # 이전 호환
+        # 2026-05-06: strategy 단위 손익 분류 (정확한 승률 계산용)
+        "profit_strategy_count": profit_strategy_count,
+        "loss_strategy_count": loss_strategy_count,
+        "decided_strategy_count": decided_strategy_count,
         "realized_pnl_total": str(realized_total),
         "crisis_total": crisis_total,
         "crisis_active": crisis_active,

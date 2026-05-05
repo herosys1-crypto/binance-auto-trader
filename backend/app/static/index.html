@@ -234,15 +234,15 @@
         <div class="card-header text-xs" style="padding:6px 12px">📊 운영 통계 (전체 누적)</div>
         <div class="p-2 grid grid-cols-3 sm:grid-cols-3 gap-2 text-center">
           <div>
-            <p class="text-xs text-slate-400">전체</p>
+            <p class="text-xs text-slate-400" title="전체 strategy 인스턴스 수 (활성 + 종료 합계)">전략 수</p>
             <p id="stats-total" class="text-base font-bold">-</p>
           </div>
           <div>
-            <p class="text-xs text-slate-400">익절</p>
+            <p class="text-xs text-slate-400" title="익절 알림 건수 — 한 strategy 가 TP1+TP2+TP3 거치면 3건으로 카운트">익절 알림</p>
             <p id="stats-completed" class="text-base font-bold pos">-</p>
           </div>
           <div>
-            <p class="text-xs text-slate-400">손절 <span class="text-slate-500" style="font-size:9px">/ 수동</span></p>
+            <p class="text-xs text-slate-400" title="손절 = -50% 자동 SL 발동 알림. 수동 = STOPPED + STOPPING strategy 수">손절 <span class="text-slate-500" style="font-size:9px">/ 수동</span></p>
             <p class="text-base font-bold leading-tight">
               <span id="stats-sl" class="neg">-</span>
               <span class="text-slate-500 font-normal" style="font-size:11px"> / </span>
@@ -250,15 +250,16 @@
             </p>
           </div>
           <div>
-            <p class="text-xs text-slate-400">승률</p>
+            <p class="text-xs text-slate-400" title="승률 = 수익 strategy / (수익 + 손실) — strategy.realized_pnl 부호 기준 (2026-05-06 정확화)">승률 <span class="text-slate-500" style="font-size:9px">(전략)</span></p>
             <p id="stats-winrate" class="text-base font-bold text-blue-300">-</p>
+            <p id="stats-winrate-detail" class="text-xs text-slate-500" style="font-size:9px">-</p>
           </div>
           <div>
-            <p class="text-xs text-slate-400">실현손익</p>
+            <p class="text-xs text-slate-400" title="모든 strategy 의 realized_pnl 합계 (USDT). 진행 중 미실현 제외.">실현손익</p>
             <p id="stats-realized" class="text-base font-bold">-</p>
           </div>
           <div>
-            <p class="text-xs text-slate-400">크라이시스</p>
+            <p class="text-xs text-slate-400" title="크라이시스 모드 진입 strategy 수 (5+단계 + -30% 손실 시)">크라이시스</p>
             <p id="stats-crisis" class="text-base font-bold text-yellow-400">-</p>
           </div>
         </div>
@@ -1338,7 +1339,16 @@ async function refreshStats() {
     document.getElementById('stats-sl').textContent = s.stop_loss;
     const manualEl = document.getElementById('stats-manual');
     if (manualEl) manualEl.textContent = (s.manual_stop != null) ? s.manual_stop : '-';
+    // 2026-05-06: 승률 = strategy 단위 (수익/손실 strategy 수 기준).
     document.getElementById('stats-winrate').textContent = s.win_rate_pct + '%';
+    const winDetailEl = document.getElementById('stats-winrate-detail');
+    if (winDetailEl) {
+      const profit = Number(s.profit_strategy_count || 0);
+      const loss = Number(s.loss_strategy_count || 0);
+      winDetailEl.textContent = `수익 ${profit} / 손실 ${loss}`;
+      winDetailEl.title = `realized_pnl > 0 인 strategy ${profit}개, realized_pnl < 0 인 strategy ${loss}개. ` +
+        `알림 기반 승률 (이전): ${s.win_rate_alert_based_pct}%`;
+    }
     const realizedNum = Number(s.realized_pnl_total || 0);
     const realizedEl = document.getElementById('stats-realized');
     realizedEl.textContent = (realizedNum >= 0 ? '+' : '') + fmtNum(realizedNum) + ' USDT';
