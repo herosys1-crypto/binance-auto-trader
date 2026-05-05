@@ -46,11 +46,22 @@ class StrategyTemplateCreate(BaseModel):
     tp3_percent: Decimal = Field(..., gt=0)
     tp4_percent: Decimal | None = Field(default=None, gt=0)
     tp5_percent: Decimal | None = Field(default=None, gt=0)
+    # 2026-05-06: 10단계 익절 확장 (사용자 요청).
+    tp6_percent: Decimal | None = Field(default=None, gt=0)
+    tp7_percent: Decimal | None = Field(default=None, gt=0)
+    tp8_percent: Decimal | None = Field(default=None, gt=0)
+    tp9_percent: Decimal | None = Field(default=None, gt=0)
+    tp10_percent: Decimal | None = Field(default=None, gt=0)
     tp1_qty_ratio: Decimal = Field(..., gt=0, le=100)
     tp2_qty_ratio: Decimal = Field(..., gt=0, le=100)
     tp3_qty_ratio: Decimal = Field(..., gt=0, le=100)
     tp4_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     tp5_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp6_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp7_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp8_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp9_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp10_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     stop_loss_percent_of_capital: Decimal = Field(..., gt=0, le=100)
     reentry_policy: Literal["manual_ready", "auto"] = "manual_ready"
     reentry_delay_seconds: int = Field(default=600, ge=10, le=86400)
@@ -116,11 +127,21 @@ def create_strategy_template(
         tp3_percent=payload.tp3_percent,
         tp4_percent=payload.tp4_percent,
         tp5_percent=payload.tp5_percent,
+        tp6_percent=payload.tp6_percent,
+        tp7_percent=payload.tp7_percent,
+        tp8_percent=payload.tp8_percent,
+        tp9_percent=payload.tp9_percent,
+        tp10_percent=payload.tp10_percent,
         tp1_qty_ratio=payload.tp1_qty_ratio,
         tp2_qty_ratio=payload.tp2_qty_ratio,
         tp3_qty_ratio=payload.tp3_qty_ratio,
         tp4_qty_ratio=payload.tp4_qty_ratio,
         tp5_qty_ratio=payload.tp5_qty_ratio,
+        tp6_qty_ratio=payload.tp6_qty_ratio,
+        tp7_qty_ratio=payload.tp7_qty_ratio,
+        tp8_qty_ratio=payload.tp8_qty_ratio,
+        tp9_qty_ratio=payload.tp9_qty_ratio,
+        tp10_qty_ratio=payload.tp10_qty_ratio,
         stop_loss_percent_of_capital=payload.stop_loss_percent_of_capital,
         reentry_policy=payload.reentry_policy,
         reentry_delay_seconds=payload.reentry_delay_seconds,

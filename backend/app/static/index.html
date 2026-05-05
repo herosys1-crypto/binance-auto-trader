@@ -490,7 +490,7 @@
 
           <!-- TP / SL 가변 설정 -->
           <details class="mt-3 border border-slate-700 rounded">
-            <summary class="cursor-pointer px-3 py-2 text-sm bg-slate-800 rounded">⚙️ 익절/손절 설정 (TP1~5, 비우면 미사용)</summary>
+            <summary class="cursor-pointer px-3 py-2 text-sm bg-slate-800 rounded">⚙️ 익절/손절 설정 (TP1~10, 비우면 미사용)</summary>
             <div class="p-3 space-y-2">
               <div class="grid grid-cols-12 gap-2 text-xs text-slate-500 pb-1 border-b border-slate-700">
                 <div class="col-span-2">단계</div>
@@ -552,11 +552,67 @@
                     class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
               </div>
+              <!-- 2026-05-06: TP6~10 추가 (사용자 요청 10단계 익절 확장) -->
+              <div class="grid grid-cols-12 gap-2 items-center text-xs">
+                <div class="col-span-2 text-slate-300 font-semibold">TP6</div>
+                <div class="col-span-5">
+                  <input id="cm-tp6-pct" type="number" step="1" min="0" placeholder="선택 (비우면 미사용)"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+                <div class="col-span-5">
+                  <input id="cm-tp6-qty" type="number" step="1" min="0" max="100" placeholder="선택"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+              </div>
+              <div class="grid grid-cols-12 gap-2 items-center text-xs">
+                <div class="col-span-2 text-slate-300 font-semibold">TP7</div>
+                <div class="col-span-5">
+                  <input id="cm-tp7-pct" type="number" step="1" min="0" placeholder="선택 (비우면 미사용)"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+                <div class="col-span-5">
+                  <input id="cm-tp7-qty" type="number" step="1" min="0" max="100" placeholder="선택"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+              </div>
+              <div class="grid grid-cols-12 gap-2 items-center text-xs">
+                <div class="col-span-2 text-slate-300 font-semibold">TP8</div>
+                <div class="col-span-5">
+                  <input id="cm-tp8-pct" type="number" step="1" min="0" placeholder="선택 (비우면 미사용)"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+                <div class="col-span-5">
+                  <input id="cm-tp8-qty" type="number" step="1" min="0" max="100" placeholder="선택"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+              </div>
+              <div class="grid grid-cols-12 gap-2 items-center text-xs">
+                <div class="col-span-2 text-slate-300 font-semibold">TP9</div>
+                <div class="col-span-5">
+                  <input id="cm-tp9-pct" type="number" step="1" min="0" placeholder="선택 (비우면 미사용)"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+                <div class="col-span-5">
+                  <input id="cm-tp9-qty" type="number" step="1" min="0" max="100" placeholder="선택"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+              </div>
+              <div class="grid grid-cols-12 gap-2 items-center text-xs">
+                <div class="col-span-2 text-slate-300 font-semibold">TP10</div>
+                <div class="col-span-5">
+                  <input id="cm-tp10-pct" type="number" step="1" min="0" placeholder="선택 (잔량 100%)"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+                <div class="col-span-5">
+                  <input id="cm-tp10-qty" type="number" step="1" min="0" max="100" placeholder="선택 (마지막=100)"
+                    class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                </div>
+              </div>
               <div class="pt-2 border-t border-slate-700">
                 <label class="text-slate-400 text-xs">🛑 손절 — 총 자본 대비 손실 %</label>
                 <input id="cm-sl-pct" type="number" step="1" value="50" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
               </div>
-              <p class="text-xs text-slate-500">트레일링 익절은 별도 — 피크 ≥ +20% 이상 도달 후 다시 +20% 이하 회귀 시 전량 청산 (자동, 코드 레벨).</p>
+              <p class="text-xs text-slate-500">트레일링 익절: 피크 ≥ +5% 후 피크 대비 -5% 회귀 시 잔량 100% 청산 (자동). 마지막 활성 TP 발동 시도 잔량 100% 청산.</p>
             </div>
           </details>
         </div>
@@ -2881,19 +2937,21 @@ async function openCreateModal(editStrategyId) {
   for (let i = 1; i <= 10; i++) {
     const cap = document.getElementById('cm-cap-' + i); if (cap) cap.value = '';
   }
-  // 기본 TP/SL — 5단계 익절 점진적 분할
-  // TP1 +10% / 25%   TP2 +15% / 25%   TP3 +20% / 25%
-  // TP4 +25% / 50%   TP5 +30% / 100%  손절 -50%
-  document.getElementById('cm-tp1-pct').value = '10';
-  document.getElementById('cm-tp2-pct').value = '15';
-  document.getElementById('cm-tp3-pct').value = '20';
-  document.getElementById('cm-tp4-pct').value = '25';
-  document.getElementById('cm-tp5-pct').value = '30';
-  document.getElementById('cm-tp1-qty').value = '25';
-  document.getElementById('cm-tp2-qty').value = '25';
-  document.getElementById('cm-tp3-qty').value = '25';
-  document.getElementById('cm-tp4-qty').value = '50';
-  document.getElementById('cm-tp5-qty').value = '100';
+  // 기본 TP/SL — 2026-05-06 (사용자 요청): 10단계 익절 점진적 분할 (5% 간격)
+  // TP1 +10% / 25%   TP2 +15% / 25%   TP3 +20% / 25%   TP4 +25% / 25%   TP5 +30% / 25%
+  // TP6 +35% / 25%   TP7 +40% / 25%   TP8 +45% / 25%   TP9 +50% / 25%   TP10 +55% / 100%
+  // 각 ratio 는 「잔량의 N%」 (orchestrator close_ratio 의미). TP10 = 마지막 활성, 잔량 100%.
+  // 손절 -50% (총 자본 대비) + 트레일링: 피크 ≥ +5% 후 -5% 회귀 시 잔량 100%.
+  const _tpDefaults = {
+    1: ['10', '25'], 2: ['15', '25'], 3: ['20', '25'], 4: ['25', '25'], 5: ['30', '25'],
+    6: ['35', '25'], 7: ['40', '25'], 8: ['45', '25'], 9: ['50', '25'], 10: ['55', '100'],
+  };
+  for (const [n, [pct, qty]] of Object.entries(_tpDefaults)) {
+    const pctEl = document.getElementById(`cm-tp${n}-pct`);
+    const qtyEl = document.getElementById(`cm-tp${n}-qty`);
+    if (pctEl) pctEl.value = pct;
+    if (qtyEl) qtyEl.value = qty;
+  }
   document.getElementById('cm-sl-pct').value = '50';
   document.getElementById('cm-start-price').value = '';
   // UX #18: 레버리지 입력 + 수동수정 플래그 초기화 (모달 열 때마다)
@@ -3247,16 +3305,13 @@ async function loadPrevBlueprint(strategyId, silent) {
       }
     }
     // 4) TP/SL 채우기 (TP4/5 nullable)
-    document.getElementById('cm-tp1-pct').value = bp.tp1_percent || '';
-    document.getElementById('cm-tp2-pct').value = bp.tp2_percent || '';
-    document.getElementById('cm-tp3-pct').value = bp.tp3_percent || '';
-    document.getElementById('cm-tp4-pct').value = bp.tp4_percent || '';
-    document.getElementById('cm-tp5-pct').value = bp.tp5_percent || '';
-    document.getElementById('cm-tp1-qty').value = bp.tp1_qty_ratio || '';
-    document.getElementById('cm-tp2-qty').value = bp.tp2_qty_ratio || '';
-    document.getElementById('cm-tp3-qty').value = bp.tp3_qty_ratio || '';
-    document.getElementById('cm-tp4-qty').value = bp.tp4_qty_ratio || '';
-    document.getElementById('cm-tp5-qty').value = bp.tp5_qty_ratio || '';
+    // 2026-05-06: TP1~10 동적 (10단계 익절 확장)
+    for (let n = 1; n <= 10; n++) {
+      const pctEl = document.getElementById(`cm-tp${n}-pct`);
+      const qtyEl = document.getElementById(`cm-tp${n}-qty`);
+      if (pctEl) pctEl.value = bp[`tp${n}_percent`] || '';
+      if (qtyEl) qtyEl.value = bp[`tp${n}_qty_ratio`] || '';
+    }
     document.getElementById('cm-sl-pct').value = bp.stop_loss_percent_of_capital;
     // 5) 시작가 — 수정 모드면 원래 시작가 유지, 일반 불러오기는 비움
     if (cmState.editingStrategyId && bp.start_price) {
@@ -3518,22 +3573,29 @@ function _collectDirectInputs() {
 }
 
 function _collectTpSl() {
-  const get = id => document.getElementById(id).value;
+  // 2026-05-06: TP1~10 동적 (10단계 익절 확장).
+  // TP1~3 = 필수 (default 10/15/20 + 25%/25%/25%), TP4~10 = 선택 (null 이면 미사용).
+  const get = id => document.getElementById(id) ? document.getElementById(id).value : '';
   const v = (raw, def) => raw && Number(raw) > 0 ? raw : def;
   const opt = raw => raw && Number(raw) > 0 ? raw : null;
-  return {
-    tp1_percent: v(get('cm-tp1-pct'), '10'),
-    tp2_percent: v(get('cm-tp2-pct'), '15'),
-    tp3_percent: v(get('cm-tp3-pct'), '20'),
-    tp4_percent: opt(get('cm-tp4-pct')),  // null 이면 미사용
-    tp5_percent: opt(get('cm-tp5-pct')),
-    tp1_qty_ratio: v(get('cm-tp1-qty'), '25'),
-    tp2_qty_ratio: v(get('cm-tp2-qty'), '25'),
-    tp3_qty_ratio: v(get('cm-tp3-qty'), '25'),
-    tp4_qty_ratio: opt(get('cm-tp4-qty')),
-    tp5_qty_ratio: opt(get('cm-tp5-qty')),
+  const _defaults = {
+    1: ['10', '25'], 2: ['15', '25'], 3: ['20', '25'],
+  };
+  const out = {
     stop_loss_percent_of_capital: v(get('cm-sl-pct'), '50'),
   };
+  for (let n = 1; n <= 10; n++) {
+    const pct = get(`cm-tp${n}-pct`);
+    const qty = get(`cm-tp${n}-qty`);
+    if (n <= 3) {
+      out[`tp${n}_percent`] = v(pct, _defaults[n][0]);
+      out[`tp${n}_qty_ratio`] = v(qty, _defaults[n][1]);
+    } else {
+      out[`tp${n}_percent`] = opt(pct);
+      out[`tp${n}_qty_ratio`] = opt(qty);
+    }
+  }
+  return out;
 }
 
 function closeCreateModal() {
