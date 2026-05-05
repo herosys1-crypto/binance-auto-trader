@@ -692,6 +692,107 @@ def get_operation_stats(
     }
 
 
+@router.get("/stats/breakdown")
+def get_stats_breakdown(
+    view: str = "strategies",
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """운영 통계 상세 — 사용자가 운영 통계 패널의 셀 클릭 시 띄울 모달 데이터.
+
+    2026-05-06 (사용자 요청): 합계만 보이는 패널의 산출 근거 가시화.
+    archive 된 strategy 도 포함 (realized_pnl 통계 일관성 유지 목적).
+
+    view 옵션:
+    - "strategies" (default): 모든 strategy 별 분류 + 손익 + 라이프사이클
+    - "realized": realized_pnl != 0 인 strategy 만 (수익/손실 분류, 절댓값 정렬)
+    - "losses": 손실/STOPPED 분류 (감사 시점 detail)
+    """
+    from sqlalchemy import select as sa_select, func, desc
+    from app.models.strategy_instance import StrategyInstance
+    from app.models.notification import Notification
+
+    if view not in {"strategies", "realized", "losses"}:
+        raise HTTPException(status_code=400, detail=f"Unknown view: {view}")
+
+    # 공통 select — 핵심 필드만 (응답 가벼움)
+    base = sa_select(
+        StrategyInstance.id,
+        StrategyInstance.symbol,
+        StrategyInstance.side,
+        StrategyInstance.status,
+        StrategyInstance.current_stage,
+        StrategyInstance.realized_pnl,
+        StrategyInstance.unrealized_pnl,
+        StrategyInstance.max_loss_pct,
+        StrategyInstance.max_profit_pct,
+        StrategyInstance.crisis_mode_triggered_at,
+        StrategyInstance.is_archived,
+        StrategyInstance.started_at,
+        StrategyInstance.stopped_at,
+        StrategyInstance.created_at,
+    )
+
+    if view == "realized":
+        rows = db.execute(
+            base.where(StrategyInstance.realized_pnl != 0)
+            .order_by(desc(func.abs(StrategyInstance.realized_pnl)))
+        ).all()
+    elif view == "losses":
+        rows = db.execute(
+            base.where(StrategyInstance.realized_pnl < 0)
+            .order_by(StrategyInstance.realized_pnl)
+        ).all()
+    else:  # strategies
+        rows = db.execute(base.order_by(desc(StrategyInstance.id))).all()
+
+    def _classify(realized, status, stage, crisis):
+        if realized is not None and Decimal(str(realized)) > 0:
+            return "수익"
+        if realized is not None and Decimal(str(realized)) < 0:
+            return "손실"
+        if status in {"STOPPED", "COMPLETED", "CLOSED", "REENTRY_READY", "STOPPING"}:
+            return "BREAKEVEN" if (stage or 0) > 0 else "미진입_종료"
+        return "진행중"
+
+    items = [
+        {
+            "id": r[0],
+            "symbol": r[1],
+            "side": r[2],
+            "status": r[3],
+            "current_stage": r[4],
+            "realized_pnl": str(r[5] or 0),
+            "unrealized_pnl": str(r[6] or 0),
+            "max_loss_pct": str(r[7]) if r[7] is not None else None,
+            "max_profit_pct": str(r[8]) if r[8] is not None else None,
+            "crisis_triggered": r[9] is not None,
+            "is_archived": bool(r[10]),
+            "started_at": r[11].isoformat() if r[11] else None,
+            "stopped_at": r[12].isoformat() if r[12] else None,
+            "created_at": r[13].isoformat() if r[13] else None,
+            "classification": _classify(r[5], r[3], r[4], r[9]),
+        }
+        for r in rows
+    ]
+
+    # 요약 — UI 헤더에 표시
+    profit_count = sum(1 for x in items if x["classification"] == "수익")
+    loss_count = sum(1 for x in items if x["classification"] == "손실")
+    realized_sum = sum((Decimal(x["realized_pnl"]) for x in items), Decimal("0"))
+    archived_count = sum(1 for x in items if x["is_archived"])
+
+    return {
+        "view": view,
+        "count": len(items),
+        "profit_count": profit_count,
+        "loss_count": loss_count,
+        "archived_count": archived_count,
+        "realized_pnl_sum": str(realized_sum),
+        "items": items,
+    }
+
+
 @router.post("/test-telegram", response_model=MessageResponse)
 def test_telegram(
     db: Session = Depends(get_db),
