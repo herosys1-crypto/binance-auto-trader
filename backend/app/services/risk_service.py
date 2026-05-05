@@ -107,8 +107,9 @@ class RiskService:
         if not strategy.crisis_mode_triggered_at and self._should_trigger_crisis_mode(strategy, pnl_ratio):
             self._enter_crisis_mode(strategy)
 
-        # 피크 갱신 (Redis 에 strategy 별 최고 PnL% 저장)
-        peak = self._update_peak_pnl(strategy_id, pnl_ratio)
+        # 피크 갱신 — Redis stored + DB max_profit_pct fallback 중 진정한 max.
+        # 2026-05-06 fix (#103): Redis key 휘발 시 DB historical peak 으로 fallback.
+        peak = self._update_peak_pnl(strategy_id, pnl_ratio, strategy.max_profit_pct)
 
         # 템플릿에서 모든 TP 임계치 가져오기
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
@@ -179,19 +180,46 @@ class RiskService:
     def _peak_redis_key(strategy_id: int) -> str:
         return f"strategy:{strategy_id}:peak_pnl_pct"
 
-    def _update_peak_pnl(self, strategy_id: int, current_pnl_pct: Decimal) -> Decimal:
-        """Redis 에 strategy 별 PnL% 피크 갱신 후 현재 피크 반환."""
+    def _update_peak_pnl(
+        self,
+        strategy_id: int,
+        current_pnl_pct: Decimal,
+        db_max_profit_pct: Decimal | float | str | None = None,
+    ) -> Decimal:
+        """Strategy 별 PnL% 피크 갱신 + 진정한 피크 반환.
+
+        2026-05-06 critical fix (사용자 #103 FHEUSDT 사례):
+          이전엔 Redis stored 만 봐서, Redis key 가 휘발 (TTL 만료 / 재시작 / evict)
+          되면 현재 PnL 이 새 peak 가 되어 trailing 무력화.
+          예: 20% 까지 갔다가 7% 회귀 → Redis 사라짐 → 새 peak=7% → trailing 평가
+              7 <= 7-5=2 false → 미발동 (실제론 피크 -13% 회귀로 발동했어야).
+
+          Fix: strategy.max_profit_pct 를 fallback 으로 사용 — 진정한 historical
+          peak 보존. true_peak = max(current, redis_stored, db_max_profit).
+          Redis 가 stale / missing 이면 fallback 으로 갱신.
+        """
+        fallback = (
+            Decimal(str(db_max_profit_pct))
+            if db_max_profit_pct is not None
+            else Decimal("-9999")
+        )
         try:
             client = get_redis_client()
             key = self._peak_redis_key(strategy_id)
             stored = client.get(key)
-            stored_dec = Decimal(stored.decode("utf-8") if isinstance(stored, bytes) else stored) if stored else Decimal("-9999")
-            if current_pnl_pct > stored_dec:
-                client.set(key, str(current_pnl_pct), ex=PEAK_REDIS_TTL_SECONDS)
-                return current_pnl_pct
-            return stored_dec
+            stored_dec = (
+                Decimal(stored.decode("utf-8") if isinstance(stored, bytes) else stored)
+                if stored else Decimal("-9999")
+            )
+            # 진정한 peak — current, Redis, DB max_profit 셋 중 최대
+            true_peak = max(current_pnl_pct, stored_dec, fallback)
+            # Redis 가 stale 또는 missing — true_peak 로 갱신
+            if true_peak > stored_dec:
+                client.set(key, str(true_peak), ex=PEAK_REDIS_TTL_SECONDS)
+            return true_peak
         except Exception:  # pragma: no cover - Redis 장애 시에도 익절은 동작해야 함
-            return current_pnl_pct
+            # Redis 자체 실패: current vs DB fallback 중 큰 값
+            return max(current_pnl_pct, fallback)
 
     def reset_peak_pnl(self, strategy_id: int) -> None:
         """전략 종료/재진입 시 피크 리셋."""
