@@ -1,8 +1,12 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="ko" translate="no">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
+<!-- 2026-05-06 (사용자 보고 #2 + #3): Chrome 자동번역이 「실현손익」 → 「원숭이/안녕 손익」,
+     「익절 알림」 → 「난절 알림」 등으로 잘못 매핑 → 운영 라벨 신뢰도 하락.
+     google=notranslate + html translate="no" 로 자동번역 자체를 차단. -->
+<meta name="google" content="notranslate" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="theme-color" content="#0b1120" />
@@ -233,33 +237,33 @@
       <div class="card rounded-lg">
         <div class="card-header text-xs" style="padding:6px 12px">📊 운영 통계 (전체 누적)</div>
         <div class="p-2 grid grid-cols-3 sm:grid-cols-3 gap-2 text-center">
-          <div>
-            <p class="text-xs text-slate-400" title="전체 strategy 인스턴스 수 (활성 + 종료 합계)">전략 수</p>
+          <div class="row-clickable" onclick="openStatsBreakdownModal('strategies')" title="클릭: 모든 strategy 별 분류 + 손익 상세">
+            <p class="text-xs text-slate-400">전략 수 🔍</p>
             <p id="stats-total" class="text-base font-bold">-</p>
           </div>
-          <div>
-            <p class="text-xs text-slate-400" title="익절 알림 건수 — 한 strategy 가 TP1+TP2+TP3 거치면 3건으로 카운트">익절 알림</p>
+          <div class="row-clickable" onclick="openStatsBreakdownModal('realized')" title="클릭: realized PnL 발생한 strategy 만 (수익/손실 분류, 절댓값 정렬)">
+            <p class="text-xs text-slate-400">익절 알림 🔍</p>
             <p id="stats-completed" class="text-base font-bold pos">-</p>
           </div>
-          <div>
-            <p class="text-xs text-slate-400" title="손절 = -50% 자동 SL 발동 알림. 수동 = STOPPED + STOPPING strategy 수">손절 <span class="text-slate-500" style="font-size:9px">/ 수동</span></p>
+          <div class="row-clickable" onclick="openStatsBreakdownModal('losses')" title="클릭: 손절/손실 strategy 만 (감사 시점 detail)">
+            <p class="text-xs text-slate-400">손절 <span class="text-slate-500" style="font-size:9px">/ 수동</span> 🔍</p>
             <p class="text-base font-bold leading-tight">
               <span id="stats-sl" class="neg">-</span>
               <span class="text-slate-500 font-normal" style="font-size:11px"> / </span>
               <span id="stats-manual" class="text-slate-400" style="font-size:13px;font-weight:600">-</span>
             </p>
           </div>
-          <div>
-            <p class="text-xs text-slate-400" title="승률 = 수익 strategy / (수익 + 손실) — strategy.realized_pnl 부호 기준 (2026-05-06 정확화)">승률 <span class="text-slate-500" style="font-size:9px">(전략)</span></p>
+          <div class="row-clickable" onclick="openStatsBreakdownModal('strategies')" title="승률 = 수익 strategy / (수익 + 손실). 클릭: strategy 분포 상세">
+            <p class="text-xs text-slate-400">승률 <span class="text-slate-500" style="font-size:9px">(전략)</span> 🔍</p>
             <p id="stats-winrate" class="text-base font-bold text-blue-300">-</p>
             <p id="stats-winrate-detail" class="text-xs text-slate-500" style="font-size:9px">-</p>
           </div>
-          <div>
-            <p class="text-xs text-slate-400" title="모든 strategy 의 realized_pnl 합계 (USDT). 진행 중 미실현 제외.">확정 손익 <span class="text-slate-500" style="font-size:9px">(Realized)</span></p>
+          <div class="row-clickable" onclick="openStatsBreakdownModal('realized')" title="클릭: realized PnL 발생 strategy 별 손익 상세 (산출 근거)">
+            <p class="text-xs text-slate-400">확정 손익 <span class="text-slate-500" style="font-size:9px">(Realized)</span> 🔍</p>
             <p id="stats-realized" class="text-base font-bold">-</p>
           </div>
-          <div>
-            <p class="text-xs text-slate-400" title="크라이시스 모드 진입 strategy 수 (5+단계 + -30% 손실 시)">크라이시스</p>
+          <div class="row-clickable" onclick="openStatsBreakdownModal('losses')" title="크라이시스 모드 진입 strategy 수. 클릭: 손실/위험 strategy 상세">
+            <p class="text-xs text-slate-400">크라이시스 🔍</p>
             <p id="stats-crisis" class="text-base font-bold text-yellow-400">-</p>
           </div>
         </div>
@@ -975,6 +979,151 @@ function scrollToSection(sectionId) {
   el.classList.add('section-highlight');
   setTimeout(() => el.classList.remove('section-highlight'), 1500);
 }
+
+// ==================== 운영 통계 상세 모달 (2026-05-06 사용자 요청) ====================
+// 「운영 통계 (전체 누적)」 패널의 6개 셀 클릭 시 띄움. strategy 별 분류 + 손익 상세.
+// view: 'strategies' | 'realized' | 'losses'
+async function openStatsBreakdownModal(view) {
+  let modal = document.getElementById('stats-breakdown-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'stats-breakdown-modal';
+    modal.className = 'hidden fixed inset-0 z-50 flex items-center justify-center';
+    modal.style.cssText = 'background:rgba(0,0,0,0.7); padding:10px;';
+    modal.innerHTML = `
+      <div class="card rounded-xl p-4" style="max-width:1100px; width:100%; max-height:92vh; overflow-y:auto;">
+        <div class="flex justify-between items-center mb-3">
+          <h2 class="text-lg font-bold">📊 <span id="sb-title">운영 통계 상세</span></h2>
+          <button onclick="closeStatsBreakdownModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
+        </div>
+        <!-- view 탭 -->
+        <div class="flex gap-2 mb-3 flex-wrap items-center">
+          <span class="text-xs text-slate-300">분류:</span>
+          <button class="btn-ghost btn text-xs sb-tab" data-view="strategies" onclick="loadStatsBreakdown('strategies')">전략 전체</button>
+          <button class="btn-ghost btn text-xs sb-tab" data-view="realized" onclick="loadStatsBreakdown('realized')">실현 손익 발생</button>
+          <button class="btn-ghost btn text-xs sb-tab" data-view="losses" onclick="loadStatsBreakdown('losses')">손실/감사</button>
+          <span class="text-xs text-slate-500 ml-auto" id="sb-summary">-</span>
+        </div>
+        <!-- 요약 -->
+        <div class="card rounded mb-3" style="background:#0f172a">
+          <div class="p-2 grid grid-cols-4 gap-2 text-center text-xs">
+            <div><p class="text-slate-400">건수</p><p id="sb-count" class="text-base font-bold">-</p></div>
+            <div><p class="text-slate-400">수익 strategy</p><p id="sb-profit" class="text-base font-bold pos">-</p></div>
+            <div><p class="text-slate-400">손실 strategy</p><p id="sb-loss" class="text-base font-bold neg">-</p></div>
+            <div><p class="text-slate-400">합계 손익</p><p id="sb-sum" class="text-base font-bold">-</p></div>
+          </div>
+        </div>
+        <!-- 테이블 -->
+        <div class="card rounded">
+          <div class="card-header text-xs" style="padding:6px 10px">📋 strategy 목록</div>
+          <div class="overflow-auto" style="max-height:520px">
+            <table class="min-w-max">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>심볼</th>
+                  <th>방향</th>
+                  <th>상태</th>
+                  <th class="num">단계</th>
+                  <th class="num">실현 PnL</th>
+                  <th class="num">미실현</th>
+                  <th class="num">최대 손실%</th>
+                  <th class="num">최대 이익%</th>
+                  <th>분류</th>
+                  <th>archive</th>
+                  <th>시작</th>
+                </tr>
+              </thead>
+              <tbody id="sb-rows"><tr><td colspan="12" class="text-center text-slate-500 py-2 text-xs">로딩 중...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  }
+  modal.classList.remove('hidden');
+  loadStatsBreakdown(view || 'strategies');
+}
+
+function closeStatsBreakdownModal() {
+  const m = document.getElementById('stats-breakdown-modal');
+  if (m) m.classList.add('hidden');
+}
+
+async function loadStatsBreakdown(view) {
+  // tab 활성 표시
+  document.querySelectorAll('#stats-breakdown-modal .sb-tab').forEach(b => {
+    if (b.dataset.view === view) {
+      b.classList.add('btn-primary');
+      b.classList.remove('btn-ghost');
+    } else {
+      b.classList.add('btn-ghost');
+      b.classList.remove('btn-primary');
+    }
+  });
+  const titleMap = {
+    strategies: '운영 통계 상세 — 전략 전체',
+    realized: '운영 통계 상세 — 실현 손익 발생 strategy',
+    losses: '운영 통계 상세 — 손실/감사',
+  };
+  document.getElementById('sb-title').textContent = titleMap[view] || '운영 통계 상세';
+
+  try {
+    const r = await api(`/admin/stats/breakdown?view=${encodeURIComponent(view)}`);
+    document.getElementById('sb-count').textContent = r.count;
+    document.getElementById('sb-profit').textContent = r.profit_count;
+    document.getElementById('sb-loss').textContent = r.loss_count;
+    const sumNum = Number(r.realized_pnl_sum || 0);
+    const sumEl = document.getElementById('sb-sum');
+    sumEl.textContent = (sumNum >= 0 ? '+' : '') + sumNum.toFixed(4) + ' USDT';
+    sumEl.className = 'text-base font-bold ' + (sumNum > 0 ? 'pos' : sumNum < 0 ? 'neg' : '');
+    const archivedNote = r.archived_count > 0 ? ` · 그 중 archive ${r.archived_count}` : '';
+    document.getElementById('sb-summary').textContent =
+      `view=${view} · ${r.count}건${archivedNote} · 합계 ${(sumNum >= 0 ? '+' : '') + sumNum.toFixed(4)} USDT`;
+
+    const items = r.items || [];
+    const rowsEl = document.getElementById('sb-rows');
+    if (items.length === 0) {
+      rowsEl.innerHTML = '<tr><td colspan="12" class="text-center text-slate-500 py-2 text-xs">데이터 없음</td></tr>';
+      return;
+    }
+    const classBadge = (cls) => {
+      if (cls === '수익') return '<span class="badge badge-green">수익</span>';
+      if (cls === '손실') return '<span class="badge badge-red">손실</span>';
+      if (cls === 'BREAKEVEN') return '<span class="badge badge-yellow">BREAKEVEN</span>';
+      if (cls === '미진입_종료') return '<span class="badge badge-gray">미진입종료</span>';
+      return '<span class="badge badge-blue">진행중</span>';
+    };
+    rowsEl.innerHTML = items.map(it => {
+      const realized = Number(it.realized_pnl || 0);
+      const unrl = Number(it.unrealized_pnl || 0);
+      const realCls = realized > 0 ? 'pos' : realized < 0 ? 'neg' : 'text-slate-400';
+      const unrlCls = unrl > 0 ? 'pos' : unrl < 0 ? 'neg' : 'text-slate-400';
+      const sideKo = it.side === 'LONG' ? '🟢 LONG' : '🔴 SHORT';
+      const archived = it.is_archived ? '📦' : '-';
+      const startedAt = it.started_at ? it.started_at.replace('T', ' ').slice(0, 16) : (it.created_at ? it.created_at.replace('T', ' ').slice(0, 16) : '-');
+      return `<tr>
+        <td>#${it.id}</td>
+        <td class="font-mono text-blue-300">${it.symbol}</td>
+        <td>${sideKo}</td>
+        <td class="text-xs">${it.status}</td>
+        <td class="num">${it.current_stage || 0}</td>
+        <td class="num ${realCls}">${realized > 0 ? '+' : ''}${realized.toFixed(4)}</td>
+        <td class="num ${unrlCls}">${unrl !== 0 ? (unrl > 0 ? '+' : '') + unrl.toFixed(4) : '-'}</td>
+        <td class="num">${it.max_loss_pct ?? '-'}</td>
+        <td class="num">${it.max_profit_pct ?? '-'}</td>
+        <td>${classBadge(it.classification)}${it.crisis_triggered ? ' 🛡' : ''}</td>
+        <td class="text-center">${archived}</td>
+        <td class="text-xs text-slate-400">${startedAt}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('sb-rows').innerHTML =
+      `<tr><td colspan="12" class="text-center text-red-400 py-2 text-xs">조회 실패: ${e.message}</td></tr>`;
+  }
+}
+
 
 // ==================== 거래 실적 상세 모달 ====================
 async function openTradeHistoryModal() {
