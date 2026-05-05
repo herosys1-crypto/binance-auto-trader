@@ -1136,16 +1136,23 @@ def delete_strategy(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> StrategyActionResponse:
-    """대기 (current_stage=0) 상태의 종료된 전략을 DB 에서 삭제한다.
+    """종료된 전략을 archive (soft delete) 한다 — DB row 보존.
 
     UX #17 (2026-04-29): 시작 실패한 전략 (-4164 등) 이 STOPPED 상태로
-    "수동 종료" 표시되어 대시보드에 쌓이는 문제. 한번도 체결된 적 없는
-    전략 (current_stage=0 AND avg_entry_price=NULL) 만 삭제 허용.
+    "수동 종료" 표시되어 대시보드에 쌓이는 문제.
+
+    2026-05-06 (사용자 #96 사례 — cascade hard delete 로 +867 USDT
+    realized_pnl 누락 — soft delete 로 변경):
+    - 한 번도 체결 안 한 전략 (current_stage=0): archive (UI 숨김 가능)
+    - 1단계 이상 체결된 전략: archive (realized_pnl 통계 보존됨)
+    - 어느 경우든 row + orders 보존 → realized_pnl 합계 정확성 유지
 
     안전장치:
-    - 종료 상태가 아니면 거절 (실수로 활성 전략 삭제 방지)
-    - 1단계라도 진입했던 전략은 거절 (감사 로그 보존)
+    - 종료 상태가 아니면 거절 (활성 전략 archive 방지)
+    - 이미 archived 면 noop (idempotent)
     """
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
@@ -1157,19 +1164,36 @@ def delete_strategy(
             detail=f"활성 전략은 삭제 불가. 먼저 종료(/stop)하세요. 현재 status={strategy.status}",
         )
 
-    if (strategy.current_stage or 0) > 0 or (strategy.avg_entry_price and Decimal(str(strategy.avg_entry_price)) > 0):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="이미 1단계 이상 체결된 전략은 감사 로그 보존을 위해 삭제 불가. (대시보드 종료 숨김으로 가리세요)",
+    # 이미 archived → idempotent
+    if getattr(strategy, "is_archived", False):
+        return StrategyActionResponse(
+            strategy_id=strategy.id,
+            status="ARCHIVED",
+            message=f"전략 #{strategy.id} 는 이미 archive 상태입니다.",
         )
 
+    # 2026-05-06 fix (#96 사례): hard delete → soft delete.
+    # row + orders 보존 → /admin/stats 의 realized_pnl 합계가 거래소 history 일치.
     sid = strategy.id
-    db.delete(strategy)
+    had_position = (strategy.current_stage or 0) > 0 or (
+        strategy.avg_entry_price and Decimal(str(strategy.avg_entry_price)) > 0
+    )
+    realized = Decimal(str(strategy.realized_pnl or 0))
+    strategy.is_archived = True
+    strategy.archived_at = _dt.now(_tz.utc)
     db.commit()
+
+    if had_position:
+        msg = (
+            f"전략 #{sid} 보관 처리됨 (DB row + orders 보존, UI 숨김). "
+            f"realized_pnl {realized:+.4f} USDT 통계 합계에 유지됨."
+        )
+    else:
+        msg = f"전략 #{sid} 보관 처리됨 (포지션 미진입, audit log 보존)."
     return StrategyActionResponse(
         strategy_id=sid,
-        status="DELETED",
-        message=f"전략 #{sid} 대기 상태에서 삭제됨 (포지션 미진입)",
+        status="ARCHIVED",
+        message=msg,
     )
 
 

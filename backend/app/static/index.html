@@ -1679,7 +1679,7 @@ async function refreshStrategies() {
         : '';
       const stopBtn = isTerminal
         ? (neverEntered
-            ? `<button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="대기 상태 전략 삭제 (DB 에서 영구 제거)">🗑</button>`
+            ? `<button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="전략 보관 (archive — DB row 보존, UI 숨김, 손익 통계 유지)">🗑</button>`
             : `<button onclick="event.stopPropagation(); restartStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="같은 설정으로 새 전략 시작 (이 전략은 그대로 보존)">🔄</button>`)
         : `<div class="flex flex-wrap gap-1" style="max-width:130px">
             <button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="설정 수정 (in-place 또는 종료+재시작)">✏️</button>
@@ -2557,12 +2557,24 @@ async function emergencyStop(id) {
 
 // UX #17 (2026-04-29): 대기 상태 (한번도 체결 안 된) 종료 전략 영구 삭제
 async function deleteStrategy(id) {
-  if (!confirm(`🗑 전략 #${id} 영구 삭제\n\n이 전략은 한번도 진입하지 않은 대기 상태입니다.\nDB 에서 영구 제거하시겠습니까?\n(이 작업은 되돌릴 수 없음)`)) return;
+  // 2026-05-06 fix (#96 사례): hard delete → soft delete (archive).
+  // realized_pnl 합계가 거래소 history 와 일치하도록 row 보존.
+  const confirmMsg =
+    `🗑 전략 #${id} 보관 처리 (archive)\n\n` +
+    `[안전 변경 — 2026-05-06]\n` +
+    `이전: DB 에서 영구 삭제 (cascade 로 orders 도 사라짐)\n` +
+    `이제: archive (DB row 보존, UI 만 숨김)\n\n` +
+    `효과:\n` +
+    `  ✓ 거래소 영향 없음 (DB 만 처리)\n` +
+    `  ✓ realized_pnl 통계 합계에 유지 (운영 손익 정확성)\n` +
+    `  ✓ 필요 시 복원 가능 (별도 endpoint, 다음 PR)\n\n` +
+    `진행할까요?`;
+  if (!confirm(confirmMsg)) return;
   try {
-    await api(`/strategies/${id}`, {method: 'DELETE'});
-    toast(`전략 #${id} 삭제 완료`, 'success');
+    const r = await api(`/strategies/${id}`, {method: 'DELETE'});
+    toast(r.message || `전략 #${id} 보관 처리 완료`, 'success');
     refreshStrategies();
-  } catch (err) { toast('삭제 실패: ' + err.message, 'error'); }
+  } catch (err) { toast('보관 처리 실패: ' + err.message, 'error'); }
 }
 
 async function testTelegram() {

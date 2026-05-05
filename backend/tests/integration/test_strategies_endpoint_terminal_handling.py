@@ -106,56 +106,66 @@ class TestStopOnTerminalStatusIsNoop:
 # ============================================================================
 # DELETE — audit-log guard
 # ============================================================================
-class TestDeleteStrategyAuditLogGuard:
-    def test_delete_completed_with_entered_position_rejected(
+class TestDeleteStrategyArchive:
+    """2026-05-06 (#96 사례 fix): hard delete → soft delete (archive).
+    기존 audit-log 가드 (1단계+ 거부) 는 제거 — archive 가 audit log 보존 목적이라 불필요.
+    이제 모든 종료 status 는 archive 가능 + row + cascade orders 보존.
+    """
+
+    def test_archive_completed_with_entered_position_succeeds(
         self,
         db_session,
         make_strategy,
     ) -> None:
-        """COMPLETED + 1단계 이상 체결됨 → 감사 로그 보존 정책으로 삭제 차단.
+        """1단계+ 진입한 COMPLETED 도 archive 가능 (이전엔 거부, audit log 가드 제거).
 
-        (사용자 LABUSDT #94/#95 사례 — terminal_statuses 통과 후 audit-log 가드에 막힘)
+        archive 자체가 row + orders 보존이라 audit log 정책 충족.
+        사용자 LABUSDT #94/#95 같은 경우도 이제 archive 가능 → UI 깔끔.
         """
         strategy = make_strategy(
             symbol_str="LABUSDT", side="SHORT", status="COMPLETED",
             current_stage=1,
-            avg_entry_price=Decimal("2.0"),  # 진입 흔적
+            avg_entry_price=Decimal("2.0"),
+            realized_pnl=Decimal("12.34"),  # 진입 흔적
         )
-        with pytest.raises(HTTPException) as ei:
-            delete_strategy(strategy_id=strategy.id, db=db_session, user_id=strategy.user_id)
-        assert ei.value.status_code == 400
-        assert "감사 로그" in ei.value.detail
-        # 전략 그대로 존재
-        assert db_session.get(StrategyInstance, strategy.id) is not None
+        sid = strategy.id
+        resp = delete_strategy(strategy_id=sid, db=db_session, user_id=strategy.user_id)
+        assert resp.status == "ARCHIVED"
+        # row + realized_pnl 보존
+        db_session.expire_all()
+        s = db_session.get(StrategyInstance, sid)
+        assert s is not None
+        assert s.is_archived is True
+        assert s.realized_pnl == Decimal("12.34")
 
     @pytest.mark.parametrize("terminal_status", ["COMPLETED", "REENTRY_READY"])
-    def test_delete_terminal_status_passes_first_guard(
+    def test_archive_terminal_status_succeeds(
         self,
         terminal_status: str,
         db_session,
         make_strategy,
     ) -> None:
-        """COMPLETED / REENTRY_READY 도 terminal status 분류 — 첫 가드 통과.
+        """COMPLETED / REENTRY_READY 모두 archive 가능 (terminal status 분류).
 
-        2026-05-04 fix 이전엔 첫 가드 ("활성 전략 삭제 불가") 에서 잘못 차단됐음.
-        이제는 두 번째 가드 (audit-log) 까지 도달.
+        2026-05-04 fix: COMPLETED/REENTRY_READY 가 TERMINAL_STATUSES 에 포함됨 → 첫 가드 통과.
+        2026-05-06 fix: 기존 audit-log 가드 제거 → archive 까지 진행.
         """
         strategy = make_strategy(
             symbol_str="LABUSDT", side="SHORT", status=terminal_status,
             current_stage=1, avg_entry_price=Decimal("2.0"),
         )
-        with pytest.raises(HTTPException) as ei:
-            delete_strategy(strategy_id=strategy.id, db=db_session, user_id=strategy.user_id)
-        # 두 번째 가드 메시지여야 — 첫 번째 가드 ("활성 전략 삭제 불가") 가 아님.
-        assert "감사 로그" in ei.value.detail
-        assert "활성 전략은 삭제 불가" not in ei.value.detail
+        sid = strategy.id
+        resp = delete_strategy(strategy_id=sid, db=db_session, user_id=strategy.user_id)
+        assert resp.status == "ARCHIVED"
+        s = db_session.get(StrategyInstance, sid)
+        assert s is not None and s.is_archived is True
 
     def test_delete_active_strategy_rejected_first_guard(
         self,
         db_session,
         make_strategy,
     ) -> None:
-        """active strategy (STAGE_X_OPEN) 는 첫 가드에 차단."""
+        """active strategy (STAGE_X_OPEN) 는 첫 가드에 차단 — archive 안 됨, 먼저 종료."""
         strategy = make_strategy(
             symbol_str="LABUSDT", side="SHORT", status="STAGE2_OPEN",
             current_stage=2, avg_entry_price=Decimal("2.0"),
@@ -163,16 +173,16 @@ class TestDeleteStrategyAuditLogGuard:
         with pytest.raises(HTTPException) as ei:
             delete_strategy(strategy_id=strategy.id, db=db_session, user_id=strategy.user_id)
         assert "활성 전략은 삭제 불가" in ei.value.detail
-        assert "감사 로그" not in ei.value.detail
 
-    def test_delete_never_entered_stopped_strategy_succeeds(
+    def test_archive_never_entered_stopped_strategy_succeeds(
         self,
         db_session,
         make_strategy,
     ) -> None:
-        """대기 (current_stage=0, avg_entry=None) 상태 STOPPED 는 정상 삭제.
+        """대기 (current_stage=0, avg_entry=None) 상태 STOPPED 도 archive (이전엔 hard delete).
 
-        UX #17 (2026-04-29) 의 본래 의도 — 시작 실패 (예: -4164) 잔재 정리.
+        UX #17 (2026-04-29) 의 본래 의도 (시작 실패 잔재 정리) 충족 — archive 로 UI 숨김.
+        2026-05-06 변경: hard delete → archive 일관성 (모든 DELETE 가 archive).
         """
         strategy = make_strategy(
             symbol_str="TSTUSDT", side="SHORT", status="STOPPED",
@@ -183,11 +193,13 @@ class TestDeleteStrategyAuditLogGuard:
         sid = strategy.id
 
         resp = delete_strategy(strategy_id=sid, db=db_session, user_id=strategy.user_id)
-        assert resp.status == "DELETED"
+        assert resp.status == "ARCHIVED"
         assert resp.strategy_id == sid
 
-        # DB 에서 사라짐
-        assert db_session.get(StrategyInstance, sid) is None
+        # row 보존 (이전 hard delete 와 다름)
+        db_session.expire_all()
+        s = db_session.get(StrategyInstance, sid)
+        assert s is not None and s.is_archived is True
 
     def test_delete_stopping_in_transit_rejected(
         self,

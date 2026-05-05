@@ -41,6 +41,13 @@ class StrategyInstance(Base):
     crisis_first_tp_done_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # 첫 TP 발동 후 피크 PnL % — 트레일링 -5% 계산용
     peak_pnl_pct_after_first_tp: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+
+    # ─────────── Soft delete (alembic 0011, 2026-05-06) ───────────
+    # DELETE endpoint 와 cleanup 스크립트가 row 자체를 삭제하면 realized_pnl 이
+    # 통계 합계에서 영구 누락 (#96 +867 USDT 사례). 삭제 대신 archived 마킹.
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
