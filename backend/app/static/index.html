@@ -304,12 +304,19 @@
 
     <!-- RIGHT 컬럼 (75%) — 전략 인스턴스 (좌측 3패널 합친 높이만큼 자연스럽게 늘어남) -->
     <div id="section-strategies" class="card rounded-lg md:col-span-3">
-      <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
+      <div class="card-header text-xs flex justify-between items-center flex-wrap gap-2" style="padding:8px 12px">
         <span>🎯 전략 인스턴스</span>
-        <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
-          <input type="checkbox" id="hide-terminated" onchange="refreshStrategies()" checked />
-          <span class="text-slate-300">종료 숨김</span>
-        </label>
+        <div class="flex gap-3 items-center">
+          <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" id="hide-terminated" onchange="refreshStrategies()" checked />
+            <span class="text-slate-300">종료 숨김</span>
+          </label>
+          <!-- 2026-05-06 (C-full Step 3): archive 보기 토글 — 「↻ 복원」 버튼 노출 -->
+          <label class="text-xs font-normal flex items-center gap-1 cursor-pointer" title="📦 보관된 전략까지 표시 — 「↻ 복원」 버튼으로 복원 가능">
+            <input type="checkbox" id="show-archived" onchange="toggleShowArchivedStrategies()" />
+            <span class="text-slate-300">📦 보관 보기</span>
+          </label>
+        </div>
       </div>
       <div class="overflow-auto" style="max-height:560px">
         <table class="min-w-max">
@@ -1074,6 +1081,10 @@ function showDashboard() {
   document.getElementById('dashboard-screen').classList.remove('hidden');
   const email = document.getElementById('email').value;
   document.getElementById('user-info').textContent = '👤 ' + email;
+  // 2026-05-06: archive 토글 체크박스 초기 상태 복원 (localStorage)
+  if (typeof _initArchiveToggleFromStorage === 'function') {
+    _initArchiveToggleFromStorage();
+  }
   // hash 기반 page routing 초기화 (2026-05-06: 시장 순위 별도 페이지)
   navigateTo(_pageFromHash() || 'dashboard');
 }
@@ -2078,10 +2089,37 @@ async function deleteTemplate(id, name) {
   } catch (e) { toast('삭제 실패: ' + e.message, 'error'); }
 }
 
+// 2026-05-06 (C-full Step 3): archived 보기 토글. localStorage 저장.
+let _showArchivedStrategies = localStorage.getItem('show_archived_strategies') === 'true';
+
+function toggleShowArchivedStrategies() {
+  // 체크박스 직접 클릭 (DOM 이벤트) 시 호출 — 체크박스 state 가 source of truth.
+  const cb = document.getElementById('show-archived');
+  _showArchivedStrategies = cb ? cb.checked : !_showArchivedStrategies;
+  localStorage.setItem('show_archived_strategies', _showArchivedStrategies ? 'true' : 'false');
+  refreshStrategies();
+}
+
+// 페이지 로드 시 체크박스 상태 복원 (showDashboard 후 호출).
+function _initArchiveToggleFromStorage() {
+  const cb = document.getElementById('show-archived');
+  if (cb) cb.checked = _showArchivedStrategies;
+}
+
+async function restoreStrategy(id) {
+  if (!confirm(`↻ 전략 #${id} 복원\n\narchive 상태 → UI 목록에 다시 표시.\nstatus 그대로 유지 (여전히 종료 상태).\n\n진행할까요?`)) return;
+  try {
+    const r = await api(`/strategies/${id}/restore`, { method: 'POST' });
+    toast(r.message || `전략 #${id} 복원 완료`, 'success');
+    refreshStrategies();
+  } catch (e) { toast('복원 실패: ' + e.message, 'error'); }
+}
+
 async function refreshStrategies() {
   try {
-    const data = await api('/strategies');
-    const active = data.filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()));
+    const url = '/strategies' + (_showArchivedStrategies ? '?include_archived=true' : '');
+    const data = await api(url);
+    const active = data.filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()) && !s.is_archived);
     let totalUnrealized = 0;
     let totalMarginUsed = 0;  // 마진 합 = sum(capital / leverage) — 사용자 실제 사용 자본
     active.forEach(s => {
@@ -2245,16 +2283,25 @@ async function refreshStrategies() {
       const triggerNextBtn = canTriggerNext
         ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="현재가에서 다음 단계 즉시 진입 (trigger_price 무시, 사전 계획된 자본 그대로)">▶</button>`
         : '';
-      const stopBtn = isTerminal
-        ? (neverEntered
-            ? `<button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="전략 보관 (archive — DB row 보존, UI 숨김, 손익 통계 유지)">🗑</button>`
-            : `<button onclick="event.stopPropagation(); restartStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="같은 설정으로 새 전략 시작 (이 전략은 그대로 보존)">🔄</button>`)
-        : `<div class="flex flex-wrap gap-1" style="max-width:130px">
+      // 2026-05-06 (C-full Step 3): archived row 는 「↻ 복원」 단독 표시.
+      let stopBtn;
+      if (s.is_archived) {
+        stopBtn = `<button onclick="event.stopPropagation(); restoreStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="archive 해제 — UI 목록에 다시 표시 (status 그대로)">↻ 복원</button>`;
+      } else if (isTerminal) {
+        stopBtn = neverEntered
+          ? `<button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="전략 보관 (archive — DB row 보존, UI 숨김, 손익 통계 유지)">🗑</button>`
+          : `<div class="flex flex-wrap gap-1" style="max-width:130px">
+              <button onclick="event.stopPropagation(); restartStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="같은 설정으로 새 전략 시작 (이 전략은 그대로 보존)">🔄</button>
+              <button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="전략 보관 (archive — DB row 보존, UI 숨김, 손익 통계 유지)">🗑</button>
+            </div>`;
+      } else {
+        stopBtn = `<div class="flex flex-wrap gap-1" style="max-width:130px">
             <button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="설정 수정 (in-place 또는 종료+재시작)">✏️</button>
             ${triggerNextBtn}
             <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="${btnStyle}" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
             <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="긴급 종료 (포지션 시장가 청산)">🛑</button>
           </div>`;
+      }
       const startPx = s.start_price && Number(s.start_price) > 0
         ? `<span class="text-yellow-400" title="운영자가 입력한 1단계 LIMIT 가격">${fmtNum(s.start_price)}</span>`
         : '<span class="text-slate-500">-</span>';
@@ -4597,6 +4644,14 @@ async function submitCreate() {
       const leverage = leverageFromInput;
       const inp = cmState._directInputs || _collectDirectInputs();
       const tpsl = cmState._directTpsl || _collectTpSl();
+      // 2026-05-06 사용자 보고 fix: 이전엔 TP1~5 만 전송 → 신규 strategy 의 template 에
+      // TP6~10 NULL 저장됨. _collectTpSl 는 TP1~10 수집하지만 여기서 안 보내서 누락.
+      // dict comprehension 으로 TP1~10 모두 동적 전송 (TP4~10 NULL 이면 그대로 NULL).
+      const _tpFields = {};
+      for (let n = 1; n <= 10; n++) {
+        _tpFields[`tp${n}_percent`] = tpsl[`tp${n}_percent`];
+        _tpFields[`tp${n}_qty_ratio`] = tpsl[`tp${n}_qty_ratio`];
+      }
       const tplCreated = await api('/admin/strategy-templates', {
         method: 'POST',
         body: {
@@ -4607,16 +4662,7 @@ async function submitCreate() {
           capitals: inp.capitals,
           trigger_percents: inp.trigger_percents,
           last_stage_trigger_percent: inp.last_stage_trigger_percent,
-          tp1_percent: tpsl.tp1_percent,
-          tp2_percent: tpsl.tp2_percent,
-          tp3_percent: tpsl.tp3_percent,
-          tp4_percent: tpsl.tp4_percent,
-          tp5_percent: tpsl.tp5_percent,
-          tp1_qty_ratio: tpsl.tp1_qty_ratio,
-          tp2_qty_ratio: tpsl.tp2_qty_ratio,
-          tp3_qty_ratio: tpsl.tp3_qty_ratio,
-          tp4_qty_ratio: tpsl.tp4_qty_ratio,
-          tp5_qty_ratio: tpsl.tp5_qty_ratio,
+          ..._tpFields,  // TP1~10 모두 (TP4~10 NULL 가능)
           stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
           reentry_policy: 'manual_ready',
         },
