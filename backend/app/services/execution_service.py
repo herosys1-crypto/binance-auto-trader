@@ -26,6 +26,34 @@ class ExecutionService:
     def apply_leverage(self, strategy):
         return self.client.change_leverage(symbol=strategy.symbol, leverage=strategy.leverage)
 
+    def ensure_isolated_margin(self, strategy) -> None:
+        """심볼의 마진 모드를 ISOLATED 로 강제 설정 (사용자 결정 2026-05-06).
+
+        모든 신규 strategy 가 ISOLATED 로 진입해야 「💰 증거금 추가」 사용 가능.
+        Binance 정책: 빈 포지션일 때만 변경 가능. 포지션 보유 중 호출 시 -4048 거부.
+        이미 ISOLATED 면 -4046 ("No need to change margin type") 응답 — 무시 (idempotent).
+
+        호출 위치: 진입 직전 (start_stage1 / enter_stage_at_market / add_position_now).
+        실패 시: warning 로그만 (본 진입 흐름은 진행). CROSS 로 진입되더라도 거래는
+        가능하지만 「증거금 추가」 만 못 함.
+        """
+        try:
+            self.client.change_margin_type(symbol=strategy.symbol, margin_type="ISOLATED")
+            logger.info("ensure_isolated_margin OK strategy=%s symbol=%s", strategy.id, strategy.symbol)
+        except Exception as e:
+            err_msg = str(e)
+            # -4046: 이미 같은 마진 모드 (idempotent OK)
+            if "-4046" in err_msg or "no need" in err_msg.lower():
+                logger.info("ensure_isolated_margin already ISOLATED (idempotent) strategy=%s symbol=%s",
+                            strategy.id, strategy.symbol)
+                return
+            # -4048: 포지션 보유 중 변경 불가 — warning 만 (강제 진행)
+            # 다른 에러 — warning 만 (본 진입 흐름 막지 않음)
+            logger.warning(
+                "ensure_isolated_margin failed (continuing anyway): strategy=%s symbol=%s error=%s",
+                strategy.id, strategy.symbol, e,
+            )
+
     def start_stage1(self, strategy_id: int) -> Order:
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
@@ -35,6 +63,7 @@ class ExecutionService:
         stage_plan = next((p for p in strategy.stage_plans if p.stage_no == 1), None)
         if not stage_plan:
             raise ValueError("Stage 1 plan not found")
+        self.ensure_isolated_margin(strategy)  # 2026-05-06 (사용자 결정): 모든 거래 ISOLATED
         self.apply_leverage(strategy)
         order = self._place_stage_entry_order(strategy, stage_plan)
         strategy.status = "STAGE1_OPEN_PENDING"
@@ -309,6 +338,8 @@ class ExecutionService:
             raise ValueError(f"Stage {stage_no} plan not found")
         if stage_plan.planned_capital is None:
             raise ValueError(f"Stage {stage_no} planned_capital is missing")
+        # 2026-05-06 (사용자 결정): 모든 거래 ISOLATED. 빈 포지션이면 변경, 보유 중이면 noop.
+        self.ensure_isolated_margin(strategy)
         # 현재가 조회 + 수량 계산
         current_price = self._fetch_current_mark_price(strategy.symbol)
         leverage = Decimal(str(strategy.leverage or 1))
@@ -375,6 +406,8 @@ class ExecutionService:
         order_type_u = (order_type or "").upper()
         if order_type_u not in ("MARKET", "LIMIT"):
             raise ValueError(f"order_type must be MARKET or LIMIT, got {order_type}")
+        # 2026-05-06 (사용자 결정): 모든 거래 ISOLATED. 빈 포지션이면 변경, 보유 중이면 noop.
+        self.ensure_isolated_margin(strategy)
         # 가격 결정
         if order_type_u == "LIMIT":
             if limit_price is None or Decimal(str(limit_price)) <= 0:
