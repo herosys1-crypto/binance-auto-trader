@@ -98,10 +98,12 @@ def run_daily_loss_check_once() -> None:
                     continue
 
                 # 활성 strategy 의 unrealized_pnl 합산. 빈 집합이면 0.
+                # 2026-05-06 C-full: archived 제외 (보관된 strategy 의 미실현은 의미 X).
                 total_unrealized_raw = db.execute(
                     select(func.coalesce(func.sum(StrategyInstance.unrealized_pnl), 0))
                     .where(StrategyInstance.exchange_account_id == acc.id)
                     .where(StrategyInstance.status.in_(_ACTIVE_STATUSES_FOR_PNL))
+                    .where(StrategyInstance.is_archived.is_(False))
                 ).scalar()
                 total_unrealized = Decimal(str(total_unrealized_raw or 0))
 

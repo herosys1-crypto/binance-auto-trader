@@ -27,8 +27,21 @@ class StrategyRepository:
     def get_strategy(self, strategy_id: int) -> StrategyInstance | None:
         return self.db.get(StrategyInstance, strategy_id)
 
-    def list_strategies(self, user_id: int, status: str | None = None, symbol: str | None = None) -> list[StrategyInstance]:
+    def list_strategies(
+        self,
+        user_id: int,
+        status: str | None = None,
+        symbol: str | None = None,
+        include_archived: bool = False,
+    ) -> list[StrategyInstance]:
+        """사용자의 strategy 목록.
+
+        2026-05-06 (PR #7 후속): default 로 archived 제외 (UI 깔끔). ?include_archived=true
+        쿼리 파라미터로 archived 도 포함 가능 (운영 통계 / restore UI 용).
+        """
         stmt = select(StrategyInstance).where(StrategyInstance.user_id == user_id)
+        if not include_archived:
+            stmt = stmt.where(StrategyInstance.is_archived.is_(False))
         if status:
             stmt = stmt.where(StrategyInstance.status == status)
         if symbol:

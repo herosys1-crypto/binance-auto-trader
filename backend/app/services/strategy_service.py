@@ -90,6 +90,7 @@ class StrategyService:
             .where(StrategyInstance.symbol == symbol)
             .where(StrategyInstance.side == side)
             .where(StrategyInstance.status.notin_(_CLOSED_STATUSES))
+            .where(StrategyInstance.is_archived.is_(False))  # 2026-05-06 C-full
             .order_by(StrategyInstance.id.desc())
             .limit(1)
         ).scalar_one_or_none()

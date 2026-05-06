@@ -122,6 +122,7 @@ def pre_pass_dedup(db: Session) -> int:
     rows = db.execute(
         select(StrategyInstance)
         .where(StrategyInstance.status.in_(ACTIVE_LIKE))
+        .where(StrategyInstance.is_archived.is_(False))  # 2026-05-06 C-full
         .order_by(StrategyInstance.id.desc())
     ).scalars().all()
     seen: dict[tuple, int] = {}

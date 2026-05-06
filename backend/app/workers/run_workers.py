@@ -43,6 +43,7 @@ def run_tp_sl_once() -> None:
             select(StrategyInstance, ExchangeAccount)
             .join(ExchangeAccount, StrategyInstance.exchange_account_id == ExchangeAccount.id)
             .where(~StrategyInstance.status.in_(_NOT_FOR_TP_SL))
+            .where(StrategyInstance.is_archived.is_(False))  # 2026-05-06 C-full: archived 제외
             .where(ExchangeAccount.is_active.is_(True))
         ).all()
         for strategy, account in rows:

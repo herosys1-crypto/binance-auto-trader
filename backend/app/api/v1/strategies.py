@@ -252,12 +252,22 @@ def create_strategy(
 def list_strategies(
     status_filter: str | None = None,
     symbol: str | None = None,
+    include_archived: bool = False,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> list[StrategyDetailResponse]:
-    """전략 인스턴스 목록 — 대시보드 표시를 위해 detail 필드까지 포함."""
+    """전략 인스턴스 목록 — 대시보드 표시를 위해 detail 필드까지 포함.
+
+    2026-05-06 (C-full Step 1): default 로 archived 제외 (UI 깔끔). UI 의 「📦 보관 보기」
+    체크박스 활성 시 ?include_archived=true 로 호출 → 전체 목록 + restore 버튼.
+    """
     from app.models.strategy_template import StrategyTemplate
-    rows = StrategyRepository(db).list_strategies(user_id=user_id, status=status_filter, symbol=symbol)
+    rows = StrategyRepository(db).list_strategies(
+        user_id=user_id,
+        status=status_filter,
+        symbol=symbol,
+        include_archived=include_archived,
+    )
     # N+1 방지: distinct template_id 들을 한 번에 fetch.
     template_ids = {r.strategy_template_id for r in rows if r.strategy_template_id}
     templates = (
@@ -1217,6 +1227,43 @@ def delete_strategy(
         strategy_id=sid,
         status="ARCHIVED",
         message=msg,
+    )
+
+
+@router.post("/{strategy_id}/restore", response_model=StrategyActionResponse)
+def restore_strategy(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyActionResponse:
+    """archived 된 strategy 를 복원 (is_archived → false). 2026-05-06 (C-full Step 2).
+
+    DELETE 가 archive 로 변경됐으니 (PR #7), 실수로 archive 한 경우 되돌리기.
+    archived 가 아닌 strategy 는 noop (idempotent). 복원 후 status 그대로 유지 —
+    여전히 종료 상태 (STOPPED/COMPLETED/등). 사용자가 「🔄 다시 시작」 으로 새 progression
+    시작 가능.
+    """
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+
+    if not getattr(strategy, "is_archived", False):
+        return StrategyActionResponse(
+            strategy_id=strategy.id,
+            status=strategy.status,
+            message=f"전략 #{strategy.id} 는 archive 상태가 아닙니다 (이미 활성/UI 표시 중).",
+        )
+
+    strategy.is_archived = False
+    strategy.archived_at = None
+    db.commit()
+    return StrategyActionResponse(
+        strategy_id=strategy.id,
+        status=strategy.status,
+        message=(
+            f"전략 #{strategy.id} 복원 완료 — UI 목록에 다시 표시. status={strategy.status} "
+            "그대로. 「🔄 다시 시작」 으로 새 progression 시작 가능."
+        ),
     )
 
 

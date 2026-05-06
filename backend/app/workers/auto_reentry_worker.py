@@ -66,6 +66,7 @@ def run_auto_reentry_once(decrypt_text: Callable[[str], str]) -> None:
             .where(
                 StrategyInstance.status == "REENTRY_READY",
                 StrategyInstance.reentry_ready.is_(True),
+                StrategyInstance.is_archived.is_(False),  # 2026-05-06 C-full
                 StrategyTemplate.reentry_policy == "auto",
             )
         ).all()

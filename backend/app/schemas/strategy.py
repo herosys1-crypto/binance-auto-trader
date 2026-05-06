@@ -86,3 +86,8 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # last_close_reason: TP_FINAL / TRAILING / SL / MANUAL / NONE
     tp_triggered_count: int = 0
     last_close_reason: str = "NONE"
+    # ─── Soft delete (2026-05-06 PR #7 + C-full) ───
+    # is_archived=true 면 default UI list 에서 숨김. ?include_archived=true 로 조회 시 표시 +
+    # 「↻ 복원」 버튼 노출. archived_at 은 archive 시점 (audit log).
+    is_archived: bool = False
+    archived_at: datetime | None = None
