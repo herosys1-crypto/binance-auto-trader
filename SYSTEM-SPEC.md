@@ -50,15 +50,29 @@
 
 ### 2.2 익절 (Take Profit)
 
-**기획**: TP1~TP5 (1~5 동적 활성). 활성 TP 는 `tp[i]_percent != NULL` 인 레벨.
+**기획 (2026-05-06 사용자 요청 — 5단계 → 10단계 확장, PR `fa199ca`)**: TP1~TP10 (1~10 동적 활성).
+활성 TP 는 `tp[i]_percent != NULL` 인 레벨. 신규 strategy 는 default 10단계 모두 채워짐
+(5% 간격), 기존 strategy 는 TP6~10 NULL → 5단계 동작 그대로 (backward-compat).
 
-| TP | 발동 조건 | qty_ratio (default) | qty_ratio (사용자 가능) |
+| TP | 발동 조건 | qty_ratio default (UI) | qty_ratio (사용자 가능) |
 |---|---|---|---|
-| TP1 | 평균진입가 대비 +tp1_percent% (SHORT 의 경우 -tp1_percent%) | 25% | 0~100% |
-| TP2 | +tp2_percent% | 50% | 0~100% |
-| TP3 | +tp3_percent% | 100% | 0~100% |
-| TP4 | +tp4_percent% (NULL 가능) | 100% | 0~100% |
-| TP5 | +tp5_percent% (NULL 가능) | 100% | 0~100% |
+| TP1 | 평균진입가 대비 +tp1_percent% (SHORT 의 경우 -tp1_percent%) | **25%** | 0~100% |
+| TP2 | +tp2_percent% | 25% | 0~100% |
+| TP3 | +tp3_percent% | 25% | 0~100% |
+| TP4 | +tp4_percent% (NULL 가능) | 25% | 0~100% |
+| TP5 | +tp5_percent% (NULL 가능) | 25% | 0~100% |
+| **TP6** ~ **TP9** | +tp{N}_percent% (NULL 가능, 2026-05-06 신규) | 25% | 0~100% |
+| **TP10** | +tp10_percent% (NULL 가능) | **100%** (잔량 전부) | 0~100% |
+
+**기본 임계 (5% 간격, UI default)**: TP1=10/TP2=15/TP3=20/.../TP10=55%.
+
+**`close_ratio` 계산 (각 TP 발동 시 청산 비율)**:
+1. **TRAILING_TP** 발동: `close_ratio = 1.00` (전량 청산)
+2. **마지막 활성 TP** 발동 ⭐: `close_ratio = 1.00` (사용자 기획 "모든 활성 TP 종료 = 전략 종료". 5단계면 TP5, 10단계면 TP10 자동, 2026-05-02 fix `0e3d119` + 2026-05-06 1~10 동적 `fa199ca`)
+3. **크라이시스 모드 + TP1~4**: `crisis_qty_ratio` 사용 (기본 25/25/50/100, 2026-05-04 alembic 0009 로 template override 가능)
+4. **일반 중간 TP**: 사용자 `tp[i]_qty_ratio` (또는 default) / 100
+
+**중요 — qty_ratio 의미**: 각 단계 청산 비율은 **현재 잔량의 %** (orchestrator [tp_sl_orchestrator.py:152](backend/app/services/tp_sl_orchestrator.py:152) `raw_qty = current_qty × close_ratio`). TP1 발동 시 잔량 25%, TP2 시 남은 잔량 25% (= 원래의 ~19%) ... TP10 = 잔량 100%.
 
 **`close_ratio` 계산 (각 TP 발동 시 청산 비율)**:
 1. **TRAILING_TP** 발동: `close_ratio = 1.00` (전량 청산)
@@ -87,6 +101,17 @@
 - TP1 발동 후부터 활성화 (피크 ≥ +5% 도달 시점)
 - 매 PnL 평가 시 Redis 의 peak 값 갱신 (0~PEAK)
 - `peak - 현재 ≥ TRAILING_TP_RETRACE_AMOUNT (5%)` 이면 `TRAILING_TP` 발동
+
+**Active status (TRAILING_ARMED_STATUSES, 2026-05-06 fix `fa199ca`)**:
+TP1~10_DONE_PARTIAL 모두 + TP2_DONE + TRAILING_ARMED + CRISIS_TP1.
+이 status 일 때만 trailing 평가 — 진입 직후 (STAGE_X_OPEN) 는 의도적으로 제외.
+
+**Peak 추적 (2026-05-06 critical fix `0620805`)**:
+- 1차: Redis `strategy:{id}:peak_pnl_pct` (TTL 적용)
+- 2차 fallback: `strategy.max_profit_pct` (DB 영구 보존)
+- `true_peak = max(current_pnl, redis_stored, db_max_profit)` — Redis 휘발 (TTL/evict/restart) 시 DB fallback 으로 진정한 historical peak 보존
+- Redis 가 stale/missing 이면 true_peak 으로 자가 회복 (다음 호출 시 정상 추적)
+- 사용자 #103 FHEUSDT 사례 — TP3 후 -13% 회귀했으나 Redis key 휘발로 trailing 무력화됐던 버그 영구 fix.
 
 ### 2.4 손절 (Stop Loss)
 
@@ -141,16 +166,24 @@
 | Status | 의미 |
 |---|---|
 | `WAITING` | 생성 후 시작 전 |
-| `STAGE1_OPEN_PENDING` ~ `STAGE4_OPEN_PENDING` | 단계 진입 LIMIT 발송 후 체결 대기 |
-| `STAGE1_OPEN` ~ `STAGE4_OPEN` | 단계 진입 체결 완료 (대시보드: 활성) |
-| `TP1_DONE_PARTIAL` ~ `TP5_DONE_PARTIAL` | TP 발동 + 잔량 남음 |
-| `STOPPING` | 사용자 정지 중 (청산 진행) |
-| `STOPPED` | 정지 완료 |
-| `REENTRY_READY` | 청산 완료 + 재진입 가능 |
-| `COMPLETED` | 모든 TP 완료 또는 트레일링 청산 |
-| `CLOSED` | 일반 종료 (legacy) |
-| `CLOSED_BY_TP` / `CLOSED_BY_SL` | 자동 종료 reason 명시 |
-| `KILL_SWITCH_TRIGGERED` | kill switch 발동 |
+| `STAGE1_OPEN_PENDING` ~ `STAGE10_OPEN_PENDING` | 단계 진입 LIMIT 발송 후 체결 대기 (옵션 C 1~10단계 동적, 2026-05-04 fix `b28c92f`) |
+| `STAGE1_OPEN` ~ `STAGE10_OPEN` | 단계 진입 체결 완료 (대시보드: 활성). TP/SL 평가 active filter 도 1~10단계 동적 (2026-05-05 fix `604f8e4`) |
+| `TP1_DONE_PARTIAL` ~ `TP10_DONE_PARTIAL` | TP 발동 + 잔량 남음 (TP6~10 은 2026-05-06 익절 10단계 확장 `fa199ca` 추가) |
+| `TP2_DONE` | legacy TP2 done 호환 |
+| `TRAILING_ARMED` | 트레일링 활성화 (legacy, 일반 TP_DONE_PARTIAL 도 동일 의미로 대체됨) |
+| `CRISIS_TP1` | 크라이시스 모드 첫 TP 발동 후 |
+| `STOPPING` | 사용자 정지 중 (청산 진행) — TERMINAL 아님 (거래소 잔재 가능) |
+| `STOPPED` | 정지 완료 — TERMINAL |
+| `REENTRY_READY` | 청산 완료 + 재진입 가능 — TERMINAL |
+| `REENTRY_FAILED` | 자동 재진입 실패 (auto_reentry_worker, 2026-05-04 fix `12d47d5`) — TERMINAL |
+| `COMPLETED` | 모든 TP 완료 또는 트레일링 청산 — TERMINAL |
+| `CLOSED` | 일반 종료 (legacy) — TERMINAL |
+| `CLOSED_BY_TP` / `CLOSED_BY_SL` | 자동 종료 reason 명시 — TERMINAL |
+| `KILL_SWITCH_TRIGGERED` | kill switch 발동 — TERMINAL |
+
+**참고**: TERMINAL 분류는 `app/core/strategy_status.py:TERMINAL_STATUSES` frozenset 이 single source of truth (5개 모듈에서 import). STOPPING 은 의도적으로 TERMINAL 제외 (거래소 잔재 가능, zombie_guardian 처리).
+
+**Soft delete (2026-05-06 fix `559ef95`)**: DELETE endpoint 가 hard delete 대신 `is_archived=True` 마킹 + `archived_at` 기록 (alembic 0011). UI 「🗑」 클릭 시 row + cascade orders 보존 → realized_pnl 통계 합계 거래소 history 와 일치 유지. 「🗑」 + status TERMINAL 인 strategy 만 archive 가능.
 
 ---
 
@@ -626,6 +659,67 @@ limit_breached_at nullable, created_at, updated_at
 - [ ] TP 중간 단계 ascending — TP1→TP2→TP3 빠짐 없이 발동 (#98 회귀, 5-04 신규)
 - [ ] -50% ROI 도달 시 텔레그램 알림 1회 (5-04 신규)
 - [ ] DB backup 복원 시뮬레이션
+- [ ] 익절 10단계 (TP1=10/.../TP10=55%) 신규 strategy → TP10 까지 progression + 잔량 100% 청산 (5-06 신규)
+- [ ] 트레일링 — Redis peak key 강제 삭제 후도 trailing 발동 (DB max_profit fallback, #103 회귀, 5-06 신규)
+- [ ] 「📈 시장 순위」 — 13 period × gainers/losers 모두 응답 200 + cache hit/miss 동작 (5-06 신규)
+- [ ] 「🗑」 archive — DB row + cascade orders 보존 + realized 통계 합계 변화 X (5-06 신규)
+- [ ] 운영 통계 셀 6개 클릭 → modal 정상 표시, 자동번역 OFF (5-06 신규)
+
+---
+
+## 🔍 5-06 영역별 cross-check 결과 (사용자 요청 #2)
+
+5-06 세션 (PR #5~#11) 후 SPEC vs 실제 코드 cross-check + 회귀 커버리지 inventory.
+
+### A. 익절 (TP1~10) — ✅ 일치
+- 코드: `risk_service.evaluate_take_profit_level` (TP1~10 동적 검출), `tp_sl_orchestrator._execute_take_profit` (잔량 기준 close_ratio + 마지막 활성 TP 자동 100%)
+- SPEC: 위 2.2 갱신 ✓
+- 회귀 (44 tests): `test_tp10_stages.py` (18), `test_tp_sl_orchestrator_lifecycle.py` (5), `test_tp_intermediate_skip.py` (5), `test_tp_sl_last_active_tp.py`, `test_run_tp_sl_active_status_filter.py` (28)
+
+### B. 트레일링 — ✅ 일치 (peak fallback fix 후)
+- 코드: `risk_service._update_peak_pnl(strategy_id, current, db_max_profit_pct)` Redis + DB 다중 fallback
+- 회귀 (12 tests): `test_trailing_tp_priority.py` (5), `test_peak_pnl_redis_fallback.py` (7)
+
+### C. 손절 (-50% capital) — ✅ 일치
+- 코드: `risk_service.evaluate_stop_loss_crisis_aware` + `tp_sl_orchestrator._execute_stop_loss`
+- SPEC: 2.4 그대로 (변경 없음)
+- 회귀: `test_risk_service_pnl_extremes.py`
+
+### D. 크라이시스 모드 — ✅ 일치
+- 코드: `risk_service._eval_crisis_mode_tp_sl` + `tp_sl_orchestrator` crisis_qty_ratio override
+- SPEC: 2.5 그대로 (alembic 0009 의 template override 노트 추가됨)
+- 회귀 (15+): `test_crisis_recovery_mode.py`, `test_crisis_qty_ratios_resolver.py` (13)
+
+### E. 단계 진입 — ✅ 일치
+- auto: `stage_trigger_worker` (1~10 동적, 5-04 fix `b28c92f`)
+- manual: `trigger_next_stage_manually` — 옵션 A LIMIT (5-04) → 옵션 B MARKET (5-04 사무실 PR #2) + atomic UPDATE race guard (5-04 PR #3)
+- 회귀 (8+8+5): `test_trigger_next_stage_and_inplace_stages.py` (8), `test_strategy_settings_inplace.py` (8), `test_strategy_calculator_v2.py` (5+)
+
+### F. 재진입 — ✅ 일치
+- 코드: `auto_reentry_worker` + `REENTRY_FAILED` status persist (5-04 fix `12d47d5`)
+- 회귀 (8): `test_auto_reentry_worker.py`
+
+### G. 좀비 자동 정리 — ✅ 일치 + soft delete 강화
+- 코드: `zombie_guardian` (Phase 1 자동 회복 + Phase 2 escalation), `reconcile_worker` (5+ 단계 동적)
+- 신규: soft delete (5-06 PR #7) — DELETE → archive
+- 회귀 (37+): `test_zombie_guardian.py` (16), `test_reconcile_*.py` (4 파일 13+5+2+13), `test_strategy_soft_delete.py` (7)
+
+### H. 일일 손실 한도 — ✅ 일치
+- 코드: `daily_loss_aggregator` worker + `account_daily_loss_limiter` (계정별 override)
+- 회귀 (33+): `test_daily_loss_*.py` (3 파일 10+8+7), `test_exchange_accounts_daily_limit.py` (6)
+
+### I. Kill Switch — ✅ 일치
+- 코드: `account_kill_switch_service` + 사각지대 fix (5-04 `c79f3aa`, stage 2+ + create 양쪽)
+- 회귀 (11): `test_kill_switch_coverage.py` (6), `test_kill_switch_endpoint_ownership.py` (5)
+
+### J. 운영 통계 (5-06 신규 영역) — ✅ 일치
+- 코드: `/admin/stats` (strategy 단위 승률), `/admin/stats/breakdown` (3 view), `/symbols/ranking` (13 period)
+- 회귀 (16): `test_admin_stats_winrate.py` (6), `test_admin_stats_breakdown.py` (6), `test_symbol_ranking_route_order.py` (4)
+
+### 종합 — 회귀 커버리지 377 passed
+- 영역별 평균 30+ 회귀 테스트
+- spec drift 발견된 곳: 모두 5-06 변경 (TP10, peak fallback, soft delete, ranking) — 본 리비전 노트로 정리됨
+- **외부 운영 영향 (사용자 보고) 모두 close**: #96 cascade defense, #98 trailing/TP skip, #103 peak fallback, 운영 통계 정확화
 
 ---
 
@@ -661,6 +755,50 @@ limit_breached_at nullable, created_at, updated_at
 **테스트 카버리지 110 → 292 (+182)**
 - 신규 integration 카테고리 + sqlite/Binance mock 스캐폴드 = postgres 없이도 종단간 시나리오 실행 가능.
 - 자세한 파일 list: `HANDOFF-2026-05-04-HOME-TO-OFFICE.md` 참조.
+
+### 2026-05-06 보강 (PR #5~#11, 7개 commit + 핸드오프)
+
+**기획 변경 (사용자 요청)**
+- **익절 5단계 → 10단계 확장** (`fa199ca`, alembic 0012). default 5% 간격
+  (TP1=10/.../TP10=55%), 잔량 25% (TP10=100%). 마지막 활성 TP 자동 100% 청산
+  + 트레일링 -5% 회귀 그대로.
+- **24h/주/월 변동률 순위 검색** (`fe00fda`). 13 period (1d~1y) × gainers/losers,
+  Redis 캐시. 빠른 작업 + 새 전략 모달 통합.
+- **승률 정확화** (`5adb538`) — 알림 기반 → strategy.realized_pnl 부호 기반
+  (수익 strategy / decided × 100). 실제 88.46% 였던 게 100% 잘못 표시되던 버그.
+- **DELETE → archive (soft delete)** (`559ef95`, alembic 0011). #96 cascade
+  delete 로 +867 USDT realized 가 통계 합계에서 누락됐던 사례 영구 방어.
+- **운영 통계 셀 클릭 → detail modal** (`aaaada2`) — strategy 별 분류 + 손익.
+- **자동번역 차단** (`aaaada2`) — `<html translate="no">` + meta google notranslate.
+  「확정 손익」 → 「안녕 손익」 같은 Chrome 번역 부작용 해소.
+- **「확정 손익 (Realized)」 라벨** (`98f5dbb`).
+
+**버그 수정 회귀 가드**
+- `risk_service._update_peak_pnl` — Redis stored 만 보던 것을 `max(current, redis,
+  db_max_profit)` true_peak 으로 변경. Redis 휘발 (TTL/evict) 시 DB fallback.
+  `test_peak_pnl_redis_fallback.py` 회귀 방어.
+- `_count_active_tps` — `range(1, 11)` 동적. UI 와 backend 일치.
+- `delete_strategy` — `current_stage > 0` 거부 가드 제거 (archive 가 audit log 보존).
+  `test_strategy_soft_delete.py` 회귀 방어.
+- `fillStartPrice` (frontend) — tick_size scientific notation (1e-8) 처리 — `_decimalsForPrice`
+  대신 `-Math.log10` 사용. 작은 가격 (0.00006304 등) 시작가 자동 채움 fix.
+- `/symbols/ranking` route 등록 순서 — `add_api_route` 명시 호출로 `/{symbol}` catch-all
+  앞에 등록. `test_symbol_ranking_route_order.py` 회귀 방어.
+
+**신규 데이터 스키마**
+- `alembic 0011` — `strategy_instances.is_archived BOOLEAN NOT NULL DEFAULT false` +
+  `archived_at TIMESTAMPTZ NULL` + index.
+- `alembic 0012` — `strategy_templates.tp6~tp10_percent NUMERIC(8,4) NULL` +
+  `tp6~tp10_qty_ratio NUMERIC(8,4) NULL` (10개 컬럼 추가).
+
+**신규 endpoint**
+- `POST /strategies/{id}/add-margin` — 전략별 증거금 추가 (5-04 추가, spec 갱신 누락이었음).
+- `GET /admin/stats/breakdown?view=strategies|realized|losses` — strategy 별 분류 + 라이프사이클.
+- `GET /symbols/ranking?period=&direction=&limit=` — 13 period × 2 direction 변동률 순위.
+
+**테스트 카버리지 292 → 377 (+85)**
+- 6 신규 unit/integration 파일 (winrate / breakdown / soft delete / peak fallback / TP10 / ranking)
+- 상세: `HANDOFF-2026-05-06-HOME-TO-OFFICE.md` 참조.
 
 ---
 
