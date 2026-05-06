@@ -82,7 +82,11 @@ def start_scheduler() -> None:
 
     scheduler.add_job(guarded_job("listenkey_keepalive", 120, lambda: run_keepalive_once(decrypt_text)), trigger=IntervalTrigger(minutes=30), id="listenkey_keepalive", replace_existing=True, max_instances=1, coalesce=True)
     scheduler.add_job(guarded_job("position_reconcile", 55, lambda: run_position_reconcile_once(decrypt_text)), trigger=IntervalTrigger(minutes=1), id="position_reconcile", replace_existing=True, max_instances=1, coalesce=True)
-    scheduler.add_job(guarded_job("tp_sl", 20, run_tp_sl_once), trigger=IntervalTrigger(seconds=10), id="tp_sl", replace_existing=True, max_instances=1, coalesce=True)
+    # 2026-05-06 fix: lock TTL 20s + Interval 10s 였는데 lock 이 다음 사이클까지 살아있어
+    # 실제로는 20s 마다 1번만 실행 (½ 빈도). #103 trailing 자동 발동 지연 원인 추정.
+    # lock TTL 8s 로 변경 → Interval 10s 보다 짧아 매 사이클 정상 실행.
+    # run_tp_sl_once 자체는 보통 1~5s 소요 (active strategy 수 따라), 8s 충분.
+    scheduler.add_job(guarded_job("tp_sl", 8, run_tp_sl_once), trigger=IntervalTrigger(seconds=10), id="tp_sl", replace_existing=True, max_instances=1, coalesce=True)
     scheduler.add_job(guarded_job("symbol_sync_daily", 3600, run_symbol_sync_once), trigger=CronTrigger(hour=3, minute=0), id="symbol_sync_daily", replace_existing=True, max_instances=1, coalesce=True)
     # 재진입 자동화 — 매 30초마다 검사 (lock TTL 25s 로 중복 방지)
     scheduler.add_job(guarded_job("auto_reentry", 25, lambda: run_auto_reentry_once(decrypt_text)), trigger=IntervalTrigger(seconds=30), id="auto_reentry", replace_existing=True, max_instances=1, coalesce=True)
