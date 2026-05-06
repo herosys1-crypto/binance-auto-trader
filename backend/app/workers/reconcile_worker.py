@@ -105,6 +105,7 @@ def _do_reconcile(decrypt_func) -> None:
             .where(StrategyInstance.status.in_(
                 _ACTIVE_PENDING + _ACTIVE_OPEN + _ACTIVE_TP_PARTIAL + ["STOPPING"]
             ))
+            .where(StrategyInstance.is_archived.is_(False))  # 2026-05-06 C-full: archived 제외
             .where(ExchangeAccount.is_active.is_(True))
         ).all()
         for strategy, account in rows:

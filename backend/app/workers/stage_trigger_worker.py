@@ -60,6 +60,7 @@ def run_stage_trigger_once(decrypt_text) -> None:
             select(StrategyInstance, ExchangeAccount)
             .join(ExchangeAccount, StrategyInstance.exchange_account_id == ExchangeAccount.id)
             .where(StrategyInstance.status.in_(ACTIVE_STAGE_STATUSES))
+            .where(StrategyInstance.is_archived.is_(False))  # 2026-05-06 C-full
             .where(ExchangeAccount.is_active.is_(True))
         ).all()
         # A08 fix: N+1 방지 — 모든 strategy 의 template 을 한 번에 batch fetch.
