@@ -128,6 +128,29 @@ class TestAddPositionMarginService:
         assert len(events) == 1
         assert events[0].severity == "ERROR"
 
+    def test_isolated_only_error_4096_friendly_message(
+        self, db_session, make_strategy, fake_trade_client, monkeypatch
+    ) -> None:
+        """2026-05-06 사용자 보고 — Binance -4096 'Add margin only support for isolated
+        position' 도 친절 메시지 매핑돼야 함. 이전엔 -4046 만 매핑되어 raw 메시지 노출."""
+        class _FailingClient:
+            def __init__(self, *a, **kw): pass
+            def add_position_margin(self, **kw):
+                raise Exception('Binance API error: status=400, code=-4096, msg=Add margin only support for isolated position.')
+        monkeypatch.setattr("app.services.execution_service.BinanceClient", _FailingClient)
+
+        strategy = make_strategy(symbol_str="ETHUSDT", side="LONG", status="STAGE1_OPEN",
+                                 current_position_qty=Decimal("1"))
+        svc = ExecutionService(db_session, api_key="k", api_secret="s", is_testnet=True)
+        with pytest.raises(ValueError) as ei:
+            svc.add_position_margin(strategy.id, amount=Decimal("50"))
+        # 친절 메시지 가드: ISOLATED 안내 + Binance UI 절차 명시
+        msg = str(ei.value)
+        assert "ISOLATED" in msg, f"친절 메시지에 ISOLATED 안내 없음: {msg}"
+        assert "Binance UI" in msg or "마진 모드" in msg or "포지션을 종료" in msg, (
+            f"운영 가이드 누락: {msg}"
+        )
+
 
 # ============================================================================
 # 증거금 추가 — API endpoint

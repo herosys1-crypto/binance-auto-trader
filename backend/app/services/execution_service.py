@@ -198,8 +198,21 @@ class ExecutionService:
         except Exception as e:
             err_msg = str(e)
             # 흔한 에러 친절 매핑
-            if "-4046" in err_msg or "marginType" in err_msg.lower() or "CROSS" in err_msg.upper():
-                hint = " (CROSS 모드 포지션은 증거금 직접 추가 불가 — Binance UI 또는 별도 절차로 ISOLATED 변경 필요)"
+            # 2026-05-06 사용자 보고 fix: -4096 도 동일 의미 매핑.
+            # -4046: "No need to change margin type" (이미 같은 모드)
+            # -4096: "Add margin only support for isolated position" (CROSS 거부 — 가장 일반적)
+            # "isolated" / "marginType" / "CROSS" 키워드 fallback.
+            if (
+                "-4046" in err_msg or "-4096" in err_msg
+                or "marginType" in err_msg.lower() or "CROSS" in err_msg.upper()
+                or "isolated" in err_msg.lower()
+            ):
+                hint = (
+                    " (CROSS 모드 포지션은 증거금 직접 추가 불가. "
+                    "→ Binance UI 에서 해당 심볼을 ISOLATED 모드로 변경하거나, "
+                    "현재 포지션을 종료 후 신규 strategy 시작 시 ISOLATED 로 진입하세요. "
+                    "포지션 보유 중엔 마진 모드 변경 불가)"
+                )
             elif "-2027" in err_msg or "margin balance" in err_msg.lower():
                 hint = " (지갑 잔액 부족 — Binance 계정에 USDT 입금 필요)"
             else:
