@@ -1059,6 +1059,18 @@ def add_margin_to_strategy(
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     db.refresh(strategy)
+    # 2026-05-06 (사용자 요청): 증거금 추가 시 텔레그램 알림 발송.
+    try:
+        from app.services.notification_service import NotificationService
+        NotificationService(db).send_margin_added_alert(
+            strategy_instance_id=strategy.id,
+            symbol=strategy.symbol,
+            side=strategy.side,
+            amount=payload.amount,
+        )
+    except Exception:
+        # 알림 실패는 본 작업 성공에 영향 X (silent fail, NotificationService 자체에서 SENT/FAILED 기록)
+        pass
     return StrategyActionResponse(
         strategy_id=strategy.id,
         status=strategy.status,
@@ -1116,6 +1128,21 @@ def add_position_to_strategy(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Exchange error: {e}") from e
     db.refresh(strategy)
     order_type_label = payload.order_type.upper()
+    # 2026-05-06 (사용자 요청): 포지션 추가 시 텔레그램 알림 발송.
+    try:
+        from app.services.notification_service import NotificationService
+        NotificationService(db).send_position_added_alert(
+            strategy_instance_id=strategy.id,
+            symbol=strategy.symbol,
+            side=strategy.side,
+            amount_usdt=payload.amount_usdt,
+            order_type=order_type_label,
+            qty=order.orig_qty,
+            limit_price=payload.limit_price,
+        )
+    except Exception:
+        # 알림 실패는 본 작업 성공에 영향 X
+        pass
     msg = (
         f"포지션 추가 — {order_type_label} 주문 발송됨 (amount={payload.amount_usdt} USDT, qty={order.orig_qty}). "
         f"체결되면 평단/qty 자동 갱신."

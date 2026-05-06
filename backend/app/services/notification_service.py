@@ -160,6 +160,41 @@ class NotificationService:
         )
 
     # ------------------------------------------------------------------
+    # 포지션 추가 (ad-hoc 진입) — 2026-05-06 신규 (사용자 요청)
+    # 「💉 포지션 추가」 버튼으로 자유 금액 시장가/지정가 진입 시 발송.
+    # ------------------------------------------------------------------
+    def send_position_added_alert(
+        self,
+        *,
+        strategy_instance_id: int,
+        symbol: str,
+        side: str,
+        amount_usdt: Any,
+        order_type: str,
+        qty: Any,
+        limit_price: Any | None = None,
+    ) -> Notification:
+        emoji = _side_emoji(side)
+        order_type_u = (order_type or "").upper()
+        title = f"💉 [포지션 추가] {symbol} {side} {order_type_u}"
+        lines = [
+            f"{emoji} 종목       : {symbol} {side}",
+            f"💵 추가 자본 : {_fmt_num(amount_usdt)} USDT (margin)",
+            f"📦 수량       : {_fmt_num(qty)}",
+            f"📋 주문 타입  : {order_type_u}",
+        ]
+        if order_type_u == "LIMIT" and limit_price is not None:
+            lines.append(f"💰 지정가     : {_fmt_num(limit_price)}")
+        else:
+            lines.append("⚡ 시장가     : 즉시 체결 (current price)")
+        lines.append("ℹ️  체결되면 평단/qty 자동 갱신됨")
+        body = "\n".join(lines)
+        return self.send(
+            strategy_instance_id=strategy_instance_id,
+            channel="TELEGRAM", title=title, body=body,
+        )
+
+    # ------------------------------------------------------------------
     # 손실 임계 알림 (2026-05-04 신규) — -50% ROI 도달 시 1회
     # ------------------------------------------------------------------
     def send_loss_threshold_alert(
