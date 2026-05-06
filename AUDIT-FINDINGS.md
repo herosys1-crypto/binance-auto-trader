@@ -2,11 +2,25 @@
 
 **정밀 코드 Audit 보고서**
 - 작성일: 2026-05-02
-- 마지막 갱신: 2026-05-04 (audit fix 후속 commit 반영 + Option C 진행 상태)
-- 기준: SYSTEM-SPEC.md (2026-05-02 작성) vs 코드 실제 구현
+- 마지막 갱신: 2026-05-06 (5-04/5-06 신규 fix + cross-check 결과 반영)
+- 기준: SYSTEM-SPEC.md vs 코드 실제 구현
 - 대상: Binance Futures Auto Trading Platform (Python FastAPI + SQLAlchemy + Redis + Docker)
 
-> **2026-05-04 갱신 요약**:
+> **2026-05-06 갱신 요약**:
+> - 5-06 사용자 보고 운영 사례 3건 모두 영구 fix:
+>   - **A18 (신규)**: trailing peak Redis 휘발 시 무력화 (#103) → DB max_profit fallback (`0620805`)
+>   - **A19 (신규)**: cascade hard delete 로 realized 합계 누락 (#96) → soft delete (`559ef95`) + C-full active filter (`cbd1968`)
+>   - **A20 (신규)**: 운영 통계 승률 알림 기반 부정확 → strategy.realized_pnl 부호 기반 (`5adb538`)
+> - 5-06 사용자 요청 2건:
+>   - **A21 (신규)**: 익절 5단계 → 10단계 확장 (`fa199ca`, alembic 0012, backward-compat)
+>   - **A22 (신규)**: 24h/주/월 변동률 순위 + 별도 페이지 (`fe00fda` + `3ea79c6`)
+> - 5-06 인프라:
+>   - VPS 배포 패키지 (`0aa85c7` + `55276e1`) — DigitalOcean Singapore + Neon 유지 + ngrok 폐지
+>   - SYSTEM-SPEC 5-06 cross-check (`8f3436c`) — 9 영역 일치 검증 완료
+>   - MAINNET-CHECKLIST 신규 19항목 통합 (`24ce791`)
+> - 회귀 가드 292 → **383 passed** (+91, 5-04+5-06 합산).
+>
+> **2026-05-04 갱신 요약** (이전):
 > - audit 의 "필수 fix" 4건 (A03/A07/A08/A12) 모두 6638177/6133072 commit 에 반영 완료.
 > - "Unit test 필수 추가" 4건 모두 추가 완료 (A01/A02/A17 + risk_service pnl_extremes).
 > - **신규**: zombie_guardian.py 16개 unit test 추가 (좀비 6패턴 자동 회복 회귀 방어).
@@ -781,6 +795,13 @@ def test_strategy_calculator_6_stages():
 | A17 | ⚪ | tests | 옵션 C 종합 테스트 | ✅ DONE — `test_strategy_calculator_v2.py` 12 tests (3~10 단계) |
 | **신규** | 🟡 | **zombie_guardian** | **회귀 테스트 0건** | ✅ DONE — `test_zombie_guardian.py` 16 tests (Phase 1 + escalation) |
 | **신규** | ⚪ | **observability/sentry** | **구조화 캡처 미흡** | ✅ DONE — `capture_strategy_event` 헬퍼 + 3개 CRITICAL 경로 wiring |
+| **A18** | 🔴 | **risk_service** | **trailing peak Redis 휘발 시 무력화 (#103)** | ✅ DONE 5-06 — `_update_peak_pnl` 에 `db_max_profit_pct` fallback (`0620805`) + 7 unit tests |
+| **A19** | 🔴 | **strategies/repository/workers** | **DELETE cascade 로 realized 통계 누락 (#96)** | ✅ DONE 5-06 — soft delete (`559ef95`, alembic 0011) + C-full active filter (`cbd1968`, 7 곳) + restore endpoint + 13 tests |
+| **A20** | 🟡 | **admin/stats** | **승률 알림 기반 부정확** | ✅ DONE 5-06 — strategy.realized_pnl 부호 기반 (`5adb538`) + 6 tests |
+| **A21** | ⚪ | **risk_service/orchestrator/template** | **익절 5단계 → 10단계 확장 (사용자 요청)** | ✅ DONE 5-06 — alembic 0012 + 5 모듈 1~10 동적 (`fa199ca`) + 18 tests |
+| **A22** | ⚪ | **symbols/static** | **24h/주/월 변동률 순위 (사용자 요청)** | ✅ DONE 5-06 — endpoint (`fe00fda`) + 별도 페이지 (`3ea79c6`) + 4 tests |
+| **A23** | ⚪ | **deploy** | **VPS 배포 패키지 미흡** | ✅ DONE 5-06 — bootstrap.sh + secrets.sh + CHECKLIST + production .env (`0aa85c7`+`55276e1`) |
+| **A24** | ⚪ | **docs/spec** | **5-06 신규 변경 SPEC 미반영** | ✅ DONE 5-06 — SYSTEM-SPEC cross-check 보강 (`8f3436c`) + MAINNET-CHECKLIST 19 항목 (`24ce791`) |
 
 ---
 
@@ -802,6 +823,15 @@ def test_strategy_calculator_6_stages():
 9. **A14**: legacy 4단계 cleanup → mainnet 후로 deferred
 10. ✅ **신규**: zombie_guardian 회귀 테스트 16개
 11. ✅ **신규**: Sentry 구조화 캡처 + CRITICAL 경로 wiring
+
+### 5-06 신규 — ✅ 모두 완료
+12. ✅ **A18 trailing peak fallback** — #103 사례 영구 방어
+13. ✅ **A19 soft delete + active filter** — #96 사례 영구 방어
+14. ✅ **A20 strategy 단위 승률** — 운영 통계 정확화
+15. ✅ **A21 TP10 확장** — 사용자 요청
+16. ✅ **A22 변동률 순위 + 별도 페이지** — 사용자 요청
+17. ✅ **A23 VPS 배포 패키지** — mainnet 직전 인프라
+18. ✅ **A24 SPEC 5-06 cross-check** — docs 정합성
 
 ---
 

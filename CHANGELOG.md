@@ -4,6 +4,107 @@
 
 ---
 
+## [2026-05-06] — 운영 정확화 + 사용자 요청 2건 + VPS 배포 패키지 (PR #5~#12, +13 commits)
+
+### 🎯 의도
+1차 핸드오프 → 사무실 PR #2 머지 → 집 추가 작업으로 운영 사례 (#103 trailing 미발동,
+#96 cascade delete) 영구 방어 + 사용자 요청 2건 (TP10 익절 확장 + 24h/주/월 변동률
+순위) + VPS 배포 패키지 (Neon Cloud 유지 + DigitalOcean Singapore + ngrok 폐지) +
+SYSTEM-SPEC cross-check + MAINNET-CHECKLIST 신규 항목 통합.
+
+### ✨ 신규 기능 (사용자 요청)
+- **익절 5단계 → 10단계 확장** (`fa199ca`, alembic 0012). default 5% 간격
+  (TP1=10/.../TP10=55%), 잔량 25% (TP10=100%). 마지막 활성 TP 자동 100% 청산.
+  trailing -5% 회귀 그대로 (사용자 명시 — 변경 X).
+- **24h/주/월 변동률 순위 검색** (`fe00fda`). 13 period (1d/2d~7d/1w/2w/1m/3m/6m/1y)
+  × gainers/losers, Redis 캐시. 빠른 작업 + 새 전략 모달 통합.
+- **시장 순위 별도 페이지** (`3ea79c6`, 사용자 요청 #2 의 「별도 페이지」 부분).
+  헤더 nav + URL hash routing (#dashboard / #ranking). 「↑ 새 전략」 → 모달 자동 +
+  심볼/시작가 자동 채움.
+
+### 🔴 CRITICAL fix (운영 사례)
+- **트레일링 peak DB fallback** (`0620805`, 사용자 #103 FHEUSDT). Redis 휘발 시
+  `_update_peak_pnl` 가 현재 PnL 을 새 peak 로 reset → trailing 무력화. fix:
+  `db_max_profit_pct` fallback 인자 추가 + `true_peak = max(current, redis, db)`.
+  Redis 자가 회복.
+- **Soft delete (DELETE → archive)** (`559ef95`, 사용자 #96 TSTUSDT). cascade
+  hard delete 로 +867 USDT realized_pnl 이 통계 합계에서 누락. fix: DELETE 가
+  `is_archived=True` 마킹만 (alembic 0011). row + cascade orders 보존.
+- **C-full archive UI 완성** (`cbd1968`). PR #7 후속 — 7 active query 에
+  `WHERE NOT is_archived` filter (repository / 5 worker / strategy_service /
+  zombie_guardian) + `POST /strategies/{id}/restore` endpoint + UI 「📦 보관 보기」
+  토글 + 「↻ 복원」 버튼. archived strategy 가 background process 에서 자동 제외.
+
+### 🟡 운영 정확화 / UX
+- **승률 strategy 단위** (`5adb538`). 알림 기반 (이전) → realized_pnl 부호 기반.
+  실제 88.46% 였던 게 100% 잘못 표시되던 사용자 보고 fix.
+- **운영 통계 셀 클릭 → modal** (`aaaada2`). 6 셀 모두 「🔍」 + 신규 endpoint
+  `GET /admin/stats/breakdown?view=` (3 view: strategies/realized/losses).
+- **자동번역 차단** (`aaaada2`). `<html translate="no">` + meta google notranslate.
+  「확정 손익」 → 「안녕 손익」 같은 Chrome 번역 부작용 영구 해소.
+- **「확정 손익 (Realized)」 라벨** (`98f5dbb`). 「실현손익」 자동번역 회피.
+- **tiny price 시작가** (`98f5dbb`). tick_size scientific notation (1e-8) 처리.
+  사용자 보고 — 가격 0.00006304 심볼에서 「현재가」 클릭 시 input 빈칸 됐던 fix.
+
+### 🛡️ VPS 배포 패키지 (mainnet 직전, 사용자 결정)
+- **사용자 결정**: Neon Cloud 유료 plan 유지 (이미 결제) + DigitalOcean Singapore
+  VPS 신규 + ngrok 폐지.
+- `deploy/vps-bootstrap.sh` (`0aa85c7`) — Phase 1 자동화 (Ubuntu 24.04 root 1회):
+  ufw / fail2ban / unattended-upgrades / swap 4GB / Docker / log rotation 등.
+- `deploy/generate-secrets.sh` — SECRET_KEY/ENCRYPTION_KEY/POSTGRES/REDIS 자동 생성
+  + 외부 자격증명 가이드.
+- `VPS-DEPLOY-CHECKLIST.md` — 단계별 (Phase 0~5).
+- `backend/.env.production.template` (`55276e1`) — DAILY_LOSS_LIMIT_USDT 등 5-04
+  신규 변수 추가 + .gitignore exception (`!backend/.env.production.template`).
+
+### 📚 문서 보강
+- **SYSTEM-SPEC** (`8f3436c`) — 5-06 cross-check 결과 (9 영역 + 회귀 inventory) +
+  본문 fix (TP1~10, peak fallback, status 표 STAGE1~10/TP1~10/ARCHIVED) + 14절
+  체크리스트 5-06 신규 5항목 + 「📜 리비전 노트」 5-06 절.
+- **HANDOFF-2026-05-06-HOME-TO-OFFICE.md** (`2266225` → `e8afec7`) — 1차 (7 PR)
+  → 최종 (13 commits, VPS + ranking page + C-full + SPEC 통합) 갱신.
+- **MAINNET-CHECKLIST** (`24ce791`) — 5-04 9항목 + 5-06 10항목 신규 통합. pytest
+  카운트 60+ → 383 passed. 24/7 운영 = DigitalOcean Singapore + ngrok 폐지 명시.
+
+### 🧪 테스트 (329 → 383, +54 신규)
+- **신규 6 파일** (모두 sqlite 호환 통합/단위 테스트):
+  - `test_admin_stats_winrate.py` (6) — 승률 strategy 단위
+  - `test_admin_stats_breakdown.py` (6) — breakdown endpoint
+  - `test_strategy_soft_delete.py` (7) — archive 동작
+  - `test_peak_pnl_redis_fallback.py` (7) — peak DB fallback (#103 회귀 가드)
+  - `test_tp10_stages.py` (18) — TP1~10 확장 + 모델 컬럼 검증
+  - `test_symbol_ranking_route_order.py` (4) — `/ranking` route 등록 순서
+  - `test_archive_active_filter_and_restore.py` (6) — C-full filter + restore
+- 기존 4 파일 update — `test_strategies_endpoint_terminal_handling.py` (PR #7 archive
+  동작 일치).
+
+### 🚦 운영 사용 예시
+```bash
+# 시장 순위 — 24h 상승 top 30 (cache 미사용 첫 호출)
+curl https://api/symbols/ranking?period=1d&direction=gainers&limit=30
+# 1주 하락 top — top 50 거래대금 심볼만 정확 계산 (cache TTL 5m)
+curl https://api/symbols/ranking?period=1w&direction=losers&limit=20
+
+# soft delete + restore
+curl -X DELETE https://api/strategies/123          # archive
+curl -X POST https://api/strategies/123/restore    # 되돌림
+
+# 운영 통계 detail
+curl https://api/admin/stats/breakdown?view=losses # 손실 strategy 만
+```
+
+### 🔖 Reviewer notes
+- 5-06 변경 모두 backward-compat (alembic 0011/0012 additive only, 기존 strategy
+  TP6~10 NULL → 5단계 동작 그대로).
+- archived 도 통계 합계 (`/admin/stats` 의 `realized_pnl_total`) 에 포함 — 거래소
+  history 일치 유지 (#96 사례 영구 방어 의도).
+- ranking endpoint 의 1d 외 기간은 24h 거래대금 top 50 만 정확 계산 (Binance API
+  호출 수 제한). cache TTL 은 period 별 적절히 조정 (1d=60s, 1y=4h).
+- VPS 셋업은 사용자 직접 작업 — DigitalOcean 계정 + SSH 키 + 도메인 + 외부 자격증명
+  발급이 사전 결정 사항. 자동화는 Phase 1 (OS hardening + Docker) 까지.
+
+---
+
 ## [2026-05-04] — Option B + C 회귀/관측성 강화 (PR #1)
 
 ### 🎯 의도
