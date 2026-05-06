@@ -162,6 +162,77 @@ class TestAddMarginEndpoint:
 
 
 # ============================================================================
+# 2026-05-06 (사용자 요청): 증거금/포지션 추가 시 텔레그램 알림 발송 검증
+# ============================================================================
+class TestNotificationOnAddMarginAndPosition:
+    def test_send_margin_added_alert_creates_notification(
+        self, db_session, make_strategy
+    ) -> None:
+        """NotificationService.send_margin_added_alert 가 Notification row 생성."""
+        from app.services.notification_service import NotificationService
+        from app.models.notification import Notification
+        s = make_strategy(
+            symbol_str="BTCUSDT", side="SHORT", status="STAGE1_OPEN",
+            current_position_qty=Decimal("-0.5"),
+        )
+        ns = NotificationService(db_session)
+        ns.send_margin_added_alert(
+            strategy_instance_id=s.id, symbol="BTCUSDT", side="SHORT",
+            amount=Decimal("100"),
+        )
+        rows = db_session.query(Notification).filter_by(strategy_instance_id=s.id).all()
+        assert len(rows) == 1
+        n = rows[0]
+        assert "[증거금 추가]" in n.title
+        assert "100" in n.body
+        assert n.channel == "TELEGRAM"
+
+    def test_send_position_added_alert_market(
+        self, db_session, make_strategy
+    ) -> None:
+        """포지션 추가 (MARKET) — title + body 검증."""
+        from app.services.notification_service import NotificationService
+        from app.models.notification import Notification
+        s = make_strategy(
+            symbol_str="BTCUSDT", side="SHORT", status="STAGE1_OPEN",
+            current_position_qty=Decimal("-0.5"),
+        )
+        ns = NotificationService(db_session)
+        ns.send_position_added_alert(
+            strategy_instance_id=s.id, symbol="BTCUSDT", side="SHORT",
+            amount_usdt=Decimal("250"), order_type="MARKET",
+            qty=Decimal("0.005"), limit_price=None,
+        )
+        n = db_session.query(Notification).filter_by(strategy_instance_id=s.id).one()
+        assert "[포지션 추가]" in n.title
+        assert "MARKET" in n.title
+        assert "250" in n.body
+        assert "시장가" in n.body
+
+    def test_send_position_added_alert_limit_includes_price(
+        self, db_session, make_strategy
+    ) -> None:
+        """포지션 추가 (LIMIT) — body 에 지정가 포함."""
+        from app.services.notification_service import NotificationService
+        from app.models.notification import Notification
+        s = make_strategy(
+            symbol_str="ETHUSDT", side="LONG", status="STAGE1_OPEN",
+            current_position_qty=Decimal("1"),
+        )
+        ns = NotificationService(db_session)
+        ns.send_position_added_alert(
+            strategy_instance_id=s.id, symbol="ETHUSDT", side="LONG",
+            amount_usdt=Decimal("500"), order_type="LIMIT",
+            qty=Decimal("0.5"), limit_price=Decimal("2500"),
+        )
+        n = db_session.query(Notification).filter_by(strategy_instance_id=s.id).one()
+        assert "[포지션 추가]" in n.title
+        assert "LIMIT" in n.title
+        assert "2,500" in n.body or "2500" in n.body  # _fmt_num 의 thousand separator 호환
+        assert "지정가" in n.body
+
+
+# ============================================================================
 # -50% ROI 손실 임계 알림
 # ============================================================================
 class TestLossThresholdAlert:
