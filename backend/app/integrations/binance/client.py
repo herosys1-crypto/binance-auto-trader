@@ -152,7 +152,10 @@ class BinanceClient:
     ) -> dict[str, Any]:
         """ISOLATED 마진 모드 포지션에 증거금 추가/감소.
 
-        Binance Futures: POST /fapi/v1/positionMargin/modify
+        Binance Futures: **POST /fapi/v1/positionMargin** (사용자 #102 사례 fix 2026-05-06):
+          이전 path `/fapi/v1/positionMargin/modify` 는 잘못 — Binance 가 -5000
+          ("Path is invalid") 응답. 공식 endpoint 는 `/positionMargin` (no /modify).
+
         - margin_type=1 → 증거금 추가 (add)
         - margin_type=2 → 증거금 감소 (reduce)
         - position_side: hedge mode 시 LONG/SHORT, one-way 시 BOTH
@@ -161,7 +164,7 @@ class BinanceClient:
         """
         return self._request(
             "POST",
-            "/fapi/v1/positionMargin/modify",
+            "/fapi/v1/positionMargin",
             params={
                 "symbol": symbol,
                 "positionSide": position_side,
