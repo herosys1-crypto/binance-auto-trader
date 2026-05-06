@@ -77,6 +77,32 @@ class BinanceClient:
     def ping(self) -> dict[str, Any]:
         return self._request("GET", "/fapi/v1/ping", signed=False)
 
+    def get_klines(
+        self, *, symbol: str, interval: str = "1d", limit: int = 30
+    ) -> list[list[Any]]:
+        """Binance Futures /fapi/v1/klines — historical candle 데이터.
+
+        반환 포맷 (Binance 표준):
+          [[open_time, open, high, low, close, volume, close_time, ...], ...]
+          close_time 후 ignore. interval 지원: 1m/5m/15m/1h/4h/1d/1w/1M 등.
+
+        2026-05-06 (사용자 요청 — 변동률 순위 기능):
+          period 별 가격 변화율 = (close[-1] - close[0]) / close[0] × 100
+          calling: get_klines(symbol="BTCUSDT", interval="1d", limit=8) → 7일 변동률 계산.
+        """
+        params = {"symbol": symbol.upper(), "interval": interval, "limit": int(limit)}
+        return self._request("GET", "/fapi/v1/klines", signed=False, params=params)
+
+    def get_24hr_ticker(self, symbol: str | None = None) -> list[dict[str, Any]] | dict[str, Any]:
+        """Binance Futures /fapi/v1/ticker/24hr — 24h 변동률 (priceChangePercent 등).
+
+        symbol=None 이면 모든 심볼 반환 (list).
+        """
+        params: dict[str, Any] = {}
+        if symbol:
+            params["symbol"] = symbol.upper()
+        return self._request("GET", "/fapi/v1/ticker/24hr", signed=False, params=params)
+
     # ------------------------------------------------------------------
     # Account / position
     # ------------------------------------------------------------------
