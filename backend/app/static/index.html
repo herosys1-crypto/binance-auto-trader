@@ -153,15 +153,20 @@
     </div>
   </div>
 
-  <!-- Header (compact) -->
-  <div class="flex justify-between items-center mb-2">
-    <div class="flex items-baseline gap-3">
+  <!-- Header (compact) + Page Nav (2026-05-06: 시장 순위 별도 페이지 추가) -->
+  <div class="flex justify-between items-center mb-2 flex-wrap gap-2">
+    <div class="flex items-baseline gap-3 flex-wrap">
       <h1 class="text-xl font-bold">🤖 운영 대시보드</h1>
-      <p id="last-updated" class="text-xs text-slate-400">마지막 갱신: -</p>
+      <!-- Page nav — hash routing (#dashboard / #ranking) -->
+      <nav class="flex gap-1 ml-2">
+        <button id="nav-dashboard" onclick="navigateTo('dashboard')" class="btn-primary btn text-xs" style="padding:4px 10px">📊 운영</button>
+        <button id="nav-ranking" onclick="navigateTo('ranking')" class="btn-ghost btn text-xs" style="padding:4px 10px" title="24h/주/월 변동률 순위 — 진입 후보 검색 (별도 페이지)">📈 시장 순위</button>
+      </nav>
+      <p id="last-updated" class="text-xs text-slate-400 ml-2">마지막 갱신: -</p>
     </div>
     <div class="flex gap-2 items-center">
       <span id="user-info" class="text-xs text-slate-300"></span>
-      <button onclick="refreshAll()" class="btn-ghost btn text-xs" style="padding:4px 10px">↻ 새로고침</button>
+      <button onclick="refreshCurrentPage()" class="btn-ghost btn text-xs" style="padding:4px 10px">↻ 새로고침</button>
       <button onclick="logout()" class="btn-danger btn text-xs" style="padding:4px 10px">로그아웃</button>
     </div>
   </div>
@@ -175,6 +180,9 @@
     </div>
     <button onclick="dismissAlert()" class="text-slate-400 hover:text-white">✕</button>
   </div>
+
+  <!-- ============ Page: Dashboard (default) ============ -->
+  <main id="page-dashboard">
 
   <!-- 5-card metrics — 모바일 2단 / 데스크톱 5단. 거래소 잔액 카드 추가 (2026-05-03) -->
   <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-2">
@@ -323,6 +331,79 @@
       </div>
     </div>
   </div>
+
+  </main><!-- /page-dashboard -->
+
+  <!-- ============ Page: Market Ranking (별도 페이지, 2026-05-06 사용자 요청) ============ -->
+  <main id="page-ranking" class="hidden">
+    <div class="card rounded-xl p-4 mb-3">
+      <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
+        <h2 class="text-lg font-bold">📈 시장 순위 — USDT/USDC Perpetual 변동률</h2>
+        <span class="text-xs text-slate-500" id="rp-summary">-</span>
+      </div>
+
+      <!-- 방향 toggle -->
+      <div class="flex gap-2 mb-3 flex-wrap items-center">
+        <span class="text-xs text-slate-300">방향:</span>
+        <button class="btn-ghost btn text-xs rp-dir" data-dir="gainers" onclick="loadRankingPage(null, 'gainers')">📈 상승 top</button>
+        <button class="btn-ghost btn text-xs rp-dir" data-dir="losers" onclick="loadRankingPage(null, 'losers')">📉 하락 top</button>
+      </div>
+
+      <!-- 기간 탭 -->
+      <div class="flex gap-1 mb-3 flex-wrap items-center">
+        <span class="text-xs text-slate-300 mr-1">기간:</span>
+        <button class="btn-ghost btn text-xs rp-period" data-period="1d" onclick="loadRankingPage('1d', null)">1d</button>
+        <button class="btn-ghost btn text-xs rp-period" data-period="2d" onclick="loadRankingPage('2d', null)">2d</button>
+        <button class="btn-ghost btn text-xs rp-period" data-period="3d" onclick="loadRankingPage('3d', null)">3d</button>
+        <button class="btn-ghost btn text-xs rp-period" data-period="4d" onclick="loadRankingPage('4d', null)">4d</button>
+        <button class="btn-ghost btn text-xs rp-period" data-period="5d" onclick="loadRankingPage('5d', null)">5d</button>
+        <button class="btn-ghost btn text-xs rp-period" data-period="6d" onclick="loadRankingPage('6d', null)">6d</button>
+        <button class="btn-ghost btn text-xs rp-period" data-period="7d" onclick="loadRankingPage('7d', null)">7d</button>
+        <span class="text-slate-700">|</span>
+        <button class="btn-ghost btn text-xs rp-period" data-period="1w" onclick="loadRankingPage('1w', null)">1w</button>
+        <button class="btn-ghost btn text-xs rp-period" data-period="2w" onclick="loadRankingPage('2w', null)">2w</button>
+        <button class="btn-ghost btn text-xs rp-period" data-period="1m" onclick="loadRankingPage('1m', null)">1m</button>
+        <button class="btn-ghost btn text-xs rp-period" data-period="3m" onclick="loadRankingPage('3m', null)">3m</button>
+        <button class="btn-ghost btn text-xs rp-period" data-period="6m" onclick="loadRankingPage('6m', null)">6m</button>
+        <button class="btn-ghost btn text-xs rp-period" data-period="1y" onclick="loadRankingPage('1y', null)">1y</button>
+      </div>
+
+      <!-- 결과 limit -->
+      <div class="flex gap-2 mb-3 items-center text-xs">
+        <span class="text-slate-300">표시 개수:</span>
+        <select id="rp-limit" onchange="loadRankingPage(null, null)" class="bg-slate-900 border border-slate-700 rounded px-2 py-1">
+          <option value="10">10</option>
+          <option value="20">20</option>
+          <option value="30" selected>30</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select>
+        <button onclick="loadRankingPage(null, null)" class="btn-ghost btn text-xs ml-auto" style="padding:3px 10px">↻ 새로고침</button>
+      </div>
+
+      <!-- 테이블 -->
+      <div class="overflow-auto" style="max-height: calc(100vh - 280px)">
+        <table class="min-w-max">
+          <thead>
+            <tr>
+              <th style="width:40px">#</th>
+              <th>심볼</th>
+              <th class="num">현재가</th>
+              <th class="num">변동률</th>
+              <th class="num">24h 거래대금</th>
+              <th>액션</th>
+            </tr>
+          </thead>
+          <tbody id="rp-rows"><tr><td colspan="6" class="text-center text-slate-500 py-3 text-xs">로딩 중...</td></tr></tbody>
+        </table>
+      </div>
+
+      <p class="text-xs text-slate-500 mt-2">
+        📌 1d 는 모든 USDT/USDC perpetual, 그 외 기간은 24h 거래대금 top 50 만 정확 계산.
+        Redis 캐시: 1d=60s, 1w=5m, 1m=30m, 1y=4h. 「↑ 새 전략」 클릭 시 새 전략 모달 + 심볼/시작가 자동 채움.
+      </p>
+    </div>
+  </main><!-- /page-ranking -->
 
   <!-- ===== 거래소 계정 관리 모달 (2026-05-04 신규) =====
        표시: 등록된 계정 목록 + daily_loss_limit_usdt 인라인 수정.
@@ -993,6 +1074,133 @@ function showDashboard() {
   document.getElementById('dashboard-screen').classList.remove('hidden');
   const email = document.getElementById('email').value;
   document.getElementById('user-info').textContent = '👤 ' + email;
+  // hash 기반 page routing 초기화 (2026-05-06: 시장 순위 별도 페이지)
+  navigateTo(_pageFromHash() || 'dashboard');
+}
+
+// ==================== Page Navigation (2026-05-06: 시장 순위 별도 페이지) ====================
+// hash routing — #dashboard / #ranking. URL 공유 가능 + 새 탭 열기 가능.
+let _currentPage = 'dashboard';
+
+function _pageFromHash() {
+  const h = (window.location.hash || '').replace(/^#/, '').toLowerCase();
+  return (h === 'ranking') ? 'ranking' : 'dashboard';
+}
+
+function navigateTo(page) {
+  if (page !== 'dashboard' && page !== 'ranking') page = 'dashboard';
+  _currentPage = page;
+  // URL hash 갱신 (popstate 도 같이 트리거)
+  if (window.location.hash !== '#' + page) {
+    history.replaceState(null, '', '#' + page);
+  }
+  // page 표시/숨김
+  document.getElementById('page-dashboard').classList.toggle('hidden', page !== 'dashboard');
+  document.getElementById('page-ranking').classList.toggle('hidden', page !== 'ranking');
+  // nav 활성 표시
+  ['dashboard', 'ranking'].forEach(p => {
+    const btn = document.getElementById('nav-' + p);
+    if (!btn) return;
+    if (p === page) {
+      btn.classList.add('btn-primary'); btn.classList.remove('btn-ghost');
+    } else {
+      btn.classList.add('btn-ghost'); btn.classList.remove('btn-primary');
+    }
+  });
+  // page 별 초기 로딩
+  if (page === 'ranking') {
+    if (!window._rpState) window._rpState = { period: '1d', direction: 'gainers' };
+    loadRankingPage(window._rpState.period, window._rpState.direction);
+  } else {
+    refreshAll();
+  }
+}
+
+function refreshCurrentPage() {
+  if (_currentPage === 'ranking') loadRankingPage(null, null);
+  else refreshAll();
+}
+
+// 브라우저 back/forward 대응
+window.addEventListener('hashchange', () => navigateTo(_pageFromHash()));
+
+// ==================== Ranking Page (별도 페이지, 2026-05-06) ====================
+async function loadRankingPage(period, direction) {
+  if (!window._rpState) window._rpState = { period: '1d', direction: 'gainers' };
+  if (period) window._rpState.period = period;
+  if (direction) window._rpState.direction = direction;
+  const p = window._rpState.period;
+  const d = window._rpState.direction;
+  const lim = Number(document.getElementById('rp-limit').value) || 30;
+
+  // 활성 표시
+  document.querySelectorAll('#page-ranking .rp-period').forEach(b => {
+    if (b.dataset.period === p) {
+      b.classList.add('btn-primary'); b.classList.remove('btn-ghost');
+    } else {
+      b.classList.add('btn-ghost'); b.classList.remove('btn-primary');
+    }
+  });
+  document.querySelectorAll('#page-ranking .rp-dir').forEach(b => {
+    if (b.dataset.dir === d) {
+      b.classList.add(d === 'gainers' ? 'btn-success' : 'btn-danger'); b.classList.remove('btn-ghost');
+    } else {
+      b.classList.add('btn-ghost'); b.classList.remove('btn-success', 'btn-danger');
+    }
+  });
+
+  try {
+    const r = await api(`/symbols/ranking?period=${encodeURIComponent(p)}&direction=${encodeURIComponent(d)}&limit=${lim}`);
+    document.getElementById('rp-summary').textContent =
+      `${r.count}건 · cache=${r.cached ? 'hit' : 'miss'} · period=${p} · ${d === 'gainers' ? '📈 상승' : '📉 하락'}`;
+    const rowsEl = document.getElementById('rp-rows');
+    if (!r.items || r.items.length === 0) {
+      rowsEl.innerHTML = '<tr><td colspan="6" class="text-center text-slate-500 py-3 text-xs">데이터 없음</td></tr>';
+      return;
+    }
+    rowsEl.innerHTML = r.items.map((it, i) => {
+      const chg = Number(it.change_pct);
+      const cls = chg > 0 ? 'pos' : chg < 0 ? 'neg' : '';
+      const sign = chg > 0 ? '+' : '';
+      const vol = Number(it.quote_volume);
+      const volStr = vol > 1e9 ? (vol/1e9).toFixed(2) + 'B' : vol > 1e6 ? (vol/1e6).toFixed(1) + 'M' : vol.toFixed(0);
+      // 새 전략 시작 link — 페이지에선 「↑ 새 전략」 으로 표시 (모달 열림 + 심볼 자동 채움)
+      const action =
+        `<button class="btn-success btn text-xs" style="padding:3px 10px"
+          onclick="startNewStrategyFromRanking('${it.symbol}', '${it.last_price}')">↑ 새 전략</button>`;
+      return `<tr>
+        <td>${i + 1}</td>
+        <td class="font-mono text-blue-300">${it.symbol}</td>
+        <td class="num">${fmtNum(it.last_price)}</td>
+        <td class="num ${cls}">${sign}${chg.toFixed(2)}%</td>
+        <td class="num text-slate-400 text-xs">${volStr} USDT</td>
+        <td>${action}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    document.getElementById('rp-rows').innerHTML =
+      `<tr><td colspan="6" class="text-center text-red-400 py-3 text-xs">조회 실패: ${e.message}</td></tr>`;
+  }
+}
+
+// 페이지에서 「↑ 새 전략」 → 새 전략 모달 열기 + 심볼/시작가 자동 채움
+function startNewStrategyFromRanking(symbol, lastPrice) {
+  // dashboard 로 이동 후 새 전략 모달 호출
+  navigateTo('dashboard');
+  if (typeof openCreateModal === 'function') {
+    openCreateModal();
+    setTimeout(() => {
+      const symInp = document.getElementById('cm-symbol');
+      const startInp = document.getElementById('cm-start-price');
+      if (symInp) symInp.value = symbol;
+      if (typeof refreshCmMarketInfo === 'function') {
+        refreshCmMarketInfo();
+      } else if (startInp) {
+        startInp.value = lastPrice;
+      }
+    }, 100);
+  }
+  toast(`✅ ${symbol} — 새 전략 모달 자동 열림`, 'success');
 }
 
 // ==================== API helper ====================
