@@ -8,7 +8,7 @@ class TestWhitelistInfo:
     def test_disabled_when_csv_empty(self, db_session, make_user, monkeypatch):
         monkeypatch.setattr("app.core.config.settings.allowed_symbols_csv", None, raising=False)
         u = make_user()
-        resp = get_whitelist_info(user_id=u.id)
+        resp = get_whitelist_info(db=db_session, user_id=u.id)
         assert resp.enabled is False
         assert resp.allowed_symbols == []
 
@@ -18,7 +18,7 @@ class TestWhitelistInfo:
             "BTCUSDT,ETHUSDT", raising=False,
         )
         u = make_user()
-        resp = get_whitelist_info(user_id=u.id)
+        resp = get_whitelist_info(db=db_session, user_id=u.id)
         assert resp.enabled is True
         assert resp.allowed_symbols == ["BTCUSDT", "ETHUSDT"]
 
@@ -28,7 +28,7 @@ class TestWhitelistInfo:
             " btcusdt , ETHUSDT,, doge ", raising=False,
         )
         u = make_user()
-        resp = get_whitelist_info(user_id=u.id)
+        resp = get_whitelist_info(db=db_session, user_id=u.id)
         assert resp.enabled is True
         # 정렬 + 대문자 정규화
         assert resp.allowed_symbols == ["BTCUSDT", "DOGE", "ETHUSDT"]
