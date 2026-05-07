@@ -203,7 +203,12 @@ class TestAggregatorWithRealizedAccumulated:
         with_limit_50,
         patched_agg_session,
     ) -> None:
-        """realized -30 + unrealized -10 = -40 ≥ -50 → no breach."""
+        """realized -30 + unrealized -10 = -40 → no breach (kill-switch 미발동).
+
+        2026-05-07 wire-up: 80% (= -40) 에 정확히 도달 → row.status='WARNED' 로 전환
+        + 텔레그램 경고 발송 (kill-switch 발동 X). "no breach" 의 의미는 kill-switch
+        가 발동 안 된다는 것 — WARNED 도 그 조건 만족.
+        """
         strategy = make_strategy(
             symbol_str="BTCUSDT", side="SHORT", status="STAGE2_OPEN",
             current_position_qty=Decimal("-0.5"),
@@ -219,10 +224,9 @@ class TestAggregatorWithRealizedAccumulated:
         agg.run_daily_loss_check_once()
 
         ks = db_session.execute(select(AccountKillSwitch)).scalar_one_or_none()
-        assert ks is None
-        # row 는 만들어짐, status=ACTIVE
+        assert ks is None  # kill-switch 미발동 (breach X)
         row = db_session.execute(select(AccountDailyRiskLimit)).scalar_one()
-        assert row.status == "ACTIVE"
+        assert row.status == "WARNED"  # 80% 임계 도달 → 경고 (2026-05-07)
         # realized 는 -30 으로 보존, unrealized 는 갱신
         assert row.realized_pnl == Decimal("-30.00000000")
         assert row.unrealized_pnl_snapshot == Decimal("-10")
