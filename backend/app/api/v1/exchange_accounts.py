@@ -63,6 +63,35 @@ class ExchangeAccountDailyLimitUpdate(BaseModel):
     )
 
 
+class ExchangeAccountCredentialsUpdate(BaseModel):
+    """API 키 회전 (testnet ↔ mainnet 전환 포함). 2026-05-07 신규.
+
+    사용 사례:
+    - testnet 운영 후 mainnet 전환 — 새 mainnet 키 + is_testnet=False 동시 변경
+    - 노출된 mainnet 키 정기 회전 — 새 키만 변경 (is_testnet 미지정)
+    - 키 갱신 (Binance 만료 등)
+
+    안전 가드 (서버측):
+    1. 새 키로 Binance 호출 검증 (`get_account`) 후 저장 — 실패 시 DB 변경 0
+    2. is_testnet 변경 시 이 계정의 활성 strategy 존재하면 거부
+       (testnet 포지션 + mainnet 키 조합은 좀비/혼란 발생)
+    """
+    api_key: str = Field(..., min_length=10, max_length=200, description="새 거래소 API key (평문)")
+    api_secret: str = Field(..., min_length=10, max_length=200, description="새 거래소 API secret (평문)")
+    passphrase: str | None = Field(
+        default=None, max_length=200,
+        description="OKX 등 일부 거래소가 요구. 명시적으로 공백 보내면 NULL 처리. 미지정 시 기존 값 보존.",
+    )
+    is_testnet: bool | None = Field(
+        default=None,
+        description="None 이면 기존 값 유지. True/False 명시 시 환경 전환 (활성 strategy 가드 적용).",
+    )
+    hedge_mode_enabled: bool | None = Field(
+        default=None,
+        description="None 이면 기존 값 유지. 거래소 헤지모드 설정과 일치해야 함.",
+    )
+
+
 @router.post("", response_model=ExchangeAccountResponse, status_code=status.HTTP_201_CREATED)
 def create_exchange_account(
     payload: ExchangeAccountCreate,
@@ -114,6 +143,117 @@ def list_exchange_accounts(
         .order_by(ExchangeAccount.id.desc())
     ).scalars().all()
     return [ExchangeAccountResponse.model_validate(r) for r in rows]
+
+
+@router.patch("/{exchange_account_id}/credentials", response_model=ExchangeAccountResponse)
+def update_credentials(
+    exchange_account_id: int,
+    payload: ExchangeAccountCredentialsUpdate,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> ExchangeAccountResponse:
+    """거래소 API 키 회전 + 옵션으로 testnet ↔ mainnet 전환 (2026-05-07).
+
+    검증 흐름:
+    1. 계정 소유 확인
+    2. is_testnet 변경 의도면: 이 계정의 활성 strategy 가 0건이어야 함 (가드)
+    3. 새 키로 Binance get_account 호출 — 인증 실패 시 거부
+    4. Fernet 암호화 + DB commit
+    5. NotificationService.send_system_alert 로 변경 이력 기록 (audit trail)
+    """
+    from app.core.strategy_status import TERMINAL_STATUSES
+    from app.models.strategy_instance import StrategyInstance
+
+    account = db.execute(
+        select(ExchangeAccount)
+        .where(ExchangeAccount.id == exchange_account_id)
+        .where(ExchangeAccount.user_id == user_id)
+    ).scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exchange account not found")
+
+    # 1) is_testnet 토글 가드 — 활성 strategy 가 있으면 거부 (포지션 mismatch 방지)
+    will_change_env = payload.is_testnet is not None and payload.is_testnet != account.is_testnet
+    if will_change_env:
+        active_count = db.execute(
+            select(StrategyInstance)
+            .where(StrategyInstance.exchange_account_id == exchange_account_id)
+            .where(StrategyInstance.status.notin_(TERMINAL_STATUSES))
+            .where(StrategyInstance.is_archived.is_(False))
+        ).all()
+        if active_count:
+            old_env = "testnet" if account.is_testnet else "mainnet"
+            new_env = "testnet" if payload.is_testnet else "mainnet"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"환경 전환 불가 ({old_env} → {new_env}): 활성 strategy {len(active_count)}건 존재. "
+                    "모든 활성 strategy 를 종료한 후 다시 시도하세요. "
+                    "(testnet 포지션을 mainnet 키로 추적하면 좀비/혼란 발생)"
+                ),
+            )
+
+    # 2) 새 키로 Binance 호출 검증 — 실패 시 DB 변경 0
+    effective_is_testnet = payload.is_testnet if payload.is_testnet is not None else account.is_testnet
+    try:
+        client = BinanceClient(
+            api_key=payload.api_key,
+            api_secret=payload.api_secret,
+            is_testnet=effective_is_testnet,
+        )
+        client.get_account()  # 인증 검증 (잔액 확인 부가효과)
+    except Exception as e:
+        logger.warning(
+            "PATCH credentials Binance call failed: account_id=%s is_testnet=%s error=%s",
+            exchange_account_id, effective_is_testnet, e,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"새 키로 Binance 인증 실패 ({'testnet' if effective_is_testnet else 'mainnet'}): {e}. "
+                "키 권한/IP whitelist/환경 일치 여부 확인 후 다시 시도."
+            ),
+        ) from e
+
+    # 3) 검증 성공 — 암호화 + 저장
+    try:
+        account.api_key_enc = encrypt_text(payload.api_key)
+        account.api_secret_enc = encrypt_text(payload.api_secret)
+        if payload.passphrase is not None:
+            account.passphrase_enc = encrypt_text(payload.passphrase) if payload.passphrase else None
+        if payload.is_testnet is not None:
+            account.is_testnet = payload.is_testnet
+        if payload.hedge_mode_enabled is not None:
+            account.hedge_mode_enabled = payload.hedge_mode_enabled
+        db.commit()
+        db.refresh(account)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"키 저장 실패 (암호화 또는 DB): {e}",
+        ) from e
+
+    # 4) Audit 알림 — 키 회전은 보안 사건이라 텔레그램 + DB 기록
+    try:
+        from app.services.notification_service import NotificationService
+        env_str = "testnet" if account.is_testnet else "mainnet"
+        env_change = (
+            f" + 환경 {('mainnet' if account.is_testnet else 'testnet')} → {env_str}"
+            if will_change_env else ""
+        )
+        NotificationService(db).send_system_alert(
+            title=f"🔑 [API 키 변경] account #{exchange_account_id}",
+            body=(
+                f"거래소: {account.exchange_name} · 환경: {env_str}{env_change}\n"
+                "검증: get_account 성공 후 저장.\n"
+                "이전 키 무효화됨 — 외부 시스템 (별도 봇 등) 에서 옛 키 사용 중이면 갱신 필요."
+            ),
+        )
+    except Exception:
+        pass  # audit 실패는 본 작업 성공 영향 X
+
+    return ExchangeAccountResponse.model_validate(account)
 
 
 @router.patch("/{exchange_account_id}/daily-loss-limit", response_model=ExchangeAccountResponse)
