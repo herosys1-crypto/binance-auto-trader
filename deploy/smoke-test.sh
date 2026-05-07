@@ -55,14 +55,24 @@ fi
 
 echo ""
 echo "==> [3/8] alembic head 검사"
-ACTUAL=$(docker compose exec -T api alembic current 2>/dev/null | grep -oE '[0-9]{4}_[a-z_]+' | head -1)
-LATEST_FILE=$(ls alembic/versions/*.py 2>/dev/null | sort | tail -1 | xargs -I {} basename {} .py)
-if [ "$ACTUAL" = "$LATEST_FILE" ]; then
-    ok "alembic head = ${ACTUAL} (latest migration 과 일치)"
-elif [ -z "$ACTUAL" ]; then
-    fail "alembic current 호출 실패 (DB 연결 또는 alembic.ini 문제)"
+# alembic 의 current 출력은 SHA (<rev>) 만 보임 — 우리 마이그레이션은 파일명을
+# revision 으로 사용하지 않으므로, 파일에서 'revision = ' 라인 추출해 비교한다.
+# 5-07 fix: 이전엔 '[0-9]{4}_[a-z_]+' regex 가 파일명 안의 'tp6_to_tp10' 같이
+# 숫자 포함된 부분을 truncate 해서 false-negative 발생.
+LATEST_FILE=$(ls alembic/versions/*.py 2>/dev/null | sort | tail -1)
+if [ -z "$LATEST_FILE" ]; then
+    fail "alembic versions 비어 있음"
 else
-    fail "alembic head=${ACTUAL} ≠ latest=${LATEST_FILE} — 'docker compose exec api alembic upgrade head' 필요"
+    LATEST_REV=$(grep -E "^revision[: ]" "$LATEST_FILE" | head -1 | grep -oE "['\"][^'\"]+['\"]" | tr -d "'\"" | head -1)
+    ACTUAL=$(docker compose exec -T api alembic current 2>/dev/null | grep -oE '\b[a-f0-9]{8,}\b|\b[0-9]{4}_[a-z_0-9]+' | head -1)
+    LATEST_BASENAME=$(basename "$LATEST_FILE" .py)
+    if [ -n "$ACTUAL" ] && { [ "$ACTUAL" = "$LATEST_REV" ] || [ "$ACTUAL" = "$LATEST_BASENAME" ]; }; then
+        ok "alembic head = ${ACTUAL} (latest migration 과 일치)"
+    elif [ -z "$ACTUAL" ]; then
+        fail "alembic current 호출 실패 (DB 연결 또는 alembic.ini 문제)"
+    else
+        fail "alembic head=${ACTUAL} ≠ latest=${LATEST_REV:-$LATEST_BASENAME} — 'docker compose exec api alembic upgrade head' 필요"
+    fi
 fi
 
 echo ""
