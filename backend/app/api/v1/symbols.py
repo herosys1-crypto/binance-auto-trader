@@ -67,14 +67,24 @@ class WhitelistInfoResponse(BaseModel):
 
 @router.get("/whitelist-info", response_model=WhitelistInfoResponse)
 def get_whitelist_info(
+    db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> WhitelistInfoResponse:
-    """현재 적용 중인 심볼 화이트리스트 상태."""
+    """현재 적용 중인 심볼 화이트리스트 상태.
+
+    enabled = (env 에 ALLOWED_SYMBOLS_CSV 값 있음) AND (DB 토글 ON).
+    DB 토글이 OFF 면 env 에 값 있어도 가드 미적용 → 모든 심볼 허용.
+    """
     from app.core.config import settings
+    from app.services.system_settings_service import SystemSettingsService
+
     allowed = settings.allowed_symbols_set
+    env_configured = allowed is not None
+    db_toggle = SystemSettingsService(db).is_whitelist_enabled(default_from_env=env_configured)
+    effective_enabled = env_configured and db_toggle
     return WhitelistInfoResponse(
-        enabled=allowed is not None,
-        allowed_symbols=sorted(allowed) if allowed else [],
+        enabled=effective_enabled,
+        allowed_symbols=sorted(allowed) if (effective_enabled and allowed) else [],
     )
 
 

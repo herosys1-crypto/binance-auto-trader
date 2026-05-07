@@ -888,6 +888,63 @@ def _verify_account_ownership(db: Session, exchange_account_id: int, user_id: in
         )
 
 
+# ============================================================================
+# System Settings — 운영자 런타임 토글 (2026-05-07 사용자 요청)
+# ============================================================================
+class WhitelistSettingResponse(BaseModel):
+    """화이트리스트 운영 상태."""
+    enabled: bool
+    allowed_symbols: list[str]
+    env_configured: bool  # env 에 ALLOWED_SYMBOLS_CSV 값이 있는지 (없으면 toggle 켜도 무의미)
+
+
+class WhitelistSettingUpdate(BaseModel):
+    enabled: bool
+
+
+@router.get("/settings/whitelist", response_model=WhitelistSettingResponse)
+def get_whitelist_setting(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> WhitelistSettingResponse:
+    """현재 화이트리스트 토글 상태 + env 의 허용 심볼 목록."""
+    from app.core.config import settings
+    from app.services.system_settings_service import SystemSettingsService
+
+    allowed = settings.allowed_symbols_set
+    env_configured = allowed is not None
+    enabled = SystemSettingsService(db).is_whitelist_enabled(default_from_env=env_configured)
+    return WhitelistSettingResponse(
+        enabled=enabled,
+        allowed_symbols=sorted(allowed) if allowed else [],
+        env_configured=env_configured,
+    )
+
+
+@router.patch("/settings/whitelist", response_model=WhitelistSettingResponse)
+def update_whitelist_setting(
+    payload: WhitelistSettingUpdate,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> WhitelistSettingResponse:
+    """화이트리스트 토글 변경 (DB 영속). 즉시 적용 — strategy 생성 시점에 반영."""
+    from app.core.config import settings
+    from app.services.system_settings_service import SystemSettingsService
+
+    SystemSettingsService(db).set(
+        "whitelist_enabled",
+        payload.enabled,
+        updated_by=user_id,
+        description="화이트리스트 적용 여부 (운영자 UI 토글)",
+    )
+    allowed = settings.allowed_symbols_set
+    return WhitelistSettingResponse(
+        enabled=payload.enabled,
+        allowed_symbols=sorted(allowed) if allowed else [],
+        env_configured=allowed is not None,
+    )
+
+
 @router.post("/kill-switch/{exchange_account_id}/enable", response_model=MessageResponse)
 def enable_kill_switch(
     exchange_account_id: int,
