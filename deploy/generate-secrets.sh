@@ -88,6 +88,12 @@ ENABLE_METRICS=true
 # ─── 일일 손실 한도 (선택) ───
 # DAILY_LOSS_LIMIT_USDT=500   # 또는 exchange_account 별 daily_loss_limit_usdt 사용
 
+# ─── 자본 상한 / 동시성 / 화이트리스트 (5-07 신규, MAINNET-CHECKLIST 3-3) ───
+# mainnet 권장값 — testnet 운영 중에도 적용해 실전 시뮬레이션.
+MAX_CONCURRENT_STRATEGIES_PER_ACCOUNT=3
+MAX_STRATEGY_CAPITAL_PCT_OF_BALANCE=5.0
+ALLOWED_SYMBOLS_CSV=BTCUSDT,ETHUSDT
+
 EOF
 
 cat <<'STDERR_NOTICE' >&2
