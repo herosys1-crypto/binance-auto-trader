@@ -62,9 +62,11 @@ class TestStatsBreakdown:
             )
         r = _call_breakdown(db_session, "realized")
         assert r["count"] == 3  # zero 두 개 제외
-        # 절댓값 정렬 — 100 > 50 > -30
-        ids = [Decimal(it["realized_pnl"]) for it in r["items"]]
-        assert abs(ids[0]) >= abs(ids[1]) >= abs(ids[2])
+        # 2026-05-08 변경: 정렬을 「최신 시작 순」 으로 — 사용자가 가장 알고 싶어하는 것은
+        # 최근 거래 결과. 같은 created_at 이면 ID 큰 (최근 row) 우선.
+        # 모든 strategy 가 거의 동시 생성됐으니 ID 큰 순 (마지막에 만든 것 = 최근).
+        ids = [it["id"] for it in r["items"]]
+        assert ids == sorted(ids, reverse=True)
 
     def test_losses_view_only_negative(self, db_session, make_strategy, make_template):
         tpl = make_template()
@@ -76,10 +78,12 @@ class TestStatsBreakdown:
             )
         r = _call_breakdown(db_session, "losses")
         assert r["count"] == 3
-        # 깊은 손실 먼저 (오름차순)
-        pnls = [Decimal(it["realized_pnl"]) for it in r["items"]]
-        assert pnls == sorted(pnls)
+        # 2026-05-08 변경: 정렬을 「최신 시작 순」 으로 (사용자 일관성).
+        # 깊은 손실 우선 정렬은 별도 UI 정렬 옵션으로 (별도 PR).
+        ids = [it["id"] for it in r["items"]]
+        assert ids == sorted(ids, reverse=True)
         # 모두 음수
+        pnls = [Decimal(it["realized_pnl"]) for it in r["items"]]
         assert all(p < 0 for p in pnls)
 
     def test_invalid_view_rejected(self, db_session):

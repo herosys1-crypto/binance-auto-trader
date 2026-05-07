@@ -754,18 +754,20 @@ def get_stats_breakdown(
         StrategyInstance.created_at,
     )
 
+    # 2026-05-08 fix (사용자 보고): realized 탭이 PNL 절대값 큰 순이라 최신 데이터가
+    # 안 보이던 문제. 모든 view 를 「최신 시작 순」 으로 통일 — 사용자가 가장 알고 싶은 것은
+    # "최근 거래가 어떻게 됐나". 정렬 기준 변경 시 created_at 우선, ID 폴백 (옛날 row 호환).
+    _recent_first = (desc(StrategyInstance.created_at), desc(StrategyInstance.id))
     if view == "realized":
         rows = db.execute(
-            base.where(StrategyInstance.realized_pnl != 0)
-            .order_by(desc(func.abs(StrategyInstance.realized_pnl)))
+            base.where(StrategyInstance.realized_pnl != 0).order_by(*_recent_first)
         ).all()
     elif view == "losses":
         rows = db.execute(
-            base.where(StrategyInstance.realized_pnl < 0)
-            .order_by(StrategyInstance.realized_pnl)
+            base.where(StrategyInstance.realized_pnl < 0).order_by(*_recent_first)
         ).all()
     else:  # strategies
-        rows = db.execute(base.order_by(desc(StrategyInstance.id))).all()
+        rows = db.execute(base.order_by(*_recent_first)).all()
 
     def _classify(realized, status, stage, crisis):
         if realized is not None and Decimal(str(realized)) > 0:
