@@ -135,10 +135,24 @@ class StrategyService:
                 "신규 전략 생성 차단. Kill-Switch 를 해제한 후 재시도하세요."
             )
 
+        # 실효 leverage 산출 (이후 여러 가드에서 공통 사용).
+        from app.core.config import settings as _settings
+        effective_lev_check = leverage_override if leverage_override is not None else (template_model.leverage or 1)
+
+        # 0-Z) 레버리지 상한 (MAINNET-CHECKLIST 3-4, 2026-05-07).
+        # Binance API 는 최대 125x 까지 허용하지만 청산 위험 큼. settings.max_leverage 양수면 가드.
+        max_lev = _settings.max_leverage
+        if max_lev and max_lev > 0:
+            if effective_lev_check > max_lev:
+                raise ValueError(
+                    f"레버리지 {effective_lev_check}x > 한도 {max_lev}x 초과. "
+                    f"운영 정책 (settings.max_leverage) 으로 차단. "
+                    "leverage_override 줄이거나 templete.leverage 줄여 재시도하세요."
+                )
+
         # 0-A) 심볼 화이트리스트 (MAINNET-CHECKLIST 3-3, 2026-05-07).
         # mainnet 초기엔 high-liquidity 심볼만 허용 (slippage / liquidity 위험 ↓).
         # settings.allowed_symbols_csv 가 비어 있으면 모든 심볼 허용 (testnet / 개발 default).
-        from app.core.config import settings as _settings
         allowed = _settings.allowed_symbols_set
         if allowed and symbol.upper() not in allowed:
             raise ValueError(
@@ -218,6 +232,23 @@ class StrategyService:
                 f"(자본 {template_model.total_capital} ÷ 레버리지 {effective_lev}x). "
                 "거래소에 입금하거나 자본을 줄이세요."
             )
+
+        # 1-Z) 청산가 안전 거리 가드 (MAINNET-CHECKLIST 3-5, 2026-05-07).
+        # 진입 직후 추정 청산가까지의 거리가 너무 가까우면 거부 (작은 가격 변동에 강제 청산 위험).
+        # 추정 공식 (Isolated, conservative): SHORT: liq = entry × (1 + (1-mmr)/lev) | LONG: × (1 - ...)
+        # mmr (maintenance margin ratio) = 0.5% (작은 포지션, 보수적).
+        min_liq_dist = _settings.min_liquidation_distance_pct
+        if min_liq_dist and min_liq_dist > 0:
+            from decimal import Decimal as _D
+            mmr = _D("0.005")
+            lev_d = _D(str(effective_lev_check)) if effective_lev_check else _D("1")
+            distance_pct_est = ((_D("1") - mmr) / lev_d * _D("100")).quantize(_D("0.01"))
+            if distance_pct_est < _D(str(min_liq_dist)):
+                raise ValueError(
+                    f"청산가 안전 거리 부족: 추정 거리 {distance_pct_est}% < 한도 {min_liq_dist}% "
+                    f"(레버리지 {effective_lev_check}x 일 때 추정 거리 ≈ {distance_pct_est}%). "
+                    "레버리지를 낮추거나 settings.min_liquidation_distance_pct 를 조정하세요."
+                )
 
         # 1-A) 단일 strategy 자본 상한 % (MAINNET-CHECKLIST 3-3, 2026-05-07).
         # template.total_capital 이 가용 잔액의 N% 초과 시 거부 — 한 전략에 자본 집중 차단.

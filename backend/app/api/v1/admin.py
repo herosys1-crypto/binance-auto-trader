@@ -911,8 +911,31 @@ def disable_kill_switch(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> MessageResponse:
+    """Kill-Switch 해제 + 오늘의 daily_risk_limit row TRIGGERED → ACTIVE 리셋.
+
+    배경 (2026-05-07 사용자 운영 발견): KS 만 clear 하고 row.status 가 TRIGGERED 로
+    남아있으면 update_pnl_and_check 가 'breached and status != TRIGGERED' 가드로
+    재발동 안 함. → KS 가 해제된 채 손실이 더 커져도 자동 차단 실패.
+
+    이 fix: KS clear 시 row 도 함께 ACTIVE 로 리셋해서 다음 사이클부터 다시
+    임계 검사 가능. (PR #15 의 실 운영 검증에서 발견된 latent 버그)
+    """
+    from datetime import date
+    from app.models.account_daily_risk_limit import AccountDailyRiskLimit
+    from sqlalchemy import select as _s
+
     _verify_account_ownership(db, exchange_account_id, user_id)
     AccountKillSwitchService(db).clear(exchange_account_id)
+
+    # 오늘의 daily_risk_limit row 가 TRIGGERED 면 ACTIVE 로 리셋 (재검사 가능 상태로).
+    row = db.execute(
+        _s(AccountDailyRiskLimit)
+        .where(AccountDailyRiskLimit.exchange_account_id == exchange_account_id)
+        .where(AccountDailyRiskLimit.trading_date == date.today())
+    ).scalar_one_or_none()
+    if row and row.status == "TRIGGERED":
+        row.status = "ACTIVE"
+        db.commit()
     return MessageResponse(message=f"Kill switch cleared on account {exchange_account_id}")
 
 

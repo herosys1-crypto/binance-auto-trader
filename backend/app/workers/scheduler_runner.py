@@ -95,6 +95,17 @@ def start_scheduler() -> None:
     # Daily loss limit 체크 — 매 1분 (settings.daily_loss_limit_usdt 미설정 시 no-op).
     # audit 2026-05-04: AccountDailyLossLimiter 가 호출되는 곳 0건이라 안전장치 무력 상태였음.
     scheduler.add_job(guarded_job("daily_loss_check", 50, run_daily_loss_check_once), trigger=IntervalTrigger(minutes=1), id="daily_loss_check", replace_existing=True, max_instances=1, coalesce=True)
+    # System heartbeat — 24/7 운영 신뢰성 알림 (2026-05-07).
+    # settings.heartbeat_interval_hours 양수일 때만 등록. 비활성 default → 스케줄 등록 0.
+    from app.core.config import settings as _cfg
+    hb_hours = _cfg.heartbeat_interval_hours
+    if hb_hours and hb_hours > 0:
+        from app.workers.heartbeat_worker import run_heartbeat_once
+        scheduler.add_job(
+            guarded_job("heartbeat", 60, run_heartbeat_once),
+            trigger=IntervalTrigger(hours=hb_hours),
+            id="heartbeat", replace_existing=True, max_instances=1, coalesce=True,
+        )
     scheduler.start()
 
 if __name__ == "__main__":

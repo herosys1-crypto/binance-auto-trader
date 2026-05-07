@@ -42,6 +42,18 @@ class Settings(BaseSettings):
     # 심볼 화이트리스트 (CSV, 예: "BTCUSDT,ETHUSDT"). None / 빈 문자열이면 모든 심볼 허용.
     # mainnet 초기엔 BTC/ETH 같은 high-liquidity 심볼만 허용 권장.
     allowed_symbols_csv: str | None = None
+    # 최대 leverage (사용자 override 포함). Binance Futures 는 최대 125x 까지 허용하지만
+    # 청산 위험 큼. mainnet 권장 5x. None / 0 / 음수면 비활성 (Binance API 한도까지).
+    max_leverage: int | None = None
+
+    # System heartbeat 텔레그램 주기 (시간). 24/7 운영 신뢰성 — 정기적으로 시스템 상태
+    # 요약 알림. None / 0 이면 비활성 (default). 권장 6 (하루 4번).
+    heartbeat_interval_hours: int | None = None
+
+    # 진입 시 추정 청산가까지 최소 거리 (%, MAINNET-CHECKLIST 3-5).
+    # 거리 = |start_price - liq_price| / start_price × 100. 이 값 미만이면 진입 거부.
+    # leverage=10x 일 때 거리 ≈ 9.95%. None / 0 이면 비활성. mainnet 권장 5~10.
+    min_liquidation_distance_pct: float | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
