@@ -1,9 +1,17 @@
+import logging
 from datetime import date
 from decimal import Decimal
 from sqlalchemy import select
 from app.models.account_daily_risk_limit import AccountDailyRiskLimit
 from app.observability.metrics import kill_switch_trigger_total, kill_switch_enabled
 from app.services.account_kill_switch_service import AccountKillSwitchService
+
+logger = logging.getLogger(__name__)
+
+# 사용자가 한도의 이 비율 손실에 도달하면 경고 알림 (한 번만, ACTIVE → WARNED).
+# breach (한도 100% 도달) 직전 사용자가 수동 개입 (포지션 정리/추가 잔액) 할 시간 확보.
+WARNING_THRESHOLD_RATIO = Decimal("0.8")
+
 
 class AccountDailyLossLimiterService:
     def __init__(self, db) -> None:
@@ -43,6 +51,27 @@ class AccountDailyLossLimiterService:
         row.unrealized_pnl_snapshot = unrealized_pnl_snapshot
         total_today_pnl = realized_pnl + unrealized_pnl_snapshot
         breached = total_today_pnl <= (-daily_loss_limit_amount)
+        warning_threshold = -(daily_loss_limit_amount * WARNING_THRESHOLD_RATIO)
+
+        # 2026-05-07 wire-up (audit 발견): kill-switch breach 전 80% 도달 경고 알림.
+        # ACTIVE → WARNED 전환 시 1회만 (스팸 방지). 이미 TRIGGERED 면 skip.
+        if (
+            not breached
+            and row.status == "ACTIVE"
+            and total_today_pnl <= warning_threshold
+        ):
+            row.status = "WARNED"
+            try:
+                from app.services.notification_service import NotificationService
+                NotificationService(self.db).send_daily_loss_warning(
+                    exchange_account_id=exchange_account_id,
+                    realized_pnl=realized_pnl,
+                    unrealized_pnl=unrealized_pnl_snapshot,
+                    daily_limit=daily_loss_limit_amount,
+                )
+            except Exception as e:
+                logger.warning("Daily loss warning alert failed for account %s: %s", exchange_account_id, e)
+
         if breached and row.status != "TRIGGERED":
             row.status = "TRIGGERED"
             self.kill_switch_service.trigger(exchange_account_id=exchange_account_id, reason_code="DAILY_LOSS_LIMIT", reason_message=f"Daily loss limit breached: {total_today_pnl}")
