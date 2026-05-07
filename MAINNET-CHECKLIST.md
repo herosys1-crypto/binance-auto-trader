@@ -32,15 +32,40 @@ testnet → mainnet 전환 전에 반드시 완료해야 할 작업 정리.
 - [ ] 발급받은 API key/secret 을 시스템 UI 에서 「거래소 계정 등록」 으로 추가 (is_testnet=false)
 
 ### 1-3. ENCRYPTION_KEY 마이그레이션 ⚠️
-DB 의 `exchange_account.api_key_enc` / `secret_enc` 가 ENCRYPTION_KEY 로 암호화됨. 이 키가 노출됐으니 마이그레이션 필요.
+DB 의 `exchange_account.{api_key_enc, api_secret_enc, passphrase_enc}` 가 ENCRYPTION_KEY 로 암호화됨. 이 키가 노출됐으니 마이그레이션 필요.
 
-권장 절차:
-1. 옛 ENCRYPTION_KEY 로 DB 의 모든 row 복호화 → plain text 임시 보관
-2. 새 ENCRYPTION_KEY 생성 + `.env` 갱신
-3. 새 키로 모든 row 재암호화 + DB 저장
-4. backend 재시작
+#### 옵션 A — 자동 회전 (권장, 2026-05-07 도구 추가)
+스크립트: [backend/scripts/rotate_encryption_key.py](backend/scripts/rotate_encryption_key.py)
+단위 테스트: [backend/tests/integration/test_rotate_encryption_key.py](backend/tests/integration/test_rotate_encryption_key.py) (7 cases passed)
 
-또는 더 안전한 옵션: 거래소 계정 row 전부 삭제 → 새 mainnet API 키로 다시 등록 (옛 testnet 자격증명도 같이 정리됨).
+```powershell
+cd backend
+
+# 1) 새 Fernet 키 생성
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+# 2) Dry-run (DB 변경 없이 검증)
+$env:NEW_ENCRYPTION_KEY="<위에서 생성한 키>"
+python scripts/rotate_encryption_key.py --dry-run
+
+# 3) 실 실행 (백업 JSON 자동 생성)
+python scripts/rotate_encryption_key.py
+
+# 4) .env 의 ENCRYPTION_KEY 를 새 값으로 교체
+
+# 5) 백엔드 재시작
+docker-compose restart api  # 또는 uvicorn 재실행
+
+# 6) 검증 — 새 키로 거래소 호출
+python scripts/check_binance_key.py
+
+# 7) 백업 JSON 안전한 곳으로 이동 + 검증 후 폐기
+```
+
+**Roll-back**: `python scripts/rotate_encryption_key.py --restore-from <backup.json>` 으로 옛 cipher 복원 가능.
+
+#### 옵션 B — 더 안전 (자격증명 새로 등록)
+거래소 계정 row 전부 삭제 → 새 mainnet API 키로 다시 등록 (옛 testnet 자격증명도 같이 정리됨).
 
 ### 1-4. 인프라 보안 🟡
 - [ ] Neon DB IP whitelist (운영 서버만 접근)
