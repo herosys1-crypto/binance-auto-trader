@@ -32,7 +32,26 @@ class Settings(BaseSettings):
     # 운영자가 `.env` 의 DAILY_LOSS_LIMIT_USDT=50 같은 식으로 설정.
     daily_loss_limit_usdt: float | None = None
 
+    # ─── 자본 상한 / 동시성 / 화이트리스트 (MAINNET-CHECKLIST 3-3, 2026-05-07 추가) ───
+    # 동시 활성 strategy 수 한도 (계정당). 초과 시 신규 create 거부.
+    # 거래소 API rate limit 보호 + 모니터링 단순화. 0 또는 음수면 1로 강제.
+    max_concurrent_strategies_per_account: int = 10
+    # 단일 strategy 의 자본이 가용 잔액의 N% 이하여야 함 (예: 5.0 = 5%).
+    # None 또는 0/음수면 비활성. mainnet 초기 권장값 5~10%.
+    max_strategy_capital_pct_of_balance: float | None = None
+    # 심볼 화이트리스트 (CSV, 예: "BTCUSDT,ETHUSDT"). None / 빈 문자열이면 모든 심볼 허용.
+    # mainnet 초기엔 BTC/ETH 같은 high-liquidity 심볼만 허용 권장.
+    allowed_symbols_csv: str | None = None
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @property
+    def allowed_symbols_set(self) -> set[str] | None:
+        """allowed_symbols_csv 를 set 으로 파싱. None / 빈 값이면 None (모든 심볼 허용)."""
+        if not self.allowed_symbols_csv:
+            return None
+        symbols = {s.strip().upper() for s in self.allowed_symbols_csv.split(",") if s.strip()}
+        return symbols or None
 
 
 settings = Settings()

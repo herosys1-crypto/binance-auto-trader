@@ -135,16 +135,28 @@ class StrategyService:
                 "신규 전략 생성 차단. Kill-Switch 를 해제한 후 재시도하세요."
             )
 
-        # 동시 활성 전략 수 한도 (예: 한 계정당 최대 8개) — 거래소 부담 + 모니터링 단순화
-        MAX_CONCURRENT_PER_ACCOUNT = 10
+        # 0-A) 심볼 화이트리스트 (MAINNET-CHECKLIST 3-3, 2026-05-07).
+        # mainnet 초기엔 high-liquidity 심볼만 허용 (slippage / liquidity 위험 ↓).
+        # settings.allowed_symbols_csv 가 비어 있으면 모든 심볼 허용 (testnet / 개발 default).
+        from app.core.config import settings as _settings
+        allowed = _settings.allowed_symbols_set
+        if allowed and symbol.upper() not in allowed:
+            raise ValueError(
+                f"심볼 {symbol} 가 허용 목록에 없음. 운영자 설정 (allowed_symbols_csv): "
+                f"{sorted(allowed)}. mainnet 초기엔 high-liquidity 심볼만 허용 권장."
+            )
+
+        # 0-B) 동시 활성 strategy 수 한도 (계정당). 환경변수로 조정 가능.
+        # 거래소 API rate limit 보호 + 모니터링 단순화. 권장: mainnet 초기 3~5개.
+        max_concurrent = max(1, _settings.max_concurrent_strategies_per_account)
         active_count = self.db.execute(
             select(StrategyInstance)
             .where(StrategyInstance.exchange_account_id == exchange_account_id)
             .where(StrategyInstance.status.notin_(_CLOSED_STATUSES))
         ).all()
-        if len(active_count) >= MAX_CONCURRENT_PER_ACCOUNT:
+        if len(active_count) >= max_concurrent:
             raise ValueError(
-                f"이 거래소 계정의 동시 활성 전략 수 한도 ({MAX_CONCURRENT_PER_ACCOUNT}개) 초과. "
+                f"이 거래소 계정의 동시 활성 전략 수 한도 ({max_concurrent}개) 초과. "
                 f"현재 {len(active_count)}개. 일부 전략을 종료한 후 새로 시작하세요."
             )
 
@@ -206,6 +218,20 @@ class StrategyService:
                 f"(자본 {template_model.total_capital} ÷ 레버리지 {effective_lev}x). "
                 "거래소에 입금하거나 자본을 줄이세요."
             )
+
+        # 1-A) 단일 strategy 자본 상한 % (MAINNET-CHECKLIST 3-3, 2026-05-07).
+        # template.total_capital 이 가용 잔액의 N% 초과 시 거부 — 한 전략에 자본 집중 차단.
+        # settings.max_strategy_capital_pct_of_balance 가 None / 0 / 음수면 비활성.
+        max_pct = _settings.max_strategy_capital_pct_of_balance
+        if max_pct and max_pct > 0 and available > 0:
+            cap_limit = (available * D(str(max_pct)) / D("100")).quantize(D("0.01"))
+            tpl_cap = D(str(template_model.total_capital))
+            if tpl_cap > cap_limit:
+                raise ValueError(
+                    f"단일 전략 자본 상한 초과: {tpl_cap} USDT > {cap_limit} USDT "
+                    f"(가용 잔액 {available} 의 {max_pct}%). "
+                    "자본을 줄이거나 max_strategy_capital_pct_of_balance 설정을 조정하세요."
+                )
 
         # 2) 마진 비율 한도 (현재 + 새 전략 후 예상)
         if total_margin > 0:
