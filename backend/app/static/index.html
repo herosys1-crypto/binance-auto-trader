@@ -2409,12 +2409,22 @@ async function selectStrategy(id) {
     if (!stagePlans.length) {
       stTbody.innerHTML = '<tr><td colspan="7" class="text-center text-slate-500 py-6">단계 계획 없음</td></tr>';
     } else {
+      // 최종 단계 trigger 표기 (사용자 #5-07 보고): trigger_percent 가 null/빈 값이면
+      // backend 기본 20% 적용 — UI 도 그대로 표기 (이전엔 "+null% 도달 시" 처럼 깨졌음).
+      const lastStageNo = stagePlans.length;
       stTbody.innerHTML = stagePlans.map(s => {
-        const conditionKo = (mode, pct) => {
+        const fmtPct = (pct) => {
+          if (pct === null || pct === undefined || pct === '') return null;
+          const n = Number(pct); if (isNaN(n)) return String(pct);
+          return n.toLocaleString('en-US', {maximumFractionDigits: 2});
+        };
+        const conditionKo = (mode, pct, isLast) => {
           if (mode === 'IMMEDIATE') return '즉시 진입';
-          if (mode === 'PRICE_UP_PCT') return `+${pct}% 도달 시`;
-          if (mode === 'PRICE_DOWN_PCT') return `-${pct}% 도달 시`;
-          if (mode === 'LIQUIDATION_BUFFER') return `청산가 -${pct}%`;
+          // pct null/빈값 → backend 기본 20% (last_stage_trigger_percent 미지정 시)
+          const p = fmtPct(pct) || (isLast ? '20' : '?');
+          if (mode === 'PRICE_UP_PCT') return `+${p}% 도달 시`;
+          if (mode === 'PRICE_DOWN_PCT') return `-${p}% 도달 시`;
+          if (mode === 'LIQUIDATION_BUFFER') return fmtPct(pct) ? `청산가 -${p}%` : '청산 임박 시';
           return mode;
         };
         let stageStatus, badgeClass;
@@ -2431,10 +2441,20 @@ async function selectStrategy(id) {
         const triggeredTime = s.triggered_at
           ? new Date(s.triggered_at).toLocaleString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
           : '-';
-        return `<tr>
-          <td class="text-center font-semibold text-slate-200">${s.stage_no}</td>
-          <td>${conditionKo(s.trigger_mode, s.trigger_percent)}</td>
-          <td class="num">${s.trigger_price ? fmtNum(s.trigger_price) : '<span class="text-slate-500">-</span>'}</td>
+        const isLast = s.stage_no === lastStageNo;
+        const stageLabel = isLast
+          ? `${s.stage_no} <span class="text-purple-300" style="font-size:10px" title="마지막 단계 — last_stage_trigger_percent 적용">최종</span>`
+          : `${s.stage_no}`;
+        // trigger_price 가 비어있으면 (legacy LIQUIDATION_BUFFER 미산정) 명시적 안내
+        const trigPriceCell = s.trigger_price
+          ? fmtNum(s.trigger_price)
+          : (s.trigger_mode === 'LIQUIDATION_BUFFER'
+              ? '<span class="text-slate-500" title="청산가 도달 시점에 산정 (보통 청산가의 95%)">청산가 산정</span>'
+              : '<span class="text-slate-500">-</span>');
+        return `<tr${isLast ? ' class="bg-slate-800/40"' : ''}>
+          <td class="text-center font-semibold text-slate-200">${stageLabel}</td>
+          <td>${conditionKo(s.trigger_mode, s.trigger_percent, isLast)}</td>
+          <td class="num">${trigPriceCell}</td>
           <td class="num">${fmtNum(s.planned_capital)} <span class="text-slate-500 text-xs">USDT</span></td>
           <td class="num">${s.planned_qty ? fmtQty(s.planned_qty) : '<span class="text-slate-500">-</span>'}</td>
           <td><span class="badge ${badgeClass}">${stageStatus}</span></td>
@@ -3816,6 +3836,14 @@ function _refreshLiveCalc() {
     const lvInpEl = document.getElementById('cm-leverage');
     const lev = lvInpEl && lvInpEl.value ? Number(lvInpEl.value) : 2;
     const side = (cmState.side || 'SHORT').toUpperCase();
+    // 마지막 단계 = 첫 빈 capital 직전. 백엔드와 일치 (capitals 컷오프).
+    let lastStageNo = 0;
+    for (let k = 1; k <= 10; k++) {
+      const v = (document.getElementById('cm-cap-' + k) || {}).value;
+      if (v === '' || v === null || v === undefined || Number(v) === 0) break;
+      lastStageNo = k;
+    }
+    const DEFAULT_LAST_TRIGGER_PCT = 20;  // backend 와 동일 (DEFAULT_LAST_*_TRIGGER_PCT)
     let prevPrice = startPrice;
     let cumQty = 0, cumNotional = 0, cumMargin = 0;
     let prevLiq = null;
@@ -3842,7 +3870,10 @@ function _refreshLiveCalc() {
       if (i === 1) {
         entryPrice = startPrice;
       } else {
-        const trgPct = Number(trgEl ? trgEl.value : 0) || 0;
+        // 사용자 #5-07 보고 fix: 마지막 단계 trigger 가 비어있으면 backend 기본 20% 적용
+        // (이전엔 0% 로 처리돼 prevPrice 와 같은 값 → "표기가 없는" 듯한 인상).
+        let trgPct = Number(trgEl ? trgEl.value : 0) || 0;
+        if (i === lastStageNo && trgPct === 0) trgPct = DEFAULT_LAST_TRIGGER_PCT;
         if (side === 'SHORT') {
           entryPrice = prevPrice * (1 + trgPct / 100);
         } else {
@@ -4445,11 +4476,21 @@ function _estimateLiquidationPrice(side, avgEntry, leverage) {
 }
 
 function _renderPreview(data) {
-  const triggerKo = (mode, pct) => {
+  // null 트리거 % 방어 + Decimal "20.0000" → "20" 정리.
+  // 마지막 단계가 null 이면 backend 기본 20% 적용 (last_stage_trigger_percent 미지정).
+  const _lastStageNoForPreview = data.stages.length;
+  const _fmtPct = (pct) => {
+    if (pct === null || pct === undefined || pct === '') return null;
+    const n = Number(pct); if (isNaN(n)) return String(pct);
+    return n.toLocaleString('en-US', {maximumFractionDigits: 2});
+  };
+  const triggerKo = (mode, pct, stageNo) => {
     if (mode === 'IMMEDIATE') return '즉시';
-    if (mode === 'PRICE_UP_PCT') return `+${pct}% 도달 시`;
-    if (mode === 'PRICE_DOWN_PCT') return `-${pct}% 도달 시`;
-    if (mode === 'LIQUIDATION_BUFFER') return `청산가 -${pct}% 전`;
+    const isLast = stageNo === _lastStageNoForPreview;
+    const p = _fmtPct(pct) || (isLast ? '20' : '?');
+    if (mode === 'PRICE_UP_PCT') return `+${p}% 도달 시`;
+    if (mode === 'PRICE_DOWN_PCT') return `-${p}% 도달 시`;
+    if (mode === 'LIQUIDATION_BUFFER') return _fmtPct(pct) ? `청산가 -${p}% 전` : '청산 임박 시';
     return mode;
   };
   // 단계별 누적 평균 진입가 + 예상 청산가 + 다음 단계 위험 분석 (2026-05-03)
@@ -4477,12 +4518,20 @@ function _renderPreview(data) {
   });
   document.getElementById('cm-preview-tbody').innerHTML = enriched.map((s, idx) => {
     const isAfterUnreach = firstUnreachable !== null && (idx + 1) >= firstUnreachable;
-    const rowClass = s._unreachable ? 'class="bg-red-950"' : (isAfterUnreach ? 'class="opacity-50"' : '');
+    const isLast = s.stage_no === _lastStageNoForPreview;
+    const rowClass = s._unreachable ? 'bg-red-950' : (isAfterUnreach ? 'opacity-50' : (isLast ? 'bg-slate-800/40' : ''));
+    const stageLabel = isLast
+      ? `${s.stage_no}단계 <span class="text-purple-300" style="font-size:10px" title="마지막 단계 — last_stage_trigger_percent 적용">최종</span>`
+      : `${s.stage_no}단계${isAfterUnreach ? ' ⚠️' : ''}`;
+    // trigger_price 비어있으면 (legacy LIQUIDATION_BUFFER) 명시적 안내
+    const trigPriceCell = s.trigger_price
+      ? fmtNum(s.trigger_price)
+      : (s.trigger_mode === 'LIQUIDATION_BUFFER' ? '<span class="text-slate-500" title="청산가 도달 시점에 산정">청산가 산정</span>' : '-');
     return `
-    <tr ${rowClass}>
-      <td>${s.stage_no}단계${isAfterUnreach ? ' ⚠️' : ''}</td>
-      <td>${triggerKo(s.trigger_mode, s.trigger_percent)}</td>
-      <td class="num">${s.trigger_price ? fmtNum(s.trigger_price) : '-'}</td>
+    <tr${rowClass ? ` class="${rowClass}"` : ''}>
+      <td>${stageLabel}</td>
+      <td>${triggerKo(s.trigger_mode, s.trigger_percent, s.stage_no)}</td>
+      <td class="num">${trigPriceCell}</td>
       <td class="num">${fmtNum(s.planned_capital)}</td>
       <td class="num">${s.planned_qty ? fmtQty(s.planned_qty) : '-'}</td>
       <td class="num text-cyan-300">${s._avgEntry > 0 ? fmtNum(s._avgEntry) : '-'}</td>
