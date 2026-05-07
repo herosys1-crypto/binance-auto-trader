@@ -1184,7 +1184,7 @@ async function loadRankingPage(period, direction) {
           onclick="startNewStrategyFromRanking('${it.symbol}', '${it.last_price}')">↑ 새 전략</button>`;
       return `<tr>
         <td>${i + 1}</td>
-        <td class="font-mono text-blue-300">${it.symbol}</td>
+        <td class="font-mono text-blue-300">${it.symbol}${renderWhitelistBadge(it.symbol)}</td>
         <td class="num">${fmtNum(it.last_price)}</td>
         <td class="num ${cls}">${sign}${chg.toFixed(2)}%</td>
         <td class="num text-slate-400 text-xs">${volStr} USDT</td>
@@ -1542,7 +1542,7 @@ async function loadSymbolRanking(period, direction) {
         : `<span class="text-slate-500 text-xs">-</span>`;
       return `<tr>
         <td>${i + 1}</td>
-        <td class="font-mono text-blue-300">${it.symbol}</td>
+        <td class="font-mono text-blue-300">${it.symbol}${renderWhitelistBadge(it.symbol)}</td>
         <td class="num">${fmtNum(it.last_price)}</td>
         <td class="num ${cls}">${sign}${chg.toFixed(2)}%</td>
         <td class="num text-slate-400 text-xs">${volStr} USDT</td>
@@ -1772,8 +1772,36 @@ async function refreshAll() {
     refreshSysHealth(),
     loadBalance(),  // 거래소 잔액 카드 (2026-05-03 추가)
     loadSystemStatus(),  // ⚠️ Zombie Guardian 배너 (2026-05-03 추가)
+    loadGlobalWhitelistInfo(),  // 🔒 화이트리스트 캐시 (2026-05-08 — 심볼 옆 WL 배지)
   ]);
   document.getElementById('last-updated').textContent = '마지막 갱신: ' + new Date().toLocaleTimeString('ko-KR');
+}
+
+// 2026-05-08: 전역 화이트리스트 캐시 + 배지 헬퍼 (심볼 표시되는 모든 곳에서 사용).
+// dashboard 로드 시 한 번 + 토글 변경 시 갱신.
+let _globalWhitelistInfo = { enabled: false, allowed: new Set() };
+
+async function loadGlobalWhitelistInfo() {
+  try {
+    const info = await api('/symbols/whitelist-info');
+    _globalWhitelistInfo = {
+      enabled: !!info.enabled,
+      allowed: new Set((info.allowed_symbols || []).map(s => s.toUpperCase())),
+    };
+  } catch { /* 비활성 시 무시 */ }
+}
+
+// 심볼 옆에 붙일 화이트리스트 배지 HTML 반환.
+// - 화이트리스트 토글 ON 이고 + 해당 심볼이 허용 목록에 있으면 「🔒 WL」 녹색 배지
+// - 토글 ON 이고 + 미허용 심볼이면 「🚫 외」 빨간 배지 (운영 정책 외 거래임을 시각화)
+// - 토글 OFF 면 빈 문자열 (배지 안 표시)
+function renderWhitelistBadge(symbol) {
+  if (!_globalWhitelistInfo.enabled) return '';
+  const sym = (symbol || '').toUpperCase();
+  if (_globalWhitelistInfo.allowed.has(sym)) {
+    return ' <span class="badge badge-green" style="font-size:9px;padding:1px 4px" title="화이트리스트 허용 심볼">🔒 WL</span>';
+  }
+  return ' <span class="badge badge-red" style="font-size:9px;padding:1px 4px" title="화이트리스트 외 — 토글 ON 시 진입 차단">🚫 외</span>';
 }
 
 // ==================== Zombie Guardian Banner ====================
@@ -2381,7 +2409,7 @@ async function refreshStrategies() {
         <td>#${s.id}</td>
         <td class="font-mono text-blue-300">
           <div class="text-xs leading-tight">
-            <span>${s.symbol}</span><br>
+            <span>${s.symbol}</span>${renderWhitelistBadge(s.symbol)}<br>
             <span class="text-slate-500" style="font-size:10px" title="전략 생성 일시">${createdShort}</span>
           </div>
         </td>
@@ -3568,7 +3596,7 @@ async function toggleWhitelist(enabled) {
     });
     const status = resp.enabled ? '✅ 적용' : '⛔ 미적용';
     toast(`화이트리스트 ${status} (즉시 반영)`, 'success');
-    // 새 전략 모달의 hint 도 갱신 — 다음 모달 오픈 시 자동
+    // 새 전략 모달의 hint 갱신
     if (typeof _cmWhitelistInfo !== 'undefined') {
       _cmWhitelistInfo = {
         enabled: resp.enabled,
@@ -3577,6 +3605,12 @@ async function toggleWhitelist(enabled) {
       if (typeof _renderWhitelistHint === 'function') _renderWhitelistHint();
       if (typeof _validateCurrentSymbol === 'function') _validateCurrentSymbol();
     }
+    // 2026-05-08: 전역 캐시도 갱신 — 전략 목록/시장 순위 등 모든 곳 배지 즉시 반영
+    _globalWhitelistInfo = {
+      enabled: resp.enabled,
+      allowed: new Set((resp.allowed_symbols || []).map(s => s.toUpperCase())),
+    };
+    refreshStrategies();  // 전략 테이블 재렌더 → 새 배지 표시
   } catch (e) {
     toast(`토글 실패: ${e.message}`, 'error');
     // 체크박스 상태 되돌리기 — 다시 렌더
@@ -3858,7 +3892,7 @@ async function loadCmPrevStrategies() {
       return `<label class="flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-slate-700">
         <input type="radio" name="cm-prev" value="${s.id}" onchange="loadPrevBlueprint(${s.id})" />
         <span class="font-mono text-blue-300">#${s.id}</span>
-        <span class="font-semibold">${s.symbol}</span>
+        <span class="font-semibold">${s.symbol}${renderWhitelistBadge(s.symbol)}</span>
         <span class="badge ${s.side==='SHORT'?'badge-red':'badge-green'}">${sideKo}</span>
         <span class="badge badge-gray">${statusKo}</span>
         <span class="text-xs text-slate-400 ml-auto">레버리지 ${s.leverage}x</span>
