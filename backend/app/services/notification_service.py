@@ -205,15 +205,33 @@ class NotificationService:
         side: str,
         pnl_pct: Any,
         threshold_pct: Any,
+        current_stage: int | None = None,
+        total_stages: int | None = None,
     ) -> Notification:
+        """손실 임계치 도달 경고. 2026-05-08: 단계 진입 상황 명시 (실제 청산 발동 가능 여부).
+
+        강제 청산 (evaluate_stop_loss) 은 모든 단계 진입 후만 발동. 단계 미완료시엔
+        "위험 경고" 만 발송하고 실제 청산은 추가 stage 진입까지 대기.
+        """
         emoji = _side_emoji(side)
         title = f"⚠️ [손실 {_fmt_num(threshold_pct)}% 도달] {symbol} {side}"
         lines = [
             f"{emoji} 종목       : {symbol} {side}",
             f"📉 현재 ROI : {_fmt_num(pnl_pct)}% (임계 {_fmt_num(threshold_pct)}%)",
-            f"⚠️ 강제 청산 (-50%) 임박 — 증거금 추가 또는 수동 청산 검토",
-            f"💡 대시보드 → 해당 전략 → 「🛡 증거금 추가」 버튼으로 청산가 완화 가능",
         ]
+        # 단계 진입 상황 안내 (실제 강제 청산 가능 여부 명시)
+        if current_stage is not None and total_stages is not None:
+            if current_stage >= total_stages:
+                lines.append(f"🛑 단계: {current_stage}/{total_stages} 모두 진입 완료 — 다음 cycle 강제 청산 발동 예정")
+            else:
+                lines.append(
+                    f"📌 단계: {current_stage}/{total_stages} — 강제 청산 미발동 "
+                    f"(SL 은 모든 단계 진입 후만)"
+                )
+        else:
+            # 단계 정보 없으면 기존 표현 유지 (호환)
+            lines.append("⚠️ 모든 단계 진입 후 -50% 도달 시 강제 청산 발동")
+        lines.append("💡 대시보드 → 해당 전략 → 「🛡 증거금 추가」 버튼으로 청산가 완화 가능")
         body = "\n".join(lines)
         return self.send(
             strategy_instance_id=strategy_instance_id,

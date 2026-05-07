@@ -297,20 +297,38 @@ class RiskService:
             except Exception:
                 pass
 
-        # 첫 교차 — RiskEvent + Telegram 알림
+        # 첫 교차 — RiskEvent + Telegram 알림.
+        # 2026-05-08 fix (사용자 보고): 「강제 청산 임박」 표현이 오해 유발.
+        # 실제 강제 청산은 evaluate_stop_loss 의 가드 「모든 단계 진입 후」 만 발동.
+        # 단계 미완료시엔 추가 stage 진입으로 평단가 평균화 기회 먼저 줌.
+        # 메시지에 현재 단계 상황 명시해 사용자 이해 돕는다.
+        total_stages = self._get_total_stages(strategy)
+        cur_stage = strategy.current_stage or 0
+        all_entered = cur_stage >= total_stages
+        if all_entered:
+            sl_status = f"⚠️ 모든 단계 ({cur_stage}/{total_stages}) 진입 완료 — 다음 cycle 에 강제 청산 발동 예정."
+        else:
+            sl_status = (
+                f"📌 현재 {cur_stage}/{total_stages} 단계만 진입 — 강제 청산 미발동 "
+                f"(SL 은 모든 단계 진입 후만 발동). 추가 단계 진입으로 평단 회복 기회 대기 중."
+            )
         try:
             self.db.add(RiskEvent(
                 strategy_instance_id=strategy.id,
                 event_type="LOSS_THRESHOLD_50PCT_REACHED",
                 severity="WARNING",
-                title=f"⚠️ 손실 {LOSS_ALERT_THRESHOLD}% 도달 — 강제 청산 임박",
+                title=f"⚠️ 손실 {LOSS_ALERT_THRESHOLD}% 도달 — 위험 경고",
                 message=(
                     f"{strategy.symbol} {strategy.side} ROI {new_d}% — "
-                    f"임계 {LOSS_ALERT_THRESHOLD}% 도달. 증거금 추가 또는 수동 청산 검토."
+                    f"임계 {LOSS_ALERT_THRESHOLD}% 도달. {sl_status} "
+                    "증거금 추가 또는 수동 청산 검토 권장."
                 ),
                 event_payload={
                     "pnl_pct": str(new_d),
                     "threshold_pct": str(LOSS_ALERT_THRESHOLD),
+                    "current_stage": cur_stage,
+                    "total_stages": total_stages,
+                    "all_entered": all_entered,
                 },
             ))
             self.db.flush()
@@ -324,6 +342,8 @@ class RiskService:
                 side=strategy.side,
                 pnl_pct=str(new_d),
                 threshold_pct=str(LOSS_ALERT_THRESHOLD),
+                current_stage=cur_stage,
+                total_stages=total_stages,
             )
         except Exception:
             pass

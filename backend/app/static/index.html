@@ -1279,13 +1279,15 @@ async function openStatsBreakdownModal(view) {
           <button onclick="closeStatsBreakdownModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
         </div>
         <!-- view 탭 -->
-        <div class="flex gap-2 mb-3 flex-wrap items-center">
+        <div class="flex gap-2 mb-2 flex-wrap items-center">
           <span class="text-xs text-slate-300">분류:</span>
           <button class="btn-ghost btn text-xs sb-tab" data-view="strategies" onclick="loadStatsBreakdown('strategies')">전략 전체</button>
           <button class="btn-ghost btn text-xs sb-tab" data-view="realized" onclick="loadStatsBreakdown('realized')">실현 손익 발생</button>
           <button class="btn-ghost btn text-xs sb-tab" data-view="losses" onclick="loadStatsBreakdown('losses')">손실/감사</button>
           <span class="text-xs text-slate-500 ml-auto" id="sb-summary">-</span>
         </div>
+        <!-- 2026-05-08: view 별 안내 (사용자 「전체/실현 차이」 혼란 해소) -->
+        <div id="sb-view-note" class="hidden text-xs text-yellow-300 mb-2 p-1 rounded bg-slate-800/40"></div>
         <!-- 요약 -->
         <div class="card rounded mb-3" style="background:#0f172a">
           <div class="p-2 grid grid-cols-4 gap-2 text-center text-xs">
@@ -1350,6 +1352,17 @@ async function loadStatsBreakdown(view) {
     losses: '운영 통계 상세 — 손실/감사',
   };
   document.getElementById('sb-title').textContent = titleMap[view] || '운영 통계 상세';
+  // 2026-05-08: view 별 안내 — 「전체 vs 실현」 차이 사용자 혼란 해소
+  const noteMap = {
+    strategies: '모든 strategy 표시 (진행중 + 미체결 종료 + 청산 완료 모두)',
+    realized: 'realized_pnl ≠ 0 인 strategy 만 (진행중 / 미진입 종료 STOPPED 는 제외)',
+    losses: 'realized_pnl < 0 또는 max_loss_pct < -10% strategy',
+  };
+  const noteEl = document.getElementById('sb-view-note');
+  if (noteEl) {
+    noteEl.textContent = `💡 ${noteMap[view] || ''}`;
+    noteEl.classList.remove('hidden');
+  }
 
   try {
     const r = await api(`/admin/stats/breakdown?view=${encodeURIComponent(view)}`);
@@ -1646,18 +1659,16 @@ async function loadTradeHistory(days) {
     const filtered = cutoff ? orders.filter(o => new Date(o.created_at) >= cutoff) : orders;
     const filled = filtered.filter(o => (o.status || '').toUpperCase() === 'FILLED');
 
-    // 각 주문별 PnL 계산 (EXIT/TP/SL 만)
+    // 각 주문별 PnL — 백엔드의 정확한 계산 (cumulative entries before exit) 사용.
+    // 2026-05-08 fix: 이전엔 strat.avg_entry_price 로 계산했는데 COMPLETED strategy 는
+    // 그 값이 0 이라 모든 EXIT 가 거대한 음수로 표시되던 버그 (사용자 #113 VVVUSDT 보고).
+    // /orders 가 이미 realized_pnl 정확히 계산해서 응답하므로 그것을 그대로 사용.
     const _EXIT_PURPOSES = new Set(['EXIT', 'TAKE_PROFIT', 'STOP_LOSS', 'EMERGENCY_CLOSE']);
     const annotated = filled.map(o => {
       const strat = _thCache.strategiesById[o.strategy_instance_id];
       let pnl = null;
-      if (strat && _EXIT_PURPOSES.has(o.purpose) && o.avg_price && o.executed_qty && strat.avg_entry_price) {
-        const exitP = Number(o.avg_price);
-        const entryP = Number(strat.avg_entry_price);
-        const qty = Number(o.executed_qty);
-        // LONG: exit - entry; SHORT: entry - exit
-        const direction = (strat.side === 'LONG') ? 1 : -1;
-        pnl = (exitP - entryP) * qty * direction;
+      if (_EXIT_PURPOSES.has(o.purpose) && o.realized_pnl !== null && o.realized_pnl !== undefined) {
+        pnl = Number(o.realized_pnl);
       }
       return { ...o, _pnl: pnl, _side_long_short: strat?.side };
     });
