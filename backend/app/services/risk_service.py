@@ -10,15 +10,17 @@ from app.services.strategy_calculator import StrategyCalculator, SymbolRule
 
 # 트레일링 익절 임계치 (정상 모드)
 # 사용자 기획 (2026-04-30): "익절을 단계별로 진행하는 중에 -5% 하락하면 모두 청산익절".
-# 기존엔 절대 임계치 (피크 ≥ 20% AND 현재 ≤ 20%) 였으나, 사용자 기획대로
-# 피크 대비 -5% 회귀 (relative drop) 로 변경. TP1 발동 후부터 활성화.
-TRAILING_TP_PEAK_THRESHOLD = Decimal("5")    # 피크가 이 % 이상 도달했어야 트레일링 활성화 (TP1+5% 시점)
+# 사용자 기획 v2 (2026-05-07): "익절 3단계 후부터 작동 — TP1=10%/TP2=15%/TP3=20% 모두
+# 발동된 후 피크 대비 -5% 회귀 시 전량 청산". 이전엔 TP1 발동 후부터 활성이었음.
+TRAILING_TP_PEAK_THRESHOLD = Decimal("5")    # 피크가 이 % 이상 도달했어야 트레일링 활성화
 TRAILING_TP_RETRACE_AMOUNT = Decimal("5")    # 피크 대비 이 % 만큼 하락하면 발동 (예: peak 25% → 20% 시 청산)
+TRAILING_MIN_TP_INDEX = 3                    # TP3 (idx 2) 이상 발동된 후부터 trailing armed
 PEAK_REDIS_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
 # 크라이시스 복구 모드 임계치
-CRISIS_MIN_STAGE = 5                # 5단계 이상 진입
-CRISIS_MAX_LOSS_THRESHOLD = Decimal("-30")  # 누적 최대 손실 -30% 이하 도달
+# 사용자 기획 v2 (2026-05-07): "전체 진입단계가 모두 진입한 상태에서 -50% 이상 손실에서
+# 익절 +5% 부터 진행". 이전엔 -30% 손실 도달 + 양수 PnL 회복 시점이었음.
+CRISIS_MAX_LOSS_THRESHOLD = Decimal("-50")  # 누적 최대 손실 이 % 이하 도달
 CRISIS_TP1_THRESHOLD = Decimal("5")         # 크라이시스 모드 첫 TP +5%
 CRISIS_TRAILING_DROP = Decimal("5")         # 첫 TP 후 피크 -5% 회귀 시 전량 청산
 CRISIS_HARD_SL_THRESHOLD = Decimal("-1")    # 첫 TP 후 PnL -1% 이하 시 전량 손절
@@ -135,12 +137,12 @@ class RiskService:
 
         # 2026-05-04 critical fix (사용자 #98 LABUSDT 사례):
         # 트레일링 체크가 TP threshold loop 보다 우선해야 함.
-        # 한번 익절 후 가격이 약간 retrace 됐지만 여전히 직전 TP threshold 위에 있는
-        # 모든 케이스에서 트레일링 무력화되던 버그 (잔량 영구 보유) fix.
-        # 2026-05-06: TP1~10_DONE_PARTIAL 모두 trailing armed (10단계 확장).
+        # 2026-05-07 사용자 기획 변경: TP3 (idx 2) 발동 후부터 trailing armed.
+        # 즉 TP1=10%, TP2=15%, TP3=20% 익절 모두 발동 후 피크 대비 -5% 회귀 시 전량 청산.
+        # 이전엔 TP1 발동만 해도 trailing armed 였으나, 너무 조기 청산 우려로 TP3+ 로 변경.
         TRAILING_ARMED_STATUSES = (
-            {f"TP{n}_DONE_PARTIAL" for n in range(1, 11)}
-            | {"TP2_DONE", "TRAILING_ARMED"}
+            {f"TP{n}_DONE_PARTIAL" for n in range(TRAILING_MIN_TP_INDEX, 11)}
+            | {"TRAILING_ARMED"}
         )
         if (
             (strategy.status or "").upper() in TRAILING_ARMED_STATUSES
@@ -246,21 +248,28 @@ class RiskService:
                 strategy.max_profit_pct = pnl_ratio
 
     def _should_trigger_crisis_mode(self, strategy, current_pnl_pct: Decimal) -> bool:
-        """크라이시스 모드 진입 조건 (사용자 기획).
+        """크라이시스 모드 진입 조건.
 
-        - 누적 최대 손실 ≤ -30% 도달했음 (max_loss_pct)
-        - 그 후 현재 PnL 이 양수 (>0%) 로 전환됨
-        - 단계 요구사항 제거 (이전에는 5+ 단계 필요했음)
+        사용자 기획 v2 (2026-05-07):
+        - 모든 stage 가 진입 완료 (current_stage == total_stages)
+        - 누적 최대 손실 ≤ -50% 도달 (max_loss_pct)
+        - 진입 시점 그 자체가 트리거 (양수 PnL 회복 대기 X)
+
+        이전 v1 (2026-04~05): max_loss ≤ -30% 도달 + 현재 양수 PnL 회복 시점.
+        v2 변경 이유: 모든 단계 진입 완료된 깊은 손실 상태에서 즉시 빠른 익절 (+5%)
+        모드로 전환 — 회복 즉시 청산해 손실 최소화.
         """
-        if strategy.crisis_mode_triggered_at:  # 이미 진입했으면 재트리거 안 함
+        if strategy.crisis_mode_triggered_at:
             return False
+        # 1) 모든 단계 진입 완료 검사
+        total_stages = self._get_total_stages(strategy)
+        if (strategy.current_stage or 0) < total_stages:
+            return False
+        # 2) 누적 최대 손실 -50% 이하 도달
         if strategy.max_loss_pct is None:
             return False
         max_loss = Decimal(str(strategy.max_loss_pct))
-        if max_loss > CRISIS_MAX_LOSS_THRESHOLD:  # -30% 미만 손실 (즉 -25% 같은 가벼운 손실)
-            return False
-        # 손실 -30% 도달 후 현재 양수 PnL 로 전환되었는지 확인 (회복 시점 포착)
-        if current_pnl_pct <= 0:
+        if max_loss > CRISIS_MAX_LOSS_THRESHOLD:  # 예: -45% 면 -50% 미달 → skip
             return False
         return True
 
@@ -327,7 +336,7 @@ class RiskService:
             event_type="CRISIS_MODE_TRIGGERED",
             severity="WARNING",
             title="🚨 크라이시스 복구 모드 진입",
-            message=f"5+ 단계 진입 + 누적 최대 손실 {strategy.max_loss_pct}% 도달. TP1 임계가 +5% 로 변경됩니다.",
+            message=f"전 단계 진입 완료 + 누적 최대 손실 {strategy.max_loss_pct}% 도달 (≤ {CRISIS_MAX_LOSS_THRESHOLD}%). TP1 임계가 +5% 로 변경되어 빠른 회복 익절 시작.",
             event_payload={
                 "current_stage": strategy.current_stage,
                 "max_loss_pct": str(strategy.max_loss_pct),

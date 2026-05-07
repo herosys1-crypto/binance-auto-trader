@@ -55,6 +55,29 @@ def list_symbols(
     return [SymbolResponse.model_validate(r) for r in rows]
 
 
+class WhitelistInfoResponse(BaseModel):
+    """거래 화이트리스트 상태 — 사용자 진입 시점에 어떤 심볼이 허용되는지 표시.
+
+    2026-05-07 사용자 요청: 「화이트리스트 거래량 적은 심볼은 검색시 확인 가능하게」.
+    UI 가 심볼 입력 폼 옆에 표시해 사용자가 미리 알 수 있게 한다.
+    """
+    enabled: bool
+    allowed_symbols: list[str]
+
+
+@router.get("/whitelist-info", response_model=WhitelistInfoResponse)
+def get_whitelist_info(
+    user_id: int = Depends(get_current_user_id),
+) -> WhitelistInfoResponse:
+    """현재 적용 중인 심볼 화이트리스트 상태."""
+    from app.core.config import settings
+    allowed = settings.allowed_symbols_set
+    return WhitelistInfoResponse(
+        enabled=allowed is not None,
+        allowed_symbols=sorted(allowed) if allowed else [],
+    )
+
+
 # get_symbol 의 decorator 등록은 file 끝에서 add_api_route 로 처리
 # (ranking 같은 specific path 가 catch-all `/{symbol}` 보다 먼저 등록되도록).
 def get_symbol(
