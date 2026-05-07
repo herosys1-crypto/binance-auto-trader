@@ -56,13 +56,15 @@ def list_symbols(
 
 
 class WhitelistInfoResponse(BaseModel):
-    """거래 화이트리스트 상태 — 사용자 진입 시점에 어떤 심볼이 허용되는지 표시.
+    """거래 화이트리스트 정보 — UI 표시용.
 
-    2026-05-07 사용자 요청: 「화이트리스트 거래량 적은 심볼은 검색시 확인 가능하게」.
-    UI 가 심볼 입력 폼 옆에 표시해 사용자가 미리 알 수 있게 한다.
+    2026-05-08 변경 (사용자 요청): allowed_symbols 는 토글 상태 무관 항상 env 값 반환.
+    enforced 필드로 가드 적용 여부 표시 (UI 는 등재 자체 + 적용 상태 분리 표시).
     """
-    enabled: bool
-    allowed_symbols: list[str]
+    enabled: bool        # 호환 — enforced 와 동일 값
+    enforced: bool       # 가드 적용 중 (env 설정 + DB 토글 ON)
+    allowed_symbols: list[str]  # env 의 등재 심볼 (항상 — 토글 OFF 여도 표시)
+    env_configured: bool
 
 
 @router.get("/whitelist-info", response_model=WhitelistInfoResponse)
@@ -70,10 +72,10 @@ def get_whitelist_info(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> WhitelistInfoResponse:
-    """현재 적용 중인 심볼 화이트리스트 상태.
+    """화이트리스트 정보. allowed_symbols 는 토글 무관 env 값 항상 반환.
 
-    enabled = (env 에 ALLOWED_SYMBOLS_CSV 값 있음) AND (DB 토글 ON).
-    DB 토글이 OFF 면 env 에 값 있어도 가드 미적용 → 모든 심볼 허용.
+    enforced = (env 값 있음) AND (DB 토글 ON) → 가드 실제 적용 중.
+    UI 는 enforced 로 배지 색상 차별 (적용=녹색 / 단순 등재=회색).
     """
     from app.core.config import settings
     from app.services.system_settings_service import SystemSettingsService
@@ -81,10 +83,12 @@ def get_whitelist_info(
     allowed = settings.allowed_symbols_set
     env_configured = allowed is not None
     db_toggle = SystemSettingsService(db).is_whitelist_enabled(default_from_env=env_configured)
-    effective_enabled = env_configured and db_toggle
+    effective_enforced = env_configured and db_toggle
     return WhitelistInfoResponse(
-        enabled=effective_enabled,
-        allowed_symbols=sorted(allowed) if (effective_enabled and allowed) else [],
+        enabled=effective_enforced,  # 호환
+        enforced=effective_enforced,
+        allowed_symbols=sorted(allowed) if allowed else [],  # 항상 env 값 — 토글 OFF 여도 표시
+        env_configured=env_configured,
     )
 
 

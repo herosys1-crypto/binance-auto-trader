@@ -1778,30 +1778,41 @@ async function refreshAll() {
 }
 
 // 2026-05-08: 전역 화이트리스트 캐시 + 배지 헬퍼 (심볼 표시되는 모든 곳에서 사용).
-// dashboard 로드 시 한 번 + 토글 변경 시 갱신.
-let _globalWhitelistInfo = { enabled: false, allowed: new Set() };
+// 사용자 요청 (2026-05-08 v2): 토글 무관 「화이트리스트 등재 여부」 자체를 항상 표시.
+// - 등재 심볼 → 항상 「🔒 WL」 배지 (적용 중이면 녹색, 단순 등재면 회색)
+// - 미등재 심볼 → 토글 ON 일 때만 「🚫 외」 배지 (실제 차단되는 상황 표시)
+let _globalWhitelistInfo = { enforced: false, allowed: new Set(), envConfigured: false };
 
 async function loadGlobalWhitelistInfo() {
   try {
     const info = await api('/symbols/whitelist-info');
     _globalWhitelistInfo = {
-      enabled: !!info.enabled,
+      enforced: !!info.enforced,
       allowed: new Set((info.allowed_symbols || []).map(s => s.toUpperCase())),
+      envConfigured: !!info.env_configured,
     };
   } catch { /* 비활성 시 무시 */ }
 }
 
 // 심볼 옆에 붙일 화이트리스트 배지 HTML 반환.
-// - 화이트리스트 토글 ON 이고 + 해당 심볼이 허용 목록에 있으면 「🔒 WL」 녹색 배지
-// - 토글 ON 이고 + 미허용 심볼이면 「🚫 외」 빨간 배지 (운영 정책 외 거래임을 시각화)
-// - 토글 OFF 면 빈 문자열 (배지 안 표시)
+// - 등재 심볼 → 「🔒 WL」 배지 (토글 ON 녹색 / OFF 회색)
+// - 미등재 심볼 (토글 ON 일 때만) → 「🚫 외」 빨간 배지 (실제 차단됨)
+// - 미등재 + 토글 OFF → 빈 문자열 (모든 심볼 허용 상태라 표시 안 함)
 function renderWhitelistBadge(symbol) {
-  if (!_globalWhitelistInfo.enabled) return '';
   const sym = (symbol || '').toUpperCase();
   if (_globalWhitelistInfo.allowed.has(sym)) {
-    return ' <span class="badge badge-green" style="font-size:9px;padding:1px 4px" title="화이트리스트 허용 심볼">🔒 WL</span>';
+    // 등재 심볼 — 항상 표시
+    const cls = _globalWhitelistInfo.enforced ? 'badge-green' : 'badge-gray';
+    const title = _globalWhitelistInfo.enforced
+      ? '화이트리스트 등재 + 가드 적용 중'
+      : '화이트리스트 등재 (현재 가드 OFF — 정보용)';
+    return ` <span class="badge ${cls}" style="font-size:9px;padding:1px 4px" title="${title}">🔒 WL</span>`;
   }
-  return ' <span class="badge badge-red" style="font-size:9px;padding:1px 4px" title="화이트리스트 외 — 토글 ON 시 진입 차단">🚫 외</span>';
+  // 미등재 — 토글 ON 일 때만 차단 표시
+  if (_globalWhitelistInfo.enforced) {
+    return ' <span class="badge badge-red" style="font-size:9px;padding:1px 4px" title="화이트리스트 외 — 진입 차단">🚫 외</span>';
+  }
+  return '';
 }
 
 // ==================== Zombie Guardian Banner ====================
@@ -3605,10 +3616,11 @@ async function toggleWhitelist(enabled) {
       if (typeof _renderWhitelistHint === 'function') _renderWhitelistHint();
       if (typeof _validateCurrentSymbol === 'function') _validateCurrentSymbol();
     }
-    // 2026-05-08: 전역 캐시도 갱신 — 전략 목록/시장 순위 등 모든 곳 배지 즉시 반영
+    // 2026-05-08 v2: 전역 캐시 갱신 — 등재 심볼은 항상 표시, enforced 만 토글 따라 색상 변경
     _globalWhitelistInfo = {
-      enabled: resp.enabled,
+      enforced: resp.enabled,  // PATCH 응답의 enabled = 새 enforced 상태
       allowed: new Set((resp.allowed_symbols || []).map(s => s.toUpperCase())),
+      envConfigured: resp.allowed_symbols && resp.allowed_symbols.length > 0,
     };
     refreshStrategies();  // 전략 테이블 재렌더 → 새 배지 표시
   } catch (e) {
