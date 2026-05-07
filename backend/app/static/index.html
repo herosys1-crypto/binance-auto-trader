@@ -529,6 +529,9 @@
           <input id="cm-symbol" list="cm-symbol-list" value="BTCUSDT" placeholder="예: BTCUSDT"
             class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
           <datalist id="cm-symbol-list"></datalist>
+          <!-- 2026-05-07: 화이트리스트 안내 (운영 정책 가시성) -->
+          <div id="cm-symbol-whitelist-hint" class="mt-1 text-xs hidden"></div>
+          <div id="cm-symbol-status" class="mt-1 text-xs hidden"></div>
         </div>
         <div>
           <label class="block text-sm font-semibold mb-2 text-slate-300">방향</label>
@@ -4178,19 +4181,42 @@ async function loadCmTemplates() {
   } catch (e) { toast('템플릿 조회 실패: '+e.message, 'error'); }
 }
 
+// 2026-05-07: 화이트리스트 캐시 — 심볼 입력 시 즉시 검증.
+let _cmWhitelistInfo = { enabled: false, allowed: new Set() };
+
 async function loadCmSymbols() {
+  // 화이트리스트 정보 먼저 로드 (비차단)
+  api('/symbols/whitelist-info').then(info => {
+    _cmWhitelistInfo = {
+      enabled: !!info.enabled,
+      allowed: new Set((info.allowed_symbols || []).map(s => s.toUpperCase())),
+    };
+    _renderWhitelistHint();
+    _validateCurrentSymbol();
+  }).catch(() => { /* 비활성 시 무시 */ });
+
   try {
     // limit 200 → 1000 으로 증가. testnet 에 586+ TRADING 심볼이 있어 200 제한 시
     // 알파벳 순으로 SOL/XRP/DOGE 등 인기 코인이 자동완성에서 누락되는 문제 해결.
     const data = await api('/symbols?only_trading=true&limit=1000');
     const list = document.getElementById('cm-symbol-list');
-    list.innerHTML = data.map(s => `<option value="${s.symbol}"></option>`).join('');
+    // 2026-05-07: datalist option 의 label 에 화이트리스트 상태 표시
+    // (브라우저별 렌더링 차이 있지만 Chrome/Firefox/Edge 에서 자동완성 시 표시됨).
+    list.innerHTML = data.map(s => {
+      const sym = s.symbol;
+      const isAllowed = !_cmWhitelistInfo.enabled || _cmWhitelistInfo.allowed.has(sym.toUpperCase());
+      const label = _cmWhitelistInfo.enabled
+        ? (isAllowed ? `${sym} ✓ 허용` : `${sym} 🚫 화이트리스트 외`)
+        : sym;
+      return `<option value="${sym}" label="${label}"></option>`;
+    }).join('');
   } catch { /* symbols 없으면 무시 — 사용자 직접 입력 가능 */ }
-  // 심볼 입력 변경 시 시세 자동 로드 (debounce)
+  // 심볼 입력 변경 시 시세 자동 로드 + 화이트리스트 검증 (debounce)
   const symEl = document.getElementById('cm-symbol');
   if (!symEl.dataset.bound) {
     let timer = null;
     const trigger = () => {
+      _validateCurrentSymbol();
       clearTimeout(timer);
       timer = setTimeout(() => loadCmMarketInfo(), 400);
     };
@@ -4200,6 +4226,44 @@ async function loadCmSymbols() {
   }
   // 거래소 계정 변경 시 testnet 여부 변경 → 시세 다시
   loadCmMarketInfo();
+}
+
+// 2026-05-07: 모달 상단의 화이트리스트 안내 표시.
+function _renderWhitelistHint() {
+  const el = document.getElementById('cm-symbol-whitelist-hint');
+  if (!el) return;
+  if (!_cmWhitelistInfo.enabled) {
+    el.classList.add('hidden');
+    return;
+  }
+  const list = [..._cmWhitelistInfo.allowed].join(', ');
+  el.innerHTML = `🔒 <span class="text-yellow-400">화이트리스트 운영</span> — 허용: <span class="font-mono text-green-300">${list}</span>`;
+  el.classList.remove('hidden');
+}
+
+// 2026-05-07: 현재 입력된 심볼이 화이트리스트 안인지 즉시 시각 표시.
+// 거부 심볼이면 빨간색 + 입력 박스 ring red. 「전략 시작」 버튼 누르기 전에 사용자가 알 수 있게.
+function _validateCurrentSymbol() {
+  const inp = document.getElementById('cm-symbol');
+  const status = document.getElementById('cm-symbol-status');
+  if (!inp || !status) return;
+  const sym = (inp.value || '').toUpperCase().trim();
+  if (!sym || !_cmWhitelistInfo.enabled) {
+    status.classList.add('hidden');
+    inp.classList.remove('ring-2', 'ring-red-400', 'ring-green-400');
+    return;
+  }
+  const isAllowed = _cmWhitelistInfo.allowed.has(sym);
+  if (isAllowed) {
+    status.innerHTML = `<span class="text-green-400">✓ ${sym} 진입 허용</span>`;
+    inp.classList.remove('ring-2', 'ring-red-400');
+    inp.classList.add('ring-2', 'ring-green-400');
+  } else {
+    status.innerHTML = `<span class="text-red-400">🚫 ${sym} 화이트리스트 외 — 진입 거부됨</span>`;
+    inp.classList.remove('ring-2', 'ring-green-400');
+    inp.classList.add('ring-2', 'ring-red-400');
+  }
+  status.classList.remove('hidden');
 }
 
 let _cmCurrentPrice = null;

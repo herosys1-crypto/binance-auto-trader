@@ -121,9 +121,9 @@ class TestTrailingFiresWhenAboveTPThreshold:
         )
 
     @pytest.mark.parametrize("done_status", [
-        "TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL", "TP4_DONE_PARTIAL",
+        "TP3_DONE_PARTIAL", "TP4_DONE_PARTIAL",
     ])
-    def test_trailing_fires_for_all_tp_done_partials(
+    def test_trailing_fires_for_tp3_plus_done_partials(
         self,
         done_status: str,
         db_session,
@@ -132,7 +132,8 @@ class TestTrailingFiresWhenAboveTPThreshold:
         make_position_with_mark,
         patched_redis_for_risk,
     ) -> None:
-        """TP1~4 partial 모두에서 동일 — peak 30% / 현재 20% / drop 10% → 트레일링."""
+        """TP3+ partial 에서만 trailing 발동 (사용자 기획 v2, 2026-05-07).
+        TP1/TP2 는 trailing armed 안 됨 — 별도 테스트에서 검증."""
         tpl = make_template(
             tp1_percent=Decimal("5"), tp2_percent=Decimal("10"),
             tp3_percent=Decimal("15"), tp4_percent=Decimal("25"),
@@ -149,6 +150,40 @@ class TestTrailingFiresWhenAboveTPThreshold:
 
         result = RiskService(db_session).evaluate_take_profit_level(strategy.id)
         assert result == "TRAILING_TP", f"{done_status}: 트레일링 안 됨 (결과={result})"
+
+    @pytest.mark.parametrize("done_status", ["TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL"])
+    def test_trailing_NOT_armed_for_tp1_tp2_done_partials(
+        self,
+        done_status: str,
+        db_session,
+        make_template,
+        make_strategy,
+        make_position_with_mark,
+        patched_redis_for_risk,
+    ) -> None:
+        """TP1/TP2 발동만으로는 trailing 활성 X (사용자 기획 v2, 2026-05-07).
+
+        같은 시나리오 (peak 30%, 현재 20%) 라도 status TP1/TP2 면 trailing 미발동.
+        대신 TP threshold loop 가 다음 미발동 TP 를 반환해야 함.
+        """
+        tpl = make_template(
+            tp1_percent=Decimal("5"), tp2_percent=Decimal("10"),
+            tp3_percent=Decimal("15"), tp4_percent=Decimal("25"),
+        )
+        strategy = make_strategy(
+            symbol_str="LABUSDT", side="SHORT", status=done_status,
+            current_position_qty=Decimal("-100"),
+            avg_entry_price=Decimal("2.37"),
+            leverage=2,
+            template=tpl, current_stage=1,
+        )
+        make_position_with_mark(strategy, Decimal("2.13"))
+        patched_redis_for_risk.store[f"strategy:{strategy.id}:peak_pnl_pct"] = "30"
+
+        result = RiskService(db_session).evaluate_take_profit_level(strategy.id)
+        # peak 30%/현재 20% — trailing 조건은 만족하지만 status TP1/TP2 라 armed X.
+        # 대신 다음 미발동 TP (TP1 status → TP2, TP2 status → TP3) 반환.
+        assert result != "TRAILING_TP", f"{done_status}: trailing 발동되면 안 됨 (정책 v2)"
 
 
 # ============================================================================
