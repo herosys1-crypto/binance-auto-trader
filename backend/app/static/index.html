@@ -3470,9 +3470,12 @@ async function renderAccountsModalBody() {
           <td>${envBadge}</td>
           <td>${activeBadge}</td>
           <td class="text-xs">${limitText}</td>
-          <td>
+          <td class="space-x-1">
             <button class="btn-ghost btn text-xs" style="padding:4px 8px"
-                    onclick="updateAccountLimit(${a.id})">✏️ 한도 수정</button>
+                    onclick="updateAccountLimit(${a.id})">✏️ 한도</button>
+            <button class="btn-warning btn text-xs" style="padding:4px 8px"
+                    onclick="openCredentialsForm(${a.id}, ${a.is_testnet})"
+                    title="API 키 회전 + testnet ↔ mainnet 전환">🔑 키 변경</button>
           </td>
         </tr>`;
     }).join('');
@@ -3524,6 +3527,69 @@ async function updateAccountLimit(accountId) {
     await renderAccountsModalBody();  // 모달 다시 렌더
   } catch (err) {
     toast(`한도 갱신 실패: ${err.message}`, 'error');
+  }
+}
+
+// 2026-05-07: API 키 회전 + testnet ↔ mainnet 전환 (사용자 요청).
+// 흐름: 새 키/secret + 옵션으로 환경 전환 → 백엔드가 Binance 호출로 검증 → 저장.
+// 환경 전환 시 활성 strategy 가 있으면 백엔드가 거부 (포지션 mismatch 방지).
+async function openCredentialsForm(accountId, currentIsTestnet) {
+  const apiKey = prompt(
+    `🔑 계정 #${accountId} 키 변경 (1/3)\n\n` +
+    `새 API key 입력 (10~200자).\n` +
+    `취소하면 변경 안 됨.`,
+    ""
+  );
+  if (!apiKey || apiKey.trim() === "") return;
+
+  const apiSecret = prompt(
+    `🔑 계정 #${accountId} 키 변경 (2/3)\n\n` +
+    `새 API secret 입력 (10~200자).`,
+    ""
+  );
+  if (!apiSecret || apiSecret.trim() === "") return;
+
+  const envChoice = prompt(
+    `🔑 계정 #${accountId} 키 변경 (3/3) — 환경\n\n` +
+    `현재: ${currentIsTestnet ? 'testnet' : 'mainnet'}\n\n` +
+    `다음 중 입력:\n` +
+    `  • testnet → testnet 으로 (현재 mainnet 이면 전환)\n` +
+    `  • mainnet → mainnet 으로 (현재 testnet 이면 전환)\n` +
+    `  • 비워두면 환경 유지 (키만 회전)\n\n` +
+    `※ 환경 전환은 활성 strategy 가 0건일 때만 가능.`,
+    ""
+  );
+  if (envChoice === null) return;
+  const trimmed = envChoice.trim().toLowerCase();
+  let isTestnet = null;  // null = 유지
+  if (trimmed === "testnet") isTestnet = true;
+  else if (trimmed === "mainnet") isTestnet = false;
+  else if (trimmed !== "") {
+    toast(`잘못된 환경 값: ${envChoice}. testnet / mainnet / 빈값 중 입력.`, 'error');
+    return;
+  }
+
+  // 최종 확인 — 환경 전환 시 강한 경고
+  const willChangeEnv = isTestnet !== null && isTestnet !== currentIsTestnet;
+  const confirmMsg = willChangeEnv
+    ? `⚠️ 환경 전환: ${currentIsTestnet ? 'testnet' : 'mainnet'} → ${isTestnet ? 'testnet' : 'mainnet'}\n\n` +
+      `백엔드가 활성 strategy 0건 확인 + 새 키로 Binance 인증 검증 후 저장합니다.\n\n진행?`
+    : `🔑 키 회전 (환경 ${currentIsTestnet ? 'testnet' : 'mainnet'} 유지)\n\n진행?`;
+  if (!confirm(confirmMsg)) return;
+
+  try {
+    await api(`/exchange-accounts/${accountId}/credentials`, {
+      method: 'PATCH',
+      body: {
+        api_key: apiKey,
+        api_secret: apiSecret,
+        is_testnet: isTestnet,
+      },
+    });
+    toast(`✅ 계정 #${accountId} 키 ${willChangeEnv ? '변경 + 환경 전환' : '회전'} 완료. 텔레그램 audit 발송됨.`, 'success');
+    await renderAccountsModalBody();
+  } catch (err) {
+    toast(`키 변경 실패: ${err.message}`, 'error');
   }
 }
 
