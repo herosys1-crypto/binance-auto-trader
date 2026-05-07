@@ -48,7 +48,7 @@ class TestSymbolWhitelist:
         make_symbol("SOLUSDT")
         tpl = make_template()
 
-        with pytest.raises(ValueError, match="허용 목록에 없음"):
+        with pytest.raises(ValueError, match="현재 허용되지 않습니다"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=u.id,
                 exchange_account_id=ea.id,
@@ -150,7 +150,7 @@ class TestMaxConcurrentStrategies:
         # 11번째 시도
         make_symbol("EXTRAUSDT")
         tpl = make_template()
-        with pytest.raises(ValueError, match="동시 활성 전략 수 한도"):
+        with pytest.raises(ValueError, match="동시 운영 한도"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=first.user_id,
                 exchange_account_id=first.exchange_account_id,
@@ -175,7 +175,7 @@ class TestMaxConcurrentStrategies:
         # 2건 active. 3번째 거부.
         make_symbol("SOLUSDT")
         tpl = make_template()
-        with pytest.raises(ValueError, match=r"동시 활성 전략 수 한도 \(2개\)"):
+        with pytest.raises(ValueError, match=r"동시 운영 한도 \(2개\)"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=first.user_id,
                 exchange_account_id=first.exchange_account_id,
@@ -196,7 +196,7 @@ class TestMaxConcurrentStrategies:
         make_symbol("ETHUSDT")
         tpl = make_template()
         # 1건 이미 있음. 다음 거부 (clamp 1 = 한도).
-        with pytest.raises(ValueError, match=r"한도 \(1개\)"):
+        with pytest.raises(ValueError, match=r"동시 운영 한도 \(1개\)"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=first.user_id,
                 exchange_account_id=first.exchange_account_id,
@@ -222,7 +222,7 @@ class TestMaxStrategyCapitalPct:
         # 기본 tpl total_capital=100 (10% of 1000)
         tpl = make_template()
 
-        with pytest.raises(ValueError, match="자본 상한 초과"):
+        with pytest.raises(ValueError, match="자본이 너무 큽니다"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=u.id,
                 exchange_account_id=ea.id,

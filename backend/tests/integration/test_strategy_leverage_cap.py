@@ -35,7 +35,7 @@ class TestLeverageCapGuard:
         make_symbol("BTCUSDT")
         tpl = make_template(leverage=10)
 
-        with pytest.raises(ValueError, match=r"레버리지 10x > 한도 5x"):
+        with pytest.raises(ValueError, match=r"레버리지가 너무 높습니다: 10x"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=u.id, exchange_account_id=ea.id,
                 strategy_template_id=tpl.id, symbol="BTCUSDT",
@@ -53,7 +53,7 @@ class TestLeverageCapGuard:
         make_symbol("BTCUSDT")
         tpl = make_template(leverage=2)
 
-        with pytest.raises(ValueError, match=r"레버리지 10x > 한도 5x"):
+        with pytest.raises(ValueError, match=r"레버리지가 너무 높습니다: 10x"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=u.id, exchange_account_id=ea.id,
                 strategy_template_id=tpl.id, symbol="BTCUSDT",

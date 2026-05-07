@@ -187,9 +187,9 @@ def update_credentials(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    f"환경 전환 불가 ({old_env} → {new_env}): 활성 strategy {len(active_count)}건 존재. "
-                    "모든 활성 strategy 를 종료한 후 다시 시도하세요. "
-                    "(testnet 포지션을 mainnet 키로 추적하면 좀비/혼란 발생)"
+                    f"⚠️ 환경 전환 불가 ({old_env} → {new_env}): 진행 중인 전략이 {len(active_count)}건 있습니다.\n\n"
+                    "📌 testnet 포지션을 mainnet 키로 추적하면 좀비/혼란이 발생합니다.\n\n"
+                    "💡 해결: 모든 활성 전략을 「⏸ 정지」 또는 「🛑 긴급 종료」 한 후 다시 시도하세요."
                 ),
             )
 
@@ -207,11 +207,17 @@ def update_credentials(
             "PATCH credentials Binance call failed: account_id=%s is_testnet=%s error=%s",
             exchange_account_id, effective_is_testnet, e,
         )
+        env_str = "testnet" if effective_is_testnet else "mainnet"
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"새 키로 Binance 인증 실패 ({'testnet' if effective_is_testnet else 'mainnet'}): {e}. "
-                "키 권한/IP whitelist/환경 일치 여부 확인 후 다시 시도."
+                f"🔑 새 API 키로 Binance ({env_str}) 인증 실패\n\n"
+                f"📋 상세: {e}\n\n"
+                "💡 점검 사항:\n"
+                "  • API 키/시크릿 정확히 복사했는지 (앞뒤 공백 X)\n"
+                "  • Futures 권한 활성 (Spot Trading 만 활성이면 거부)\n"
+                "  • IP Whitelist 에 VPS IP (152.42.232.195) 등록\n"
+                "  • testnet/mainnet 환경 일치 (testnet 키를 mainnet 으로 등록 X)"
             ),
         ) from e
 

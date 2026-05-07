@@ -97,7 +97,7 @@ class TestWhitelistRuntimeToggle:
         make_symbol("SOLUSDT")
         tpl = make_template()
 
-        with pytest.raises(ValueError, match="허용 목록에 없음"):
+        with pytest.raises(ValueError, match="현재 허용되지 않습니다"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=u.id, exchange_account_id=ea.id,
                 strategy_template_id=tpl.id, symbol="SOLUSDT",
@@ -119,7 +119,7 @@ class TestWhitelistRuntimeToggle:
         make_symbol("SOLUSDT")
         tpl = make_template()
 
-        with pytest.raises(ValueError, match="허용 목록에 없음"):
+        with pytest.raises(ValueError, match="현재 허용되지 않습니다"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=u.id, exchange_account_id=ea.id,
                 strategy_template_id=tpl.id, symbol="SOLUSDT",

@@ -40,7 +40,7 @@ class StrategyService:
         template_model = self.repo.get_template(strategy_template_id)
         symbol_model = self.repo.get_symbol(symbol)
         if not template_model or not symbol_model:
-            raise ValueError("Strategy template or symbol not found")
+            raise ValueError("⚠️ 전략 템플릿 또는 심볼 정보를 찾을 수 없습니다. 운영자에게 문의하세요.")
 
         symbol_rule = SymbolRule(
             symbol=symbol_model.symbol,
@@ -71,7 +71,7 @@ class StrategyService:
         template_model = self.repo.get_template(strategy_template_id)
         symbol_model = self.repo.get_symbol(symbol)
         if not template_model or not symbol_model:
-            raise ValueError("Template or symbol not found")
+            raise ValueError("⚠️ 전략 템플릿 또는 심볼 정보를 찾을 수 없습니다. 운영자에게 문의하세요.")
         # 중복 방지 (Critical): Binance 는 같은 심볼+방향에 대해 통합 포지션으로만 관리.
         # 같은 계정/심볼/방향 활성 전략이 있으면 새 전략 생성을 거부 (TP/SL 충돌, qty 추적 오류 회피).
         # 종료된 상태 (모두 _CLOSED_STATUSES 에 포함) 는 제외 — 새로 시작 가능.
@@ -100,16 +100,14 @@ class StrategyService:
             # 사용자는 reconcile 자동 정리 (30초) 또는 force-stop 으로 즉시 해결 가능.
             if existing.status == "STOPPING":
                 hint = (
-                    f" 현재 #{existing.id} 는 STOPPING (청산 진행 중) — reconcile_worker 가 30초마다 "
-                    f"거래소 포지션 0 확인 시 자동으로 STOPPED 승격합니다. "
-                    f"잠시 후 다시 시도하거나, 거래소에 잔재 포지션이 없는 게 확실하면 "
-                    f"`POST /api/v1/strategies/{existing.id}/force-stop` 으로 즉시 STOPPED 마킹 가능."
+                    f"\n\n📌 전략 #{existing.id} 가 「청산 중」 상태입니다. 30초 안에 자동으로 정리됩니다 — 잠시 후 다시 시도하세요. "
+                    f"혹시 거래소에 잔재 포지션이 없는 게 확실하면 강제 정리 가능합니다 (별도 안내)."
                 )
             else:
-                hint = " 기존 전략을 종료(/stop) 한 후 새로 시작하시거나, 다른 심볼/방향을 선택해 주세요."
+                hint = "\n\n💡 해결: 「⏸ 정지」 또는 「🛑 긴급 종료」 로 기존 전략을 닫은 후 다시 시작하시거나, 다른 심볼/방향으로 진행하세요."
             raise ValueError(
-                f"같은 거래소/심볼/방향 ({symbol} {side}) 으로 활성 전략 #{existing.id} ({existing.status}) 가 이미 있습니다. "
-                "Binance 는 통합 포지션으로만 관리하므로 중복 전략은 TP/SL 충돌을 일으킵니다."
+                f"⚠️ {symbol} {side} 전략이 이미 진행 중입니다 (#{existing.id}). "
+                f"Binance 는 한 종목/방향에 하나의 통합 포지션만 허용합니다. 중복 시 익절/손절이 충돌해 손실 위험이 큽니다."
                 + hint
             )
         # 잔액/마진 사전 안전 체크 (2026-05-03 강화):
@@ -131,8 +129,9 @@ class StrategyService:
         # WAITING 상태 잔재 발생. 이제 create 시점에 차단해 DB 깨끗.
         if AccountKillSwitchService(self.db).is_enabled(exchange_account_id):
             raise ValueError(
-                f"거래소 계정 #{exchange_account_id} 의 Kill-Switch 가 활성화돼 있습니다. "
-                "신규 전략 생성 차단. Kill-Switch 를 해제한 후 재시도하세요."
+                f"🔒 거래소 계정 #{exchange_account_id} 의 Kill-Switch 가 활성화돼 신규 거래가 차단됐습니다.\n\n"
+                "💡 해결: 대시보드 상단의 빨간 배너에서 「🔓 해제」 버튼을 클릭한 후 다시 시도하세요. "
+                "(보통 일일 손실 한도 도달 시 자동 발동됩니다.)"
             )
 
         # 실효 leverage 산출 (이후 여러 가드에서 공통 사용).
@@ -145,9 +144,9 @@ class StrategyService:
         if max_lev and max_lev > 0:
             if effective_lev_check > max_lev:
                 raise ValueError(
-                    f"레버리지 {effective_lev_check}x > 한도 {max_lev}x 초과. "
-                    f"운영 정책 (settings.max_leverage) 으로 차단. "
-                    "leverage_override 줄이거나 templete.leverage 줄여 재시도하세요."
+                    f"⚠️ 레버리지가 너무 높습니다: {effective_lev_check}x (한도 {max_lev}x).\n\n"
+                    f"💡 해결: 「레버리지」 입력값을 {max_lev}x 이하로 낮춰주세요. "
+                    "높은 레버리지는 작은 가격 변동에도 강제 청산될 위험이 큽니다."
                 )
 
         # 0-A) 심볼 화이트리스트 (MAINNET-CHECKLIST 3-3, 2026-05-07).
@@ -160,10 +159,13 @@ class StrategyService:
                 default_from_env=True  # env 에 값 있으면 default ON
             )
             if wl_enabled and symbol.upper() not in allowed:
+                allowed_str = ", ".join(sorted(allowed))
                 raise ValueError(
-                    f"심볼 {symbol} 가 허용 목록에 없음. 운영자 설정 (allowed_symbols_csv): "
-                    f"{sorted(allowed)}. mainnet 초기엔 high-liquidity 심볼만 허용 권장. "
-                    "운영자 대시보드에서 화이트리스트 토글 OFF 시 모든 심볼 허용."
+                    f"🚫 심볼 「{symbol}」 는 현재 허용되지 않습니다.\n\n"
+                    f"📋 허용 심볼: {allowed_str}\n\n"
+                    "💡 해결 (택1):\n"
+                    f"  • 위 심볼 중 하나로 변경 (예: {sorted(allowed)[0]})\n"
+                    "  • 「💼 계정」 모달의 「🔒 심볼 화이트리스트 적용」 체크 해제 (모든 심볼 허용)"
                 )
 
         # 0-B) 동시 활성 strategy 수 한도 (계정당). 환경변수로 조정 가능.
@@ -176,13 +178,16 @@ class StrategyService:
         ).all()
         if len(active_count) >= max_concurrent:
             raise ValueError(
-                f"이 거래소 계정의 동시 활성 전략 수 한도 ({max_concurrent}개) 초과. "
-                f"현재 {len(active_count)}개. 일부 전략을 종료한 후 새로 시작하세요."
+                f"⚠️ 이 거래소 계정에 이미 진행 중인 전략이 {len(active_count)}개 — 동시 운영 한도 ({max_concurrent}개) 입니다.\n\n"
+                "💡 해결: 활성 전략 중 하나를 「⏸ 정지」 또는 「🛑 긴급 종료」 한 후 다시 시도하세요."
             )
 
         ex_account = self.db.get(_EA, exchange_account_id)
         if not ex_account:
-            raise ValueError(f"거래소 계정 #{exchange_account_id} 를 찾을 수 없습니다.")
+            raise ValueError(
+                f"⚠️ 거래소 계정 #{exchange_account_id} 를 찾을 수 없습니다.\n\n"
+                "💡 해결: 「💼 계정」 모달에서 등록된 계정을 확인하세요."
+            )
 
         try:
             client = BinanceClient(
@@ -195,8 +200,12 @@ class StrategyService:
             # 안전 우선: 거래소 API 호출 실패 시 차단 (이전 silent skip → 사고 가능성)
             _logger.error("balance pre-check Binance call failed: %s", e)
             raise ValueError(
-                f"거래소 잔액 확인 실패 (안전상 신규 전략 차단): {e}. "
-                "잠시 후 다시 시도하거나 거래소 API 상태를 확인하세요."
+                f"⚠️ 거래소 (Binance) 와 통신 실패 — 안전을 위해 신규 전략 생성을 차단했습니다.\n\n"
+                f"📋 상세: {e}\n\n"
+                "💡 해결:\n"
+                "  • 잠시 후 다시 시도\n"
+                "  • API 키 만료/IP 변경 여부 확인 (「💼 계정」 → 「🔑 키 변경」)\n"
+                "  • Binance 거래소 상태 페이지 확인"
             )
 
         # 거래소 실 포지션 사전 체크 (2026-05-03 강화):
@@ -212,9 +221,9 @@ class StrategyService:
                     and abs(D(str(p.get("positionAmt", "0")))) > 0
                 ):
                     raise ValueError(
-                        f"거래소에 이미 {symbol} {side} 포지션 {p.get('positionAmt')} 가 존재합니다. "
-                        "(우리 시스템에 활성 strategy 가 없어도 거래소 포지션이 있으면 중복) "
-                        "기존 포지션을 정리한 후 새 전략을 시작하세요."
+                        f"⚠️ Binance 거래소에 {symbol} {side} 포지션 {p.get('positionAmt')} 가 이미 있습니다.\n\n"
+                        "📌 우리 시스템에 활성 전략이 없어도, 거래소에 잔재 포지션이 있으면 중복 위험으로 차단됩니다.\n\n"
+                        "💡 해결: Binance 웹 또는 앱에서 해당 포지션을 직접 정리한 후 다시 시도하세요."
                     )
         except ValueError:
             raise
@@ -234,9 +243,12 @@ class StrategyService:
         # 1) 가용 잔액 체크
         if required_margin > available:
             raise ValueError(
-                f"잔액 부족: 필요 마진 {required_margin} USDT > 가용 잔액 {available} USDT. "
-                f"(자본 {template_model.total_capital} ÷ 레버리지 {effective_lev}x). "
-                "거래소에 입금하거나 자본을 줄이세요."
+                f"💰 잔액 부족 — 필요한 마진 {required_margin:.2f} USDT > 가용 잔액 {available:.2f} USDT\n\n"
+                f"📌 계산: 자본 {template_model.total_capital} USDT ÷ 레버리지 {effective_lev}x = 필요 마진 {required_margin:.2f}\n\n"
+                "💡 해결 (택1):\n"
+                "  • Binance 거래소에 USDT 추가 입금\n"
+                "  • 자본을 줄여 다시 시도\n"
+                "  • 레버리지를 높여 필요 마진 감소 (단, 청산 위험 ↑)"
             )
 
         # 1-Z) 청산가 안전 거리 가드 (MAINNET-CHECKLIST 3-5, 2026-05-07).
@@ -251,9 +263,10 @@ class StrategyService:
             distance_pct_est = ((_D("1") - mmr) / lev_d * _D("100")).quantize(_D("0.01"))
             if distance_pct_est < _D(str(min_liq_dist)):
                 raise ValueError(
-                    f"청산가 안전 거리 부족: 추정 거리 {distance_pct_est}% < 한도 {min_liq_dist}% "
-                    f"(레버리지 {effective_lev_check}x 일 때 추정 거리 ≈ {distance_pct_est}%). "
-                    "레버리지를 낮추거나 settings.min_liquidation_distance_pct 를 조정하세요."
+                    f"⚠️ 청산가가 너무 가까워 위험합니다.\n\n"
+                    f"📌 레버리지 {effective_lev_check}x 일 때 진입가에서 약 {distance_pct_est}% 만 움직여도 강제 청산. "
+                    f"운영 정책상 최소 {min_liq_dist}% 이상 거리가 필요합니다.\n\n"
+                    "💡 해결: 「레버리지」 를 낮춰주세요. (예: 5x → 거리 ≈ 19.9%, 10x → ≈ 9.95%)"
                 )
 
         # 1-A) 단일 strategy 자본 상한 % (MAINNET-CHECKLIST 3-3, 2026-05-07).
@@ -265,9 +278,10 @@ class StrategyService:
             tpl_cap = D(str(template_model.total_capital))
             if tpl_cap > cap_limit:
                 raise ValueError(
-                    f"단일 전략 자본 상한 초과: {tpl_cap} USDT > {cap_limit} USDT "
-                    f"(가용 잔액 {available} 의 {max_pct}%). "
-                    "자본을 줄이거나 max_strategy_capital_pct_of_balance 설정을 조정하세요."
+                    f"💰 한 전략의 자본이 너무 큽니다 — {tpl_cap:.2f} USDT (한도 {cap_limit:.2f} USDT)\n\n"
+                    f"📌 운영 정책: 단일 전략은 가용 잔액 ({available:.2f} USDT) 의 {max_pct}% 이내. "
+                    "한 전략에 자본이 집중되면 손실 시 회복이 어렵기 때문입니다.\n\n"
+                    f"💡 해결: 자본을 {cap_limit:.0f} USDT 이하로 줄여 다시 시도하세요."
                 )
 
         # 2) 마진 비율 한도 (현재 + 새 전략 후 예상)
@@ -277,8 +291,11 @@ class StrategyService:
             MAX_MARGIN_RATIO_PCT = D("80")
             if current_ratio_pct > MAX_MARGIN_RATIO_PCT:
                 raise ValueError(
-                    f"마진 비율 {current_ratio_pct}% > {MAX_MARGIN_RATIO_PCT}% 한도. 청산 위험. "
-                    "기존 포지션을 정리하거나 입금 후 시도하세요."
+                    f"⚠️ 거래소 마진 사용율이 {current_ratio_pct}% 로 청산 위험 영역 ({MAX_MARGIN_RATIO_PCT}% 한도) 입니다.\n\n"
+                    "📌 이미 보유한 포지션이 청산가에 가까워 신규 진입을 차단했습니다.\n\n"
+                    "💡 해결 (택1):\n"
+                    "  • Binance 에서 일부 포지션 정리\n"
+                    "  • USDT 추가 입금으로 마진 여유 확보"
                 )
         preview = self.calculate_preview(symbol=symbol, side=side, start_price=start_price, strategy_template_id=strategy_template_id, leverage_override=leverage_override)
         instance = StrategyInstance(

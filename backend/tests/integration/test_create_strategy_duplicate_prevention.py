@@ -62,12 +62,9 @@ class TestDuplicatePreventionMessages:
         )
         msg = str(err)
         assert f"#{existing.id}" in msg
-        assert "STOPPING" in msg
-        # STOPPING 전용 가이드 포함
-        assert "reconcile_worker" in msg
+        # STOPPING 전용 가이드: 청산 중 상태 + 30초 자동 정리 안내
+        assert "청산 중" in msg
         assert "30초" in msg
-        assert "force-stop" in msg
-        assert f"strategies/{existing.id}/force-stop" in msg
 
     @pytest.mark.parametrize(
         "active_status",
@@ -100,11 +97,10 @@ class TestDuplicatePreventionMessages:
         )
         msg = str(err)
         assert f"#{existing.id}" in msg
-        assert active_status in msg
-        # generic hint — STOPPING 전용 가이드는 없어야 함
-        assert "/stop" in msg
-        assert "force-stop" not in msg
-        assert "reconcile_worker" not in msg
+        # generic hint — 정지/긴급 종료 안내, STOPPING 전용 가이드 없음
+        assert ("정지" in msg) or ("긴급 종료" in msg)
+        assert "30초" not in msg  # STOPPING 전용 안내 미포함
+        assert "청산 중" not in msg
 
     def test_terminal_strategy_does_not_block(
         self,
@@ -139,6 +135,6 @@ class TestDuplicatePreventionMessages:
                 start_price=Decimal("2.5"),
             )
         msg = str(ei.value)
-        # 중복 가드 메시지가 아니어야 함
-        assert "활성 전략" not in msg
-        assert "중복 전략" not in msg
+        # 중복 가드 메시지가 아니어야 함 (다른 단계 — 잔액/Binance — 에서 실패)
+        assert "이미 진행 중" not in msg
+        assert "통합 포지션만 허용" not in msg

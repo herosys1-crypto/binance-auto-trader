@@ -145,7 +145,7 @@ def preview_inline(
     """
     symbol_model = StrategyRepository(db).get_symbol(payload.symbol)
     if not symbol_model:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Symbol not synced: {payload.symbol}")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"⚠️ 심볼 「{payload.symbol}」 가 시스템에 없습니다. 운영자에게 심볼 동기화 요청 (admin → /admin/symbol-sync) 하세요.")
 
     leverage = payload.leverage if payload.leverage is not None else (2 if payload.side == "SHORT" else 1)
     total_capital = sum(payload.capitals)
@@ -297,7 +297,7 @@ def get_strategy(
     from app.models.strategy_template import StrategyTemplate
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
     tpl = db.get(StrategyTemplate, strategy.strategy_template_id) if strategy.strategy_template_id else None
     resp = _enrich_response(StrategyDetailResponse.model_validate(strategy), tpl)
     counts = _fetch_tp_counts_batch(db, {strategy.id}).get(strategy.id, {})
@@ -327,7 +327,7 @@ def get_strategy_timeline(
 
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
 
     items: list[dict] = []
 
@@ -407,7 +407,7 @@ def get_strategy_stage_plans(
 
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
     rows = db.execute(
         sa_select(StrategyStagePlan)
         .where(StrategyStagePlan.strategy_instance_id == strategy_id)
@@ -450,10 +450,10 @@ def get_strategy_blueprint(
 
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
     tpl = db.get(StrategyTemplate, strategy.strategy_template_id)
     if not tpl:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template missing")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략 템플릿이 삭제됐거나 손상됐습니다. 운영자에게 문의하세요.")
 
     sc = tpl.stages_config or {}
     return {
@@ -490,11 +490,11 @@ def start_strategy(
 ) -> StrategyActionResponse:
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
 
     account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
     if not account:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exchange account not found")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="⚠️ 거래소 계정이 삭제됐거나 본인 소유가 아닙니다. 「💼 계정」 모달에서 확인하세요.")
 
     try:
         execution_service = ExecutionService(
@@ -524,7 +524,7 @@ def start_strategy(
             hint = " (주문 금액이 최소 거래 금액 미만. 자본 늘리세요)"
         else:
             hint = ""
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Exchange error: {e}{hint}") from e
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"⚠️ 거래소 (Binance) 주문 실패: {e}{hint}") from e
 
     db.refresh(strategy)
     # 전략 시작 즉시 텔레그램 알림 (체결 무관 — 미체결로 한참 기다려도 사용자가 확인 가능).
@@ -628,19 +628,19 @@ def update_strategy_settings_in_place(
 
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
     if strategy.status in TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"이미 종료된 전략 (status={strategy.status}) 은 in-place 수정 불가. "
-                "「🔄 다시 시작」 또는 「🟢 새 전략 시작」 으로 새 strategy 를 만드세요."
+                f"⚠️ 이미 종료된 전략 (상태: {strategy.status}) 은 설정 수정이 불가합니다.\n\n"
+                "💡 해결: 「🔄 다시 시작」 (같은 설정 새 전략) 또는 「🟢 새 전략 시작」 으로 진행하세요."
             ),
         )
 
     old_tpl = db.get(StrategyTemplate, strategy.strategy_template_id)
     if not old_tpl:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Original template not found")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="⚠️ 원본 전략 템플릿이 삭제됐습니다. 「🔄 다시 시작」 으로 새 전략을 생성하세요.")
 
     # 새 template 생성 — 모든 필드 복사 + payload override.
     # name 에 strategy id + timestamp 부착 → 중복 회피 + 추적 용이.
@@ -905,7 +905,7 @@ def trigger_next_stage_manually(
     """
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
     if strategy.status in TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -983,7 +983,7 @@ def trigger_next_stage_manually(
             .values(is_triggered=False)
         )
         db.commit()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exchange account not found")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="⚠️ 거래소 계정이 삭제됐거나 본인 소유가 아닙니다. 「💼 계정」 모달에서 확인하세요.")
     try:
         execution_service = ExecutionService(
             db,
@@ -1044,10 +1044,10 @@ def add_margin_to_strategy(
     """
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
     account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
     if not account:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exchange account not found")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="⚠️ 거래소 계정이 삭제됐거나 본인 소유가 아닙니다. 「💼 계정」 모달에서 확인하세요.")
     try:
         execution_service = ExecutionService(
             db,
@@ -1105,10 +1105,10 @@ def add_position_to_strategy(
     """
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
     account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
     if not account:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exchange account not found")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="⚠️ 거래소 계정이 삭제됐거나 본인 소유가 아닙니다. 「💼 계정」 모달에서 확인하세요.")
     try:
         execution_service = ExecutionService(
             db,
@@ -1171,7 +1171,7 @@ def force_stop_strategy(
     """
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
     strategy.status = "STOPPED"
     strategy.reentry_ready = False
     # 좀비 방지 (2026-05-03): force-stop 시에도 qty=0 보장 — UI/통계 잔재 방지.
@@ -1215,7 +1215,7 @@ def delete_strategy(
     from datetime import timezone as _tz
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
 
     # 2026-05-04: 공통 TERMINAL_STATUSES 사용 (이전엔 inline set 이라 다른 곳과 drift).
     if strategy.status not in TERMINAL_STATUSES:
@@ -1272,7 +1272,7 @@ def restore_strategy(
     """
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
 
     if not getattr(strategy, "is_archived", False):
         return StrategyActionResponse(
@@ -1303,7 +1303,7 @@ def stop_strategy(
 ) -> StrategyActionResponse:
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Strategy not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
 
     # Terminal status guard (2026-05-04 fix):
     # COMPLETED / STOPPED / REENTRY_READY 등 이미 종료된 strategy 에 stop 누르면
@@ -1318,7 +1318,7 @@ def stop_strategy(
 
     account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
     if not account:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Exchange account not found")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="⚠️ 거래소 계정이 삭제됐거나 본인 소유가 아닙니다. 「💼 계정」 모달에서 확인하세요.")
 
     execution_service = ExecutionService(
         db,

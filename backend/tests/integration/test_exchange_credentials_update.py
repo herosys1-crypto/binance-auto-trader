@@ -81,7 +81,7 @@ class TestCredentialsRotation:
                 user_id=u.id,
             )
         assert ei.value.status_code == 400
-        assert "Binance 인증 실패" in ei.value.detail
+        assert "Binance" in ei.value.detail and "인증 실패" in ei.value.detail
 
         db_session.refresh(ea)
         assert ea.api_key_enc == old_enc  # 변경 안 됨
@@ -129,7 +129,7 @@ class TestCredentialsRotation:
             )
         assert ei.value.status_code == 400
         assert "환경 전환 불가" in ei.value.detail
-        assert "활성 strategy" in ei.value.detail
+        assert "진행 중인 전략" in ei.value.detail
 
         db_session.refresh(ea)
         assert ea.is_testnet is True  # 변경 안 됨
