@@ -3465,10 +3465,33 @@ function closeAccountsModal() {
 
 async function renderAccountsModalBody() {
   const body = document.getElementById('accounts-modal-body');
+  // 2026-05-07 사용자 요청: 화이트리스트 운영 토글 (DB 영속, 즉시 적용)
+  let whitelistHtml = '';
+  try {
+    const wl = await api('/admin/settings/whitelist');
+    const allowedList = (wl.allowed_symbols || []).join(', ') || '(env 미설정)';
+    const checked = wl.enabled ? 'checked' : '';
+    const note = wl.env_configured
+      ? `허용: <span class="font-mono text-green-300">${allowedList}</span>`
+      : `<span class="text-yellow-400">⚠️ env 의 ALLOWED_SYMBOLS_CSV 가 비어있어 토글 켜도 무의미. .env 에 심볼 채운 후 컨테이너 재기동 필요.</span>`;
+    whitelistHtml = `
+      <div class="mb-4 p-3 rounded border border-slate-700 bg-slate-800/40">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" id="wl-toggle" ${checked} onchange="toggleWhitelist(this.checked)"
+                 class="w-4 h-4 cursor-pointer" />
+          <span class="text-sm font-semibold">🔒 심볼 화이트리스트 적용</span>
+          <span class="text-xs text-slate-400">— 체크 시 허용 심볼 외 진입 거부</span>
+        </label>
+        <div class="text-xs mt-1 ml-6">${note}</div>
+      </div>`;
+  } catch (e) {
+    whitelistHtml = `<div class="mb-4 text-xs text-red-400">화이트리스트 상태 조회 실패: ${e.message}</div>`;
+  }
+
   try {
     const accounts = await api('/exchange-accounts');
     if (!accounts.length) {
-      body.innerHTML = `
+      body.innerHTML = whitelistHtml + `
         <div class="text-center py-8">
           <div class="text-yellow-300 mb-2">⚠️ 등록된 거래소 계정이 없습니다.</div>
           <div class="text-slate-400 text-xs">
@@ -3506,7 +3529,7 @@ async function renderAccountsModalBody() {
           </td>
         </tr>`;
     }).join('');
-    body.innerHTML = `
+    body.innerHTML = whitelistHtml + `
       <table class="min-w-full">
         <thead>
           <tr class="text-slate-400 text-xs">
@@ -3521,7 +3544,32 @@ async function renderAccountsModalBody() {
         <tbody>${rows}</tbody>
       </table>`;
   } catch (err) {
-    body.innerHTML = `<div class="text-red-400 text-sm">계정 조회 실패: ${err.message}</div>`;
+    body.innerHTML = whitelistHtml + `<div class="text-red-400 text-sm">계정 조회 실패: ${err.message}</div>`;
+  }
+}
+
+// 2026-05-07: 화이트리스트 토글 (DB 영속, 즉시 적용)
+async function toggleWhitelist(enabled) {
+  try {
+    const resp = await api('/admin/settings/whitelist', {
+      method: 'PATCH',
+      body: { enabled: !!enabled },
+    });
+    const status = resp.enabled ? '✅ 적용' : '⛔ 미적용';
+    toast(`화이트리스트 ${status} (즉시 반영)`, 'success');
+    // 새 전략 모달의 hint 도 갱신 — 다음 모달 오픈 시 자동
+    if (typeof _cmWhitelistInfo !== 'undefined') {
+      _cmWhitelistInfo = {
+        enabled: resp.enabled,
+        allowed: new Set((resp.allowed_symbols || []).map(s => s.toUpperCase())),
+      };
+      if (typeof _renderWhitelistHint === 'function') _renderWhitelistHint();
+      if (typeof _validateCurrentSymbol === 'function') _validateCurrentSymbol();
+    }
+  } catch (e) {
+    toast(`토글 실패: ${e.message}`, 'error');
+    // 체크박스 상태 되돌리기 — 다시 렌더
+    await renderAccountsModalBody();
   }
 }
 

@@ -151,14 +151,20 @@ class StrategyService:
                 )
 
         # 0-A) 심볼 화이트리스트 (MAINNET-CHECKLIST 3-3, 2026-05-07).
-        # mainnet 초기엔 high-liquidity 심볼만 허용 (slippage / liquidity 위험 ↓).
-        # settings.allowed_symbols_csv 가 비어 있으면 모든 심볼 허용 (testnet / 개발 default).
+        # 2-단계 검사: env 에 list 있고 + DB toggle 가 enabled (또는 env 만 있고 toggle 없으면 default ON).
+        # 운영자가 UI 체크박스로 .env 재시작 없이 on/off 가능 (system_settings.whitelist_enabled).
         allowed = _settings.allowed_symbols_set
-        if allowed and symbol.upper() not in allowed:
-            raise ValueError(
-                f"심볼 {symbol} 가 허용 목록에 없음. 운영자 설정 (allowed_symbols_csv): "
-                f"{sorted(allowed)}. mainnet 초기엔 high-liquidity 심볼만 허용 권장."
+        if allowed:
+            from app.services.system_settings_service import SystemSettingsService
+            wl_enabled = SystemSettingsService(self.db).is_whitelist_enabled(
+                default_from_env=True  # env 에 값 있으면 default ON
             )
+            if wl_enabled and symbol.upper() not in allowed:
+                raise ValueError(
+                    f"심볼 {symbol} 가 허용 목록에 없음. 운영자 설정 (allowed_symbols_csv): "
+                    f"{sorted(allowed)}. mainnet 초기엔 high-liquidity 심볼만 허용 권장. "
+                    "운영자 대시보드에서 화이트리스트 토글 OFF 시 모든 심볼 허용."
+                )
 
         # 0-B) 동시 활성 strategy 수 한도 (계정당). 환경변수로 조정 가능.
         # 거래소 API rate limit 보호 + 모니터링 단순화. 권장: mainnet 초기 3~5개.
