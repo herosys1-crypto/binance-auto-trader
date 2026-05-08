@@ -342,6 +342,45 @@ def detect_orphan_exchange_positions(
                 ).scalar_one_or_none()
                 if match:
                     continue
+                # 2026-05-08 #120 fix: KS 발동 전 transition race 한 번 더 검증.
+                # REENTRY_READY 는 exit FILLED 직후 transition status — 거래소 잔량이
+                # 아직 정리 안 된 race window 가능. 같은 심볼/방향의 REENTRY_READY
+                # strategy 가 최근 5분 내에 있으면 KS 보류 (reconcile 가 다음 cycle 에 정정).
+                # STOPPED / COMPLETED / archived 는 정상 종료라 잔량 있으면 진짜 orphan.
+                from datetime import datetime, timedelta, timezone
+                recent_match = db.execute(
+                    select(StrategyInstance)
+                    .where(StrategyInstance.exchange_account_id == acc.id)
+                    .where(StrategyInstance.symbol == symbol)
+                    .where(StrategyInstance.side == position_side)
+                    .where(StrategyInstance.is_archived.is_(False))
+                    .where(StrategyInstance.status == "REENTRY_READY")
+                    .where(StrategyInstance.updated_at >= datetime.now(timezone.utc) - timedelta(minutes=5))
+                    .order_by(StrategyInstance.id.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                if recent_match:
+                    logger.warning(
+                        "Orphan candidate %s %s amt=%s: recent strategy #%s (status=%s) — KS 보류 (race window)",
+                        symbol, position_side, amt, recent_match.id, recent_match.status,
+                    )
+                    db.add(RiskEvent(
+                        strategy_instance_id=recent_match.id,
+                        event_type="ZOMBIE_ORPHAN_RACE_DEFERRED",
+                        severity="WARN",
+                        title="⚠️ Orphan 후보 — 최근 strategy 매칭으로 KS 보류",
+                        message=(
+                            f"거래소 {symbol} {position_side} amt={amt} 에 ACTIVE 매칭은 없으나 "
+                            f"최근 5분 내 #{recent_match.id} (status={recent_match.status}) 가 같은 종목/방향. "
+                            "transition window race 가능성 — KS 보류, 다음 sweep 에 재평가."
+                        ),
+                        event_payload={"account_id": acc.id, "exchange_snapshot": {
+                            "symbol": symbol, "positionSide": position_side,
+                            "positionAmt": str(amt),
+                        }, "recent_strategy_id": recent_match.id, "recent_status": recent_match.status},
+                    ))
+                    db.commit()
+                    continue  # KS 발동 안 함 — 다음 cycle 재평가
                 # 매칭 없음 — orphan exchange position!
                 found += 1
                 snapshot = {
