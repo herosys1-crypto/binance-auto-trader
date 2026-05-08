@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # 요약 알림. None / 0 이면 비활성 (default). 권장 6 (하루 4번).
     heartbeat_interval_hours: int | None = None
 
+    # 일일 운영 보고 (Layer 3, 2026-05-09): 매일 KST 09:00 「전일 24h 요약」 텔레그램.
+    # health_check 명령 안 돌려도 자동으로 받음. False 면 scheduler 등록 X.
+    daily_report_enabled: bool = True
+
     # 진입 시 추정 청산가까지 최소 거리 (%, MAINNET-CHECKLIST 3-5).
     # 거리 = |start_price - liq_price| / start_price × 100. 이 값 미만이면 진입 거부.
     # leverage=10x 일 때 거리 ≈ 9.95%. None / 0 이면 비활성. mainnet 권장 5~10.

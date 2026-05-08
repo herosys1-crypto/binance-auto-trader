@@ -343,6 +343,15 @@ def patched_sessionlocal(monkeypatch, engine):
         bind=engine, autoflush=False, autocommit=False, future=True
     )
     monkeypatch.setattr("app.workers.reconcile_worker.SessionLocal", test_session_factory)
+    # 2026-05-09 daily_report_worker 도 자체 SessionLocal 사용 — 같이 patch
+    try:
+        monkeypatch.setattr("app.workers.daily_report_worker.SessionLocal", test_session_factory)
+    except (AttributeError, ImportError):
+        pass
+    try:
+        monkeypatch.setattr("app.workers.heartbeat_worker.SessionLocal", test_session_factory)
+    except (AttributeError, ImportError):
+        pass
     return test_session_factory
 
 

@@ -109,6 +109,16 @@ def start_scheduler() -> None:
             trigger=IntervalTrigger(hours=hb_hours),
             id="heartbeat", replace_existing=True, max_instances=1, coalesce=True,
         )
+    # 일일 운영 보고 — 매일 KST 09:00 (UTC 00:00) 1회 (2026-05-09 Layer 3).
+    # 사용자가 health_check 안 돌려도 자동으로 「전일 24h 요약」 텔레그램 받음.
+    # settings.daily_report_enabled (default True) — False 면 등록 X.
+    if getattr(_cfg, "daily_report_enabled", True):
+        from app.workers.daily_report_worker import run_daily_report_once
+        scheduler.add_job(
+            guarded_job("daily_report", 300, run_daily_report_once),
+            trigger=CronTrigger(hour=0, minute=0),  # UTC 00:00 = KST 09:00
+            id="daily_report", replace_existing=True, max_instances=1, coalesce=True,
+        )
     scheduler.start()
 
 if __name__ == "__main__":
