@@ -231,7 +231,7 @@ def cleanup_quick_templates(
         주의: mainnet 에서 사용 시 실제 포지션이 시장가 청산되어 손실 확정될 수 있음.
     """
     from app.models.strategy_instance import StrategyInstance
-    from app.services.execution_service import ExecutionService
+    from app.services.execution_service import EmergencyCloseInProgress, ExecutionService
 
     # Bug #14 fix (2026-04-29): PostgreSQL LIKE 의 underscore (_) 는 와일드카드라서
     # 단순히 \\_ 만으로는 매칭 안 됨 (ESCAPE 절 필요). startswith() 가 자동으로 처리해줌.
@@ -278,6 +278,9 @@ def cleanup_quick_templates(
                             exec_svc.emergency_close_position(r.id, quantity=qty)
                         except ValueError:
                             # Bug #8 fix: 거래소 포지션 0 일 때 ValueError. 정상 정리됨.
+                            pass
+                        except EmergencyCloseInProgress:
+                            # 2026-05-08 #120 fix: 다른 caller 가 청산 중 — 정상 진행
                             pass
                     r.status = "STOPPED"
                     r.current_position_qty = Decimal("0")

@@ -139,6 +139,11 @@ class TestMaxConcurrentStrategies:
         monkeypatch.setattr(
             "app.core.config.settings.max_concurrent_strategies_per_account", 10, raising=False
         )
+        # 2026-05-08: env 에 ALLOWED_SYMBOLS_CSV 가 설정되면 화이트리스트 검사가 먼저
+        # 발동해 동시 한도 검증 못함. 이 테스트 목적상 화이트리스트 비활성화.
+        monkeypatch.setattr(
+            "app.core.config.settings.allowed_symbols_csv", None, raising=False
+        )
         first = make_strategy(symbol_str="BTCUSDT", status="STAGE1_OPEN")
         for i in range(9):
             make_strategy(
@@ -166,6 +171,10 @@ class TestMaxConcurrentStrategies:
         """max_concurrent=2 로 설정 — 2건 active 면 3번째 거부 (mainnet 초기 권장)."""
         monkeypatch.setattr(
             "app.core.config.settings.max_concurrent_strategies_per_account", 2, raising=False
+        )
+        # 2026-05-08: 화이트리스트 비활성화 (env 영향 차단 — 위 test_default_limit_10 동일 사유)
+        monkeypatch.setattr(
+            "app.core.config.settings.allowed_symbols_csv", None, raising=False
         )
         first = make_strategy(symbol_str="BTCUSDT", status="STAGE1_OPEN")
         make_strategy(

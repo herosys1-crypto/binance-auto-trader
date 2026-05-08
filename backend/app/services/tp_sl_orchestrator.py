@@ -5,7 +5,7 @@ from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
 from app.observability.metrics import strategy_runs_total, strategy_take_profit_total
 from app.repositories.strategy_repository import StrategyRepository
-from app.services.execution_service import ExecutionService
+from app.services.execution_service import EmergencyCloseInProgress, ExecutionService
 from app.services.notification_service import NotificationService
 from app.services.risk_service import RiskService
 
@@ -162,7 +162,12 @@ class TPSLOrchestratorService:
         if close_qty <= 0:
             return
         # 실제 청산 체결 — 반환된 order 의 avg_price 가 진짜 청산 단가 (mark 보다 정확).
-        close_order = self.execution_service.emergency_close_position(strategy.id, quantity=close_qty)
+        # 2026-05-08 #120 fix: 다른 caller (manual stop, admin cleanup) 가 이미 청산 중이면
+        # idempotency lock 이 EmergencyCloseInProgress 발생 → 다음 cycle 에 재평가.
+        try:
+            close_order = self.execution_service.emergency_close_position(strategy.id, quantity=close_qty)
+        except EmergencyCloseInProgress:
+            return  # 다른 caller 가 청산 중 — status/qty 변경 없이 대기, 다음 cycle 재평가
         # 청산 후 남은 수량 계산
         remaining_qty = (current_qty - close_qty).quantize(Decimal("0.00000001"))
         # 상태 진행 — 2026-05-06: TP1~10 동적 (10단계 익절 확장).
@@ -241,7 +246,10 @@ class TPSLOrchestratorService:
         # 이전엔 `current_qty > 0` 이라 SHORT SL 이 실행되지 않는 버그가 있었음.
         current_qty = abs(Decimal(str(strategy.current_position_qty)))
         if current_qty > 0:
-            self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
+            try:
+                self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
+            except EmergencyCloseInProgress:
+                return  # #120 fix: 다른 caller 가 청산 중 — 다음 cycle 재시도
         strategy.status = "STOPPING"
         self.db.commit()
 
@@ -280,7 +288,10 @@ class TPSLOrchestratorService:
             close_qty = (current_qty * Decimal("0.25")).quantize(Decimal("0.00000001"))
             if close_qty <= 0:
                 return
-            self.execution_service.emergency_close_position(strategy.id, quantity=close_qty)
+            try:
+                self.execution_service.emergency_close_position(strategy.id, quantity=close_qty)
+            except EmergencyCloseInProgress:
+                return  # #120 fix: 다른 caller 가 청산 중
             strategy.status = "CRISIS_TP1_DONE"
             strategy.crisis_first_tp_done_at = datetime.now(timezone.utc)
             # 피크 PnL 초기화 (지금부터 추적 시작)
@@ -303,7 +314,10 @@ class TPSLOrchestratorService:
 
         elif action == "CRISIS_TRAIL_FULL":
             # 남은 전량 청산 — 트레일링 보호 발동
-            self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
+            try:
+                self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
+            except EmergencyCloseInProgress:
+                return  # #120 fix: 다른 caller 가 청산 중
             strategy.status = "COMPLETED"
             strategy.reentry_ready = False
             self.risk_service.reset_peak_pnl(strategy.id)
@@ -327,7 +341,10 @@ class TPSLOrchestratorService:
 
         elif action == "CRISIS_HARD_SL":
             # 남은 전량 손절 — 빠른 손절
-            self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
+            try:
+                self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
+            except EmergencyCloseInProgress:
+                return  # #120 fix: 다른 caller 가 청산 중
             strategy.status = "STOPPING"
             self.db.commit()
             strategy_stop_loss_total.labels(symbol=strategy.symbol, side=strategy.side).inc()

@@ -419,6 +419,7 @@ def fake_redis(monkeypatch) -> FakeRedis:
         "app.services.tp_sl_orchestrator",
         "app.services.risk_service",
         "app.services.zombie_guardian",
+        "app.services.execution_service",  # 2026-05-08 #120 fix: emergency_close idempotency lock
     ):
         try:
             monkeypatch.setattr(f"{mod}.get_redis_client", _factory, raising=False)

@@ -1,6 +1,8 @@
 import logging
 from decimal import Decimal
 from uuid import uuid4
+from app.core.redis_client import get_redis_client
+from app.core.redis_lock import redis_lock, RedisLockError
 from app.integrations.binance.client import BinanceClient
 from app.integrations.binance.futures_trade import BinanceFuturesTradeClient
 from app.integrations.binance.execution.router import ExecutionAdapterRouter
@@ -13,6 +15,11 @@ from app.services.account_kill_switch_service import AccountKillSwitchService
 from app.core.sentry import capture_strategy_event
 
 logger = logging.getLogger(__name__)
+
+
+class EmergencyCloseInProgress(Exception):
+    """다른 caller 가 같은 strategy 의 emergency_close 를 처리 중 — 중복 발사 방지."""
+    pass
 
 class ExecutionService:
     def __init__(self, db, *, api_key: str, api_secret: str, is_testnet: bool = False) -> None:
@@ -98,6 +105,26 @@ class ExecutionService:
         return order
 
     def emergency_close_position(self, strategy_id: int, *, quantity: Decimal) -> Order:
+        # 2026-05-08 (사용자 #120 DYDXUSDT orphan 사례): emergency_close_position 이
+        # 같은 strategy 에 대해 동시 다발 호출되면 (manual stop API + tp_sl_orchestrator
+        # + admin cleanup 등) 같은 양 (예: 245 DYDX) 이 여러 번 청산되어 거래소-DB
+        # 불일치 → orphan → KS 발동. caller 측 락이 다 따로라 함수 자체에 idempotency
+        # 락 추가. TTL 5s — 중복 차단엔 충분, 정상 retry 는 통과 가능.
+        redis_client = get_redis_client()
+        lock_key = f"lock:strategy:{strategy_id}:emergency_close"
+        try:
+            with redis_lock(redis_client, lock_key, ttl_seconds=5, wait_timeout_seconds=0):
+                return self._emergency_close_position_locked(strategy_id, quantity=quantity)
+        except RedisLockError:
+            logger.warning(
+                "emergency_close_position skipped — duplicate call within 5s window: strategy_id=%s qty=%s",
+                strategy_id, quantity,
+            )
+            raise EmergencyCloseInProgress(
+                f"strategy_id={strategy_id} 의 청산이 이미 진행 중 — 중복 호출 차단"
+            )
+
+    def _emergency_close_position_locked(self, strategy_id: int, *, quantity: Decimal) -> Order:
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
             raise ValueError("Strategy not found")

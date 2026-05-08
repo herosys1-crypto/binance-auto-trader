@@ -20,7 +20,7 @@ from app.schemas.strategy import (
     StrategyInstanceResponse,
     StrategyStopRequest,
 )
-from app.services.execution_service import ExecutionService
+from app.services.execution_service import EmergencyCloseInProgress, ExecutionService
 from app.services.strategy_calculator import StrategyCalculator, SymbolRule
 from app.services.strategy_service import StrategyService
 
@@ -1351,6 +1351,15 @@ def stop_strategy(
                             message=f"이미 청산된 상태였습니다. 미체결 주문 취소 + STOPPED 마킹 완료. ({ve})",
                         )
                     raise
+                except EmergencyCloseInProgress:
+                    # 2026-05-08 (#120 사례): 같은 전략에 대해 다른 caller (자동 TP/SL,
+                    # admin cleanup) 가 이미 청산 중. 중복 발사 방지 — 정상 응답으로 처리.
+                    db.refresh(strategy)
+                    return StrategyActionResponse(
+                        strategy_id=strategy.id,
+                        status=strategy.status,
+                        message="이미 다른 청산 요청이 처리 중입니다. 5초 후 상태를 다시 확인하세요.",
+                    )
             strategy.status = "STOPPING"
             db.commit()
             message = "Position closed at market"
