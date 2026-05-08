@@ -300,10 +300,14 @@ def detect_orphan_exchange_positions(
     db: Session,
     *,
     decrypt_func,
+    positions_cache: dict[int, list[dict]] | None = None,
 ) -> int:
     """거래소엔 포지션 있는데 DB 에 매칭 active strategy 없음 → CRITICAL 알림 + Kill-Switch.
 
     이 케이스는 시스템 외부 장애 (사용자가 거래소에서 수동 진입, 또는 DB 손실 등) 의 강한 신호.
+
+    2026-05-09 (rate limit 사후): positions_cache 인자로 main loop 가 이미 fetch 한
+    bulk 결과를 받아 같은 cycle 안에서 거래소 호출 중복 제거. 키 = exchange_account_id.
     """
     accounts = db.execute(
         select(ExchangeAccount).where(ExchangeAccount.is_active.is_(True))
@@ -311,14 +315,18 @@ def detect_orphan_exchange_positions(
     found = 0
     for acc in accounts:
         try:
-            from app.integrations.binance.client import BinanceClient
-            client = BinanceClient(
-                api_key=decrypt_func(acc.api_key_enc),
-                api_secret=decrypt_func(acc.api_secret_enc),
-                is_testnet=acc.is_testnet,
-            )
-            # 거래소의 모든 포지션 (positionAmt != 0)
-            risk = client.get_position_risk()
+            # cache hit 시 거래소 재호출 X (rate limit 부담 감소)
+            if positions_cache is not None and acc.id in positions_cache:
+                risk = positions_cache[acc.id]
+            else:
+                from app.integrations.binance.client import BinanceClient
+                client = BinanceClient(
+                    api_key=decrypt_func(acc.api_key_enc),
+                    api_secret=decrypt_func(acc.api_secret_enc),
+                    is_testnet=acc.is_testnet,
+                )
+                # 거래소의 모든 포지션 (positionAmt != 0)
+                risk = client.get_position_risk()
             if isinstance(risk, dict):
                 risk = [risk]
             for p in risk:

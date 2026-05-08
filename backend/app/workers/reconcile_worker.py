@@ -108,18 +108,49 @@ def _do_reconcile(decrypt_func) -> None:
             .where(StrategyInstance.is_archived.is_(False))  # 2026-05-06 C-full: archived 제외
             .where(ExchangeAccount.is_active.is_(True))
         ).all()
+
+        # 2026-05-09 (#120 사후 — rate limit 178건 발견): 같은 account 의 모든 strategy
+        # 가 각자 client.get_position_risk(symbol=...) 호출하던 것을 account 별 1회 bulk
+        # 호출로 변경. 5 strategy → 5 호출 이 1 호출로 줄어 rate limit 부담 ~80% 감소.
+        # 추가로 account 별 BinanceClient 도 1번만 만들어서 재활용.
+        # bulk 호출 결과는 Phase 2 orphan detection 도 재사용 (총 절감 효과 ↑↑).
+        bulk_positions_cache: dict[int, list[dict]] = {}  # acc_id → positions
+        bulk_client_cache: dict[int, BinanceClient] = {}  # acc_id → client
+        bulk_failure_accs: set[int] = set()  # 호출 실패한 계정 (개별 strategy 도 skip)
+
+        def _get_bulk_for_account(acc: ExchangeAccount) -> list[dict] | None:
+            if acc.id in bulk_positions_cache:
+                return bulk_positions_cache[acc.id]
+            if acc.id in bulk_failure_accs:
+                return None
+            try:
+                cli = BinanceClient(
+                    api_key=decrypt_func(acc.api_key_enc),
+                    api_secret=decrypt_func(acc.api_secret_enc),
+                    is_testnet=acc.is_testnet,
+                )
+                bulk_client_cache[acc.id] = cli
+                pos = cli.get_position_risk()  # bulk — symbol 인자 없음
+                if isinstance(pos, dict):
+                    pos = [pos]
+                bulk_positions_cache[acc.id] = pos
+                return pos
+            except Exception as e:
+                # bulk 실패 (rate limit 등) — 이번 cycle 의 main loop + orphan 모두 skip.
+                # 한 cycle 미스는 30~60s 후 다음 cycle 에 자동 복구.
+                logger.warning("Bulk get_position_risk failed acc=%s: %s — cycle skip", acc.id, e)
+                bulk_failure_accs.add(acc.id)
+                return None
+
         for strategy, account in rows:
             try:
-                client = BinanceClient(
-                    api_key=decrypt_func(account.api_key_enc),
-                    api_secret=decrypt_func(account.api_secret_enc),
-                    is_testnet=account.is_testnet,
-                )
-                position_risk = client.get_position_risk(symbol=strategy.symbol)
-                if isinstance(position_risk, dict):
-                    position_risk = [position_risk]
+                bulk_positions = _get_bulk_for_account(account)
+                if bulk_positions is None:
+                    # bulk 실패 — 이 strategy reconcile skip (rate limit 부담 줄임)
+                    continue
+                client = bulk_client_cache[account.id]
                 matched = None
-                for item in position_risk:
+                for item in bulk_positions:
                     if item.get("symbol") == strategy.symbol and item.get("positionSide") == strategy.side:
                         matched = item
                         break
@@ -307,8 +338,12 @@ def _do_reconcile(decrypt_func) -> None:
         db.commit()
 
         # ===== Phase 2 안전망 — 거래소 orphan 포지션 감지 =====
+        # 2026-05-09: bulk_positions_cache 전달 — main loop 가 이미 fetch 한 결과 재사용.
         try:
-            n_orphan = detect_orphan_exchange_positions(db, decrypt_func=decrypt_func)
+            n_orphan = detect_orphan_exchange_positions(
+                db, decrypt_func=decrypt_func,
+                positions_cache=bulk_positions_cache,
+            )
             db.commit()
             if n_orphan:
                 logger.critical(

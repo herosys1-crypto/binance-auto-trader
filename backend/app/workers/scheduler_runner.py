@@ -81,7 +81,10 @@ def start_scheduler() -> None:
         return _wrapped
 
     scheduler.add_job(guarded_job("listenkey_keepalive", 120, lambda: run_keepalive_once(decrypt_text)), trigger=IntervalTrigger(minutes=30), id="listenkey_keepalive", replace_existing=True, max_instances=1, coalesce=True)
-    scheduler.add_job(guarded_job("position_reconcile", 55, lambda: run_position_reconcile_once(decrypt_text)), trigger=IntervalTrigger(minutes=1), id="position_reconcile", replace_existing=True, max_instances=1, coalesce=True)
+    # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
+    # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
+    # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.
+    scheduler.add_job(guarded_job("position_reconcile", 110, lambda: run_position_reconcile_once(decrypt_text)), trigger=IntervalTrigger(minutes=2), id="position_reconcile", replace_existing=True, max_instances=1, coalesce=True)
     # 2026-05-06 fix: lock TTL 20s + Interval 10s 였는데 lock 이 다음 사이클까지 살아있어
     # 실제로는 20s 마다 1번만 실행 (½ 빈도). #103 trailing 자동 발동 지연 원인 추정.
     # lock TTL 8s 로 변경 → Interval 10s 보다 짧아 매 사이클 정상 실행.
