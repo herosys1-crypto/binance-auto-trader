@@ -1777,42 +1777,29 @@ async function refreshAll() {
   document.getElementById('last-updated').textContent = '마지막 갱신: ' + new Date().toLocaleTimeString('ko-KR');
 }
 
-// 2026-05-08: 전역 화이트리스트 캐시 + 배지 헬퍼 (심볼 표시되는 모든 곳에서 사용).
-// 사용자 요청 (2026-05-08 v2): 토글 무관 「화이트리스트 등재 여부」 자체를 항상 표시.
-// - 등재 심볼 → 항상 「🔒 WL」 배지 (적용 중이면 녹색, 단순 등재면 회색)
-// - 미등재 심볼 → 토글 ON 일 때만 「🚫 외」 배지 (실제 차단되는 상황 표시)
-let _globalWhitelistInfo = { enforced: false, allowed: new Set(), envConfigured: false };
+// 2026-05-08 (v3): 화이트리스트 미등재 심볼만 위험 표시 — 단순화.
+// 이전 버전(녹색/회색 등재 + 빨강 미등재 + 토글 색상 가변)이 너무 복잡하다는
+// 사용자 피드백 반영. 사용자가 보고 싶은 단 한 가지 정보 = "이 심볼이 위험한가?".
+// - env 화이트리스트 미설정 → 표시 없음 (의미 없음)
+// - 등재 심볼 → 표시 없음 (정상 — 표시 안 해도 알 수 있음)
+// - 미등재 심볼 → 「⚠️ 외」 빨간 배지 (토글 무관 — 위험 알림 목적)
+let _globalWhitelistInfo = { allowed: new Set(), envConfigured: false };
 
 async function loadGlobalWhitelistInfo() {
   try {
     const info = await api('/symbols/whitelist-info');
     _globalWhitelistInfo = {
-      enforced: !!info.enforced,
       allowed: new Set((info.allowed_symbols || []).map(s => s.toUpperCase())),
       envConfigured: !!info.env_configured,
     };
   } catch { /* 비활성 시 무시 */ }
 }
 
-// 심볼 옆에 붙일 화이트리스트 배지 HTML 반환.
-// - 등재 심볼 → 「🔒 WL」 배지 (토글 ON 녹색 / OFF 회색)
-// - 미등재 심볼 (토글 ON 일 때만) → 「🚫 외」 빨간 배지 (실제 차단됨)
-// - 미등재 + 토글 OFF → 빈 문자열 (모든 심볼 허용 상태라 표시 안 함)
 function renderWhitelistBadge(symbol) {
+  if (!_globalWhitelistInfo.envConfigured) return '';
   const sym = (symbol || '').toUpperCase();
-  if (_globalWhitelistInfo.allowed.has(sym)) {
-    // 등재 심볼 — 항상 표시
-    const cls = _globalWhitelistInfo.enforced ? 'badge-green' : 'badge-gray';
-    const title = _globalWhitelistInfo.enforced
-      ? '화이트리스트 등재 + 가드 적용 중'
-      : '화이트리스트 등재 (현재 가드 OFF — 정보용)';
-    return ` <span class="badge ${cls}" style="font-size:9px;padding:1px 4px" title="${title}">🔒 WL</span>`;
-  }
-  // 미등재 — 토글 ON 일 때만 차단 표시
-  if (_globalWhitelistInfo.enforced) {
-    return ' <span class="badge badge-red" style="font-size:9px;padding:1px 4px" title="화이트리스트 외 — 진입 차단">🚫 외</span>';
-  }
-  return '';
+  if (_globalWhitelistInfo.allowed.has(sym)) return '';
+  return ' <span class="badge badge-red" style="font-size:9px;padding:1px 4px" title="화이트리스트 외 — 위험 심볼">⚠️ 외</span>';
 }
 
 // ==================== Zombie Guardian Banner ====================
@@ -3616,9 +3603,8 @@ async function toggleWhitelist(enabled) {
       if (typeof _renderWhitelistHint === 'function') _renderWhitelistHint();
       if (typeof _validateCurrentSymbol === 'function') _validateCurrentSymbol();
     }
-    // 2026-05-08 v2: 전역 캐시 갱신 — 등재 심볼은 항상 표시, enforced 만 토글 따라 색상 변경
+    // 2026-05-08 v3: 전역 캐시 갱신 — 미등재만 위험 표시 정책이라 enforced 불필요
     _globalWhitelistInfo = {
-      enforced: resp.enabled,  // PATCH 응답의 enabled = 새 enforced 상태
       allowed: new Set((resp.allowed_symbols || []).map(s => s.toUpperCase())),
       envConfigured: resp.allowed_symbols && resp.allowed_symbols.length > 0,
     };
