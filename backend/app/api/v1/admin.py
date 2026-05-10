@@ -1083,3 +1083,157 @@ def get_system_status(
         "stuck_zombie_count": stuck_count,
         "is_healthy": is_healthy,
     }
+
+
+# ============================================================================
+# Layer 2 (2026-05-09 사용자 요청): 운영 점검 dashboard endpoint.
+# health_check.py CLI 와 같은 데이터를 JSON 으로 반환 — UI 「🩺 점검」 탭 용.
+# ============================================================================
+
+# health_check.py 와 동일 — 정상 패턴 (검토 필요 분류 제외)
+_BENIGN_EVENT_TYPES = {
+    "ORDER_TRADE_UPDATE",
+    "ZOMBIE_ORPHAN_RACE_DEFERRED",
+    "RECONCILE_RECOVERED_PENDING",
+    "RECONCILE_AUTO_STOP_ORPHAN",
+    "RECONCILE_STOPPING_ZOMBIE_CLEANUP",
+}
+
+
+@router.get("/health/dashboard")
+def get_health_dashboard(
+    hours: int = 24,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """운영 점검 dashboard — 직전 N시간 거래/이벤트/손익 요약.
+
+    UI 「🩺 점검」 탭이 호출. health_check.py CLI 와 동일 데이터 형식.
+    """
+    from collections import Counter
+    from datetime import datetime, timedelta, timezone
+    from decimal import Decimal
+    from sqlalchemy import func
+    from app.models.notification import Notification
+    from app.models.order import Order
+    from app.models.risk_event import RiskEvent
+    from app.models.strategy_instance import StrategyInstance
+    from app.core.strategy_status import TERMINAL_STATUSES
+
+    if hours < 1 or hours > 720:  # 최대 30일
+        raise HTTPException(status_code=400, detail="hours 는 1~720 범위")
+
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+
+    # ----- 거래 활동 -----
+    entry_count = db.execute(
+        select(func.count(Order.id))
+        .where(Order.purpose == "ENTRY")
+        .where(Order.status == "FILLED")
+        .where(Order.created_at >= since)
+    ).scalar() or 0
+    exit_count = db.execute(
+        select(func.count(Order.id))
+        .where(Order.purpose == "EXIT")
+        .where(Order.status == "FILLED")
+        .where(Order.created_at >= since)
+    ).scalar() or 0
+    new_strategies = db.execute(
+        select(func.count(StrategyInstance.id))
+        .where(StrategyInstance.created_at >= since)
+    ).scalar() or 0
+
+    # ----- 손익 -----
+    total_realized = db.execute(
+        select(func.sum(StrategyInstance.realized_pnl))
+    ).scalar() or Decimal("0")
+    active_strategies = db.execute(
+        select(StrategyInstance)
+        .where(StrategyInstance.status.notin_(TERMINAL_STATUSES))
+        .where(StrategyInstance.is_archived.is_(False))
+    ).scalars().all()
+    unrealized = sum(Decimal(str(s.unrealized_pnl or 0)) for s in active_strategies)
+
+    # ----- 텔레그램 -----
+    notif_total = db.execute(
+        select(func.count(Notification.id)).where(Notification.created_at >= since)
+    ).scalar() or 0
+    notif_failed = db.execute(
+        select(func.count(Notification.id))
+        .where(Notification.created_at >= since)
+        .where(Notification.send_status != "SENT")
+    ).scalar() or 0
+
+    # ----- 위험 이벤트 -----
+    events = db.execute(
+        select(RiskEvent)
+        .where(RiskEvent.created_at >= since)
+        .order_by(RiskEvent.id.desc())
+    ).scalars().all()
+    sev_counts: Counter = Counter()
+    type_counts: Counter = Counter()
+    action_needed: list[dict] = []
+    for e in events:
+        sev_counts[e.severity] += 1
+        type_counts[e.event_type] += 1
+        if e.severity in ("CRITICAL", "ERROR") and e.event_type not in _BENIGN_EVENT_TYPES:
+            if len(action_needed) < 20:  # top 20 만 반환
+                action_needed.append({
+                    "created_at": e.created_at.isoformat(),
+                    "severity": e.severity,
+                    "event_type": e.event_type,
+                    "title": e.title,
+                    "strategy_instance_id": e.strategy_instance_id,
+                })
+
+    # ----- 권장 조치 -----
+    recommendations = []
+    rl = type_counts.get("POSITION_RECONCILE_FAILED", 0) + type_counts.get("POSITION_RECONCILE_ERROR", 0)
+    if rl >= 5:
+        recommendations.append(f"⚙️ Reconcile 실패 {rl}회 — Binance API rate limit 의심")
+    orph = type_counts.get("ZOMBIE_ORPHAN_EXCHANGE_POSITION", 0)
+    if orph >= 5:
+        recommendations.append(f"🚨 Orphan 반복 {orph}회 — 거래소 직접 점검")
+    qm = type_counts.get("POSITION_QTY_MISMATCH", 0)
+    if qm >= 3:
+        recommendations.append(f"⚖️ qty mismatch {qm}회 — 부분 체결 검토")
+    if sev_counts.get("CRITICAL", 0) > 0:
+        recommendations.append(f"🚨 CRITICAL {sev_counts['CRITICAL']}건 — 즉시 확인")
+    if notif_failed > 0:
+        recommendations.append(f"📱 텔레그램 실패 {notif_failed}건 — 토큰/네트워크 확인")
+
+    # 빈도 top 5 (정상 마커 포함)
+    top_events = [
+        {"event_type": et, "count": cnt, "is_benign": et in _BENIGN_EVENT_TYPES}
+        for et, cnt in type_counts.most_common(5)
+    ]
+
+    return {
+        "period_hours": hours,
+        "since": since.isoformat(),
+        "is_healthy": len(action_needed) == 0 and notif_failed == 0,
+        "trading": {
+            "new_strategies": new_strategies,
+            "entries": entry_count,
+            "exits": exit_count,
+        },
+        "pnl": {
+            "realized_total": str(total_realized),
+            "unrealized": str(unrealized),
+            "active_count": len(active_strategies),
+        },
+        "telegram": {
+            "sent": notif_total,
+            "failed": notif_failed,
+        },
+        "events": {
+            "total": len(events),
+            "by_severity": dict(sev_counts),
+            "top_5": top_events,
+        },
+        "action_needed": {
+            "count": sum(1 for e in events if e.severity in ("CRITICAL", "ERROR") and e.event_type not in _BENIGN_EVENT_TYPES),
+            "items": action_needed,
+        },
+        "recommendations": recommendations,
+    }
