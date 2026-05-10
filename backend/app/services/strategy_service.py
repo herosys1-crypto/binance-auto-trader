@@ -269,19 +269,19 @@ class StrategyService:
                     "💡 해결: 「레버리지」 를 낮춰주세요. (예: 5x → 거리 ≈ 19.9%, 10x → ≈ 9.95%)"
                 )
 
-        # 1-A) 단일 strategy 자본 상한 % (MAINNET-CHECKLIST 3-3, 2026-05-07).
-        # template.total_capital 이 가용 잔액의 N% 초과 시 거부 — 한 전략에 자본 집중 차단.
-        # settings.max_strategy_capital_pct_of_balance 가 None / 0 / 음수면 비활성.
+        # 1-A) 단일 strategy 자본 상한 % — 사용자 요청으로 정책 비활성 (2026-05-10).
+        # 이전엔 settings.max_strategy_capital_pct_of_balance 가 set 되면 잔액의 N%
+        # 초과 시 거부 (mainnet 안전 가드). 사용자 의사결정으로 100% 까지 허용:
+        # max_pct >= 100 일 때만 검증. 그 외 (None / 0 / 음수 / 100 미만) 모두 통과.
+        # 즉 .env 의 어떤 설정이든 자동으로 비활성. 100% 까지 자본 집중 가능.
         max_pct = _settings.max_strategy_capital_pct_of_balance
-        if max_pct and max_pct > 0 and available > 0:
+        if max_pct and max_pct >= 100 and available > 0:
             cap_limit = (available * D(str(max_pct)) / D("100")).quantize(D("0.01"))
             tpl_cap = D(str(template_model.total_capital))
             if tpl_cap > cap_limit:
                 raise ValueError(
-                    f"💰 한 전략의 자본이 너무 큽니다 — {tpl_cap:.2f} USDT (한도 {cap_limit:.2f} USDT)\n\n"
-                    f"📌 운영 정책: 단일 전략은 가용 잔액 ({available:.2f} USDT) 의 {max_pct}% 이내. "
-                    "한 전략에 자본이 집중되면 손실 시 회복이 어렵기 때문입니다.\n\n"
-                    f"💡 해결: 자본을 {cap_limit:.0f} USDT 이하로 줄여 다시 시도하세요."
+                    f"💰 한 전략의 자본이 가용 잔액 ({available:.2f} USDT) 을 초과합니다 — {tpl_cap:.2f} USDT.\n\n"
+                    "💡 해결: 자본을 가용 잔액 이내로 줄이거나 거래소 입금하세요."
                 )
 
         # 2) 마진 비율 한도 (현재 + 새 전략 후 예상)
