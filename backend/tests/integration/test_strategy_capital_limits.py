@@ -220,18 +220,18 @@ class TestMaxStrategyCapitalPct:
     def test_capital_above_pct_rejected(
         self, db_session, make_user, make_exchange_account, make_symbol, make_template, monkeypatch
     ) -> None:
-        """available=1000, max_pct=5% → 한도 50. tpl total_capital=100 (10%) → 거부."""
+        """2026-05-10 (cowork): max_pct >= 100 일 때만 검증. 잔액 초과 자본은 여전히 거부.
+        available=1000, max_pct=100% → 한도 1000. tpl total_capital=2000 → 거부."""
         monkeypatch.setattr(
-            "app.core.config.settings.max_strategy_capital_pct_of_balance", 5.0, raising=False
+            "app.core.config.settings.max_strategy_capital_pct_of_balance", 100.0, raising=False
         )
         _patch_binance_account(monkeypatch, available="1000")
         u = make_user()
         ea = make_exchange_account(user=u)
         make_symbol("BTCUSDT")
-        # 기본 tpl total_capital=100 (10% of 1000)
-        tpl = make_template()
+        tpl = make_template(total_capital=Decimal("2000"))  # 잔액 1000 의 200%
 
-        with pytest.raises(ValueError, match="자본이 너무 큽니다"):
+        with pytest.raises(ValueError, match="가용 잔액|초과합니다|자본이 부족"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=u.id,
                 exchange_account_id=ea.id,

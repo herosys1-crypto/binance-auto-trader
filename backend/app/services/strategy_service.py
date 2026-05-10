@@ -83,7 +83,11 @@ class StrategyService:
         #  점유하는 좀비 발생 — #89/#90 LABUSDT 사례)
         from sqlalchemy import select
         # 2026-05-04: 공통 TERMINAL_STATUSES 사용 (이전엔 inline set 이라 admin.py 와 drift).
+        # 2026-05-10 (사용자 요청): 같은 심볼+방향 중복 차단을 env 토글로 비활성 가능.
+        # ALLOW_DUPLICATE_SYMBOL_STRATEGIES=true 면 차단 skip — 사용자가 위험 감수.
         _CLOSED_STATUSES = TERMINAL_STATUSES
+        from app.core.config import settings as _settings_dup
+        _allow_dup = getattr(_settings_dup, "allow_duplicate_symbol_strategies", False)
         existing = self.db.execute(
             select(StrategyInstance)
             .where(StrategyInstance.exchange_account_id == exchange_account_id)
@@ -94,7 +98,7 @@ class StrategyService:
             .order_by(StrategyInstance.id.desc())
             .limit(1)
         ).scalar_one_or_none()
-        if existing:
+        if existing and not _allow_dup:
             # 2026-05-04 fix: STOPPING 인 경우 사용자가 어떻게 해결할지 명확한 가이드 제공.
             # backend 가 STOPPING 을 active 로 분류하는 건 race window 보호 (commit 6133072).
             # 사용자는 reconcile 자동 정리 (30초) 또는 force-stop 으로 즉시 해결 가능.
@@ -104,7 +108,12 @@ class StrategyService:
                     f"혹시 거래소에 잔재 포지션이 없는 게 확실하면 강제 정리 가능합니다 (별도 안내)."
                 )
             else:
-                hint = "\n\n💡 해결: 「⏸ 정지」 또는 「🛑 긴급 종료」 로 기존 전략을 닫은 후 다시 시작하시거나, 다른 심볼/방향으로 진행하세요."
+                hint = (
+                    "\n\n💡 해결 (택1):"
+                    "\n  • 「⏸ 정지」 또는 「🛑 긴급 종료」 로 기존 전략 닫은 후 다시 시작"
+                    "\n  • 다른 심볼/방향으로 진행"
+                    "\n  • 차단 자체 해제 — .env 에 ALLOW_DUPLICATE_SYMBOL_STRATEGIES=true (위험 감수)"
+                )
             raise ValueError(
                 f"⚠️ {symbol} {side} 전략이 이미 진행 중입니다 (#{existing.id}). "
                 f"Binance 는 한 종목/방향에 하나의 통합 포지션만 허용합니다. 중복 시 익절/손절이 충돌해 손실 위험이 큽니다."

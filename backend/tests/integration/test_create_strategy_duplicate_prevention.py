@@ -44,7 +44,13 @@ class TestDuplicatePreventionMessages:
         make_symbol,
         make_template,
         make_strategy,
+        monkeypatch,
     ) -> None:
+        # 2026-05-10: env 의 whitelist + dup toggle 영향 차단 (위 테스트와 동일 사유)
+        monkeypatch.setattr("app.core.config.settings.allowed_symbols_csv", None, raising=False)
+        monkeypatch.setattr(
+            "app.core.config.settings.allow_duplicate_symbol_strategies", False, raising=False,
+        )
         u = make_user()
         ea = make_exchange_account(user=u)
         sym = make_symbol("LABUSDT")
@@ -79,7 +85,14 @@ class TestDuplicatePreventionMessages:
         make_symbol,
         make_template,
         make_strategy,
+        monkeypatch,
     ) -> None:
+        # 2026-05-10 (사용자 자유 거래 모드 도입 사후): env 의 whitelist + dup toggle 영향
+        # 차단해 본 테스트의 가설 (LABUSDT 가 같은 symbol+side 중복으로 차단) 만 검증.
+        monkeypatch.setattr("app.core.config.settings.allowed_symbols_csv", None, raising=False)
+        monkeypatch.setattr(
+            "app.core.config.settings.allow_duplicate_symbol_strategies", False, raising=False,
+        )
         u = make_user()
         ea = make_exchange_account(user=u)
         sym = make_symbol("LABUSDT")
