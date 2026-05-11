@@ -794,18 +794,36 @@ def get_stats_breakdown(
             base.where(StrategyInstance.realized_pnl != 0).order_by(*_recent_first)
         ).all()
     elif view == "losses":
+        # 2026-05-12 (사용자 보고): 「손실/감사」 view 가 realized_pnl<0 만 필터링.
+        # 수동 정지 (STOPPED/STOPPING) + 크라이시스 모드 진입 + max_loss<-10% 모두 누락.
+        # 사용자 의도: 감사 대상 = 「뭔가 비정상이거나 사용자 개입 있었던 strategy 모두」.
+        # → realized_pnl<0 OR max_loss_pct<-10 OR 수동정지 OR 크라이시스 진입 (OR 조건).
+        from sqlalchemy import or_
         rows = db.execute(
-            base.where(StrategyInstance.realized_pnl < 0).order_by(*_recent_first)
+            base.where(or_(
+                StrategyInstance.realized_pnl < 0,
+                StrategyInstance.max_loss_pct < Decimal("-10"),
+                StrategyInstance.status.in_(["STOPPED", "STOPPING"]),
+                StrategyInstance.crisis_mode_triggered_at.is_not(None),
+            )).order_by(*_recent_first)
         ).all()
     else:  # strategies
         rows = db.execute(base.order_by(*_recent_first)).all()
 
-    def _classify(realized, status, stage, crisis):
+    def _classify(realized, status, stage, crisis, max_loss):
+        # 2026-05-12: 「수동정지」 분류 추가 — STOPPED/STOPPING 인 strategy 명시.
+        # 우선순위: 실현 손익 > 크라이시스 > 수동정지 > 큰 미실현 손실 > 종료/진행.
         if realized is not None and Decimal(str(realized)) > 0:
             return "수익"
         if realized is not None and Decimal(str(realized)) < 0:
             return "손실"
-        if status in {"STOPPED", "COMPLETED", "CLOSED", "REENTRY_READY", "STOPPING"}:
+        if crisis is not None:
+            return "🚨크라이시스"
+        if status in {"STOPPED", "STOPPING"}:
+            return "✋수동정지"
+        if max_loss is not None and Decimal(str(max_loss)) < Decimal("-10"):
+            return "⚠️큰낙폭"
+        if status in {"COMPLETED", "CLOSED", "REENTRY_READY"}:
             return "BREAKEVEN" if (stage or 0) > 0 else "미진입_종료"
         return "진행중"
 
@@ -825,7 +843,7 @@ def get_stats_breakdown(
             "started_at": r[11].isoformat() if r[11] else None,
             "stopped_at": r[12].isoformat() if r[12] else None,
             "created_at": r[13].isoformat() if r[13] else None,
-            "classification": _classify(r[5], r[3], r[4], r[9]),
+            "classification": _classify(r[5], r[3], r[4], r[9], r[7]),
         }
         for r in rows
     ]

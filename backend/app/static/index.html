@@ -1499,7 +1499,7 @@ async function loadStatsBreakdown(view) {
   const noteMap = {
     strategies: '모든 strategy 표시 (진행중 + 미체결 종료 + 청산 완료 모두)',
     realized: 'realized_pnl ≠ 0 인 strategy 만 (진행중 / 미진입 종료 STOPPED 는 제외)',
-    losses: 'realized_pnl < 0 또는 max_loss_pct < -10% strategy',
+    losses: '감사 대상: 손실 / 큰 낙폭(-10%↓) / 수동정지 / 크라이시스 진입 strategy (OR 조건)',
   };
   const noteEl = document.getElementById('sb-view-note');
   if (noteEl) {
