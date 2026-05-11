@@ -12,6 +12,9 @@ class StagePlanPreview(BaseModel):
     trigger_price: Decimal | None = None
     planned_capital: Decimal
     planned_qty: Decimal | None = None
+    # 2026-05-11 (사용자 요청): 단계별 추가 증거금 (USDT). 미리보기 테이블 노출용.
+    # None/0 = 추가 안 함. StagePlan dataclass.__dict__ 에서 그대로 전달.
+    additional_margin_usdt: Decimal | None = None
 
 class StrategyCalculateRequest(BaseModel):
     symbol: str = Field(..., min_length=1, max_length=30)
