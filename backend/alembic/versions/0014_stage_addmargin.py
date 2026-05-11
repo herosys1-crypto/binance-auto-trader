@@ -27,7 +27,9 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = "0014_stage_plan_additional_margin"
+# 2026-05-11 production fix: 처음엔 '0014_stage_plan_additional_margin' (33자) 였는데
+# alembic_version.version_num 가 VARCHAR(32) 라 production 적용 실패. 짧게 변경.
+revision = "0014_stage_addmargin"
 down_revision = "0013_system_settings"
 branch_labels = None
 depends_on = None
