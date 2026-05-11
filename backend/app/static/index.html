@@ -68,6 +68,13 @@
      이전 tr 만 적용돼서 div 클릭 가능 표시 안 됐음. */
   div.row-clickable { cursor: pointer; transition: background 0.15s, transform 0.1s; border-radius: 4px; }
   div.row-clickable:hover { background: rgba(59,130,246,0.10); transform: translateY(-1px); }
+  /* 2026-05-12 v2 (사용자 재요청): 「클릭 가능한 모든 곳」 손모양 커서 — 전역 catch-all.
+     onclick 속성이 있는 모든 element 에 자동 적용. button/a 는 기본값이라 영향 없음.
+     row-clickable 안 붙인 element 도 onclick 만 있으면 자동으로 클릭 가능 표시됨. */
+  [onclick] { cursor: pointer; }
+  /* hover 시 살짝 밝게 (subtle 한 시각 피드백 — 너무 강하면 눈 피로). */
+  [onclick]:not(button):not(.row-clickable):hover { filter: brightness(1.15); }
+  button[onclick]:hover { cursor: pointer; }
   .num { text-align: right; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
   .pos { color: #34d399; }
   .neg { color: #f87171; }
