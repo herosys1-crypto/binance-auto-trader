@@ -545,7 +545,10 @@ def get_recent_activity(
     """모든 전략의 최근 활동 통합 (orders + risk_events + notifications).
 
     메인 대시보드 활동 피드용. 시간 역순 정렬, 최근 N건만 반환.
+    2026-05-12 (사용자 요청): 20건 한도 → 사용자가 20/50/100/200/500 선택 가능.
+    상한 1000 — 메모리 안전 (3 source × 1000 = 3000 sort).
     """
+    limit = max(1, min(limit, 1000))
     from sqlalchemy import select as sa_select
     from app.models.order import Order
     from app.models.risk_event import RiskEvent
@@ -703,14 +706,21 @@ def get_operation_stats(
         sa_select(func.coalesce(func.avg(StrategyInstance.max_profit_pct), 0))
     ).scalar_one() or Decimal("0")
 
-    # TP 단계별 카운트 — notification 의 title prefix 로 집계 ([TP1 익절 ... ~ [TP5 익절 ...)
+    # TP 단계별 카운트 — notification 의 title prefix 로 집계.
+    # 2026-05-12: TP1~10 + TRAILING_TP 동적 확장 (사용자 요청 — 기존 TP1~5 만 집계로
+    # TP6~10 발동분 누락. TRAILING_TP 도 별도 카운트해서 trailing 빈도 파악 가능).
     from app.models.notification import Notification
     tp_breakdown = {}
-    for level in ("TP1", "TP2", "TP3", "TP4", "TP5"):
+    for n in range(1, 11):
+        level = f"TP{n}"
         tp_breakdown[level] = db.execute(
             sa_select(func.count(Notification.id))
             .where(Notification.title.like(f"%[{level} 익절%"))
         ).scalar_one() or 0
+    tp_breakdown["TRAILING_TP"] = db.execute(
+        sa_select(func.count(Notification.id))
+        .where(Notification.title.like("%[TRAILING_TP 익절%"))
+    ).scalar_one() or 0
 
     return {
         "total": total,

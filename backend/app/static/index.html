@@ -277,28 +277,19 @@
             <p id="stats-crisis" class="text-base font-bold text-yellow-400">-</p>
           </div>
         </div>
-        <!-- TP 단계별 카운트 (notification title 기준) -->
-        <div class="p-2 grid grid-cols-5 gap-1 text-center border-t border-slate-700" style="padding-top:6px">
-          <div>
-            <p class="text-xs text-slate-500" title="+10% 1차 익절">TP1</p>
-            <p id="stats-tp1" class="text-sm font-semibold pos">-</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-500" title="+15% 2차 익절">TP2</p>
-            <p id="stats-tp2" class="text-sm font-semibold pos">-</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-500" title="+20% 3차 익절">TP3</p>
-            <p id="stats-tp3" class="text-sm font-semibold pos">-</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-500" title="+25% / +30% 4차 익절">TP4</p>
-            <p id="stats-tp4" class="text-sm font-semibold pos">-</p>
-          </div>
-          <div>
-            <p class="text-xs text-slate-500" title="+30% 전량 익절 (legacy)">TP5</p>
-            <p id="stats-tp5" class="text-sm font-semibold pos">-</p>
-          </div>
+        <!-- TP 단계별 카운트 (notification title 기준) — 2026-05-12: TP1~10 확장 + TRAILING -->
+        <div class="p-2 grid grid-cols-5 md:grid-cols-11 gap-1 text-center border-t border-slate-700" style="padding-top:6px">
+          <div><p class="text-xs text-slate-500" title="1차 익절">TP1</p><p id="stats-tp1" class="text-sm font-semibold pos">-</p></div>
+          <div><p class="text-xs text-slate-500" title="2차 익절">TP2</p><p id="stats-tp2" class="text-sm font-semibold pos">-</p></div>
+          <div><p class="text-xs text-slate-500" title="3차 익절">TP3</p><p id="stats-tp3" class="text-sm font-semibold pos">-</p></div>
+          <div><p class="text-xs text-slate-500" title="4차 익절">TP4</p><p id="stats-tp4" class="text-sm font-semibold pos">-</p></div>
+          <div><p class="text-xs text-slate-500" title="5차 익절">TP5</p><p id="stats-tp5" class="text-sm font-semibold pos">-</p></div>
+          <div><p class="text-xs text-slate-500" title="6차 익절">TP6</p><p id="stats-tp6" class="text-sm font-semibold pos">-</p></div>
+          <div><p class="text-xs text-slate-500" title="7차 익절">TP7</p><p id="stats-tp7" class="text-sm font-semibold pos">-</p></div>
+          <div><p class="text-xs text-slate-500" title="8차 익절">TP8</p><p id="stats-tp8" class="text-sm font-semibold pos">-</p></div>
+          <div><p class="text-xs text-slate-500" title="9차 익절">TP9</p><p id="stats-tp9" class="text-sm font-semibold pos">-</p></div>
+          <div><p class="text-xs text-slate-500" title="10차 익절">TP10</p><p id="stats-tp10" class="text-sm font-semibold pos">-</p></div>
+          <div><p class="text-xs text-yellow-400" title="피크 -5% 회귀 시 잔량 전량 청산 (v3: TP4 이후 활성)">🌀TRAIL</p><p id="stats-trailing" class="text-sm font-semibold text-yellow-300">-</p></div>
         </div>
       </div>
     </div>
@@ -827,11 +818,25 @@
 
   <!-- 최근 활동 피드 — 전체폭 (전략 인스턴스는 상단 우측으로 이동됨) -->
   <div class="card rounded-lg mb-2">
-    <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
-      <span>📡 최근 활동 (최신순 20건)</span>
-      <span class="text-xs text-slate-500" id="activity-updated">-</span>
+    <div class="card-header text-xs flex justify-between items-center flex-wrap gap-2" style="padding:8px 12px">
+      <span>📡 최근 활동 <span id="activity-count-label" class="text-slate-400">(최신순 20건)</span></span>
+      <div class="flex items-center gap-2">
+        <!-- 2026-05-12 (사용자 요청): 20건 한도 → 50/100/200/500 선택 + 「더 보기」. -->
+        <label class="text-xs text-slate-400 flex items-center gap-1" title="한 번에 가져올 활동 건수">
+          표시:
+          <select id="activity-limit-select" onchange="refreshActivity()" class="bg-slate-800 border border-slate-600 rounded text-xs px-1 py-0.5">
+            <option value="20">20</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+            <option value="500">500</option>
+          </select>
+        </label>
+        <button onclick="refreshActivity()" class="btn-ghost btn text-xs" style="padding:2px 8px" title="다시 불러오기">🔄</button>
+        <span class="text-xs text-slate-500" id="activity-updated">-</span>
+      </div>
     </div>
-    <div id="activity-feed" class="p-2 overflow-y-auto" style="max-height:280px">
+    <div id="activity-feed" class="p-2 overflow-y-auto" style="max-height:480px">
       <p class="text-slate-500 text-xs text-center py-2">로딩 중...</p>
     </div>
   </div>
@@ -938,7 +943,7 @@
 
     <!-- 단계별 계획 -->
     <div class="card rounded-lg mb-4">
-      <div class="card-header text-sm">📋 선택 전략 — 단계별 계획</div>
+      <div class="card-header text-sm">📋 선택 전략 — 단계별 계획 <span id="detail-stage-symbol" class="text-blue-300 text-xs font-normal ml-2"></span></div>
       <div class="overflow-x-auto">
         <table>
           <thead>
@@ -959,7 +964,7 @@
 
     <!-- 주문 내역 -->
     <div class="card rounded-lg mb-6">
-      <div class="card-header text-sm">📦 선택 전략 — 주문 내역</div>
+      <div class="card-header text-sm">📦 선택 전략 — 주문 내역 <span id="detail-orders-symbol" class="text-blue-300 text-xs font-normal ml-2"></span></div>
       <div class="overflow-x-auto">
         <table>
           <thead>
@@ -2053,9 +2058,14 @@ function _localizeActivity(text) {
 
 async function refreshActivity() {
   try {
-    const data = await api('/admin/recent-activity?limit=20');
+    // 2026-05-12 (사용자 요청): 20건 hardcode → 사용자 선택 (20/50/100/200/500).
+    const limitSel = document.getElementById('activity-limit-select');
+    const limit = limitSel ? Number(limitSel.value || 50) : 50;
+    const data = await api(`/admin/recent-activity?limit=${limit}`);
     const el = document.getElementById('activity-feed');
     document.getElementById('activity-updated').textContent = '갱신 ' + new Date().toLocaleTimeString('ko-KR');
+    const lbl = document.getElementById('activity-count-label');
+    if (lbl) lbl.textContent = `(최신순 ${data.length}건${data.length >= limit ? ' — 더 보려면 ↑ 표시 변경' : ''})`;
     if (!data.length) {
       el.innerHTML = '<p class="text-slate-500 text-sm text-center py-4">활동 이력 없음</p>';
       return;
@@ -2137,12 +2147,14 @@ async function refreshStats() {
     const crisisEl = document.getElementById('stats-crisis');
     crisisEl.textContent = s.crisis_total + (s.crisis_active > 0 ? ` (현재 ${s.crisis_active})` : '');
     crisisEl.className = 'text-xl font-bold ' + (s.crisis_active > 0 ? 'text-red-400' : 'text-yellow-400');
-    // TP 단계별 카운트 (notification 기준)
+    // TP 단계별 카운트 (notification 기준) — 2026-05-12: TP1~10 + TRAILING
     const tpb = s.tp_breakdown || {};
-    ['TP1','TP2','TP3','TP4','TP5'].forEach(k => {
-      const el = document.getElementById('stats-' + k.toLowerCase());
-      if (el) el.textContent = tpb[k] || 0;
-    });
+    for (let n = 1; n <= 10; n++) {
+      const el = document.getElementById(`stats-tp${n}`);
+      if (el) el.textContent = tpb[`TP${n}`] || 0;
+    }
+    const trEl = document.getElementById('stats-trailing');
+    if (trEl) trEl.textContent = tpb['TRAILING_TP'] || 0;
   } catch (err) { /* 통계 조회 실패는 무시 — 다른 패널은 정상 동작 */ }
 }
 
@@ -2584,6 +2596,17 @@ async function selectStrategy(id) {
     if (strategy) {
       _renderDetailChart(strategy, stagePlans).catch(e => console.warn('chart render fail', e));
     }
+
+    // 2026-05-12 (사용자 요청): 「선택 전략」 카드 헤더에 심볼 + 방향 + 전략 ID 표시.
+    // 이전엔 「선택 전략 — 단계별 계획」 처럼 어떤 전략인지 알 수 없었음.
+    const sideLabel = strategy?.side === 'SHORT' ? '📉 SHORT' : (strategy?.side === 'LONG' ? '📈 LONG' : '');
+    const headerLabel = strategy
+      ? `— #${id} ${escapeHtml(strategy.symbol || '?')} ${sideLabel}`
+      : `— #${id}`;
+    const stEl = document.getElementById('detail-stage-symbol');
+    const ordEl = document.getElementById('detail-orders-symbol');
+    if (stEl) stEl.innerHTML = headerLabel;
+    if (ordEl) ordEl.innerHTML = headerLabel;
 
     // 활동 타임라인 렌더링
     const tlEl = document.getElementById('timeline-container');
