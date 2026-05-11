@@ -4100,14 +4100,14 @@ function buildCapitalsGrid() {
   // (실시간 계산 — 입력 즉시 갱신)
   let html = `<div class="grid grid-cols-12 gap-1 text-xs text-slate-500 px-1 pb-1 border-b border-slate-700 mb-1">
     <div class="col-span-1">단계</div>
-    <div class="col-span-2">💵 자본</div>
+    <div class="col-span-1">💵 자본</div>
     <div class="col-span-1">📊 트리%</div>
-    <div class="col-span-2 text-yellow-400" title="단계 진입 직후 추가로 투입할 isolated 증거금 (USDT). 비우거나 0 = 추가 안 함. 청산가를 멀리 밀어 안전 마진 확보 (사용자 요청, 2026-05-11)">💰 증거금 추가</div>
+    <div class="col-span-1 text-yellow-400" title="단계 진입 직후 추가로 투입할 isolated 증거금 (USDT). 비우거나 0 = 추가 안 함. 청산가를 멀리 밀어 안전 마진 확보 (사용자 요청, 2026-05-11)">💰 증거금</div>
     <div class="col-span-2 text-right text-purple-400" title="이 단계의 LIMIT 진입 가격 (이전 단계 × (1±trigger%))">단계 진입가</div>
-    <div class="col-span-1 text-right text-cyan-400" title="이 단계까지 누적 가중평균 진입가">평균</div>
+    <div class="col-span-2 text-right text-cyan-400" title="이 단계까지 누적 가중평균 진입가">평균진입</div>
     <div class="col-span-1 text-right text-orange-400" title="누적 평균 기준 예상 청산가 (Isolated 보수적)">청산가</div>
     <div class="col-span-1 text-right text-red-400" title="이 단계 진입 직전→직후 누적 ROI %">손실율</div>
-    <div class="col-span-1 text-right text-red-300" title="이 단계 진입 시점의 누적 손실 USDT">손실$</div>
+    <div class="col-span-2 text-right text-red-300" title="이 단계 진입 시점의 누적 손실 USDT">손실$</div>
   </div>`;
   for (let i = 1; i <= 10; i++) {
     let triggerPlaceholder, triggerDisabled, triggerTitle, triggerValue;
@@ -4124,31 +4124,32 @@ function buildCapitalsGrid() {
       triggerTitle = `직전 단계 대비 +${_defaultTriggerPct(i)}% (▲▼ 1씩 조정)`;
       triggerValue = _defaultTriggerPct(i);  // 기본값 미리 채움 → ▲▼ 즉시 동작
     }
-    const capPlaceholder = i === 1 ? '예: 100 (필수)' : '비우면 사용 안 함';
+    const capPlaceholder = i === 1 ? '예: 100' : '비움';
     html += `<div class="grid grid-cols-12 gap-1 items-center">
       <div class="col-span-1 text-xs text-slate-300 font-semibold">${i}단계</div>
-      <div class="col-span-2">
+      <div class="col-span-1">
         <input type="number" min="0" step="any" id="cm-cap-${i}" placeholder="${capPlaceholder}"
           oninput="onCapitalsChange(); _refreshLiveCalc()"
-          class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm" />
+          title="단계별 투입 자본 (USDT). 1단계 필수, 2단계 이후 비우면 그 단계 사용 안 함."
+          class="w-full px-1 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm" />
       </div>
       <div class="col-span-1">
         <input type="number" min="0" step="1" id="cm-trg-${i}" placeholder="${triggerPlaceholder}" value="${triggerValue}" ${triggerDisabled}
           title="${triggerTitle}"
           oninput="onCapitalsChange(); _refreshLiveCalc()"
-          class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm ${triggerDisabled?'opacity-50 cursor-not-allowed':''}" />
+          class="w-full px-1 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm ${triggerDisabled?'opacity-50 cursor-not-allowed':''}" />
       </div>
-      <div class="col-span-2">
-        <input type="number" min="0" step="any" id="cm-add-margin-${i}" placeholder="0 (추가 안 함)"
+      <div class="col-span-1">
+        <input type="number" min="0" step="any" id="cm-add-margin-${i}" placeholder="0"
           title="단계 ${i} 진입 직후 추가로 투입할 isolated 증거금 (USDT). 비우면 추가 안 함."
           oninput="onCapitalsChange(); _refreshLiveCalc()"
-          class="w-full px-2 py-1 bg-slate-900 border border-yellow-800 rounded text-yellow-300 text-sm" />
+          class="w-full px-1 py-1 bg-slate-900 border border-yellow-800 rounded text-yellow-300 text-sm" />
       </div>
       <div class="col-span-2 text-xs text-purple-300 text-right" id="cm-stage-entry-${i}" title="이 단계의 LIMIT 진입가">-</div>
-      <div class="col-span-1 text-xs text-cyan-300 text-right" id="cm-stage-avg-${i}" title="이 단계까지 누적 평균 진입가">-</div>
+      <div class="col-span-2 text-xs text-cyan-300 text-right" id="cm-stage-avg-${i}" title="이 단계까지 누적 평균 진입가">-</div>
       <div class="col-span-1 text-xs text-orange-300 text-right" id="cm-stage-liq-${i}" title="평균 기준 예상 청산가">-</div>
       <div class="col-span-1 text-xs text-red-400 text-right" id="cm-stage-loss-${i}" title="이 단계 진입 시점의 누적 ROI %">-</div>
-      <div class="col-span-1 text-xs text-red-300 text-right" id="cm-stage-lossusd-${i}" title="이 단계 진입 시점의 누적 손실 USDT (단조 증가)">-</div>
+      <div class="col-span-2 text-xs text-red-300 text-right" id="cm-stage-lossusd-${i}" title="이 단계 진입 시점의 누적 손실 USDT (단조 증가)">-</div>
     </div>`;
   }
   grid.innerHTML = html;
