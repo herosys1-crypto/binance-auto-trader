@@ -606,4 +606,20 @@ class ExecutionService:
 
     @staticmethod
     def _new_client_order_id(symbol: str, suffix: str) -> str:
-        return f"{symbol}-{suffix}-{uuid4().hex[:18]}"
+        """Binance newClientOrderId 36자 제한 — 항상 35자 이하 보장.
+
+        2026-05-12 fix (사용자 보고 #-4015 에러):
+        Binance API: "Client order id length should be less than 36 chars" (strict <).
+        이전 포맷 `{symbol}-{suffix}-{uuid18}` 는 symbol_len + suffix_len + 20.
+        - 8자 symbol + ENTRY10M (8자) suffix = 36자 → -4015 reject
+        - 9자 symbol + ENTRY10M = 37자 → -4015 reject
+        Fix: uuid 길이를 가용 공간에 맞게 동적 (선호 18자, 최소 8자 = 32bit).
+        symbol/suffix 가 매우 길어 8자도 안 들어가면 전체 35자로 강제 truncate.
+        """
+        MAX_LEN = 35              # Binance limit < 36 → 최대 35
+        PREFERRED_UUID = 18       # 충분한 충돌 방지 (72 bits)
+        MIN_UUID = 8              # 최소 충돌 방지 (32 bits — 일 단위 운영 충분)
+        base_len = len(symbol) + 1 + len(suffix) + 1  # symbol + "-" + suffix + "-"
+        uuid_len = max(MIN_UUID, min(PREFERRED_UUID, MAX_LEN - base_len))
+        cid = f"{symbol}-{suffix}-{uuid4().hex[:uuid_len]}"
+        return cid[:MAX_LEN]      # 안전장치 — 어떤 입력에도 35자 보장
