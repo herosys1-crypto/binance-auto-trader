@@ -4046,14 +4046,21 @@ async function loadPrevBlueprint(strategyId, silent) {
     // 2) 심볼 + 방향
     document.getElementById('cm-symbol').value = bp.symbol;
     setCmSide(bp.side);
-    // 3) 직접 입력 모드로 전환 + capitals/trigger_percents 채우기
+    // 3) 직접 입력 모드로 전환 + capitals/trigger_percents/additional_margins 채우기
     setCmMode('direct');
+    const addMargins = bp.additional_margins || [];
     for (let i = 1; i <= 10; i++) {
       const cap = (bp.capitals || [])[i-1];
       const trg = (bp.trigger_percents || [])[i-1];
+      const addM = addMargins[i-1];
       document.getElementById('cm-cap-' + i).value = cap !== undefined && cap !== null ? cap : '';
       if (i > 1) {
         document.getElementById('cm-trg-' + i).value = trg !== undefined && trg !== null ? trg : '';
+      }
+      // 2026-05-11: 단계별 추가 증거금 자동 채움 (이전 전략의 설정 그대로)
+      const addEl = document.getElementById('cm-add-margin-' + i);
+      if (addEl) {
+        addEl.value = (addM !== undefined && addM !== null && Number(addM) > 0) ? addM : '';
       }
     }
     // 4) TP/SL 채우기 (TP4/5 nullable)
@@ -4093,12 +4100,13 @@ function buildCapitalsGrid() {
   // (실시간 계산 — 입력 즉시 갱신)
   let html = `<div class="grid grid-cols-12 gap-1 text-xs text-slate-500 px-1 pb-1 border-b border-slate-700 mb-1">
     <div class="col-span-1">단계</div>
-    <div class="col-span-2">💵 자본</div>
-    <div class="col-span-1">📊 트리거%</div>
+    <div class="col-span-1">💵 자본</div>
+    <div class="col-span-1">📊 트리%</div>
+    <div class="col-span-1 text-yellow-400" title="단계 진입 직후 추가로 투입할 isolated 증거금 (USDT). 비우거나 0 = 추가 안 함. 청산가를 멀리 밀어 안전 마진 확보 (사용자 요청, 2026-05-11)">💰 증거금</div>
     <div class="col-span-2 text-right text-purple-400" title="이 단계의 LIMIT 진입 가격 (이전 단계 × (1±trigger%))">단계 진입가</div>
     <div class="col-span-2 text-right text-cyan-400" title="이 단계까지 누적 가중평균 진입가">평균 진입</div>
     <div class="col-span-1 text-right text-orange-400" title="누적 평균 기준 예상 청산가 (Isolated 보수적)">청산가</div>
-    <div class="col-span-1 text-right text-red-400" title="이 단계 진입 직전(왼쪽) → 직후(오른쪽) 누적 ROI %. 직전이 -85% 이하면 청산 임박 ⚠️">손실율 (직전→직후)</div>
+    <div class="col-span-1 text-right text-red-400" title="이 단계 진입 직전(왼쪽) → 직후(오른쪽) 누적 ROI %. 직전이 -85% 이하면 청산 임박 ⚠️">손실율</div>
     <div class="col-span-2 text-right text-red-300" title="이 단계 진입 시점의 누적 손실 USDT (직전과 직후 동일 — 진입 직후엔 새 자본만 추가, 손실 변화 X)">누적 손실$</div>
   </div>`;
   for (let i = 1; i <= 10; i++) {
@@ -4116,10 +4124,10 @@ function buildCapitalsGrid() {
       triggerTitle = `직전 단계 대비 +${_defaultTriggerPct(i)}% (▲▼ 1씩 조정)`;
       triggerValue = _defaultTriggerPct(i);  // 기본값 미리 채움 → ▲▼ 즉시 동작
     }
-    const capPlaceholder = i === 1 ? '예: 100 (필수)' : '비우면 사용 안 함';
+    const capPlaceholder = i === 1 ? '예: 100' : '비움';
     html += `<div class="grid grid-cols-12 gap-1 items-center">
       <div class="col-span-1 text-xs text-slate-300 font-semibold">${i}단계</div>
-      <div class="col-span-2">
+      <div class="col-span-1">
         <input type="number" min="0" step="any" id="cm-cap-${i}" placeholder="${capPlaceholder}"
           oninput="onCapitalsChange(); _refreshLiveCalc()"
           class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm" />
@@ -4129,6 +4137,12 @@ function buildCapitalsGrid() {
           title="${triggerTitle}"
           oninput="onCapitalsChange(); _refreshLiveCalc()"
           class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm ${triggerDisabled?'opacity-50 cursor-not-allowed':''}" />
+      </div>
+      <div class="col-span-1">
+        <input type="number" min="0" step="any" id="cm-add-margin-${i}" placeholder="0"
+          title="단계 ${i} 진입 직후 추가로 투입할 isolated 증거금 (USDT). 비우면 추가 안 함."
+          oninput="onCapitalsChange(); _refreshLiveCalc()"
+          class="w-full px-2 py-1 bg-slate-900 border border-yellow-800 rounded text-yellow-300 text-sm" />
       </div>
       <div class="col-span-2 text-xs text-purple-300 text-right" id="cm-stage-entry-${i}" title="이 단계의 LIMIT 진입가">-</div>
       <div class="col-span-2 text-xs text-cyan-300 text-right" id="cm-stage-avg-${i}" title="이 단계까지 누적 평균 진입가">-</div>
@@ -4312,6 +4326,7 @@ function onCapitalsChange() {
 function _collectDirectInputs() {
   const caps = [];
   const triggers = [];
+  const additionalMargins = [];
   for (let i = 1; i <= 10; i++) {
     const v = document.getElementById('cm-cap-' + i).value;
     if (v === '' || v === null || v === undefined || Number(v) === 0) break;
@@ -4322,6 +4337,10 @@ function _collectDirectInputs() {
       const t = document.getElementById('cm-trg-' + i).value;
       triggers.push(t === '' ? null : String(t));
     }
+    // 2026-05-11 (사용자 요청): 단계별 추가 증거금. 빈값/0 이면 null (= 추가 안 함).
+    const addEl = document.getElementById('cm-add-margin-' + i);
+    const addV = addEl ? addEl.value : '';
+    additionalMargins.push((addV === '' || Number(addV) === 0) ? null : String(addV));
   }
   // 사용자 기획 변경 (2026-04-30): 마지막 단계도 사용자 입력값 (예: 20%) 으로 진입.
   // 이전엔 LIQUIDATION_BUFFER 로 null 로 비웠으나, 이제는 PRICE_UP_PCT/PRICE_DOWN_PCT
@@ -4332,7 +4351,7 @@ function _collectDirectInputs() {
     last_stage_trigger_percent = last;  // 사용자 입력값 (null 이면 backend 기본 20%)
     triggers[triggers.length - 1] = null;  // trigger_percents 배열에선 last 는 무시되므로 null
   }
-  return { capitals: caps, trigger_percents: triggers, last_stage_trigger_percent };
+  return { capitals: caps, trigger_percents: triggers, additional_margins: additionalMargins, last_stage_trigger_percent };
 }
 
 function _collectTpSl() {
@@ -4809,6 +4828,7 @@ async function calcPreview() {
           symbol, side: cmState.side, start_price: startPrice,
           capitals: inp.capitals,
           trigger_percents: inp.trigger_percents,
+          additional_margins: inp.additional_margins,
           last_stage_trigger_percent: inp.last_stage_trigger_percent,
           tp1_percent: tpsl.tp1_percent,
           tp2_percent: tpsl.tp2_percent,
@@ -5093,6 +5113,7 @@ async function submitCreate() {
           leverage,
           capitals: inp.capitals,
           trigger_percents: inp.trigger_percents,
+          additional_margins: inp.additional_margins,
           last_stage_trigger_percent: inp.last_stage_trigger_percent,
           ..._tpFields,  // TP1~10 모두 (TP4~10 NULL 가능)
           stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,

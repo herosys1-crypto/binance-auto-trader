@@ -33,6 +33,11 @@ class StrategyTemplateCreate(BaseModel):
         default=None,
         description="단계별 trigger_percent (None 이면 기본 10%). 길이는 capitals 와 같아야 함",
     )
+    # 2026-05-11 (사용자 요청): 단계별 추가 isolated 증거금 (USDT). None/0 = 추가 안 함.
+    additional_margins: list[Decimal | None] | None = Field(
+        default=None,
+        description="단계별 추가 isolated 증거금 USDT (None/0 = 추가 안 함). 길이는 capitals 와 같아야 함. 단계 진입 시 add_position_margin 자동 호출.",
+    )
     last_stage_trigger_mode: str | None = Field(
         default=None,
         description="마지막 단계 trigger_mode. 미지정 시 SHORT=PRICE_UP_PCT, LONG=PRICE_DOWN_PCT (2026-04-30 변경)",
@@ -96,6 +101,13 @@ def create_strategy_template(
             detail="trigger_percents length must match capitals length",
         )
 
+    # 2026-05-11: additional_margins 길이 검증
+    if payload.additional_margins is not None and len(payload.additional_margins) != len(payload.capitals):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="additional_margins length must match capitals length",
+        )
+
     total_capital = sum(payload.capitals)
     stages_config = {
         "capitals": [str(c) for c in payload.capitals],
@@ -105,6 +117,12 @@ def create_strategy_template(
             else [None] * len(payload.capitals)
         ),
     }
+    # 2026-05-11 (사용자 요청): 단계별 추가 증거금. None/0 = 추가 안 함.
+    if payload.additional_margins:
+        stages_config["additional_margins"] = [
+            str(m) if m is not None and Decimal(str(m)) > 0 else None
+            for m in payload.additional_margins
+        ]
     if payload.last_stage_trigger_mode:
         stages_config["last_stage_trigger_mode"] = payload.last_stage_trigger_mode
     if payload.last_stage_trigger_percent is not None:

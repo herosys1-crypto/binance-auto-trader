@@ -115,6 +115,8 @@ class PreviewInlineRequest(BaseModel):
     start_price: Decimal = Field(..., gt=0)
     capitals: list[Decimal] = Field(..., min_length=1, max_length=10)
     trigger_percents: list[Decimal | None] | None = None
+    # 2026-05-11 (사용자 요청): 단계별 추가 isolated 증거금 (USDT). 빈값/None/0 = 추가 안 함.
+    additional_margins: list[Decimal | None] | None = None
     leverage: int | None = None  # None 이면 SHORT=2, LONG=1 자동
     tp1_percent: Decimal = Field(default=Decimal("10"))
     tp2_percent: Decimal = Field(default=Decimal("20"))
@@ -158,6 +160,12 @@ def preview_inline(
             else [None] * len(payload.capitals)
         ),
     }
+    # 2026-05-11 (사용자 요청): 단계별 추가 증거금. None/0 은 그대로 None 으로.
+    if payload.additional_margins:
+        stages_config["additional_margins"] = [
+            str(m) if m is not None and Decimal(str(m)) > 0 else None
+            for m in payload.additional_margins
+        ]
     if payload.last_stage_trigger_mode:
         stages_config["last_stage_trigger_mode"] = payload.last_stage_trigger_mode
     if payload.last_stage_trigger_percent is not None:
@@ -465,6 +473,8 @@ def get_strategy_blueprint(
         "start_price": str(strategy.start_price) if strategy.start_price else None,
         "capitals": sc.get("capitals") or [],
         "trigger_percents": sc.get("trigger_percents") or [],
+        # 2026-05-11 (사용자 요청): 단계별 추가 증거금 (이전 전략 불러오기에 자동 채움)
+        "additional_margins": sc.get("additional_margins") or [],
         "last_stage_trigger_mode": sc.get("last_stage_trigger_mode"),
         "last_stage_trigger_percent": sc.get("last_stage_trigger_percent"),
         # 2026-05-06: TP1~10 동적 (10단계 익절 확장).
