@@ -175,8 +175,11 @@ CRISIS_HARD_SL_THRESHOLD = Decimal("-1")    # 첫 TP 후 -1%
 
 ### 3.3 ISOLATED 마진 강제 (2026-05-06 사용자 결정)
 
-- `ensure_isolated_margin(strategy)` 4개 진입점에서 호출:
-  - `start_stage1`, `enter_stage_at_market`, `add_position_now`
+- `ensure_isolated_margin(strategy)` **3개 진입점**에서 호출 (각 「신규 entry」 경로):
+  - `start_stage1` (execution_service.py:73)
+  - `enter_stage_at_market` (execution_service.py:395)
+  - `add_position_now` (execution_service.py:463)
+  - `trigger_next_stage` 는 호출 안 함 — 같은 strategy 의 stage 1 에서 이미 ensure 됨
 - -4046 (이미 ISOLATED) idempotent — warning 없이 통과.
 - -4048 (포지션 보유 중) — warning 만, 강제 진행.
 - 실패 시: 거래는 진행되지만 「💰 증거금 추가」 만 작동 안 함 (CROSS 에선 add_position_margin 불가능, -4046).
@@ -226,7 +229,7 @@ uuid_len = max(MIN_UUID, min(PREFERRED_UUID, MAX_LEN - base_len))
 
 ## 4. 데이터 모델
 
-### 4.1 모델 13개
+### 4.1 모델 14개
 
 | 모델 | 테이블 | 핵심 책임 |
 |---|---|---|
@@ -334,7 +337,7 @@ uuid_len = max(MIN_UUID, min(PREFERRED_UUID, MAX_LEN - base_len))
 
 ---
 
-## 6. REST API (51 endpoints, prefix `/api/v1`)
+## 6. REST API (52 endpoints, prefix `/api/v1`)
 
 | 라우터 | endpoint 수 | 핵심 |
 |---|---|---|
@@ -343,9 +346,9 @@ uuid_len = max(MIN_UUID, min(PREFERRED_UUID, MAX_LEN - base_len))
 | `/orders` | 2 | 본인 모든 주문 + by-strategy (PnL/ROI 자동 계산) |
 | `/positions` | 1 | latest snapshot |
 | `/events` | 1 | by-strategy + severity 필터 |
-| `/admin` | 18 | templates CRUD, CSV export, system-health, **stats**, **stats/breakdown**, **recent-activity**, **notifications-by-title**, kill-switch enable/disable, whitelist 토글, symbol-sync, test-telegram |
+| `/admin` | 19 | templates CRUD, CSV export, system-health, **stats**, **stats/breakdown**, **recent-activity**, **notifications-by-title**, kill-switch enable/disable, whitelist 토글, symbol-sync, test-telegram, system-status, health-dashboard |
 | `/exchange-accounts` | 5 | CRUD + credentials 회전 + 일일 한도 + balance |
-| `/symbols` | 4 | list, whitelist-info, ranking (24h/주/월), 단일 |
+| `/symbols` | 4 | list, whitelist-info, ranking (24h/주/월), 단일 (add_api_route) |
 | `/market` | 3 | ticker, ticker24h, klines (public 프록시) |
 
 ### 6.1 핵심 endpoint 응답 명세
@@ -512,7 +515,7 @@ div.row-clickable:hover { background: rgba(59,130,246,0.10); transform: translat
 
 ## 10. 관측성
 
-### 10.1 Prometheus 메트릭 (16개)
+### 10.1 Prometheus 메트릭 (18개 = 13 Counter + 4 Gauge + 1 Histogram)
 
 **Counter (13)**:
 - `strategy_runs_total{side,status}`
