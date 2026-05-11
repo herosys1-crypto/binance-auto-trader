@@ -12,9 +12,13 @@ from app.services.strategy_calculator import StrategyCalculator, SymbolRule
 # 사용자 기획 (2026-04-30): "익절을 단계별로 진행하는 중에 -5% 하락하면 모두 청산익절".
 # 사용자 기획 v2 (2026-05-07): "익절 3단계 후부터 작동 — TP1=10%/TP2=15%/TP3=20% 모두
 # 발동된 후 피크 대비 -5% 회귀 시 전량 청산". 이전엔 TP1 발동 후부터 활성이었음.
+# 사용자 기획 v3 (2026-05-12): "익절 4단계 후부터 작동 — TP1/TP2/TP3/TP4 모두 발동된 후
+# 피크 대비 -5% 회귀 시 전량 청산". 사용자 거래 #2 VVVUSDT / #5 SAGAUSDT 분석 결과,
+# TP1 만 발동된 직후 trailing 발동 사례가 발견됨 (혹은 사용자 의도와 다름) — 4단계까지
+# 강제하여 더 보수적으로.
 TRAILING_TP_PEAK_THRESHOLD = Decimal("5")    # 피크가 이 % 이상 도달했어야 트레일링 활성화
 TRAILING_TP_RETRACE_AMOUNT = Decimal("5")    # 피크 대비 이 % 만큼 하락하면 발동 (예: peak 25% → 20% 시 청산)
-TRAILING_MIN_TP_INDEX = 3                    # TP3 (idx 2) 이상 발동된 후부터 trailing armed
+TRAILING_MIN_TP_INDEX = 4                    # TP4 (idx 3) 이상 발동된 후부터 trailing armed (v3, 2026-05-12)
 PEAK_REDIS_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
 # 크라이시스 복구 모드 임계치
@@ -138,8 +142,9 @@ class RiskService:
         # 2026-05-04 critical fix (사용자 #98 LABUSDT 사례):
         # 트레일링 체크가 TP threshold loop 보다 우선해야 함.
         # 2026-05-07 사용자 기획 변경: TP3 (idx 2) 발동 후부터 trailing armed.
-        # 즉 TP1=10%, TP2=15%, TP3=20% 익절 모두 발동 후 피크 대비 -5% 회귀 시 전량 청산.
-        # 이전엔 TP1 발동만 해도 trailing armed 였으나, 너무 조기 청산 우려로 TP3+ 로 변경.
+        # 2026-05-12 사용자 기획 v3: TP4 (idx 3) 발동 후부터 trailing armed.
+        # 즉 TP1/TP2/TP3/TP4 익절 모두 발동 후 피크 대비 -5% 회귀 시 전량 청산.
+        # TP4 미설정 (NULL) 템플릿이면 trailing 영원히 미발동 — 명시적 결정.
         TRAILING_ARMED_STATUSES = (
             {f"TP{n}_DONE_PARTIAL" for n in range(TRAILING_MIN_TP_INDEX, 11)}
             | {"TRAILING_ARMED"}

@@ -88,19 +88,20 @@ class TestTrailingFiresWhenAboveTPThreshold:
         make_position_with_mark,
         patched_redis_for_risk,
     ) -> None:
-        """SHORT, TP1=5/TP2=10/TP3=15. status=TP3_DONE_PARTIAL.
-        Peak 30%, 현재 19.76% (drop 10.24%) → 트레일링 발동 기대."""
+        """SHORT, TP1=5/TP2=10/TP3=15/TP4=20. status=TP4_DONE_PARTIAL.
+        Peak 30%, 현재 19.76% (drop 10.24%) → 트레일링 발동 기대 (v3, 2026-05-12)."""
         tpl = make_template(
             tp1_percent=Decimal("5"), tp2_percent=Decimal("10"),
-            tp3_percent=Decimal("15"),
-            tp1_qty_ratio=Decimal("25"), tp2_qty_ratio=Decimal("50"), tp3_qty_ratio=Decimal("100"),
+            tp3_percent=Decimal("15"), tp4_percent=Decimal("20"),
+            tp1_qty_ratio=Decimal("25"), tp2_qty_ratio=Decimal("25"),
+            tp3_qty_ratio=Decimal("25"), tp4_qty_ratio=Decimal("25"),
         )
         # SHORT @ entry 2.37, current 2.13 — leveraged ROI 매핑 위해
         # leverage=2 가정: raw -10.13% × 2 = leveraged ROI ~+20.25% (SHORT side flips sign)
         # 실제 계산: (avg-mark)/avg * 100 = (2.37-2.13)/2.37 * 100 = 10.13% raw
         # × leverage 2 = 20.25% leveraged ROI (사용자 화면 19.76% 와 비슷)
         strategy = make_strategy(
-            symbol_str="LABUSDT", side="SHORT", status="TP3_DONE_PARTIAL",
+            symbol_str="LABUSDT", side="SHORT", status="TP4_DONE_PARTIAL",
             current_position_qty=Decimal("-476.4"),
             avg_entry_price=Decimal("2.37"),
             leverage=2,
@@ -116,14 +117,14 @@ class TestTrailingFiresWhenAboveTPThreshold:
 
         assert result == "TRAILING_TP", (
             f"트레일링 발동 기대: peak=30%, 현재 ~20%, drop ~10% (>5% 임계). "
-            f"현재 status TP3_DONE_PARTIAL — 활성 trailing armed status. "
-            f"실제 결과: {result} (이전 버그: TP loop 가 'TP3' 조기 반환해 트레일링 무력화)"
+            f"현재 status TP4_DONE_PARTIAL — 활성 trailing armed status (v3). "
+            f"실제 결과: {result}"
         )
 
     @pytest.mark.parametrize("done_status", [
-        "TP3_DONE_PARTIAL", "TP4_DONE_PARTIAL",
+        "TP4_DONE_PARTIAL", "TP5_DONE_PARTIAL",
     ])
-    def test_trailing_fires_for_tp3_plus_done_partials(
+    def test_trailing_fires_for_tp4_plus_done_partials(
         self,
         done_status: str,
         db_session,
@@ -132,11 +133,12 @@ class TestTrailingFiresWhenAboveTPThreshold:
         make_position_with_mark,
         patched_redis_for_risk,
     ) -> None:
-        """TP3+ partial 에서만 trailing 발동 (사용자 기획 v2, 2026-05-07).
-        TP1/TP2 는 trailing armed 안 됨 — 별도 테스트에서 검증."""
+        """TP4+ partial 에서만 trailing 발동 (사용자 기획 v3, 2026-05-12).
+        TP1/TP2/TP3 는 trailing armed 안 됨 — 별도 테스트에서 검증."""
         tpl = make_template(
             tp1_percent=Decimal("5"), tp2_percent=Decimal("10"),
-            tp3_percent=Decimal("15"), tp4_percent=Decimal("25"),
+            tp3_percent=Decimal("15"), tp4_percent=Decimal("20"),
+            tp5_percent=Decimal("25"),
         )
         strategy = make_strategy(
             symbol_str="LABUSDT", side="SHORT", status=done_status,
@@ -151,8 +153,10 @@ class TestTrailingFiresWhenAboveTPThreshold:
         result = RiskService(db_session).evaluate_take_profit_level(strategy.id)
         assert result == "TRAILING_TP", f"{done_status}: 트레일링 안 됨 (결과={result})"
 
-    @pytest.mark.parametrize("done_status", ["TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL"])
-    def test_trailing_NOT_armed_for_tp1_tp2_done_partials(
+    @pytest.mark.parametrize("done_status", [
+        "TP1_DONE_PARTIAL", "TP2_DONE_PARTIAL", "TP3_DONE_PARTIAL",
+    ])
+    def test_trailing_NOT_armed_for_tp1_tp2_tp3_done_partials(
         self,
         done_status: str,
         db_session,
@@ -161,9 +165,9 @@ class TestTrailingFiresWhenAboveTPThreshold:
         make_position_with_mark,
         patched_redis_for_risk,
     ) -> None:
-        """TP1/TP2 발동만으로는 trailing 활성 X (사용자 기획 v2, 2026-05-07).
+        """TP1/TP2/TP3 발동만으로는 trailing 활성 X (사용자 기획 v3, 2026-05-12).
 
-        같은 시나리오 (peak 30%, 현재 20%) 라도 status TP1/TP2 면 trailing 미발동.
+        같은 시나리오 (peak 30%, 현재 20%) 라도 status TP1/TP2/TP3 면 trailing 미발동.
         대신 TP threshold loop 가 다음 미발동 TP 를 반환해야 함.
         """
         tpl = make_template(
@@ -181,9 +185,9 @@ class TestTrailingFiresWhenAboveTPThreshold:
         patched_redis_for_risk.store[f"strategy:{strategy.id}:peak_pnl_pct"] = "30"
 
         result = RiskService(db_session).evaluate_take_profit_level(strategy.id)
-        # peak 30%/현재 20% — trailing 조건은 만족하지만 status TP1/TP2 라 armed X.
-        # 대신 다음 미발동 TP (TP1 status → TP2, TP2 status → TP3) 반환.
-        assert result != "TRAILING_TP", f"{done_status}: trailing 발동되면 안 됨 (정책 v2)"
+        # peak 30%/현재 20% — trailing 조건은 만족하지만 status TP1/2/3 라 armed X.
+        # 대신 다음 미발동 TP (TP1→TP2, TP2→TP3, TP3→TP4) 반환.
+        assert result != "TRAILING_TP", f"{done_status}: trailing 발동되면 안 됨 (정책 v3)"
 
 
 # ============================================================================

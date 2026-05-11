@@ -1,8 +1,10 @@
-"""크라이시스 모드 + Trailing TP 정책 v2 검증 (사용자 기획 2026-05-07).
+"""크라이시스 모드 + Trailing TP 정책 v3 검증 (사용자 기획 2026-05-12).
 
-변경:
-1. Trailing armed: TP1 (idx 0) → TP3 (idx 2) 부터 활성 (사용자: "익절 3단계 후부터")
-2. Crisis 진입: max_loss ≤ -30% + 양수 PnL → 전 단계 진입 + max_loss ≤ -50%
+변경 이력:
+- v1 (2026-04-30): TP1 발동 후부터 trailing armed
+- v2 (2026-05-07): TP3 발동 후부터 trailing armed
+- v3 (2026-05-12): TP4 발동 후부터 trailing armed — TP1/2/3/4 모두 후
+  Crisis 진입: max_loss ≤ -30% + 양수 PnL → 전 단계 진입 + max_loss ≤ -50%
 
 영구 회귀 방어 — 정책 변경 시 테스트도 같이 업데이트해야 함.
 """
@@ -19,21 +21,21 @@ from app.services.risk_service import (
 )
 
 
-class TestTrailingArmedFromTP3:
-    """Trailing TP 가 TP3 발동 후부터 armed 되어야 함 (이전 TP1 부터 → 변경)."""
+class TestTrailingArmedFromTP4:
+    """Trailing TP 가 TP4 발동 후부터 armed 되어야 함 (v3, 2026-05-12)."""
 
     def test_constant_value(self):
-        assert TRAILING_MIN_TP_INDEX == 3
+        assert TRAILING_MIN_TP_INDEX == 4
 
-    def test_armed_statuses_only_tp3_plus(self):
-        """TRAILING_ARMED_STATUSES set 검증 — TP3~TP10 만 포함."""
+    def test_armed_statuses_only_tp4_plus(self):
+        """TRAILING_ARMED_STATUSES set 검증 — TP4~TP10 만 포함."""
         # risk_service 의 evaluate_take_profit_level 안에서 정의됨.
         # 직접 import 안 되니 동작 검증으로 대체 — 별도 통합 시나리오 테스트 필요.
         # 이 테스트는 상수 정확성만 보장.
-        for n in range(1, 3):
-            # TP1, TP2 발동만으론 trailing 안 잡혀야
+        for n in range(1, 4):
+            # TP1, TP2, TP3 발동만으론 trailing 안 잡혀야
             assert n < TRAILING_MIN_TP_INDEX
-        for n in range(3, 11):
+        for n in range(4, 11):
             assert n >= TRAILING_MIN_TP_INDEX
 
 
