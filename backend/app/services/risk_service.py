@@ -13,12 +13,19 @@ from app.services.strategy_calculator import StrategyCalculator, SymbolRule
 # 사용자 기획 v2 (2026-05-07): "익절 3단계 후부터 작동 — TP1=10%/TP2=15%/TP3=20% 모두
 # 발동된 후 피크 대비 -5% 회귀 시 전량 청산". 이전엔 TP1 발동 후부터 활성이었음.
 # 사용자 기획 v3 (2026-05-12 새벽): TP4 부터 활성 (#2/#5 분석 후 보수적).
-# 사용자 기획 v4 (2026-05-12 저녁): v3 → v2 revert. "tp3 +20% 익절후에 잔량 청산하는걸로,
-# 익절 3단계 후 최고가 대비 -5% 가 되면 잔량 모두 익절 청산". TP4 까지 강제하면 4단계
-# 익절 임계까지 안 가는 케이스에서 trailing 영영 미발동 우려. 사용자 본래 의도는 TP3+.
+# 사용자 기획 v4 (2026-05-12 저녁): v3 → v2 revert. 사용자 본래 의도는 TP3+.
+# 사용자 기획 v5 (2026-05-12 밤): v4 + 「진입 단계 3 이상」 추가 조건.
+#   "진입도 1단계 2단계 3단계 실행후 부터 진행 실행하는거야".
+#   즉 trailing 발동에 두 가지 조건 동시 만족 필요:
+#     ① TP3 발동 (status >= TP3_DONE_PARTIAL)  ← v2 부터의 조건
+#     ② 진입 stage 3 이상 (current_stage >= 3) ← v5 신규 조건
+#   2단계까지만 진입한 strategy 가 빠른 가격 상승으로 TP3 까지 발동된 케이스에선
+#   잔량이 적으니 trailing 발동 의미 작음 + last_active_tp 가 100% 청산 처리.
+#   3단계 이상 진입 = "충분히 분할 진입한 상태" 라는 사용자 의도.
 TRAILING_TP_PEAK_THRESHOLD = Decimal("5")    # 피크가 이 % 이상 도달했어야 트레일링 활성화
 TRAILING_TP_RETRACE_AMOUNT = Decimal("5")    # 피크 대비 이 % 만큼 하락하면 발동 (예: peak 25% → 20% 시 청산)
-TRAILING_MIN_TP_INDEX = 3                    # TP3 (idx 2) 이상 발동된 후부터 trailing armed (v4 = v2 revert, 2026-05-12 저녁)
+TRAILING_MIN_TP_INDEX = 3                    # TP3 (idx 2) 이상 발동된 후부터 trailing armed
+TRAILING_MIN_STAGE = 3                       # 진입 stage 3 이상이어야 trailing armed (v5, 2026-05-12 밤)
 PEAK_REDIS_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
 
 # 크라이시스 복구 모드 임계치
@@ -144,13 +151,18 @@ class RiskService:
         # 2026-05-07 v2: TP3 (idx 2) 발동 후부터 trailing armed.
         # 2026-05-12 새벽 v3: TP4 강제로 변경.
         # 2026-05-12 저녁 v4: v3 → v2 revert (사용자 본래 의도 TP3+).
-        # 즉 TP1/TP2/TP3 익절 모두 발동 후 피크 대비 -5% 회귀 시 전량 청산.
+        # 2026-05-12 밤 v5: v4 + 「current_stage >= 3」 추가 조건.
+        # 즉 두 조건 동시 만족 필요:
+        #   ① TP3 발동 (status >= TP3_DONE_PARTIAL)
+        #   ② 진입 단계 3 이상 (current_stage >= 3)
+        # 2단계까지만 진입한 strategy 의 짧은 잔량 trailing 청산 무력화 (사용자 의도).
         TRAILING_ARMED_STATUSES = (
             {f"TP{n}_DONE_PARTIAL" for n in range(TRAILING_MIN_TP_INDEX, 11)}
             | {"TRAILING_ARMED"}
         )
         if (
             (strategy.status or "").upper() in TRAILING_ARMED_STATUSES
+            and (strategy.current_stage or 0) >= TRAILING_MIN_STAGE
             and peak >= TRAILING_TP_PEAK_THRESHOLD
             and pnl_ratio <= (peak - TRAILING_TP_RETRACE_AMOUNT)
             and pnl_ratio < peak

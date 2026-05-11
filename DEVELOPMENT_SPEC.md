@@ -75,19 +75,21 @@
 - **한 cycle 1단계만 발동** — ascending sort + `cur_done_idx` 보다 큰 첫 TP (TP skip 방지, #98 LABUSDT fix).
 - **부분 청산 step_size floor**: `close_qty = (raw_qty // step) * step` (Bug #11, 2026-04-29).
 
-### 2.3 트레일링 청산 (Trailing TP) — v4 (= v2 revert, 2026-05-12 저녁)
+### 2.3 트레일링 청산 (Trailing TP) — v5 (2026-05-12 밤)
 
 ```python
 TRAILING_TP_PEAK_THRESHOLD = Decimal("5")    # peak ≥ +5%
 TRAILING_TP_RETRACE_AMOUNT = Decimal("5")    # 회귀 -5%
-TRAILING_MIN_TP_INDEX = 3                    # TP3 부터 armed (v4 = v2 revert)
+TRAILING_MIN_TP_INDEX = 3                    # TP3 부터 armed
+TRAILING_MIN_STAGE = 3                       # 진입 stage 3 이상 (v5 신규)
 ```
 
-**4가지 발동 조건 (AND)**:
+**5가지 발동 조건 (AND)**:
 1. `status` ∈ {`TP3_DONE_PARTIAL`, `TP4_DONE_PARTIAL`, ..., `TP10_DONE_PARTIAL`, `TRAILING_ARMED`}
-2. peak ≥ +5% (leveraged ROI)
-3. 현재 pnl_ratio ≤ peak - 5%
-4. 현재 pnl_ratio < peak
+2. **`current_stage >= 3`** (v5 신규 — 진입 단계 3 이상 필수)
+3. peak ≥ +5% (leveraged ROI)
+4. 현재 pnl_ratio ≤ peak - 5%
+5. 현재 pnl_ratio < peak
 
 **발동 시**: `close_ratio = 1.00` → 잔량 100% 청산 → `status = COMPLETED` → Redis peak key 삭제.
 
@@ -95,7 +97,8 @@ TRAILING_MIN_TP_INDEX = 3                    # TP3 부터 armed (v4 = v2 revert)
 - v1 (2026-04-30): TP1+ armed
 - v2 (2026-05-07, PR #20): TP3+ armed
 - v3 (2026-05-12 새벽): TP4+ armed — 너무 보수적
-- **v4 (2026-05-12 저녁): TP3+ armed (v3 → v2 revert)** — 사용자 본래 의도 「3단계 후」 회복
+- v4 (2026-05-12 저녁): v3 → v2 revert (TP3+ 만 조건)
+- **v5 (2026-05-12 밤): TP3+ armed AND current_stage >= 3** (사용자: "진입도 1/2/3단계 실행후부터")
 
 **Redis peak fallback** (#103 FHEUSDT fix): Redis 휘발 시 `strategy.max_profit_pct` 를 fallback 으로 사용.
 
