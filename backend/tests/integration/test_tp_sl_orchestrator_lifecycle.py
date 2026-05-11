@@ -154,7 +154,7 @@ class TestLastActiveTPFullClose:
     이는 "4/4 익절 모두 종료되면 전략 인스턴스 모두 종료" 기획의 정확 반영.
     """
 
-    def test_short_last_tp_triggers_full_close_and_completed(
+    def test_short_tp3_uses_template_ratio_not_full_close_v6(
         self,
         db_session,
         make_template,
@@ -165,9 +165,13 @@ class TestLastActiveTPFullClose:
         fake_trade_client,
         orchestrator,
     ) -> None:
-        # template: TP1=5%, TP2=10%, TP3=15% 모두 활성. TP3 가 마지막 활성 TP.
-        # 사용자 ratio: TP1=25%, TP2=50%, TP3=50% (의도적으로 TP3 < 100%)
-        # TP3 발동 시: 코드가 ratio 무시하고 잔량 100% 청산 + COMPLETED.
+        """v6 (2026-05-12 밤): last_active_tp shortcut 폐지. TP3 가 마지막 enabled 여도
+        사용자 ratio (또는 default 25%) 사용. trailing 이 close-all 처리.
+
+        시나리오: TP1=5/TP2=10/TP3=15 활성, TP3 ratio=50% — 사용자 의도 부분 청산.
+        v5 까지: TP3 가 last_active_tp → 100% 강제 → COMPLETED.
+        v6: TP3 가 50% 청산 → 잔량 보유 → status TP3_DONE_PARTIAL → trailing 가능.
+        """
         tpl = make_template(
             tp1_percent=Decimal("5"), tp2_percent=Decimal("10"), tp3_percent=Decimal("15"),
             tp1_qty_ratio=Decimal("25"), tp2_qty_ratio=Decimal("50"), tp3_qty_ratio=Decimal("50"),
@@ -177,9 +181,8 @@ class TestLastActiveTPFullClose:
             symbol_str="BTCUSDT", side="SHORT", status="TP2_DONE_PARTIAL",
             current_position_qty=Decimal("-0.2"),  # TP1+TP2 청산 후 잔량
             avg_entry_price=Decimal("50000"), leverage=1,
-            template=tpl, current_stage=2,
+            template=tpl, current_stage=3,
         )
-        # mark 42500 = SHORT 15% PnL (TP3 도달)
         make_position(strategy, mark_price=Decimal("42500"))
         fake_binance.set_position(
             "BTCUSDT", position_amt="-0.2", position_side="SHORT",
@@ -188,15 +191,21 @@ class TestLastActiveTPFullClose:
 
         orchestrator.run_for_strategy(strategy.id)
 
-        # 잔량 100% 청산 — 0.2 BTC 전부
+        # v6: 사용자 ratio 50% 적용 → 0.1 BTC 청산 (잔량 0.1 보유)
         assert len(fake_trade_client.placed_orders) == 1
         placed = fake_trade_client.placed_orders[0]
-        assert Decimal(placed["quantity"]) == Decimal("0.2")  # ratio 50% 무시, 100%
+        assert Decimal(placed["quantity"]) == Decimal("0.1"), (
+            f"v6: TP3 사용자 ratio 50% 적용, 100% 강제 안 함 (last_active_tp shortcut 폐지). "
+            f"실제 quantity={placed['quantity']}"
+        )
 
         db_session.expire_all()
         s = db_session.get(StrategyInstance, strategy.id)
-        assert s.status == "COMPLETED"  # 마지막 TP → COMPLETED
-        assert s.reentry_ready is False  # COMPLETED 면 reentry 안 함
+        # v6: 부분 청산 → status = TP3_DONE_PARTIAL (COMPLETED 아님)
+        assert s.status == "TP3_DONE_PARTIAL", (
+            f"v6: 부분 청산 후 TP3_DONE_PARTIAL 상태 (잔량 보유 → trailing 기회). "
+            f"실제 status={s.status}"
+        )
 
 
 # ============================================================================

@@ -106,45 +106,37 @@ class TPSLOrchestratorService:
         # SHORT 면 음수로 저장되어 있으므로 abs() 로 양수 quantity 확보.
         current_qty = abs(Decimal(str(strategy.current_position_qty)))
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
-        # 템플릿의 qty_ratio 우선 사용. 없으면 기본값 폴백 (2026-05-06: TP1~10 확장).
+        # 템플릿의 qty_ratio 우선 사용. 없으면 기본값 폴백.
         ratio_attr = {f"TP{n}": f"tp{n}_qty_ratio" for n in range(1, 11)}
-        # default: 잔량의 25% (기존 TP1~3 의미 유지). 단, TP1~3 는 기존 호환 위해 그대로.
-        default_ratio = {
-            "TP1": Decimal("25"), "TP2": Decimal("50"), "TP3": Decimal("100"),
-            "TP4": Decimal("100"), "TP5": Decimal("100"),
-            "TP6": Decimal("25"), "TP7": Decimal("25"), "TP8": Decimal("25"),
-            "TP9": Decimal("25"), "TP10": Decimal("100"),
-        }
+        # 사용자 기획 v6 (2026-05-12 밤): TP1~9 모두 「잔량의 25%」 균일.
+        # "익절시작은 +10%에서 25%씩 시작하고 +15% 일때 잔량에 25% 이렇게 tp10단계까지".
+        # TP10 만 100% (절대 마지막 안전망 — trailing 미발동 + 가격 계속 상승 케이스).
+        # 이전 default (TP2=50, TP3~5=100) 는 사용자 「TP3 후 trailing」 의도 위배 — TP3
+        # 가 100% 면 trailing 영영 발동 못함. 균일 25% 로 변경 → 잔량 보유 → trailing 기회.
+        default_ratio = {f"TP{n}": Decimal("25") for n in range(1, 10)}
+        default_ratio["TP10"] = Decimal("100")
         # 크라이시스 모드 qty ratio (사용자 기획 default):
         # TP1=25%, TP2=25%, TP3=50% of remaining, TP4=100% of remaining
         # 2026-05-04 (alembic 0009): template.crisis_qty_ratios JSONB override 가능.
         # 일부 키만 채워도 나머지는 default 사용. invalid 값은 default fallback.
         crisis_qty_ratio = _resolve_crisis_qty_ratios(getattr(tpl, "crisis_qty_ratios", None))
 
-        # 사용자 기획 (2026-04-30 evening, #80 사례 검토 후):
-        # "4/4 익절 모두 종료되면 전략 인스턴스 모두 종료. 1단계만 진입했어도 모든 활성 TP
-        #  발동 시 나머지 잔량까지 전부 청산하고 종료."
-        # 활성 TP = template 의 tp1~5_percent 중 NOT NULL 인 레벨. 가장 큰 번호 = 마지막 TP.
-        # 마지막 TP 발동 시 사용자 ratio 무시하고 잔량 100% 청산 + COMPLETED.
-        # 2026-05-06: TP1~10 동적 (10단계 익절 확장). 사용자가 채운 가장 높은 단계가 마지막.
-        active_tps = []
-        if tpl:
-            for n in range(1, 11):
-                if getattr(tpl, f"tp{n}_percent", None) is not None:
-                    active_tps.append(f"TP{n}")
-        last_active_tp = active_tps[-1] if active_tps else None
-
+        # 사용자 기획 v6 (2026-05-12 밤): last_active_tp shortcut 폐지.
+        # 이전 (#80, 2026-04-30): 「마지막 enabled TP 발동 시 잔량 100% 청산」 안전망.
+        #   문제: 사용자가 TP1~3 만 enable + 사용자 의도 TP3 후 trailing 인데, TP3 가
+        #         last_active_tp → 100% 청산 → status COMPLETED → trailing 영원히 X.
+        # 신규 정책: TPs 가 균일 25% (TP10 만 default 100%) — 잔량 보유 → trailing 기회.
+        #   대안 안전망: TP10 default 100% + crisis 모드 + SL -50% + 사용자 수동 stop.
+        #   사용자가 TP3 만 enable + trailing 발동 안 하는 시나리오 우려시 → 명시적
+        #   tp3_qty_ratio = 100 으로 setting (코드는 사용자 setting 우선).
         if level == "TRAILING_TP":
-            close_ratio = Decimal("1.00")  # 전량 청산
-        elif last_active_tp and level == last_active_tp:
-            # 마지막 활성 TP 발동 — 잔량 전부 청산 (사용자 ratio 무시)
-            close_ratio = Decimal("1.00")
+            close_ratio = Decimal("1.00")  # 트레일링은 항상 100% (user fix v6 변경 없음)
         elif strategy.crisis_mode_triggered_at and level in crisis_qty_ratio:
             close_ratio = crisis_qty_ratio[level] / Decimal("100")
         else:
             attr = ratio_attr.get(level)
             tpl_val = getattr(tpl, attr, None) if tpl and attr else None
-            ratio_pct = Decimal(str(tpl_val)) if tpl_val is not None else default_ratio.get(level, Decimal("100"))
+            ratio_pct = Decimal(str(tpl_val)) if tpl_val is not None else default_ratio.get(level, Decimal("25"))
             close_ratio = ratio_pct / Decimal("100")
         if close_ratio >= Decimal("1.00"):
             close_qty = current_qty

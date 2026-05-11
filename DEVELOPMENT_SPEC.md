@@ -54,26 +54,26 @@
 - 단계 수: `StrategyTemplate.stages_config["capitals"]` 길이 (1~10), 또는 stage_plan row count.
 - **추가 증거금** (`StrategyStagePlan.additional_margin_usdt`, **alembic 0014**, 2026-05-11): 단계 진입 LIMIT fill 후 자동 add_position_margin API 호출.
 
-### 2.2 익절 정책 (TP1~TP10)
+### 2.2 익절 정책 (TP1~TP10) — v6 (2026-05-12 밤)
 
 **Default qty ratios (template `tp{n}_qty_ratio` 가 우선, NULL 이면 fallback):**
 
 | TP | default 잔량 비율 | 비고 |
 |---|---|---|
-| TP1 | 25% | |
-| TP2 | 50% | |
-| TP3 | 100% | (이전엔 TP3 만으로 종료 가능) |
-| TP4 | 100% | |
-| TP5 | 100% | |
-| TP6~9 | 25% | (10단계 확장, 2026-05-06) |
-| TP10 | 100% | |
+| TP1~TP9 | **25%** | v6 균일 (사용자 기획: "+10%에서 25%씩 시작, +15% 일때 잔량에 25%, ... tp10단계까지") |
+| TP10 | 100% | 절대 마지막 안전망 (trailing 미발동 + 가격 계속 상승 케이스) |
 
 **Default thresholds (template 의 tp{n}_percent 가 우선)**: TP1=10%, TP2=15%, TP3=20% (사용자 안내 기준).
 
 **비즈니스 룰**:
-- **마지막 활성 TP** (`last_active_tp` = template 의 NOT NULL TP 중 가장 큰 번호) 발동 시 사용자 ratio 무시 → **잔량 100% 청산 + COMPLETED** (2026-04-30 #80 사례 fix).
+- **last_active_tp shortcut 폐지 (v6, 2026-05-12 밤)** — 이전엔 「사용자가 enable 한 마지막 TP 가 자동 100% 청산」 안전망이었으나, 사용자 기획 「TP3 후 trailing -5%」 와 모순 (TP1~3 만 enable 시 TP3 가 100% 청산 → trailing 영원히 미발동). v6 부터: 모든 TP 가 사용자 ratio (또는 default 25%) 적용. 잔량 보유 → trailing 가능.
 - **한 cycle 1단계만 발동** — ascending sort + `cur_done_idx` 보다 큰 첫 TP (TP skip 방지, #98 LABUSDT fix).
 - **부분 청산 step_size floor**: `close_qty = (raw_qty // step) * step` (Bug #11, 2026-04-29).
+- **TP fires regardless of entry stage** — 진입 단계와 무관하게 pnl threshold 만 체크.
+
+**개정 이력**:
+- v1~v5: TP1=25, TP2=50, TP3=100, TP4=100, TP5=100, TP6~9=25, TP10=100 + last_active_tp 100% override
+- **v6 (2026-05-12 밤): TP1~9 균일 25%, TP10 100%, last_active_tp shortcut 폐지** (사용자 기획 「+10%에서 25%씩 시작」)
 
 ### 2.3 트레일링 청산 (Trailing TP) — v5 (2026-05-12 밤)
 
