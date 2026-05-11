@@ -2,11 +2,12 @@
 
 | 항목 | 내용 |
 |---|---|
-| 문서 버전 | v1.0 |
-| 작성일 | 2026-05-12 |
-| 작성 방식 | Reverse-engineered from current codebase (HEAD = `89cbd1c`) |
+| 문서 버전 | v1.2 |
+| 작성일 | 2026-05-12 (밤 최종) |
+| 작성 방식 | Reverse-engineered from current codebase (HEAD = `332050c`) |
 | 검증 기준 | `backend/` 코드 베이스 전체 + 527 회귀 테스트 통과 상태 |
 | 운영 환경 | Testnet (159.65.137.250) — mainnet 전환 전 |
+| 정책 버전 | trailing v5 (TP3+ AND stage>=3) + TP qty v6 (균일 25%, TP10 100%) |
 | 다음 단계 | `CONSISTENCY_CHECKLIST.md` 로 코드 vs 기획서 정합성 점검 |
 
 ---
@@ -648,7 +649,19 @@ docker compose restart api scheduler  # 코드 변경 영역에 따라
 
 | 버전 | 날짜 | 내용 |
 |---|---|---|
-| v1.0 | 2026-05-12 | 초안 — 전체 코드베이스 reverse-engineering, HEAD `89cbd1c` 기준 |
+| v1.0 | 2026-05-12 새벽 | 초안 — 전체 코드베이스 reverse-engineering, HEAD `89cbd1c` 기준 |
+| v1.1 | 2026-05-12 오후 | 1차+2차 정합성 점검 후 명세 4건 수치 오류 수정 (모델 13→14, endpoint 51→52, 메트릭 16→18, ISOLATED 4→3) |
+| v1.2 | 2026-05-12 밤 | trailing 정책 v3→v4→v5 + TP qty 정책 v6 반영. HEAD `332050c` |
+
+### 정책 변경 시간선 (2026-05-12 하루 동안)
+
+| 시간 | 정책 | 핵심 |
+|---|---|---|
+| 새벽 | trailing v3 | TP4+ armed (보수적, #2/#5 분석 후) |
+| 오후 | spec 수치 수정 | 4건 카운트 오류 |
+| 저녁 | trailing v4 | v3→v2 revert (TP3+ armed) |
+| 밤 (1차) | trailing v5 | v4 + `current_stage >= 3` 추가 조건 |
+| 밤 (2차) | TP qty v6 | TP1~9 균일 25%, TP10 100%, last_active_tp shortcut 폐지 |
 
 ---
 

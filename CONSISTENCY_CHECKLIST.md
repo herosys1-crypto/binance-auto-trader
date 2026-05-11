@@ -52,19 +52,34 @@
 
 ---
 
-## §2.3 트레일링 청산 (Trailing TP) v3 — **최우선 점검**
+## §2.3 트레일링 청산 (Trailing TP) v5 — **최우선 점검**
 
 | # | 점검 항목 | 검증 방법 | 결과 | 비고 |
 |---|---|---|---|---|
-| 2.3.1 | `TRAILING_MIN_TP_INDEX = 4` | `risk_service.py:17` | | v3 (2026-05-12) |
-| 2.3.2 | `TRAILING_TP_PEAK_THRESHOLD = Decimal("5")` | `risk_service.py:15` | | |
-| 2.3.3 | `TRAILING_TP_RETRACE_AMOUNT = Decimal("5")` | `risk_service.py:16` | | |
-| 2.3.4 | `TRAILING_ARMED_STATUSES = TP4~TP10_DONE_PARTIAL ∪ TRAILING_ARMED` | `risk_service.evaluate_take_profit_level:143~146` | | dynamic range(TRAILING_MIN_TP_INDEX, 11) |
-| 2.3.5 | TP1/TP2/TP3 발동만으론 trailing 미발동 | `test_trailing_tp_priority.py::test_trailing_NOT_armed_for_tp1_tp2_tp3_done_partials` | | |
-| 2.3.6 | TP4/TP5+ 발동 후 trailing 발동 | `test_trailing_tp_priority.py::test_trailing_fires_for_tp4_plus_done_partials` | | |
-| 2.3.7 | 발동 시 100% 청산 + COMPLETED + reset_peak_pnl | `tp_sl_orchestrator.py:137~187` | | |
-| 2.3.8 | Redis peak fallback (db_max_profit_pct) | `_update_peak_pnl` + `test_peak_pnl_redis_fallback.py` | | #103 fix |
-| 2.3.9 | **🔍 과거 미스터리**: TP1 직후 TRAILING_TP 발동 사례 (#2 VVVUSDT, #5 SAGAUSDT) — 코드대로면 불가능 | DB 직접 조회 + 알림 history 확인 | | **별도 조사** 필요 |
+| 2.3.1 | `TRAILING_MIN_TP_INDEX = 3` | `risk_service.py` (v4 = v2 revert) | ✅ | |
+| 2.3.2 | **`TRAILING_MIN_STAGE = 3`** (v5 신규) | `risk_service.py` | ✅ | 진입 단계 3 이상 추가 조건 |
+| 2.3.3 | `TRAILING_TP_PEAK_THRESHOLD = Decimal("5")` | `risk_service.py` | ✅ | |
+| 2.3.4 | `TRAILING_TP_RETRACE_AMOUNT = Decimal("5")` | `risk_service.py` | ✅ | |
+| 2.3.5 | `TRAILING_ARMED_STATUSES = TP3~TP10_DONE_PARTIAL ∪ TRAILING_ARMED` | `evaluate_take_profit_level` | ✅ | dynamic range |
+| 2.3.6 | TP1/TP2 발동만으론 trailing 미발동 | `test_trailing_NOT_armed_for_tp1_tp2_done_partials` | ✅ | |
+| 2.3.7 | TP3+ 발동 + stage>=3 일 때 trailing 발동 | `test_trailing_fires_for_tp3_plus_done_partials_with_stage3` | ✅ | |
+| 2.3.8 | **stage<3 면 TP3+ 라도 trailing 미발동** (v5) | `test_trailing_NOT_armed_when_stage_below_3` | ✅ | parametrize stage 1, 2 |
+| 2.3.9 | 발동 시 100% 청산 + COMPLETED + reset_peak_pnl | `tp_sl_orchestrator.py` | ✅ | |
+| 2.3.10 | Redis peak fallback (db_max_profit_pct) | `_update_peak_pnl` + `test_peak_pnl_redis_fallback.py` | ✅ | #103 fix |
+| 2.3.11 | **🔍 과거 미스터리**: TP1 직후 TRAILING_TP 발동 (이전 #2/#5/#11/#13) — 코드대로면 불가능 | DB 직접 조회 + 알림 history | 🔍 | v6 정책 적용 후 재현 시 깊이 조사 |
+
+## §2.2 익절 정책 v6 — **TP qty ratio 균일화**
+
+| # | 점검 항목 | 검증 방법 | 결과 | 비고 |
+|---|---|---|---|---|
+| 2.2.1 | **default TP1~9 = 25% (균일, v6)** | `tp_sl_orchestrator.py` `default_ratio = {f"TP{n}": Decimal("25") for n in range(1, 10)}` | ✅ | 사용자 기획 |
+| 2.2.2 | **default TP10 = 100% (안전망)** | `default_ratio["TP10"] = Decimal("100")` | ✅ | |
+| 2.2.3 | **last_active_tp shortcut 폐지** | `_execute_take_profit` 코드 블록 삭제 | ✅ | TP3 enable 만 해도 100% 강제 안 함 |
+| 2.2.4 | template `tp{n}_qty_ratio` 우선 (사용자 setting > default) | `_execute_take_profit:144~148` | ✅ | |
+| 2.2.5 | 한 cycle 1단계만 발동 (TP skip 방지) | `evaluate_take_profit_level` ascending sort | ✅ | #98 fix |
+| 2.2.6 | 부분 청산 step_size floor | `_execute_take_profit:152~161` | ✅ | Bug #11 |
+| 2.2.7 | TP fires regardless of entry stage | `evaluate_take_profit_level` 가 stage 안 봄 | ✅ | 사용자 「진입단계 상관없이」 |
+| 2.2.8 | 회귀 테스트 — v6 default ratio 균일 검증 | `test_tp_sl_last_active_tp.py` 13 tests | ✅ | 전면 재작성 |
 
 ---
 
@@ -392,12 +407,19 @@ ALL ✅ 면 「코드와 기획서 100% 정합」 판정.
 
 | 점검 차원 | 항목 수 | 결과 |
 |---|---|---|
-| 정책 상수 (정확한 값) | 9개 | ✅ 100% |
+| 정책 상수 (정확한 값) | 11개 (v5+v6 신규 포함) | ✅ 100% |
 | 메서드 존재 | 30+개 | ✅ 100% |
 | 사용처 정확성 (Kill-switch + ISOLATED + 추가 증거금) | 12 호출 지점 | ✅ 100% |
 | 카운트 일치 | 8 카테고리 | ⚠️ 4건 명세 오류 → 수정 완료 |
+| **§2.2 TP qty v6 (신규)** | 8개 | ✅ 100% (모든 TP 25% 균일 + TP10 100% + shortcut 폐지) |
+| **§2.3 trailing v5 (신규)** | 11개 | ✅ 100% (TP3+ AND stage>=3 + peak-5%) |
 
-**결론**: **코드는 명세 의도와 100% 일치**. 명세서의 4건 카운트 오류만 발견되어 모두 수정함. 코드 자체는 변경 불필요.
+**결론**: **코드는 명세 의도와 100% 일치**. 명세서의 4건 카운트 오류만 발견되어 모두 수정함.
+
+### v5+v6 정책 변경 핵심
+- v5 (저녁→밤): trailing 발동 조건에 `current_stage >= 3` 추가
+- v6 (밤): TP1~9 default 균일 25%, TP10 default 100% (안전망), last_active_tp shortcut 폐지
+- 결과: 사용자 기획 「TP3 후 trailing 청산」 시나리오 정상 작동
 
 ## 미점검 영역 (필요 시 별도 진행)
 
