@@ -64,6 +64,10 @@
   td { padding: 12px; border-top: 1px solid #334155; font-size: 13px; }
   tr.row-clickable { cursor: pointer; transition: background 0.1s; }
   tr.row-clickable:hover { background: rgba(59,130,246,0.05); }
+  /* 2026-05-12 (사용자 요청): div 셀 (운영 통계 등) 도 cursor pointer + hover 표시.
+     이전 tr 만 적용돼서 div 클릭 가능 표시 안 됐음. */
+  div.row-clickable { cursor: pointer; transition: background 0.15s, transform 0.1s; border-radius: 4px; }
+  div.row-clickable:hover { background: rgba(59,130,246,0.10); transform: translateY(-1px); }
   .num { text-align: right; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
   .pos { color: #34d399; }
   .neg { color: #f87171; }
@@ -277,19 +281,19 @@
             <p id="stats-crisis" class="text-base font-bold text-yellow-400">-</p>
           </div>
         </div>
-        <!-- TP 단계별 카운트 (notification title 기준) — 2026-05-12: TP1~10 확장 + TRAILING -->
+        <!-- TP 단계별 카운트 (notification title 기준) — 2026-05-12: TP1~10 확장 + TRAILING + 클릭 가능 -->
         <div class="p-2 grid grid-cols-5 md:grid-cols-11 gap-1 text-center border-t border-slate-700" style="padding-top:6px">
-          <div><p class="text-xs text-slate-500" title="1차 익절">TP1</p><p id="stats-tp1" class="text-sm font-semibold pos">-</p></div>
-          <div><p class="text-xs text-slate-500" title="2차 익절">TP2</p><p id="stats-tp2" class="text-sm font-semibold pos">-</p></div>
-          <div><p class="text-xs text-slate-500" title="3차 익절">TP3</p><p id="stats-tp3" class="text-sm font-semibold pos">-</p></div>
-          <div><p class="text-xs text-slate-500" title="4차 익절">TP4</p><p id="stats-tp4" class="text-sm font-semibold pos">-</p></div>
-          <div><p class="text-xs text-slate-500" title="5차 익절">TP5</p><p id="stats-tp5" class="text-sm font-semibold pos">-</p></div>
-          <div><p class="text-xs text-slate-500" title="6차 익절">TP6</p><p id="stats-tp6" class="text-sm font-semibold pos">-</p></div>
-          <div><p class="text-xs text-slate-500" title="7차 익절">TP7</p><p id="stats-tp7" class="text-sm font-semibold pos">-</p></div>
-          <div><p class="text-xs text-slate-500" title="8차 익절">TP8</p><p id="stats-tp8" class="text-sm font-semibold pos">-</p></div>
-          <div><p class="text-xs text-slate-500" title="9차 익절">TP9</p><p id="stats-tp9" class="text-sm font-semibold pos">-</p></div>
-          <div><p class="text-xs text-slate-500" title="10차 익절">TP10</p><p id="stats-tp10" class="text-sm font-semibold pos">-</p></div>
-          <div><p class="text-xs text-yellow-400" title="피크 -5% 회귀 시 잔량 전량 청산 (v3: TP4 이후 활성)">🌀TRAIL</p><p id="stats-trailing" class="text-sm font-semibold text-yellow-300">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP1', '1차 익절')" title="클릭: TP1 익절 알림 목록"><p class="text-xs text-slate-500">TP1 🔍</p><p id="stats-tp1" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP2', '2차 익절')" title="클릭: TP2 익절 알림 목록"><p class="text-xs text-slate-500">TP2 🔍</p><p id="stats-tp2" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP3', '3차 익절')" title="클릭: TP3 익절 알림 목록"><p class="text-xs text-slate-500">TP3 🔍</p><p id="stats-tp3" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP4', '4차 익절')" title="클릭: TP4 익절 알림 목록"><p class="text-xs text-slate-500">TP4 🔍</p><p id="stats-tp4" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP5', '5차 익절')" title="클릭: TP5 익절 알림 목록"><p class="text-xs text-slate-500">TP5 🔍</p><p id="stats-tp5" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP6', '6차 익절')" title="클릭: TP6 익절 알림 목록"><p class="text-xs text-slate-500">TP6 🔍</p><p id="stats-tp6" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP7', '7차 익절')" title="클릭: TP7 익절 알림 목록"><p class="text-xs text-slate-500">TP7 🔍</p><p id="stats-tp7" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP8', '8차 익절')" title="클릭: TP8 익절 알림 목록"><p class="text-xs text-slate-500">TP8 🔍</p><p id="stats-tp8" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP9', '9차 익절')" title="클릭: TP9 익절 알림 목록"><p class="text-xs text-slate-500">TP9 🔍</p><p id="stats-tp9" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP10', '10차 익절')" title="클릭: TP10 익절 알림 목록"><p class="text-xs text-slate-500">TP10 🔍</p><p id="stats-tp10" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TRAILING_TP', '트레일링 청산')" title="클릭: TRAILING_TP 청산 알림 목록 — 피크 -5% 회귀 시 발동"><p class="text-xs text-yellow-400">🌀TRAIL 🔍</p><p id="stats-trailing" class="text-sm font-semibold text-yellow-300">-</p></div>
         </div>
       </div>
     </div>
@@ -1475,6 +1479,69 @@ async function openStatsBreakdownModal(view) {
 
 function closeStatsBreakdownModal() {
   const m = document.getElementById('stats-breakdown-modal');
+  if (m) m.classList.add('hidden');
+}
+
+// ==================== TP/TRAIL 알림 상세 모달 (2026-05-12 사용자 요청) ====================
+// 「운영 통계」 의 TP1~10 / 🌀TRAIL 셀 클릭 시 띄움. 해당 level 의 알림 목록 + body 노출.
+async function openTpNotificationsModal(level, label) {
+  let modal = document.getElementById('tp-notif-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'tp-notif-modal';
+    modal.className = 'hidden fixed inset-0 z-50 flex items-center justify-center';
+    modal.style.cssText = 'background:rgba(0,0,0,0.7); padding:10px;';
+    modal.innerHTML = `
+      <div class="card rounded-xl p-4" style="max-width:1000px; width:100%; max-height:92vh; overflow-y:auto;">
+        <div class="flex justify-between items-center mb-3">
+          <h2 class="text-lg font-bold">📜 <span id="tpn-title">알림 상세</span></h2>
+          <button onclick="closeTpNotificationsModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
+        </div>
+        <div class="text-xs text-slate-400 mb-2" id="tpn-summary">-</div>
+        <div class="overflow-auto" style="max-height:70vh">
+          <div id="tpn-list" class="text-xs"><p class="text-slate-500 text-center py-4">로딩 중...</p></div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  }
+  modal.classList.remove('hidden');
+  document.getElementById('tpn-title').textContent = `${label} (${level}) 알림 상세`;
+  const listEl = document.getElementById('tpn-list');
+  listEl.innerHTML = '<p class="text-slate-500 text-center py-4">로딩 중...</p>';
+  try {
+    const pattern = `%[${level} 익절%`;
+    const data = await api(`/admin/notifications-by-title?title_like=${encodeURIComponent(pattern)}&limit=500`);
+    document.getElementById('tpn-summary').textContent = `${level} 매칭 알림 ${data.length}건 (최신순, 최대 500건)`;
+    if (!data.length) {
+      listEl.innerHTML = `<p class="text-slate-500 text-center py-6">${level} 알림이 아직 없습니다.</p>`;
+      return;
+    }
+    listEl.innerHTML = data.map(n => {
+      const ts = new Date(n.ts);
+      const tsStr = ts.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const sideEmoji = n.side === 'SHORT' ? '📉' : (n.side === 'LONG' ? '📈' : '');
+      const stratLink = n.strategy_id
+        ? `<button onclick="closeTpNotificationsModal(); selectStrategy(${n.strategy_id})" class="text-blue-400 hover:underline">#${n.strategy_id}</button>`
+        : '<span class="text-slate-500">-</span>';
+      return `<div class="border-b border-slate-700 py-2 px-1 hover:bg-slate-800/30">
+        <div class="flex gap-3 items-start">
+          <div class="text-slate-500 font-mono whitespace-nowrap" style="min-width:120px">${tsStr}</div>
+          <div class="whitespace-nowrap" style="min-width:140px">${stratLink} <span class="text-slate-300">${escapeHtml(n.symbol || '?')}</span> ${sideEmoji}</div>
+          <div class="flex-1">
+            <div class="text-slate-200 font-semibold mb-1">${escapeHtml(n.title)}</div>
+            <pre class="text-slate-400 text-xs whitespace-pre-wrap font-mono" style="font-size:11px">${escapeHtml(n.body)}</pre>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (err) {
+    listEl.innerHTML = `<p class="text-red-400 text-center py-4">조회 실패: ${escapeHtml(String(err.message || err))}</p>`;
+  }
+}
+
+function closeTpNotificationsModal() {
+  const m = document.getElementById('tp-notif-modal');
   if (m) m.classList.add('hidden');
 }
 

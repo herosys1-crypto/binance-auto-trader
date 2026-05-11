@@ -536,6 +536,49 @@ def get_system_health(
     }
 
 
+@router.get("/notifications-by-title")
+def get_notifications_by_title(
+    title_like: str,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> list[dict]:
+    """제목 패턴 매칭 알림 목록 — 운영 통계 패널의 TP/TRAIL 셀 클릭 시 사용.
+
+    2026-05-12 (사용자 요청): TP1~10/TRAILING_TP 카운트 셀 클릭 → 해당 알림 상세 목록.
+    title_like 는 SQL LIKE 패턴 (% 허용). 보안상 길이 200자 이내.
+
+    예: title_like='%[TP1 익절%' → TP1 익절 알림 모두
+        title_like='%[TRAILING_TP 익절%' → 트레일링 청산 모두
+    """
+    from sqlalchemy import select as sa_select
+    from app.models.notification import Notification
+    if not title_like or len(title_like) > 200:
+        raise HTTPException(status_code=400, detail="title_like 1~200자")
+    limit = max(1, min(limit, 1000))
+    rows = db.execute(
+        sa_select(Notification)
+        .where(Notification.title.like(title_like))
+        .order_by(Notification.created_at.desc())
+        .limit(limit)
+    ).scalars().all()
+    out: list[dict] = []
+    for n in rows:
+        sym = n.strategy_instance.symbol if n.strategy_instance else None
+        side = n.strategy_instance.side if n.strategy_instance else None
+        out.append({
+            "id": n.id,
+            "ts": n.created_at.isoformat() if n.created_at else None,
+            "strategy_id": n.strategy_instance_id,
+            "symbol": sym,
+            "side": side,
+            "title": n.title or "",
+            "body": (n.body or "")[:500],
+            "send_status": n.send_status,
+        })
+    return out
+
+
 @router.get("/recent-activity")
 def get_recent_activity(
     limit: int = 20,
@@ -556,23 +599,51 @@ def get_recent_activity(
 
     items: list[dict] = []
 
-    # 최근 주문 (체결 위주)
+    # 최근 주문 (체결 위주).
+    # 2026-05-12 (사용자 요청): 「매도/매수」 → 「SHORT/LONG 포지션 진입/청산」 으로 변경.
+    # 사용자 의견: 「실제로 매도/매수가 일어나긴 하지만 의미는 포지션 진입/청산이라
+    # 헷갈림. 실제 사용 용어로 표시해줘」.
+    # 매핑:
+    #   ENTRY  + SELL  → SHORT 포지션 진입
+    #   ENTRY  + BUY   → LONG 포지션 진입
+    #   TP/SL/EMERG + BUY  → SHORT 포지션 청산 (SHORT 닫으려면 BUY)
+    #   TP/SL/EMERG + SELL → LONG 포지션 청산 (LONG 닫으려면 SELL)
     orders = db.execute(
         sa_select(Order).order_by(Order.updated_at.desc()).limit(limit)
     ).scalars().all()
+    _close_purposes = {"TAKE_PROFIT", "STOP_LOSS", "EMERGENCY_CLOSE"}
+    _purpose_ko = {"ENTRY": "진입", "TAKE_PROFIT": "익절", "STOP_LOSS": "손절", "EMERGENCY_CLOSE": "긴급청산"}
     for o in orders:
-        purpose_ko = {"ENTRY": "진입", "TAKE_PROFIT": "익절", "STOP_LOSS": "손절", "EMERGENCY_CLOSE": "긴급청산"}.get(o.purpose, o.purpose)
-        side_ko = "매도 📉" if o.side == "SELL" else "매수 📈"
+        purpose_upper = (o.purpose or "").upper()
+        order_side = (o.side or "").upper()
+        is_close = purpose_upper in _close_purposes
+        if is_close:
+            # 청산: BUY=SHORT 청산, SELL=LONG 청산
+            pos_dir = "SHORT" if order_side == "BUY" else ("LONG" if order_side == "SELL" else "?")
+            action_ko = "포지션 청산"
+        else:
+            # 진입 (ENTRY 또는 unknown — 진입으로 간주)
+            pos_dir = "SHORT" if order_side == "SELL" else ("LONG" if order_side == "BUY" else "?")
+            action_ko = "포지션 진입"
+        dir_emoji = "📉" if pos_dir == "SHORT" else ("📈" if pos_dir == "LONG" else "❓")
+        purpose_ko = _purpose_ko.get(purpose_upper, o.purpose or "")
         is_filled = (o.status or "").upper() == "FILLED"
         ts = o.updated_at if (is_filled and o.updated_at) else o.created_at
+        # title — 청산이면 사유 추가 (익절/손절/긴급청산), 진입이면 단순 「SHORT 포지션 진입」
+        if is_close:
+            title = f"{dir_emoji} {pos_dir} {action_ko} ({purpose_ko}){' 체결' if is_filled else ' 발송'}"
+        else:
+            title = f"{dir_emoji} {pos_dir} {action_ko}{' 체결' if is_filled else ' 발송'}"
+        qty = o.executed_qty if is_filled else o.orig_qty
+        px = o.avg_price if is_filled else o.price
         items.append({
             "ts": ts.isoformat(),
             "strategy_id": o.strategy_instance_id,
             "symbol": o.symbol,
             "kind": "ORDER",
             "icon": "✅" if is_filled else "📤",
-            "title": f"{purpose_ko}{' 체결' if is_filled else ' 발송'}",
-            "detail": f"{side_ko} {o.executed_qty if is_filled else o.orig_qty} @ {o.avg_price if is_filled else o.price}" + (f" — {o.stage_no}단계" if o.stage_no else ""),
+            "title": title,
+            "detail": f"수량 {qty} @ {px}" + (f" — {o.stage_no}단계" if o.stage_no else ""),
         })
 
     # 최근 리스크 이벤트 (크라이시스/손절 등)
