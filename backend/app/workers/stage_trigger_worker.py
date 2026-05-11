@@ -114,6 +114,36 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     f"{strategy.symbol} {strategy.side} (mark={mark} {'>=' if strategy.side == 'SHORT' else '<='} trig={trigger})"
                 )
                 exec_service.trigger_next_stage(strategy.id, next_stage_no)
+
+                # 2026-05-11 (사용자 요청): 단계 진입 시 추가 증거금 자동 투입.
+                # next_plan.additional_margin_usdt > 0 이면 add_position_margin API 호출.
+                # entry 주문이 LIMIT 발사된 후 즉시 호출 — Binance 가 포지션이 조금이라도
+                # 있으면 추가 마진 받음 (체결되지 않은 LIMIT 만 있어도 OK 인지는 isolated 모드
+                # 에서 Binance 정책 따라 다름. 실패하면 다음 cycle 자동 정정 X — 명시적
+                # RiskEvent 기록 후 사용자가 수동 처리).
+                add_m = next_plan.additional_margin_usdt
+                if add_m and Decimal(str(add_m)) > 0:
+                    try:
+                        exec_service.add_position_margin(strategy.id, amount=Decimal(str(add_m)))
+                        logger.info(
+                            f"[stage-trigger] additional margin +{add_m} USDT applied to #{strategy.id} {strategy.symbol}"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"[stage-trigger] additional margin failed for #{strategy.id} stage{next_stage_no}: {e}"
+                        )
+                        # entry 자체는 정상 — 추가 증거금만 실패. 사용자에게 알림.
+                        try:
+                            NotificationService(db).send_system_alert(
+                                title=f"⚠️ [추가 증거금 실패] #{strategy.id} {strategy.symbol} 단계{next_stage_no}",
+                                body=(
+                                    f"단계 {next_stage_no} entry 는 정상 발사됨. 그러나 추가 증거금 {add_m} USDT 투입 실패.\n"
+                                    f"원인: {e}\n\n"
+                                    "💡 수동 처리: Binance UI 에서 직접 증거금 추가 가능. 또는 마진 모드 isolated 확인."
+                                ),
+                            )
+                        except Exception:
+                            pass
             except Exception as e:
                 logger.exception(f"[stage-trigger] failed for strategy #{strategy.id}: {e}")
                 try:

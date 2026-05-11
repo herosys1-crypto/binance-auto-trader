@@ -249,15 +249,31 @@ class StrategyService:
             effective_lev = D("1")
         required_margin = (D(str(template_model.total_capital)) / effective_lev).quantize(D("0.01"))
 
-        # 1) 가용 잔액 체크
-        if required_margin > available:
+        # 2026-05-11 (사용자 요청): 단계별 추가 증거금 합도 잔액 필요량에 포함.
+        # stages_config.additional_margins 가 있으면 그 합을 required_margin 에 더함.
+        # 진입 시점에 entry 마진 + 추가 증거금 모두 잠겨야 하므로.
+        cfg_dict = template_model.stages_config or {}
+        add_margins_raw = cfg_dict.get("additional_margins") or []
+        try:
+            additional_margin_sum = sum(
+                (D(str(m)) for m in add_margins_raw if m and D(str(m)) > 0),
+                D("0"),
+            )
+        except Exception:
+            additional_margin_sum = D("0")
+        required_margin_total = (required_margin + additional_margin_sum).quantize(D("0.01"))
+
+        # 1) 가용 잔액 체크 (entry 마진 + 추가 증거금 합)
+        if required_margin_total > available:
             raise ValueError(
-                f"💰 잔액 부족 — 필요한 마진 {required_margin:.2f} USDT > 가용 잔액 {available:.2f} USDT\n\n"
-                f"📌 계산: 자본 {template_model.total_capital} USDT ÷ 레버리지 {effective_lev}x = 필요 마진 {required_margin:.2f}\n\n"
+                f"💰 잔액 부족 — 필요한 마진 {required_margin_total:.2f} USDT > 가용 잔액 {available:.2f} USDT\n\n"
+                f"📌 계산: 자본 {template_model.total_capital} USDT ÷ 레버리지 {effective_lev}x = entry 마진 {required_margin:.2f}\n"
+                f"        + 단계별 추가 증거금 합 {additional_margin_sum:.2f} USDT\n"
+                f"        = 총 필요 마진 {required_margin_total:.2f}\n\n"
                 "💡 해결 (택1):\n"
                 "  • Binance 거래소에 USDT 추가 입금\n"
-                "  • 자본을 줄여 다시 시도\n"
-                "  • 레버리지를 높여 필요 마진 감소 (단, 청산 위험 ↑)"
+                "  • 자본 또는 단계별 추가 증거금을 줄여 다시 시도\n"
+                "  • 레버리지를 높여 entry 마진 감소 (단, 청산 위험 ↑)"
             )
 
         # 1-Z) 청산가 안전 거리 가드 (MAINNET-CHECKLIST 3-5, 2026-05-07).
@@ -320,7 +336,18 @@ class StrategyService:
             status="WAITING",
         )
         self.repo.create_strategy_instance(instance)
-        plans = [StrategyStagePlan(strategy_instance_id=instance.id, stage_no=s.stage_no, side=side, trigger_mode=s.trigger_mode, trigger_percent=s.trigger_percent, trigger_price=s.trigger_price, planned_capital=s.planned_capital, planned_qty=s.planned_qty) for s in preview.stages]
+        plans = [StrategyStagePlan(
+            strategy_instance_id=instance.id,
+            stage_no=s.stage_no,
+            side=side,
+            trigger_mode=s.trigger_mode,
+            trigger_percent=s.trigger_percent,
+            trigger_price=s.trigger_price,
+            planned_capital=s.planned_capital,
+            planned_qty=s.planned_qty,
+            # 2026-05-11 (사용자 요청): 단계별 추가 증거금 — preview 에서 전달받음
+            additional_margin_usdt=s.additional_margin_usdt,
+        ) for s in preview.stages]
         self.repo.create_stage_plans(plans)
         self.db.commit()
         self.db.refresh(instance)

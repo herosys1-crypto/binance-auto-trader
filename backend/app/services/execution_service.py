@@ -77,6 +77,32 @@ class ExecutionService:
         strategy.current_stage = 1
         self.db.commit()
         self.db.refresh(order)
+        # 2026-05-11 (사용자 요청): 단계 1 진입 시 추가 증거금 자동 투입 (옵션).
+        # additional_margin_usdt > 0 이면 add_position_margin 호출. 실패해도 entry 자체는
+        # 정상 진행 — 사용자에게 RiskEvent + Telegram 알림. 호출자(API) 가 그 처리.
+        add_m = stage_plan.additional_margin_usdt
+        if add_m and Decimal(str(add_m)) > 0:
+            try:
+                self.add_position_margin(strategy_id, amount=Decimal(str(add_m)))
+                logger.info(
+                    "start_stage1: additional margin +%s USDT applied to strategy=%s symbol=%s",
+                    add_m, strategy_id, strategy.symbol,
+                )
+            except Exception as e:
+                logger.warning(
+                    "start_stage1: additional margin failed strategy=%s: %s (entry already placed)",
+                    strategy_id, e,
+                )
+                # entry 는 정상이라 raise 안 함 — 별도 RiskEvent 만 기록
+                self.db.add(RiskEvent(
+                    strategy_instance_id=strategy_id,
+                    event_type="STAGE_ADDITIONAL_MARGIN_FAILED",
+                    severity="WARN",
+                    title="⚠️ 단계 1 추가 증거금 투입 실패 (entry 는 정상)",
+                    message=f"단계 1 entry 정상 발사. 추가 증거금 {add_m} USDT 투입 실패: {e}. 수동 처리 필요.",
+                    event_payload={"strategy_id": strategy_id, "stage_no": 1, "amount": str(add_m), "error": str(e)},
+                ))
+                self.db.commit()
         return order
 
     def trigger_next_stage(self, strategy_id: int, stage_no: int) -> Order:
