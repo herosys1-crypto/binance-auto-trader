@@ -4146,12 +4146,27 @@ async function loadPrevBlueprint(strategyId, silent) {
     // 3) 직접 입력 모드로 전환 + capitals/trigger_percents/additional_margins 채우기
     setCmMode('direct');
     const addMargins = bp.additional_margins || [];
+    // 2026-05-12 fix (사용자 보고): 「이전 전략 불러오기」 시 마지막 단계 trigger% 가 항상 빈칸.
+    // 원인: stages_config 에서 마지막 단계 trigger 는 last_stage_trigger_percent 컬럼에
+    // 별도 저장되고, trigger_percents 배열의 마지막 idx 는 None 인 경우가 많음
+    // (legacy LIQUIDATION_BUFFER 모드 호환). loadPrevBlueprint 가 그 fallback 을 안 함.
+    // → 마지막 사용 단계 식별 후, 그 단계 trigger 가 비었으면 last_stage_trigger_percent 로 대체.
+    let lastUsedStage = 0;
+    for (let k = 0; k < (bp.capitals || []).length; k++) {
+      const c = (bp.capitals || [])[k];
+      if (c !== null && c !== undefined && c !== '' && Number(c) > 0) lastUsedStage = k + 1;
+    }
     for (let i = 1; i <= 10; i++) {
       const cap = (bp.capitals || [])[i-1];
-      const trg = (bp.trigger_percents || [])[i-1];
+      let trg = (bp.trigger_percents || [])[i-1];
       const addM = addMargins[i-1];
       document.getElementById('cm-cap-' + i).value = cap !== undefined && cap !== null ? cap : '';
       if (i > 1) {
+        // 마지막 사용 단계인데 trigger 비었으면 last_stage_trigger_percent fallback.
+        if ((trg === null || trg === undefined || trg === '') && i === lastUsedStage
+            && bp.last_stage_trigger_percent !== null && bp.last_stage_trigger_percent !== undefined && bp.last_stage_trigger_percent !== '') {
+          trg = bp.last_stage_trigger_percent;
+        }
         document.getElementById('cm-trg-' + i).value = trg !== undefined && trg !== null ? trg : '';
       }
       // 2026-05-11: 단계별 추가 증거금 자동 채움 (이전 전략의 설정 그대로)
