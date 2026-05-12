@@ -564,14 +564,24 @@
           <input id="cm-symbol" list="cm-symbol-list" value="BTCUSDT" placeholder="예: BTCUSDT"
             class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
           <datalist id="cm-symbol-list"></datalist>
-          <!-- 다중 심볼 textarea (hidden by default) -->
-          <textarea id="cm-symbols-multi" rows="3"
-            placeholder="예: BTCUSDT, ETHUSDT, SOLUSDT&#10;또는 한 줄에 한 심볼씩 (max 50개)"
-            class="hidden w-full px-3 py-2 bg-slate-900 border border-blue-700 rounded text-white text-sm font-mono"></textarea>
+          <!-- 2026-05-12 v3 (사용자 UX): 다중 심볼 chip 방식 — 1개씩 입력 + 즉시 검증 -->
+          <div id="cm-multi-container" class="hidden">
+            <!-- chip 영역 -->
+            <div id="cm-multi-chips" class="flex flex-wrap gap-1 min-h-8 p-1 mb-1 bg-slate-900 border border-blue-700 rounded">
+              <span class="text-slate-500 text-xs italic" id="cm-multi-empty">아직 추가된 심볼이 없습니다 — 아래에서 입력</span>
+            </div>
+            <!-- 입력 + 추가 버튼 -->
+            <div class="flex gap-1">
+              <input id="cm-multi-add-input" list="cm-symbol-list" placeholder="심볼 입력 후 Enter 또는 「+ 추가」"
+                onkeypress="if(event.key==='Enter'){event.preventDefault();addSymbolChip();}"
+                class="flex-1 px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm" />
+              <button onclick="addSymbolChip()" class="btn-primary btn text-xs" style="padding:4px 10px">+ 추가</button>
+            </div>
+          </div>
           <!-- 2026-05-07: 화이트리스트 안내 (운영 정책 가시성) -->
           <div id="cm-symbol-whitelist-hint" class="mt-1 text-xs hidden"></div>
           <div id="cm-symbol-status" class="mt-1 text-xs hidden"></div>
-          <div id="cm-multi-preview" class="mt-1 text-xs text-blue-300 hidden">파싱된 심볼: -</div>
+          <div id="cm-multi-preview" class="mt-1 text-xs hidden"></div>
         </div>
         <div>
           <label class="block text-sm font-semibold mb-2 text-slate-300">방향</label>
@@ -4519,14 +4529,15 @@ function _collectTpSl() {
 
 function closeCreateModal() {
   document.getElementById('create-modal').classList.add('hidden');
-  // 2026-05-12: 다중 심볼 토글 초기화 (다음 진입 시 단일 모드로 시작)
+  // 2026-05-12: 다중 심볼 토글 + chips 초기화 (다음 진입 시 단일 모드로 시작)
   const multiToggle = document.getElementById('cm-multi-symbol-toggle');
   if (multiToggle && multiToggle.checked) {
     multiToggle.checked = false;
     toggleMultiSymbolMode();
   }
-  const multiTextarea = document.getElementById('cm-symbols-multi');
-  if (multiTextarea) multiTextarea.value = '';
+  _cmMultiSymbols = [];
+  const addInput = document.getElementById('cm-multi-add-input');
+  if (addInput) addInput.value = '';
 }
 
 async function loadCmAccounts() {
@@ -5102,7 +5113,42 @@ function _renderPreview(data) {
         <div class="mt-1 text-red-400">권장: 레버리지를 낮추거나 (예: 1x) / 단계별 trigger % 줄이거나 / 후반 단계 자본 줄이세요.</div>
       </div>`;
   }
+  // 2026-05-12 v3 (사용자 UX): 미리보기에 「선택된 템플릿 + 다중 심볼 리스트 + 계산 기준」 명시.
+  let modeBanner = '';
+  const isMulti = document.getElementById('cm-multi-symbol-toggle')?.checked;
+  // 선택된 템플릿 표시
+  let tplLabel = '';
+  if (cmState.mode === 'template' && cmState.templateId) {
+    const radio = document.querySelector(`input[name="cm-template"][value="${cmState.templateId}"]`);
+    if (radio) {
+      // 라디오 옆 label 의 첫 줄 (이름) 추출
+      const lbl = radio.closest('label');
+      const tplName = lbl ? (lbl.querySelector('.font-mono')?.textContent || `#${cmState.templateId}`) : `#${cmState.templateId}`;
+      tplLabel = `<span class="text-blue-300">📋 템플릿: <strong>${escapeHtml(tplName)}</strong> (#${cmState.templateId})</span>`;
+    }
+  } else if (cmState.mode === 'direct') {
+    tplLabel = `<span class="text-blue-300">📝 모드: 직접 입력</span>`;
+  } else if (cmState.mode === 'prev') {
+    tplLabel = `<span class="text-blue-300">📂 이전 전략 불러오기</span>`;
+  }
+  if (isMulti) {
+    const validSyms = _cmMultiSymbols.filter(s => s.status === 'valid').map(s => s.symbol);
+    const firstSym = validSyms[0] || (cmState._lastPreviewSymbol || '?');
+    modeBanner = `<div class="mb-2 p-2 rounded bg-blue-900/30 border border-blue-700">
+      <div class="flex items-center justify-between flex-wrap gap-1">
+        <div>${tplLabel}</div>
+        <div class="text-xs text-blue-200">📦 다중 모드 — ${validSyms.length}개 ✓ 심볼</div>
+      </div>
+      <div class="text-xs text-slate-300 mt-1">
+        대상: ${validSyms.length ? validSyms.map(s => `<span class="font-mono px-1 bg-slate-800 rounded">${escapeHtml(s)}</span>`).join(' ') : '<span class="text-slate-500">(미정 — chip 추가 필요)</span>'}
+      </div>
+      <div class="text-xs text-yellow-300 mt-1">⚠️ 아래 계산은 <strong>${escapeHtml(firstSym)}</strong> 시작가 기준 예시 — 실제 시작가는 각 심볼의 현재가에서 자동 산출 (SHORT +0.1% / LONG -0.1%)</div>
+    </div>`;
+  } else {
+    modeBanner = `<div class="mb-2 p-2 rounded bg-slate-800/40 border border-slate-700">${tplLabel}</div>`;
+  }
   document.getElementById('cm-preview-meta').innerHTML =
+    modeBanner +
     `레버리지: ${data.leverage}x | 총 투입자본: <strong>${fmtNum(totalCap)} USDT</strong> | ` +
     `TP: ${data.tp1_percent}/${data.tp2_percent}/${data.tp3_percent}% (25/50/25 분할 + 트레일링) | ` +
     `<span class="text-red-400">손절 한도: ${fmtNum(data.stop_loss_amount)} USDT</span>` +
@@ -5313,37 +5359,112 @@ function toast(msg, type) {
 // ==================== 「📦 다중 심볼 모드」 토글 + batch 생성 (2026-05-12 사용자 UX 개선) ====================
 // 사용자 의도: 「+ 새 전략」 모달 한 곳에서 단일/다중 심볼 둘 다 자연스럽게 선택.
 
+// 다중 심볼 chip 방식 1개씩 추가 + 즉시 검증 (사용자 UX 요청 v3, 2026-05-12)
+let _cmMultiSymbols = [];  // [{symbol, status: 'valid'|'invalid'|'pending', reason}]
+
 function toggleMultiSymbolMode() {
   const isMulti = document.getElementById('cm-multi-symbol-toggle').checked;
   const single = document.getElementById('cm-symbol');
-  const multi = document.getElementById('cm-symbols-multi');
+  const container = document.getElementById('cm-multi-container');
   const preview = document.getElementById('cm-multi-preview');
   const countLabel = document.getElementById('cm-symbol-count');
   if (isMulti) {
     single.classList.add('hidden');
-    multi.classList.remove('hidden');
+    container.classList.remove('hidden');
     preview.classList.remove('hidden');
     countLabel.classList.remove('hidden');
-    multi.oninput = function() {
-      const symbols = _parseBatchSymbols(this.value);
-      preview.textContent = symbols.length
-        ? `파싱된 심볼 ${symbols.length}개: ${symbols.join(', ')}`
-        : '파싱된 심볼: -';
-      _refreshSubmitBtnLabel();
-    };
+    _cmMultiSymbols = [];
+    _renderMultiSymbolChips();
   } else {
     single.classList.remove('hidden');
-    multi.classList.add('hidden');
+    container.classList.add('hidden');
     preview.classList.add('hidden');
     countLabel.classList.add('hidden');
+    _cmMultiSymbols = [];
   }
   _refreshSubmitBtnLabel();
 }
 
+async function addSymbolChip() {
+  const input = document.getElementById('cm-multi-add-input');
+  const raw = (input.value || '').toUpperCase().trim();
+  if (!raw) return;
+  if (_cmMultiSymbols.find(s => s.symbol === raw)) {
+    toast(`${raw} 이미 추가됨`, 'warning');
+    input.value = '';
+    return;
+  }
+  if (_cmMultiSymbols.length >= 50) {
+    toast('최대 50개', 'error');
+    return;
+  }
+  // pending 상태로 즉시 추가 (UI 즉시 반영)
+  _cmMultiSymbols.push({ symbol: raw, status: 'pending', reason: '검증 중...' });
+  input.value = '';
+  _renderMultiSymbolChips();
+  _refreshSubmitBtnLabel();
+  // 비동기 검증 — /symbols/{symbol} 호출 (404 면 invalid)
+  try {
+    const symInfo = await api(`/symbols/${raw}`);
+    const idx = _cmMultiSymbols.findIndex(s => s.symbol === raw);
+    if (idx < 0) return;  // 사용자가 그 사이 제거
+    if (symInfo && symInfo.symbol === raw) {
+      _cmMultiSymbols[idx] = { symbol: raw, status: 'valid', reason: '거래소 등록 OK' };
+    } else {
+      _cmMultiSymbols[idx] = { symbol: raw, status: 'invalid', reason: '심볼 정보 응답 이상' };
+    }
+  } catch (e) {
+    const idx = _cmMultiSymbols.findIndex(s => s.symbol === raw);
+    if (idx < 0) return;
+    const errMsg = String(e.message || '');
+    const reason = errMsg.includes('404') || errMsg.toLowerCase().includes('not found')
+      ? '거래소에 없는 심볼' : errMsg.slice(0, 80);
+    _cmMultiSymbols[idx] = { symbol: raw, status: 'invalid', reason };
+  }
+  _renderMultiSymbolChips();
+  _refreshSubmitBtnLabel();
+  input.focus();  // 다음 심볼 입력 위해 포커스 유지
+}
+
+function removeSymbolChip(symbol) {
+  _cmMultiSymbols = _cmMultiSymbols.filter(s => s.symbol !== symbol);
+  _renderMultiSymbolChips();
+  _refreshSubmitBtnLabel();
+}
+
+function _renderMultiSymbolChips() {
+  const container = document.getElementById('cm-multi-chips');
+  if (!container) return;
+  if (!_cmMultiSymbols.length) {
+    container.innerHTML = '<span class="text-slate-500 text-xs italic">아직 추가된 심볼이 없습니다 — 아래에서 입력</span>';
+  } else {
+    container.innerHTML = _cmMultiSymbols.map(s => {
+      const cls = s.status === 'valid' ? 'bg-green-900 border-green-600 text-green-200'
+                : s.status === 'invalid' ? 'bg-red-900 border-red-600 text-red-200'
+                : 'bg-slate-700 border-slate-500 text-slate-300';
+      const ic = s.status === 'valid' ? '✓' : s.status === 'invalid' ? '✗' : '⏳';
+      return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs ${cls}" title="${escapeHtml(s.reason)}">
+        <span>${ic}</span>
+        <span class="font-mono">${escapeHtml(s.symbol)}</span>
+        <button onclick="removeSymbolChip('${escapeHtml(s.symbol).replace(/'/g, "\\'")}')" class="hover:text-white" style="font-weight:bold" title="제거">×</button>
+      </span>`;
+    }).join('');
+  }
+  const validCount = _cmMultiSymbols.filter(s => s.status === 'valid').length;
+  const invalidCount = _cmMultiSymbols.filter(s => s.status === 'invalid').length;
+  const pendingCount = _cmMultiSymbols.filter(s => s.status === 'pending').length;
+  const previewEl = document.getElementById('cm-multi-preview');
+  if (previewEl) {
+    previewEl.innerHTML = _cmMultiSymbols.length === 0
+      ? '<span class="text-slate-500">심볼 추가하세요</span>'
+      : `<span class="text-green-400">✓ ${validCount} 유효</span> · <span class="text-red-400">✗ ${invalidCount} 무효</span>${pendingCount ? ` · <span class="text-slate-400">⏳ ${pendingCount} 검증중</span>` : ''} <span class="text-slate-500">(전략 시작 시 ✓ 만 사용)</span>`;
+  }
+}
+
 async function submitCreateMulti() {
-  // 다중 심볼 모드 — 한 템플릿으로 N개 심볼에 동시 전략 생성.
-  const symbols = _parseBatchSymbols(document.getElementById('cm-symbols-multi').value);
-  if (!symbols.length) { toast('심볼 1개 이상 입력 필요', 'error'); return; }
+  // 다중 심볼 모드 — chip 검증된 ✓ valid 심볼만 사용 (사용자 UX v3, 2026-05-12)
+  const symbols = _cmMultiSymbols.filter(s => s.status === 'valid').map(s => s.symbol);
+  if (!symbols.length) { toast('✓ 유효한 심볼이 1개 이상 필요 (chip 으로 추가 + 검증)', 'error'); return; }
   if (symbols.length > 50) { toast('한 번에 최대 50개', 'error'); return; }
   if (!cmState.accountId) { toast('거래소 계정 선택 필요', 'error'); return; }
   // template 결정: template 모드면 cmState.templateId 사용, direct/prev 면 _quick_ 자동 생성.
@@ -5454,12 +5575,12 @@ function _refreshSubmitBtnLabel() {
   if (!submit || cmState.editingStrategyId) return;  // 수정 모드는 별도 라벨
   const isMulti = document.getElementById('cm-multi-symbol-toggle')?.checked;
   if (isMulti) {
-    const symbols = _parseBatchSymbols(document.getElementById('cm-symbols-multi').value);
-    submit.textContent = symbols.length > 1
-      ? `🚀 ${symbols.length}개 전략 동시 시작`
-      : symbols.length === 1
-        ? '🚀 전략 시작 (1개)'
-        : '🚀 전략 시작';
+    const validCount = _cmMultiSymbols.filter(s => s.status === 'valid').length;
+    submit.textContent = validCount > 1
+      ? `🚀 ${validCount}개 전략 동시 시작`
+      : validCount === 1
+        ? '🚀 1개 전략 시작'
+        : '🚀 ✓ 유효 심볼 추가 필요';
   } else {
     submit.textContent = '🚀 전략 시작';
   }
