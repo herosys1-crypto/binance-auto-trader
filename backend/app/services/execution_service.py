@@ -634,20 +634,21 @@ class ExecutionService:
 
     @staticmethod
     def _new_client_order_id(symbol: str, suffix: str) -> str:
-        """Binance newClientOrderId 36자 제한 — 항상 35자 이하 보장.
+        """Binance newClientOrderId 안전 cap — 항상 32자 이하 보장.
 
-        2026-05-12 fix (사용자 보고 #-4015 에러):
-        Binance API: "Client order id length should be less than 36 chars" (strict <).
-        이전 포맷 `{symbol}-{suffix}-{uuid18}` 는 symbol_len + suffix_len + 20.
-        - 8자 symbol + ENTRY10M (8자) suffix = 36자 → -4015 reject
-        - 9자 symbol + ENTRY10M = 37자 → -4015 reject
-        Fix: uuid 길이를 가용 공간에 맞게 동적 (선호 18자, 최소 8자 = 32bit).
-        symbol/suffix 가 매우 길어 8자도 안 들어가면 전체 35자로 강제 truncate.
+        2026-05-12 fix v1: 35자 cap (Binance error msg "less than 36 chars" 기준).
+        2026-05-13 fix v2 (사용자 #26 JELLYJELLYUSDT 재발 보고): 35자 cap 적용 후에도
+        같은 -4015 에러 → Binance Futures 실 한도가 36 보다 작은 것으로 추정 (32자 추정).
+        에러 메시지는 "less than 36 chars" 라고 되어있지만 실제는 더 엄격한 듯.
+        안전하게 32자 cap 으로 줄임 — 어떤 Binance 변경에도 충돌 안 함.
+
+        포맷: `{symbol}-{suffix}-{uuid_hex[:N]}` 또는 길면 truncate.
+        예: JELLYJELLYUSDT+EXIT → base_len=20, uuid=12 → 총 32자.
         """
-        MAX_LEN = 35              # Binance limit < 36 → 최대 35
+        MAX_LEN = 32              # 2026-05-13: 35→32 안전 cap (재발 방지)
         PREFERRED_UUID = 18       # 충분한 충돌 방지 (72 bits)
-        MIN_UUID = 8              # 최소 충돌 방지 (32 bits — 일 단위 운영 충분)
+        MIN_UUID = 8              # 최소 충돌 방지 (32 bits)
         base_len = len(symbol) + 1 + len(suffix) + 1  # symbol + "-" + suffix + "-"
         uuid_len = max(MIN_UUID, min(PREFERRED_UUID, MAX_LEN - base_len))
         cid = f"{symbol}-{suffix}-{uuid4().hex[:uuid_len]}"
-        return cid[:MAX_LEN]      # 안전장치 — 어떤 입력에도 35자 보장
+        return cid[:MAX_LEN]      # 안전장치 — 어떤 입력에도 32자 보장
