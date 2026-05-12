@@ -4575,8 +4575,11 @@ async function loadCmTemplates() {
     el.innerHTML = active.map(t => {
       const sc = t.stages_config || {};
       const stages = (sc.capitals || []).join(' / ');
+      // 2026-05-12 fix (사용자 보고 「성공인데 전략 없음」): template radio 선택 시
+      // cmState.side 도 template 의 side 로 자동 sync — 이전엔 templateId 만 set 되고
+      // side 는 default 'SHORT' 그대로라, LONG 템플릿 선택 시 side 불일치로 실패 가능.
       return `<label class="flex items-center gap-2 p-2 rounded cursor-pointer hover:bg-slate-700">
-        <input type="radio" name="cm-template" value="${t.id}" onchange="cmState.templateId=${t.id}; updateCmSubmit()" />
+        <input type="radio" name="cm-template" value="${t.id}" onchange="cmState.templateId=${t.id}; setCmSide('${t.side}'); updateCmSubmit()" />
         <span class="font-mono text-blue-300">#${t.id}</span>
         <span class="font-semibold">${escapeHtml(t.name)}</span>
         <span class="badge ${t.side==='SHORT'?'badge-red':'badge-green'}">${t.side}</span>
@@ -5566,10 +5569,21 @@ async function submitCreateMulti() {
   const submit = document.getElementById('cm-submit');
   submit.disabled = true;
   submit.textContent = '⏳ 진행 중...';
-  // 진행 표시: cm-balance-check 영역 재활용
-  const progEl = document.getElementById('cm-balance-check') || document.createElement('div');
-  progEl.classList.remove('hidden');
-  progEl.innerHTML = '<div class="text-xs text-slate-400">진행 중...</div>';
+  // 2026-05-12 v3 (사용자 보고 「성공인데 전략 없음」): 진행 표시를 modal 내 별도 영역에
+  // 강조 표시 (cm-balance-check 는 미리보기 잔액 체크용이라 조용히 묻힘 가능).
+  // 모달 footer 위에 명시적 결과 패널 만들기.
+  let progEl = document.getElementById('cm-batch-progress');
+  if (!progEl) {
+    progEl = document.createElement('div');
+    progEl.id = 'cm-batch-progress';
+    progEl.className = 'mt-3 p-3 rounded border border-blue-700 bg-slate-900 text-xs';
+    // 모달 footer 의 위 (취소/저장/시작 버튼 위) 에 삽입
+    const footerBtnRow = document.querySelector('#create-modal .flex.justify-end.gap-2.pt-3');
+    if (footerBtnRow) footerBtnRow.parentNode.insertBefore(progEl, footerBtnRow);
+  }
+  progEl.style.display = 'block';
+  progEl.innerHTML = '<div class="text-slate-400">⏳ 진행 중...</div>';
+  console.log('[batch] start', { symbols, templateId, side: cmState.side, accountId: cmState.accountId, leverage: leverageFromInput });
   const results = [];
   for (let i = 0; i < symbols.length; i++) {
     const sym = symbols[i];
@@ -5580,43 +5594,71 @@ async function submitCreateMulti() {
         results.push({ symbol: sym, status: 'fail', message: '현재가 조회 실패 (심볼 invalid?)' });
       } else {
         const startPrice = lastPrice * (1 + offsetPct);
-        const created = await api('/strategies', {
-          method: 'POST',
-          body: {
-            exchange_account_id: cmState.accountId,
-            strategy_template_id: templateId,
-            symbol: sym, side: cmState.side, start_price: String(startPrice),
-            leverage_override: leverageFromInput,
-          },
-        });
+        console.log(`[batch] ${sym} POST /strategies`, { exchange_account_id: cmState.accountId, strategy_template_id: templateId, side: cmState.side, start_price: String(startPrice) });
+        let created;
+        try {
+          created = await api('/strategies', {
+            method: 'POST',
+            body: {
+              exchange_account_id: cmState.accountId,
+              strategy_template_id: templateId,
+              symbol: sym, side: cmState.side, start_price: String(startPrice),
+              leverage_override: leverageFromInput,
+            },
+          });
+          console.log(`[batch] ${sym} created`, created);
+        } catch (createErr) {
+          console.error(`[batch] ${sym} create failed`, createErr);
+          results.push({ symbol: sym, status: 'fail', message: `생성 실패: ${createErr.message}` });
+          continue;  // start 시도 안 함
+        }
         try {
           await api(`/strategies/${created.id}/start`, { method: 'POST' });
-          results.push({ symbol: sym, status: 'ok', strategy_id: created.id, message: `#${created.id} (${fmtNum(startPrice)})` });
+          console.log(`[batch] ${sym} #${created.id} started`);
+          results.push({ symbol: sym, status: 'ok', strategy_id: created.id, message: `#${created.id} 시작 완료 (시작가 ${fmtNum(startPrice)})` });
         } catch (startErr) {
+          console.error(`[batch] ${sym} #${created.id} start failed`, startErr);
           results.push({ symbol: sym, status: 'partial', strategy_id: created.id, message: `#${created.id} 생성 — 시작 실패: ${startErr.message}` });
         }
       }
     } catch (e) {
+      console.error(`[batch] ${sym} unexpected error`, e);
       results.push({ symbol: sym, status: 'fail', message: e.message });
     }
-    // 진행 갱신
+    // 진행 갱신 (강조 색상)
     const okN = results.filter(r => r.status === 'ok').length;
     const failN = results.filter(r => r.status === 'fail').length;
     const partN = results.filter(r => r.status === 'partial').length;
-    progEl.innerHTML = `<div class="text-xs"><div class="font-semibold mb-1">진행 ${i+1}/${symbols.length} — ✅ ${okN} / ⚠️ ${partN} / ❌ ${failN}</div>` +
+    progEl.innerHTML = `<div class="font-semibold mb-2 text-blue-300">📦 다중 전략 생성 진행 ${i+1}/${symbols.length}</div>
+      <div class="mb-2"><span class="text-green-400">✅ ${okN} 성공</span> · <span class="text-yellow-400">⚠️ ${partN} 부분</span> · <span class="text-red-400">❌ ${failN} 실패</span></div>` +
       results.map(r => {
         const ic = r.status === 'ok' ? '✅' : r.status === 'partial' ? '⚠️' : '❌';
-        return `<div>${ic} ${escapeHtml(r.symbol)}: ${escapeHtml(r.message)}</div>`;
-      }).join('') + '</div>';
+        const cls = r.status === 'ok' ? 'text-green-300' : r.status === 'partial' ? 'text-yellow-300' : 'text-red-300';
+        return `<div class="${cls}">${ic} ${escapeHtml(r.symbol)}: ${escapeHtml(r.message)}</div>`;
+      }).join('');
   }
   submit.disabled = false;
   _refreshSubmitBtnLabel();
   refreshStrategies();
   refreshTemplates();
   const ok = results.filter(r => r.status === 'ok').length;
-  toast(`🚀 batch 완료: ${ok}/${symbols.length} 성공`, ok === symbols.length ? 'success' : 'warning');
-  // 모두 성공이면 모달 닫기
-  if (ok === symbols.length) setTimeout(closeCreateModal, 1500);
+  const failTotal = results.filter(r => r.status === 'fail').length;
+  const partial = results.filter(r => r.status === 'partial').length;
+  // 명확한 토스트 메시지
+  let toastMsg, toastType;
+  if (ok === symbols.length) {
+    toastMsg = `🚀 batch 완료: ${ok}/${symbols.length} 모두 성공 — 「🎯 전략 인스턴스」 패널 확인`;
+    toastType = 'success';
+  } else if (ok > 0) {
+    toastMsg = `⚠️ batch 부분 성공: ${ok}/${symbols.length} (실패 ${failTotal}, 부분 ${partial}). 위 결과 패널 확인`;
+    toastType = 'warning';
+  } else {
+    toastMsg = `❌ batch 실패: 0/${symbols.length} 성공 — 위 결과 패널에서 에러 메시지 확인`;
+    toastType = 'error';
+  }
+  toast(toastMsg, toastType);
+  // 모두 성공이면 모달 자동 닫기 (실패 있으면 사용자가 결과 확인 후 직접 닫음)
+  if (ok === symbols.length) setTimeout(closeCreateModal, 2500);
 }
 
 function _refreshSubmitBtnLabel() {
