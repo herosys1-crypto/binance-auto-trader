@@ -552,13 +552,26 @@
       <!-- 2) 심볼 + 방향 -->
       <div class="grid grid-cols-2 gap-4 mb-4">
         <div>
-          <label class="block text-sm font-semibold mb-2 text-slate-300">2️⃣  심볼</label>
+          <div class="flex items-center justify-between mb-2">
+            <label class="block text-sm font-semibold text-slate-300">2️⃣  심볼 <span id="cm-symbol-count" class="text-xs text-blue-300 font-normal hidden">(다중)</span></label>
+            <!-- 2026-05-12 (사용자 요청): 다중 심볼 토글 - 동시 N개 전략 생성 -->
+            <label class="text-xs text-slate-300 flex items-center gap-1 cursor-pointer" title="📦 다중 심볼 모드 — 한 템플릿으로 여러 심볼에 동시 전략 생성. 시작가는 각 심볼의 현재가 자동 산출.">
+              <input type="checkbox" id="cm-multi-symbol-toggle" onchange="toggleMultiSymbolMode()" />
+              <span>📦 다중 심볼</span>
+            </label>
+          </div>
+          <!-- 단일 심볼 입력 (default) -->
           <input id="cm-symbol" list="cm-symbol-list" value="BTCUSDT" placeholder="예: BTCUSDT"
             class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
           <datalist id="cm-symbol-list"></datalist>
+          <!-- 다중 심볼 textarea (hidden by default) -->
+          <textarea id="cm-symbols-multi" rows="3"
+            placeholder="예: BTCUSDT, ETHUSDT, SOLUSDT&#10;또는 한 줄에 한 심볼씩 (max 50개)"
+            class="hidden w-full px-3 py-2 bg-slate-900 border border-blue-700 rounded text-white text-sm font-mono"></textarea>
           <!-- 2026-05-07: 화이트리스트 안내 (운영 정책 가시성) -->
           <div id="cm-symbol-whitelist-hint" class="mt-1 text-xs hidden"></div>
           <div id="cm-symbol-status" class="mt-1 text-xs hidden"></div>
+          <div id="cm-multi-preview" class="mt-1 text-xs text-blue-300 hidden">파싱된 심볼: -</div>
         </div>
         <div>
           <label class="block text-sm font-semibold mb-2 text-slate-300">방향</label>
@@ -2296,10 +2309,10 @@ async function refreshTemplates() {
       const nameDisplay = isQuick
         ? `<span class="font-mono text-slate-500">${escapeHtml(t.name)}</span>`
         : `<span class="font-mono text-blue-300">${escapeHtml(t.name)}</span>`;
-      // 2026-05-12 (사용자 요청): 사용자 저장 템플릿 (_quick_* 아님) 에 「🚀 다중 심볼 전략」 버튼.
-      // _quick_* 는 자동 생성이라 batch 전략 생성 의미 없음 (이미 1개 strategy 마다 1개 생성됨).
+      // 2026-05-12 v2 (사용자 UX 개선): 「🚀 다중」 버튼 → 「+ 새 전략」 모달 열기 (template select + 다중 모드 pre-set).
+      // 단일 진입점 (모달) 으로 통합 — 동일한 다중 심볼 입력 UI 사용.
       const batchBtn = !isQuick && t.is_active
-        ? `<button onclick="openBatchStrategyModal(${t.id}, '${escapeHtml(t.name).replace(/'/g, "\\'")}')" class="btn-primary btn text-xs" style="padding:2px 8px" title="이 템플릿으로 다중 심볼에 동시 전략 생성">🚀 다중</button>`
+        ? `<button onclick="openCreateModalForBatch(${t.id})" class="btn-primary btn text-xs" style="padding:2px 8px" title="이 템플릿으로 「+ 새 전략」 모달 열기 + 다중 심볼 모드 자동 활성">🚀 다중</button>`
         : '';
       return `<tr>
         <td>${t.id}</td>
@@ -4506,6 +4519,14 @@ function _collectTpSl() {
 
 function closeCreateModal() {
   document.getElementById('create-modal').classList.add('hidden');
+  // 2026-05-12: 다중 심볼 토글 초기화 (다음 진입 시 단일 모드로 시작)
+  const multiToggle = document.getElementById('cm-multi-symbol-toggle');
+  if (multiToggle && multiToggle.checked) {
+    multiToggle.checked = false;
+    toggleMultiSymbolMode();
+  }
+  const multiTextarea = document.getElementById('cm-symbols-multi');
+  if (multiTextarea) multiTextarea.value = '';
 }
 
 async function loadCmAccounts() {
@@ -5186,9 +5207,15 @@ async function submitInPlaceSettings() {
 }
 
 async function submitCreate() {
+  // 2026-05-12 v2 (사용자 UX 개선): 다중 심볼 모드면 batch 처리로 우회.
+  // 단일 모드는 기존 로직 그대로.
+  const isMulti = document.getElementById('cm-multi-symbol-toggle')?.checked;
+  const editingId = cmState.editingStrategyId;
+  if (isMulti && !editingId) {
+    return submitCreateMulti();  // 신규 batch 함수 호출
+  }
   const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
   const startPrice = document.getElementById('cm-start-price').value;
-  const editingId = cmState.editingStrategyId;
   const confirmMsg = editingId
     ? `🔄 전략 #${editingId} 수정\n\n1. 기존 미체결 주문 자동 취소\n2. 새 설정으로 ${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략 시작\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요?`
     : `${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략을 시작합니다.\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요? (testnet 거래소면 실거래 발생)`;
@@ -5281,6 +5308,161 @@ function toast(msg, type) {
   el.className = 'toast toast-' + (type || 'success');
   el.classList.remove('hidden');
   setTimeout(() => el.classList.add('hidden'), 3500);
+}
+
+// ==================== 「📦 다중 심볼 모드」 토글 + batch 생성 (2026-05-12 사용자 UX 개선) ====================
+// 사용자 의도: 「+ 새 전략」 모달 한 곳에서 단일/다중 심볼 둘 다 자연스럽게 선택.
+
+function toggleMultiSymbolMode() {
+  const isMulti = document.getElementById('cm-multi-symbol-toggle').checked;
+  const single = document.getElementById('cm-symbol');
+  const multi = document.getElementById('cm-symbols-multi');
+  const preview = document.getElementById('cm-multi-preview');
+  const countLabel = document.getElementById('cm-symbol-count');
+  if (isMulti) {
+    single.classList.add('hidden');
+    multi.classList.remove('hidden');
+    preview.classList.remove('hidden');
+    countLabel.classList.remove('hidden');
+    multi.oninput = function() {
+      const symbols = _parseBatchSymbols(this.value);
+      preview.textContent = symbols.length
+        ? `파싱된 심볼 ${symbols.length}개: ${symbols.join(', ')}`
+        : '파싱된 심볼: -';
+      _refreshSubmitBtnLabel();
+    };
+  } else {
+    single.classList.remove('hidden');
+    multi.classList.add('hidden');
+    preview.classList.add('hidden');
+    countLabel.classList.add('hidden');
+  }
+  _refreshSubmitBtnLabel();
+}
+
+async function submitCreateMulti() {
+  // 다중 심볼 모드 — 한 템플릿으로 N개 심볼에 동시 전략 생성.
+  const symbols = _parseBatchSymbols(document.getElementById('cm-symbols-multi').value);
+  if (!symbols.length) { toast('심볼 1개 이상 입력 필요', 'error'); return; }
+  if (symbols.length > 50) { toast('한 번에 최대 50개', 'error'); return; }
+  if (!cmState.accountId) { toast('거래소 계정 선택 필요', 'error'); return; }
+  // template 결정: template 모드면 cmState.templateId 사용, direct/prev 면 _quick_ 자동 생성.
+  let templateId = cmState.templateId;
+  const lvInpEl = document.getElementById('cm-leverage');
+  const leverageFromInput = lvInpEl && lvInpEl.value ? Number(lvInpEl.value) : _defaultLeverageForSide(cmState.side);
+  if (cmState.mode === 'direct') {
+    // direct 모드 → _quick_ 자동 생성 (단일 모드와 동일 패턴)
+    try {
+      const ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+      const inp = cmState._directInputs || _collectDirectInputs();
+      const tpsl = cmState._directTpsl || _collectTpSl();
+      const _tpFields = {};
+      for (let n = 1; n <= 10; n++) {
+        _tpFields[`tp${n}_percent`] = tpsl[`tp${n}_percent`];
+        _tpFields[`tp${n}_qty_ratio`] = tpsl[`tp${n}_qty_ratio`];
+      }
+      const tplCreated = await api('/admin/strategy-templates', {
+        method: 'POST',
+        body: {
+          name: `_quick_${ts}`,
+          strategy_type: cmState.side === 'SHORT' ? 'DYNAMIC_SHORT' : 'DYNAMIC_LONG',
+          side: cmState.side, leverage: leverageFromInput,
+          capitals: inp.capitals, trigger_percents: inp.trigger_percents,
+          additional_margins: inp.additional_margins,
+          last_stage_trigger_percent: inp.last_stage_trigger_percent,
+          ..._tpFields,
+          stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
+          reentry_policy: 'manual_ready',
+        },
+      });
+      templateId = tplCreated.id;
+    } catch (e) { toast('템플릿 자동 생성 실패: ' + e.message, 'error'); return; }
+  } else if (cmState.mode === 'template' && !templateId) {
+    toast('「📋 템플릿 선택」 모드에서 템플릿을 먼저 선택하세요', 'error');
+    return;
+  } else if (cmState.mode === 'prev' && !templateId) {
+    toast('「📂 이전 전략 불러오기」 모드는 직접 입력으로 자동 전환되니 다시 시도하세요', 'error');
+    return;
+  }
+  // 시작가 결정 모드 (현재가 기준 약간 위/아래 — SHORT/LONG 진입 유리)
+  const offsetPct = cmState.side === 'SHORT' ? 0.001 : -0.001;  // SHORT: +0.1% / LONG: -0.1%
+  const confirmMsg = `🚀 ${symbols.length}개 심볼에 동시 전략 시작\n\n` +
+    `심볼: ${symbols.join(', ')}\n` +
+    `방향: ${cmState.side === 'SHORT' ? '📉 숏' : '📈 롱'}\n` +
+    `레버리지: ${leverageFromInput}x\n` +
+    `시작가: 각 심볼 현재가 ${offsetPct > 0 ? '+' : ''}${(offsetPct*100).toFixed(2)}% (${cmState.side === 'SHORT' ? 'SHORT' : 'LONG'} 진입 유리)\n\n` +
+    `각 심볼당 1개 strategy 생성 → 1단계 LIMIT 발사. 진행할까요? (testnet 거래소면 실거래 발생)`;
+  if (!confirm(confirmMsg)) return;
+  const submit = document.getElementById('cm-submit');
+  submit.disabled = true;
+  submit.textContent = '⏳ 진행 중...';
+  // 진행 표시: cm-balance-check 영역 재활용
+  const progEl = document.getElementById('cm-balance-check') || document.createElement('div');
+  progEl.classList.remove('hidden');
+  progEl.innerHTML = '<div class="text-xs text-slate-400">진행 중...</div>';
+  const results = [];
+  for (let i = 0; i < symbols.length; i++) {
+    const sym = symbols[i];
+    try {
+      const tickerData = await api(`/market/ticker?symbol=${sym}&testnet=true`).catch(() => null);
+      const lastPrice = tickerData && tickerData.lastPrice ? Number(tickerData.lastPrice) : null;
+      if (!lastPrice || lastPrice <= 0) {
+        results.push({ symbol: sym, status: 'fail', message: '현재가 조회 실패 (심볼 invalid?)' });
+      } else {
+        const startPrice = lastPrice * (1 + offsetPct);
+        const created = await api('/strategies', {
+          method: 'POST',
+          body: {
+            exchange_account_id: cmState.accountId,
+            strategy_template_id: templateId,
+            symbol: sym, side: cmState.side, start_price: String(startPrice),
+            leverage_override: leverageFromInput,
+          },
+        });
+        try {
+          await api(`/strategies/${created.id}/start`, { method: 'POST' });
+          results.push({ symbol: sym, status: 'ok', strategy_id: created.id, message: `#${created.id} (${fmtNum(startPrice)})` });
+        } catch (startErr) {
+          results.push({ symbol: sym, status: 'partial', strategy_id: created.id, message: `#${created.id} 생성 — 시작 실패: ${startErr.message}` });
+        }
+      }
+    } catch (e) {
+      results.push({ symbol: sym, status: 'fail', message: e.message });
+    }
+    // 진행 갱신
+    const okN = results.filter(r => r.status === 'ok').length;
+    const failN = results.filter(r => r.status === 'fail').length;
+    const partN = results.filter(r => r.status === 'partial').length;
+    progEl.innerHTML = `<div class="text-xs"><div class="font-semibold mb-1">진행 ${i+1}/${symbols.length} — ✅ ${okN} / ⚠️ ${partN} / ❌ ${failN}</div>` +
+      results.map(r => {
+        const ic = r.status === 'ok' ? '✅' : r.status === 'partial' ? '⚠️' : '❌';
+        return `<div>${ic} ${escapeHtml(r.symbol)}: ${escapeHtml(r.message)}</div>`;
+      }).join('') + '</div>';
+  }
+  submit.disabled = false;
+  _refreshSubmitBtnLabel();
+  refreshStrategies();
+  refreshTemplates();
+  const ok = results.filter(r => r.status === 'ok').length;
+  toast(`🚀 batch 완료: ${ok}/${symbols.length} 성공`, ok === symbols.length ? 'success' : 'warning');
+  // 모두 성공이면 모달 닫기
+  if (ok === symbols.length) setTimeout(closeCreateModal, 1500);
+}
+
+function _refreshSubmitBtnLabel() {
+  const submit = document.getElementById('cm-submit');
+  if (!submit || cmState.editingStrategyId) return;  // 수정 모드는 별도 라벨
+  const isMulti = document.getElementById('cm-multi-symbol-toggle')?.checked;
+  if (isMulti) {
+    const symbols = _parseBatchSymbols(document.getElementById('cm-symbols-multi').value);
+    submit.textContent = symbols.length > 1
+      ? `🚀 ${symbols.length}개 전략 동시 시작`
+      : symbols.length === 1
+        ? '🚀 전략 시작 (1개)'
+        : '🚀 전략 시작';
+  } else {
+    submit.textContent = '🚀 전략 시작';
+  }
 }
 
 // ==================== 「💾 템플릿으로 저장」 + 「🚀 다중 심볼 전략 시작」 (2026-05-12 사용자 요청) ====================
@@ -5381,92 +5563,28 @@ async function saveAsTemplate() {
   }
 }
 
-async function openBatchStrategyModal(templateId, templateName) {
-  let modal = document.getElementById('batch-strategy-modal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'batch-strategy-modal';
-    modal.className = 'hidden fixed inset-0 z-50 flex items-center justify-center';
-    modal.style.cssText = 'background:rgba(0,0,0,0.7); padding:10px;';
-    modal.innerHTML = `
-      <div class="card rounded-xl p-4" style="max-width:800px; width:100%; max-height:92vh; overflow-y:auto;">
-        <div class="flex justify-between items-center mb-3">
-          <h2 class="text-lg font-bold">🚀 <span id="bs-title">다중 심볼 전략 시작</span></h2>
-          <button onclick="closeBatchStrategyModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
-        </div>
-        <div class="text-xs text-slate-400 mb-3" id="bs-desc">선택한 템플릿으로 여러 심볼에 동시 전략 생성</div>
-        <!-- 거래소 계정 -->
-        <div class="mb-3">
-          <label class="text-xs text-slate-300 block mb-1">1️⃣ 거래소 계정</label>
-          <div id="bs-accounts" class="text-xs">로딩 중...</div>
-        </div>
-        <!-- 심볼 다중 입력 -->
-        <div class="mb-3">
-          <label class="text-xs text-slate-300 block mb-1">2️⃣ 심볼 (다중, 콤마 또는 공백/줄바꿈 구분)</label>
-          <textarea id="bs-symbols" rows="4" placeholder="예: BTCUSDT, ETHUSDT, SOLUSDT&#10;또는 한 줄에 한 심볼씩"
-            class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm font-mono"></textarea>
-          <div class="text-xs text-slate-500 mt-1" id="bs-symbol-preview">파싱된 심볼: -</div>
-        </div>
-        <!-- 시작가 옵션 -->
-        <div class="mb-3">
-          <label class="text-xs text-slate-300 block mb-1">3️⃣ 시작가 결정 방식</label>
-          <select id="bs-startprice-mode" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm">
-            <option value="current">📊 각 심볼의 현재가 자동 (권장)</option>
-            <option value="current_minus_1">📉 현재가 -0.1% (SHORT 진입 유리)</option>
-            <option value="current_plus_1">📈 현재가 +0.1% (LONG 진입 유리)</option>
-          </select>
-        </div>
-        <!-- 결과 영역 -->
-        <div id="bs-result" class="text-xs hidden mb-3 p-2 rounded bg-slate-900 border border-slate-700 max-h-48 overflow-y-auto"></div>
-        <!-- 액션 -->
-        <div class="flex justify-end gap-2 pt-3 border-t border-slate-700">
-          <button onclick="closeBatchStrategyModal()" class="btn-ghost btn">취소</button>
-          <button id="bs-submit" onclick="submitBatchStrategy()" class="btn-success btn">🚀 모두 시작</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(modal);
+// 「📋 전략 템플릿」 panel 의 「🚀 다중」 버튼 → 「+ 새 전략」 모달 열기 + pre-set
+//   - 「📋 템플릿 선택」 모드 + 클릭한 template 라디오 활성
+//   - 「📦 다중 심볼 모드」 토글 ON
+//   - 사용자는 심볼 textarea + 시작 버튼만 누르면 됨
+async function openCreateModalForBatch(templateId) {
+  await openCreateModal();
+  // 템플릿 모드로 전환 + 라디오 선택
+  setCmMode('template');
+  await new Promise(r => setTimeout(r, 100));  // 라디오 렌더링 대기
+  const radio = document.querySelector(`input[name="cm-template"][value="${templateId}"]`);
+  if (radio) {
+    radio.checked = true;
+    radio.dispatchEvent(new Event('change'));
   }
-  modal.classList.remove('hidden');
-  document.getElementById('bs-title').textContent = `다중 심볼 전략 시작 — 템플릿 「${templateName}」 (#${templateId})`;
-  document.getElementById('bs-desc').textContent = `이 템플릿의 모든 설정 (단계별 자본 / 트리거 / TP / SL / 레버리지) 으로 입력한 심볼들에 동시 전략 생성`;
-  // 결과 초기화
-  document.getElementById('bs-result').classList.add('hidden');
-  document.getElementById('bs-symbols').value = '';
-  document.getElementById('bs-symbol-preview').textContent = '파싱된 심볼: -';
-  // textarea oninput → 심볼 미리보기
-  document.getElementById('bs-symbols').oninput = function() {
-    const symbols = _parseBatchSymbols(this.value);
-    document.getElementById('bs-symbol-preview').textContent =
-      symbols.length ? `파싱된 심볼 ${symbols.length}개: ${symbols.join(', ')}` : '파싱된 심볼: -';
-  };
-  // 거래소 계정 라디오 로드
-  try {
-    const accounts = await api('/exchange-accounts');
-    if (!accounts || !accounts.length) {
-      document.getElementById('bs-accounts').innerHTML = '<span class="text-red-400">거래소 계정 없음 — 먼저 등록 필요</span>';
-      return;
-    }
-    document.getElementById('bs-accounts').innerHTML = accounts.map((a, i) => `
-      <label class="flex items-center gap-2 mb-1 cursor-pointer">
-        <input type="radio" name="bs-account" value="${a.id}" ${i === 0 || a.is_active ? 'checked' : ''} />
-        <span>${escapeHtml(a.exchange_name)} #${a.id} ${a.is_testnet ? '🧪 testnet' : '🔴 mainnet'} ${a.is_active ? '(활성)' : '(비활성)'}</span>
-      </label>
-    `).join('');
-  } catch (e) { toast('계정 조회 실패: ' + e.message, 'error'); }
-  // template 정보 cache (side 도 미리 — POST /strategies 에 필요)
-  modal.dataset.templateId = templateId;
-  modal.dataset.templateName = templateName;
-  try {
-    const tplList = await api('/admin/strategy-templates');
-    const tpl = tplList.find(t => t.id === templateId);
-    modal.dataset.templateSide = tpl ? tpl.side : '';
-  } catch (e) { /* 무시 — submit 시 다시 시도 */ }
-}
-
-function closeBatchStrategyModal() {
-  const m = document.getElementById('batch-strategy-modal');
-  if (m) m.classList.add('hidden');
+  // 다중 심볼 토글 ON
+  const toggle = document.getElementById('cm-multi-symbol-toggle');
+  if (toggle && !toggle.checked) {
+    toggle.checked = true;
+    toggleMultiSymbolMode();
+  }
+  // 심볼 textarea 포커스 (사용자가 바로 입력)
+  setTimeout(() => document.getElementById('cm-symbols-multi')?.focus(), 200);
 }
 
 function _parseBatchSymbols(raw) {
@@ -5474,87 +5592,6 @@ function _parseBatchSymbols(raw) {
   return Array.from(new Set(
     String(raw || '').toUpperCase().split(/[\s,;]+/).filter(s => s.length >= 3)
   ));
-}
-
-async function submitBatchStrategy() {
-  const modal = document.getElementById('batch-strategy-modal');
-  const templateId = Number(modal.dataset.templateId);
-  const templateName = modal.dataset.templateName;
-  const accountRadio = document.querySelector('input[name="bs-account"]:checked');
-  if (!accountRadio) { toast('계정 선택 필요', 'error'); return; }
-  const accountId = Number(accountRadio.value);
-  const symbols = _parseBatchSymbols(document.getElementById('bs-symbols').value);
-  if (!symbols.length) { toast('심볼 1개 이상 입력 필요', 'error'); return; }
-  if (symbols.length > 50) { toast('한 번에 최대 50개 까지', 'error'); return; }
-  const priceMode = document.getElementById('bs-startprice-mode').value;
-  const confirmMsg = `🚀 ${symbols.length}개 심볼에 동시 전략 시작\n\n` +
-    `템플릿: ${templateName} (#${templateId})\n` +
-    `심볼: ${symbols.join(', ')}\n` +
-    `시작가: ${priceMode === 'current' ? '현재가 자동' : priceMode === 'current_minus_1' ? '현재가 -0.1%' : '현재가 +0.1%'}\n\n` +
-    `각 심볼당 1개 strategy 생성 → 1단계 LIMIT 발사. 진행할까요?`;
-  if (!confirm(confirmMsg)) return;
-  const submitBtn = document.getElementById('bs-submit');
-  submitBtn.disabled = true;
-  submitBtn.textContent = '⏳ 진행 중...';
-  const resultEl = document.getElementById('bs-result');
-  resultEl.classList.remove('hidden');
-  resultEl.innerHTML = '<div class="text-slate-400">진행 중...</div>';
-  const results = [];
-  for (let i = 0; i < symbols.length; i++) {
-    const sym = symbols[i];
-    try {
-      // 시작가 산출 — 각 심볼의 현재가 fetch (testnet 무관)
-      const tickerData = await api(`/market/ticker?symbol=${sym}&testnet=true`).catch(() => null);
-      const lastPrice = tickerData && tickerData.lastPrice ? Number(tickerData.lastPrice) : null;
-      if (!lastPrice || lastPrice <= 0) {
-        results.push({ symbol: sym, status: 'fail', message: '현재가 조회 실패 (심볼 invalid?)' });
-        continue;
-      }
-      let startPrice = lastPrice;
-      if (priceMode === 'current_minus_1') startPrice = lastPrice * 0.999;
-      else if (priceMode === 'current_plus_1') startPrice = lastPrice * 1.001;
-      // 전략 생성 — 템플릿 side 사용 (modal dataset 에 cache)
-      const tplSide = modal.dataset.templateSide;
-      if (!tplSide) {
-        results.push({ symbol: sym, status: 'fail', message: '템플릿 side 조회 실패' });
-        continue;
-      }
-      const created = await api('/strategies', {
-        method: 'POST',
-        body: {
-          exchange_account_id: accountId,
-          strategy_template_id: templateId,
-          symbol: sym,
-          side: tplSide,
-          start_price: String(startPrice),
-        },
-      });
-      // 시작
-      try {
-        await api(`/strategies/${created.id}/start`, { method: 'POST' });
-        results.push({ symbol: sym, status: 'ok', strategy_id: created.id, message: `#${created.id} 시작 완료 (${fmtNum(startPrice)})` });
-      } catch (startErr) {
-        results.push({ symbol: sym, status: 'partial', strategy_id: created.id, message: `#${created.id} 생성 됐지만 시작 실패: ${startErr.message}` });
-      }
-    } catch (e) {
-      results.push({ symbol: sym, status: 'fail', message: e.message });
-    }
-    // 진행 상황 갱신
-    const okN = results.filter(r => r.status === 'ok').length;
-    const failN = results.filter(r => r.status === 'fail').length;
-    const partN = results.filter(r => r.status === 'partial').length;
-    resultEl.innerHTML = `<div class="text-xs">진행 ${i+1}/${symbols.length} — ✅ ${okN} / ⚠️ ${partN} / ❌ ${failN}</div>` +
-      results.map(r => {
-        const ic = r.status === 'ok' ? '✅' : r.status === 'partial' ? '⚠️' : '❌';
-        return `<div>${ic} ${escapeHtml(r.symbol)}: ${escapeHtml(r.message)}</div>`;
-      }).join('');
-  }
-  submitBtn.disabled = false;
-  submitBtn.textContent = '🚀 모두 시작';
-  refreshStrategies();
-  refreshTemplates();
-  const ok = results.filter(r => r.status === 'ok').length;
-  toast(`🚀 batch 완료: ${ok}/${symbols.length} 성공`, ok === symbols.length ? 'success' : 'warning');
 }
 
 // ==================== Init ====================
