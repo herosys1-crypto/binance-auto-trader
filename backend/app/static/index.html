@@ -808,14 +808,15 @@
 
       <!-- 4) 시작가 -->
       <div class="mb-4">
-        <label class="block text-sm font-semibold mb-2 text-slate-300">4️⃣  시작가 (LIMIT 1단계 가격)</label>
+        <label class="block text-sm font-semibold mb-2 text-slate-300">4️⃣  시작가 <span id="cm-start-price-mode-label">(LIMIT 1단계 가격)</span></label>
         <div class="flex gap-2">
           <input id="cm-start-price" type="number" step="any" placeholder="예: 100000 또는 0.0011208"
             oninput="if(typeof _refreshLiveCalc==='function')_refreshLiveCalc()"
             class="flex-1 px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
           <button onclick="calcPreview()" class="btn-primary btn">📋 미리보기</button>
         </div>
-        <p class="text-xs text-slate-500 mt-1">SHORT: 현재가보다 약간 위 / LONG: 현재가보다 약간 아래 추천 (위 버튼으로 자동 채움 가능)</p>
+        <!-- 2026-05-12 (사용자 UX): 다중 모드 안내 (default 단일 모드 멘트) -->
+        <p id="cm-start-price-hint" class="text-xs text-slate-500 mt-1">SHORT: 현재가보다 약간 위 / LONG: 현재가보다 약간 아래 추천 (위 버튼으로 자동 채움 가능)</p>
       </div>
 
       <!-- 미리보기 결과 -->
@@ -4848,6 +4849,20 @@ function setCmSide(side) {
 }
 
 function updateCmSubmit() {
+  // 2026-05-12 v3 (사용자 UX): 다중 모드는 _refreshSubmitBtnLabel 이 chip 기반으로 판정 (cmState.preview 무관).
+  const isMulti = document.getElementById('cm-multi-symbol-toggle')?.checked;
+  if (isMulti && !cmState.editingStrategyId) {
+    // 다중 모드: chip 검증 결과만 보고 enable/disable.
+    // template 모드에선 templateId 도 필요. direct 는 capitals 필요.
+    let okMulti = !!cmState.accountId;
+    if (cmState.mode === 'template') okMulti = okMulti && !!cmState.templateId;
+    if (cmState.mode === 'direct') okMulti = okMulti && cmState.capitals.some(c => c && Number(c) > 0);
+    const validCount = (typeof _cmMultiSymbols !== 'undefined' ? _cmMultiSymbols.filter(s => s.status === 'valid').length : 0);
+    okMulti = okMulti && (validCount > 0);
+    document.getElementById('cm-submit').disabled = !okMulti;
+    if (typeof _refreshSubmitBtnLabel === 'function') _refreshSubmitBtnLabel();
+    return;
+  }
   let ok = cmState.accountId && cmState.preview;
   if (cmState.mode === 'template') ok = ok && cmState.templateId;
   if (cmState.mode === 'direct') ok = ok && cmState.capitals.some(c => c && Number(c) > 0);
@@ -4968,9 +4983,32 @@ function _filledCapitals() {
 }
 
 async function calcPreview() {
-  const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
-  const startPrice = document.getElementById('cm-start-price').value;
-  if (!symbol || !startPrice) return toast('심볼과 시작가를 입력하세요', 'warning');
+  // 2026-05-12 v3 (사용자 UX): 다중 심볼 모드면 첫 valid chip 의 심볼 + 현재가 자동 사용.
+  // 단일 input (cm-symbol) 의 leftover 값 (예: BILLUSDT) 에 의한 잘못된 미리보기 방지.
+  const isMulti = document.getElementById('cm-multi-symbol-toggle')?.checked;
+  let symbol, startPrice;
+  if (isMulti) {
+    const validChips = (typeof _cmMultiSymbols !== 'undefined' ? _cmMultiSymbols : []).filter(s => s.status === 'valid');
+    if (validChips.length === 0) {
+      return toast('다중 모드: ✓ 유효 심볼 1개 이상 추가 후 미리보기', 'warning');
+    }
+    symbol = validChips[0].symbol;
+    // 각 심볼이 다른 시작가 사용 — 미리보기는 첫 심볼의 현재가로 산출 (다른 심볼은 자기 시작가 적용).
+    try {
+      const ticker = await api(`/market/ticker?symbol=${symbol}&testnet=true`);
+      startPrice = String(ticker.lastPrice);
+      // 시작가 input 도 채워서 사용자에게 보이게 (혹시 단일 모드 전환할 때)
+      const sp = document.getElementById('cm-start-price');
+      if (sp) sp.value = startPrice;
+      toast(`📋 미리보기: 첫 ✓ 심볼 ${symbol} 기준 (현재가 ${fmtNum(Number(startPrice))}). 다른 심볼은 동일 ratio + 각자 시작가 적용.`, 'success');
+    } catch (e) {
+      return toast(`첫 ✓ 심볼 ${symbol} 현재가 조회 실패: ${e.message}`, 'error');
+    }
+  } else {
+    symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
+    startPrice = document.getElementById('cm-start-price').value;
+    if (!symbol || !startPrice) return toast('심볼과 시작가를 입력하세요', 'warning');
+  }
 
   if (cmState.mode === 'direct') {
     // 직접 입력 모드 — 인라인 미리보기 (DB 에 템플릿 안 만듦)
@@ -5368,6 +5406,9 @@ function toggleMultiSymbolMode() {
   const container = document.getElementById('cm-multi-container');
   const preview = document.getElementById('cm-multi-preview');
   const countLabel = document.getElementById('cm-symbol-count');
+  // 2026-05-12 (사용자 UX): 시작가 영역 안내문도 모드별 변경.
+  const startPriceLabel = document.getElementById('cm-start-price-mode-label');
+  const startPriceHint = document.getElementById('cm-start-price-hint');
   if (isMulti) {
     single.classList.add('hidden');
     container.classList.remove('hidden');
@@ -5375,14 +5416,19 @@ function toggleMultiSymbolMode() {
     countLabel.classList.remove('hidden');
     _cmMultiSymbols = [];
     _renderMultiSymbolChips();
+    if (startPriceLabel) startPriceLabel.textContent = '(다중 모드 — 미리보기용 첫 심볼 가격 자동 채움)';
+    if (startPriceHint) startPriceHint.innerHTML = '<span class="text-blue-300">📦 다중 모드: 시작가는 각 심볼 현재가가 자동 적용됩니다 (SHORT +0.1% / LONG -0.1%). 미리보기 클릭 시 첫 ✓ 심볼 기준 계산.</span>';
   } else {
     single.classList.remove('hidden');
     container.classList.add('hidden');
     preview.classList.add('hidden');
     countLabel.classList.add('hidden');
     _cmMultiSymbols = [];
+    if (startPriceLabel) startPriceLabel.textContent = '(LIMIT 1단계 가격)';
+    if (startPriceHint) startPriceHint.textContent = 'SHORT: 현재가보다 약간 위 / LONG: 현재가보다 약간 아래 추천 (위 버튼으로 자동 채움 가능)';
   }
   _refreshSubmitBtnLabel();
+  updateCmSubmit();
 }
 
 async function addSymbolChip() {
@@ -5403,6 +5449,7 @@ async function addSymbolChip() {
   input.value = '';
   _renderMultiSymbolChips();
   _refreshSubmitBtnLabel();
+  updateCmSubmit();
   // 비동기 검증 — /symbols/{symbol} 호출 (404 면 invalid)
   try {
     const symInfo = await api(`/symbols/${raw}`);
@@ -5423,6 +5470,7 @@ async function addSymbolChip() {
   }
   _renderMultiSymbolChips();
   _refreshSubmitBtnLabel();
+  updateCmSubmit();
   input.focus();  // 다음 심볼 입력 위해 포커스 유지
 }
 
@@ -5430,6 +5478,7 @@ function removeSymbolChip(symbol) {
   _cmMultiSymbols = _cmMultiSymbols.filter(s => s.symbol !== symbol);
   _renderMultiSymbolChips();
   _refreshSubmitBtnLabel();
+  updateCmSubmit();
 }
 
 function _renderMultiSymbolChips() {
@@ -5571,11 +5620,12 @@ async function submitCreateMulti() {
 }
 
 function _refreshSubmitBtnLabel() {
+  // 라벨 (text) 만 업데이트 — disabled 는 updateCmSubmit() 가 단독 관리.
   const submit = document.getElementById('cm-submit');
   if (!submit || cmState.editingStrategyId) return;  // 수정 모드는 별도 라벨
   const isMulti = document.getElementById('cm-multi-symbol-toggle')?.checked;
   if (isMulti) {
-    const validCount = _cmMultiSymbols.filter(s => s.status === 'valid').length;
+    const validCount = (typeof _cmMultiSymbols !== 'undefined' ? _cmMultiSymbols.filter(s => s.status === 'valid').length : 0);
     submit.textContent = validCount > 1
       ? `🚀 ${validCount}개 전략 동시 시작`
       : validCount === 1
