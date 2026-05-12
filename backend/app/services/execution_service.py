@@ -420,6 +420,34 @@ class ExecutionService:
             strategy.status = "STAGE1_OPEN_PENDING"
         self.db.commit()
         self.db.refresh(order)
+        # 2026-05-12 fix (사용자 #21 SAGAUSDT 4단계 보고): 「수동 ▶ 다음 단계 진입」 에서
+        # additional_margin_usdt 자동 투입 코드 누락. start_stage1 + stage_trigger_worker
+        # 두 자동 경로엔 있는데 수동만 빠져 사용자가 설정한 증거금이 안 들어감. 동일 패턴 추가.
+        # 실패해도 entry 는 정상 (try/except + RiskEvent 기록).
+        add_m = stage_plan.additional_margin_usdt
+        if add_m and Decimal(str(add_m)) > 0:
+            try:
+                self.add_position_margin(strategy.id, amount=Decimal(str(add_m)))
+                logger.info(
+                    f"[manual ▶] additional margin +{add_m} USDT applied to #{strategy.id} stage{stage_no}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[manual ▶] additional margin failed for #{strategy.id} stage{stage_no}: {e}"
+                )
+                # entry 자체는 정상 — 사용자에게 알림 (수동 보충 안내).
+                try:
+                    from app.services.notification_service import NotificationService
+                    NotificationService(self.db).send_system_alert(
+                        title=f"⚠️ [추가 증거금 실패 — 수동진입] #{strategy.id} {strategy.symbol} 단계{stage_no}",
+                        body=(
+                            f"수동 ▶ {stage_no}단계 entry 는 정상. 그러나 추가 증거금 {add_m} USDT 투입 실패.\n"
+                            f"원인: {e}\n\n"
+                            "💡 수동 보충: 「💰 증거금 추가」 버튼 또는 Binance UI 에서 직접 증거금 추가."
+                        ),
+                    )
+                except Exception:
+                    pass
         return order
 
     # 2026-05-04 (사용자 요청): 「💉 포지션 추가」 — ad-hoc 자유 금액 진입.
