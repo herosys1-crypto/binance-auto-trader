@@ -477,6 +477,13 @@
         <button onclick="closeAddPositionModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
       </div>
       <input type="hidden" id="ap-strategy-id" value="" />
+      <!-- 2026-05-14 (사용자 요청): ad-hoc 동작 명확 안내 -->
+      <div class="mb-3 p-2 rounded bg-blue-900/30 border border-blue-800 text-xs text-blue-200">
+        ℹ️ 「💉 포지션 추가」 = stage 단계 시스템 우회 (ad-hoc).<br>
+        • 포지션 qty + 평단가 즉시 갱신 (TP/SL 정상 적용)<br>
+        • current_stage 진행 X (stage_no = NULL 로 기록)<br>
+        • <span class="text-yellow-300">v4 안전망: ad-hoc 사용 흔적 있으면 stage 미완료라도 max_loss 임계 도달 시 Crisis 발동 ✓</span>
+      </div>
       <div class="mb-3 p-3 rounded bg-slate-900/50 text-sm">
         <div class="flex items-center gap-2 mb-1">
           <span class="text-slate-400">심볼:</span>
@@ -2587,7 +2594,7 @@ async function refreshStrategies() {
         ? `<button onclick="event.stopPropagation(); openAddPositionModal(${s.id}, '${s.symbol}', '${s.side}', ${s.leverage || 1})"
                   class="btn-primary btn text-xs mt-1 ml-1"
                   style="padding:2px 6px;font-size:10px;line-height:1.2"
-                  title="포지션 추가 — 자유 금액 시장가 또는 지정가 즉시 진입 (qty 늘림 + 평단 갱신)">💉 포지션 추가</button>`
+                  title="포지션 추가 (ad-hoc) — 자유 금액 시장가/지정가 즉시 진입. qty + 평단 갱신, stage 진행 X. v4 안전망: 사용 시 max_loss 임계 도달하면 Crisis 발동 (stage 미완료라도)">💉 포지션 추가</button>`
         : '';
       const qtyStack = hasPosition
         ? `<div class="text-xs leading-tight">

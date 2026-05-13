@@ -268,10 +268,12 @@ class RiskService:
         """크라이시스 모드 진입 조건.
 
         사용자 기획 v2 (2026-05-07): 모든 stage 진입 완료 + max_loss ≤ -50% 도달.
-        사용자 기획 v3 (2026-05-14, alembic 0015): 임계 사용자 정의 가능.
-          template.crisis_max_loss_threshold 가 NULL 이면 global -50% 사용.
-          -50/-60/-70/-80 = 그 값 사용 (보수적일수록 더 깊은 손실에서 진입).
-          -100 (또는 그 이하) = 크라이시스 비활성 (도달 불가능 → 영원히 미발동).
+        사용자 기획 v3 (2026-05-14, alembic 0015): 임계 사용자 정의 가능 (-50~-100, -100=비활성).
+        사용자 기획 v4 (2026-05-14, ad-hoc 안전망):
+          「💉 포지션 추가」 (ad-hoc, stage_no=NULL ENTRY) 사용한 strategy 는
+          stage 조건 완화 — 사용자가 임의로 큰 자본 투입했으니 「충분한 진입」 으로 간주.
+          ad-hoc + max_loss 임계 도달 → Crisis 발동 (모든 단계 진입 안 해도).
+          이유: ad-hoc 사용 = 큰 노출 = Crisis 보호 더 필요.
         """
         if strategy.crisis_mode_triggered_at:
             return False
@@ -286,10 +288,23 @@ class RiskService:
         # -100 이하 = 크라이시스 비활성 (어떤 손실도 이 임계에 도달 불가능 — leveraged ROI 도 -100% 가 사실상 청산)
         if threshold <= Decimal("-100"):
             return False
-        # 1) 모든 단계 진입 완료 검사
+        # 1) Stage 조건: 모든 단계 진입 OR 「💉 포지션 추가」 (ad-hoc) 사용 (v4 안전망)
         total_stages = self._get_total_stages(strategy)
         if (strategy.current_stage or 0) < total_stages:
-            return False
+            # 모든 단계 미진입 → ad-hoc 사용 흔적 확인
+            from app.models.order import Order
+            from sqlalchemy import select as sa_select
+            has_adhoc = self.db.execute(
+                sa_select(Order.id).where(
+                    Order.strategy_instance_id == strategy.id,
+                    Order.stage_no.is_(None),    # ad-hoc 표시
+                    Order.purpose == "ENTRY",
+                    Order.status == "FILLED",     # 실제 체결된 것만
+                ).limit(1)
+            ).scalar_one_or_none()
+            if not has_adhoc:
+                return False
+            # ad-hoc 사용함 → stage 조건 완화, max_loss 검사로 진행
         # 2) 누적 최대 손실 임계 이하 도달
         if strategy.max_loss_pct is None:
             return False
