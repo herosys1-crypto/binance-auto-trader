@@ -80,9 +80,16 @@
   .neg { color: #f87171; }
 
   /* Toast */
-  .toast { position: fixed; top: 20px; right: 20px; padding: 14px 22px; border-radius: 8px; z-index: 50; box-shadow: 0 10px 25px rgba(0,0,0,0.5); font-weight: 500; }
+  /* 2026-05-13 (사용자 모바일 UX): 긴 에러 메시지의 줄바꿈 표시 + 모바일 가독성. */
+  .toast { position: fixed; top: 20px; right: 20px; padding: 14px 22px; border-radius: 8px; z-index: 50; box-shadow: 0 10px 25px rgba(0,0,0,0.5); font-weight: 500;
+           white-space: pre-line; max-width: min(92vw, 480px); line-height: 1.45; word-break: keep-all; overflow-wrap: anywhere; }
   .toast-success { background: #10b981; color: #fff; }
   .toast-error   { background: #ef4444; color: #fff; }
+  .toast-warning { background: #f59e0b; color: #fff; }
+  /* 모바일: 좌우 여백 제거 + 상단 더 안쪽 (notch 회피) */
+  @media (max-width: 640px) {
+    .toast { top: 60px; right: 8px; left: 8px; max-width: none; padding: 12px 16px; font-size: 13px; }
+  }
   .toast-warning { background: #f59e0b; color: #fff; }
 
   /* 위험 알림 띠 */
@@ -5390,11 +5397,31 @@ async function submitCreate() {
 }
 
 function toast(msg, type) {
+  // 2026-05-13 (사용자 모바일 UX): backend 에러의 literal "\n" 을 실 줄바꿈으로 표시.
+  // 또한 JSON detail 추출 — "400: {\"detail\":\"...\"}" → "400: ..."
   const el = document.getElementById('toast');
-  el.textContent = msg;
+  let display = String(msg || '');
+  // JSON detail 추출 (e.g., '400: {"detail":"..."}')
+  const jsonMatch = display.match(/^(\d{3}):\s*(\{.*\})$/s);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[2]);
+      if (parsed && parsed.detail) {
+        display = `${jsonMatch[1]}: ${parsed.detail}`;
+      }
+    } catch (_) { /* 파싱 실패 시 원본 유지 */ }
+  }
+  // literal "\n" 을 실 newline 으로 (CSS white-space: pre-line 가 줄바꿈 표시)
+  display = display.replace(/\\n/g, '\n');
+  el.textContent = display;
   el.className = 'toast toast-' + (type || 'success');
   el.classList.remove('hidden');
-  setTimeout(() => el.classList.add('hidden'), 3500);
+  // 긴 메시지는 더 오래 표시 (글자 수 비례, 3.5s ~ 15s)
+  const duration = Math.max(3500, Math.min(15000, display.length * 80));
+  // 클릭하면 즉시 닫기 (긴 메시지 사용자 제어)
+  el.style.cursor = 'pointer';
+  el.onclick = () => el.classList.add('hidden');
+  setTimeout(() => el.classList.add('hidden'), duration);
 }
 
 // ==================== 「📦 다중 심볼 모드」 토글 + batch 생성 (2026-05-12 사용자 UX 개선) ====================
