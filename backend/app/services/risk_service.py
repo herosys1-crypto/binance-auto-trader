@@ -267,26 +267,34 @@ class RiskService:
     def _should_trigger_crisis_mode(self, strategy, current_pnl_pct: Decimal) -> bool:
         """크라이시스 모드 진입 조건.
 
-        사용자 기획 v2 (2026-05-07):
-        - 모든 stage 가 진입 완료 (current_stage == total_stages)
-        - 누적 최대 손실 ≤ -50% 도달 (max_loss_pct)
-        - 진입 시점 그 자체가 트리거 (양수 PnL 회복 대기 X)
-
-        이전 v1 (2026-04~05): max_loss ≤ -30% 도달 + 현재 양수 PnL 회복 시점.
-        v2 변경 이유: 모든 단계 진입 완료된 깊은 손실 상태에서 즉시 빠른 익절 (+5%)
-        모드로 전환 — 회복 즉시 청산해 손실 최소화.
+        사용자 기획 v2 (2026-05-07): 모든 stage 진입 완료 + max_loss ≤ -50% 도달.
+        사용자 기획 v3 (2026-05-14, alembic 0015): 임계 사용자 정의 가능.
+          template.crisis_max_loss_threshold 가 NULL 이면 global -50% 사용.
+          -50/-60/-70/-80 = 그 값 사용 (보수적일수록 더 깊은 손실에서 진입).
+          -100 (또는 그 이하) = 크라이시스 비활성 (도달 불가능 → 영원히 미발동).
         """
         if strategy.crisis_mode_triggered_at:
+            return False
+        # Template 별 크라이시스 임계 결정
+        from app.models.strategy_template import StrategyTemplate
+        tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id) if strategy.strategy_template_id else None
+        threshold = (
+            Decimal(str(tpl.crisis_max_loss_threshold))
+            if tpl and tpl.crisis_max_loss_threshold is not None
+            else CRISIS_MAX_LOSS_THRESHOLD  # global -50
+        )
+        # -100 이하 = 크라이시스 비활성 (어떤 손실도 이 임계에 도달 불가능 — leveraged ROI 도 -100% 가 사실상 청산)
+        if threshold <= Decimal("-100"):
             return False
         # 1) 모든 단계 진입 완료 검사
         total_stages = self._get_total_stages(strategy)
         if (strategy.current_stage or 0) < total_stages:
             return False
-        # 2) 누적 최대 손실 -50% 이하 도달
+        # 2) 누적 최대 손실 임계 이하 도달
         if strategy.max_loss_pct is None:
             return False
         max_loss = Decimal(str(strategy.max_loss_pct))
-        if max_loss > CRISIS_MAX_LOSS_THRESHOLD:  # 예: -45% 면 -50% 미달 → skip
+        if max_loss > threshold:  # 예: threshold -60, max_loss -45 면 -60 미달 → skip
             return False
         return True
 

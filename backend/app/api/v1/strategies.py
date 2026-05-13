@@ -489,6 +489,8 @@ def get_strategy_blueprint(
             ) for n in range(1, 11)
         },
         "stop_loss_percent_of_capital": str(tpl.stop_loss_percent_of_capital),
+        # 2026-05-14 (사용자 요청, alembic 0015): 크라이시스 임계 사용자 정의 자동 채움.
+        "crisis_max_loss_threshold": str(tpl.crisis_max_loss_threshold) if tpl.crisis_max_loss_threshold is not None else None,
     }
 
 

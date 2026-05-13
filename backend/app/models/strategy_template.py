@@ -77,6 +77,12 @@ class StrategyTemplate(Base):
     # 일부 키만 채우면 나머지는 기본값. 키는 TP1~TP4 만 허용 (TP5 는 크라이시스 미사용).
     crisis_qty_ratios: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
+    # 2026-05-14 (사용자 요청, alembic 0015): 크라이시스 모드 진입 임계 사용자 정의.
+    # NULL = global default -50% 사용 (기존 동작).
+    # -50 / -60 / -70 / -80 = 그 값 사용 (보수적일수록 더 깊은 손실에서 진입).
+    # -100 (또는 그 이하) = 크라이시스 영원히 미발동 (비활성).
+    crisis_max_loss_threshold: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+
     reentry_policy: Mapped[str] = mapped_column(String(30), default="manual_ready", nullable=False)
     # auto 정책 — SL 후 자동 재시작 대기 시간 (초). 기본 600 (10분).
     reentry_delay_seconds: Mapped[int] = mapped_column(Integer, default=600, nullable=False)

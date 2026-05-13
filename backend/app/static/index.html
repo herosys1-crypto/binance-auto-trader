@@ -761,7 +761,21 @@
                 <label class="text-slate-400 text-xs">🛑 손절 — 총 자본 대비 손실 %</label>
                 <input id="cm-sl-pct" type="number" step="1" value="50" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
               </div>
-              <p class="text-xs text-slate-500">트레일링 익절: 피크 ≥ +5% 후 피크 대비 -5% 회귀 시 잔량 100% 청산 (자동). 마지막 활성 TP 발동 시도 잔량 100% 청산.</p>
+              <!-- 2026-05-14 (사용자 요청): 크라이시스 임계 사용자 정의 -->
+              <div class="pt-2 border-t border-slate-700">
+                <label class="text-slate-400 text-xs" title="모든 단계 진입 + 누적 최대 손실 ROI 가 이 임계 이하일 때 크라이시스 모드 진입 (TP 임계 5/10/15/20% 로 빠른 회복 익절)">
+                  🚨 크라이시스 진입 임계 (모든 단계 진입 후 max_loss ROI ≤ 임계 시)
+                </label>
+                <select id="cm-crisis-threshold" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white">
+                  <option value="">기본 (-50% — 글로벌)</option>
+                  <option value="-50">-50% (기본)</option>
+                  <option value="-60">-60% (보수적)</option>
+                  <option value="-70">-70% (더 보수적)</option>
+                  <option value="-80">-80% (매우 보수적)</option>
+                  <option value="-100">-100% (크라이시스 비활성)</option>
+                </select>
+              </div>
+              <p class="text-xs text-slate-500">트레일링 익절: 피크 ≥ +5% 후 피크 대비 -5% 회귀 시 잔량 100% 청산 (자동, stage>=3 + TP3+ 후).</p>
             </div>
           </details>
         </div>
@@ -4226,6 +4240,9 @@ async function loadPrevBlueprint(strategyId, silent) {
       if (qtyEl) qtyEl.value = bp[`tp${n}_qty_ratio`] || '';
     }
     document.getElementById('cm-sl-pct').value = bp.stop_loss_percent_of_capital;
+    // 2026-05-14: 크라이시스 임계 dropdown 자동 채움 (NULL 이면 default 빈 값 = 글로벌 -50%)
+    const ctSel = document.getElementById('cm-crisis-threshold');
+    if (ctSel) ctSel.value = bp.crisis_max_loss_threshold ? String(parseInt(bp.crisis_max_loss_threshold)) : '';
     // 5) 시작가 — 수정 모드면 원래 시작가 유지, 일반 불러오기는 비움
     if (cmState.editingStrategyId && bp.start_price) {
       document.getElementById('cm-start-price').value = bp.start_price;
@@ -4532,6 +4549,9 @@ function _collectTpSl() {
       out[`tp${n}_qty_ratio`] = opt(qty);
     }
   }
+  // 2026-05-14 (사용자 요청): 크라이시스 임계 사용자 정의 (NULL = 글로벌 -50%).
+  const ct = get('cm-crisis-threshold');
+  out.crisis_max_loss_threshold = ct ? ct : null;
   return out;
 }
 
@@ -5363,6 +5383,7 @@ async function submitCreate() {
           last_stage_trigger_percent: inp.last_stage_trigger_percent,
           ..._tpFields,  // TP1~10 모두 (TP4~10 NULL 가능)
           stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
+          crisis_max_loss_threshold: tpsl.crisis_max_loss_threshold,
           reentry_policy: 'manual_ready',
         },
       });
@@ -5572,6 +5593,7 @@ async function submitCreateMulti() {
           last_stage_trigger_percent: inp.last_stage_trigger_percent,
           ..._tpFields,
           stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
+          crisis_max_loss_threshold: tpsl.crisis_max_loss_threshold,
           reentry_policy: 'manual_ready',
         },
       });
@@ -5772,6 +5794,7 @@ async function saveAsTemplate() {
       last_stage_trigger_percent: sc.last_stage_trigger_percent,
       ..._tpFields,
       stop_loss_percent_of_capital: srcTpl.stop_loss_percent_of_capital,
+      crisis_max_loss_threshold: srcTpl.crisis_max_loss_threshold,
       reentry_policy: srcTpl.reentry_policy || 'manual_ready',
     };
     sourceDesc = `선택한 템플릿 「${srcTpl.name}」 (#${srcTpl.id}) 의 설정 복제`;

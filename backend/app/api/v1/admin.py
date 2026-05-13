@@ -71,6 +71,9 @@ class StrategyTemplateCreate(BaseModel):
     reentry_policy: Literal["manual_ready", "auto"] = "manual_ready"
     reentry_delay_seconds: int = Field(default=600, ge=10, le=86400)
     reentry_offset_pct: Decimal = Field(default=Decimal("1.0"), ge=0, le=50)
+    # 2026-05-14 (사용자 요청, alembic 0015): 크라이시스 임계 사용자 정의.
+    # NULL = global default -50% / -50~-80 = 그 값 사용 / -100 (이하) = 비활성.
+    crisis_max_loss_threshold: Decimal | None = Field(default=None, ge=Decimal("-200"), le=Decimal("-30"))
 
 
 class StrategyTemplateResponse(BaseModel):
@@ -164,6 +167,7 @@ def create_strategy_template(
         reentry_policy=payload.reentry_policy,
         reentry_delay_seconds=payload.reentry_delay_seconds,
         reentry_offset_pct=payload.reentry_offset_pct,
+        crisis_max_loss_threshold=payload.crisis_max_loss_threshold,
         is_active=True,
     )
     db.add(template)
