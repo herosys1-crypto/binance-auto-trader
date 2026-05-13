@@ -216,31 +216,88 @@ class ExecutionService:
             strategy.status = "STOPPING"
         self.db.commit()
         # A03 fix (audit 2026-05-02): 거래소 호출 실패 시 명시적 로깅 + RiskEvent 기록.
+        # 2026-05-13 v4 fix (사용자 #26 JELLYJELLYUSDT 4차 fix):
+        # v3 (28자 + underscore) 적용 후에도 -4015 지속 → cid 가 진짜 원인 아닐 수 있음.
+        # Fallback: -4015 발생 시 newClientOrderId 빼고 재시도 (Binance 자동 생성).
+        # 만약 자동 cid 로도 실패 → real cause 가 cid 무관 (symbol/qty/account 등) — 그 에러가 진짜 원인.
+        def _do_place(use_cid: str | None) -> dict:
+            if use_cid:
+                return self.trade_client.place_market_order(
+                    symbol=strategy.symbol, side=side, position_side=position_side,
+                    quantity=quantity, new_client_order_id=use_cid,
+                )
+            # cid 없이 raw payload 로 호출 → Binance 자동 생성
+            payload = {
+                "symbol": strategy.symbol, "side": side, "positionSide": position_side,
+                "type": "MARKET", "quantity": str(quantity),
+            }
+            return self.client.place_order(payload)
+
         try:
-            response = self.trade_client.place_market_order(symbol=strategy.symbol, side=side, position_side=position_side, quantity=quantity, new_client_order_id=client_order_id)
+            response = _do_place(client_order_id)
         except Exception as e:
-            logger.error(
-                "emergency_close place_market_order failed: strategy_id=%s symbol=%s qty=%s side=%s error=%s",
-                strategy.id, strategy.symbol, quantity, side, e,
-            )
-            self.db.add(RiskEvent(
-                strategy_instance_id=strategy.id,
-                event_type="EMERGENCY_CLOSE_PLACE_FAILED",
-                severity="ERROR",
-                title="Emergency close 시장가 주문 발송 실패",
-                message=f"symbol={strategy.symbol} qty={quantity} side={side} error={e}",
-                event_payload={"strategy_id": strategy.id, "quantity": str(quantity), "side": side, "error": str(e)},
-            ))
-            self.db.commit()
-            capture_strategy_event(
-                "emergency_close place_market_order failed",
-                level="error",
-                strategy_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
-                account_id=strategy.exchange_account_id, error=e,
-                extras={"quantity": str(quantity), "exit_side": side},
-                tags={"event_type": "EMERGENCY_CLOSE_PLACE_FAILED"},
-            )
-            raise
+            err_str = str(e)
+            # -4015 fallback: cid 빼고 재시도 (Binance 가 자동 생성)
+            if "-4015" in err_str or "Client order id" in err_str:
+                logger.warning(
+                    "emergency_close: -4015 with cid=%s, retrying WITHOUT newClientOrderId (Binance auto-generate). "
+                    "primary_err=%s", client_order_id, err_str,
+                )
+                try:
+                    response = _do_place(None)  # 자동 생성 시도
+                    binance_cid = response.get("clientOrderId", "")
+                    logger.info(
+                        "emergency_close: succeeded without our cid — Binance auto cid=%s strategy_id=%s",
+                        binance_cid, strategy.id,
+                    )
+                    client_order_id = binance_cid or client_order_id  # DB 저장용 (auto cid 우선)
+                except Exception as retry_err:
+                    # 자동 cid 도 실패 → 진짜 원인은 cid 무관 (symbol/qty/account/position 등)
+                    logger.error(
+                        "emergency_close: failed EVEN without cid — real underlying issue: %s", retry_err,
+                    )
+                    self.db.add(RiskEvent(
+                        strategy_instance_id=strategy.id,
+                        event_type="EMERGENCY_CLOSE_PLACE_FAILED",
+                        severity="ERROR",
+                        title="Emergency close 시장가 주문 발송 실패 (auto-cid 도 실패)",
+                        message=f"symbol={strategy.symbol} qty={quantity} side={side} primary_err={err_str} retry_err={retry_err}",
+                        event_payload={"strategy_id": strategy.id, "quantity": str(quantity), "side": side, "primary_error": err_str, "retry_error": str(retry_err)},
+                    ))
+                    self.db.commit()
+                    capture_strategy_event(
+                        "emergency_close failed even without cid",
+                        level="error",
+                        strategy_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+                        account_id=strategy.exchange_account_id, error=retry_err,
+                        extras={"quantity": str(quantity), "primary_error": err_str},
+                        tags={"event_type": "EMERGENCY_CLOSE_PLACE_FAILED_EVEN_AUTO_CID"},
+                    )
+                    raise retry_err
+            else:
+                # -4015 외 다른 에러 — 기존 처리
+                logger.error(
+                    "emergency_close place_market_order failed: strategy_id=%s symbol=%s qty=%s side=%s error=%s",
+                    strategy.id, strategy.symbol, quantity, side, e,
+                )
+                self.db.add(RiskEvent(
+                    strategy_instance_id=strategy.id,
+                    event_type="EMERGENCY_CLOSE_PLACE_FAILED",
+                    severity="ERROR",
+                    title="Emergency close 시장가 주문 발송 실패",
+                    message=f"symbol={strategy.symbol} qty={quantity} side={side} error={e}",
+                    event_payload={"strategy_id": strategy.id, "quantity": str(quantity), "side": side, "error": str(e)},
+                ))
+                self.db.commit()
+                capture_strategy_event(
+                    "emergency_close place_market_order failed",
+                    level="error",
+                    strategy_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+                    account_id=strategy.exchange_account_id, error=e,
+                    extras={"quantity": str(quantity), "exit_side": side},
+                    tags={"event_type": "EMERGENCY_CLOSE_PLACE_FAILED"},
+                )
+                raise
         order = Order(strategy_instance_id=strategy.id, stage_no=None, purpose="EXIT", symbol=strategy.symbol, side=side, position_side=position_side, order_type="MARKET", time_in_force=None, client_order_id=client_order_id, exchange_order_id=response.get("orderId"), trigger_price=None, price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, orig_qty=quantity, executed_qty=Decimal(str(response.get("executedQty", "0"))), avg_price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, status=response.get("status", "NEW"), raw_request={"symbol": strategy.symbol, "side": side, "positionSide": position_side, "type": "MARKET", "quantity": str(quantity), "newClientOrderId": client_order_id}, raw_response=response)
         self.order_repo.create(order)
         self.db.commit()
