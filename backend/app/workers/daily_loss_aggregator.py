@@ -44,9 +44,11 @@ __all__ = ["run_daily_loss_check_once", "_ACTIVE_STATUSES_FOR_PNL"]
 # 어느 status 의 strategy 가 PnL 집계 대상인가:
 # 활성 포지션 있는 모든 status (1~10단계 OPEN + TP partial). PENDING (LIMIT 미체결) 은
 # 포지션 없으므로 제외. STOPPING 은 포지션 잔재 가능 → 포함.
+# 2026-05-14 fix (사용자 #33 AVAAIUSDT 추가 fix): TP1~5 → TP1~10. 이전엔 TP6~10
+# DONE_PARTIAL 인 strategy 의 unrealized PnL 이 일일 손실 집계에서 누락 → 한도 평가 부정확.
 _ACTIVE_STATUSES_FOR_PNL = (
     {f"STAGE{n}_OPEN" for n in range(1, 11)}
-    | {f"TP{n}_DONE_PARTIAL" for n in range(1, 6)}
+    | {f"TP{n}_DONE_PARTIAL" for n in range(1, 11)}
     | {"STOPPING"}
 )
 

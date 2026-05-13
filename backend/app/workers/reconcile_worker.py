@@ -98,7 +98,10 @@ def _do_reconcile(decrypt_func) -> None:
         # 5+ stage 진입한 strategy 가 reconcile main loop 에서 누락되는 버그.
         _ACTIVE_PENDING = [f"STAGE{n}_OPEN_PENDING" for n in range(1, 11)]
         _ACTIVE_OPEN = [f"STAGE{n}_OPEN" for n in range(1, 11)]
-        _ACTIVE_TP_PARTIAL = [f"TP{n}_DONE_PARTIAL" for n in range(1, 6)]
+        # 2026-05-14 fix (사용자 #33 AVAAIUSDT KS 오발동 - 추가 발견):
+        # TP6~10_DONE_PARTIAL 도 포함해야 reconcile main loop 가 그 strategy 를 평가.
+        # 누락 시 거래소 포지션 매칭 안 되고 「외부 청산」 으로 오판 → STOPPED.
+        _ACTIVE_TP_PARTIAL = [f"TP{n}_DONE_PARTIAL" for n in range(1, 11)]
         rows = db.execute(
             select(StrategyInstance, ExchangeAccount)
             .join(ExchangeAccount, StrategyInstance.exchange_account_id == ExchangeAccount.id)
@@ -199,10 +202,11 @@ def _do_reconcile(decrypt_func) -> None:
                         position_reconcile_total.labels(status="zombie_stopped").inc()
                         _stuck_clear(strategy.id)
                         continue
-                    # *_OPEN orphan 자동 정리 — 1~10단계 + TP 1~5 PARTIAL.
+                    # *_OPEN orphan 자동 정리 — 1~10단계 + TP 1~10 PARTIAL.
+                    # 2026-05-14 fix: TP1~5 → TP1~10 (#33 AVAAIUSDT KS 오발동 추가 fix).
                     _OPEN_STATES = (
                         {f"STAGE{n}_OPEN" for n in range(1, 11)}
-                        | {f"TP{n}_DONE_PARTIAL" for n in range(1, 6)}
+                        | {f"TP{n}_DONE_PARTIAL" for n in range(1, 11)}
                     )
                     if strategy.status in _OPEN_STATES:
                         db.add(RiskEvent(
