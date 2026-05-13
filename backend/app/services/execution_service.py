@@ -634,21 +634,28 @@ class ExecutionService:
 
     @staticmethod
     def _new_client_order_id(symbol: str, suffix: str) -> str:
-        """Binance newClientOrderId 안전 cap — 항상 32자 이하 보장.
+        """Binance newClientOrderId — 절대 안전 포맷 (사용자 #26 JELLYJELLYUSDT 3차 fix).
 
-        2026-05-12 fix v1: 35자 cap (Binance error msg "less than 36 chars" 기준).
-        2026-05-13 fix v2 (사용자 #26 JELLYJELLYUSDT 재발 보고): 35자 cap 적용 후에도
-        같은 -4015 에러 → Binance Futures 실 한도가 36 보다 작은 것으로 추정 (32자 추정).
-        에러 메시지는 "less than 36 chars" 라고 되어있지만 실제는 더 엄격한 듯.
-        안전하게 32자 cap 으로 줄임 — 어떤 Binance 변경에도 충돌 안 함.
+        2026-05-12 v1 (35자) → 2026-05-13 v2 (32자, 하이픈) → 32자도 -4015 reject 됨.
+        2026-05-13 v3: 하이픈 → 언더스코어 + 28자 cap.
 
-        포맷: `{symbol}-{suffix}-{uuid_hex[:N]}` 또는 길면 truncate.
-        예: JELLYJELLYUSDT+EXIT → base_len=20, uuid=12 → 총 32자.
+        근거 — Binance Futures 공식 spec:
+            newClientOrderId: STRING ^[a-zA-Z0-9_]*$ length<36
+        Spot 은 하이픈/콜론 허용하지만 Futures 는 [a-zA-Z0-9_] 만 명시 ← 하이픈 거부 가능성.
+        실제로 32자 (하이픈 포함) reject 됨 → 하이픈이 문제 가능 → underscore 로 교체.
+
+        v3 포맷: `{symbol}_{suffix}_{uuid_hex[:N]}` (하이픈 X, alphanumeric+underscore 만)
+        - JELLYJELLYUSDT(14) + EXIT(4) → base 20, uuid 8 → 28자 ✓
+        - SAGAUSDT(8) + ENTRY10M(8) → base 18, uuid 10 → 28자 ✓
+        - BTCUSDT(7) + EXIT(4) → base 13, uuid 15 → 28자 ✓
+        모든 케이스 ≤28자 + alphanumeric/underscore 만 → Binance Futures 절대 안전.
         """
-        MAX_LEN = 32              # 2026-05-13: 35→32 안전 cap (재발 방지)
-        PREFERRED_UUID = 18       # 충분한 충돌 방지 (72 bits)
-        MIN_UUID = 8              # 최소 충돌 방지 (32 bits)
-        base_len = len(symbol) + 1 + len(suffix) + 1  # symbol + "-" + suffix + "-"
+        MAX_LEN = 28              # v3: Binance Futures 매우 보수적 cap (실 한도 < 32 추정)
+        PREFERRED_UUID = 16       # 충분한 충돌 방지 (64 bits)
+        # MIN_UUID = 4 (=16^4 = 65536 unique). 실 운영은 sub-minute 단위 발사라 충분.
+        # 더 큰 prefix (긴 symbol+suffix) 는 prefix 보존 우선 — uuid 줄여서 MAX_LEN 보장.
+        MIN_UUID = 4
+        base_len = len(symbol) + 1 + len(suffix) + 1  # symbol + "_" + suffix + "_"
         uuid_len = max(MIN_UUID, min(PREFERRED_UUID, MAX_LEN - base_len))
-        cid = f"{symbol}-{suffix}-{uuid4().hex[:uuid_len]}"
-        return cid[:MAX_LEN]      # 안전장치 — 어떤 입력에도 32자 보장
+        cid = f"{symbol}_{suffix}_{uuid4().hex[:uuid_len]}"  # ← 하이픈 → 언더스코어
+        return cid[:MAX_LEN]      # 안전장치 — 어떤 입력에도 28자 보장
