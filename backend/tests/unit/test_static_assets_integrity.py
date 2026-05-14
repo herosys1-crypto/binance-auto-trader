@@ -45,6 +45,10 @@ def _helpers_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "helpers.js").read_text(encoding="utf-8")
 
 
+def _ranking_modal_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "ranking-modal.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -340,6 +344,41 @@ class TestStaticAssetsIntegrity:
         violations = [pat for pat in forbidden if pat in html]
         assert not violations, (
             "index.html 에 helpers 함수 inline 재정의 발견:\n  " + "\n  ".join(violations)
+        )
+
+    def test_ranking_modal_js_exists_and_loaded(self):
+        """ranking-modal.js (Phase 3 추가) 존재 + script tag 검증."""
+        path = _backend_root() / "app" / "static" / "js" / "ranking-modal.js"
+        assert path.exists(), "ranking-modal.js missing"
+
+        html = _index_html()
+        helpers_pos = html.find("/static/js/helpers.js")
+        modal_pos = html.find("/static/js/ranking-modal.js")
+        assert modal_pos > 0, "<script src='/static/js/ranking-modal.js'> tag 누락"
+        assert modal_pos > helpers_pos, "ranking-modal.js 가 helpers.js 보다 먼저 로드됨"
+
+    def test_ranking_modal_js_defines_required(self):
+        """ranking-modal.js 가 4 함수 모두 정의."""
+        js = _ranking_modal_js()
+        for fn in [
+            "async function openSymbolRankingModal",
+            "function closeSymbolRankingModal",
+            "async function loadSymbolRanking",
+            "function selectSymbolFromRanking",
+        ]:
+            assert fn in js, f"ranking-modal.js 누락: {fn}"
+
+    def test_no_inline_ranking_modal_in_index_html(self):
+        """index.html 에 ranking-modal 함수 inline 재정의 금지."""
+        html = _index_html()
+        forbidden = [
+            "async function openSymbolRankingModal",
+            "async function loadSymbolRanking",
+            "function selectSymbolFromRanking",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations, (
+            "index.html 에 ranking-modal 함수 inline 재정의 발견:\n  " + "\n  ".join(violations)
         )
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
