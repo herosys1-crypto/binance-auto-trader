@@ -25,6 +25,10 @@ def _constants_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "constants.js").read_text(encoding="utf-8")
 
 
+def _api_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "api.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -40,7 +44,9 @@ class TestStaticAssetsIntegrity:
         """
         html = _index_html()
         tag_pos = html.find("/static/js/constants.js")
-        inline_pos = html.find("const API_BASE")
+        # 2026-05-14 Phase 3 추가: const API_BASE 가 api.js 로 이동했으므로 anchor 변경.
+        # 본문 첫 inline 함수 (showDashboard) 위치를 anchor 로 사용.
+        inline_pos = html.find("function showDashboard")
         assert tag_pos > 0, "<script src='/static/js/constants.js'> tag 누락"
         assert inline_pos > tag_pos, (
             "constants.js 가 본문 inline script 뒤에 로드됨 — 순서 잘못됨"
@@ -116,6 +122,60 @@ class TestStaticAssetsIntegrity:
         unexpected = extras - allowed_extras
         assert not unexpected, (
             f"frontend TERMINAL_STATUSES 에 backend 미포함 + STOPPING 외 추가 항목: {unexpected}"
+        )
+
+    def test_api_js_exists_and_loaded_before_inline_script(self):
+        """api.js (Phase 3 추가) 가 존재 + index.html 본문 inline script 보다 먼저 로드."""
+        path = _backend_root() / "app" / "static" / "js" / "api.js"
+        assert path.exists(), "api.js missing — Phase 3 추가 분리 깨짐"
+
+        html = _index_html()
+        api_tag_pos = html.find("/static/js/api.js")
+        # 첫 번째 본문 inline 의 의미있는 식별자 (auth handler 등록)
+        inline_pos = html.find("login-form")
+        assert api_tag_pos > 0, "<script src='/static/js/api.js'> tag 누락"
+        # 정확한 본문 inline script 시작은 const 선언인데, 이제 그게 빠져있어 다른 anchor 사용.
+        # api.js 가 constants.js 다음에 와야 (둘 다 inline 보다 먼저).
+        const_tag_pos = html.find("/static/js/constants.js")
+        assert const_tag_pos > 0
+        # 두 script tag 모두 본문 첫 inline 함수 정의 (showDashboard 등) 보다 먼저
+        first_func_pos = html.find("function showDashboard")
+        assert const_tag_pos < first_func_pos
+        assert api_tag_pos < first_func_pos
+
+    def test_api_js_defines_all_required(self):
+        """api.js 가 API_BASE / token / api / toast / logout 모두 정의."""
+        js = _api_js()
+        required_patterns = [
+            r"const\s+API_BASE\s*=",
+            r"let\s+token\s*=",
+            r"function\s+logout\s*\(",
+            r"async\s+function\s+api\s*\(",
+            r"function\s+toast\s*\(",
+        ]
+        for pat in required_patterns:
+            assert re.search(pat, js), f"api.js 에 패턴 누락: {pat}"
+
+    def test_no_inline_api_helpers_in_index_html(self):
+        """index.html 본문에 api/toast/logout/API_BASE/token 정의가 다시 들어오면 안 됨.
+
+        Phase 3 추가 분리 후 누군가 inline 으로 복원하면 두 곳 정의 → silent bug.
+        """
+        html = _index_html()
+        forbidden = [
+            (r"^const\s+API_BASE\s*=", "API_BASE inline"),
+            (r"^let\s+token\s*=\s*localStorage", "token inline"),
+            (r"^function\s+logout\s*\(\)", "logout() inline"),
+            (r"^async\s+function\s+api\s*\(", "api() inline"),
+            (r"^function\s+toast\s*\(", "toast() inline"),
+        ]
+        violations = []
+        for pat, label in forbidden:
+            if re.search(pat, html, re.MULTILINE):
+                violations.append(label)
+        assert not violations, (
+            "index.html 에 api.js 의 helper 가 inline 정의됨 (분리 깨짐):\n  "
+            + "\n  ".join(violations)
         )
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
