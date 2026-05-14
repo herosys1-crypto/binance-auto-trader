@@ -97,6 +97,10 @@ def _cm_preview_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "cm-preview.js").read_text(encoding="utf-8")
 
 
+def _cm_open_modal_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "cm-open-modal.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -776,6 +780,39 @@ class TestStaticAssetsIntegrity:
         violations = [pat for pat in forbidden if pat in html]
         assert not violations, (
             "index.html 에 cm-preview 함수 inline 재정의 발견:\n  " + "\n  ".join(violations)
+        )
+
+    def test_cm_open_modal_js_exists_and_loaded(self):
+        path = _backend_root() / "app" / "static" / "js" / "cm-open-modal.js"
+        assert path.exists(), "cm-open-modal.js missing"
+        html = _index_html()
+        # cm-open-modal 은 다른 cm-* 모듈 (buildCapitalsGrid, setCmSide 등) 의존하므로 마지막에 로드.
+        # cmState 는 hoisting 으로 함수 호출 시점에만 평가되므로 위치 무관 (다만 모듈 함수가
+        # 모듈 load 시점에 cmState 읽으면 깨짐 — 모든 cm-*.js 는 함수 정의만, 호출 X 라 안전).
+        om_pos = html.find("/static/js/cm-open-modal.js")
+        assert om_pos > 0
+
+    def test_cm_open_modal_js_defines_required(self):
+        js = _cm_open_modal_js()
+        for fn in [
+            "let cmState",
+            "async function openCreateModal",
+            "async function editStrategy",
+            "async function restartStrategy",
+        ]:
+            assert fn in js, f"cm-open-modal.js 누락: {fn}"
+
+    def test_no_inline_cm_open_modal_in_index_html(self):
+        html = _index_html()
+        forbidden = [
+            "let cmState =",
+            "async function openCreateModal(editStrategyId)",
+            "async function editStrategy(id)",
+            "async function restartStrategy(id)",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations, (
+            "index.html 에 cm-open-modal 함수 inline 재정의 발견:\n  " + "\n  ".join(violations)
         )
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
