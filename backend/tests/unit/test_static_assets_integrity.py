@@ -101,6 +101,10 @@ def _cm_open_modal_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "cm-open-modal.js").read_text(encoding="utf-8")
 
 
+def _dashboard_refresh_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "dashboard-refresh.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -841,6 +845,43 @@ class TestStaticAssetsIntegrity:
         assert not duplicates, (
             "index.html 에 같은 이름의 function 중복 정의 발견 (dead code + override 위험):\n  "
             + "\n  ".join(f"{n}: lines {lines}" for n, lines in duplicates.items())
+        )
+
+    def test_dashboard_refresh_js_exists_and_loaded(self):
+        path = _backend_root() / "app" / "static" / "js" / "dashboard-refresh.js"
+        assert path.exists(), "dashboard-refresh.js missing"
+        html = _index_html()
+        dr_pos = html.find("/static/js/dashboard-refresh.js")
+        assert dr_pos > 0
+
+    def test_dashboard_refresh_js_defines_required(self):
+        js = _dashboard_refresh_js()
+        for fn in [
+            "async function refreshAll",
+            "async function loadGlobalWhitelistInfo",
+            "function renderWhitelistBadge",
+            "function _localizeActivity",
+            "async function refreshActivity",
+            "async function refreshSysHealth",
+            "async function refreshStats",
+            "async function refreshHealth",
+            "async function loadBalance",
+        ]:
+            assert fn in js, f"dashboard-refresh.js 누락: {fn}"
+
+    def test_no_inline_dashboard_refresh_in_index_html(self):
+        html = _index_html()
+        forbidden = [
+            "async function refreshAll() {",
+            "async function refreshActivity() {",
+            "async function refreshSysHealth() {",
+            "async function refreshStats() {",
+            "async function refreshHealth() {",
+            "async function loadBalance() {",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations, (
+            "index.html 에 dashboard-refresh 함수 inline 재정의 발견:\n  " + "\n  ".join(violations)
         )
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
