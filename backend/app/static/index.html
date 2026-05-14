@@ -1457,14 +1457,8 @@ async function refreshTemplates() {
   } catch (err) { toast('템플릿 조회 실패: ' + err.message, 'error'); }
 }
 
-async function deleteTemplate(id, name) {
-  if (!confirm(`템플릿 '${name}' (#${id}) 을 삭제할까요?\n\n사용 중인 strategy 가 있으면 비활성화됩니다.`)) return;
-  try {
-    const res = await api(`/admin/strategy-templates/${id}`, { method: 'DELETE' });
-    toast(res.message || '삭제됨', 'success');
-    refreshTemplates();
-  } catch (e) { toast('삭제 실패: ' + e.message, 'error'); }
-}
+// 2026-05-14 dead code 제거: deleteTemplate 가 두 번 정의돼 있었음 (이전 라인 + 1506).
+// 두 번째 정의 (cascade retry 포함) 가 첫 번째를 override 하던 상태 → 첫 번째 제거.
 
 // UX #19 (2026-04-29): 3-way 선택 (안전 / 강제 / 완전(force))
 async function cleanupQuickTemplates() {

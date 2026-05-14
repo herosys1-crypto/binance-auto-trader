@@ -815,6 +815,34 @@ class TestStaticAssetsIntegrity:
             "index.html 에 cm-open-modal 함수 inline 재정의 발견:\n  " + "\n  ".join(violations)
         )
 
+    def test_no_duplicate_function_definitions_in_index_html(self):
+        """index.html 에 같은 이름의 function 이 중복 정의되면 안 됨.
+
+        2026-05-14 발견: deleteTemplate 이 line 1460 + 1506 두 번 정의돼
+        두 번째가 첫 번째를 silently override 하던 상태 (dead code + 혼란).
+        분리 작업 중 비슷한 중복 발생 시 즉시 catch.
+        """
+        import re
+        html = _index_html()
+        # async function NAME / function NAME 패턴 검출 (top-level 만)
+        # 주석 안의 「function name」 은 무시 (line.startswith with stripping)
+        defs: dict[str, list[int]] = {}
+        for lineno, line in enumerate(html.splitlines(), start=1):
+            stripped = line.lstrip()
+            # 주석 라인 무시
+            if stripped.startswith("//") or stripped.startswith("*") or stripped.startswith("<!--"):
+                continue
+            m = re.match(r"^(async\s+)?function\s+(\w+)\s*\(", stripped)
+            if m:
+                name = m.group(2)
+                # 시작 시 이름이 _ 로 시작하는 helper, 또는 anonymous 제외
+                defs.setdefault(name, []).append(lineno)
+        duplicates = {n: lines for n, lines in defs.items() if len(lines) > 1}
+        assert not duplicates, (
+            "index.html 에 같은 이름의 function 중복 정의 발견 (dead code + override 위험):\n  "
+            + "\n  ".join(f"{n}: lines {lines}" for n, lines in duplicates.items())
+        )
+
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
         """제거된 cm-crisis-threshold UI element 참조가 다시 들어오면 안 됨.
 
