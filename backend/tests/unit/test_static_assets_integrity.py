@@ -77,6 +77,10 @@ def _cm_loaders_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "cm-loaders.js").read_text(encoding="utf-8")
 
 
+def _cm_market_info_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "cm-market-info.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -612,6 +616,36 @@ class TestStaticAssetsIntegrity:
             "async function loadCmAccounts",
             "async function loadCmTemplates",
             "async function loadCmSymbols",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations
+
+    def test_cm_market_info_js_exists_and_loaded(self):
+        path = _backend_root() / "app" / "static" / "js" / "cm-market-info.js"
+        assert path.exists(), "cm-market-info.js missing"
+        html = _index_html()
+        mi_pos = html.find("/static/js/cm-market-info.js")
+        assert mi_pos > 0
+
+    def test_cm_market_info_js_defines_required(self):
+        js = _cm_market_info_js()
+        for fn in [
+            "let _cmCurrentPrice",
+            "let _cmTickSize",
+            "async function loadCmMarketInfo",
+            "function _drawCmChart",
+            "function _decimalsForPrice",
+            "function _tickSizeDecimals",
+            "function fillStartPrice",
+        ]:
+            assert fn in js, f"cm-market-info.js 누락: {fn}"
+
+    def test_no_inline_cm_market_info_in_index_html(self):
+        html = _index_html()
+        forbidden = [
+            "async function loadCmMarketInfo",
+            "function fillStartPrice",
+            "function _drawCmChart",
         ]
         violations = [pat for pat in forbidden if pat in html]
         assert not violations
