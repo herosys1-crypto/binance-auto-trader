@@ -1065,6 +1065,7 @@
 <script src="/static/js/cm-prev-blueprint.js"></script>
 <script src="/static/js/multi-symbol.js"></script>
 <script src="/static/js/template-save.js"></script>
+<script src="/static/js/cm-submit.js"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
@@ -3657,104 +3658,9 @@ async function submitInPlaceSettings() {
   }
 }
 
-async function submitCreate() {
-  // 2026-05-12 v2 (사용자 UX 개선): 다중 심볼 모드면 batch 처리로 우회.
-  // 단일 모드는 기존 로직 그대로.
-  const isMulti = document.getElementById('cm-multi-symbol-toggle')?.checked;
-  const editingId = cmState.editingStrategyId;
-  if (isMulti && !editingId) {
-    return submitCreateMulti();  // 신규 batch 함수 호출
-  }
-  const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
-  const startPrice = document.getElementById('cm-start-price').value;
-  const confirmMsg = editingId
-    ? `🔄 전략 #${editingId} 수정\n\n1. 기존 미체결 주문 자동 취소\n2. 새 설정으로 ${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략 시작\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요?`
-    : `${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략을 시작합니다.\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요? (testnet 거래소면 실거래 발생)`;
-  if (!confirm(confirmMsg)) return;
-  try {
-    document.getElementById('cm-submit').disabled = true;
-    document.getElementById('cm-submit').textContent = editingId ? '⏳ 종료 + 재시작 중...' : '⏳ 생성 중...';
-
-    // 수정 모드 — 기존 전략 먼저 cancel_only 로 정지
-    if (editingId) {
-      try {
-        await api(`/strategies/${editingId}/stop`, {
-          method: 'POST',
-          body: { mode: 'cancel_only', reason: '수정 모드 — 새 설정으로 재시작' },
-        });
-        toast(`전략 #${editingId} 미체결 주문 취소 완료`, 'success');
-      } catch (e) {
-        // 이미 종료됐거나 주문 없으면 무시하고 계속
-        console.warn('Cancel old strategy:', e.message);
-      }
-    }
-
-    // 직접 입력 모드 — 이 시점에만 템플릿 1번 생성
-    let templateId = cmState.templateId;
-    // UX #18: 레버리지는 입력 필드에서 가져옴. 비었으면 사이드 기본값.
-    const lvInpEl = document.getElementById('cm-leverage');
-    const leverageFromInput = lvInpEl && lvInpEl.value ? Number(lvInpEl.value) : _defaultLeverageForSide(cmState.side);
-    if (cmState.mode === 'direct') {
-      const ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-      const leverage = leverageFromInput;
-      const inp = cmState._directInputs || _collectDirectInputs();
-      const tpsl = cmState._directTpsl || _collectTpSl();
-      // 2026-05-06 사용자 보고 fix: 이전엔 TP1~5 만 전송 → 신규 strategy 의 template 에
-      // TP6~10 NULL 저장됨. _collectTpSl 는 TP1~10 수집하지만 여기서 안 보내서 누락.
-      // dict comprehension 으로 TP1~10 모두 동적 전송 (TP4~10 NULL 이면 그대로 NULL).
-      const _tpFields = {};
-      for (let n = 1; n <= 10; n++) {
-        _tpFields[`tp${n}_percent`] = tpsl[`tp${n}_percent`];
-        _tpFields[`tp${n}_qty_ratio`] = tpsl[`tp${n}_qty_ratio`];
-      }
-      const tplCreated = await api('/admin/strategy-templates', {
-        method: 'POST',
-        body: {
-          name: `_quick_${ts}`,
-          strategy_type: cmState.side === 'SHORT' ? 'DYNAMIC_SHORT' : 'DYNAMIC_LONG',
-          side: cmState.side,
-          leverage,
-          capitals: inp.capitals,
-          trigger_percents: inp.trigger_percents,
-          additional_margins: inp.additional_margins,
-          last_stage_trigger_percent: inp.last_stage_trigger_percent,
-          ..._tpFields,  // TP1~10 모두 (TP4~10 NULL 가능)
-          stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
-          crisis_max_loss_threshold: tpsl.crisis_max_loss_threshold,
-          reentry_policy: 'manual_ready',
-        },
-      });
-      templateId = tplCreated.id;
-    }
-
-    const created = await api('/strategies', {
-      method: 'POST',
-      body: {
-        exchange_account_id: cmState.accountId,
-        strategy_template_id: templateId,
-        symbol, side: cmState.side, start_price: startPrice,
-        // UX #18: 레버리지 override (템플릿 기본값을 덮어씀)
-        leverage_override: leverageFromInput,
-      },
-    });
-    toast('✅ 전략 #' + created.id + ' 생성됨. 1단계 주문 발송 중...', 'success');
-    try {
-      await api('/strategies/' + created.id + '/start', { method: 'POST' });
-      toast('🚀 전략 #' + created.id + ' 시작 완료. 1단계 주문 발송됨.', 'success');
-    } catch (startErr) {
-      toast('전략 생성됐지만 시작 실패: ' + startErr.message + ' (수동으로 다시 시도하세요)', 'warning');
-    }
-    closeCreateModal();
-    refreshStrategies();
-    refreshTemplates();
-  } catch (e) {
-    toast('전략 생성 실패: '+e.message, 'error');
-    document.getElementById('cm-submit').disabled = false;
-    document.getElementById('cm-submit').textContent = '🚀 전략 시작';
-  }
-}
 
 // toast() 는 /static/js/api.js 로 분리 (Phase 3 추가).
+// submitCreate 는 /static/js/cm-submit.js 로 분리 (Phase 3 단계 3f).
 // 「📦 다중 심볼 모드」 5+ 함수는 /static/js/multi-symbol.js 로 분리 (Phase 3 추가).
 // 「💾 템플릿으로 저장」 + openCreateModalForBatch + _parseBatchSymbols 는
 // /static/js/template-save.js 로 분리 (Phase 3 추가).

@@ -85,6 +85,10 @@ def _cm_capitals_grid_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "cm-capitals-grid.js").read_text(encoding="utf-8")
 
 
+def _cm_submit_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "cm-submit.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -682,6 +686,26 @@ class TestStaticAssetsIntegrity:
         ]
         violations = [pat for pat in forbidden if pat in html]
         assert not violations
+
+    def test_cm_submit_js_exists_and_loaded(self):
+        path = _backend_root() / "app" / "static" / "js" / "cm-submit.js"
+        assert path.exists(), "cm-submit.js missing"
+        html = _index_html()
+        # cm-submit 는 multi-symbol.js (submitCreateMulti) + cm-collectors (_collectTpSl) 의존
+        ms_pos = html.find("/static/js/multi-symbol.js")
+        sub_pos = html.find("/static/js/cm-submit.js")
+        assert sub_pos > 0
+        assert sub_pos > ms_pos, "cm-submit.js 가 multi-symbol.js 보다 먼저 로드 — submitCreateMulti 의존"
+
+    def test_cm_submit_js_defines_submitCreate(self):
+        js = _cm_submit_js()
+        assert "async function submitCreate" in js
+
+    def test_no_inline_submit_create_in_index_html(self):
+        html = _index_html()
+        assert "async function submitCreate(" not in html, (
+            "submitCreate 가 index.html 에 inline 재정의됨 (cm-submit.js 와 중복)"
+        )
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
         """제거된 cm-crisis-threshold UI element 참조가 다시 들어오면 안 됨.
