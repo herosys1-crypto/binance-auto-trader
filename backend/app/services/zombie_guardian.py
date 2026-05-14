@@ -34,6 +34,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.sentry import capture_strategy_event
+from app.core.strategy_status import (
+    ACTIVE_LIKE,
+    ACTIVE_WAITING,
+    ACTIVE_WITH_POSITION,
+    TERMINAL_STATUSES,
+)
 from app.models.exchange_account import ExchangeAccount
 from app.models.risk_event import RiskEvent
 from app.models.strategy_instance import StrategyInstance
@@ -44,34 +50,11 @@ from app.services.notification_service import NotificationService
 logger = logging.getLogger(__name__)
 
 
-# ===== 상태 분류 =====
-
-# 거래소에 실제 포지션이 있어야 하는 active 상태.
-# 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 1~4 만이라 5+ stage strategy 가
-# zombie 분류에서 누락되는 버그 (중복 active 강등 / orphan 감지 미작동).
-# 2026-05-14 fix (사용자 #33 AVAAIUSDT 보고): TP1~5 만이라 TP6~10_DONE_PARTIAL
-# strategy 가 active 분류 누락 → 거래소 포지션 있는데 orphan 으로 오판 → KS 오발동.
-# 2026-05-06 TP10 확장 시 zombie_guardian 의 TP range 도 같이 갱신했어야 했음.
-ACTIVE_WITH_POSITION = (
-    {f"STAGE{n}_OPEN" for n in range(1, 11)}
-    | {f"TP{n}_DONE_PARTIAL" for n in range(1, 11)}  # TP1~10 (이전 1~5 → 1~10)
-    | {"TRAILING_ARMED"}  # 명시적 trailing armed status (혹시나)
-    | {"CRISIS_TP1_DONE"}  # 크라이시스 첫 TP 후 잔량 보유 상태
-    | {"STOPPING"}  # 청산 진행 중 (포지션 아직 남아있을 수 있음)
-)
-
-# 거래소 포지션 미확정 (LIMIT 미체결)
-ACTIVE_WAITING = {f"STAGE{n}_OPEN_PENDING" for n in range(1, 11)}
-
-# 모든 "active" — 신규 strategy 진입 차단해야 할 상태
-ACTIVE_LIKE = ACTIVE_WITH_POSITION | ACTIVE_WAITING
-
-# 종료 상태 — qty 는 반드시 0 이어야 함
-TERMINAL_STATUSES = {
-    "STOPPED", "COMPLETED", "CLOSED",
-    "CLOSED_BY_TP", "CLOSED_BY_SL",
-    "REENTRY_READY", "KILL_SWITCH_TRIGGERED",
-}
+# ===== 상태 분류 (2026-05-14 Phase 1: app.core.strategy_status 로 centralize) =====
+# 이전엔 여기에 inline 으로 4곳 다 같은 패턴이 흩어져 있었고 (zombie / reconcile / daily_loss / orchestrator),
+# 5-06 TP10 확장 시 3곳 누락 → recurring bug. 이제 1곳에서 single source.
+# 변경 시 app/core/strategy_status.py 만 수정하면 모든 worker 자동 반영.
+__all__ = ["ACTIVE_WITH_POSITION", "ACTIVE_WAITING", "ACTIVE_LIKE", "TERMINAL_STATUSES"]
 
 
 # ===== Redis 키 =====

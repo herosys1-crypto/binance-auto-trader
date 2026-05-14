@@ -20,6 +20,12 @@ from app.core.database import SessionLocal
 from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
 from app.core.sentry import capture_strategy_event
+from app.core.strategy_status import (
+    ACTIVE_WAITING,
+    ACTIVE_WITH_POSITION,
+    OPEN_LIKE_FOR_ORPHAN_CHECK,
+    PENDING_TO_OPEN_MAP,
+)
 from app.integrations.binance.client import BinanceClient
 from app.models.exchange_account import ExchangeAccount
 from app.models.position import Position
@@ -94,20 +100,14 @@ def _do_reconcile(decrypt_func) -> None:
         # ===== Main loop — active strategy 별 거래소 sync + 자동 회복 =====
         # 활성 전략 조회. *_PENDING 상태도 포함 — user-stream 이 죽어 체결 이벤트를
         # 놓친 경우 reconcile 이 거래소 상태를 보고 PENDING -> OPEN 으로 자가 회복.
-        # 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 STAGE1~4_OPEN_PENDING/OPEN 만 active 분류라
-        # 5+ stage 진입한 strategy 가 reconcile main loop 에서 누락되는 버그.
-        _ACTIVE_PENDING = [f"STAGE{n}_OPEN_PENDING" for n in range(1, 11)]
-        _ACTIVE_OPEN = [f"STAGE{n}_OPEN" for n in range(1, 11)]
-        # 2026-05-14 fix (사용자 #33 AVAAIUSDT KS 오발동 - 추가 발견):
-        # TP6~10_DONE_PARTIAL 도 포함해야 reconcile main loop 가 그 strategy 를 평가.
-        # 누락 시 거래소 포지션 매칭 안 되고 「외부 청산」 으로 오판 → STOPPED.
-        _ACTIVE_TP_PARTIAL = [f"TP{n}_DONE_PARTIAL" for n in range(1, 11)]
+        # 2026-05-14 Phase 1 centralize: ACTIVE_WAITING + ACTIVE_WITH_POSITION 사용.
+        # ACTIVE_WITH_POSITION 이 STOPPING + STAGE_n_OPEN + TP_n_DONE_PARTIAL 모두 포함.
+        # 이전 inline build 시 5-06 TP10 확장에서 TP6~10 누락 버그 발생 → centralize 로 영구 차단.
+        _RECONCILE_TARGET_STATUSES = list(ACTIVE_WAITING | ACTIVE_WITH_POSITION)
         rows = db.execute(
             select(StrategyInstance, ExchangeAccount)
             .join(ExchangeAccount, StrategyInstance.exchange_account_id == ExchangeAccount.id)
-            .where(StrategyInstance.status.in_(
-                _ACTIVE_PENDING + _ACTIVE_OPEN + _ACTIVE_TP_PARTIAL + ["STOPPING"]
-            ))
+            .where(StrategyInstance.status.in_(_RECONCILE_TARGET_STATUSES))
             .where(StrategyInstance.is_archived.is_(False))  # 2026-05-06 C-full: archived 제외
             .where(ExchangeAccount.is_active.is_(True))
         ).all()
@@ -203,12 +203,8 @@ def _do_reconcile(decrypt_func) -> None:
                         _stuck_clear(strategy.id)
                         continue
                     # *_OPEN orphan 자동 정리 — 1~10단계 + TP 1~10 PARTIAL.
-                    # 2026-05-14 fix: TP1~5 → TP1~10 (#33 AVAAIUSDT KS 오발동 추가 fix).
-                    _OPEN_STATES = (
-                        {f"STAGE{n}_OPEN" for n in range(1, 11)}
-                        | {f"TP{n}_DONE_PARTIAL" for n in range(1, 11)}
-                    )
-                    if strategy.status in _OPEN_STATES:
+                    # 2026-05-14 Phase 1 centralize: OPEN_LIKE_FOR_ORPHAN_CHECK 사용.
+                    if strategy.status in OPEN_LIKE_FOR_ORPHAN_CHECK:
                         db.add(RiskEvent(
                             strategy_instance_id=strategy.id,
                             event_type="RECONCILE_AUTO_STOP_ORPHAN",
@@ -317,11 +313,9 @@ def _do_reconcile(decrypt_func) -> None:
                 # 잘못 승격. 거래소 포지션은 stage 1~(N-1) 합 (= 이전 fills) 이라 != 0 인 게 당연.
                 # 해당 stage 의 LIMIT 가 실제로 fill 됐는지 확인하려면 stage_plan.is_triggered 검사.
                 # is_triggered 는 stream_service 가 ENTRY FILLED 처리 시 atomic UPDATE 함.
-                _PENDING_TO_OPEN = {
-                    f"STAGE{n}_OPEN_PENDING": (f"STAGE{n}_OPEN", n) for n in range(1, 11)
-                }
-                if strategy.status in _PENDING_TO_OPEN and exchange_position_amt != 0:
-                    new_status, pending_stage_no = _PENDING_TO_OPEN[strategy.status]
+                # 2026-05-14 Phase 1 centralize: PENDING_TO_OPEN_MAP 사용 (app.core.strategy_status).
+                if strategy.status in PENDING_TO_OPEN_MAP and exchange_position_amt != 0:
+                    new_status, pending_stage_no = PENDING_TO_OPEN_MAP[strategy.status]
                     # 그 stage 의 plan 이 실제 fill 됐는지 확인 (stream 누락 회복용 가드).
                     from app.models.strategy_stage_plan import StrategyStagePlan
                     plan = db.execute(

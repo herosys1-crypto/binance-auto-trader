@@ -30,8 +30,9 @@ from app.services.notification_service import NotificationService
 logger = logging.getLogger(__name__)
 
 # 다음 stage 진입 검사 대상 상태 (stage 1~9 가 OPEN 이면 그 다음 stage 진입 검사 — 10 은 마지막).
-# 2026-05-04: 옵션 C 1~10단계 동적 — comprehension 으로 통일.
-ACTIVE_STAGE_STATUSES = {f"STAGE{n}_OPEN" for n in range(1, 10)}
+# 2026-05-14 Phase 1 centralize: STAGES_WITH_NEXT (app.core.strategy_status).
+from app.core.strategy_status import STAGES_WITH_NEXT
+ACTIVE_STAGE_STATUSES = STAGES_WITH_NEXT
 
 
 def _count_total_stages_from_template(tpl) -> int:
