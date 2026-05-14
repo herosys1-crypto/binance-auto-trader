@@ -33,6 +33,10 @@ def _stats_modals_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "stats-modals.js").read_text(encoding="utf-8")
 
 
+def _health_page_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "health-page.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -226,6 +230,29 @@ class TestStaticAssetsIntegrity:
         assert not violations, (
             "index.html 에 stats-modals 함수 inline 재정의 발견:\n  "
             + "\n  ".join(violations)
+        )
+
+    def test_health_page_js_exists_and_loaded(self):
+        """health-page.js (Phase 3 추가) 존재 + script tag 순서 검증."""
+        path = _backend_root() / "app" / "static" / "js" / "health-page.js"
+        assert path.exists(), "health-page.js missing"
+
+        html = _index_html()
+        api_pos = html.find("/static/js/api.js")
+        health_pos = html.find("/static/js/health-page.js")
+        assert health_pos > 0, "<script src='/static/js/health-page.js'> tag 누락"
+        assert health_pos > api_pos, "health-page.js 가 api.js 보다 먼저 로드됨"
+
+    def test_health_page_js_defines_loadHealthDashboard(self):
+        """health-page.js 가 loadHealthDashboard 정의."""
+        js = _health_page_js()
+        assert "async function loadHealthDashboard" in js, "loadHealthDashboard 정의 누락"
+
+    def test_no_inline_load_health_dashboard_in_index_html(self):
+        """index.html 에 loadHealthDashboard inline 재정의 금지."""
+        html = _index_html()
+        assert "async function loadHealthDashboard" not in html, (
+            "loadHealthDashboard 가 index.html 에 inline 재정의됨 — health-page.js 와 중복"
         )
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
