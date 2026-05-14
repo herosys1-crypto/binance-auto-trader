@@ -61,6 +61,10 @@ def _multi_symbol_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "multi-symbol.js").read_text(encoding="utf-8")
 
 
+def _template_save_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "template-save.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -487,6 +491,38 @@ class TestStaticAssetsIntegrity:
         violations = [pat for pat in forbidden if pat in html]
         assert not violations, (
             "index.html 에 multi-symbol 함수 inline 재정의 발견:\n  " + "\n  ".join(violations)
+        )
+
+    def test_template_save_js_exists_and_loaded(self):
+        """template-save.js 존재 + script tag 검증."""
+        path = _backend_root() / "app" / "static" / "js" / "template-save.js"
+        assert path.exists(), "template-save.js missing"
+
+        html = _index_html()
+        ms_pos = html.find("/static/js/multi-symbol.js")
+        ts_pos = html.find("/static/js/template-save.js")
+        assert ts_pos > 0
+        assert ts_pos > ms_pos, "template-save.js 가 multi-symbol.js 보다 먼저 로드됨 (toggleMultiSymbolMode 의존)"
+
+    def test_template_save_js_defines_required(self):
+        js = _template_save_js()
+        for fn in [
+            "async function saveAsTemplate",
+            "async function openCreateModalForBatch",
+            "function _parseBatchSymbols",
+        ]:
+            assert fn in js, f"template-save.js 누락: {fn}"
+
+    def test_no_inline_template_save_in_index_html(self):
+        html = _index_html()
+        forbidden = [
+            "async function saveAsTemplate",
+            "async function openCreateModalForBatch",
+            "function _parseBatchSymbols",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations, (
+            "index.html 에 template-save 함수 inline 재정의 발견:\n  " + "\n  ".join(violations)
         )
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
