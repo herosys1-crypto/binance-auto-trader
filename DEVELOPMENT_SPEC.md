@@ -76,6 +76,22 @@
 - v1~v5: TP1=25, TP2=50, TP3=100, TP4=100, TP5=100, TP6~9=25, TP10=100 + last_active_tp 100% override
 - **v6 (2026-05-12 밤): TP1~9 균일 25%, TP10 100%, last_active_tp shortcut 폐지** (사용자 기획 「+10%에서 25%씩 시작」)
 
+### 2.3.1 단축 익절 (v7, 2026-05-14)
+
+stage<3 인데 TP3+ 발동 시 → **잔량 100% 즉시 청산** (trailing 기다림 X).
+
+```
+조건 (모두 AND):
+  ① level == TPx (x >= 3)
+  ② current_stage < 3 (TRAILING_MIN_STAGE 미달)
+  ③ NOT crisis_mode (크라이시스는 별도 ratio)
+→ close_ratio = 1.00 (잔량 전부)
+```
+
+**이유**: stage<3 = trailing 자격 미달 → trailing 영영 미발동 위험. TP3 (+20% threshold) 까지 갔다 = 충분한 수익 = 잔량 빠르게 정리하는 게 안전.
+
+**구현**: `tp_sl_orchestrator._execute_take_profit` 의 close_ratio 결정 로직에 분기.
+
 ### 2.3 트레일링 청산 (Trailing TP) — v5 (2026-05-12 밤)
 
 ```python
