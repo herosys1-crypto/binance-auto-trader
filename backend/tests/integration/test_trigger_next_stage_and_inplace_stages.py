@@ -171,9 +171,14 @@ class TestTriggerNextStageManually:
         ))
         db_session.commit()
 
-        # decrypt_text 우회 — fake account
-        from app.api.v1 import strategies as strategies_mod
-        monkeypatch.setattr(strategies_mod, "decrypt_text", lambda x: "fake")
+        # decrypt_text 우회 — fake account.
+        # 2026-05-14 Phase 4: strategies.py 분할 후 source 모듈 직접 patch (더 견고).
+        # 다른 테스트들 (test_strategy_capital_limits.py 등) 도 같은 패턴 사용.
+        monkeypatch.setattr("app.core.crypto.decrypt_text", lambda s: "fake")
+        # control.py 가 이미 from app.core.crypto import decrypt_text 한 상태므로
+        # control 모듈 내 reference 도 같이 patch.
+        from app.api.v1.strategies import control as _strategies_control
+        monkeypatch.setattr(_strategies_control, "decrypt_text", lambda s: "fake")
         # ExecutionService.enter_stage_at_market 가 거래소 통신 실패 raise 라고 시뮬
         def _boom(self, strategy_id, stage_no):  # noqa: ANN001, ARG001
             raise RuntimeError("Binance API timeout")
