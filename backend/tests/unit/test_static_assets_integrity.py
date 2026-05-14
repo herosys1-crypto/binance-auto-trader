@@ -81,6 +81,10 @@ def _cm_market_info_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "cm-market-info.js").read_text(encoding="utf-8")
 
 
+def _cm_capitals_grid_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "cm-capitals-grid.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -646,6 +650,35 @@ class TestStaticAssetsIntegrity:
             "async function loadCmMarketInfo",
             "function fillStartPrice",
             "function _drawCmChart",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations
+
+    def test_cm_capitals_grid_js_exists_and_loaded(self):
+        path = _backend_root() / "app" / "static" / "js" / "cm-capitals-grid.js"
+        assert path.exists(), "cm-capitals-grid.js missing"
+        html = _index_html()
+        cg_pos = html.find("/static/js/cm-capitals-grid.js")
+        mi_pos = html.find("/static/js/cm-market-info.js")
+        assert cg_pos > 0
+        assert cg_pos > mi_pos, "cm-capitals-grid.js 가 cm-market-info.js 보다 먼저 로드 — _decimalsForPrice 의존"
+
+    def test_cm_capitals_grid_js_defines_required(self):
+        js = _cm_capitals_grid_js()
+        for fn in [
+            "function _defaultTriggerPct",
+            "function buildCapitalsGrid",
+            "function _refreshLiveCalc",
+            "function onCapitalsChange",
+        ]:
+            assert fn in js, f"cm-capitals-grid.js 누락: {fn}"
+
+    def test_no_inline_cm_capitals_grid_in_index_html(self):
+        html = _index_html()
+        forbidden = [
+            "function buildCapitalsGrid()",
+            "function _refreshLiveCalc()",
+            "function onCapitalsChange()",
         ]
         violations = [pat for pat in forbidden if pat in html]
         assert not violations
