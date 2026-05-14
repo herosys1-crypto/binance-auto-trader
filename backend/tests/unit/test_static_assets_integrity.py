@@ -93,6 +93,10 @@ def _cm_state_helpers_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "cm-state-helpers.js").read_text(encoding="utf-8")
 
 
+def _cm_preview_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "cm-preview.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -739,6 +743,40 @@ class TestStaticAssetsIntegrity:
         ]
         violations = [pat for pat in forbidden if pat in html]
         assert not violations
+
+    def test_cm_preview_js_exists_and_loaded(self):
+        path = _backend_root() / "app" / "static" / "js" / "cm-preview.js"
+        assert path.exists(), "cm-preview.js missing"
+        html = _index_html()
+        prev_pos = html.find("/static/js/cm-preview.js")
+        assert prev_pos > 0
+
+    def test_cm_preview_js_defines_required(self):
+        js = _cm_preview_js()
+        for fn in [
+            "function updateCmSubmit",
+            "async function loadBalanceForPreview",
+            "function _filledCapitals",
+            "async function calcPreview",
+            "function _estimateLiquidationPrice",
+            "function _renderPreview",
+            "async function submitInPlaceSettings",
+        ]:
+            assert fn in js, f"cm-preview.js 누락: {fn}"
+
+    def test_no_inline_cm_preview_in_index_html(self):
+        html = _index_html()
+        forbidden = [
+            "function updateCmSubmit() {",
+            "async function loadBalanceForPreview()",
+            "async function calcPreview()",
+            "function _renderPreview(data)",
+            "async function submitInPlaceSettings()",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations, (
+            "index.html 에 cm-preview 함수 inline 재정의 발견:\n  " + "\n  ".join(violations)
+        )
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
         """제거된 cm-crisis-threshold UI element 참조가 다시 들어오면 안 됨.
