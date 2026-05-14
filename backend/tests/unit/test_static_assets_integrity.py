@@ -69,6 +69,10 @@ def _cm_collectors_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "cm-collectors.js").read_text(encoding="utf-8")
 
 
+def _cm_prev_blueprint_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "cm-prev-blueprint.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -560,6 +564,25 @@ class TestStaticAssetsIntegrity:
         assert "function _collectDirectInputs() {" not in html
         assert "function _collectTpSl() {" not in html
         assert "function _defaultLeverageForSide(side) {" not in html
+
+    def test_cm_prev_blueprint_js_exists_and_loaded(self):
+        path = _backend_root() / "app" / "static" / "js" / "cm-prev-blueprint.js"
+        assert path.exists(), "cm-prev-blueprint.js missing"
+        html = _index_html()
+        coll_pos = html.find("/static/js/cm-collectors.js")
+        prev_pos = html.find("/static/js/cm-prev-blueprint.js")
+        assert prev_pos > 0
+        assert prev_pos > coll_pos, "cm-prev-blueprint.js 가 cm-collectors.js 보다 먼저 로드됨"
+
+    def test_cm_prev_blueprint_js_defines_required(self):
+        js = _cm_prev_blueprint_js()
+        assert "async function loadCmPrevStrategies" in js
+        assert "async function loadPrevBlueprint" in js
+
+    def test_no_inline_cm_prev_blueprint_in_index_html(self):
+        html = _index_html()
+        assert "async function loadCmPrevStrategies" not in html
+        assert "async function loadPrevBlueprint" not in html
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
         """제거된 cm-crisis-threshold UI element 참조가 다시 들어오면 안 됨.
