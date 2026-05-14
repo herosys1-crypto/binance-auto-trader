@@ -238,11 +238,63 @@ def delete_strategy(
         strategy.avg_entry_price and Decimal(str(strategy.avg_entry_price)) > 0
     )
     realized = Decimal(str(strategy.realized_pnl or 0))
+
+    # 2026-05-15 fix (사용자 #33 AVAAIUSDT + #41 ESPORTSUSDT 좀비 사례):
+    # archive 시 latest position 의 qty 가 0 이 아니면 (force-stop 후 또는 외부 청산 누락)
+    # 거래소에 잔량이 남아있을 가능성 높음 → CRITICAL RiskEvent + WARN 메시지.
+    # archive 자체는 진행 (운영자 판단 존중) — 단 사후 알림 보장.
+    from app.models.position import Position
+    from app.models.risk_event import RiskEvent
+    from sqlalchemy import select as sa_select
+    latest_pos = db.execute(
+        sa_select(Position)
+        .where(Position.strategy_instance_id == strategy.id)
+        .order_by(Position.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    suspected_orphan = False
+    suspected_qty = None
+    if latest_pos and latest_pos.position_amt is not None:
+        try:
+            suspected_qty = abs(Decimal(str(latest_pos.position_amt)))
+            if suspected_qty > 0:
+                suspected_orphan = True
+        except Exception:
+            pass
+
     strategy.is_archived = True
     strategy.archived_at = _dt.now(_tz.utc)
+
+    if suspected_orphan:
+        db.add(RiskEvent(
+            strategy_instance_id=strategy.id,
+            event_type="ARCHIVE_WITH_NONZERO_POSITION",
+            severity="CRITICAL",
+            title=f"🚨 전략 #{sid} archive 시 거래소 잔량 의심 ({suspected_qty})",
+            message=(
+                f"{strategy.symbol} {strategy.side} 전략 #{sid} archive 처리됐으나 "
+                f"마지막 position snapshot 의 qty 가 {suspected_qty} (≠ 0). "
+                f"거래소에 좀비 포지션 가능성 — 직접 확인/수동 청산 권장. "
+                f"force-stop 후 archive 한 경우 자주 발생 (force-stop 은 DB qty=0 만 마킹)."
+            ),
+            event_payload={
+                "strategy_id": sid,
+                "symbol": strategy.symbol,
+                "side": strategy.side,
+                "last_known_position_amt": str(suspected_qty),
+                "snapshot_id": latest_pos.id,
+            },
+        ))
+
     db.commit()
 
-    if had_position:
+    if suspected_orphan:
+        msg = (
+            f"⚠️ 전략 #{sid} 보관 처리됨 (DB row + orders 보존). "
+            f"마지막 snapshot qty={suspected_qty} → 거래소 잔량 가능성 높음. "
+            f"CRITICAL 알림 발송됨 — 거래소에서 직접 청산 확인 필요."
+        )
+    elif had_position:
         msg = (
             f"전략 #{sid} 보관 처리됨 (DB row + orders 보존, UI 숨김). "
             f"realized_pnl {realized:+.4f} USDT 통계 합계에 유지됨."
