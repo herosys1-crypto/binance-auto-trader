@@ -253,3 +253,112 @@ class TestExistingTPBehaviorPreserved:
         # No position — evaluate returns None gracefully
         result = RiskService(db_session).evaluate_take_profit_level(strategy.id)
         assert result is None
+
+
+# ============================================================================
+# 사용자 #40 BUSDT 보고 (2026-05-14 evening) — 3 exits 보장 시뮬레이션
+# ============================================================================
+class TestUser40Busdt3ExitsGuaranteed:
+    """사용자 #40 BUSDT 보고: stage 2 진입 + 빠른 가격 변동 시 EXIT 가 2건만 발생.
+    예상: TP1 (25%) + TP2 (25%) + TP3 v7 (100%) = 3건.
+    실제 (구 코드): TP1 (25%) + TP3 v7 (100%) = 2건 (TP2 skip).
+
+    원인 추정: v2 fix (2026-05-04, 사용자 #98 LABUSDT 사례) 이전 production code.
+    descending loop 였을 때 한 tick 에 TP2/TP3 모두 도달 시 TP3 즉시 반환 → TP2 skip.
+
+    이 테스트는 현재 code 가 #40 같은 시나리오에서 절대 TP2 skip 안 하는지 검증.
+    3 exit 시퀀스 시뮬레이션:
+      1. status=ACTIVE → pnl 22% (TP1+TP2+TP3 모두 임계 초과) → TP1 반환 (가장 낮은 미발동)
+      2. status=TP1_DONE_PARTIAL → pnl 22% 유지 → TP2 반환 (skip 안 됨!)
+      3. status=TP2_DONE_PARTIAL → pnl 22% 유지 → TP3 반환 (orchestrator 가 v7 100% 처리)
+    """
+
+    def test_first_call_at_status_active_returns_tp1(
+        self,
+        db_session,
+        make_template,
+        make_strategy,
+        make_position_at_mark,
+        patched_redis_for_risk,
+    ) -> None:
+        """1번째 tick: status=ACTIVE 또는 STAGE2_OPEN, pnl 큰 폭 → TP1 반환 (가장 낮은 미발동)."""
+        tpl = make_template(
+            tp1_percent=Decimal("10"), tp2_percent=Decimal("15"), tp3_percent=Decimal("20"),
+        )
+        strategy = make_strategy(
+            symbol_str="BUSDT", side="SHORT", status="STAGE2_OPEN",
+            current_position_qty=Decimal("-76"),
+            avg_entry_price=Decimal("0.65"),
+            leverage=1,
+            template=tpl, current_stage=2,
+        )
+        # SHORT @ 0.65, mark 0.5135 → +21% raw → 21% leveraged (모든 TP 임계 초과)
+        make_position_at_mark(strategy, Decimal("0.5135"))
+
+        result = RiskService(db_session).evaluate_take_profit_level(strategy.id)
+        assert result == "TP1", (
+            f"#40 시나리오 1번째 tick — TP1 발동 기대 (가장 낮은 미발동). 실제: {result}\n"
+            f"이전 버그 (v2 fix 이전): descending → TP3 즉시 반환 → TP1/TP2 skip"
+        )
+
+    def test_second_call_at_tp1_partial_returns_tp2_not_tp3(
+        self,
+        db_session,
+        make_template,
+        make_strategy,
+        make_position_at_mark,
+        patched_redis_for_risk,
+    ) -> None:
+        """2번째 tick: status=TP1_DONE_PARTIAL, pnl 여전히 큼 → TP2 (NOT TP3) 반환.
+
+        #40 BUSDT 의 핵심 회귀: 이 단계에서 TP3 반환 = TP2 skip = 2 exits 만 발생.
+        v2 fix 후엔 무조건 TP2 반환 → 다음 tick 에 TP3 → 총 3 exits.
+        """
+        tpl = make_template(
+            tp1_percent=Decimal("10"), tp2_percent=Decimal("15"), tp3_percent=Decimal("20"),
+        )
+        strategy = make_strategy(
+            symbol_str="BUSDT", side="SHORT", status="TP1_DONE_PARTIAL",
+            current_position_qty=Decimal("-57"),  # 76 - 19 (TP1 25%)
+            avg_entry_price=Decimal("0.65"),
+            leverage=1,
+            template=tpl, current_stage=2,
+        )
+        make_position_at_mark(strategy, Decimal("0.5135"))  # +21%
+
+        result = RiskService(db_session).evaluate_take_profit_level(strategy.id)
+        assert result == "TP2", (
+            f"#40 BUSDT 핵심 회귀 — TP1_PARTIAL 상태에서 pnl 21% (TP3 임계 초과) 라도 "
+            f"다음 미발동인 TP2 만 반환해야. 실제: {result}\n"
+            f"TP3 반환 시 TP2 skip = 사용자 #40 BUSDT 의 2-exits 버그 재발."
+        )
+
+    def test_third_call_at_tp2_partial_returns_tp3_for_v7(
+        self,
+        db_session,
+        make_template,
+        make_strategy,
+        make_position_at_mark,
+        patched_redis_for_risk,
+    ) -> None:
+        """3번째 tick: status=TP2_DONE_PARTIAL → TP3 반환.
+
+        orchestrator._execute_take_profit('TP3') 가 v7_short_exit 분기로 100% 청산.
+        (test_v7_short_exit_partial_stage 가 orchestrator 단 검증)
+        """
+        tpl = make_template(
+            tp1_percent=Decimal("10"), tp2_percent=Decimal("15"), tp3_percent=Decimal("20"),
+        )
+        strategy = make_strategy(
+            symbol_str="BUSDT", side="SHORT", status="TP2_DONE_PARTIAL",
+            current_position_qty=Decimal("-43"),  # 57 - 14 (TP2 25%)
+            avg_entry_price=Decimal("0.65"),
+            leverage=1,
+            template=tpl, current_stage=2,
+        )
+        make_position_at_mark(strategy, Decimal("0.5135"))  # +21%
+
+        result = RiskService(db_session).evaluate_take_profit_level(strategy.id)
+        assert result == "TP3", (
+            f"3번째 tick — TP3 반환 기대 (orchestrator 가 v7 으로 잔량 100% 청산). 실제: {result}"
+        )
