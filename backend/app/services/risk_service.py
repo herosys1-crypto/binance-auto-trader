@@ -71,12 +71,22 @@ class RiskService:
         if (strategy.current_stage or 0) < total_stages:
             return False
         current_loss_amount = Decimal(str(strategy.realized_pnl)) + Decimal(str(strategy.unrealized_pnl))
-        # SL 은 레버리지 적용된 ROI -50% 기준.
-        # qty = capital/price (notional 모델) 이므로 raw price -50% = USD 손실 -capital*0.50.
-        # 레버리지 적용된 ROI = (USD 손실 / margin) × 100 = (USD 손실 × leverage / capital) × 100.
-        # ROI -50% 도달 → USD 손실 = -capital × 0.50 / leverage. (1x:가격-50%, 2x:가격-25%, 5x:가격-10%)
+        # SL 은 레버리지 적용된 ROI 기준.
+        # threshold = total_capital × (sl_pct/100) / leverage.
+        # ROI -sl_pct% 도달 → USD 손실 = -capital × (sl_pct/100) / leverage.
+        # 2026-05-14 fix (사용자 발견 버그): 이전엔 Decimal("0.50") hardcoded —
+        # template.stop_loss_percent_of_capital (사용자 입력) 무시됐음.
+        # 사용자가 「🛑 손절: 90」 입력해도 코드는 50% 만 사용 → 사용자 의도 위배.
+        # 이제 template 값 우선 (NULL 또는 0 이하면 default 50%).
+        from app.models.strategy_template import StrategyTemplate
+        tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id) if strategy.strategy_template_id else None
+        sl_pct = (
+            Decimal(str(tpl.stop_loss_percent_of_capital))
+            if tpl and tpl.stop_loss_percent_of_capital and Decimal(str(tpl.stop_loss_percent_of_capital)) > 0
+            else Decimal("50")  # default fallback
+        )
         leverage = Decimal(str(strategy.leverage)) if strategy.leverage else Decimal("1")
-        threshold = (Decimal(str(strategy.total_capital)) * Decimal("0.50")) / leverage
+        threshold = (Decimal(str(strategy.total_capital)) * (sl_pct / Decimal("100"))) / leverage
         is_stop = current_loss_amount <= (-threshold)
         if is_stop:
             self.db.add(RiskEvent(strategy_instance_id=strategy.id, event_type="STOP_LOSS_TRIGGERED", severity="CRITICAL", title="🛑 손절 발동 (Stop Loss)", message=f"현재 손실 {current_loss_amount} USDT 가 한도 {-threshold} USDT 초과 → 강제 전량 청산", event_payload={"current_loss_amount": str(current_loss_amount), "threshold": str(-threshold)}))
