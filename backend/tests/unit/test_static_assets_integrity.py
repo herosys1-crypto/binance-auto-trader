@@ -113,6 +113,10 @@ def _indicators_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "indicators.js").read_text(encoding="utf-8")
 
 
+def _strategies_list_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "strategies-list.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -946,6 +950,36 @@ class TestStaticAssetsIntegrity:
             "function _bollingerBands(closes",
             "function _rsi(closes",
             "function _macd(closes",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations
+
+    def test_strategies_list_js_exists_and_loaded(self):
+        path = _backend_root() / "app" / "static" / "js" / "strategies-list.js"
+        assert path.exists(), "strategies-list.js missing"
+        html = _index_html()
+        sl_pos = html.find("/static/js/strategies-list.js")
+        assert sl_pos > 0
+
+    def test_strategies_list_js_defines_required(self):
+        js = _strategies_list_js()
+        for fn in [
+            "let _showArchivedStrategies",
+            "function toggleShowArchivedStrategies",
+            "function _initArchiveToggleFromStorage",
+            "async function restoreStrategy",
+            "async function refreshStrategies",
+            "async function refreshExchangeAccounts",
+        ]:
+            assert fn in js, f"strategies-list.js 누락: {fn}"
+
+    def test_no_inline_strategies_list_in_index_html(self):
+        html = _index_html()
+        forbidden = [
+            "async function refreshStrategies() {",
+            "async function refreshExchangeAccounts() {",
+            "async function restoreStrategy(id) {",
+            "function toggleShowArchivedStrategies() {",
         ]
         violations = [pat for pat in forbidden if pat in html]
         assert not violations
