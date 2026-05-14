@@ -53,6 +53,10 @@ def _trade_history_modal_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "trade-history-modal.js").read_text(encoding="utf-8")
 
 
+def _system_banner_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "system-banner.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -420,6 +424,27 @@ class TestStaticAssetsIntegrity:
         assert not violations, (
             "index.html 에 trade-history-modal inline 재정의 발견:\n  " + "\n  ".join(violations)
         )
+
+    def test_system_banner_js_exists_and_loaded(self):
+        """system-banner.js 존재 + script tag 검증."""
+        path = _backend_root() / "app" / "static" / "js" / "system-banner.js"
+        assert path.exists(), "system-banner.js missing"
+
+        html = _index_html()
+        api_pos = html.find("/static/js/api.js")
+        banner_pos = html.find("/static/js/system-banner.js")
+        assert banner_pos > 0
+        assert banner_pos > api_pos
+
+    def test_system_banner_js_defines_required(self):
+        js = _system_banner_js()
+        assert "async function loadSystemStatus" in js
+        assert "async function clearKillSwitch" in js
+
+    def test_no_inline_system_banner_in_index_html(self):
+        html = _index_html()
+        assert "async function loadSystemStatus" not in html
+        assert "async function clearKillSwitch" not in html
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
         """제거된 cm-crisis-threshold UI element 참조가 다시 들어오면 안 됨.
