@@ -8,38 +8,26 @@ from app.repositories.position_repository import PositionRepository
 from app.repositories.strategy_repository import StrategyRepository
 from app.services.strategy_calculator import StrategyCalculator, SymbolRule
 
-# 트레일링 익절 임계치 (정상 모드)
-# 사용자 기획 (2026-04-30): "익절을 단계별로 진행하는 중에 -5% 하락하면 모두 청산익절".
-# 사용자 기획 v2 (2026-05-07): "익절 3단계 후부터 작동 — TP1=10%/TP2=15%/TP3=20% 모두
-# 발동된 후 피크 대비 -5% 회귀 시 전량 청산". 이전엔 TP1 발동 후부터 활성이었음.
-# 사용자 기획 v3 (2026-05-12 새벽): TP4 부터 활성 (#2/#5 분석 후 보수적).
-# 사용자 기획 v4 (2026-05-12 저녁): v3 → v2 revert. 사용자 본래 의도는 TP3+.
-# 사용자 기획 v5 (2026-05-12 밤): v4 + 「진입 단계 3 이상」 추가 조건.
-#   "진입도 1단계 2단계 3단계 실행후 부터 진행 실행하는거야".
-#   즉 trailing 발동에 두 가지 조건 동시 만족 필요:
-#     ① TP3 발동 (status >= TP3_DONE_PARTIAL)  ← v2 부터의 조건
-#     ② 진입 stage 3 이상 (current_stage >= 3) ← v5 신규 조건
-#   2단계까지만 진입한 strategy 가 빠른 가격 상승으로 TP3 까지 발동된 케이스에선
-#   잔량이 적으니 trailing 발동 의미 작음 + last_active_tp 가 100% 청산 처리.
-#   3단계 이상 진입 = "충분히 분할 진입한 상태" 라는 사용자 의도.
-TRAILING_TP_PEAK_THRESHOLD = Decimal("5")    # 피크가 이 % 이상 도달했어야 트레일링 활성화
-TRAILING_TP_RETRACE_AMOUNT = Decimal("5")    # 피크 대비 이 % 만큼 하락하면 발동 (예: peak 25% → 20% 시 청산)
-TRAILING_MIN_TP_INDEX = 3                    # TP3 (idx 2) 이상 발동된 후부터 trailing armed
-TRAILING_MIN_STAGE = 3                       # 진입 stage 3 이상이어야 trailing armed (v5, 2026-05-12 밤)
-PEAK_REDIS_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
-
-# 크라이시스 복구 모드 임계치
-# 사용자 기획 v2 (2026-05-07): "전체 진입단계가 모두 진입한 상태에서 -50% 이상 손실에서
-# 익절 +5% 부터 진행". 이전엔 -30% 손실 도달 + 양수 PnL 회복 시점이었음.
-CRISIS_MAX_LOSS_THRESHOLD = Decimal("-50")  # 누적 최대 손실 이 % 이하 도달
-CRISIS_TP1_THRESHOLD = Decimal("5")         # 크라이시스 모드 첫 TP +5%
-CRISIS_TRAILING_DROP = Decimal("5")         # 첫 TP 후 피크 -5% 회귀 시 전량 청산
-CRISIS_HARD_SL_THRESHOLD = Decimal("-1")    # 첫 TP 후 PnL -1% 이하 시 전량 손절
-
-# 손실 알림 임계 (2026-05-04 신규) — 강제 청산 (-50%) 도달 시 1회 알림.
-# 도달 = max_loss_pct 가 처음 이 임계 이하로 내려가는 사이클.
-# 상태는 strategy.max_loss_pct 의 prev/new 비교로 판정 (별도 컬럼 불필요).
-LOSS_ALERT_THRESHOLD = Decimal("-50")
+# 트레일링 익절 / 크라이시스 / 손실 알림 정책 상수 — 2026-05-14 Phase 2 centralize.
+# 정책 변경 시 app/core/risk_constants.py 만 수정 → 모든 사용처 자동 반영.
+# 이 모듈은 backward compat 을 위해 재export (외부 import 경로 유지).
+#
+# 정책 history (참조):
+# - 트레일링 v5 (2026-05-12): TP3+ AND stage>=3 두 조건 동시 만족
+# - 크라이시스 v2 (2026-05-07): -50% 손실 + 모든 단계 진입 후 +5% 부터 회복
+# - 5-14: template.crisis_max_loss_threshold 사용자 정의 가능 (-100=비활성)
+from app.core.risk_constants import (
+    CRISIS_HARD_SL_THRESHOLD_PCT as CRISIS_HARD_SL_THRESHOLD,
+    CRISIS_MAX_LOSS_THRESHOLD_DEFAULT as CRISIS_MAX_LOSS_THRESHOLD,
+    CRISIS_TP1_THRESHOLD_PCT as CRISIS_TP1_THRESHOLD,
+    CRISIS_TRAILING_DROP_PCT as CRISIS_TRAILING_DROP,
+    LOSS_ALERT_THRESHOLD_PCT as LOSS_ALERT_THRESHOLD,
+    PEAK_REDIS_TTL_SECONDS,
+    TRAILING_MIN_STAGE,
+    TRAILING_MIN_TP_INDEX,
+    TRAILING_PEAK_THRESHOLD_PCT as TRAILING_TP_PEAK_THRESHOLD,
+    TRAILING_RETRACE_PCT as TRAILING_TP_RETRACE_AMOUNT,
+)
 
 class RiskService:
     def __init__(self, db) -> None:
@@ -78,15 +66,20 @@ class RiskService:
         # template.stop_loss_percent_of_capital (사용자 입력) 무시됐음.
         # 사용자가 「🛑 손절: 90」 입력해도 코드는 50% 만 사용 → 사용자 의도 위배.
         # 이제 template 값 우선 (NULL 또는 0 이하면 default 50%).
+        from app.core.risk_constants import (
+            DEFAULT_SL_PCT_OF_CAPITAL,
+            LEVERAGE_FALLBACK,
+            PERCENT_DENOMINATOR,
+        )
         from app.models.strategy_template import StrategyTemplate
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id) if strategy.strategy_template_id else None
         sl_pct = (
             Decimal(str(tpl.stop_loss_percent_of_capital))
             if tpl and tpl.stop_loss_percent_of_capital and Decimal(str(tpl.stop_loss_percent_of_capital)) > 0
-            else Decimal("50")  # default fallback
+            else DEFAULT_SL_PCT_OF_CAPITAL  # template 미설정 시 default 50%
         )
-        leverage = Decimal(str(strategy.leverage)) if strategy.leverage else Decimal("1")
-        threshold = (Decimal(str(strategy.total_capital)) * (sl_pct / Decimal("100"))) / leverage
+        leverage = Decimal(str(strategy.leverage)) if strategy.leverage else LEVERAGE_FALLBACK
+        threshold = (Decimal(str(strategy.total_capital)) * (sl_pct / PERCENT_DENOMINATOR)) / leverage
         is_stop = current_loss_amount <= (-threshold)
         if is_stop:
             self.db.add(RiskEvent(strategy_instance_id=strategy.id, event_type="STOP_LOSS_TRIGGERED", severity="CRITICAL", title="🛑 손절 발동 (Stop Loss)", message=f"현재 손실 {current_loss_amount} USDT 가 한도 {-threshold} USDT 초과 → 강제 전량 청산", event_payload={"current_loss_amount": str(current_loss_amount), "threshold": str(-threshold)}))
@@ -116,8 +109,9 @@ class RiskService:
         # raw 가격 변동률에 레버리지 곱해서 사용자 실제 ROI 로 변환.
         # 이 한 곳에서 변환하면 TP1~5, 트레일링, 크라이시스, peak 추적, max_loss/profit 모두
         # 자동으로 leveraged ROI 기준으로 동작.
-        raw_pnl_pct = ((mark_price - avg_entry) / avg_entry) * Decimal("100") if strategy.side == "LONG" else ((avg_entry - mark_price) / avg_entry) * Decimal("100")
-        leverage = Decimal(str(strategy.leverage)) if strategy.leverage else Decimal("1")
+        from app.core.risk_constants import LEVERAGE_FALLBACK, PERCENT_DENOMINATOR
+        raw_pnl_pct = ((mark_price - avg_entry) / avg_entry) * PERCENT_DENOMINATOR if strategy.side == "LONG" else ((avg_entry - mark_price) / avg_entry) * PERCENT_DENOMINATOR
+        leverage = Decimal(str(strategy.leverage)) if strategy.leverage else LEVERAGE_FALLBACK
         pnl_ratio = raw_pnl_pct * leverage
 
         # ─────────── PnL 추적 + 크라이시스 모드 검사 (Phase D-1) ───────────
@@ -296,7 +290,8 @@ class RiskService:
             else CRISIS_MAX_LOSS_THRESHOLD  # global -50
         )
         # -100 이하 = 크라이시스 비활성 (어떤 손실도 이 임계에 도달 불가능 — leveraged ROI 도 -100% 가 사실상 청산)
-        if threshold <= Decimal("-100"):
+        from app.core.risk_constants import CRISIS_DISABLED_SENTINEL
+        if threshold <= CRISIS_DISABLED_SENTINEL:
             return False
         # 1) Stage 조건: 모든 단계 진입 OR 「💉 포지션 추가」 (ad-hoc) 사용 (v4 안전망)
         total_stages = self._get_total_stages(strategy)

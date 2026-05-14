@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from decimal import Decimal, getcontext
 from typing import Any, Literal
 
+from app.core.risk_constants import PERCENT_DENOMINATOR
+
 getcontext().prec = 28
 Side = Literal["LONG", "SHORT"]
 
@@ -310,7 +312,7 @@ class StrategyCalculator:
             prev_anchor_price = price
 
         stop_loss_amount = self._quantize_price(
-            total_capital * (stop_loss_percent_of_capital / Decimal("100"))
+            total_capital * (stop_loss_percent_of_capital / PERCENT_DENOMINATOR)
         )
         return StrategyPreview(
             symbol=symbol,
@@ -361,9 +363,11 @@ class StrategyCalculator:
     # ---------- helpers ----------
     @staticmethod
     def _multiplier(side: Side, pct: Decimal) -> Decimal:
+        # SHORT: 가격 상승 → multiplier > 1 (예: pct=10 → 1.10)
+        # LONG: 가격 하락 → multiplier < 1
         if side == "SHORT":
-            return Decimal("1") + (pct / Decimal("100"))
-        return Decimal("1") - (pct / Decimal("100"))
+            return Decimal("1") + (pct / PERCENT_DENOMINATOR)
+        return Decimal("1") - (pct / PERCENT_DENOMINATOR)
 
     def _quantize_price(self, value: Decimal) -> Decimal:
         if self.symbol_rule.tick_size == 0:

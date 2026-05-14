@@ -3,22 +3,27 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
+from app.core.risk_constants import (
+    CRISIS_QTY_RATIO_DEFAULT as _CRISIS_QTY_RATIO_DEFAULT,
+    CRISIS_RATIO_KEYS as _CRISIS_RATIO_KEYS,
+    DEFAULT_STEP_SIZE_FALLBACK,
+    DEFAULT_TP_QTY_RATIO_PCT,
+    FULL_CLOSE_RATIO,
+    LEVERAGE_FALLBACK,
+    PERCENT_DENOMINATOR,
+    QTY_PRECISION,
+    TP_FINAL_QTY_RATIO_PCT,
+    USDT_PRICE_PRECISION,
+)
 from app.observability.metrics import strategy_runs_total, strategy_take_profit_total
 from app.repositories.strategy_repository import StrategyRepository
 from app.services.execution_service import EmergencyCloseInProgress, ExecutionService
 from app.services.notification_service import NotificationService
 from app.services.risk_service import RiskService
 
-
-# 크라이시스 모드 qty ratio default (사용자 spec — 2026-04-30 변경 이후 고정).
-# template.crisis_qty_ratios 가 NULL 또는 일부 키만 채웠을 때 fallback.
-_CRISIS_QTY_RATIO_DEFAULT: dict[str, Decimal] = {
-    "TP1": Decimal("25"),
-    "TP2": Decimal("25"),
-    "TP3": Decimal("50"),
-    "TP4": Decimal("100"),
-}
-_CRISIS_RATIO_KEYS = ("TP1", "TP2", "TP3", "TP4")
+# 2026-05-14 Phase 2 centralize: 위 상수 모두 app.core.risk_constants 에서 import.
+# _CRISIS_QTY_RATIO_DEFAULT / _CRISIS_RATIO_KEYS 는 backward compat 을 위해 alias 유지
+# (test_crisis_qty_ratios_resolver.py 가 이 이름으로 import).
 
 
 def _resolve_crisis_qty_ratios(override: Any) -> dict[str, Decimal]:
@@ -113,8 +118,8 @@ class TPSLOrchestratorService:
         # TP10 만 100% (절대 마지막 안전망 — trailing 미발동 + 가격 계속 상승 케이스).
         # 이전 default (TP2=50, TP3~5=100) 는 사용자 「TP3 후 trailing」 의도 위배 — TP3
         # 가 100% 면 trailing 영영 발동 못함. 균일 25% 로 변경 → 잔량 보유 → trailing 기회.
-        default_ratio = {f"TP{n}": Decimal("25") for n in range(1, 10)}
-        default_ratio["TP10"] = Decimal("100")
+        default_ratio = {f"TP{n}": DEFAULT_TP_QTY_RATIO_PCT for n in range(1, 10)}
+        default_ratio["TP10"] = TP_FINAL_QTY_RATIO_PCT
         # 크라이시스 모드 qty ratio (사용자 기획 default):
         # TP1=25%, TP2=25%, TP3=50% of remaining, TP4=100% of remaining
         # 2026-05-04 (alembic 0009): template.crisis_qty_ratios JSONB override 가능.
@@ -150,17 +155,17 @@ class TPSLOrchestratorService:
                 pass
 
         if level == "TRAILING_TP":
-            close_ratio = Decimal("1.00")  # 트레일링은 항상 100% (v6 변경 없음)
+            close_ratio = FULL_CLOSE_RATIO  # 트레일링은 항상 100% (v6 변경 없음)
         elif v7_short_exit:
-            close_ratio = Decimal("1.00")  # v7: 단축 익절 — 잔량 100% (stage 미달 + TP3+)
+            close_ratio = FULL_CLOSE_RATIO  # v7: 단축 익절 — 잔량 100% (stage 미달 + TP3+)
         elif strategy.crisis_mode_triggered_at and level in crisis_qty_ratio:
-            close_ratio = crisis_qty_ratio[level] / Decimal("100")
+            close_ratio = crisis_qty_ratio[level] / PERCENT_DENOMINATOR
         else:
             attr = ratio_attr.get(level)
             tpl_val = getattr(tpl, attr, None) if tpl and attr else None
-            ratio_pct = Decimal(str(tpl_val)) if tpl_val is not None else default_ratio.get(level, Decimal("25"))
-            close_ratio = ratio_pct / Decimal("100")
-        if close_ratio >= Decimal("1.00"):
+            ratio_pct = Decimal(str(tpl_val)) if tpl_val is not None else default_ratio.get(level, DEFAULT_TP_QTY_RATIO_PCT)
+            close_ratio = ratio_pct / PERCENT_DENOMINATOR
+        if close_ratio >= FULL_CLOSE_RATIO:
             close_qty = current_qty
         else:
             # Bug #11 fix (2026-04-29): step_size 단위로 floor.
@@ -170,7 +175,7 @@ class TPSLOrchestratorService:
             # 에러로 거절됨. 이제 심볼의 step_size 로 floor 한다.
             raw_qty = current_qty * close_ratio
             sym = self.db.execute(select(Symbol).where(Symbol.symbol == strategy.symbol)).scalars().first()
-            step = Decimal(str(sym.step_size)) if sym and sym.step_size and sym.step_size > 0 else Decimal("0.001")
+            step = Decimal(str(sym.step_size)) if sym and sym.step_size and sym.step_size > 0 else DEFAULT_STEP_SIZE_FALLBACK
             # floor to step: floor(raw / step) * step
             close_qty = (raw_qty // step) * step
         if close_qty <= 0:
@@ -183,9 +188,9 @@ class TPSLOrchestratorService:
         except EmergencyCloseInProgress:
             return  # 다른 caller 가 청산 중 — status/qty 변경 없이 대기, 다음 cycle 재평가
         # 청산 후 남은 수량 계산
-        remaining_qty = (current_qty - close_qty).quantize(Decimal("0.00000001"))
+        remaining_qty = (current_qty - close_qty).quantize(QTY_PRECISION)
         # 상태 진행 — 2026-05-06: TP1~10 동적 (10단계 익절 확장).
-        is_final = (level == "TRAILING_TP" or close_ratio >= Decimal("1.00"))
+        is_final = (level == "TRAILING_TP" or close_ratio >= FULL_CLOSE_RATIO)
         if level == "TRAILING_TP":
             strategy.status = "COMPLETED"
         elif level.startswith("TP") and level[2:].isdigit():
@@ -237,14 +242,14 @@ class TPSLOrchestratorService:
                 if latest_pos and latest_pos.mark_price:
                     exit_px = Decimal(str(latest_pos.mark_price))
             if avg_entry and exit_px and avg_entry > 0:
-                leverage = Decimal(str(strategy.leverage)) if strategy.leverage else Decimal("1")
+                leverage = Decimal(str(strategy.leverage)) if strategy.leverage else LEVERAGE_FALLBACK
                 if strategy.side == "LONG":
-                    raw_pct = (exit_px - avg_entry) / avg_entry * Decimal("100")
-                    realized_pnl = (close_qty * (exit_px - avg_entry)).quantize(Decimal("0.01"))
+                    raw_pct = (exit_px - avg_entry) / avg_entry * PERCENT_DENOMINATOR
+                    realized_pnl = (close_qty * (exit_px - avg_entry)).quantize(USDT_PRICE_PRECISION)
                 else:  # SHORT
-                    raw_pct = (avg_entry - exit_px) / avg_entry * Decimal("100")
-                    realized_pnl = (close_qty * (avg_entry - exit_px)).quantize(Decimal("0.01"))
-                pnl_pct = (raw_pct * leverage).quantize(Decimal("0.01"))
+                    raw_pct = (avg_entry - exit_px) / avg_entry * PERCENT_DENOMINATOR
+                    realized_pnl = (close_qty * (avg_entry - exit_px)).quantize(USDT_PRICE_PRECISION)
+                pnl_pct = (raw_pct * leverage).quantize(USDT_PRICE_PRECISION)
                 avg_exit_price = exit_px
         except Exception:
             pass
@@ -273,16 +278,16 @@ class TPSLOrchestratorService:
         pnl_pct = None
         try:
             capital = Decimal(str(strategy.total_capital))
-            leverage = Decimal(str(strategy.leverage)) if strategy.leverage else Decimal("1")
+            leverage = Decimal(str(strategy.leverage)) if strategy.leverage else LEVERAGE_FALLBACK
             if capital > 0:
-                pnl_pct = (loss_amount * leverage / capital * Decimal("100")).quantize(Decimal("0.01"))
+                pnl_pct = (loss_amount * leverage / capital * PERCENT_DENOMINATOR).quantize(USDT_PRICE_PRECISION)
         except Exception:
             pass
 
         self.notification_service.send_stop_loss_alert(
             strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
             total_capital=str(strategy.total_capital),
-            current_loss_amount=str(loss_amount.quantize(Decimal("0.01"))),
+            current_loss_amount=str(loss_amount.quantize(USDT_PRICE_PRECISION)),
             pnl_pct=pnl_pct,
         )
         self.risk_service.mark_reentry_ready(strategy.id)
@@ -299,7 +304,8 @@ class TPSLOrchestratorService:
 
         if action == "CRISIS_TP1":
             # 25% 청산 — 첫 TP 발동
-            close_qty = (current_qty * Decimal("0.25")).quantize(Decimal("0.00000001"))
+            # 크라이시스 첫 TP — 25% 청산 (CRISIS_QTY_RATIO_DEFAULT["TP1"] / 100).
+            close_qty = (current_qty * (_CRISIS_QTY_RATIO_DEFAULT["TP1"] / PERCENT_DENOMINATOR)).quantize(QTY_PRECISION)
             if close_qty <= 0:
                 return
             try:
@@ -315,7 +321,7 @@ class TPSLOrchestratorService:
                 latest_pos = PositionRepository(self.db).latest_by_strategy(strategy.id)
                 if latest_pos and latest_pos.mark_price and avg_entry:
                     mark = Decimal(str(latest_pos.mark_price))
-                    cur_pnl = ((mark - avg_entry) / avg_entry * Decimal("100")) if strategy.side == "LONG" else ((avg_entry - mark) / avg_entry * Decimal("100"))
+                    cur_pnl = ((mark - avg_entry) / avg_entry * PERCENT_DENOMINATOR) if strategy.side == "LONG" else ((avg_entry - mark) / avg_entry * PERCENT_DENOMINATOR)
                     strategy.peak_pnl_pct_after_first_tp = cur_pnl
             except Exception:
                 pass
@@ -345,7 +351,7 @@ class TPSLOrchestratorService:
                 if latest_pos and latest_pos.mark_price and strategy.avg_entry_price:
                     avg = Decimal(str(strategy.avg_entry_price))
                     mark = Decimal(str(latest_pos.mark_price))
-                    cur_pnl = str((mark - avg) / avg * Decimal("100") if strategy.side == "LONG" else (avg - mark) / avg * Decimal("100"))
+                    cur_pnl = str((mark - avg) / avg * PERCENT_DENOMINATOR if strategy.side == "LONG" else (avg - mark) / avg * PERCENT_DENOMINATOR)
             except Exception:
                 cur_pnl = "?"
             self.notification_service.send_crisis_trailing_full(
@@ -369,7 +375,7 @@ class TPSLOrchestratorService:
                 if latest_pos and latest_pos.mark_price and strategy.avg_entry_price:
                     avg = Decimal(str(strategy.avg_entry_price))
                     mark = Decimal(str(latest_pos.mark_price))
-                    cur_pnl = str((mark - avg) / avg * Decimal("100") if strategy.side == "LONG" else (avg - mark) / avg * Decimal("100"))
+                    cur_pnl = str((mark - avg) / avg * PERCENT_DENOMINATOR if strategy.side == "LONG" else (avg - mark) / avg * PERCENT_DENOMINATOR)
             except Exception:
                 cur_pnl = "?"
             self.notification_service.send_crisis_hard_sl(
