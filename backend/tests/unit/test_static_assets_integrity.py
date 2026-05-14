@@ -29,6 +29,10 @@ def _api_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "api.js").read_text(encoding="utf-8")
 
 
+def _stats_modals_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "stats-modals.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -175,6 +179,52 @@ class TestStaticAssetsIntegrity:
                 violations.append(label)
         assert not violations, (
             "index.html 에 api.js 의 helper 가 inline 정의됨 (분리 깨짐):\n  "
+            + "\n  ".join(violations)
+        )
+
+    def test_stats_modals_js_exists_and_loaded(self):
+        """stats-modals.js (Phase 3 추가) 존재 + script tag 순서 검증.
+
+        api.js 의존하므로 api.js 다음에 로드돼야.
+        """
+        path = _backend_root() / "app" / "static" / "js" / "stats-modals.js"
+        assert path.exists(), "stats-modals.js missing — Phase 3 분리 깨짐"
+
+        html = _index_html()
+        api_pos = html.find("/static/js/api.js")
+        modals_pos = html.find("/static/js/stats-modals.js")
+        assert modals_pos > 0, "<script src='/static/js/stats-modals.js'> tag 누락"
+        assert modals_pos > api_pos, (
+            "stats-modals.js 가 api.js 보다 먼저 로드됨 — api() 의존성 순서 깨짐"
+        )
+
+    def test_stats_modals_js_defines_all_required(self):
+        """stats-modals.js 가 5개 모달 함수 모두 정의."""
+        js = _stats_modals_js()
+        required = [
+            "async function openStatsBreakdownModal",
+            "function closeStatsBreakdownModal",
+            "async function loadStatsBreakdown",
+            "async function openTpNotificationsModal",
+            "function closeTpNotificationsModal",
+        ]
+        missing = [r for r in required if r not in js]
+        assert not missing, f"stats-modals.js 누락 함수: {missing}"
+
+    def test_no_inline_stats_modals_in_index_html(self):
+        """index.html 본문에 5개 모달 함수가 다시 inline 정의되면 안 됨.
+
+        분리 후 누군가 inline 으로 복원 → 두 곳 정의 → 후자가 덮어써서 silent bug.
+        """
+        html = _index_html()
+        forbidden = [
+            "async function openStatsBreakdownModal",
+            "async function loadStatsBreakdown",
+            "async function openTpNotificationsModal",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations, (
+            "index.html 에 stats-modals 함수 inline 재정의 발견:\n  "
             + "\n  ".join(violations)
         )
 
