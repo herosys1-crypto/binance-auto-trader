@@ -41,6 +41,10 @@ def _ranking_page_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "ranking-page.js").read_text(encoding="utf-8")
 
 
+def _helpers_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "helpers.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -281,6 +285,62 @@ class TestStaticAssetsIntegrity:
         html = _index_html()
         assert "async function loadRankingPage" not in html
         assert "function startNewStrategyFromRanking" not in html
+
+    def test_helpers_js_exists_and_loaded(self):
+        """helpers.js (Phase 3 추가) 존재 + script tag 검증.
+
+        다른 모듈 (stats-modals 등) 이 escapeHtml/fmtNum 등 의존하므로
+        constants.js 다음, 다른 feature 모듈보다 먼저 로드돼야.
+        """
+        path = _backend_root() / "app" / "static" / "js" / "helpers.js"
+        assert path.exists(), "helpers.js missing"
+
+        html = _index_html()
+        const_pos = html.find("/static/js/constants.js")
+        helpers_pos = html.find("/static/js/helpers.js")
+        modals_pos = html.find("/static/js/stats-modals.js")
+        assert helpers_pos > 0, "<script src='/static/js/helpers.js'> tag 누락"
+        assert helpers_pos > const_pos, "helpers.js 가 constants.js 보다 먼저 로드됨"
+        # helpers.js 가 stats-modals.js 보다 먼저여야 (escapeHtml 의존)
+        assert helpers_pos < modals_pos, (
+            "helpers.js 가 stats-modals.js 보다 늦게 로드됨 — escapeHtml 의존 깨짐"
+        )
+
+    def test_helpers_js_defines_all_required(self):
+        """helpers.js 가 핵심 helper 함수 모두 정의."""
+        js = _helpers_js()
+        required = [
+            "function statusInfo",
+            "function sideBadge",
+            "function renderStageBar",
+            "function _tpCountFromStatus",
+            "function renderTpBar",
+            "function fmtNum",
+            "function fmtQty",
+            "function fmtPnL",
+            "function setMetric",
+            "function setSignal",
+            "function showAlert",
+            "function hideAlert",
+            "function escapeHtml",
+        ]
+        missing = [r for r in required if r not in js]
+        assert not missing, f"helpers.js 누락 함수: {missing}"
+
+    def test_no_inline_helpers_in_index_html(self):
+        """index.html 에 helpers 함수 inline 재정의 금지."""
+        html = _index_html()
+        forbidden = [
+            "function statusInfo(status) {",
+            "function escapeHtml(s) {",
+            "function fmtNum(v) {",
+            "function fmtQty(v) {",
+            "function fmtPnL(v) {",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations, (
+            "index.html 에 helpers 함수 inline 재정의 발견:\n  " + "\n  ".join(violations)
+        )
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
         """제거된 cm-crisis-threshold UI element 참조가 다시 들어오면 안 됨.
