@@ -105,6 +105,10 @@ def _dashboard_refresh_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "dashboard-refresh.js").read_text(encoding="utf-8")
 
 
+def _templates_panel_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "templates-panel.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -883,6 +887,32 @@ class TestStaticAssetsIntegrity:
         assert not violations, (
             "index.html 에 dashboard-refresh 함수 inline 재정의 발견:\n  " + "\n  ".join(violations)
         )
+
+    def test_templates_panel_js_exists_and_loaded(self):
+        path = _backend_root() / "app" / "static" / "js" / "templates-panel.js"
+        assert path.exists(), "templates-panel.js missing"
+        html = _index_html()
+        tp_pos = html.find("/static/js/templates-panel.js")
+        assert tp_pos > 0
+
+    def test_templates_panel_js_defines_required(self):
+        js = _templates_panel_js()
+        for fn in [
+            "async function refreshTemplates",
+            "async function cleanupQuickTemplates",
+            "async function deleteTemplate",
+        ]:
+            assert fn in js, f"templates-panel.js 누락: {fn}"
+
+    def test_no_inline_templates_panel_in_index_html(self):
+        html = _index_html()
+        forbidden = [
+            "async function refreshTemplates() {",
+            "async function cleanupQuickTemplates() {",
+            "async function deleteTemplate(id, name) {",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
         """제거된 cm-crisis-threshold UI element 참조가 다시 들어오면 안 됨.
