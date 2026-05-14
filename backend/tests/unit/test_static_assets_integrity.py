@@ -109,6 +109,10 @@ def _templates_panel_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "templates-panel.js").read_text(encoding="utf-8")
 
 
+def _indicators_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "indicators.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -910,6 +914,38 @@ class TestStaticAssetsIntegrity:
             "async function refreshTemplates() {",
             "async function cleanupQuickTemplates() {",
             "async function deleteTemplate(id, name) {",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations
+
+    def test_indicators_js_exists_and_loaded(self):
+        path = _backend_root() / "app" / "static" / "js" / "indicators.js"
+        assert path.exists(), "indicators.js missing"
+        html = _index_html()
+        ind_pos = html.find("/static/js/indicators.js")
+        assert ind_pos > 0
+
+    def test_indicators_js_defines_required(self):
+        js = _indicators_js()
+        for fn in [
+            "function _sma",
+            "function _ema",
+            "function _bollingerBands",
+            "function _rsi",
+            "function _macd",
+            "function _obv",
+            "function _computeIsolatedLiqPrice",
+        ]:
+            assert fn in js, f"indicators.js 누락: {fn}"
+
+    def test_no_inline_indicators_in_index_html(self):
+        html = _index_html()
+        forbidden = [
+            "function _sma(arr, period)",
+            "function _ema(arr, period)",
+            "function _bollingerBands(closes",
+            "function _rsi(closes",
+            "function _macd(closes",
         ]
         violations = [pat for pat in forbidden if pat in html]
         assert not violations
