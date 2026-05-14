@@ -57,6 +57,10 @@ def _system_banner_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "system-banner.js").read_text(encoding="utf-8")
 
 
+def _multi_symbol_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "multi-symbol.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -445,6 +449,45 @@ class TestStaticAssetsIntegrity:
         html = _index_html()
         assert "async function loadSystemStatus" not in html
         assert "async function clearKillSwitch" not in html
+
+    def test_multi_symbol_js_exists_and_loaded(self):
+        """multi-symbol.js 존재 + script tag 검증."""
+        path = _backend_root() / "app" / "static" / "js" / "multi-symbol.js"
+        assert path.exists(), "multi-symbol.js missing"
+
+        html = _index_html()
+        helpers_pos = html.find("/static/js/helpers.js")
+        ms_pos = html.find("/static/js/multi-symbol.js")
+        assert ms_pos > 0
+        assert ms_pos > helpers_pos, "multi-symbol.js 가 helpers.js 보다 먼저 로드됨 (escapeHtml 의존)"
+
+    def test_multi_symbol_js_defines_required(self):
+        """multi-symbol.js 가 6 함수 + state 정의."""
+        js = _multi_symbol_js()
+        for fn in [
+            "let _cmMultiSymbols",
+            "function toggleMultiSymbolMode",
+            "async function addSymbolChip",
+            "function removeSymbolChip",
+            "function _renderMultiSymbolChips",
+            "async function submitCreateMulti",
+            "function _refreshSubmitBtnLabel",
+        ]:
+            assert fn in js, f"multi-symbol.js 누락: {fn}"
+
+    def test_no_inline_multi_symbol_in_index_html(self):
+        """index.html 에 multi-symbol 함수 inline 재정의 금지."""
+        html = _index_html()
+        forbidden = [
+            "function toggleMultiSymbolMode",
+            "async function submitCreateMulti",
+            "function _refreshSubmitBtnLabel",
+            "async function addSymbolChip",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations, (
+            "index.html 에 multi-symbol 함수 inline 재정의 발견:\n  " + "\n  ".join(violations)
+        )
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
         """제거된 cm-crisis-threshold UI element 참조가 다시 들어오면 안 됨.
