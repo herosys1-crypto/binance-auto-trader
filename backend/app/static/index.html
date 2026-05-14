@@ -1063,6 +1063,7 @@
 <script src="/static/js/cm-market-info.js"></script>
 <script src="/static/js/cm-capitals-grid.js"></script>
 <script src="/static/js/cm-prev-blueprint.js"></script>
+<script src="/static/js/cm-state-helpers.js"></script>
 <script src="/static/js/multi-symbol.js"></script>
 <script src="/static/js/template-save.js"></script>
 <script src="/static/js/cm-submit.js"></script>
@@ -3135,25 +3136,7 @@ async function addMargin(id, symbol, side) {
   }
 }
 
-function setCmMode(mode) {
-  cmState.mode = mode;
-  cmState.preview = null;
-  document.getElementById('cm-preview').classList.add('hidden');
-  // 버튼 스타일
-  const modes = ['direct', 'template', 'prev'];
-  modes.forEach(m => {
-    const btn = document.getElementById('cm-mode-' + m);
-    btn.className = 'btn flex-1' + (m === mode ? ' btn-primary' : ' btn-ghost');
-    btn.style.fontSize = '12px';
-    btn.style.padding = '6px 10px';
-  });
-  // 패널 표시
-  document.getElementById('cm-direct-panel').classList.toggle('hidden', mode !== 'direct');
-  document.getElementById('cm-template-panel').classList.toggle('hidden', mode !== 'template');
-  document.getElementById('cm-prev-panel').classList.toggle('hidden', mode !== 'prev');
-  if (mode === 'prev') loadCmPrevStrategies();
-  updateCmSubmit();
-}
+// setCmMode 는 /static/js/cm-state-helpers.js 로 분리 (Phase 3 단계 3g).
 
 // loadCmPrevStrategies / loadPrevBlueprint 는 /static/js/cm-prev-blueprint.js 로 분리 (Phase 3 단계 3b).
 
@@ -3162,18 +3145,7 @@ function setCmMode(mode) {
 
 // _collectDirectInputs / _collectTpSl 는 /static/js/cm-collectors.js 로 분리 (Phase 3 단계 3a).
 
-function closeCreateModal() {
-  document.getElementById('create-modal').classList.add('hidden');
-  // 2026-05-12: 다중 심볼 토글 + chips 초기화 (다음 진입 시 단일 모드로 시작)
-  const multiToggle = document.getElementById('cm-multi-symbol-toggle');
-  if (multiToggle && multiToggle.checked) {
-    multiToggle.checked = false;
-    toggleMultiSymbolMode();
-  }
-  _cmMultiSymbols = [];
-  const addInput = document.getElementById('cm-multi-add-input');
-  if (addInput) addInput.value = '';
-}
+// closeCreateModal 는 /static/js/cm-state-helpers.js 로 분리 (Phase 3 단계 3g).
 
 // loadCmAccounts / loadCmTemplates / loadCmSymbols / _renderWhitelistHint /
 // _validateCurrentSymbol 는 /static/js/cm-loaders.js 로 분리 (Phase 3 단계 3c).
@@ -3182,39 +3154,9 @@ function closeCreateModal() {
 // fillStartPrice + state (_cmCurrentPrice, _cmTickSize) 는
 // /static/js/cm-market-info.js 로 분리 (Phase 3 단계 3d).
 
-// UX #18: 사용자가 직접 레버리지를 수정했는지 추적. true 면 사이드 변경 시 자동 갱신 안 함.
-let cmLeverageManuallyEdited = false;
-
 // _defaultLeverageForSide 는 /static/js/cm-collectors.js 로 분리 (Phase 3 단계 3a).
-
-function resetCmLeverage() {
-  const lev = _defaultLeverageForSide(cmState.side);
-  document.getElementById('cm-leverage').value = lev;
-  cmLeverageManuallyEdited = false;
-  cmState.preview = null;
-  document.getElementById('cm-preview').classList.add('hidden');
-  updateCmSubmit();
-}
-
-function setCmSide(side) {
-  cmState.side = side;
-  document.getElementById('cm-side-short').className = 'btn flex-1' + (side==='SHORT' ? '' : ' btn-ghost');
-  document.getElementById('cm-side-short').style.background = side==='SHORT' ? '#ef4444' : 'transparent';
-  document.getElementById('cm-side-short').style.color = side==='SHORT' ? '#fff' : '#cbd5e1';
-  document.getElementById('cm-side-long').className = 'btn flex-1' + (side==='LONG' ? '' : ' btn-ghost');
-  document.getElementById('cm-side-long').style.background = side==='LONG' ? '#10b981' : 'transparent';
-  document.getElementById('cm-side-long').style.color = side==='LONG' ? '#fff' : '#cbd5e1';
-  // Bug fix (2026-04-30): 사이드 변경 시 무조건 default leverage 로 reset.
-  // 이전 버전은 manualEdited=true 면 갱신 안 해서 SHORT 의 2 가 LONG 으로 유지되는 버그.
-  const lev = _defaultLeverageForSide(side);
-  const lvInp = document.getElementById('cm-leverage');
-  if (lvInp) lvInp.value = lev;
-  cmLeverageManuallyEdited = false;  // 사이드 바꿨으니 다시 자동 갱신 가능 상태로
-  // 방향 변경 시 미리보기 무효화
-  cmState.preview = null;
-  document.getElementById('cm-preview').classList.add('hidden');
-  updateCmSubmit();
-}
+// cmLeverageManuallyEdited / resetCmLeverage / setCmSide 는
+// /static/js/cm-state-helpers.js 로 분리 (Phase 3 단계 3g).
 
 function updateCmSubmit() {
   // 2026-05-12 v3 (사용자 UX): 다중 모드는 _refreshSubmitBtnLabel 이 chip 기반으로 판정 (cmState.preview 무관).

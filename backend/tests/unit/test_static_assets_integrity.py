@@ -89,6 +89,10 @@ def _cm_submit_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "cm-submit.js").read_text(encoding="utf-8")
 
 
+def _cm_state_helpers_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "cm-state-helpers.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -706,6 +710,35 @@ class TestStaticAssetsIntegrity:
         assert "async function submitCreate(" not in html, (
             "submitCreate 가 index.html 에 inline 재정의됨 (cm-submit.js 와 중복)"
         )
+
+    def test_cm_state_helpers_js_exists_and_loaded(self):
+        path = _backend_root() / "app" / "static" / "js" / "cm-state-helpers.js"
+        assert path.exists(), "cm-state-helpers.js missing"
+        html = _index_html()
+        sh_pos = html.find("/static/js/cm-state-helpers.js")
+        assert sh_pos > 0
+
+    def test_cm_state_helpers_js_defines_required(self):
+        js = _cm_state_helpers_js()
+        for fn in [
+            "function setCmMode",
+            "function closeCreateModal",
+            "function resetCmLeverage",
+            "function setCmSide",
+            "let cmLeverageManuallyEdited",
+        ]:
+            assert fn in js, f"cm-state-helpers.js 누락: {fn}"
+
+    def test_no_inline_cm_state_helpers_in_index_html(self):
+        html = _index_html()
+        forbidden = [
+            "function setCmMode(mode) {",
+            "function closeCreateModal() {",
+            "function setCmSide(side) {",
+            "function resetCmLeverage() {",
+        ]
+        violations = [pat for pat in forbidden if pat in html]
+        assert not violations
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
         """제거된 cm-crisis-threshold UI element 참조가 다시 들어오면 안 됨.
