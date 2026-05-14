@@ -65,6 +65,10 @@ def _template_save_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "template-save.js").read_text(encoding="utf-8")
 
 
+def _cm_collectors_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "cm-collectors.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -524,6 +528,38 @@ class TestStaticAssetsIntegrity:
         assert not violations, (
             "index.html 에 template-save 함수 inline 재정의 발견:\n  " + "\n  ".join(violations)
         )
+
+    def test_cm_collectors_js_exists_and_loaded_before_consumers(self):
+        """cm-collectors.js 가 multi-symbol.js / template-save.js 보다 먼저 로드.
+
+        둘 다 _collectTpSl/_collectDirectInputs/_defaultLeverageForSide 의존.
+        """
+        path = _backend_root() / "app" / "static" / "js" / "cm-collectors.js"
+        assert path.exists(), "cm-collectors.js missing"
+
+        html = _index_html()
+        coll_pos = html.find("/static/js/cm-collectors.js")
+        ms_pos = html.find("/static/js/multi-symbol.js")
+        ts_pos = html.find("/static/js/template-save.js")
+        assert coll_pos > 0
+        assert coll_pos < ms_pos, "cm-collectors.js 가 multi-symbol.js 보다 늦게 로드 — 의존성 깨짐"
+        assert coll_pos < ts_pos, "cm-collectors.js 가 template-save.js 보다 늦게 로드 — 의존성 깨짐"
+
+    def test_cm_collectors_js_defines_required(self):
+        js = _cm_collectors_js()
+        for fn in [
+            "function _collectDirectInputs",
+            "function _collectTpSl",
+            "function _defaultLeverageForSide",
+        ]:
+            assert fn in js, f"cm-collectors.js 누락: {fn}"
+
+    def test_no_inline_cm_collectors_in_index_html(self):
+        html = _index_html()
+        # body 만 들어간 정의 검출 (주석 OK)
+        assert "function _collectDirectInputs() {" not in html
+        assert "function _collectTpSl() {" not in html
+        assert "function _defaultLeverageForSide(side) {" not in html
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
         """제거된 cm-crisis-threshold UI element 참조가 다시 들어오면 안 됨.
