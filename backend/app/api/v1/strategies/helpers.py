@@ -46,29 +46,43 @@ def _fetch_tp_counts_batch(db: Session, strategy_ids: set[int]) -> dict[int, dic
     """notifications 에서 strategy 별 TP 발동 카운트 + TRAILING 여부 batch fetch.
 
     N+1 방지: 모든 strategy 한 번에 query.
+    2026-05-14 Phase 5: PostgreSQL regex (~) + ANY() + COUNT(...) FILTER → portable SQL 로 변경.
+    이전엔 sqlite 테스트에서 호출 불가. 이제 양 DB 모두 지원 → N+1 회귀 테스트 가능.
+    semantic 동등: TP1~5 익절 (TRAILING 제외) 카운트 + TRAILING 발생 여부.
+
+    title 패턴:
+      "[TP1 익절 체결]" / "[TP2 익절 체결]" / ... / "[TP5 익절 체결]"
+      "[TRAILING_TP 익절 체결]"
+
     Returns: {strategy_id: {"tp_count": int, "has_trailing": bool}}
     """
     if not strategy_ids:
         return {}
-    from sqlalchemy import text
-    # title 패턴:
-    #   "[TP1 익절 체결]" / "[TP2 익절 체결]" / ... / "[TP5 익절 체결]"
-    #   "[TRAILING_TP 익절 체결]"
+    from sqlalchemy import case, func, or_, select as sa_select
+    from app.models.notification import Notification
+
+    # TP1~5 익절 (TRAILING 제외) — OR 로 묶음
+    tp_like = or_(*[Notification.title.like(f"%[TP{n} 익절%") for n in range(1, 6)])
+    not_trailing = ~Notification.title.like("%TRAILING%")
+    is_trailing = Notification.title.like("%TRAILING_TP%")
+
     rows = db.execute(
-        text("""
-            SELECT strategy_instance_id,
-                   COUNT(*) FILTER (
-                     WHERE title ~ '\\[TP[1-5] 익절' AND title NOT LIKE '%TRAILING%'
-                   ) AS tp_count,
-                   BOOL_OR(title LIKE '%TRAILING_TP%') AS has_trailing
-            FROM notifications
-            WHERE strategy_instance_id = ANY(:ids)
-              AND send_status IN ('SENT', 'PENDING')
-            GROUP BY strategy_instance_id
-        """),
-        {"ids": list(strategy_ids)},
+        sa_select(
+            Notification.strategy_instance_id,
+            func.sum(case((tp_like & not_trailing, 1), else_=0)).label("tp_count"),
+            func.max(case((is_trailing, 1), else_=0)).label("has_trailing"),
+        )
+        .where(Notification.strategy_instance_id.in_(strategy_ids))
+        .where(Notification.send_status.in_(["SENT", "PENDING"]))
+        .group_by(Notification.strategy_instance_id)
     ).all()
-    return {r.strategy_instance_id: {"tp_count": r.tp_count or 0, "has_trailing": bool(r.has_trailing)} for r in rows}
+    return {
+        r.strategy_instance_id: {
+            "tp_count": int(r.tp_count or 0),
+            "has_trailing": bool(r.has_trailing),
+        }
+        for r in rows
+    }
 
 
 def _resolve_close_reason(strategy, counts: dict, total_active_tps: int) -> str:
