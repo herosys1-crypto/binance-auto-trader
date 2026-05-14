@@ -15,6 +15,7 @@ from app.core.risk_constants import (
     TP_FINAL_QTY_RATIO_PCT,
     USDT_PRICE_PRECISION,
 )
+from app.models.risk_event import RiskEvent
 from app.observability.metrics import strategy_runs_total, strategy_take_profit_total
 from app.repositories.strategy_repository import StrategyRepository
 from app.services.execution_service import EmergencyCloseInProgress, ExecutionService
@@ -178,6 +179,25 @@ class TPSLOrchestratorService:
             step = Decimal(str(sym.step_size)) if sym and sym.step_size and sym.step_size > 0 else DEFAULT_STEP_SIZE_FALLBACK
             # floor to step: floor(raw / step) * step
             close_qty = (raw_qty // step) * step
+            # 2026-05-14 fix (사용자 #40 BUSDT 후속): step_size flooring 으로 close_qty=0 이 되면
+            # 「3단계 익절」 같은 사용자 기획대로 진행 안 됨 (TP partial close 누락).
+            # 잔량이 step_size 이상이면 최소 1 step 보장 — 사용자 「3건 익절」 의도 충족.
+            # 잔량 자체가 1 step 미만이면 (이미 거의 청산됨) close 진행 안 함 (current_qty 부족).
+            if close_qty <= 0 and current_qty >= step:
+                close_qty = step  # 최소 1 lot 보장
+                # WARN 기록 — fee 손실 인지 + 사용자 알림
+                self.db.add(RiskEvent(
+                    strategy_instance_id=strategy.id,
+                    event_type="TP_MIN_STEP_ENFORCED",
+                    severity="INFO",
+                    title=f"⚙️ {level} 최소 step 보장",
+                    message=(
+                        f"{level} 청산 비율 {close_ratio*100:.1f}% × 잔량 {current_qty} = {raw_qty} 가 "
+                        f"step_size ({step}) 미만 → 1 step ({step}) 으로 보장. "
+                        f"사용자 「TP 단계별 진행」 의도 유지."
+                    ),
+                ))
+                self.db.flush()
         if close_qty <= 0:
             return
         # 실제 청산 체결 — 반환된 order 의 avg_price 가 진짜 청산 단가 (mark 보다 정확).
