@@ -37,6 +37,10 @@ def _health_page_js() -> str:
     return (_backend_root() / "app" / "static" / "js" / "health-page.js").read_text(encoding="utf-8")
 
 
+def _ranking_page_js() -> str:
+    return (_backend_root() / "app" / "static" / "js" / "ranking-page.js").read_text(encoding="utf-8")
+
+
 class TestStaticAssetsIntegrity:
     """index.html + js/constants.js 분리 구조 검증."""
 
@@ -254,6 +258,29 @@ class TestStaticAssetsIntegrity:
         assert "async function loadHealthDashboard" not in html, (
             "loadHealthDashboard 가 index.html 에 inline 재정의됨 — health-page.js 와 중복"
         )
+
+    def test_ranking_page_js_exists_and_loaded(self):
+        """ranking-page.js (Phase 3 추가) 존재 + script tag 검증."""
+        path = _backend_root() / "app" / "static" / "js" / "ranking-page.js"
+        assert path.exists(), "ranking-page.js missing"
+
+        html = _index_html()
+        api_pos = html.find("/static/js/api.js")
+        ranking_pos = html.find("/static/js/ranking-page.js")
+        assert ranking_pos > 0, "<script src='/static/js/ranking-page.js'> tag 누락"
+        assert ranking_pos > api_pos, "ranking-page.js 가 api.js 보다 먼저 로드됨"
+
+    def test_ranking_page_js_defines_required(self):
+        """ranking-page.js 가 loadRankingPage + startNewStrategyFromRanking 정의."""
+        js = _ranking_page_js()
+        assert "async function loadRankingPage" in js
+        assert "function startNewStrategyFromRanking" in js
+
+    def test_no_inline_ranking_page_in_index_html(self):
+        """index.html 에 ranking-page 함수 inline 재정의 금지."""
+        html = _index_html()
+        assert "async function loadRankingPage" not in html
+        assert "function startNewStrategyFromRanking" not in html
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
         """제거된 cm-crisis-threshold UI element 참조가 다시 들어오면 안 됨.
