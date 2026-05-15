@@ -36,6 +36,7 @@ from app.services.zombie_guardian import (
     pre_pass_dedup,
     enforce_terminal_qty_zero,
     detect_orphan_exchange_positions,
+    detect_orphan_exchange_open_orders,
     escalate_stuck_strategy,
     _stuck_inc,
     _stuck_clear,
@@ -381,6 +382,26 @@ def _do_reconcile(decrypt_func) -> None:
                 "detect_orphan_exchange_positions failed",
                 level="error", error=e,
                 tags={"event_type": "ORPHAN_DETECTION_LOOP_FAILED"},
+            )
+
+        # ===== Phase 3 안전망 — 거래소 orphan open order 감지 (사용자 #VICUSDT 보고 2026-05-15) =====
+        # LIMIT 미체결 주문이 archive/stop 시 cancel_all_orders 누락으로 거래소에 잔존
+        # 하는 케이스. WARN RiskEvent 기록 — 운영자가 거래소에서 직접 취소 권장.
+        try:
+            n_orphan_oo = detect_orphan_exchange_open_orders(
+                db, decrypt_func=decrypt_func, auto_cancel=False,
+            )
+            if n_orphan_oo:
+                logger.warning(
+                    "Zombie Guardian: %d orphan exchange open order(s) detected", n_orphan_oo
+                )
+        except Exception as e:
+            logger.error("detect_orphan_exchange_open_orders 실패: %s", e)
+            db.rollback()
+            capture_strategy_event(
+                "detect_orphan_exchange_open_orders failed",
+                level="error", error=e,
+                tags={"event_type": "ORPHAN_OO_DETECTION_LOOP_FAILED"},
             )
     finally:
         db.close()

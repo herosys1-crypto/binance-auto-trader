@@ -453,3 +453,126 @@ def detect_orphan_exchange_positions(
                 tags={"event_type": "ORPHAN_DETECT_FAILED"},
             )
     return found
+
+
+def detect_orphan_exchange_open_orders(
+    db: Session,
+    *,
+    decrypt_func,
+    auto_cancel: bool = False,
+) -> int:
+    """거래소에 open order (LIMIT 미체결) 가 있지만 매칭 active strategy 없음 → WARN.
+
+    사용자 #VICUSDT 사례 (2026-05-15 보고):
+    - 2 일 전 (5-13) 발송된 LIMIT order (Open Short 397 VIC, filled 0) 가
+      거래소 open orders 에 머물러 있음
+    - 매칭 strategy 가 archived/stopped 됐는데 cancel_all_orders 누락된 케이스
+    - position 좀비 (detect_orphan_exchange_positions) 와 다름 — 아직 진입 안 됨
+
+    매칭 기준:
+    - DB 의 Order row 중 client_order_id 가 같은 active 주문 존재 여부 (정확)
+    - 또는 (symbol, side) 의 ACTIVE_LIKE strategy 가 있으면 정상으로 간주
+
+    auto_cancel=False (default): WARN 만 기록 (운영자 판단)
+    auto_cancel=True: cancel_all_orders 로 자동 취소 (위험 — 실수로 활성 주문 취소 가능)
+
+    Returns: orphan open order 발견 건수
+    """
+    from app.integrations.binance.client import BinanceClient
+    from app.models.order import Order
+    from datetime import datetime, timezone
+
+    accounts = db.execute(
+        select(ExchangeAccount).where(ExchangeAccount.is_active.is_(True))
+    ).scalars().all()
+    found = 0
+    for acc in accounts:
+        try:
+            client = BinanceClient(
+                api_key=decrypt_func(acc.api_key_enc),
+                api_secret=decrypt_func(acc.api_secret_enc),
+                is_testnet=acc.is_testnet,
+            )
+            open_orders = client.list_open_orders()  # symbol 인자 없음 → 전체
+            if not isinstance(open_orders, list):
+                continue
+            for oo in open_orders:
+                client_oid = oo.get("clientOrderId")
+                symbol = oo.get("symbol")
+                position_side = oo.get("positionSide")
+                if not client_oid or not symbol:
+                    continue
+                # 1) DB 의 Order 에 같은 clientOrderId 가 있고 active strategy 면 정상
+                local_order = db.execute(
+                    select(Order).where(Order.client_order_id == client_oid).limit(1)
+                ).scalar_one_or_none()
+                if local_order:
+                    # 매칭 strategy 가 active/in-progress 면 정상
+                    strat = db.execute(
+                        select(StrategyInstance)
+                        .where(StrategyInstance.id == local_order.strategy_instance_id)
+                        .limit(1)
+                    ).scalar_one_or_none()
+                    if strat and strat.status in ACTIVE_LIKE and not strat.is_archived:
+                        continue  # 정상 활성 주문
+                # 2) clientOrderId 매칭 없음 — (symbol, side) 의 active strategy 라도 있는지 fallback 검사
+                strat_match = db.execute(
+                    select(StrategyInstance)
+                    .where(StrategyInstance.exchange_account_id == acc.id)
+                    .where(StrategyInstance.symbol == symbol)
+                    .where(StrategyInstance.side == position_side)
+                    .where(StrategyInstance.status.in_(ACTIVE_LIKE))
+                    .where(StrategyInstance.is_archived.is_(False))
+                    .limit(1)
+                ).scalar_one_or_none()
+                if strat_match:
+                    continue  # 같은 종목/방향에 active 가 있으면 일단 패스 (broad match)
+                # 매칭 없음 — orphan open order!
+                found += 1
+                order_time_ms = oo.get("time") or oo.get("updateTime")
+                age_str = "?"
+                if order_time_ms:
+                    try:
+                        order_time = datetime.fromtimestamp(order_time_ms / 1000, tz=timezone.utc)
+                        age_h = (datetime.now(timezone.utc) - order_time).total_seconds() / 3600
+                        age_str = f"{age_h:.1f}h"
+                    except Exception:
+                        pass
+                logger.warning(
+                    "Orphan open order: %s %s qty=%s price=%s clientOrderId=%s age=%s",
+                    symbol, position_side, oo.get("origQty"), oo.get("price"), client_oid, age_str,
+                )
+                db.add(RiskEvent(
+                    strategy_instance_id=None,
+                    event_type="ZOMBIE_ORPHAN_OPEN_ORDER",
+                    severity="WARN",
+                    title=f"⚠️ 거래소 orphan open order — {symbol} {position_side} (age {age_str})",
+                    message=(
+                        f"거래소에 미체결 LIMIT 주문 있으나 매칭 active strategy 없음. "
+                        f"qty={oo.get('origQty')} price={oo.get('price')} clientOrderId={client_oid}. "
+                        f"strategy 가 archived/stopped 됐을 때 cancel_all_orders 누락 가능성. "
+                        f"거래소에서 직접 취소 권장 (auto_cancel=False)."
+                    ),
+                    event_payload={
+                        "account_id": acc.id,
+                        "symbol": symbol,
+                        "position_side": position_side,
+                        "client_order_id": client_oid,
+                        "exchange_order_id": oo.get("orderId"),
+                        "orig_qty": str(oo.get("origQty", "")),
+                        "price": str(oo.get("price", "")),
+                        "age_hours": age_str,
+                    },
+                ))
+                db.commit()
+                if auto_cancel:
+                    try:
+                        client._request("DELETE", "/fapi/v1/order", params={
+                            "symbol": symbol, "origClientOrderId": client_oid,
+                        }, signed=True)
+                        logger.info("Auto-cancelled orphan open order %s %s", symbol, client_oid)
+                    except Exception as e:
+                        logger.error("Auto-cancel orphan open order 실패: %s", e)
+        except Exception as e:
+            logger.error("detect_orphan_exchange_open_orders 실패 acc=%s: %s", acc.id, e)
+    return found
