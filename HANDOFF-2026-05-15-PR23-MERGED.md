@@ -1,12 +1,32 @@
-# Handoff — 2026-05-15 PR #23 머지 + VPS 배포 보류
+# Handoff — 2026-05-15 PR #23 머지 + VPS 배포 완료
 
-이 세션은 **5-08~5-15 누적 89 commits 를 PR #23 으로 통합 머지** 하고, **VPS 배포는 네트워크 제약으로 다음 세션에 위임** 하는 것으로 마무리됨.
+이 세션은 **5-08~5-15 누적 89 commits 를 PR #23 으로 통합 머지** 하고, **VPS 배포까지 완료** (smoke test 13/13 통과) 한 것으로 마무리됨.
 
 ---
 
 ## 🎯 한 문장 요약
 
-**main = `e824b0f` (PR #23 머지). 코드는 모두 통합 + 테스트 통과 + push 완료. VPS 배포는 22 포트 차단 환경 때문에 다음 세션으로 보류.**
+**main = `34e4b02` (PR #23 머지 + handoff). 코드 + 테스트 + 배포 모두 완료. 운영 환경 정상.**
+
+---
+
+## 🚀 5-15 VPS 배포 결과
+
+| 검증 항목 | 결과 |
+|---|---|
+| api `/health` | ✅ `{"status":"ok"}` |
+| 4 컨테이너 (api/scheduler/user-stream/redis) | ✅ 모두 running |
+| alembic head | ✅ `0016_hot_path_indexes` |
+| DB | ✅ Neon, 59 strategies 보존 |
+| Redis ping | ✅ PONG |
+| scheduler 활동 | ✅ 30 lines/min |
+| user-stream websocket | ✅ connected |
+| 정적 자산 | ✅ index.html 1180줄 + JS 모듈 32개 |
+| Smoke test | ✅ **13/13 통과** |
+
+⚠️ Smoke test 의 두 WARN 은 무시 (testnet 운영 — mainnet 시 채워야 함):
+- `DAILY_LOSS_LIMIT_USDT` 미설정
+- `SENTRY_DSN` 미설정
 
 ---
 
@@ -42,18 +62,40 @@
 
 ---
 
-## ⏸ 다음 세션이 이어받을 작업
+## ⏸ 다음 세션이 이어받을 작업 (선택)
 
-### A. VPS 배포 (최우선)
+### A. 머지된 브랜치 정리
+
+배포 검증 완료 → 안전하게 삭제 가능:
+```bash
+# 로컬
+git branch -d fix/pnl-display-and-loss-alert-clarity
+
+# 원격: GitHub 웹 PR #23 페이지 하단 「Delete branch」 버튼
+```
+
+### B. mainnet 전환 (사용자 결정)
+
+testnet 충분히 검증됐으면 진행:
+1. Binance mainnet API 발급 + IP whitelist `159.65.137.250`
+2. (옵션) 도메인 + Let's Encrypt HTTPS
+3. ENCRYPTION_KEY 회전 (`scripts/rotate_encryption_key.py`)
+4. 「💼 계정」 → 「🔑 키 변경」 → 환경 "mainnet" 선택
+
+---
+
+## 📦 5-15 검증된 배포 절차 (재사용용)
 
 **현재 운영 환경**:
-- VPS IP: `159.65.137.250` (DEVELOPMENT_SPEC.md + TP_TRAILING_LOGIC_FINAL.md 5-15 갱신본 기준)
-- ⚠️ 5-07 핸드오프의 `152.42.232.195` 는 **stale** — 5-08 이후 어느 시점에 VPS 재배포되며 IP 변경됨 (메모리에 안 들어감)
-- 운영 URL: `http://159.65.137.250/` (nginx port 80) — port 8000 직접 접근은 외부 차단된 게 정상
+- VPS IP: `159.65.137.250` (root@, repo at `/root/binance-auto-trader/`)
+- 운영 URL: `http://159.65.137.250/` (nginx port 80)
 
-**보류 이유**: 5-15 작업 환경에서 outbound port 22 가 ISP/네트워크 단에서 차단 (`Test-NetConnection -Port 22 → TcpTestSucceeded: False`). Ping 은 75ms 로 정상, VPS 자체는 살아있음.
+**핵심 주의사항** (5-15 hard-learned):
+- ⚠️ **Windows 에서 만든 tar 의 .sh 파일은 CRLF 줄바꿈** → bash 가 거부. `find ... -exec sed -i 's/\r$//' {} \;` 필수
+- ⚠️ docker `--no-cache` 안 쓰면 `COPY . /app` 캐시 layer 재사용 → 옛 코드 그대로
+- ⚠️ smoke test 전 `sleep 10` — api startup time
 
-**배포 절차** (22 포트 열린 환경 — 핫스팟/다른 망/집/회사):
+**배포 명령** (PowerShell + SSH):
 
 ```powershell
 # 1) 로컬에서 archive 만들기 (Git Bash 권장 — /tmp 경로 동작)
