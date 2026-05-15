@@ -81,7 +81,10 @@ def start_scheduler() -> None:
         return _wrapped
 
     scheduler.add_job(guarded_job("listenkey_keepalive", 120, lambda: run_keepalive_once(decrypt_text)), trigger=IntervalTrigger(minutes=30), id="listenkey_keepalive", replace_existing=True, max_instances=1, coalesce=True)
-    scheduler.add_job(guarded_job("position_reconcile", 55, lambda: run_position_reconcile_once(decrypt_text)), trigger=IntervalTrigger(minutes=1), id="position_reconcile", replace_existing=True, max_instances=1, coalesce=True)
+    # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
+    # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
+    # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.
+    scheduler.add_job(guarded_job("position_reconcile", 110, lambda: run_position_reconcile_once(decrypt_text)), trigger=IntervalTrigger(minutes=2), id="position_reconcile", replace_existing=True, max_instances=1, coalesce=True)
     # 2026-05-06 fix: lock TTL 20s + Interval 10s 였는데 lock 이 다음 사이클까지 살아있어
     # 실제로는 20s 마다 1번만 실행 (½ 빈도). #103 trailing 자동 발동 지연 원인 추정.
     # lock TTL 8s 로 변경 → Interval 10s 보다 짧아 매 사이클 정상 실행.
@@ -105,6 +108,16 @@ def start_scheduler() -> None:
             guarded_job("heartbeat", 60, run_heartbeat_once),
             trigger=IntervalTrigger(hours=hb_hours),
             id="heartbeat", replace_existing=True, max_instances=1, coalesce=True,
+        )
+    # 일일 운영 보고 — 매일 KST 09:00 (UTC 00:00) 1회 (2026-05-09 Layer 3).
+    # 사용자가 health_check 안 돌려도 자동으로 「전일 24h 요약」 텔레그램 받음.
+    # settings.daily_report_enabled (default True) — False 면 등록 X.
+    if getattr(_cfg, "daily_report_enabled", True):
+        from app.workers.daily_report_worker import run_daily_report_once
+        scheduler.add_job(
+            guarded_job("daily_report", 300, run_daily_report_once),
+            trigger=CronTrigger(hour=0, minute=0),  # UTC 00:00 = KST 09:00
+            id="daily_report", replace_existing=True, max_instances=1, coalesce=True,
         )
     scheduler.start()
 

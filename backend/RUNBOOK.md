@@ -34,7 +34,29 @@ docker compose logs api --tail=20
 
 ## 2. 일상 운영
 
-### 2.1 시스템 상태 확인
+### 2.1 시스템 상태 확인 — 운영 점검 스크립트 (권장)
+
+**한 줄로 「오늘 문제 있었나?」 점검** (2026-05-09 추가):
+```bash
+# 최근 24시간 — 거래 활동 + 위험 이벤트 + 권장 조치
+docker compose exec api python scripts/health_check.py --hours 24
+
+# 최근 1시간 — 짧은 점검 (자주)
+docker compose exec api python scripts/health_check.py --hours 1
+
+# 즉시 진단 — DB ↔ 거래소 1:1 일치 + 5분 내 CRITICAL 확인
+docker compose exec api python scripts/health_check.py --now
+```
+
+출력 예시 — 모두 정상이면:
+```
+🚨 검토 필요   ✅ 0건 — 운영 정상
+💡 권장 조치   없음 — 그대로 운영
+```
+
+문제 있으면 「검토 필요」 + 「권장 조치」 항목에 구체적 안내 표시.
+
+### 2.1b 컨테이너/로그 직접 확인 (필요 시)
 ```bash
 # 컨테이너 상태
 docker compose ps
@@ -137,12 +159,22 @@ gunzip -c backend/db_backups/daily/binance_auto_trader-latest.sql.gz | \
 
 ## 4. 정기 점검
 
-### 4.1 일일 (매일 권장)
-- [ ] `docker compose ps` — 11개 컨테이너 Running
-- [ ] `docker compose logs api --tail=100` — ERROR 없음
-- [ ] 활성 전략 상태 (좀비 STOPPING 없는지)
+### 4.1 일일 (매일 권장 — 1분)
+**한 줄로 끝**:
+```bash
+docker compose exec api python scripts/health_check.py --hours 24
+```
+
+이 스크립트가 다음을 자동 점검:
+- [x] 거래 활동 (진입/청산/신규)
+- [x] 텔레그램 발송 실패 여부
+- [x] CRITICAL/ERROR 검토 필요 항목
+- [x] 빈도 높은 이벤트 패턴 (rate limit / orphan / mismatch)
+- [x] 권장 조치 자동 도출
+
+추가로 (필요 시):
 - [ ] DB 백업 파일 (오늘 03:00 UTC 의 .sql.gz 생성됐나)
-- [ ] Telegram 알림 정상 수신 (전략 시작/TP/단계)
+- [ ] `docker compose ps` — 컨테이너 모두 Running
 
 ### 4.2 주간
 - [ ] 누적 통계 (`SELECT ... FROM strategy_instances WHERE status IN ('STOPPED','COMPLETED','REENTRY_READY')`)

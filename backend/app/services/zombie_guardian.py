@@ -34,6 +34,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.sentry import capture_strategy_event
+from app.core.strategy_status import (
+    ACTIVE_LIKE,
+    ACTIVE_WAITING,
+    ACTIVE_WITH_POSITION,
+    TERMINAL_STATUSES,
+)
 from app.models.exchange_account import ExchangeAccount
 from app.models.risk_event import RiskEvent
 from app.models.strategy_instance import StrategyInstance
@@ -44,29 +50,11 @@ from app.services.notification_service import NotificationService
 logger = logging.getLogger(__name__)
 
 
-# ===== 상태 분류 =====
-
-# 거래소에 실제 포지션이 있어야 하는 active 상태.
-# 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 1~4 만이라 5+ stage strategy 가
-# zombie 분류에서 누락되는 버그 (중복 active 강등 / orphan 감지 미작동).
-ACTIVE_WITH_POSITION = (
-    {f"STAGE{n}_OPEN" for n in range(1, 11)}
-    | {f"TP{n}_DONE_PARTIAL" for n in range(1, 6)}
-    | {"STOPPING"}  # 청산 진행 중 (포지션 아직 남아있을 수 있음)
-)
-
-# 거래소 포지션 미확정 (LIMIT 미체결)
-ACTIVE_WAITING = {f"STAGE{n}_OPEN_PENDING" for n in range(1, 11)}
-
-# 모든 "active" — 신규 strategy 진입 차단해야 할 상태
-ACTIVE_LIKE = ACTIVE_WITH_POSITION | ACTIVE_WAITING
-
-# 종료 상태 — qty 는 반드시 0 이어야 함
-TERMINAL_STATUSES = {
-    "STOPPED", "COMPLETED", "CLOSED",
-    "CLOSED_BY_TP", "CLOSED_BY_SL",
-    "REENTRY_READY", "KILL_SWITCH_TRIGGERED",
-}
+# ===== 상태 분류 (2026-05-14 Phase 1: app.core.strategy_status 로 centralize) =====
+# 이전엔 여기에 inline 으로 4곳 다 같은 패턴이 흩어져 있었고 (zombie / reconcile / daily_loss / orchestrator),
+# 5-06 TP10 확장 시 3곳 누락 → recurring bug. 이제 1곳에서 single source.
+# 변경 시 app/core/strategy_status.py 만 수정하면 모든 worker 자동 반영.
+__all__ = ["ACTIVE_WITH_POSITION", "ACTIVE_WAITING", "ACTIVE_LIKE", "TERMINAL_STATUSES"]
 
 
 # ===== Redis 키 =====
@@ -300,10 +288,14 @@ def detect_orphan_exchange_positions(
     db: Session,
     *,
     decrypt_func,
+    positions_cache: dict[int, list[dict]] | None = None,
 ) -> int:
     """거래소엔 포지션 있는데 DB 에 매칭 active strategy 없음 → CRITICAL 알림 + Kill-Switch.
 
     이 케이스는 시스템 외부 장애 (사용자가 거래소에서 수동 진입, 또는 DB 손실 등) 의 강한 신호.
+
+    2026-05-09 (rate limit 사후): positions_cache 인자로 main loop 가 이미 fetch 한
+    bulk 결과를 받아 같은 cycle 안에서 거래소 호출 중복 제거. 키 = exchange_account_id.
     """
     accounts = db.execute(
         select(ExchangeAccount).where(ExchangeAccount.is_active.is_(True))
@@ -311,14 +303,18 @@ def detect_orphan_exchange_positions(
     found = 0
     for acc in accounts:
         try:
-            from app.integrations.binance.client import BinanceClient
-            client = BinanceClient(
-                api_key=decrypt_func(acc.api_key_enc),
-                api_secret=decrypt_func(acc.api_secret_enc),
-                is_testnet=acc.is_testnet,
-            )
-            # 거래소의 모든 포지션 (positionAmt != 0)
-            risk = client.get_position_risk()
+            # cache hit 시 거래소 재호출 X (rate limit 부담 감소)
+            if positions_cache is not None and acc.id in positions_cache:
+                risk = positions_cache[acc.id]
+            else:
+                from app.integrations.binance.client import BinanceClient
+                client = BinanceClient(
+                    api_key=decrypt_func(acc.api_key_enc),
+                    api_secret=decrypt_func(acc.api_secret_enc),
+                    is_testnet=acc.is_testnet,
+                )
+                # 거래소의 모든 포지션 (positionAmt != 0)
+                risk = client.get_position_risk()
             if isinstance(risk, dict):
                 risk = [risk]
             for p in risk:
@@ -342,6 +338,45 @@ def detect_orphan_exchange_positions(
                 ).scalar_one_or_none()
                 if match:
                     continue
+                # 2026-05-08 #120 fix: KS 발동 전 transition race 한 번 더 검증.
+                # REENTRY_READY 는 exit FILLED 직후 transition status — 거래소 잔량이
+                # 아직 정리 안 된 race window 가능. 같은 심볼/방향의 REENTRY_READY
+                # strategy 가 최근 5분 내에 있으면 KS 보류 (reconcile 가 다음 cycle 에 정정).
+                # STOPPED / COMPLETED / archived 는 정상 종료라 잔량 있으면 진짜 orphan.
+                from datetime import datetime, timedelta, timezone
+                recent_match = db.execute(
+                    select(StrategyInstance)
+                    .where(StrategyInstance.exchange_account_id == acc.id)
+                    .where(StrategyInstance.symbol == symbol)
+                    .where(StrategyInstance.side == position_side)
+                    .where(StrategyInstance.is_archived.is_(False))
+                    .where(StrategyInstance.status == "REENTRY_READY")
+                    .where(StrategyInstance.updated_at >= datetime.now(timezone.utc) - timedelta(minutes=5))
+                    .order_by(StrategyInstance.id.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                if recent_match:
+                    logger.warning(
+                        "Orphan candidate %s %s amt=%s: recent strategy #%s (status=%s) — KS 보류 (race window)",
+                        symbol, position_side, amt, recent_match.id, recent_match.status,
+                    )
+                    db.add(RiskEvent(
+                        strategy_instance_id=recent_match.id,
+                        event_type="ZOMBIE_ORPHAN_RACE_DEFERRED",
+                        severity="WARN",
+                        title="⚠️ Orphan 후보 — 최근 strategy 매칭으로 KS 보류",
+                        message=(
+                            f"거래소 {symbol} {position_side} amt={amt} 에 ACTIVE 매칭은 없으나 "
+                            f"최근 5분 내 #{recent_match.id} (status={recent_match.status}) 가 같은 종목/방향. "
+                            "transition window race 가능성 — KS 보류, 다음 sweep 에 재평가."
+                        ),
+                        event_payload={"account_id": acc.id, "exchange_snapshot": {
+                            "symbol": symbol, "positionSide": position_side,
+                            "positionAmt": str(amt),
+                        }, "recent_strategy_id": recent_match.id, "recent_status": recent_match.status},
+                    ))
+                    db.commit()
+                    continue  # KS 발동 안 함 — 다음 cycle 재평가
                 # 매칭 없음 — orphan exchange position!
                 found += 1
                 snapshot = {
@@ -417,4 +452,127 @@ def detect_orphan_exchange_positions(
                 account_id=acc.id, error=e,
                 tags={"event_type": "ORPHAN_DETECT_FAILED"},
             )
+    return found
+
+
+def detect_orphan_exchange_open_orders(
+    db: Session,
+    *,
+    decrypt_func,
+    auto_cancel: bool = False,
+) -> int:
+    """거래소에 open order (LIMIT 미체결) 가 있지만 매칭 active strategy 없음 → WARN.
+
+    사용자 #VICUSDT 사례 (2026-05-15 보고):
+    - 2 일 전 (5-13) 발송된 LIMIT order (Open Short 397 VIC, filled 0) 가
+      거래소 open orders 에 머물러 있음
+    - 매칭 strategy 가 archived/stopped 됐는데 cancel_all_orders 누락된 케이스
+    - position 좀비 (detect_orphan_exchange_positions) 와 다름 — 아직 진입 안 됨
+
+    매칭 기준:
+    - DB 의 Order row 중 client_order_id 가 같은 active 주문 존재 여부 (정확)
+    - 또는 (symbol, side) 의 ACTIVE_LIKE strategy 가 있으면 정상으로 간주
+
+    auto_cancel=False (default): WARN 만 기록 (운영자 판단)
+    auto_cancel=True: cancel_all_orders 로 자동 취소 (위험 — 실수로 활성 주문 취소 가능)
+
+    Returns: orphan open order 발견 건수
+    """
+    from app.integrations.binance.client import BinanceClient
+    from app.models.order import Order
+    from datetime import datetime, timezone
+
+    accounts = db.execute(
+        select(ExchangeAccount).where(ExchangeAccount.is_active.is_(True))
+    ).scalars().all()
+    found = 0
+    for acc in accounts:
+        try:
+            client = BinanceClient(
+                api_key=decrypt_func(acc.api_key_enc),
+                api_secret=decrypt_func(acc.api_secret_enc),
+                is_testnet=acc.is_testnet,
+            )
+            open_orders = client.list_open_orders()  # symbol 인자 없음 → 전체
+            if not isinstance(open_orders, list):
+                continue
+            for oo in open_orders:
+                client_oid = oo.get("clientOrderId")
+                symbol = oo.get("symbol")
+                position_side = oo.get("positionSide")
+                if not client_oid or not symbol:
+                    continue
+                # 1) DB 의 Order 에 같은 clientOrderId 가 있고 active strategy 면 정상
+                local_order = db.execute(
+                    select(Order).where(Order.client_order_id == client_oid).limit(1)
+                ).scalar_one_or_none()
+                if local_order:
+                    # 매칭 strategy 가 active/in-progress 면 정상
+                    strat = db.execute(
+                        select(StrategyInstance)
+                        .where(StrategyInstance.id == local_order.strategy_instance_id)
+                        .limit(1)
+                    ).scalar_one_or_none()
+                    if strat and strat.status in ACTIVE_LIKE and not strat.is_archived:
+                        continue  # 정상 활성 주문
+                # 2) clientOrderId 매칭 없음 — (symbol, side) 의 active strategy 라도 있는지 fallback 검사
+                strat_match = db.execute(
+                    select(StrategyInstance)
+                    .where(StrategyInstance.exchange_account_id == acc.id)
+                    .where(StrategyInstance.symbol == symbol)
+                    .where(StrategyInstance.side == position_side)
+                    .where(StrategyInstance.status.in_(ACTIVE_LIKE))
+                    .where(StrategyInstance.is_archived.is_(False))
+                    .limit(1)
+                ).scalar_one_or_none()
+                if strat_match:
+                    continue  # 같은 종목/방향에 active 가 있으면 일단 패스 (broad match)
+                # 매칭 없음 — orphan open order!
+                found += 1
+                order_time_ms = oo.get("time") or oo.get("updateTime")
+                age_str = "?"
+                if order_time_ms:
+                    try:
+                        order_time = datetime.fromtimestamp(order_time_ms / 1000, tz=timezone.utc)
+                        age_h = (datetime.now(timezone.utc) - order_time).total_seconds() / 3600
+                        age_str = f"{age_h:.1f}h"
+                    except Exception:
+                        pass
+                logger.warning(
+                    "Orphan open order: %s %s qty=%s price=%s clientOrderId=%s age=%s",
+                    symbol, position_side, oo.get("origQty"), oo.get("price"), client_oid, age_str,
+                )
+                db.add(RiskEvent(
+                    strategy_instance_id=None,
+                    event_type="ZOMBIE_ORPHAN_OPEN_ORDER",
+                    severity="WARN",
+                    title=f"⚠️ 거래소 orphan open order — {symbol} {position_side} (age {age_str})",
+                    message=(
+                        f"거래소에 미체결 LIMIT 주문 있으나 매칭 active strategy 없음. "
+                        f"qty={oo.get('origQty')} price={oo.get('price')} clientOrderId={client_oid}. "
+                        f"strategy 가 archived/stopped 됐을 때 cancel_all_orders 누락 가능성. "
+                        f"거래소에서 직접 취소 권장 (auto_cancel=False)."
+                    ),
+                    event_payload={
+                        "account_id": acc.id,
+                        "symbol": symbol,
+                        "position_side": position_side,
+                        "client_order_id": client_oid,
+                        "exchange_order_id": oo.get("orderId"),
+                        "orig_qty": str(oo.get("origQty", "")),
+                        "price": str(oo.get("price", "")),
+                        "age_hours": age_str,
+                    },
+                ))
+                db.commit()
+                if auto_cancel:
+                    try:
+                        client._request("DELETE", "/fapi/v1/order", params={
+                            "symbol": symbol, "origClientOrderId": client_oid,
+                        }, signed=True)
+                        logger.info("Auto-cancelled orphan open order %s %s", symbol, client_oid)
+                    except Exception as e:
+                        logger.error("Auto-cancel orphan open order 실패: %s", e)
+        except Exception as e:
+            logger.error("detect_orphan_exchange_open_orders 실패 acc=%s: %s", acc.id, e)
     return found

@@ -343,6 +343,15 @@ def patched_sessionlocal(monkeypatch, engine):
         bind=engine, autoflush=False, autocommit=False, future=True
     )
     monkeypatch.setattr("app.workers.reconcile_worker.SessionLocal", test_session_factory)
+    # 2026-05-09 daily_report_worker 도 자체 SessionLocal 사용 — 같이 patch
+    try:
+        monkeypatch.setattr("app.workers.daily_report_worker.SessionLocal", test_session_factory)
+    except (AttributeError, ImportError):
+        pass
+    try:
+        monkeypatch.setattr("app.workers.heartbeat_worker.SessionLocal", test_session_factory)
+    except (AttributeError, ImportError):
+        pass
     return test_session_factory
 
 
@@ -419,6 +428,7 @@ def fake_redis(monkeypatch) -> FakeRedis:
         "app.services.tp_sl_orchestrator",
         "app.services.risk_service",
         "app.services.zombie_guardian",
+        "app.services.execution_service",  # 2026-05-08 #120 fix: emergency_close idempotency lock
     ):
         try:
             monkeypatch.setattr(f"{mod}.get_redis_client", _factory, raising=False)

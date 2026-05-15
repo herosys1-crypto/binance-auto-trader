@@ -20,6 +20,12 @@ from app.core.database import SessionLocal
 from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
 from app.core.sentry import capture_strategy_event
+from app.core.strategy_status import (
+    ACTIVE_WAITING,
+    ACTIVE_WITH_POSITION,
+    OPEN_LIKE_FOR_ORPHAN_CHECK,
+    PENDING_TO_OPEN_MAP,
+)
 from app.integrations.binance.client import BinanceClient
 from app.models.exchange_account import ExchangeAccount
 from app.models.position import Position
@@ -30,6 +36,7 @@ from app.services.zombie_guardian import (
     pre_pass_dedup,
     enforce_terminal_qty_zero,
     detect_orphan_exchange_positions,
+    detect_orphan_exchange_open_orders,
     escalate_stuck_strategy,
     _stuck_inc,
     _stuck_clear,
@@ -94,32 +101,86 @@ def _do_reconcile(decrypt_func) -> None:
         # ===== Main loop — active strategy 별 거래소 sync + 자동 회복 =====
         # 활성 전략 조회. *_PENDING 상태도 포함 — user-stream 이 죽어 체결 이벤트를
         # 놓친 경우 reconcile 이 거래소 상태를 보고 PENDING -> OPEN 으로 자가 회복.
-        # 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 STAGE1~4_OPEN_PENDING/OPEN 만 active 분류라
-        # 5+ stage 진입한 strategy 가 reconcile main loop 에서 누락되는 버그.
-        _ACTIVE_PENDING = [f"STAGE{n}_OPEN_PENDING" for n in range(1, 11)]
-        _ACTIVE_OPEN = [f"STAGE{n}_OPEN" for n in range(1, 11)]
-        _ACTIVE_TP_PARTIAL = [f"TP{n}_DONE_PARTIAL" for n in range(1, 6)]
+        # 2026-05-14 Phase 1 centralize: ACTIVE_WAITING + ACTIVE_WITH_POSITION 사용.
+        # ACTIVE_WITH_POSITION 이 STOPPING + STAGE_n_OPEN + TP_n_DONE_PARTIAL 모두 포함.
+        # 이전 inline build 시 5-06 TP10 확장에서 TP6~10 누락 버그 발생 → centralize 로 영구 차단.
+        _RECONCILE_TARGET_STATUSES = list(ACTIVE_WAITING | ACTIVE_WITH_POSITION)
         rows = db.execute(
             select(StrategyInstance, ExchangeAccount)
             .join(ExchangeAccount, StrategyInstance.exchange_account_id == ExchangeAccount.id)
-            .where(StrategyInstance.status.in_(
-                _ACTIVE_PENDING + _ACTIVE_OPEN + _ACTIVE_TP_PARTIAL + ["STOPPING"]
-            ))
+            .where(StrategyInstance.status.in_(_RECONCILE_TARGET_STATUSES))
             .where(StrategyInstance.is_archived.is_(False))  # 2026-05-06 C-full: archived 제외
             .where(ExchangeAccount.is_active.is_(True))
         ).all()
+
+        # 2026-05-09 (#120 사후 — rate limit 178건 발견): 같은 account 의 모든 strategy
+        # 가 각자 client.get_position_risk(symbol=...) 호출하던 것을 account 별 1회 bulk
+        # 호출로 변경. 5 strategy → 5 호출 이 1 호출로 줄어 rate limit 부담 ~80% 감소.
+        # 추가로 account 별 BinanceClient 도 1번만 만들어서 재활용.
+        # bulk 호출 결과는 Phase 2 orphan detection 도 재사용 (총 절감 효과 ↑↑).
+        # 2026-05-09 Layer 4: API ban 감지 시 자동 backoff — 다음 cycle 들 skip.
+        bulk_positions_cache: dict[int, list[dict]] = {}  # acc_id → positions
+        bulk_client_cache: dict[int, BinanceClient] = {}  # acc_id → client
+        bulk_failure_accs: set[int] = set()  # 호출 실패한 계정 (개별 strategy 도 skip)
+
+        # Backoff: ban 중인 계정 미리 감지 → bulk 호출 자체 skip
+        from app.core.api_backoff import (
+            check_api_ban, parse_rate_limit_error, record_api_ban,
+        )
+        from app.services.notification_service import NotificationService
+        try:
+            from app.core.redis_client import get_redis_client as _get_rc
+            _redis = _get_rc()
+        except Exception:
+            _redis = None
+        notif_svc = NotificationService(db)
+
+        def _get_bulk_for_account(acc: ExchangeAccount) -> list[dict] | None:
+            if acc.id in bulk_positions_cache:
+                return bulk_positions_cache[acc.id]
+            if acc.id in bulk_failure_accs:
+                return None
+            # Backoff 사전 점검 — ban 중이면 거래소 호출 시도조차 안 함
+            is_banned, expiry_ms = check_api_ban(_redis, acc.id)
+            if is_banned:
+                logger.info("API ban active for account=%s — skip cycle", acc.id)
+                bulk_failure_accs.add(acc.id)
+                return None
+            try:
+                cli = BinanceClient(
+                    api_key=decrypt_func(acc.api_key_enc),
+                    api_secret=decrypt_func(acc.api_secret_enc),
+                    is_testnet=acc.is_testnet,
+                )
+                bulk_client_cache[acc.id] = cli
+                pos = cli.get_position_risk()  # bulk — symbol 인자 없음
+                if isinstance(pos, dict):
+                    pos = [pos]
+                bulk_positions_cache[acc.id] = pos
+                return pos
+            except Exception as e:
+                # rate limit / ban 인지 검사
+                ban_until = parse_rate_limit_error(e)
+                if ban_until is not None:
+                    record_api_ban(
+                        _redis, acc.id, ban_until,
+                        notification_service=notif_svc,
+                        error_message=str(e),
+                    )
+                # bulk 실패 (rate limit 등) — 이번 cycle 의 main loop + orphan 모두 skip.
+                logger.warning("Bulk get_position_risk failed acc=%s: %s — cycle skip", acc.id, e)
+                bulk_failure_accs.add(acc.id)
+                return None
+
         for strategy, account in rows:
             try:
-                client = BinanceClient(
-                    api_key=decrypt_func(account.api_key_enc),
-                    api_secret=decrypt_func(account.api_secret_enc),
-                    is_testnet=account.is_testnet,
-                )
-                position_risk = client.get_position_risk(symbol=strategy.symbol)
-                if isinstance(position_risk, dict):
-                    position_risk = [position_risk]
+                bulk_positions = _get_bulk_for_account(account)
+                if bulk_positions is None:
+                    # bulk 실패 — 이 strategy reconcile skip (rate limit 부담 줄임)
+                    continue
+                client = bulk_client_cache[account.id]
                 matched = None
-                for item in position_risk:
+                for item in bulk_positions:
                     if item.get("symbol") == strategy.symbol and item.get("positionSide") == strategy.side:
                         matched = item
                         break
@@ -142,12 +203,9 @@ def _do_reconcile(decrypt_func) -> None:
                         position_reconcile_total.labels(status="zombie_stopped").inc()
                         _stuck_clear(strategy.id)
                         continue
-                    # *_OPEN orphan 자동 정리 — 1~10단계 + TP 1~5 PARTIAL.
-                    _OPEN_STATES = (
-                        {f"STAGE{n}_OPEN" for n in range(1, 11)}
-                        | {f"TP{n}_DONE_PARTIAL" for n in range(1, 6)}
-                    )
-                    if strategy.status in _OPEN_STATES:
+                    # *_OPEN orphan 자동 정리 — 1~10단계 + TP 1~10 PARTIAL.
+                    # 2026-05-14 Phase 1 centralize: OPEN_LIKE_FOR_ORPHAN_CHECK 사용.
+                    if strategy.status in OPEN_LIKE_FOR_ORPHAN_CHECK:
                         db.add(RiskEvent(
                             strategy_instance_id=strategy.id,
                             event_type="RECONCILE_AUTO_STOP_ORPHAN",
@@ -256,11 +314,9 @@ def _do_reconcile(decrypt_func) -> None:
                 # 잘못 승격. 거래소 포지션은 stage 1~(N-1) 합 (= 이전 fills) 이라 != 0 인 게 당연.
                 # 해당 stage 의 LIMIT 가 실제로 fill 됐는지 확인하려면 stage_plan.is_triggered 검사.
                 # is_triggered 는 stream_service 가 ENTRY FILLED 처리 시 atomic UPDATE 함.
-                _PENDING_TO_OPEN = {
-                    f"STAGE{n}_OPEN_PENDING": (f"STAGE{n}_OPEN", n) for n in range(1, 11)
-                }
-                if strategy.status in _PENDING_TO_OPEN and exchange_position_amt != 0:
-                    new_status, pending_stage_no = _PENDING_TO_OPEN[strategy.status]
+                # 2026-05-14 Phase 1 centralize: PENDING_TO_OPEN_MAP 사용 (app.core.strategy_status).
+                if strategy.status in PENDING_TO_OPEN_MAP and exchange_position_amt != 0:
+                    new_status, pending_stage_no = PENDING_TO_OPEN_MAP[strategy.status]
                     # 그 stage 의 plan 이 실제 fill 됐는지 확인 (stream 누락 회복용 가드).
                     from app.models.strategy_stage_plan import StrategyStagePlan
                     plan = db.execute(
@@ -307,8 +363,12 @@ def _do_reconcile(decrypt_func) -> None:
         db.commit()
 
         # ===== Phase 2 안전망 — 거래소 orphan 포지션 감지 =====
+        # 2026-05-09: bulk_positions_cache 전달 — main loop 가 이미 fetch 한 결과 재사용.
         try:
-            n_orphan = detect_orphan_exchange_positions(db, decrypt_func=decrypt_func)
+            n_orphan = detect_orphan_exchange_positions(
+                db, decrypt_func=decrypt_func,
+                positions_cache=bulk_positions_cache,
+            )
             db.commit()
             if n_orphan:
                 logger.critical(
@@ -322,6 +382,26 @@ def _do_reconcile(decrypt_func) -> None:
                 "detect_orphan_exchange_positions failed",
                 level="error", error=e,
                 tags={"event_type": "ORPHAN_DETECTION_LOOP_FAILED"},
+            )
+
+        # ===== Phase 3 안전망 — 거래소 orphan open order 감지 (사용자 #VICUSDT 보고 2026-05-15) =====
+        # LIMIT 미체결 주문이 archive/stop 시 cancel_all_orders 누락으로 거래소에 잔존
+        # 하는 케이스. WARN RiskEvent 기록 — 운영자가 거래소에서 직접 취소 권장.
+        try:
+            n_orphan_oo = detect_orphan_exchange_open_orders(
+                db, decrypt_func=decrypt_func, auto_cancel=False,
+            )
+            if n_orphan_oo:
+                logger.warning(
+                    "Zombie Guardian: %d orphan exchange open order(s) detected", n_orphan_oo
+                )
+        except Exception as e:
+            logger.error("detect_orphan_exchange_open_orders 실패: %s", e)
+            db.rollback()
+            capture_strategy_event(
+                "detect_orphan_exchange_open_orders failed",
+                level="error", error=e,
+                tags={"event_type": "ORPHAN_OO_DETECTION_LOOP_FAILED"},
             )
     finally:
         db.close()

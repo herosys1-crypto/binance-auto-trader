@@ -34,16 +34,20 @@ def _make_risk_service():
 
 
 class TestTp10TrailingArmedStatuses:
-    def test_all_tp_done_partial_statuses_armed(self, fake_redis):
-        """TP1~10_DONE_PARTIAL 모두 trailing armed status 에 포함."""
-        from app.services.risk_service import RiskService
+    def test_tp4_through_tp10_done_partial_statuses_armed(self, fake_redis):
+        """TP4~10_DONE_PARTIAL 모두 trailing armed status 에 포함 (v3 정책 2026-05-12).
+
+        v1: TP1~ / v2: TP3~ / v3: TP4~ — TRAILING_MIN_TP_INDEX 변경 시 같이 갱신.
+        """
+        from app.services.risk_service import RiskService, TRAILING_MIN_TP_INDEX
         # TRAILING_ARMED_STATUSES 가 함수 내부 local 이라 직접 접근 불가 — 코드 inspect.
         import inspect
         src = inspect.getsource(RiskService.evaluate_take_profit_level)
-        # TP1~10 모두 명시되어야
-        assert "range(1, 11)" in src or all(f"TP{n}_DONE_PARTIAL" in src for n in range(1, 11)), (
-            f"TRAILING_ARMED_STATUSES 가 TP1~10 모두 포함해야 함. "
-            f"코드에 range(1, 11) 또는 명시적 TP1~10_DONE_PARTIAL 필요"
+        # TRAILING_MIN_TP_INDEX (=4) ~ 10 까지 dynamic range 가 코드에 있어야
+        expected_pattern = f"range(TRAILING_MIN_TP_INDEX, 11)"
+        assert expected_pattern in src, (
+            f"TRAILING_ARMED_STATUSES 는 range(TRAILING_MIN_TP_INDEX={TRAILING_MIN_TP_INDEX}, 11) 로 "
+            f"동적 산출돼야 함. 직접 범위 변경 시 정책 정합성 깨짐."
         )
 
 

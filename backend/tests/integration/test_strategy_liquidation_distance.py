@@ -37,7 +37,7 @@ class TestLiquidationDistanceGuard:
         make_symbol("BTCUSDT")
         tpl = make_template(leverage=20)
 
-        with pytest.raises(ValueError, match=r"청산가 안전 거리 부족"):
+        with pytest.raises(ValueError, match="청산가가 너무 가까워"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=u.id, exchange_account_id=ea.id,
                 strategy_template_id=tpl.id, symbol="BTCUSDT",
@@ -94,7 +94,7 @@ class TestLiquidationDistanceGuard:
         make_symbol("BTCUSDT")
         tpl = make_template(leverage=10, side="LONG")
 
-        with pytest.raises(ValueError, match=r"청산가 안전 거리 부족"):
+        with pytest.raises(ValueError, match="청산가가 너무 가까워"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=u.id, exchange_account_id=ea.id,
                 strategy_template_id=tpl.id, symbol="BTCUSDT",

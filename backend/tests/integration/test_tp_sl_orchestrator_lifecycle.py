@@ -154,7 +154,7 @@ class TestLastActiveTPFullClose:
     이는 "4/4 익절 모두 종료되면 전략 인스턴스 모두 종료" 기획의 정확 반영.
     """
 
-    def test_short_last_tp_triggers_full_close_and_completed(
+    def test_short_tp3_uses_template_ratio_not_full_close_v6(
         self,
         db_session,
         make_template,
@@ -165,9 +165,13 @@ class TestLastActiveTPFullClose:
         fake_trade_client,
         orchestrator,
     ) -> None:
-        # template: TP1=5%, TP2=10%, TP3=15% 모두 활성. TP3 가 마지막 활성 TP.
-        # 사용자 ratio: TP1=25%, TP2=50%, TP3=50% (의도적으로 TP3 < 100%)
-        # TP3 발동 시: 코드가 ratio 무시하고 잔량 100% 청산 + COMPLETED.
+        """v6 (2026-05-12 밤): last_active_tp shortcut 폐지. TP3 가 마지막 enabled 여도
+        사용자 ratio (또는 default 25%) 사용. trailing 이 close-all 처리.
+
+        시나리오: TP1=5/TP2=10/TP3=15 활성, TP3 ratio=50% — 사용자 의도 부분 청산.
+        v5 까지: TP3 가 last_active_tp → 100% 강제 → COMPLETED.
+        v6: TP3 가 50% 청산 → 잔량 보유 → status TP3_DONE_PARTIAL → trailing 가능.
+        """
         tpl = make_template(
             tp1_percent=Decimal("5"), tp2_percent=Decimal("10"), tp3_percent=Decimal("15"),
             tp1_qty_ratio=Decimal("25"), tp2_qty_ratio=Decimal("50"), tp3_qty_ratio=Decimal("50"),
@@ -177,9 +181,8 @@ class TestLastActiveTPFullClose:
             symbol_str="BTCUSDT", side="SHORT", status="TP2_DONE_PARTIAL",
             current_position_qty=Decimal("-0.2"),  # TP1+TP2 청산 후 잔량
             avg_entry_price=Decimal("50000"), leverage=1,
-            template=tpl, current_stage=2,
+            template=tpl, current_stage=3,
         )
-        # mark 42500 = SHORT 15% PnL (TP3 도달)
         make_position(strategy, mark_price=Decimal("42500"))
         fake_binance.set_position(
             "BTCUSDT", position_amt="-0.2", position_side="SHORT",
@@ -188,15 +191,21 @@ class TestLastActiveTPFullClose:
 
         orchestrator.run_for_strategy(strategy.id)
 
-        # 잔량 100% 청산 — 0.2 BTC 전부
+        # v6: 사용자 ratio 50% 적용 → 0.1 BTC 청산 (잔량 0.1 보유)
         assert len(fake_trade_client.placed_orders) == 1
         placed = fake_trade_client.placed_orders[0]
-        assert Decimal(placed["quantity"]) == Decimal("0.2")  # ratio 50% 무시, 100%
+        assert Decimal(placed["quantity"]) == Decimal("0.1"), (
+            f"v6: TP3 사용자 ratio 50% 적용, 100% 강제 안 함 (last_active_tp shortcut 폐지). "
+            f"실제 quantity={placed['quantity']}"
+        )
 
         db_session.expire_all()
         s = db_session.get(StrategyInstance, strategy.id)
-        assert s.status == "COMPLETED"  # 마지막 TP → COMPLETED
-        assert s.reentry_ready is False  # COMPLETED 면 reentry 안 함
+        # v6: 부분 청산 → status = TP3_DONE_PARTIAL (COMPLETED 아님)
+        assert s.status == "TP3_DONE_PARTIAL", (
+            f"v6: 부분 청산 후 TP3_DONE_PARTIAL 상태 (잔량 보유 → trailing 기회). "
+            f"실제 status={s.status}"
+        )
 
 
 # ============================================================================
@@ -283,3 +292,126 @@ class TestRedisLockProtection:
         db_session.expire_all()
         s = db_session.get(StrategyInstance, strategy.id)
         assert s.status == "STAGE2_OPEN"
+
+
+# ============================================================================
+# 사용자 #40 BUSDT step_size flooring 후속 (2026-05-14)
+# ============================================================================
+class TestTPMinStepEnforcement:
+    """사용자 #40 BUSDT 보고 후속 — step_size flooring 으로 close_qty=0 이 되면
+    사용자 「3단계 익절 모두 진행」 의도와 다름. 잔량 ≥ step 이면 최소 1 step 보장.
+
+    테스트:
+    1. 잔량 충분 (100) + step 50 + ratio 25% (=25 → floor 0) → close=50 (1 step 보장)
+    2. 잔량 부족 (25) + step 50 → 청산 진행 X (current_qty < step)
+    """
+
+    def test_tp_with_floored_zero_qty_enforces_min_step(
+        self,
+        db_session,
+        make_template,
+        make_strategy,
+        make_position,
+        make_symbol,
+        fake_redis,
+        fake_binance,
+        fake_trade_client,
+        orchestrator,
+    ) -> None:
+        """잔량 100, step 50, TP1 ratio 25% → raw=25 → floor=0 → fix: 50 보장."""
+        # 큰 step_size 심볼 (BUSDT 같은)
+        sym = make_symbol("BIGSTEP", step_size=Decimal("50"))
+        tpl = make_template(
+            tp1_percent=Decimal("5"), tp2_percent=Decimal("10"), tp3_percent=Decimal("15"),
+            tp1_qty_ratio=Decimal("25"), tp2_qty_ratio=Decimal("25"), tp3_qty_ratio=Decimal("25"),
+        )
+        strategy = make_strategy(
+            symbol_str="BIGSTEP", side="SHORT", status="STAGE2_OPEN",
+            symbol_obj=sym,
+            current_position_qty=Decimal("-100"),  # 잔량 100, step 50
+            avg_entry_price=Decimal("1.0"),
+            leverage=1,
+            template=tpl, current_stage=2,
+        )
+        # mark 0.95 = SHORT +5% → TP1 도달
+        make_position(strategy, mark_price=Decimal("0.95"))
+        fake_binance.set_position(
+            "BIGSTEP", position_amt="-100", position_side="SHORT",
+            entry_price="1.0", mark_price="0.95",
+        )
+
+        orchestrator.run_for_strategy(strategy.id)
+
+        # 100 × 0.25 = 25 → step 50 으로 floor 시 0 → fix 작동 → 50 (1 step) close
+        assert len(fake_trade_client.placed_orders) == 1, (
+            "step flooring 으로 close_qty=0 이 되더라도 최소 1 step 청산 보장 (사용자 #40 후속)"
+        )
+        placed = fake_trade_client.placed_orders[0]
+        assert Decimal(placed["quantity"]) == Decimal("50"), (
+            f"최소 1 step (50) close 기대. 실제: {placed['quantity']}"
+        )
+
+        # status 진행 (TP1_DONE_PARTIAL)
+        db_session.expire_all()
+        s = db_session.get(StrategyInstance, strategy.id)
+        assert s.status == "TP1_DONE_PARTIAL"
+
+        # WARN 이벤트 기록
+        from app.models.risk_event import RiskEvent
+        events = db_session.execute(
+            select(RiskEvent)
+            .where(RiskEvent.strategy_instance_id == strategy.id)
+            .where(RiskEvent.event_type == "TP_MIN_STEP_ENFORCED")
+        ).scalars().all()
+        assert len(events) == 1, "TP_MIN_STEP_ENFORCED RiskEvent 기록돼야"
+        assert "TP1" in events[0].title
+
+    def test_tp_with_qty_below_step_skips_close(
+        self,
+        db_session,
+        make_template,
+        make_strategy,
+        make_position,
+        make_symbol,
+        fake_redis,
+        fake_binance,
+        fake_trade_client,
+        orchestrator,
+    ) -> None:
+        """잔량 25 (step 50 미만) + partial TP → close 진행 X (current_qty < step).
+
+        partial close 경로 (close_ratio < 1.00) 만 step floor 검증 — last TP 의 100%
+        close 는 별도 경로 (close_qty = current_qty 그대로).
+        """
+        sym = make_symbol("TINYREM", step_size=Decimal("50"))
+        # TP1 + TP2 정의 → TP1 발동 시 partial close (last X)
+        tpl = make_template(
+            tp1_percent=Decimal("5"), tp2_percent=Decimal("10"), tp3_percent=Decimal("15"),
+            tp1_qty_ratio=Decimal("25"), tp2_qty_ratio=Decimal("25"), tp3_qty_ratio=Decimal("25"),
+        )
+        strategy = make_strategy(
+            symbol_str="TINYREM", side="SHORT", status="STAGE2_OPEN",
+            symbol_obj=sym,
+            current_position_qty=Decimal("-25"),  # 잔량 25 < step 50
+            avg_entry_price=Decimal("1.0"),
+            leverage=1,
+            template=tpl, current_stage=2,
+        )
+        # mark 0.95 = SHORT +5% → TP1 도달 (partial 25%)
+        make_position(strategy, mark_price=Decimal("0.95"))
+        fake_binance.set_position(
+            "TINYREM", position_amt="-25", position_side="SHORT",
+            entry_price="1.0", mark_price="0.95",
+        )
+
+        orchestrator.run_for_strategy(strategy.id)
+
+        # 25 × 0.25 = 6.25 → step 50 으로 floor = 0 → fix: current_qty 25 < step 50 →
+        # 1 step 보장 안 됨 → return (close 안 함)
+        assert len(fake_trade_client.placed_orders) == 0, (
+            "잔량 < step 이면 close 진행 안 함 (1 step 도 부족 — 진짜 청산 불가)"
+        )
+        # status 도 진행 안 함 (return 으로 인해)
+        db_session.expire_all()
+        s = db_session.get(StrategyInstance, strategy.id)
+        assert s.status == "STAGE2_OPEN", "step 부족 시 status 도 그대로"

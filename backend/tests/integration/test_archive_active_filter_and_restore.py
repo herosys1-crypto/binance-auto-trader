@@ -133,3 +133,97 @@ class TestArchiveRestoreCycle:
         assert s2.is_archived is True
         assert s2.archived_at is not None
         assert s2.realized_pnl == Decimal("123.45")  # 사이클 거치며 보존
+
+
+# ============================================================================
+# 사용자 #33 AVAAIUSDT + #41 ESPORTSUSDT 좀비 보고 (2026-05-15)
+# ============================================================================
+class TestArchiveWithNonzeroPositionEmitsCritical:
+    """archive 시 latest position snapshot 의 qty 가 0 이 아니면 CRITICAL RiskEvent 발송.
+
+    사용자 #33/#41 사례: force-stop 또는 외부 청산 누락으로 거래소에 잔량 있는 채
+    archive → 좀비. 사후 알림 보장으로 운영자가 빨리 인지하도록.
+    """
+    def test_archive_with_nonzero_position_emits_critical_event(
+        self, db_session, make_strategy, make_template
+    ):
+        """잔량 -182 (force-stop 후 DB qty=0 이지만 position snapshot 에 -182 남음)."""
+        from app.models.position import Position
+        from app.models.risk_event import RiskEvent
+
+        tpl = make_template()
+        s = make_strategy(
+            symbol_str="AVAAIUSDT", side="SHORT", status="STOPPED",
+            current_position_qty=Decimal("0"),  # force-stop 으로 마킹됨
+            avg_entry_price=Decimal("0.00984"),
+            template=tpl, current_stage=1,
+        )
+        # latest position snapshot — 거래소 실제 qty -182 잔재
+        db_session.add(Position(
+            strategy_instance_id=s.id, symbol="AVAAIUSDT", side="SHORT",
+            position_side="SHORT", position_amt=Decimal("-182"),
+            entry_price=Decimal("0.00984"), source="TEST",
+        ))
+        db_session.commit()
+
+        delete_strategy(strategy_id=s.id, db=db_session, user_id=s.user_id)
+
+        # CRITICAL RiskEvent 발생 확인
+        events = db_session.execute(
+            select(RiskEvent).where(RiskEvent.strategy_instance_id == s.id)
+            .where(RiskEvent.event_type == "ARCHIVE_WITH_NONZERO_POSITION")
+        ).scalars().all()
+        assert len(events) == 1, "archive 시 nonzero position snapshot 이면 CRITICAL 1건 발송 필수"
+        assert events[0].severity == "CRITICAL"
+        assert "182" in events[0].title
+
+    def test_archive_with_zero_position_no_critical(
+        self, db_session, make_strategy, make_template
+    ):
+        """잔량 0 이면 CRITICAL 발송 안 함 (정상 archive)."""
+        from app.models.position import Position
+        from app.models.risk_event import RiskEvent
+
+        tpl = make_template()
+        s = make_strategy(
+            symbol_str="BTCUSDT", side="SHORT", status="COMPLETED",
+            current_position_qty=Decimal("0"),
+            avg_entry_price=Decimal("50000"),
+            template=tpl, current_stage=2, realized_pnl=Decimal("100"),
+        )
+        db_session.add(Position(
+            strategy_instance_id=s.id, symbol="BTCUSDT", side="SHORT",
+            position_side="SHORT", position_amt=Decimal("0"),
+            entry_price=Decimal("50000"), source="TEST",
+        ))
+        db_session.commit()
+
+        delete_strategy(strategy_id=s.id, db=db_session, user_id=s.user_id)
+
+        events = db_session.execute(
+            select(RiskEvent).where(RiskEvent.strategy_instance_id == s.id)
+            .where(RiskEvent.event_type == "ARCHIVE_WITH_NONZERO_POSITION")
+        ).scalars().all()
+        assert len(events) == 0, "잔량 0 이면 CRITICAL 발송 안 함 (정상 archive)"
+
+    def test_archive_with_no_position_snapshot_no_critical(
+        self, db_session, make_strategy, make_template
+    ):
+        """Position snapshot 자체가 없으면 (한 번도 진입 안 함) CRITICAL 발송 안 함."""
+        from app.models.risk_event import RiskEvent
+
+        tpl = make_template()
+        s = make_strategy(
+            symbol_str="BTCUSDT", side="SHORT", status="STOPPED",
+            current_position_qty=Decimal("0"),
+            avg_entry_price=None,
+            template=tpl, current_stage=0,
+        )
+
+        delete_strategy(strategy_id=s.id, db=db_session, user_id=s.user_id)
+
+        events = db_session.execute(
+            select(RiskEvent).where(RiskEvent.strategy_instance_id == s.id)
+            .where(RiskEvent.event_type == "ARCHIVE_WITH_NONZERO_POSITION")
+        ).scalars().all()
+        assert len(events) == 0

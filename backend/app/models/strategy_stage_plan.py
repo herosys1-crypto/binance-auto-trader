@@ -16,6 +16,10 @@ class StrategyStagePlan(Base):
     trigger_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
     planned_capital: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     planned_qty: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    # 2026-05-11 (사용자 요청): 단계 진입 시 추가 isolated 증거금 (USDT).
+    # NULL/0 = 추가 안 함 (기존 동작). 양수 = stage_trigger_worker 가 entry 주문
+    # 체결 후 add_position_margin API 호출. 청산가를 멀리 밀어 안전 마진 확보.
+    additional_margin_usdt: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_triggered: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

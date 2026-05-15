@@ -48,7 +48,7 @@ class TestSymbolWhitelist:
         make_symbol("SOLUSDT")
         tpl = make_template()
 
-        with pytest.raises(ValueError, match="허용 목록에 없음"):
+        with pytest.raises(ValueError, match="현재 허용되지 않습니다"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=u.id,
                 exchange_account_id=ea.id,
@@ -139,6 +139,11 @@ class TestMaxConcurrentStrategies:
         monkeypatch.setattr(
             "app.core.config.settings.max_concurrent_strategies_per_account", 10, raising=False
         )
+        # 2026-05-08: env 에 ALLOWED_SYMBOLS_CSV 가 설정되면 화이트리스트 검사가 먼저
+        # 발동해 동시 한도 검증 못함. 이 테스트 목적상 화이트리스트 비활성화.
+        monkeypatch.setattr(
+            "app.core.config.settings.allowed_symbols_csv", None, raising=False
+        )
         first = make_strategy(symbol_str="BTCUSDT", status="STAGE1_OPEN")
         for i in range(9):
             make_strategy(
@@ -150,7 +155,7 @@ class TestMaxConcurrentStrategies:
         # 11번째 시도
         make_symbol("EXTRAUSDT")
         tpl = make_template()
-        with pytest.raises(ValueError, match="동시 활성 전략 수 한도"):
+        with pytest.raises(ValueError, match="동시 운영 한도"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=first.user_id,
                 exchange_account_id=first.exchange_account_id,
@@ -167,6 +172,10 @@ class TestMaxConcurrentStrategies:
         monkeypatch.setattr(
             "app.core.config.settings.max_concurrent_strategies_per_account", 2, raising=False
         )
+        # 2026-05-08: 화이트리스트 비활성화 (env 영향 차단 — 위 test_default_limit_10 동일 사유)
+        monkeypatch.setattr(
+            "app.core.config.settings.allowed_symbols_csv", None, raising=False
+        )
         first = make_strategy(symbol_str="BTCUSDT", status="STAGE1_OPEN")
         make_strategy(
             symbol_str="ETHUSDT", status="STAGE1_OPEN",
@@ -175,7 +184,7 @@ class TestMaxConcurrentStrategies:
         # 2건 active. 3번째 거부.
         make_symbol("SOLUSDT")
         tpl = make_template()
-        with pytest.raises(ValueError, match=r"동시 활성 전략 수 한도 \(2개\)"):
+        with pytest.raises(ValueError, match=r"동시 운영 한도 \(2개\)"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=first.user_id,
                 exchange_account_id=first.exchange_account_id,
@@ -196,7 +205,7 @@ class TestMaxConcurrentStrategies:
         make_symbol("ETHUSDT")
         tpl = make_template()
         # 1건 이미 있음. 다음 거부 (clamp 1 = 한도).
-        with pytest.raises(ValueError, match=r"한도 \(1개\)"):
+        with pytest.raises(ValueError, match=r"동시 운영 한도 \(1개\)"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=first.user_id,
                 exchange_account_id=first.exchange_account_id,
@@ -211,18 +220,18 @@ class TestMaxStrategyCapitalPct:
     def test_capital_above_pct_rejected(
         self, db_session, make_user, make_exchange_account, make_symbol, make_template, monkeypatch
     ) -> None:
-        """available=1000, max_pct=5% → 한도 50. tpl total_capital=100 (10%) → 거부."""
+        """2026-05-10 (cowork): max_pct >= 100 일 때만 검증. 잔액 초과 자본은 여전히 거부.
+        available=1000, max_pct=100% → 한도 1000. tpl total_capital=2000 → 거부."""
         monkeypatch.setattr(
-            "app.core.config.settings.max_strategy_capital_pct_of_balance", 5.0, raising=False
+            "app.core.config.settings.max_strategy_capital_pct_of_balance", 100.0, raising=False
         )
         _patch_binance_account(monkeypatch, available="1000")
         u = make_user()
         ea = make_exchange_account(user=u)
         make_symbol("BTCUSDT")
-        # 기본 tpl total_capital=100 (10% of 1000)
-        tpl = make_template()
+        tpl = make_template(total_capital=Decimal("2000"))  # 잔액 1000 의 200%
 
-        with pytest.raises(ValueError, match="자본 상한 초과"):
+        with pytest.raises(ValueError, match="가용 잔액|초과합니다|자본이 부족"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=u.id,
                 exchange_account_id=ea.id,

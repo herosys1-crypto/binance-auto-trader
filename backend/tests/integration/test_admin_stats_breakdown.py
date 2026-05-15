@@ -62,11 +62,23 @@ class TestStatsBreakdown:
             )
         r = _call_breakdown(db_session, "realized")
         assert r["count"] == 3  # zero 두 개 제외
-        # 절댓값 정렬 — 100 > 50 > -30
-        ids = [Decimal(it["realized_pnl"]) for it in r["items"]]
-        assert abs(ids[0]) >= abs(ids[1]) >= abs(ids[2])
+        # 2026-05-08 변경: 정렬을 「최신 시작 순」 으로 — 사용자가 가장 알고 싶어하는 것은
+        # 최근 거래 결과. 같은 created_at 이면 ID 큰 (최근 row) 우선.
+        # 모든 strategy 가 거의 동시 생성됐으니 ID 큰 순 (마지막에 만든 것 = 최근).
+        ids = [it["id"] for it in r["items"]]
+        assert ids == sorted(ids, reverse=True)
 
-    def test_losses_view_only_negative(self, db_session, make_strategy, make_template):
+    def test_losses_view_includes_audit_targets(self, db_session, make_strategy, make_template):
+        """2026-05-12 사용자 요청 (정책 v2): 「손실/감사」 view 가 손실 외에도 감사 대상 포함.
+
+        포함 기준 (OR):
+        - realized_pnl < 0 (실제 손실)
+        - max_loss_pct < -10% (큰 미실현 낙폭)
+        - status IN (STOPPED, STOPPING) (수동 정지)
+        - crisis_mode_triggered_at IS NOT NULL (크라이시스 진입)
+
+        이전엔 realized_pnl < 0 만 봐서 「수동 정지 2건」 같은 카운트가 모달에 안 나옴.
+        """
         tpl = make_template()
         for pnl in [50, -10, -30, 100, -5]:
             make_strategy(
@@ -75,12 +87,31 @@ class TestStatsBreakdown:
                 template=tpl, realized_pnl=Decimal(str(pnl)),
             )
         r = _call_breakdown(db_session, "losses")
-        assert r["count"] == 3
-        # 깊은 손실 먼저 (오름차순)
-        pnls = [Decimal(it["realized_pnl"]) for it in r["items"]]
-        assert pnls == sorted(pnls)
-        # 모두 음수
-        assert all(p < 0 for p in pnls)
+        # 5개 모두 STOPPED 상태이므로 「수동정지」 분류로 모두 포함됨.
+        assert r["count"] == 5, f"수동정지(STOPPED) 5건 모두 포함돼야 함 (count={r['count']})"
+        ids = [it["id"] for it in r["items"]]
+        assert ids == sorted(ids, reverse=True)  # 최신순 정렬 유지
+
+    def test_losses_view_excludes_clean_running(self, db_session, make_strategy, make_template):
+        """진행중 + realized_pnl 양수/0 + max_loss 작음 + 수동정지 아님 — 감사 대상 X."""
+        tpl = make_template()
+        # 양수 PnL 진행중 (STAGE2_OPEN) — 감사 대상 아님
+        s_clean = make_strategy(
+            symbol_str="ETHUSDT", side="LONG", status="STAGE2_OPEN",
+            current_position_qty=Decimal("0.5"),
+            template=tpl, realized_pnl=Decimal("0"),
+            max_loss_pct=Decimal("-3"),  # -10% 이내
+        )
+        # 손실 (감사 대상)
+        s_loss = make_strategy(
+            symbol_str="BTCUSDT", side="SHORT", status="COMPLETED",
+            current_position_qty=Decimal("0"),
+            template=tpl, realized_pnl=Decimal("-15"),
+        )
+        r = _call_breakdown(db_session, "losses")
+        ids = {it["id"] for it in r["items"]}
+        assert s_loss.id in ids, "손실 strategy 는 감사 대상 ✓"
+        assert s_clean.id not in ids, "진행중 + 손실 작은 strategy 는 감사 대상 X"
 
     def test_invalid_view_rejected(self, db_session):
         with pytest.raises(HTTPException) as ei:

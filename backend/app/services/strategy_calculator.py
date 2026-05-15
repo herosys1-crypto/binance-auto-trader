@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from decimal import Decimal, getcontext
 from typing import Any, Literal
 
+from app.core.risk_constants import PERCENT_DENOMINATOR
+
 getcontext().prec = 28
 Side = Literal["LONG", "SHORT"]
 
@@ -88,6 +90,9 @@ class StagePlan:
     trigger_percent: Decimal | None = None
     trigger_price: Decimal | None = None
     planned_qty: Decimal | None = None
+    # 2026-05-11 (사용자 요청): 단계 진입 시 추가 isolated 증거금 (USDT).
+    # NULL/0 = 추가 안 함. 양수 = stage_trigger_worker 가 entry 체결 후 add_position_margin 호출.
+    additional_margin_usdt: Decimal | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +138,24 @@ def _normalize_stages_config(stages_config: dict[str, Any] | None, side: Side, t
         trigger_percents_raw = (list(trigger_percents_raw) + [None] * n)[:n]
     trigger_percents = [_decimal_or_none(p) for p in trigger_percents_raw]
 
+    # 2026-05-11 (사용자 요청): 단계별 추가 증거금 (USDT). NULL/0 = 추가 안 함.
+    # 길이가 capitals 와 다르면 None/0 으로 padding. 음수 거부.
+    add_margins_raw = stages_config.get("additional_margins") or [None] * n
+    if len(add_margins_raw) != n:
+        add_margins_raw = (list(add_margins_raw) + [None] * n)[:n]
+    additional_margins = []
+    for i, m in enumerate(add_margins_raw, 1):
+        if m is None or m == "" or m == 0:
+            additional_margins.append(None)
+            continue
+        try:
+            mv = Decimal(str(m))
+        except Exception:
+            raise ValueError(f"additional_margin for stage {i} invalid: {m}")
+        if mv < 0:
+            raise ValueError(f"additional_margin for stage {i} must be >= 0, got {mv}")
+        additional_margins.append(mv if mv > 0 else None)
+
     last_mode = stages_config.get("last_stage_trigger_mode") or (
         DEFAULT_LAST_TRIGGER_MODE_SHORT if side == "SHORT" else DEFAULT_LAST_TRIGGER_MODE_LONG
     )
@@ -143,6 +166,7 @@ def _normalize_stages_config(stages_config: dict[str, Any] | None, side: Side, t
     return {
         "capitals": capitals,
         "trigger_percents": trigger_percents,
+        "additional_margins": additional_margins,
         "last_mode": last_mode,
         "last_pct": last_pct,
     }
@@ -204,6 +228,7 @@ class StrategyCalculator:
         cfg = _normalize_stages_config(stages_config, side, total_capital)
         capitals: list[Decimal] = cfg["capitals"]
         trigger_percents: list[Decimal | None] = cfg["trigger_percents"]
+        additional_margins: list[Decimal | None] = cfg["additional_margins"]
         last_mode: str = cfg["last_mode"]
         last_pct: Decimal = cfg["last_pct"]
         n = len(capitals)
@@ -215,6 +240,7 @@ class StrategyCalculator:
             stage_no = i + 1
             is_first = i == 0
             is_last = i == n - 1
+            add_m = additional_margins[i] if i < len(additional_margins) else None
 
             if is_first:
                 price = prev_anchor_price
@@ -226,6 +252,7 @@ class StrategyCalculator:
                         trigger_price=price,
                         planned_capital=capital,
                         planned_qty=qty,
+                        additional_margin_usdt=add_m,
                     )
                 )
                 prev_anchor_price = price
@@ -245,6 +272,7 @@ class StrategyCalculator:
                             trigger_price=None,  # 청산가 산출 시점에 채움
                             planned_capital=capital,
                             planned_qty=None,
+                            additional_margin_usdt=add_m,
                         )
                     )
                 else:
@@ -259,6 +287,7 @@ class StrategyCalculator:
                             trigger_price=price,
                             planned_capital=capital,
                             planned_qty=qty,
+                            additional_margin_usdt=add_m,
                         )
                     )
                 continue
@@ -277,12 +306,13 @@ class StrategyCalculator:
                     trigger_price=price,
                     planned_capital=capital,
                     planned_qty=qty,
+                    additional_margin_usdt=add_m,
                 )
             )
             prev_anchor_price = price
 
         stop_loss_amount = self._quantize_price(
-            total_capital * (stop_loss_percent_of_capital / Decimal("100"))
+            total_capital * (stop_loss_percent_of_capital / PERCENT_DENOMINATOR)
         )
         return StrategyPreview(
             symbol=symbol,
@@ -333,9 +363,11 @@ class StrategyCalculator:
     # ---------- helpers ----------
     @staticmethod
     def _multiplier(side: Side, pct: Decimal) -> Decimal:
+        # SHORT: 가격 상승 → multiplier > 1 (예: pct=10 → 1.10)
+        # LONG: 가격 하락 → multiplier < 1
         if side == "SHORT":
-            return Decimal("1") + (pct / Decimal("100"))
-        return Decimal("1") - (pct / Decimal("100"))
+            return Decimal("1") + (pct / PERCENT_DENOMINATOR)
+        return Decimal("1") - (pct / PERCENT_DENOMINATOR)
 
     def _quantize_price(self, value: Decimal) -> Decimal:
         if self.symbol_rule.tick_size == 0:

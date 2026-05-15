@@ -109,21 +109,49 @@ class StreamService:
             is_full_close = (remaining_abs <= Decimal("0.00000001")) and (order.status == "FILLED")
 
             if is_full_close:
-                # 전체 청산 — qty/unrealized 0, status 전환
-                strategy.current_position_qty = Decimal("0")
-                strategy.unrealized_pnl = Decimal("0")
-                # status 전환:
-                #   COMPLETED  : _execute_take_profit 가 이미 마킹 → 보존
-                #   STOPPING   : 사용자 「수동 정지」 → STOPPED (좀비 방지)
-                #   기타       : TP/SL 자동 청산 → REENTRY_READY
-                if strategy.status == "COMPLETED":
-                    pass
-                elif strategy.status == "STOPPING":
-                    strategy.status = "STOPPED"
-                    strategy.stopped_at = datetime.now(timezone.utc)
+                # 2026-05-08 #120 fix (defense-in-depth): is_full_close 가 True 라도
+                # 거래소 실제 포지션을 한 번 더 확인. DB qty 가 stale 인 경우 (예:
+                # 직전 다른 EXIT 이벤트가 race 로 차감 누락) 우리가 close 한 양보다
+                # 더 큰 포지션이 거래소에 남아있을 수 있음.
+                # → REENTRY_READY 로 잘못 마킹하면 다음 zombie scan 에서 orphan 감지 → KS.
+                # 실제 잔량 > 0 이면 partial 로 처리하고 다음 cycle 에 reconcile 가 정정.
+                actual_remaining = self._fetch_actual_position_qty(strategy)
+                if actual_remaining is not None and actual_remaining > Decimal("0.00000001"):
+                    # 거래소엔 아직 포지션 있음 — REENTRY_READY 차단, partial 로 처리
+                    sign = Decimal("-1") if strategy.side == "SHORT" else Decimal("1")
+                    strategy.current_position_qty = (actual_remaining * sign).quantize(Decimal("0.00000001"))
+                    self.db.add(RiskEvent(
+                        strategy_instance_id=strategy.id,
+                        event_type="EXIT_FULL_CLOSE_MISMATCH",
+                        severity="WARN",
+                        title="⚠️ EXIT FILLED 'is_full_close' 차단 — 거래소 잔량 존재",
+                        message=(
+                            f"DB 는 잔량 0 으로 판단했으나 거래소에 {actual_remaining} 남음. "
+                            f"REENTRY_READY 마킹 차단 + DB qty 정정. 다음 cycle 재평가."
+                        ),
+                        event_payload={
+                            "delta_executed": str(delta_abs),
+                            "db_cur_qty_before": str(cur_qty_abs),
+                            "actual_remaining": str(actual_remaining),
+                            "order_client_id": order.client_order_id,
+                        },
+                    ))
                 else:
-                    strategy.status = "REENTRY_READY"
-                    strategy.reentry_ready = True
+                    # 정상 — qty/unrealized 0, status 전환
+                    strategy.current_position_qty = Decimal("0")
+                    strategy.unrealized_pnl = Decimal("0")
+                    # status 전환:
+                    #   COMPLETED  : _execute_take_profit 가 이미 마킹 → 보존
+                    #   STOPPING   : 사용자 「수동 정지」 → STOPPED (좀비 방지)
+                    #   기타       : TP/SL 자동 청산 → REENTRY_READY
+                    if strategy.status == "COMPLETED":
+                        pass
+                    elif strategy.status == "STOPPING":
+                        strategy.status = "STOPPED"
+                        strategy.stopped_at = datetime.now(timezone.utc)
+                    else:
+                        strategy.status = "REENTRY_READY"
+                        strategy.reentry_ready = True
             else:
                 # 부분 청산 — delta 만큼 차감 (cur_qty - delta_abs).
                 # status / reentry_ready 는 그대로 (TP partial 진행 중 또는 PARTIAL 후속 대기).
@@ -191,6 +219,39 @@ class StreamService:
             strategy.current_position_qty = Decimal(str(pos.get("pa"))) if pos.get("pa") else Decimal("0")
             strategy.unrealized_pnl = Decimal(str(pos.get("up"))) if pos.get("up") else Decimal("0")
         self.db.commit()
+
+    def _fetch_actual_position_qty(self, strategy) -> Decimal | None:
+        """거래소 실제 포지션 잔량 (절대값) 반환. 실패 시 None.
+
+        2026-05-08 #120 fix: stream EXIT FILLED 처리 시 is_full_close 판정의
+        defensive check 용. DB qty 기준으로 잔량 0 이라 판단해도, 거래소에
+        실제로 포지션이 남아있으면 REENTRY_READY 마킹 차단.
+
+        실패 시 (API 에러, 계정 비활성 등) None 반환 — caller 가 기존 동작 유지.
+        외부 호출이라 실패 가능성 무시 못함, fail-soft.
+        """
+        try:
+            from app.core.crypto import decrypt_text
+            from app.integrations.binance.client import BinanceClient
+            from app.repositories.exchange_account_repository import ExchangeAccountRepository
+            account = ExchangeAccountRepository(self.db).get(strategy.exchange_account_id)
+            if not account or not account.is_active:
+                return None
+            client = BinanceClient(
+                api_key=decrypt_text(account.api_key_enc),
+                api_secret=decrypt_text(account.api_secret_enc),
+                is_testnet=account.is_testnet,
+            )
+            risk = client.get_position_risk(symbol=strategy.symbol)
+            if isinstance(risk, dict):
+                risk = [risk]
+            for p in risk:
+                if p.get("symbol") == strategy.symbol and p.get("positionSide") == strategy.side:
+                    amt = Decimal(str(p.get("positionAmt", "0")))
+                    return amt.copy_abs()
+            return Decimal("0")  # 매칭 항목 없으면 잔량 0
+        except Exception:
+            return None  # fail-soft
 
     def handle_listen_key_expired(self, payload: dict) -> None:
         user_stream_events_total.labels(event_type="listenKeyExpired").inc()

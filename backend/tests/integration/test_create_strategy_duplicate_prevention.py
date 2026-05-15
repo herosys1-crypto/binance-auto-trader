@@ -44,7 +44,13 @@ class TestDuplicatePreventionMessages:
         make_symbol,
         make_template,
         make_strategy,
+        monkeypatch,
     ) -> None:
+        # 2026-05-10: env 의 whitelist + dup toggle 영향 차단 (위 테스트와 동일 사유)
+        monkeypatch.setattr("app.core.config.settings.allowed_symbols_csv", None, raising=False)
+        monkeypatch.setattr(
+            "app.core.config.settings.allow_duplicate_symbol_strategies", False, raising=False,
+        )
         u = make_user()
         ea = make_exchange_account(user=u)
         sym = make_symbol("LABUSDT")
@@ -62,12 +68,52 @@ class TestDuplicatePreventionMessages:
         )
         msg = str(err)
         assert f"#{existing.id}" in msg
-        assert "STOPPING" in msg
-        # STOPPING 전용 가이드 포함
-        assert "reconcile_worker" in msg
+        # STOPPING 전용 가이드: 청산 중 상태 + reconcile 자동 정리 안내 (30초~1분)
+        assert "청산 중" in msg
         assert "30초" in msg
+
+    def test_stuck_stopping_strategy_5min_plus_shows_force_stop_endpoint(
+        self,
+        db_session,
+        make_user,
+        make_exchange_account,
+        make_symbol,
+        make_template,
+        make_strategy,
+        monkeypatch,
+    ) -> None:
+        """사용자 #57 MLNUSDT (2026-05-15): 5분+ stuck STOPPING 시 force-stop 명시 안내."""
+        from datetime import datetime, timezone, timedelta
+
+        monkeypatch.setattr("app.core.config.settings.allowed_symbols_csv", None, raising=False)
+        monkeypatch.setattr(
+            "app.core.config.settings.allow_duplicate_symbol_strategies", False, raising=False,
+        )
+        u = make_user()
+        ea = make_exchange_account(user=u)
+        sym = make_symbol("MLNUSDT")
+        tpl = make_template(side="LONG")
+        existing = make_strategy(
+            symbol_str="MLNUSDT", side="LONG", status="STOPPING",
+            current_position_qty=Decimal("100"),
+            user=u, exchange_account=ea, symbol_obj=sym, template=tpl,
+        )
+        # stopped_at 을 10분 전으로 설정 — stuck 시뮬레이션
+        existing.stopped_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+        db_session.commit()
+
+        err = _try_create_duplicate(
+            StrategyService(db_session),
+            user_id=u.id, exchange_account_id=ea.id, template_id=tpl.id,
+            symbol="MLNUSDT", side="LONG",
+        )
+        msg = str(err)
+        # stuck 안내 명시 — 경과 시간 + force-stop endpoint
+        assert "10분째 stuck" in msg or "10분" in msg
         assert "force-stop" in msg
-        assert f"strategies/{existing.id}/force-stop" in msg
+        assert f"/strategies/{existing.id}/force-stop" in msg
+        # 기본 「30초 자동 정리」 안내 X (이미 stuck 이므로 부정확)
+        assert "잠시 후" not in msg or "force-stop" in msg
 
     @pytest.mark.parametrize(
         "active_status",
@@ -82,7 +128,14 @@ class TestDuplicatePreventionMessages:
         make_symbol,
         make_template,
         make_strategy,
+        monkeypatch,
     ) -> None:
+        # 2026-05-10 (사용자 자유 거래 모드 도입 사후): env 의 whitelist + dup toggle 영향
+        # 차단해 본 테스트의 가설 (LABUSDT 가 같은 symbol+side 중복으로 차단) 만 검증.
+        monkeypatch.setattr("app.core.config.settings.allowed_symbols_csv", None, raising=False)
+        monkeypatch.setattr(
+            "app.core.config.settings.allow_duplicate_symbol_strategies", False, raising=False,
+        )
         u = make_user()
         ea = make_exchange_account(user=u)
         sym = make_symbol("LABUSDT")
@@ -100,11 +153,10 @@ class TestDuplicatePreventionMessages:
         )
         msg = str(err)
         assert f"#{existing.id}" in msg
-        assert active_status in msg
-        # generic hint — STOPPING 전용 가이드는 없어야 함
-        assert "/stop" in msg
-        assert "force-stop" not in msg
-        assert "reconcile_worker" not in msg
+        # generic hint — 정지/긴급 종료 안내, STOPPING 전용 가이드 없음
+        assert ("정지" in msg) or ("긴급 종료" in msg)
+        assert "30초" not in msg  # STOPPING 전용 안내 미포함
+        assert "청산 중" not in msg
 
     def test_terminal_strategy_does_not_block(
         self,
@@ -139,6 +191,6 @@ class TestDuplicatePreventionMessages:
                 start_price=Decimal("2.5"),
             )
         msg = str(ei.value)
-        # 중복 가드 메시지가 아니어야 함
-        assert "활성 전략" not in msg
-        assert "중복 전략" not in msg
+        # 중복 가드 메시지가 아니어야 함 (다른 단계 — 잔액/Binance — 에서 실패)
+        assert "이미 진행 중" not in msg
+        assert "통합 포지션만 허용" not in msg

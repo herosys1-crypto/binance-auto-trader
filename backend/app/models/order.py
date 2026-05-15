@@ -1,12 +1,21 @@
 from datetime import datetime
 from decimal import Decimal
-from sqlalchemy import String, Integer, BigInteger, DateTime, ForeignKey, func, Numeric
+from sqlalchemy import Index, String, Integer, BigInteger, DateTime, ForeignKey, func, Numeric
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 class Order(Base):
     __tablename__ = "orders"
+    # 2026-05-14 Phase 5: composite index (strategy_instance_id, stage_no, purpose, status).
+    # 사용처:
+    #   - control.trigger_next_stage_manually: WHERE strategy_id AND stage_no AND purpose='ENTRY' AND status='NEW'
+    #   - risk_service crisis 검사: WHERE strategy_id AND stage_no IS NULL AND purpose='ENTRY' AND status='FILLED'
+    #   - reconcile / zombie_guardian 의 stage 관련 query 들
+    # 단일 strategy_instance_id 인덱스로는 stage/purpose/status 추가 필터 시 row 너무 많이 fetch.
+    __table_args__ = (
+        Index("ix_orders_strategy_stage_purpose_status", "strategy_instance_id", "stage_no", "purpose", "status"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     strategy_instance_id: Mapped[int] = mapped_column(ForeignKey("strategy_instances.id", ondelete="CASCADE"), nullable=False, index=True)
     stage_no: Mapped[int | None] = mapped_column(Integer, nullable=True)

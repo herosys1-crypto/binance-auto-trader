@@ -31,6 +31,7 @@ from sqlalchemy import func, select
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.sentry import capture_strategy_event
+from app.core.strategy_status import ACTIVE_FOR_PNL
 from app.models.exchange_account import ExchangeAccount
 from app.models.strategy_instance import StrategyInstance
 from app.services.account_daily_loss_limiter import AccountDailyLossLimiterService
@@ -38,17 +39,12 @@ from app.services.account_kill_switch_service import AccountKillSwitchService
 
 logger = logging.getLogger(__name__)
 
+# 2026-05-14 Phase 1 centralize: ACTIVE_FOR_PNL = ACTIVE_WITH_POSITION (app.core.strategy_status).
+# 이전엔 여기서 inline build (range(1,11)) — 5-06 TP10 확장 시 TP6~10 누락 버그.
+# 이제 single source. 외부 (테스트 등) 에서 참조하는 alias 유지.
+_ACTIVE_STATUSES_FOR_PNL = ACTIVE_FOR_PNL
+
 __all__ = ["run_daily_loss_check_once", "_ACTIVE_STATUSES_FOR_PNL"]
-
-
-# 어느 status 의 strategy 가 PnL 집계 대상인가:
-# 활성 포지션 있는 모든 status (1~10단계 OPEN + TP partial). PENDING (LIMIT 미체결) 은
-# 포지션 없으므로 제외. STOPPING 은 포지션 잔재 가능 → 포함.
-_ACTIVE_STATUSES_FOR_PNL = (
-    {f"STAGE{n}_OPEN" for n in range(1, 11)}
-    | {f"TP{n}_DONE_PARTIAL" for n in range(1, 6)}
-    | {"STOPPING"}
-)
 
 
 def _resolve_account_limit(acc: ExchangeAccount) -> Decimal | None:
