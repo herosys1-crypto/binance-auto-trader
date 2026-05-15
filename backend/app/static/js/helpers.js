@@ -24,10 +24,15 @@ function statusInfo(status) {
   return STATUS_MAP[status.toUpperCase()] || { ko: status, sig: 'blue', icon: '•' };
 }
 
-function sideBadge(side) {
-  if (side === 'SHORT') return '<span class="badge badge-red">📉 숏</span>';
-  if (side === 'LONG')  return '<span class="badge badge-green">📈 롱</span>';
-  return '<span class="badge badge-gray">' + side + '</span>';
+function sideBadge(side, leverage) {
+  // 2026-05-15 사용자 요청: 방향 옆에 leverage 같이 표시 (전략 인스턴스 컬럼 한눈에 파악).
+  // leverage 인자 생략 시 배지만 (templates-panel 처럼 별도 컬럼 있는 곳은 그대로 호환).
+  const lev = (leverage !== undefined && leverage !== null && Number(leverage) > 0)
+    ? ` <span class="text-xs text-slate-300 ml-1">${leverage}x</span>`
+    : '';
+  if (side === 'SHORT') return '<span class="badge badge-red">📉 숏</span>' + lev;
+  if (side === 'LONG')  return '<span class="badge badge-green">📈 롱</span>' + lev;
+  return '<span class="badge badge-gray">' + side + '</span>' + lev;
 }
 
 function renderStageBar(current, total) {

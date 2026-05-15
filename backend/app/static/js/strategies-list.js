@@ -289,7 +289,7 @@ async function refreshStrategies() {
             <span class="text-slate-500" style="font-size:10px" title="전략 생성 일시">${createdShort}</span>
           </div>
         </td>
-        <td>${sideBadge(s.side)}</td>
+        <td>${sideBadge(s.side, s.leverage)}</td>
         <td>${stateCell}</td>
         <td>${stage}</td>
         <td class="num">${entry}</td>

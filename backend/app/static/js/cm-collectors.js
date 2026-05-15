@@ -7,7 +7,7 @@
  * 함수:
  *   - _collectDirectInputs()  : 단계별 capital/trigger/additional_margin 배열 수집
  *   - _collectTpSl()           : TP1~10 percent/qty_ratio + SL + crisis_max_loss_threshold
- *   - _defaultLeverageForSide(side) : SHORT=2, LONG=1 default leverage
+ *   - _defaultLeverageForSide(side) : SHORT=2, LONG=2 default leverage (2026-05-15 사용자 요청 — 롱도 2x)
  *
  * 외부 의존성: 없음 (pure DOM 읽기만).
  *
@@ -79,5 +79,6 @@ function _collectTpSl() {
 }
 
 function _defaultLeverageForSide(side) {
-  return side === 'SHORT' ? 2 : 1;
+  // 2026-05-15 사용자 요청: SHORT/LONG 둘 다 2x default (이전 LONG=1 → 사용자 거의 항상 직접 2 로 변경하는 패턴 발견)
+  return 2;
 }
