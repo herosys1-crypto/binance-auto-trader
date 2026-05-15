@@ -51,7 +51,14 @@ async function loadPrevBlueprint(strategyId, silent) {
     if (accountRadio) { accountRadio.checked = true; cmState.accountId = bp.exchange_account_id; }
     // 2) 심볼 + 방향
     document.getElementById('cm-symbol').value = bp.symbol;
-    setCmSide(bp.side);
+    setCmSide(bp.side);  // 부수효과: leverage 가 사이드별 default 로 reset 됨 → 아래에서 덮어씀
+    // 2-a) 2026-05-15 사용자 보고: 이전 전략의 leverage 가 안 따라옴 (롱이면 항상 1 로 떨어짐).
+    // setCmSide 가 default 로 reset 한 직후 bp.leverage 로 덮어쓰고 manualEdited 마킹.
+    if (bp.leverage !== undefined && bp.leverage !== null && Number(bp.leverage) > 0) {
+      const lvInp = document.getElementById('cm-leverage');
+      if (lvInp) lvInp.value = bp.leverage;
+      cmLeverageManuallyEdited = true;  // 이후 사이드 토글 시 자동 reset 안 되게
+    }
     // 3) 직접 입력 모드로 전환 + capitals/trigger_percents/additional_margins 채우기
     setCmMode('direct');
     const addMargins = bp.additional_margins || [];
