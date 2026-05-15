@@ -132,12 +132,13 @@ class TestStaticAssetsIntegrity:
         """
         html = _index_html()
         tag_pos = html.find("/static/js/constants.js")
-        # 2026-05-14 Phase 3 추가: const API_BASE 가 api.js 로 이동했으므로 anchor 변경.
-        # 본문 첫 inline 함수 (showDashboard) 위치를 anchor 로 사용.
-        inline_pos = html.find("function showDashboard")
+        # 2026-05-15 Phase 3 단계 3t: 모든 inline JS 가 모듈로 분리됐으므로 anchor 변경.
+        # constants.js 는 의존 모듈 (auth-bootstrap.js — STATUS_MAP/API_BASE 등 참조 가능) 보다 먼저.
+        dep_pos = html.find("/static/js/auth-bootstrap.js")
         assert tag_pos > 0, "<script src='/static/js/constants.js'> tag 누락"
-        assert inline_pos > tag_pos, (
-            "constants.js 가 본문 inline script 뒤에 로드됨 — 순서 잘못됨"
+        assert dep_pos > 0, "<script src='/static/js/auth-bootstrap.js'> tag 누락"
+        assert dep_pos > tag_pos, (
+            "constants.js 가 의존 모듈 (auth-bootstrap.js) 뒤에 로드됨 — 순서 잘못됨"
         )
 
     def test_no_inline_constants_redefinition_in_index_html(self):
@@ -226,10 +227,12 @@ class TestStaticAssetsIntegrity:
         # api.js 가 constants.js 다음에 와야 (둘 다 inline 보다 먼저).
         const_tag_pos = html.find("/static/js/constants.js")
         assert const_tag_pos > 0
-        # 두 script tag 모두 본문 첫 inline 함수 정의 (showDashboard 등) 보다 먼저
-        first_func_pos = html.find("function showDashboard")
-        assert const_tag_pos < first_func_pos
-        assert api_tag_pos < first_func_pos
+        # 2026-05-15 Phase 3 단계 3t: 모든 inline JS 가 모듈로 분리됐으므로 anchor 변경.
+        # 두 script tag 모두 의존 모듈 (auth-bootstrap.js — API_BASE/token/api/toast 참조) 보다 먼저.
+        dep_pos = html.find("/static/js/auth-bootstrap.js")
+        assert dep_pos > 0, "<script src='/static/js/auth-bootstrap.js'> tag 누락"
+        assert const_tag_pos < dep_pos
+        assert api_tag_pos < dep_pos
 
     def test_api_js_defines_all_required(self):
         """api.js 가 API_BASE / token / api / toast / logout 모두 정의."""
