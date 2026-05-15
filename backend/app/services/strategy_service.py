@@ -100,13 +100,36 @@ class StrategyService:
         ).scalar_one_or_none()
         if existing and not _allow_dup:
             # 2026-05-04 fix: STOPPING 인 경우 사용자가 어떻게 해결할지 명확한 가이드 제공.
-            # backend 가 STOPPING 을 active 로 분류하는 건 race window 보호 (commit 6133072).
-            # 사용자는 reconcile 자동 정리 (30초) 또는 force-stop 으로 즉시 해결 가능.
+            # 2026-05-15 fix (사용자 #57 MLNUSDT 보고): STOPPING 5분 이상 stuck 시
+            # 「30초 안에 자동」 안내가 부정확 → 경과 시간 표시 + force-stop endpoint 명시.
             if existing.status == "STOPPING":
-                hint = (
-                    f"\n\n📌 전략 #{existing.id} 가 「청산 중」 상태입니다. 30초 안에 자동으로 정리됩니다 — 잠시 후 다시 시도하세요. "
-                    f"혹시 거래소에 잔재 포지션이 없는 게 확실하면 강제 정리 가능합니다 (별도 안내)."
-                )
+                from datetime import datetime as _dt, timezone as _tz
+                stopping_since = existing.stopped_at or existing.updated_at
+                elapsed_min = None
+                if stopping_since:
+                    # sqlite/postgres tz-aware/naive 호환 — naive 면 utc 로 가정.
+                    if stopping_since.tzinfo is None:
+                        stopping_since = stopping_since.replace(tzinfo=_tz.utc)
+                    elapsed_sec = (_dt.now(_tz.utc) - stopping_since).total_seconds()
+                    elapsed_min = int(elapsed_sec / 60)
+                # 5분 이상이면 stuck 가능성 높음 → force-stop 명시 안내
+                if elapsed_min is not None and elapsed_min >= 5:
+                    hint = (
+                        f"\n\n🚨 전략 #{existing.id} 가 「청산 중」 상태로 {elapsed_min}분째 stuck — "
+                        f"reconcile 자동 정리 실패 의심.\n\n"
+                        f"💡 해결 (택1):\n"
+                        f"  • POST /api/v1/strategies/{existing.id}/force-stop  (DB 만 STOPPED 마킹, 거래소 호출 X)\n"
+                        f"  • 거래소에서 직접 잔량/미체결 확인 후 정리\n"
+                        f"  • 「📦 보관 보기」 + 🗑 archive 후 재시도\n\n"
+                        f"⚠️ force-stop 후 거래소에 잔량 있으면 「⚠️ archive 시 거래소 잔량 의심」 CRITICAL 알림 즉시 발송됩니다 (5-15 fix)."
+                    )
+                else:
+                    elapsed_label = f" ({elapsed_min}분 경과)" if elapsed_min is not None else ""
+                    hint = (
+                        f"\n\n📌 전략 #{existing.id} 가 「청산 중」 상태{elapsed_label}. "
+                        f"reconcile 가 1분~30초마다 자동 정리 시도 중 — 잠시 후 재시도하세요.\n"
+                        f"5분 이상 stuck 시 force-stop endpoint 사용 가능."
+                    )
             else:
                 hint = (
                     "\n\n💡 해결 (택1):"

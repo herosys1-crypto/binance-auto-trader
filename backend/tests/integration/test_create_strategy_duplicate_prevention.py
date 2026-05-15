@@ -68,9 +68,52 @@ class TestDuplicatePreventionMessages:
         )
         msg = str(err)
         assert f"#{existing.id}" in msg
-        # STOPPING 전용 가이드: 청산 중 상태 + 30초 자동 정리 안내
+        # STOPPING 전용 가이드: 청산 중 상태 + reconcile 자동 정리 안내 (30초~1분)
         assert "청산 중" in msg
         assert "30초" in msg
+
+    def test_stuck_stopping_strategy_5min_plus_shows_force_stop_endpoint(
+        self,
+        db_session,
+        make_user,
+        make_exchange_account,
+        make_symbol,
+        make_template,
+        make_strategy,
+        monkeypatch,
+    ) -> None:
+        """사용자 #57 MLNUSDT (2026-05-15): 5분+ stuck STOPPING 시 force-stop 명시 안내."""
+        from datetime import datetime, timezone, timedelta
+
+        monkeypatch.setattr("app.core.config.settings.allowed_symbols_csv", None, raising=False)
+        monkeypatch.setattr(
+            "app.core.config.settings.allow_duplicate_symbol_strategies", False, raising=False,
+        )
+        u = make_user()
+        ea = make_exchange_account(user=u)
+        sym = make_symbol("MLNUSDT")
+        tpl = make_template(side="LONG")
+        existing = make_strategy(
+            symbol_str="MLNUSDT", side="LONG", status="STOPPING",
+            current_position_qty=Decimal("100"),
+            user=u, exchange_account=ea, symbol_obj=sym, template=tpl,
+        )
+        # stopped_at 을 10분 전으로 설정 — stuck 시뮬레이션
+        existing.stopped_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+        db_session.commit()
+
+        err = _try_create_duplicate(
+            StrategyService(db_session),
+            user_id=u.id, exchange_account_id=ea.id, template_id=tpl.id,
+            symbol="MLNUSDT", side="LONG",
+        )
+        msg = str(err)
+        # stuck 안내 명시 — 경과 시간 + force-stop endpoint
+        assert "10분째 stuck" in msg or "10분" in msg
+        assert "force-stop" in msg
+        assert f"/strategies/{existing.id}/force-stop" in msg
+        # 기본 「30초 자동 정리」 안내 X (이미 stuck 이므로 부정확)
+        assert "잠시 후" not in msg or "force-stop" in msg
 
     @pytest.mark.parametrize(
         "active_status",
