@@ -179,9 +179,70 @@ def reset_api_ban(redis_client, account_id: int) -> None:
         logger.warning("reset_api_ban failed: %s", e)
 
 
+# ---------------------------------------------------------------------------
+# 워커용 편의 헬퍼 (2026-05-17 — rate limit ban 스파이럴 사후).
+#
+# 배경: 기존엔 check_api_ban 가드가 reconcile_worker 에만 적용되어 있어,
+# tp_sl / stage_trigger / auto_reentry 워커는 ban 윈도우 중에도 10초마다
+# 거래소 호출을 계속 시도 → Binance 가 ban 기간 요청을 카운트해 418 을
+# 연장/승격 (2분 → 13분 → ...). 아래 헬퍼로 모든 워커가 동일하게 cycle skip.
+# ---------------------------------------------------------------------------
+
+def is_account_banned(account_id: int, redis_client=None) -> bool:
+    """이 account 가 현재 ban 중인지 — True 면 caller 는 이 strategy/cycle skip.
+
+    redis_client 생략 시 자동 획득 (실패해도 False — fail-open).
+    """
+    try:
+        client = redis_client
+        if client is None:
+            from app.core.redis_client import get_redis_client
+            client = get_redis_client()
+        banned, _ = check_api_ban(client, account_id)
+        return banned
+    except Exception as e:  # pragma: no cover — redis 장애 시 거래 막지 않음
+        logger.warning("is_account_banned check failed (fail-open): %s", e)
+        return False
+
+
+def maybe_record_ban_from_exc(
+    exc: Exception,
+    account_id: int,
+    *,
+    redis_client=None,
+    notification_service=None,
+) -> bool:
+    """Exception 이 rate limit/ban 이면 Redis 마킹 + Telegram 1회.
+
+    Returns:
+        True  — rate limit 으로 판단해 ban 기록함 (caller 는 이번 cycle 의
+                해당 account strategy 들을 모두 skip 권장)
+        False — rate limit 아님 (다른 에러 — caller 가 평소대로 처리)
+    """
+    try:
+        ban_until = parse_rate_limit_error(exc)
+        if ban_until is None:
+            return False
+        client = redis_client
+        if client is None:
+            from app.core.redis_client import get_redis_client
+            client = get_redis_client()
+        record_api_ban(
+            client, account_id, ban_until,
+            notification_service=notification_service,
+            error_message=str(exc),
+        )
+        return True
+    except Exception as e:  # pragma: no cover
+        logger.warning("maybe_record_ban_from_exc failed: %s", e)
+        return False
+
+
 __all__ = [
     "check_api_ban",
     "parse_rate_limit_error",
     "record_api_ban",
     "reset_api_ban",
+    "is_account_banned",
+    "maybe_record_ban_from_exc",
 ]

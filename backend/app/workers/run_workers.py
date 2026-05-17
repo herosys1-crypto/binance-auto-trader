@@ -1,8 +1,12 @@
 import argparse
+import logging
 from sqlalchemy import select
+from app.core.api_backoff import is_account_banned, maybe_record_ban_from_exc
 from app.core.crypto import decrypt_text
 from app.core.database import SessionLocal
 from app.core.strategy_status import TERMINAL_STATUSES
+
+logger = logging.getLogger(__name__)
 from app.integrations.binance.client import BinanceClient
 from app.models.exchange_account import ExchangeAccount
 from app.models.strategy_instance import StrategyInstance
@@ -46,10 +50,24 @@ def run_tp_sl_once() -> None:
             .where(StrategyInstance.is_archived.is_(False))  # 2026-05-06 C-full: archived 제외
             .where(ExchangeAccount.is_active.is_(True))
         ).all()
+        # 2026-05-17 rate limit ban 스파이럴 사후: account 별 ban 1회 체크 캐시.
+        # ban 중이면 그 account 의 모든 strategy skip → ban 윈도우 중 호출 폭주 차단.
+        _banned_accounts: set[int] = set()
         for strategy, account in rows:
+            if account.id in _banned_accounts:
+                continue
+            if is_account_banned(account.id):
+                _banned_accounts.add(account.id)
+                logger.info("[tp_sl] API ban active account=%s — skip cycle", account.id)
+                continue
             try:
                 TPSLOrchestratorService(db, api_key=decrypt_text(account.api_key_enc), api_secret=decrypt_text(account.api_secret_enc), is_testnet=account.is_testnet).run_for_strategy(strategy.id)
             except Exception as e:
+                # rate limit/ban 이면 기록 + 이 account 나머지 strategy skip (스파이럴 차단)
+                if maybe_record_ban_from_exc(e, account.id, notification_service=NotificationService(db)):
+                    _banned_accounts.add(account.id)
+                    logger.warning("[tp_sl] rate limit detected account=%s — skip rest of cycle", account.id)
+                    continue
                 NotificationService(db).send_system_alert(title="[시스템 오류] TP/SL orchestration 실패", body=f"strategy_id={strategy.id}, error={e}")
     finally:
         db.close()
