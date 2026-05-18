@@ -33,6 +33,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.api_backoff import is_account_banned, maybe_record_ban_from_exc
 from app.core.sentry import capture_strategy_event
 from app.core.strategy_status import (
     ACTIVE_LIKE,
@@ -487,6 +488,12 @@ def detect_orphan_exchange_open_orders(
     ).scalars().all()
     found = 0
     for acc in accounts:
+        # 2026-05-18 메인넷 전 검토 (사용자 요청): detect_orphan_exchange_positions 와
+        # 달리 이 함수는 list_open_orders 를 별도 호출 → ban 윈도우 중에도 무가드 호출
+        # → ban 연장 기여 (방금 고친 워커 가드와 동일 클래스 버그). ban 중이면 skip.
+        if is_account_banned(acc.id):
+            logger.info("detect_orphan_exchange_open_orders: API ban active acc=%s — skip", acc.id)
+            continue
         try:
             client = BinanceClient(
                 api_key=decrypt_func(acc.api_key_enc),
@@ -574,5 +581,11 @@ def detect_orphan_exchange_open_orders(
                     except Exception as e:
                         logger.error("Auto-cancel orphan open order 실패: %s", e)
         except Exception as e:
+            # rate limit/ban 이면 Redis 마킹 (다음 cycle 자동 skip — ban 연장 차단)
+            if maybe_record_ban_from_exc(e, acc.id):
+                logger.warning(
+                    "detect_orphan_exchange_open_orders: rate limit acc=%s — ban 기록, skip", acc.id
+                )
+                continue
             logger.error("detect_orphan_exchange_open_orders 실패 acc=%s: %s", acc.id, e)
     return found
