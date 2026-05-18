@@ -254,6 +254,43 @@ def _do_reconcile(decrypt_func) -> None:
                 exchange_mark_price = Decimal(str(matched.get("markPrice", "0")))
                 exchange_unrealized_pnl = Decimal(str(matched.get("unRealizedProfit", "0")))
                 exchange_liquidation_price = Decimal(str(matched.get("liquidationPrice", "0")))
+
+                # ----- 2026-05-18: flat 거래소 레코드 (positionAmt=0) = 포지션 없음과 동일 -----
+                # #53 BASUSDT 사례 (사용자 보고): 거래소가 BASUSDT 를 positionAmt=0 (flat)
+                # 으로 반환하면 `matched` 가 truthy → 위 `not matched` orphan 정리 분기를
+                # 안 탐 → status 가 TP_n_DONE_PARTIAL 에 갇힘 → emergency-close 무한루프 →
+                # API 호출 spam → rate limit / 418 ban 악화. flat 레코드는 「포지션 없음」
+                # 과 동일하게 취급해 orphan/STOPPING 자동정리 적용 (snapshot/sync 생략).
+                if exchange_position_amt == 0 and (
+                    strategy.status == "STOPPING"
+                    or strategy.status in OPEN_LIKE_FOR_ORPHAN_CHECK
+                ):
+                    _is_stopping = strategy.status == "STOPPING"
+                    db.add(RiskEvent(
+                        strategy_instance_id=strategy.id,
+                        event_type="RECONCILE_FLAT_POSITION_CLEANUP",
+                        severity="INFO" if _is_stopping else "WARN",
+                        title=(
+                            "✅ 좀비 STOPPING 자동 정리 (flat 레코드 — STOPPED)"
+                            if _is_stopping else
+                            "🧹 외부 청산된 전략 자동 정리 (flat 레코드 — STOPPED)"
+                        ),
+                        message=(
+                            f"{strategy.symbol} {strategy.side} — 거래소가 positionAmt=0 "
+                            f"(flat) 반환. 포지션 없음과 동일 → STOPPED 마킹 "
+                            f"(이전 status={strategy.status})."
+                        ),
+                        event_payload={"strategy_id": strategy.id, "old_status": strategy.status},
+                    ))
+                    strategy.status = "STOPPED"
+                    strategy.current_position_qty = Decimal("0")
+                    strategy.stopped_at = datetime.now(timezone.utc)
+                    position_reconcile_total.labels(
+                        status="zombie_stopped" if _is_stopping else "orphan_stopped"
+                    ).inc()
+                    _stuck_clear(strategy.id)
+                    continue
+
                 db.add(Position(
                     strategy_instance_id=strategy.id,
                     symbol=strategy.symbol, side=strategy.side, position_side=strategy.side,

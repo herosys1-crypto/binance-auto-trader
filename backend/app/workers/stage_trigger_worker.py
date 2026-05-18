@@ -20,6 +20,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
+from app.core.api_backoff import is_account_banned, maybe_record_ban_from_exc
 from app.core.database import SessionLocal
 from app.models.exchange_account import ExchangeAccount
 from app.models.strategy_instance import StrategyInstance
@@ -71,7 +72,15 @@ def run_stage_trigger_once(decrypt_text) -> None:
             {t.id: t for t in db.query(StrategyTemplate).filter(StrategyTemplate.id.in_(template_ids)).all()}
             if template_ids else {}
         )
+        # 2026-05-17 rate limit ban 스파이럴 사후: account 별 ban skip (tp_sl 와 동일 패턴).
+        _banned_accounts: set[int] = set()
         for strategy, account in rows:
+            if account.id in _banned_accounts:
+                continue
+            if is_account_banned(account.id):
+                _banned_accounts.add(account.id)
+                logger.info("[stage-trigger] API ban active account=%s — skip cycle", account.id)
+                continue
             try:
                 next_stage_no = (strategy.current_stage or 0) + 1
                 total_stages = _count_total_stages_from_template(templates.get(strategy.strategy_template_id))
@@ -146,6 +155,11 @@ def run_stage_trigger_once(decrypt_text) -> None:
                         except Exception:
                             pass
             except Exception as e:
+                # rate limit/ban 이면 기록 + 이 account 나머지 strategy skip (스파이럴 차단)
+                if maybe_record_ban_from_exc(e, account.id, notification_service=NotificationService(db)):
+                    _banned_accounts.add(account.id)
+                    logger.warning("[stage-trigger] rate limit detected account=%s — skip rest of cycle", account.id)
+                    continue
                 logger.exception(f"[stage-trigger] failed for strategy #{strategy.id}: {e}")
                 try:
                     NotificationService(db).send_system_alert(

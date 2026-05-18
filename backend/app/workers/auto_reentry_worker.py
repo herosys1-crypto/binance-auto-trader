@@ -23,6 +23,7 @@ from typing import Callable
 import requests
 from sqlalchemy import select
 
+from app.core.api_backoff import is_account_banned, maybe_record_ban_from_exc
 from app.core.database import SessionLocal
 from app.core.sentry import capture_strategy_event
 from app.models.exchange_account import ExchangeAccount
@@ -95,6 +96,13 @@ def run_auto_reentry_once(decrypt_text: Callable[[str], str]) -> None:
                 db.commit()
                 continue
 
+            # 2026-05-17 rate limit ban 스파이럴 사후: ban 중이면 skip.
+            # ★ REENTRY_FAILED 로 마킹하지 않음 — status 그대로 REENTRY_READY 유지 →
+            #   ban 만료 후 다음 cycle 에서 정상 재진입 (일시적 ban 으로 재진입 영구 상실 방지).
+            if is_account_banned(account.id):
+                logger.info("auto_reentry: skip strategy %s — API ban active account=%s", strategy.id, account.id)
+                continue
+
             # 현재가 → 새 start_price
             current_price = _fetch_current_price(strategy.symbol, account.is_testnet)
             if current_price is None:
@@ -145,6 +153,13 @@ def run_auto_reentry_once(decrypt_text: Callable[[str], str]) -> None:
                 logger.info("auto_reentry: strategy #%s → new #%s (start_price=%s)",
                            strategy.id, new_strategy.id, new_start_price)
             except Exception as e:
+                # 2026-05-17: rate limit/ban 이면 REENTRY_FAILED 마킹 금지 — rollback 후
+                # status 그대로 두어 ban 만료 후 다음 cycle 에서 재시도 (일시적 ban 으로
+                # 재진입 영구 상실 방지). ban 기록만 하고 다음 strategy 로.
+                if maybe_record_ban_from_exc(e, account.id, notification_service=NotificationService(db)):
+                    db.rollback()
+                    logger.warning("auto_reentry: rate limit detected account=%s — skip (status 유지, 다음 cycle 재시도)", account.id)
+                    continue
                 logger.exception("auto_reentry: failed for strategy #%s: %s", strategy.id, e)
                 # 2026-05-04 fix: 이전 코드 버그 — last_error_message 설정 후 rollback 하면
                 # 그 변경도 같이 rollback 되어 영구히 lost. 또 status 가 REENTRY_READY 그대로

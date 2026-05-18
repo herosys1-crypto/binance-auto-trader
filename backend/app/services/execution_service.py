@@ -33,6 +33,9 @@ class ExecutionService:
     def apply_leverage(self, strategy):
         return self.client.change_leverage(symbol=strategy.symbol, leverage=strategy.leverage)
 
+    def _margin_cache_key(self, strategy) -> str:
+        return f"margin_iso:account:{strategy.exchange_account_id}:symbol:{strategy.symbol}"
+
     def ensure_isolated_margin(self, strategy) -> None:
         """심볼의 마진 모드를 ISOLATED 로 강제 설정 (사용자 결정 2026-05-06).
 
@@ -43,19 +46,45 @@ class ExecutionService:
         호출 위치: 진입 직전 (start_stage1 / enter_stage_at_market / add_position_now).
         실패 시: warning 로그만 (본 진입 흐름은 진행). CROSS 로 진입되더라도 거래는
         가능하지만 「증거금 추가」 만 못 함.
+
+        2026-05-17 (rate limit ban 사후 — Fix 3): 한 번 ISOLATED 확정되면 Redis 에
+        1h 캐시 → 이후 진입 시 change_margin_type 호출 자체를 skip (weight 절감).
+        Redis 장애 시 fail-open (기존처럼 매번 호출 — 동작 변화 없음).
         """
+        # Redis 캐시 hit 시 거래소 호출 skip (fail-open)
+        _redis = None
+        try:
+            from app.core.redis_client import get_redis_client
+            _redis = get_redis_client()
+            if _redis is not None and _redis.get(self._margin_cache_key(strategy)):
+                logger.debug("ensure_isolated_margin cache hit — skip API strategy=%s symbol=%s",
+                             strategy.id, strategy.symbol)
+                return
+        except Exception:
+            _redis = None  # fail-open
+
+        def _mark_cached():
+            if _redis is None:
+                return
+            try:
+                _redis.setex(self._margin_cache_key(strategy), 3600, "ISOLATED")
+            except Exception:
+                pass
+
         try:
             self.client.change_margin_type(symbol=strategy.symbol, margin_type="ISOLATED")
             logger.info("ensure_isolated_margin OK strategy=%s symbol=%s", strategy.id, strategy.symbol)
+            _mark_cached()
         except Exception as e:
             err_msg = str(e)
-            # -4046: 이미 같은 마진 모드 (idempotent OK)
+            # -4046: 이미 같은 마진 모드 (idempotent OK) — 캐시 마킹 (다음부터 skip)
             if "-4046" in err_msg or "no need" in err_msg.lower():
                 logger.info("ensure_isolated_margin already ISOLATED (idempotent) strategy=%s symbol=%s",
                             strategy.id, strategy.symbol)
+                _mark_cached()
                 return
-            # -4048: 포지션 보유 중 변경 불가 — warning 만 (강제 진행)
-            # 다른 에러 — warning 만 (본 진입 흐름 막지 않음)
+            # -4048: 포지션 보유 중 변경 불가 — warning 만 (강제 진행, 캐시 안 함)
+            # 다른 에러 — warning 만 (본 진입 흐름 막지 않음, 캐시 안 함)
             logger.warning(
                 "ensure_isolated_margin failed (continuing anyway): strategy=%s symbol=%s error=%s",
                 strategy.id, strategy.symbol, e,
