@@ -303,6 +303,55 @@ class ExecutionService:
                         tags={"event_type": "EMERGENCY_CLOSE_PLACE_FAILED_EVEN_AUTO_CID"},
                     )
                     raise retry_err
+            elif "-4131" in err_str or "PERCENT_PRICE" in err_str:
+                # 2026-05-19 (#62 MLNUSDT): 저유동성 심볼 MARKET 청산이 PERCENT_PRICE
+                # 밴드 밖 → -4131. 밴드 경계가 LIMIT GTC 로 폴백 (가능한 만큼 즉시
+                # 청산 + 잔여 유효주문 대기 → reconcile 추적). 전량 실패 루프 차단.
+                logger.warning(
+                    "emergency_close: -4131 PERCENT_PRICE — LIMIT 폴백 시도 strategy=%s symbol=%s",
+                    strategy.id, strategy.symbol,
+                )
+                try:
+                    response = self._emergency_close_limit_fallback(
+                        strategy, side=side, position_side=position_side,
+                        quantity=quantity, client_order_id=client_order_id,
+                    )
+                    _emergency_order_type = "LIMIT"
+                    _emergency_tif = "GTC"
+                    self.db.add(RiskEvent(
+                        strategy_instance_id=strategy.id,
+                        event_type="EMERGENCY_CLOSE_LIMIT_FALLBACK",
+                        severity="WARN",
+                        title="⚠️ 저유동성 청산 — MARKET 거부(-4131) → LIMIT 폴백",
+                        message=(
+                            f"{strategy.symbol} {side} qty={quantity} — 호가 얇아 MARKET "
+                            f"-4131. PERCENT_PRICE 밴드 경계 LIMIT GTC 발송 (잔여는 대기)."
+                        ),
+                        event_payload={"strategy_id": strategy.id, "quantity": str(quantity), "side": side},
+                    ))
+                    self.db.commit()
+                except Exception as fb_err:
+                    logger.error(
+                        "emergency_close: -4131 LIMIT 폴백도 실패 strategy=%s err=%s",
+                        strategy.id, fb_err,
+                    )
+                    self.db.add(RiskEvent(
+                        strategy_instance_id=strategy.id,
+                        event_type="EMERGENCY_CLOSE_PLACE_FAILED",
+                        severity="ERROR",
+                        title="Emergency close 실패 (-4131 + LIMIT 폴백 실패)",
+                        message=f"symbol={strategy.symbol} qty={quantity} side={side} market_err={err_str} fallback_err={fb_err}",
+                        event_payload={"strategy_id": strategy.id, "quantity": str(quantity), "side": side, "market_error": err_str, "fallback_error": str(fb_err)},
+                    ))
+                    self.db.commit()
+                    capture_strategy_event(
+                        "emergency_close -4131 limit fallback failed",
+                        level="error", strategy_id=strategy.id, symbol=strategy.symbol,
+                        side=strategy.side, account_id=strategy.exchange_account_id, error=fb_err,
+                        extras={"quantity": str(quantity), "market_error": err_str},
+                        tags={"event_type": "EMERGENCY_CLOSE_4131_FALLBACK_FAILED"},
+                    )
+                    raise fb_err
             else:
                 # -4015 외 다른 에러 — 기존 처리
                 logger.error(
@@ -327,7 +376,9 @@ class ExecutionService:
                     tags={"event_type": "EMERGENCY_CLOSE_PLACE_FAILED"},
                 )
                 raise
-        order = Order(strategy_instance_id=strategy.id, stage_no=None, purpose="EXIT", symbol=strategy.symbol, side=side, position_side=position_side, order_type="MARKET", time_in_force=None, client_order_id=client_order_id, exchange_order_id=response.get("orderId"), trigger_price=None, price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, orig_qty=quantity, executed_qty=Decimal(str(response.get("executedQty", "0"))), avg_price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, status=response.get("status", "NEW"), raw_request={"symbol": strategy.symbol, "side": side, "positionSide": position_side, "type": "MARKET", "quantity": str(quantity), "newClientOrderId": client_order_id}, raw_response=response)
+        _ot = locals().get("_emergency_order_type", "MARKET")
+        _tif = locals().get("_emergency_tif", None)
+        order = Order(strategy_instance_id=strategy.id, stage_no=None, purpose="EXIT", symbol=strategy.symbol, side=side, position_side=position_side, order_type=_ot, time_in_force=_tif, client_order_id=client_order_id, exchange_order_id=response.get("orderId"), trigger_price=None, price=Decimal(str(response.get("price"))) if response.get("price") and Decimal(str(response.get("price"))) > 0 else (Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None), orig_qty=quantity, executed_qty=Decimal(str(response.get("executedQty", "0"))), avg_price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, status=response.get("status", "NEW"), raw_request={"symbol": strategy.symbol, "side": side, "positionSide": position_side, "type": _ot, "quantity": str(quantity), "newClientOrderId": client_order_id}, raw_response=response)
         self.order_repo.create(order)
         self.db.commit()
         return order
@@ -639,6 +690,73 @@ class ExecutionService:
         sym = self.db.execute(select(Symbol).where(Symbol.symbol == symbol)).scalars().first()
         step = Decimal(str(sym.step_size)) if sym and sym.step_size and Decimal(str(sym.step_size)) > 0 else Decimal("0.001")
         return (raw_qty // step) * step
+
+    def _percent_price_bounds(self, symbol: str, mark_price: Decimal) -> tuple[Decimal, Decimal, Decimal]:
+        """심볼 PERCENT_PRICE 필터 → (하한, 상한, tick_size).
+
+        Binance: 주문가 ∈ [mark*multiplierDown, mark*multiplierUp].
+        필터/심볼 못 찾으면 보수적 ±5% + tick 0.00000001 fallback.
+        """
+        from app.models.symbol import Symbol
+        from sqlalchemy import select
+        sym = self.db.execute(select(Symbol).where(Symbol.symbol == symbol)).scalars().first()
+        mult_up = Decimal("1.05")
+        mult_down = Decimal("0.95")
+        tick = Decimal("0.00000001")
+        if sym:
+            if sym.tick_size and Decimal(str(sym.tick_size)) > 0:
+                tick = Decimal(str(sym.tick_size))
+            info = sym.raw_exchange_info or {}
+            for f in info.get("filters", []):
+                if f.get("filterType") == "PERCENT_PRICE":
+                    try:
+                        mult_up = Decimal(str(f.get("multiplierUp", mult_up)))
+                        mult_down = Decimal(str(f.get("multiplierDown", mult_down)))
+                    except Exception:
+                        pass
+                    break
+        lower = mark_price * mult_down
+        upper = mark_price * mult_up
+        return lower, upper, tick
+
+    def _emergency_close_limit_fallback(
+        self, strategy, *, side: str, position_side: str, quantity: Decimal,
+        client_order_id: str,
+    ) -> dict:
+        """-4131 (PERCENT_PRICE) 로 MARKET 거부된 저유동성 심볼의 청산 폴백.
+
+        2026-05-19 사용자 보고 (#62 MLNUSDT): 호가창이 얇아 MARKET 청산이
+        PERCENT_PRICE 밴드 밖 → -4131 거부 → 포지션 stuck + 매 cycle 재시도 루프.
+
+        해법: PERCENT_PRICE 밴드 경계가에 reduceOnly 아닌 LIMIT GTC 발송
+        (hedge 모드라 positionSide 로 방향 제어 — 기존 MARKET 과 동일 패턴).
+        - SELL(롱청산): 하한가 (가장 공격적, 밴드 내 최저) — bid 매칭 즉시 일부 체결
+        - BUY(숏청산): 상한가 (가장 공격적, 밴드 내 최고) — ask 매칭
+        - 미체결 잔여는 밴드 내 GTC 로 대기 → reconcile/stream 이 추적
+        (전량 실패보다 「가능한 만큼 즉시 + 잔여 유효 주문 대기」 가 안전)
+        """
+        mark = self._fetch_current_mark_price(strategy.symbol)
+        lower, upper, tick = self._percent_price_bounds(strategy.symbol, mark)
+        if side == "SELL":
+            # 하한 이상이어야 수락 → tick ceil 로 하한 바로 위 (가장 공격적)
+            limit_price = (lower / tick).to_integral_value(rounding="ROUND_CEILING") * tick
+        else:  # BUY
+            # 상한 이하여야 수락 → tick floor 로 상한 바로 아래 (가장 공격적)
+            limit_price = (upper / tick).to_integral_value(rounding="ROUND_FLOOR") * tick
+        if limit_price <= 0:
+            raise ValueError(f"PERCENT_PRICE 폴백 가격 계산 실패 (mark={mark}, tick={tick})")
+        payload = {
+            "symbol": strategy.symbol, "side": side, "positionSide": position_side,
+            "type": "LIMIT", "quantity": str(quantity),
+            "price": str(limit_price), "timeInForce": "GTC",
+            "newClientOrderId": client_order_id,
+        }
+        logger.warning(
+            "emergency_close -4131 fallback: LIMIT GTC strategy=%s symbol=%s side=%s "
+            "qty=%s price=%s (mark=%s band=[%s,%s])",
+            strategy.id, strategy.symbol, side, quantity, limit_price, mark, lower, upper,
+        )
+        return self.client.place_order(payload)
 
     def _place_market_entry(self, strategy, *, stage_no: int | None, qty: Decimal, current_price: Decimal, suffix: str) -> Order:
         """공통 MARKET 진입 주문 (stage 또는 ad-hoc)."""
