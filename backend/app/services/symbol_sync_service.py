@@ -21,6 +21,13 @@ class SymbolSyncService:
         """
         exchange_info = self.client.get_exchange_info()
         symbols = exchange_info.get("symbols", [])
+        # 2026-05-18 (사용자 보고 — EDENUSDT 등 testnet 에 없는 심볼 잔존):
+        # exchangeInfo 에 실제 존재하는 심볼명 집합. 아래 loop 후 이 집합에 없는
+        # DB 심볼 (이전 sync 잔재 / mainnet↔testnet 차이) 은 DELISTED 로 마킹해
+        # only_trading 필터에서 자동 제외 (UI dropdown + 전략생성에서 사라짐).
+        live_symbol_names = {
+            item.get("symbol") for item in symbols if item.get("symbol")
+        }
         succeeded = 0
         failed = 0
         for item in symbols:
@@ -81,5 +88,31 @@ class SymbolSyncService:
                 self.db.rollback()
                 failed += 1
                 logger.warning("symbol_sync failed %s: %s", symbol_name, e)
-        logger.info("symbol_sync complete: succeeded=%d failed=%d", succeeded, failed)
+        # ----- stale 심볼 비활성화 (exchangeInfo 에 없는 TRADING 심볼 → DELISTED) -----
+        # 사용자 보고 (5-18): EDENUSDT 등 testnet 에 없는 심볼이 dropdown 에 다수.
+        # 원인: 과거 sync (mainnet 연결/구 testnet) 잔재가 status=TRADING 영구 유지.
+        # 매 sync 마다 「현재 exchangeInfo 에 없으면 DELISTED」 처리 → 일일 cron 이
+        # 자동으로 stale 정리 (사용자가 원한 「하루 1회 검색·등록」 = 이미 03:00 cron,
+        # 이 fix 로 등록뿐 아니라 정리까지 일관).
+        delisted = 0
+        if live_symbol_names:  # exchangeInfo fetch 실패(빈값) 시엔 전체 DELIST 방지
+            try:
+                stale_rows = self.db.execute(
+                    select(Symbol).where(
+                        Symbol.status == "TRADING",
+                        Symbol.symbol.notin_(live_symbol_names),
+                    )
+                ).scalars().all()
+                for s in stale_rows:
+                    s.status = "DELISTED"
+                    delisted += 1
+                if delisted:
+                    self.db.commit()
+            except Exception as e:
+                self.db.rollback()
+                logger.warning("symbol_sync delist sweep 실패: %s", e)
+        logger.info(
+            "symbol_sync complete: succeeded=%d failed=%d delisted=%d",
+            succeeded, failed, delisted,
+        )
         return succeeded
