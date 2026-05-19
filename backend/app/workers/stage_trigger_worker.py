@@ -50,11 +50,59 @@ def _count_total_stages_from_template(tpl) -> int:
     return len(capitals) if capitals else 4
 
 
+# ---------------------------------------------------------------------------
+# 2026-05-19 사용자 보고 (#다수, -2019 "Margin is insufficient"):
+# 13개 동시 전략으로 가용 증거금 소진 → 다음 단계 진입이 -2019 거부.
+# is_triggered 가 False 라 stage_trigger 가 매 10초 재시도 → 거래소 주문 spam
+# (rate-limit 기여) + RiskEvent/Telegram spam + 자동 해소 안 됨 (마진은 포지션
+# 정리/입금 전엔 안 생김). ban guard / -4131 / flat-record 와 동일 클래스.
+#
+# 해법: -2019 감지 시 (strategy,stage) Redis 쿨다운 (30분) + 알림 1회만.
+# 쿨다운 중엔 그 단계 skip. 만료 후 1회 재시도 (포지션 정리로 마진 회복 가능) —
+# 여전히 부족하면 재쿨다운 (알림은 쿨다운 동안 dedup 되어 재발송 X).
+# ---------------------------------------------------------------------------
+_MARGIN_COOLDOWN_TTL = 1800  # 30분
+_MARGIN_COOLDOWN_KEY = "stage_margin_cooldown:strategy:{sid}:stage:{n}"
+
+
+def _margin_cooldown_active(redis_client, sid: int, stage_no: int) -> bool:
+    if redis_client is None:
+        return False
+    try:
+        return bool(redis_client.get(_MARGIN_COOLDOWN_KEY.format(sid=sid, n=stage_no)))
+    except Exception:
+        return False
+
+
+def _set_margin_cooldown(redis_client, sid: int, stage_no: int) -> bool:
+    """쿨다운 설정. 새로 설정했으면 True (알림 발송), 이미 있었으면 False (dedup)."""
+    if redis_client is None:
+        return True  # redis 없으면 알림은 보냄 (안전), 쿨다운만 불가
+    key = _MARGIN_COOLDOWN_KEY.format(sid=sid, n=stage_no)
+    try:
+        if redis_client.get(key):
+            return False  # 이미 쿨다운 중 — 알림 dedup
+        redis_client.setex(key, _MARGIN_COOLDOWN_TTL, "1")
+        return True
+    except Exception:
+        return True
+
+
+def _is_margin_insufficient(exc: Exception) -> bool:
+    msg = str(exc)
+    return "-2019" in msg or "Margin is insufficient" in msg
+
+
 def run_stage_trigger_once(decrypt_text) -> None:
     """활성 전략의 다음 stage 트리거 검사 + 자동 LIMIT 주문 발송.
 
     매 10초마다 scheduler 가 호출. Redis lock 은 scheduler 가 처리.
     """
+    from app.core.redis_client import get_redis_client
+    try:
+        _redis = get_redis_client()
+    except Exception:
+        _redis = None
     db = SessionLocal()
     try:
         from app.models.strategy_template import StrategyTemplate
@@ -97,6 +145,9 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     continue
                 if next_plan.is_triggered:
                     continue  # 이미 진입됨
+                # 2026-05-19: 마진부족(-2019) 쿨다운 중인 단계는 skip (재시도 spam 차단)
+                if _margin_cooldown_active(_redis, strategy.id, next_stage_no):
+                    continue
                 if not next_plan.trigger_price:
                     # LIQUIDATION_BUFFER 모드 (마지막 단계) — trigger_price 가 None.
                     # 실시간으로 청산가 -5% 기반 산출 필요. 일단 skip (후속 작업으로 분리).
@@ -160,6 +211,30 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     _banned_accounts.add(account.id)
                     logger.warning("[stage-trigger] rate limit detected account=%s — skip rest of cycle", account.id)
                     continue
+                # 2026-05-19: 마진부족(-2019) — 30분 쿨다운 + 알림 1회 (매 cycle spam 차단).
+                # 마진은 포지션 정리/입금 전엔 안 생기므로 blind 재시도 무의미.
+                if _is_margin_insufficient(e):
+                    _sn = next_stage_no if "next_stage_no" in dir() else 0
+                    first = _set_margin_cooldown(_redis, strategy.id, _sn)
+                    logger.warning(
+                        "[stage-trigger] margin insufficient strategy=%s stage=%s — cooldown %dm (alert=%s)",
+                        strategy.id, _sn, _MARGIN_COOLDOWN_TTL // 60, first,
+                    )
+                    if first:  # 쿨다운 동안 1회만 알림 (dedup)
+                        try:
+                            NotificationService(db).send_system_alert(
+                                title=f"⚠️ [마진 부족] 전략 #{strategy.id} {strategy.symbol} 단계{_sn} 진입 보류",
+                                body=(
+                                    f"가용 증거금 부족(-2019)으로 단계 {_sn} 진입 실패. "
+                                    f"{_MARGIN_COOLDOWN_TTL // 60}분간 자동 재시도 보류.\n\n"
+                                    "💡 조치: ① 다른 전략 일부 정리(포지션 청산) 또는 "
+                                    "② 거래소 잔액 입금 → 마진 확보 시 다음 cycle 자동 재개.\n"
+                                    "동시 전략 수가 많으면 MAX_CONCURRENT_STRATEGIES_PER_ACCOUNT 조정 검토."
+                                ),
+                            )
+                        except Exception:
+                            pass
+                    continue  # 일반 「시스템 오류」 spam 알림 안 보냄
                 logger.exception(f"[stage-trigger] failed for strategy #{strategy.id}: {e}")
                 try:
                     NotificationService(db).send_system_alert(
