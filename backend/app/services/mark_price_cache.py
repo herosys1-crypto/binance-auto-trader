@@ -92,13 +92,20 @@ def calc_unrealized_pnl(
 ) -> Decimal:
     """unrealized PNL 재계산 — 라이브 마크 가격 기준.
 
-    LONG:  qty × (mark - entry)
-    SHORT: qty × (entry - mark)
+    LONG:  |qty| × (mark - entry)
+    SHORT: |qty| × (entry - mark)
 
-    qty 는 양수로 가정 (방향은 side 로 판단). entry_price 0/None 이면 0 반환.
+    qty 는 signed (Binance positionAmt) 또는 absolute 어느 쪽이든 안전하게
+    동작하도록 abs() 적용. 방향은 항상 side 로 판단.
+
+    2026-05-21 핫픽스: 이전 구현은 qty 부호 그대로 사용 → DB 의
+    current_position_qty 가 reconcile_worker 에서 Binance positionAmt 그대로
+    저장 (SHORT 는 음수) 라 SHORT PNL 부호가 반전됐음 (INJUSDT 사례:
+    실제 +20.50 인데 tool 표시 -20.50).
     """
     if not entry_price or entry_price <= 0 or not mark_price or mark_price <= 0:
         return Decimal("0")
+    abs_qty = abs(qty)
     if (side or "").upper() == "SHORT":
-        return qty * (entry_price - mark_price)
-    return qty * (mark_price - entry_price)
+        return abs_qty * (entry_price - mark_price)
+    return abs_qty * (mark_price - entry_price)
