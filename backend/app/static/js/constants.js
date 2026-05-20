@@ -97,10 +97,20 @@ const PURPOSE_MAP = {
   'EMERGENCY_CLOSE':  '긴급 청산',
 };
 
-// Backend `_CLOSED_STATUSES` (services/strategy_service.py, api/v1/strategies.py) + STOPPING.
-// 2026-05-04 v3 (사용자 피드백): "종료 숨김" 은 진행 중 전략만 보이게 — STOPPING (종료 중)
-// 도 사용자 관점에선 "끝낸 거" 라 숨겨야 함. backend 의 race-window 보호 (STOPPING 도
-// active 로 보고 신규 진입 차단) 는 그대로 유지하되 프론트에서는 정리 진행 중 행을
-// 가린다. duplicate-prevention 에러 메시지가 offending strategy id 알려주므로 사용자가
-// 어떤 행이 막는지 알 수 있음.
-const TERMINAL_STATUSES = ['STOPPED', 'STOPPING', 'COMPLETED', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'REENTRY_READY', 'KILL_SWITCH_TRIGGERED'];
+// Backend `_CLOSED_STATUSES` (services/strategy_service.py, api/v1/strategies.py) 와 일치.
+// 2026-05-21 STOPPING 제거 (사장님 #77 PHB / #78 RONIN 갇힘 사례, +359 → -24 손실):
+//   이전엔 STOPPING 도 종료로 취급해 「종료 숨김」 토글 켜면 보이지 않았음.
+//   reconcile 이 「matched 있음 + positionAmt != 0」 케이스를 자동 정리 못 하므로
+//   STOPPING 갇힘은 사용자만 수동 청산 가능. 그런데 보이지 않으면 인지조차 못 함 →
+//   TP/SL 평가도 `_NOT_FOR_TP_SL` 필터에 막혀 그 사이 기회 손실 (실 손해 ~$384).
+//   해법: STOPPING 을 별도 「청산 진행」 그룹으로 분리. 종료 숨김 토글에서 제외.
+// 5-04 race-window 우려는 backend 의 신규 진입 가드 (cm-preview closedSet) 가 별도로
+// 막아주므로 frontend 가시성과 무관.
+const TERMINAL_STATUSES = ['STOPPED', 'COMPLETED', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'REENTRY_READY', 'KILL_SWITCH_TRIGGERED'];
+
+// STOPPING 전용 set — 종료 숨김 토글 대상 아님, 강조 표시 대상.
+// updated_at 5분 초과 시 「갇힘」 의심 — strategies-list.js 가 stuck 배지 표시.
+const STOPPING_STATUSES = ['STOPPING'];
+
+// 갇힘 의심 임계 (ms) — 5분. reconcile_worker 의 알림 임계와 동일하게 맞춤.
+const STOPPING_STUCK_THRESHOLD_MS = 5 * 60 * 1000;

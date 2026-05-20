@@ -183,11 +183,12 @@ class TestStaticAssetsIntegrity:
             assert f"'TP{n}_DONE_PARTIAL'" in js, f"TP{n}_DONE_PARTIAL 누락"
 
     def test_terminal_statuses_matches_backend(self):
-        """frontend TERMINAL_STATUSES 가 backend TERMINAL_STATUSES 와 의미 동일.
+        """frontend TERMINAL_STATUSES 가 backend TERMINAL_STATUSES 와 정확히 일치.
 
-        STOPPING 은 frontend 에선 hide (사용자 관점 종료), backend 에선 active
-        (race-window 보호) — 의도적 차이라 frontend 만 STOPPING 추가.
-        나머지 항목은 양측 모두 포함해야 함.
+        2026-05-21 #77/#78 PHB/RONIN 사례 후 (실 손해 ~$384):
+          이전엔 frontend 만 STOPPING 추가해 「종료 숨김」 토글로 가렸음 — 갇힘 시
+          사용자가 인지 못 함. 이제 양측 set 이 완전히 일치하고, STOPPING 은 별도
+          `STOPPING_STATUSES` 로 분리해 강조 표시 + 5분 초과 시 stuck 배지 + 알림.
         """
         from app.core.strategy_status import TERMINAL_STATUSES as BACKEND_TERMINAL
 
@@ -198,19 +199,29 @@ class TestStaticAssetsIntegrity:
         items = re.findall(r"'([^']+)'", m.group(1))
         frontend_set = set(items)
 
-        # 모든 backend TERMINAL_STATUSES 가 frontend 에도 있어야 함
-        missing_in_frontend = BACKEND_TERMINAL - frontend_set
-        assert not missing_in_frontend, (
-            f"backend TERMINAL_STATUSES 가 frontend 에 누락: {missing_in_frontend}\n"
-            "constants.js 의 TERMINAL_STATUSES 갱신 필요"
+        # backend ↔ frontend 정확히 일치 — drift 차단.
+        assert frontend_set == set(BACKEND_TERMINAL), (
+            f"backend ↔ frontend TERMINAL_STATUSES drift:\n"
+            f"  only backend: {set(BACKEND_TERMINAL) - frontend_set}\n"
+            f"  only frontend: {frontend_set - set(BACKEND_TERMINAL)}\n"
+            f"constants.js 또는 strategy_status.py 갱신 필요"
         )
 
-        # frontend 만 가질 수 있는 항목 (의도적): STOPPING
-        extras = frontend_set - BACKEND_TERMINAL
-        allowed_extras = {"STOPPING"}
-        unexpected = extras - allowed_extras
-        assert not unexpected, (
-            f"frontend TERMINAL_STATUSES 에 backend 미포함 + STOPPING 외 추가 항목: {unexpected}"
+        # STOPPING 은 절대 TERMINAL 그룹에 들어가면 안 됨 (#77/#78 회귀 가드)
+        assert "STOPPING" not in frontend_set, (
+            "STOPPING 이 다시 TERMINAL_STATUSES 에 들어감 — 「종료 숨김」 토글로 가려져 "
+            "갇힘을 인지하지 못하는 #77/#78 사례 재발 위험. STOPPING_STATUSES 사용 검토."
+        )
+
+    def test_stopping_statuses_defined_separately(self):
+        """STOPPING_STATUSES 별도 set + STOPPING_STUCK_THRESHOLD_MS 상수 정의 (#77/#78 가드)."""
+        js = _constants_js()
+        assert re.search(r'const\s+STOPPING_STATUSES\s*=', js), (
+            "STOPPING_STATUSES 누락 — STOPPING 을 종료 그룹에서 분리하기 위한 별도 set 필요"
+        )
+        assert "'STOPPING'" in js
+        assert re.search(r'const\s+STOPPING_STUCK_THRESHOLD_MS\s*=', js), (
+            "STOPPING_STUCK_THRESHOLD_MS 누락 — strategies-list.js 가 갇힘 배지 표시에 사용"
         )
 
     def test_api_js_exists_and_loaded_before_inline_script(self):
@@ -986,6 +997,24 @@ class TestStaticAssetsIntegrity:
         ]
         violations = [pat for pat in forbidden if pat in html]
         assert not violations
+
+    def test_strategies_list_renders_stopping_stuck_badge(self):
+        """strategies-list.js 가 STOPPING + updated_at 5분 초과 시 「⚠️ 갇힘」 배지 표시.
+
+        #77/#78 회귀 가드 — 갇힘 인지 못 하면 ~$384 손실 재발 가능.
+        """
+        js = _strategies_list_js()
+        # 핵심: STOPPING_STUCK_THRESHOLD_MS 참조 + updated_at age 계산 + 배지 출력
+        assert "STOPPING_STUCK_THRESHOLD_MS" in js, (
+            "strategies-list.js 가 STOPPING_STUCK_THRESHOLD_MS 미사용 — 갇힘 배지 표시 깨짐"
+        )
+        assert "updated_at" in js, "updated_at 필드 미참조 — 갇힘 시간 계산 불가"
+        # 「갇힘」 또는 stuck 키워드가 들어간 배지 출력
+        assert "갇힘" in js, "갇힘 배지 텍스트 누락"
+        # 상단 경고 alert 도 갇힘 strategy 발견 시 표시 (showAlert)
+        assert "stuckStopping" in js or "stuck_stopping" in js, (
+            "갇힘 strategy 상단 경고 로직 누락 — showAlert 미표시 시 사장님 인지 어려움"
+        )
 
     def test_no_dead_crisis_dropdown_refs_in_index_html(self):
         """제거된 cm-crisis-threshold UI element 참조가 다시 들어오면 안 됨.

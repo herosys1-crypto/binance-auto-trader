@@ -440,5 +440,122 @@ def _do_reconcile(decrypt_func) -> None:
                 level="error", error=e,
                 tags={"event_type": "ORPHAN_OO_DETECTION_LOOP_FAILED"},
             )
+
+        # ===== Phase 4 안전망 — STOPPING 갇힘 감지 (2026-05-21, #77/#78 사례 재발 방지) =====
+        # 사장님 #77 PHB / #78 RONIN 사례 (실 손해 ~$384):
+        #   emergency_close 가 거래소에서 거절 → strategy.status="STOPPING" 갇힘.
+        #   거래소엔 포지션이 그대로 남아있고, reconcile 의 matched 분기는 「positionAmt
+        #   != 0」 케이스를 자동 정리 못 함 (= 정상 — 거래소에 실 포지션이 있음). 그 사이
+        #   `_NOT_FOR_TP_SL` 필터에 막혀 TP/SL 평가도 차단 → PHB 가 +20% (TP3) 임계점을
+        #   지나갔는데도 TP 미발동 → 결국 -24 로 회귀 (피크 +359 → -24, 손실 ~$384).
+        #
+        # 본 가드:
+        #   - reconcile 매 사이클 (2분 주기) STOPPING + updated_at 5분 초과 strategy 스캔
+        #   - 각 strategy 별 30분 cooldown (Redis) — 사이클마다 알림 폭주 차단
+        #   - 텔레그램 CRITICAL: 「긴급 종료 재시도 또는 거래소 UI 직접 청산 필요」
+        #   - RiskEvent CRITICAL 기록 — UI 알림 + 감사 추적
+        try:
+            _detect_stopping_stuck(db, notif_svc=notif_svc, redis=_redis)
+            db.commit()
+        except Exception as e:
+            logger.error("STOPPING stuck detection 실패: %s", e)
+            db.rollback()
+            capture_strategy_event(
+                "STOPPING stuck detection failed",
+                level="error", error=e,
+                tags={"event_type": "STOPPING_STUCK_DETECTION_FAILED"},
+            )
     finally:
         db.close()
+
+
+# ===== STOPPING 갇힘 감지 =====
+# 5분 이상 STOPPING 상태인 strategy 를 reconcile 마지막에 스캔.
+# 임계는 frontend `STOPPING_STUCK_THRESHOLD_MS` 와 동일 (= 5분).
+STOPPING_STUCK_THRESHOLD_SECONDS = 5 * 60
+
+# Redis cooldown — 같은 strategy 에 대해 알림 한 번 발송 후 30분 침묵.
+# 너무 짧으면 텔레그램 spam, 너무 길면 사장님이 잊을 가능성 → 30분 절충.
+STOPPING_STUCK_ALERT_COOLDOWN_SECONDS = 30 * 60
+STOPPING_STUCK_ALERT_REDIS_PREFIX = "stopping_stuck_alert:"
+
+
+def _detect_stopping_stuck(db, *, notif_svc, redis) -> None:
+    """STOPPING 5분 초과 strategy 감지 → 텔레그램 CRITICAL + RiskEvent.
+
+    notif_svc / redis 는 호출부에서 만들어 전달 — _do_reconcile 본문이 이미 둘 다
+    초기화한 상태라 재생성 비용을 피한다.
+    """
+    now = datetime.now(timezone.utc)
+    threshold = now.timestamp() - STOPPING_STUCK_THRESHOLD_SECONDS
+
+    stuck_rows = db.execute(
+        select(StrategyInstance)
+        .where(StrategyInstance.status == "STOPPING")
+        .where(StrategyInstance.is_archived.is_(False))
+    ).scalars().all()
+
+    for s in stuck_rows:
+        # updated_at 이 NULL 인 경우는 없지만 (server_default + onupdate), 방어적 가드.
+        if s.updated_at is None:
+            continue
+        # postgres 는 timezone=True 라 항상 tz-aware. sqlite (테스트) 는 naive 라
+        # `.timestamp()` 가 로컬 타임존 기준으로 계산 — UTC 로 가정해 보정.
+        updated_at = s.updated_at
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        if updated_at.timestamp() > threshold:
+            continue  # 아직 5분 안 지남
+        age_seconds = int(now.timestamp() - updated_at.timestamp())
+        age_min = age_seconds // 60
+
+        # cooldown 검사 — Redis 에 키 존재하면 skip. 실패 시 (Redis down) cooldown 무시
+        # 하지 말고 알림 발송 — 갇힘은 무시하면 안 됨.
+        cooldown_key = f"{STOPPING_STUCK_ALERT_REDIS_PREFIX}{s.id}"
+        already_alerted = False
+        if redis is not None:
+            try:
+                already_alerted = bool(redis.get(cooldown_key))
+            except Exception as e:
+                logger.debug("STOPPING cooldown 조회 실패 (alert 계속): %s", e)
+        if already_alerted:
+            continue
+
+        title = f"🔴 [긴급] 전략 종료 갇힘 — #{s.id} {s.symbol} {s.side}"
+        body = (
+            f"⚠️ STOPPING 상태가 {age_min}분째 지속 (updated_at={updated_at.isoformat()})\n"
+            f"\n"
+            f"원인: emergency_close 가 거래소에서 거절돼 status 만 STOPPING 으로 남음. "
+            f"거래소엔 포지션이 잔재할 가능성 높음.\n"
+            f"\n"
+            f"부작용: TP/SL 평가가 차단됨 (`_NOT_FOR_TP_SL` 필터) — 그 사이 가격이 익절 "
+            f"임계 넘어도 자동 청산 안 됨.\n"
+            f"\n"
+            f"조치:\n"
+            f"  1) 대시보드에서 「🛑 긴급 종료」 재시도 (qty 재계산 후 시장가 청산 재시도)\n"
+            f"  2) 실패 시 Binance 거래소 UI 에서 직접 포지션 청산\n"
+            f"  3) reconcile 다음 사이클이 거래소 포지션 0 을 확인하면 자동으로 STOPPED 전환"
+        )
+        notif_svc.send_system_alert(title=title, body=body)
+        db.add(RiskEvent(
+            strategy_instance_id=s.id,
+            event_type="STOPPING_STUCK_DETECTED",
+            severity="CRITICAL",
+            title=title,
+            message=body,
+            event_payload={
+                "strategy_id": s.id,
+                "age_seconds": age_seconds,
+                "updated_at": updated_at.isoformat(),
+            },
+        ))
+        logger.critical(
+            "STOPPING stuck detected: strategy_id=%s symbol=%s side=%s age=%dmin",
+            s.id, s.symbol, s.side, age_min,
+        )
+
+        if redis is not None:
+            try:
+                redis.setex(cooldown_key, STOPPING_STUCK_ALERT_COOLDOWN_SECONDS, "1")
+            except Exception as e:
+                logger.debug("STOPPING cooldown 저장 실패 (다음 사이클 재알림 가능): %s", e)

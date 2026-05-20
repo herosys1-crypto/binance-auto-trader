@@ -91,11 +91,27 @@ async function refreshStrategies() {
       return;
     }
 
-    // 위험 신호 감지 (청산 임박, 손절 종료, 크라이시스 모드)
+    // 위험 신호 감지 (청산 임박, 손절 종료, 크라이시스 모드, STOPPING 갇힘)
     const danger = data.find(s => ['LIQUIDATION_IMMINENT', 'KILL_SWITCH_TRIGGERED'].includes((s.status || '').toUpperCase()));
     const crisisActive = data.find(s => s.crisis_mode_triggered_at && !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()));
+    // 2026-05-21 STOPPING 갇힘 감지 (사장님 #77/#78 사례 재발 방지):
+    //   STOPPING 인데 updated_at 이 5분 이상 지났으면 emergency_close 실패 후 정지 상태.
+    //   reconcile 이 자동 정리 못 하는 케이스 (거래소에 포지션 잔재 + close 주문 거절) →
+    //   사장님이 직접 「긴급 종료」 재시도하거나 거래소 UI 에서 수동 청산 필요.
+    const stuckStopping = data.find(s => {
+      if ((s.status || '').toUpperCase() !== 'STOPPING') return false;
+      if (!s.updated_at) return false;
+      const ageMs = Date.now() - new Date(s.updated_at).getTime();
+      return ageMs >= STOPPING_STUCK_THRESHOLD_MS;
+    });
     if (danger) {
       showAlert(`전략 #${danger.id} ${danger.symbol} ${danger.side} — 즉시 확인 필요`, statusInfo(danger.status).ko);
+    } else if (stuckStopping) {
+      const ageMin = Math.floor((Date.now() - new Date(stuckStopping.updated_at).getTime()) / 60000);
+      showAlert(
+        `🔴 종료 갇힘: 전략 #${stuckStopping.id} ${stuckStopping.symbol} ${stuckStopping.side} — ${ageMin}분째 STOPPING`,
+        `emergency_close 실패 후 정지 — TP/SL 평가도 차단됨. 「🛑 긴급 종료」 재시도 또는 거래소 UI 에서 직접 청산 필요.`
+      );
     } else if (crisisActive) {
       const stage2 = !!crisisActive.crisis_first_tp_done_at;
       const detail = stage2
@@ -269,10 +285,21 @@ async function refreshStrategies() {
         : '<span class="text-slate-500">-</span>';
       const maxCell = `<div class="text-xs leading-tight">${maxLoss}<br>${maxProfit}</div>`;
 
+      // 2026-05-21 STOPPING 갇힘 배지 — updated_at 5분 초과면 「⚠️ 갇힘 N분」 표시.
+      // reconcile 이 자동 정리 못 하는 케이스 (포지션 잔재) — 사장님이 인지해야 함.
+      let stuckBadge = '';
+      if ((s.status || '').toUpperCase() === 'STOPPING' && s.updated_at) {
+        const ageMs = Date.now() - new Date(s.updated_at).getTime();
+        if (ageMs >= STOPPING_STUCK_THRESHOLD_MS) {
+          const ageMin = Math.floor(ageMs / 60000);
+          stuckBadge = `<span class="badge badge-red" title="STOPPING 상태가 ${ageMin}분째 지속 — emergency_close 실패. TP/SL 평가도 차단됨. 「🛑 긴급 종료」 재시도 또는 거래소 UI 에서 직접 청산.">⚠️ 갇힘 ${ageMin}분</span>`;
+        }
+      }
       // 상태 셀에 모드 배지 + 최대손익 tooltip 까지 합쳐 9 컬럼으로 압축.
       const stateCell = `
         <div class="flex flex-col gap-1" title="모드: ${modeBadge.replace(/<[^>]+>/g,'').trim()} / 진입요청가: ${s.start_price ? fmtNum(s.start_price) : '-'} / 최대 손실: ${s.max_loss_pct !== null && s.max_loss_pct !== undefined ? fmtNum(s.max_loss_pct)+'%' : '-'} / 최대 이익: ${s.max_profit_pct !== null && s.max_profit_pct !== undefined ? '+'+fmtNum(s.max_profit_pct)+'%' : '-'}">
           <span class="badge badge-${info.sig}">${info.icon} ${info.ko}</span>
+          ${stuckBadge}
           ${s.crisis_mode_triggered_at ? modeBadge : ''}
         </div>`;
       // 진입일시 (created_at) — 짧게 MM/DD HH:MM 형식
