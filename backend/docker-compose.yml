@@ -63,6 +63,22 @@ services:
     volumes:
       - .:/app
 
+  # 2026-05-20: markPrice 실시간 스트림 — Redis 캐시 갱신 (1초 주기) 후 API 가
+  # 라이브 PNL 재계산에 사용. UBUSDT 사례에서 reconcile 2분 stale 로 13 USDT
+  # 차이 발생 → 본 서비스로 ±0.1 USDT 이내 일치.
+  mark-price-stream:
+    build: .
+    container_name: binance-auto-trader-mark-price-stream
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    command: ["python", "-m", "app.workers.mark_price_stream_consumer"]
+    volumes:
+      - .:/app
+
   prometheus:
     image: prom/prometheus:latest
     container_name: binance-auto-trader-prometheus

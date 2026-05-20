@@ -1,6 +1,9 @@
 """Strategies — 공통 helper 함수 (모든 submodule 에서 재사용).
 
 2026-05-14 Phase 4 split: 기존 strategies.py 1,384줄에서 분리.
+2026-05-20: live mark price 기반 unrealized_pnl 재계산 (PNL stale 5~13 USDT
+            차이 해소). mark_price_cache (WebSocket markPrice 1s push) 우선,
+            miss 시 DB stored 값 fallback.
 """
 from __future__ import annotations
 
@@ -9,6 +12,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 
 from app.schemas.strategy import StrategyDetailResponse
+from app.services.mark_price_cache import calc_unrealized_pnl, get_mark_prices_bulk
 
 
 def _count_active_stages(tpl) -> int:
@@ -36,10 +40,68 @@ def _count_active_tps(tpl) -> int:
 
 
 def _enrich_response(resp: StrategyDetailResponse, tpl) -> StrategyDetailResponse:
-    """응답에 template 기반 카운트 채우기."""
+    """응답에 template 기반 카운트 채우기.
+
+    Note: unrealized_pnl 라이브 재계산은 list/get 엔드포인트에서 batch 로 적용
+    (apply_live_unrealized_pnl 또는 apply_live_unrealized_pnl_batch). 단건만 갱신
+    하려면 호출 측에서 별도로 처리.
+    """
     resp.total_active_stages = _count_active_stages(tpl)
     resp.total_active_tps = _count_active_tps(tpl)
     return resp
+
+
+def apply_live_unrealized_pnl(resp: StrategyDetailResponse) -> StrategyDetailResponse:
+    """단건 응답의 unrealized_pnl 을 라이브 마크 가격으로 재계산.
+
+    캐시 hit: side/qty/entry/mark 로 PNL 재계산.
+    miss: DB stored 값 그대로 (fallback).
+    """
+    if not resp.symbol or not resp.current_position_qty or not resp.avg_entry_price:
+        return resp
+    prices = get_mark_prices_bulk([resp.symbol])
+    mark = prices.get(resp.symbol.upper())
+    if mark is None:
+        return resp
+    resp.unrealized_pnl = calc_unrealized_pnl(
+        side=resp.side,
+        qty=Decimal(resp.current_position_qty),
+        entry_price=Decimal(resp.avg_entry_price),
+        mark_price=mark,
+    )
+    return resp
+
+
+def apply_live_unrealized_pnl_batch(responses: list[StrategyDetailResponse]) -> list[StrategyDetailResponse]:
+    """list 응답 전체의 unrealized_pnl 을 라이브 마크 가격으로 재계산.
+
+    Redis mget 1회로 모든 심볼 한 번에 조회 (N+1 회피).
+    캐시 miss 인 심볼은 stored 값 유지.
+    """
+    if not responses:
+        return responses
+    # 활성 포지션이 있는 응답만 — qty=0 / entry=None 은 PNL 0 이라 재계산 불필요
+    candidates = [
+        r for r in responses
+        if r.symbol and r.current_position_qty and r.avg_entry_price
+    ]
+    if not candidates:
+        return responses
+    symbols = {r.symbol.upper() for r in candidates}
+    prices = get_mark_prices_bulk(symbols)
+    if not prices:
+        return responses
+    for r in candidates:
+        mark = prices.get(r.symbol.upper())
+        if mark is None:
+            continue
+        r.unrealized_pnl = calc_unrealized_pnl(
+            side=r.side,
+            qty=Decimal(r.current_position_qty),
+            entry_price=Decimal(r.avg_entry_price),
+            mark_price=mark,
+        )
+    return responses
 
 
 def _fetch_tp_counts_batch(db: Session, strategy_ids: set[int]) -> dict[int, dict]:
