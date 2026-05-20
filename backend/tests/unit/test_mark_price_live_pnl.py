@@ -94,7 +94,7 @@ def test_calc_unrealized_pnl_long():
 
 
 def test_calc_unrealized_pnl_short():
-    """SHORT: qty * (entry - mark). INJUSDT 케이스."""
+    """SHORT: |qty| * (entry - mark). INJUSDT 케이스 — 양수 qty 입력."""
     from app.services.mark_price_cache import calc_unrealized_pnl
     pnl = calc_unrealized_pnl(
         side="SHORT",
@@ -102,8 +102,42 @@ def test_calc_unrealized_pnl_short():
         entry_price=Decimal("5.0783979"),
         mark_price=Decimal("4.9624337"),
     )
-    # 116.1 × (5.0783979 - 4.9624337) = 116.1 × 0.1159642 = 13.4624 USDT
     assert pnl == pytest.approx(Decimal("13.4624"), abs=Decimal("0.01"))
+
+
+def test_calc_unrealized_pnl_short_signed_qty_regression():
+    """🚨 회귀 방지: 2026-05-21 핫픽스 — DB 에 SHORT 가 음수 qty 로 저장됨
+    (Binance positionAmt 그대로). 이 경우에도 PNL 부호가 옳아야 함.
+
+    실측 사례: INJUSDT 사용자 보고 — Tool -20.50 vs Binance +20.50 (부호반전).
+    원인: 이전 코드가 qty 부호 그대로 곱해서 SHORT 가 두 번 반전 (DB negative
+    × SHORT 분기) → 부호 반대. abs(qty) 사용으로 해결.
+    """
+    from app.services.mark_price_cache import calc_unrealized_pnl
+    # DB 저장 그대로의 SHORT — 음수 qty
+    pnl = calc_unrealized_pnl(
+        side="SHORT",
+        qty=Decimal("-87.1"),                  # ← signed (Binance positionAmt)
+        entry_price=Decimal("5.0783979"),
+        mark_price=Decimal("4.8440438"),       # Binance 실시간 mark
+    )
+    # 가격이 entry 보다 내려갔으니 SHORT 는 PROFIT — 반드시 +
+    # 87.1 × (5.0783979 - 4.8440438) = 87.1 × 0.2343541 = 20.412 USDT
+    assert pnl > 0, f"SHORT profit 인데 부호가 양수가 아님: {pnl}"
+    assert pnl == pytest.approx(Decimal("20.412"), abs=Decimal("0.05"))
+
+
+def test_calc_unrealized_pnl_long_signed_qty():
+    """LONG 은 qty 항상 양수라 영향 없어야 하지만 명시 테스트."""
+    from app.services.mark_price_cache import calc_unrealized_pnl
+    pnl = calc_unrealized_pnl(
+        side="LONG",
+        qty=Decimal("18254"),                  # LONG positive
+        entry_price=Decimal("0.12975826"),
+        mark_price=Decimal("0.1250320"),       # 가격 내려감 → LONG 손실
+    )
+    assert pnl < 0
+    assert pnl == pytest.approx(Decimal("-86.272"), abs=Decimal("0.05"))
 
 
 def test_calc_unrealized_pnl_zero_when_missing_inputs():
