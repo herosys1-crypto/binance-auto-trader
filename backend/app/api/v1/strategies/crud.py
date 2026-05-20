@@ -13,6 +13,8 @@ from app.api.v1.strategies.helpers import (
     _enrich_response,
     _fetch_tp_counts_batch,
     _resolve_close_reason,
+    apply_live_unrealized_pnl,
+    apply_live_unrealized_pnl_batch,
 )
 from app.repositories.strategy_repository import StrategyRepository
 from app.schemas.strategy import (
@@ -82,6 +84,9 @@ def list_strategies(
         resp.tp_triggered_count = cnt.get("tp_count", 0)
         resp.last_close_reason = _resolve_close_reason(r, cnt, resp.total_active_tps)
         out.append(resp)
+    # 2026-05-20: 라이브 markPrice 로 unrealized_pnl 재계산 (Redis mget 1회).
+    # 캐시 miss 인 심볼은 stored 값 유지 — backward-compat.
+    apply_live_unrealized_pnl_batch(out)
     return out
 
 
@@ -100,6 +105,8 @@ def get_strategy(
     counts = _fetch_tp_counts_batch(db, {strategy.id}).get(strategy.id, {})
     resp.tp_triggered_count = counts.get("tp_count", 0)
     resp.last_close_reason = _resolve_close_reason(strategy, counts, resp.total_active_tps)
+    # 2026-05-20: 라이브 markPrice 로 unrealized_pnl 재계산.
+    apply_live_unrealized_pnl(resp)
     return resp
 
 

@@ -1,4 +1,4 @@
-.PHONY: install run test lint migrate upgrade downgrade seed-templates worker-keepalive worker-reconcile worker-tpsl worker-symbol-sync scheduler telegram-test user-stream pg-test
+.PHONY: install run test lint migrate upgrade downgrade seed-templates worker-keepalive worker-reconcile worker-tpsl worker-symbol-sync scheduler telegram-test user-stream mark-price-stream pg-test
 
 install:
 	pip install -r requirements.txt
@@ -44,6 +44,9 @@ telegram-test:
 
 user-stream:
 	python -m app.workers.run_user_stream
+
+mark-price-stream:
+	python -m app.workers.mark_price_stream_consumer
 
 pg-test:
 	TEST_DATABASE_URL=$$TEST_DATABASE_URL pytest -q tests/integration

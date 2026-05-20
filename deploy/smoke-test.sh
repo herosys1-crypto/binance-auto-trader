@@ -34,7 +34,7 @@ fail() { echo -e "${RED}✗${NC} $1"; FAIL=$((FAIL+1)); }
 warn() { echo -e "${YELLOW}⚠${NC} $1"; }
 
 echo "==> [1/8] 컨테이너 상태"
-EXPECTED=("api" "scheduler" "user-stream" "redis")
+EXPECTED=("api" "scheduler" "user-stream" "mark-price-stream" "redis")
 for svc in "${EXPECTED[@]}"; do
     status=$(docker compose ps --format "{{.Service}}\t{{.State}}" 2>/dev/null | grep "^${svc}" | awk '{print $2}')
     if [ "$status" = "running" ]; then
