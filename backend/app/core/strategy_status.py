@@ -24,7 +24,7 @@ TOTAL_TP_LEVELS = 10
 # ===== TERMINAL =====
 # 거래소 포지션 / 신규 주문 영향이 모두 끝난 "완전 종료" status.
 # 새 strategy 진입 시 중복 가드의 _CLOSED_STATUSES, DELETE 가드 등 모두 이 set 사용.
-# STOPPING 은 의도적으로 제외 — 거래소에 포지션 잔재 가능 (closing in progress).
+# STOPPING / MANUAL_CLEANUP_REQUIRED 는 의도적으로 제외 — 거래소에 포지션 잔재 가능.
 TERMINAL_STATUSES: frozenset[str] = frozenset({
     "STOPPED",
     "COMPLETED",
@@ -37,8 +37,22 @@ TERMINAL_STATUSES: frozenset[str] = frozenset({
 
 
 # 운영자가 영구 삭제 (DELETE) 가능한 status — TERMINAL 과 동일.
-# (UI 의 종료 숨김 필터는 STOPPING 도 포함하지만 그건 view-only 영역.)
 DELETABLE_STATUSES: frozenset[str] = TERMINAL_STATUSES
+
+
+# ===== MANUAL CLEANUP =====
+# 2026-05-21 #77/#78 사례 후 신규 (사장님 요구 — Phase 2):
+#   emergency_close 검증 실패 또는 STOPPING 5분 초과 시 자동 STOPPED 안 함.
+#   사장님이 거래소에서 직접 청산 → UI 「✅ 처리 완료」 클릭 → 명시적 STOPPED 전환.
+# 이유: 자동 STOPPED 처리되면 사장님이 「내가 책임지고 처리한 건」 vs 「자동 정리된 건」
+# 구분 못 함. 자금 흐름 추적 / 책임 명확화 위해 사장님 확인 통해서만 종료.
+#
+# - 거래소 포지션은 잔재 가능 (또는 사장님이 이미 거래소 UI 로 청산했을 수도)
+# - TP/SL 평가 대상 X (_NOT_FOR_TP_SL 에 포함)
+# - reconcile 자동 STOPPED 전환 X (사장님 ack 없이는 status 유지)
+# - 같은 symbol+side 신규 strategy 진입 차단 대상 (ACTIVE_LIKE 포함)
+# - 「종료 숨김」 토글 영향 X (STOPPING 과 동일하게 항상 보임)
+MANUAL_CLEANUP_REQUIRED: str = "MANUAL_CLEANUP_REQUIRED"
 
 
 # ===== ACTIVE 계열 =====
@@ -50,6 +64,7 @@ ACTIVE_WITH_POSITION: frozenset[str] = frozenset(
     | {"TRAILING_ARMED"}     # 명시적 trailing armed status
     | {"CRISIS_TP1_DONE"}    # 크라이시스 첫 TP 후 잔량 보유 상태
     | {"STOPPING"}           # 청산 진행 중 (포지션 잔재 가능)
+    | {MANUAL_CLEANUP_REQUIRED}  # 수동 청산 요청 — 사장님 ack 대기 (포지션 잔재 가능)
 )
 
 # 거래소 포지션 미확정 (LIMIT 미체결) — STAGE_n_OPEN_PENDING 모두.
@@ -96,6 +111,7 @@ __all__ = [
     "TOTAL_TP_LEVELS",
     "TERMINAL_STATUSES",
     "DELETABLE_STATUSES",
+    "MANUAL_CLEANUP_REQUIRED",
     "ACTIVE_WITH_POSITION",
     "ACTIVE_WAITING",
     "ACTIVE_LIKE",

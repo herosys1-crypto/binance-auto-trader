@@ -1,8 +1,10 @@
 import logging
+import time
 from decimal import Decimal
 from uuid import uuid4
 from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
+from app.core.strategy_status import MANUAL_CLEANUP_REQUIRED
 from app.integrations.binance.client import BinanceClient
 from app.integrations.binance.futures_trade import BinanceFuturesTradeClient
 from app.integrations.binance.execution.router import ExecutionAdapterRouter
@@ -13,6 +15,14 @@ from app.repositories.order_repository import OrderRepository
 from app.repositories.strategy_repository import StrategyRepository
 from app.services.account_kill_switch_service import AccountKillSwitchService
 from app.core.sentry import capture_strategy_event
+
+# 2026-05-21 Phase 2 (#77/#78 사후 사장님 요구):
+# emergency_close 주문 발송 후 거래소가 실제로 포지션을 감소시켰는지 검증.
+# 응답 (response) 이 성공이라도 reduceOnly 거절 / 부분 체결 후 정지 등으로
+# 실 포지션이 의도대로 줄지 않는 케이스 발생 가능 (#77 PHB / #78 RONIN).
+# 3초 = MARKET 즉시체결 + Binance internal state 반영 여유. 너무 짧으면 false-positive,
+# 너무 길면 API 응답 지연 체감.
+EMERGENCY_CLOSE_VERIFY_DELAY_SECONDS = 3.0
 
 logger = logging.getLogger(__name__)
 
@@ -381,7 +391,123 @@ class ExecutionService:
         order = Order(strategy_instance_id=strategy.id, stage_no=None, purpose="EXIT", symbol=strategy.symbol, side=side, position_side=position_side, order_type=_ot, time_in_force=_tif, client_order_id=client_order_id, exchange_order_id=response.get("orderId"), trigger_price=None, price=Decimal(str(response.get("price"))) if response.get("price") and Decimal(str(response.get("price"))) > 0 else (Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None), orig_qty=quantity, executed_qty=Decimal(str(response.get("executedQty", "0"))), avg_price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, status=response.get("status", "NEW"), raw_request={"symbol": strategy.symbol, "side": side, "positionSide": position_side, "type": _ot, "quantity": str(quantity), "newClientOrderId": client_order_id}, raw_response=response)
         self.order_repo.create(order)
         self.db.commit()
+
+        # 2026-05-21 Phase 2 post-verify (#77/#78 사후 사장님 요구):
+        # 청산 주문 「접수」 응답은 받았지만 거래소가 실제로 포지션을 줄였는지 별개.
+        # reduceOnly 거절 / 부분 체결 후 멈춤 / 거래소 내부 지연 등의 케이스 발생 가능.
+        # status=STOPPING (전량 강제 청산) 케이스만 대상 — TP 부분 청산은 Phase 2B 에서.
+        # LIMIT 폴백은 즉시 체결 보장 X → 검증 skip (reconcile/Phase 1 가드가 백업).
+        if strategy.status == "STOPPING" and _ot == "MARKET":
+            self._verify_emergency_close_applied(
+                strategy,
+                initial_position=actual_position,
+                requested_close_qty=quantity,
+            )
+
         return order
+
+    def _verify_emergency_close_applied(
+        self,
+        strategy,
+        *,
+        initial_position: Decimal,
+        requested_close_qty: Decimal,
+    ) -> None:
+        """청산 주문 후 거래소 포지션이 실제로 줄었는지 검증.
+
+        검증 실패 시 strategy.status="MANUAL_CLEANUP_REQUIRED" 전환 + 텔레그램 CRITICAL
+        + RiskEvent. 이후 reconcile 의 자동 STOPPED 전환은 차단됨 — 사장님이 거래소에서
+        직접 청산 후 「✅ 처리 완료」 명시적 ack 해야만 STOPPED 으로 전환됨.
+
+        의도:
+          - reconcile 2분 주기 / Phase 1 5분 가드보다 빠른 대응 (3초 안에 인지)
+          - 자동 STOPPED 처리되면 「사장님이 직접 처리한 건」 vs 「자동 정리된 건」 구분
+            불가 → 자금 흐름 추적 / 책임 명확화 위해 명시적 ack 필수
+
+        검증 호출 자체가 실패 (네트워크/rate limit) 한 경우는 Phase 1 의 5분 가드가
+        백업 — 여기서는 알림만 남기고 status 변경 안 함.
+        """
+        time.sleep(EMERGENCY_CLOSE_VERIFY_DELAY_SECONDS)
+
+        try:
+            position_risk = self.client.get_position_risk(symbol=strategy.symbol)
+            if isinstance(position_risk, dict):
+                position_risk = [position_risk]
+            post_position = Decimal("0")
+            for item in position_risk:
+                if (
+                    item.get("symbol") == strategy.symbol
+                    and item.get("positionSide") == strategy.side
+                ):
+                    post_position = abs(Decimal(str(item.get("positionAmt", "0"))))
+                    break
+        except Exception as e:
+            # 검증 호출 자체 실패 — Phase 1 의 5분 가드가 백업 처리.
+            # 보수적으로 MANUAL_CLEANUP_REQUIRED 전환하지 않음 (false-positive 위험).
+            logger.warning(
+                "emergency_close post-verify 호출 실패 (Phase 1 5분 가드가 백업 처리): "
+                "strategy=%s err=%s",
+                strategy.id, e,
+            )
+            return
+
+        # 의도된 감소량의 90% 이상이면 정상 (수수료/부분 체결 미체결 잔량 허용).
+        expected_reduction = requested_close_qty
+        actual_reduction = initial_position - post_position
+        success_threshold = expected_reduction * Decimal("0.9")
+
+        if actual_reduction >= success_threshold:
+            logger.info(
+                "emergency_close 검증 성공: strategy=%s initial=%s post=%s reduced=%s (목표 %s)",
+                strategy.id, initial_position, post_position, actual_reduction, expected_reduction,
+            )
+            return
+
+        # 검증 실패 — 거래소가 의도대로 청산 안 함 → 사장님 명시적 처리 필요
+        logger.critical(
+            "emergency_close 검증 실패 — MANUAL_CLEANUP_REQUIRED 전환: "
+            "strategy=%s initial=%s post=%s reduced=%s (목표 %s)",
+            strategy.id, initial_position, post_position, actual_reduction, expected_reduction,
+        )
+        strategy.status = MANUAL_CLEANUP_REQUIRED
+        title = (
+            f"🔴 [긴급] 청산 검증 실패 — #{strategy.id} {strategy.symbol} {strategy.side}"
+        )
+        body = (
+            f"⚠️ 강제 청산 주문 발송 후 {EMERGENCY_CLOSE_VERIFY_DELAY_SECONDS:.0f}초 대기.\n"
+            f"  발송 전 거래소 qty: {initial_position}\n"
+            f"  요청 청산 qty: {requested_close_qty}\n"
+            f"  발송 후 거래소 qty: {post_position} (감소량 {actual_reduction}, 목표 {expected_reduction})\n\n"
+            f"거래소가 주문을 접수했으나 포지션이 의도대로 줄지 않음. "
+            f"reduceOnly 거절 / 부분 체결 후 정지 / 거래소 내부 지연 등 의심.\n\n"
+            f"status: STOPPING → MANUAL_CLEANUP_REQUIRED 전환됨. "
+            f"자동 STOPPED 전환 차단 — 사장님 명시적 처리 필요.\n\n"
+            f"조치:\n"
+            f"  1) 대시보드의 「🛑 긴급 종료」 재시도\n"
+            f"  2) 실패 시 Binance 거래소 UI 에서 직접 포지션 청산\n"
+            f"  3) 완료 후 대시보드에서 「✅ 수동 청산 처리 완료」 클릭"
+        )
+        self.db.add(RiskEvent(
+            strategy_instance_id=strategy.id,
+            event_type="EMERGENCY_CLOSE_VERIFY_FAILED",
+            severity="CRITICAL",
+            title=title,
+            message=body,
+            event_payload={
+                "strategy_id": strategy.id,
+                "initial_position": str(initial_position),
+                "requested_close_qty": str(requested_close_qty),
+                "post_position": str(post_position),
+                "actual_reduction": str(actual_reduction),
+                "expected_reduction": str(expected_reduction),
+            },
+        ))
+        try:
+            from app.services.notification_service import NotificationService
+            NotificationService(self.db).send_system_alert(title=title, body=body)
+        except Exception as e:
+            logger.warning("MANUAL_CLEANUP_REQUIRED 텔레그램 알림 실패: %s", e)
+        self.db.commit()
 
     def cancel_exchange_order(self, *, symbol: str, order_id: int | None = None, orig_client_order_id: str | None = None) -> dict:
         return self.client.cancel_order(symbol=symbol, order_id=order_id, orig_client_order_id=orig_client_order_id)

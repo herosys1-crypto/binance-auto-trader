@@ -223,6 +223,42 @@ class TestStaticAssetsIntegrity:
         assert re.search(r'const\s+STOPPING_STUCK_THRESHOLD_MS\s*=', js), (
             "STOPPING_STUCK_THRESHOLD_MS 누락 — strategies-list.js 가 갇힘 배지 표시에 사용"
         )
+        # 2026-05-21 Phase 2 — MANUAL_CLEANUP_REQUIRED 도 STOPPING_STATUSES 에 포함.
+        assert "'MANUAL_CLEANUP_REQUIRED'" in js, (
+            "MANUAL_CLEANUP_REQUIRED 가 STOPPING_STATUSES 에 없음 — 사장님 명시적 처리 대기 상태 분리 누락"
+        )
+
+    def test_manual_cleanup_required_status_defined(self):
+        """MANUAL_CLEANUP_REQUIRED 신규 상태 정의 검증 (Phase 2 사장님 요구):
+          - STATUS_MAP 에 라벨 정의
+          - backend strategy_status 의 상수 export
+          - ACTIVE_LIKE 에 포함 → 신규 진입 차단됨
+          - TERMINAL_STATUSES 미포함 → 자동 STOPPED 차단 (사장님 ack 필수)
+        """
+        js = _constants_js()
+        assert "'MANUAL_CLEANUP_REQUIRED'" in js, "STATUS_MAP 에 MANUAL_CLEANUP_REQUIRED 라벨 누락"
+
+        from app.core.strategy_status import (
+            ACTIVE_LIKE, MANUAL_CLEANUP_REQUIRED, TERMINAL_STATUSES,
+        )
+        assert MANUAL_CLEANUP_REQUIRED == "MANUAL_CLEANUP_REQUIRED"
+        assert MANUAL_CLEANUP_REQUIRED in ACTIVE_LIKE, (
+            "MANUAL_CLEANUP_REQUIRED 가 ACTIVE_LIKE 에 없음 — 신규 진입 차단 안 됨"
+        )
+        assert MANUAL_CLEANUP_REQUIRED not in TERMINAL_STATUSES, (
+            "MANUAL_CLEANUP_REQUIRED 가 TERMINAL_STATUSES 에 들어가면 안 됨 "
+            "— 자동 STOPPED 차단 깨짐 (사장님 명시적 ack 흐름 무효화)"
+        )
+
+    def test_strategy_actions_defines_acknowledge_manual_cleanup(self):
+        """strategy-actions.js 가 acknowledgeManualCleanup 함수 정의 (Phase 2)."""
+        path = _backend_root() / "app" / "static" / "js" / "strategy-actions.js"
+        assert path.exists()
+        js = path.read_text(encoding="utf-8")
+        assert "async function acknowledgeManualCleanup" in js, (
+            "acknowledgeManualCleanup 함수 누락 — 「✅ 수동 청산 처리 완료」 버튼이 호출"
+        )
+        assert "/acknowledge-manual-cleanup" in js, "API endpoint 경로 누락"
 
     def test_api_js_exists_and_loaded_before_inline_script(self):
         """api.js (Phase 3 추가) 가 존재 + index.html 본문 inline script 보다 먼저 로드."""
