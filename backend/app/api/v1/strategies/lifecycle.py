@@ -11,9 +11,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from datetime import datetime, timezone
+
 from app.api.deps import get_current_user_id, get_db
 from app.core.crypto import decrypt_text
-from app.core.strategy_status import TERMINAL_STATUSES
+from app.core.strategy_status import MANUAL_CLEANUP_REQUIRED, TERMINAL_STATUSES
+from app.models.risk_event import RiskEvent
 from app.repositories.exchange_account_repository import ExchangeAccountRepository
 from app.repositories.strategy_repository import StrategyRepository
 from app.schemas.strategy import StrategyActionResponse, StrategyStopRequest
@@ -421,3 +424,76 @@ def stop_strategy(
 
     db.refresh(strategy)
     return StrategyActionResponse(strategy_id=strategy.id, status=strategy.status, message=message)
+
+
+# ============================================================================
+# 2026-05-21 Phase 2 — 수동 청산 처리 완료 ack (사장님 요구)
+# ============================================================================
+@router.post("/{strategy_id}/acknowledge-manual-cleanup", response_model=StrategyActionResponse)
+def acknowledge_manual_cleanup(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyActionResponse:
+    """수동 청산 요청 (MANUAL_CLEANUP_REQUIRED) → 사장님 명시적 STOPPED 전환.
+
+    사용 시나리오:
+      1. emergency_close 가 거래소에서 거절돼 strategy 가 MANUAL_CLEANUP_REQUIRED 로 전환됨
+      2. 사장님이 거래소 UI 에서 직접 포지션 청산 (또는 대시보드 「긴급 종료」 재시도 성공)
+      3. 대시보드에서 「✅ 수동 청산 처리 완료」 버튼 클릭 → 본 endpoint 호출
+      4. status MANUAL_CLEANUP_REQUIRED → STOPPED 전환 + RiskEvent (감사 추적)
+
+    이전엔 reconcile 이 거래소 포지션 0 보면 자동 STOPPED 처리했지만, 「사장님이 직접
+    처리한 건」 vs 「자동 정리된 건」 구분 불가 → 책임 추적 어려움. 본 endpoint 는
+    사장님의 명시적 ack 만 STOPPED 전환을 허용함.
+
+    가드:
+      - 본인 소유 strategy 만 (user_id 일치)
+      - status 가 MANUAL_CLEANUP_REQUIRED 인 경우에만 (다른 status 면 400)
+    """
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.",
+        )
+    if strategy.status != MANUAL_CLEANUP_REQUIRED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"⚠️ 수동 청산 처리 가능한 상태가 아닙니다 (현재 status: {strategy.status}). "
+                f"MANUAL_CLEANUP_REQUIRED 상태에서만 사용하세요."
+            ),
+        )
+
+    previous_status = strategy.status
+    strategy.status = "STOPPED"
+    strategy.current_position_qty = Decimal("0")  # 사장님이 거래소에서 청산 완료한 상태
+    strategy.stopped_at = datetime.now(timezone.utc)
+
+    # 감사 추적 — 「사장님이 직접 처리 완료 확인」 trail 로그
+    db.add(RiskEvent(
+        strategy_instance_id=strategy.id,
+        event_type="MANUAL_CLEANUP_ACKNOWLEDGED",
+        severity="INFO",
+        title="✅ 수동 청산 처리 완료 확인 (사장님 ack)",
+        message=(
+            f"{strategy.symbol} {strategy.side} — 사장님이 거래소에서 직접 청산 후 "
+            f"대시보드에서 처리 완료 확인. {previous_status} → STOPPED 전환."
+        ),
+        event_payload={
+            "strategy_id": strategy.id,
+            "previous_status": previous_status,
+            "acknowledged_by_user_id": user_id,
+        },
+    ))
+    db.commit()
+    db.refresh(strategy)
+    return StrategyActionResponse(
+        strategy_id=strategy.id,
+        status=strategy.status,
+        message=(
+            "수동 청산 처리 완료 확인됨. STOPPED 전환 + 감사 로그 기록. "
+            "(reconcile 다음 사이클이 거래소 잔재 포지션 0 을 재확인합니다)"
+        ),
+    )

@@ -62,6 +62,31 @@ async function triggerNextStage(id) {
   }
 }
 
+// 2026-05-21 Phase 2 (사장님 요구 — #77/#78 사례 후속):
+// MANUAL_CLEANUP_REQUIRED 상태에서 사장님이 거래소 UI 에서 직접 청산 완료 후
+// 「✅ 처리 완료」 클릭 → STOPPED 전환 (자동 STOPPED 차단된 상태였음).
+// 감사 추적 위해 RiskEvent 에 「사장님 직접 ack」 로그 남김.
+async function acknowledgeManualCleanup(id) {
+  const confirmMsg =
+    `✅ 전략 #${id} 수동 청산 처리 완료 확인\n\n` +
+    `이 작업은 「사장님이 거래소에서 직접 포지션을 청산했음」을 시스템에 알립니다.\n\n` +
+    `효과:\n` +
+    `  • status: MANUAL_CLEANUP_REQUIRED → STOPPED 전환\n` +
+    `  • 감사 로그 기록 (자동 정리 vs 사장님 직접 처리 구분)\n` +
+    `  • reconcile 다음 사이클이 거래소 잔재 포지션 0 재확인\n\n` +
+    `※ 거래소에 포지션이 남아있는 상태에서 클릭하면 reconcile 이 다음 사이클에 \n` +
+    `   orphan 으로 감지하여 알림을 보낼 수 있습니다. 청산 완료 후 클릭하세요.\n\n` +
+    `진행할까요?`;
+  if (!confirm(confirmMsg)) return;
+  try {
+    const resp = await api(`/strategies/${id}/acknowledge-manual-cleanup`, { method: 'POST' });
+    toast(`✅ ${resp.message || `전략 #${id} 수동 청산 처리 완료 확인됨`}`, 'success');
+    refreshStrategies();
+  } catch (err) {
+    toast(`수동 청산 처리 확인 실패: ${err.message}`, 'error');
+  }
+}
+
 // 2026-05-04 (사용자 요청): 증거금 추가 — ISOLATED 모드 포지션 청산가 완화.
 // prompt 로 USDT 금액 입력 → POST /strategies/{id}/add-margin → 결과 토스트.
 // 거래소가 CROSS 모드면 backend 가 -4046 친절 에러 메시지로 거절.

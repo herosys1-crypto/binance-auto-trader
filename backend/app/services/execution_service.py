@@ -1,8 +1,10 @@
 import logging
+import time
 from decimal import Decimal
 from uuid import uuid4
 from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
+from app.core.strategy_status import MANUAL_CLEANUP_REQUIRED
 from app.integrations.binance.client import BinanceClient
 from app.integrations.binance.futures_trade import BinanceFuturesTradeClient
 from app.integrations.binance.execution.router import ExecutionAdapterRouter
@@ -13,6 +15,25 @@ from app.repositories.order_repository import OrderRepository
 from app.repositories.strategy_repository import StrategyRepository
 from app.services.account_kill_switch_service import AccountKillSwitchService
 from app.core.sentry import capture_strategy_event
+
+# 2026-05-21 Phase 2 (#77/#78 사후 사장님 요구):
+# emergency_close 주문 발송 후 거래소가 실제로 포지션을 감소시켰는지 검증.
+# 응답 (response) 이 성공이라도 reduceOnly 거절 / 부분 체결 후 정지 등으로
+# 실 포지션이 의도대로 줄지 않는 케이스 발생 가능 (#77 PHB / #78 RONIN).
+# 3초 = MARKET 즉시체결 + Binance internal state 반영 여유. 너무 짧으면 false-positive,
+# 너무 길면 API 응답 지연 체감.
+EMERGENCY_CLOSE_VERIFY_DELAY_SECONDS = 3.0
+
+# 자동 재시도 — 1차 검증 실패 후 10초 대기 후 잔량 재청산 1회.
+# 10초: rate limit 회피 + 거래소 internal state 안정화. 너무 짧으면 같은 거절 반복,
+# 너무 길면 사장님 대기 시간 ↑. 재시도도 검증 → 그래도 실패면 MANUAL_CLEANUP_REQUIRED.
+# 자동 재시도가 합리적인 케이스: 거래소 일시 지연, 부분 체결 후 잔량, rate-limit.
+# 자동 재시도가 무의미한 케이스 (-2022 reduceOnly, -2027 마진 부족) 는 재시도 후에도
+# 같은 결과 → MANUAL_CLEANUP_REQUIRED 로 빠짐. 명확한 분기는 Phase 3 후보.
+EMERGENCY_CLOSE_RETRY_DELAY_SECONDS = 10.0
+
+# 검증 성공 임계 — 90% 이상 감소면 성공 처리 (수수료/부분 체결 잔량 허용).
+EMERGENCY_CLOSE_SUCCESS_THRESHOLD_RATIO = Decimal("0.9")
 
 logger = logging.getLogger(__name__)
 
@@ -381,7 +402,265 @@ class ExecutionService:
         order = Order(strategy_instance_id=strategy.id, stage_no=None, purpose="EXIT", symbol=strategy.symbol, side=side, position_side=position_side, order_type=_ot, time_in_force=_tif, client_order_id=client_order_id, exchange_order_id=response.get("orderId"), trigger_price=None, price=Decimal(str(response.get("price"))) if response.get("price") and Decimal(str(response.get("price"))) > 0 else (Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None), orig_qty=quantity, executed_qty=Decimal(str(response.get("executedQty", "0"))), avg_price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, status=response.get("status", "NEW"), raw_request={"symbol": strategy.symbol, "side": side, "positionSide": position_side, "type": _ot, "quantity": str(quantity), "newClientOrderId": client_order_id}, raw_response=response)
         self.order_repo.create(order)
         self.db.commit()
+
+        # 2026-05-21 Phase 2 post-verify (#77/#78 사후 사장님 요구):
+        # 청산 주문 「접수」 응답은 받았지만 거래소가 실제로 포지션을 줄였는지 별개.
+        # reduceOnly 거절 / 부분 체결 후 멈춤 / 거래소 내부 지연 등의 케이스 발생 가능.
+        # status=STOPPING (전량 강제 청산) 케이스만 대상 — TP 부분 청산은 Phase 2B 에서.
+        # LIMIT 폴백은 즉시 체결 보장 X → 검증 skip (reconcile/Phase 1 가드가 백업).
+        if strategy.status == "STOPPING" and _ot == "MARKET":
+            self._verify_emergency_close_applied(
+                strategy,
+                initial_position=actual_position,
+                requested_close_qty=quantity,
+            )
+
         return order
+
+    def _fetch_current_position_qty(self, strategy) -> Decimal | None:
+        """거래소에서 현재 포지션 qty (절댓값) 조회. 실패 시 None.
+
+        emergency_close 검증 + 재시도 검증에서 공통 사용.
+        """
+        try:
+            position_risk = self.client.get_position_risk(symbol=strategy.symbol)
+            if isinstance(position_risk, dict):
+                position_risk = [position_risk]
+            for item in position_risk:
+                if (
+                    item.get("symbol") == strategy.symbol
+                    and item.get("positionSide") == strategy.side
+                ):
+                    return abs(Decimal(str(item.get("positionAmt", "0"))))
+            return Decimal("0")  # matched=None = 포지션 없음
+        except Exception as e:
+            logger.warning(
+                "post-verify get_position_risk 실패: strategy=%s err=%s", strategy.id, e,
+            )
+            return None
+
+    def _is_close_successful(
+        self, *, initial_position: Decimal, post_position: Decimal,
+        requested_close_qty: Decimal,
+    ) -> bool:
+        """청산 성공 판정 — 의도된 감소량의 90% 이상이면 성공.
+
+        수수료 / 부분 체결 잔량 허용. 분자: 실 감소량, 분모: 요청 청산 qty.
+        """
+        actual_reduction = initial_position - post_position
+        success_threshold = requested_close_qty * EMERGENCY_CLOSE_SUCCESS_THRESHOLD_RATIO
+        return actual_reduction >= success_threshold
+
+    def _verify_emergency_close_applied(
+        self,
+        strategy,
+        *,
+        initial_position: Decimal,
+        requested_close_qty: Decimal,
+    ) -> None:
+        """청산 주문 후 거래소 포지션 검증 + 자동 재시도 1회 + 실패 시 MANUAL_CLEANUP_REQUIRED.
+
+        흐름:
+          1) 3초 대기 → 거래소 포지션 조회
+          2) 90% 이상 감소 → 성공, status STOPPING 유지 (reconcile 이 STOPPED 처리)
+          3) 1차 검증 실패 → 10초 대기 → 잔량 재청산 발송 (자동 재시도 1회)
+          4) 재시도 검증 → 성공 시 정상, 실패 시 MANUAL_CLEANUP_REQUIRED 전환
+
+        의도:
+          - 사장님 부담 최소화 — 거래소 일시 지연/부분 체결/rate-limit 케이스 자동 회복
+          - 자동 재시도 무의미한 케이스 (-2022 reduceOnly, -2027 마진부족) 는 재시도 후에도
+            같은 결과 → MANUAL_CLEANUP_REQUIRED 로 빠짐 (사장님 조치 필요)
+          - 자동 STOPPED 차단 — 사장님이 거래소에서 직접 청산 후 「✅ 처리 완료」 명시적 ack
+
+        검증 호출 자체 실패 (네트워크) 시 status 변경 안 함 — Phase 1 의 5분 가드 백업.
+        """
+        # ===== 1차 검증 =====
+        time.sleep(EMERGENCY_CLOSE_VERIFY_DELAY_SECONDS)
+        post_position = self._fetch_current_position_qty(strategy)
+        if post_position is None:
+            # 검증 호출 자체 실패 — Phase 1 5분 가드가 백업. 보수적으로 status 유지.
+            return
+        if self._is_close_successful(
+            initial_position=initial_position, post_position=post_position,
+            requested_close_qty=requested_close_qty,
+        ):
+            logger.info(
+                "emergency_close 1차 검증 성공: strategy=%s initial=%s post=%s",
+                strategy.id, initial_position, post_position,
+            )
+            return
+
+        # ===== 자동 재시도 1회 =====
+        # 잔량 (post_position) 기반으로 재청산 — 부분 체결 케이스 정확히 처리.
+        retry_qty = post_position
+        if retry_qty <= 0:
+            # 사실 닫혔는데 race 로 0 반환된 케이스 — 성공으로 간주.
+            return
+
+        logger.warning(
+            "emergency_close 1차 검증 실패 → 자동 재시도 (%.0f초 후): "
+            "strategy=%s initial=%s post=%s retry_qty=%s",
+            EMERGENCY_CLOSE_RETRY_DELAY_SECONDS, strategy.id, initial_position,
+            post_position, retry_qty,
+        )
+        self.db.add(RiskEvent(
+            strategy_instance_id=strategy.id,
+            event_type="EMERGENCY_CLOSE_RETRY_ATTEMPTED",
+            severity="WARN",
+            title=f"🔁 청산 자동 재시도 — #{strategy.id} {strategy.symbol} {strategy.side}",
+            message=(
+                f"1차 검증 실패 — 잔량 {retry_qty} 재청산 시도. "
+                f"성공 시 정상 종료, 실패 시 MANUAL_CLEANUP_REQUIRED 전환."
+            ),
+            event_payload={
+                "strategy_id": strategy.id,
+                "initial_position": str(initial_position),
+                "post_position_after_first": str(post_position),
+                "retry_qty": str(retry_qty),
+            },
+        ))
+        self.db.commit()
+
+        time.sleep(EMERGENCY_CLOSE_RETRY_DELAY_SECONDS)
+
+        side = "SELL" if strategy.side == "LONG" else "BUY"
+        retry_cid = self._new_client_order_id(strategy.symbol, "EXIT_RETRY")
+        try:
+            self.trade_client.place_market_order(
+                symbol=strategy.symbol, side=side, position_side=strategy.side,
+                quantity=retry_qty, new_client_order_id=retry_cid,
+            )
+        except Exception as e:
+            # 재시도 호출 자체 실패 → MANUAL_CLEANUP_REQUIRED (재시도 분기 그대로 진행)
+            logger.warning(
+                "emergency_close 재시도 발송 실패: strategy=%s err=%s — MANUAL_CLEANUP_REQUIRED 전환",
+                strategy.id, e,
+            )
+            self._promote_to_manual_cleanup(
+                strategy,
+                initial_position=initial_position,
+                post_position=post_position,
+                requested_close_qty=requested_close_qty,
+                retry_error=str(e),
+            )
+            return
+
+        # 재시도 검증
+        time.sleep(EMERGENCY_CLOSE_VERIFY_DELAY_SECONDS)
+        post_retry = self._fetch_current_position_qty(strategy)
+        if post_retry is None:
+            # 재시도 후 검증 호출 실패 — 보수적으로 MANUAL_CLEANUP_REQUIRED
+            self._promote_to_manual_cleanup(
+                strategy,
+                initial_position=initial_position,
+                post_position=post_position,
+                requested_close_qty=requested_close_qty,
+                retry_error="post-retry verify call failed",
+            )
+            return
+
+        if self._is_close_successful(
+            initial_position=initial_position, post_position=post_retry,
+            requested_close_qty=requested_close_qty,
+        ):
+            logger.info(
+                "emergency_close 재시도 성공: strategy=%s post_retry=%s",
+                strategy.id, post_retry,
+            )
+            self.db.add(RiskEvent(
+                strategy_instance_id=strategy.id,
+                event_type="EMERGENCY_CLOSE_RETRY_SUCCEEDED",
+                severity="INFO",
+                title=f"✅ 청산 재시도 성공 — #{strategy.id} {strategy.symbol} {strategy.side}",
+                message=(
+                    f"1차 검증 실패 후 자동 재시도로 정상 청산 완료. "
+                    f"초기 {initial_position} → 1차 후 {post_position} → 재시도 후 {post_retry}."
+                ),
+                event_payload={
+                    "strategy_id": strategy.id,
+                    "initial_position": str(initial_position),
+                    "post_position_after_first": str(post_position),
+                    "post_position_after_retry": str(post_retry),
+                },
+            ))
+            self.db.commit()
+            return
+
+        # 재시도도 실패 → 사장님 명시적 처리 필요
+        self._promote_to_manual_cleanup(
+            strategy,
+            initial_position=initial_position,
+            post_position=post_retry,
+            requested_close_qty=requested_close_qty,
+            retry_error=None,
+        )
+
+    def _promote_to_manual_cleanup(
+        self,
+        strategy,
+        *,
+        initial_position: Decimal,
+        post_position: Decimal,
+        requested_close_qty: Decimal,
+        retry_error: str | None,
+    ) -> None:
+        """MANUAL_CLEANUP_REQUIRED 전환 + 텔레그램 CRITICAL + RiskEvent.
+
+        retry_error: 재시도 호출 자체 실패 시 에러 메시지. None 이면 재시도 후 검증 실패.
+        """
+        actual_reduction = initial_position - post_position
+        logger.critical(
+            "emergency_close 재시도 후에도 실패 — MANUAL_CLEANUP_REQUIRED: "
+            "strategy=%s initial=%s post=%s reduced=%s (목표 %s)",
+            strategy.id, initial_position, post_position, actual_reduction, requested_close_qty,
+        )
+        strategy.status = MANUAL_CLEANUP_REQUIRED
+        title = (
+            f"🔴 [긴급] 청산 검증 실패 (자동 재시도 후) — #{strategy.id} {strategy.symbol} {strategy.side}"
+        )
+        retry_status_line = (
+            f"  재시도 결과: 발송 실패 ({retry_error})"
+            if retry_error
+            else f"  재시도 후 거래소 qty: {post_position}"
+        )
+        body = (
+            f"⚠️ 강제 청산 1차 발송 + 자동 재시도 1회 모두 검증 실패.\n"
+            f"  발송 전 거래소 qty: {initial_position}\n"
+            f"  요청 청산 qty: {requested_close_qty}\n"
+            f"{retry_status_line}\n"
+            f"  최종 감소량: {actual_reduction} (목표 {requested_close_qty})\n\n"
+            f"거래소가 자동 재시도에도 청산을 거절하거나 부분 체결 후 정지함. "
+            f"reduceOnly 거절 (-2022) / 마진 부족 (-2027) / 거래소 내부 이슈 의심.\n\n"
+            f"status: STOPPING → MANUAL_CLEANUP_REQUIRED 전환됨. "
+            f"자동 STOPPED 전환 차단 — 사장님 명시적 처리 필요.\n\n"
+            f"조치:\n"
+            f"  1) 대시보드의 「🛑 재시도」 추가 시도\n"
+            f"  2) 실패 시 Binance 거래소 UI 에서 직접 포지션 청산\n"
+            f"  3) 완료 후 대시보드에서 「✅ 수동 청산 처리 완료」 클릭"
+        )
+        self.db.add(RiskEvent(
+            strategy_instance_id=strategy.id,
+            event_type="EMERGENCY_CLOSE_VERIFY_FAILED",
+            severity="CRITICAL",
+            title=title,
+            message=body,
+            event_payload={
+                "strategy_id": strategy.id,
+                "initial_position": str(initial_position),
+                "requested_close_qty": str(requested_close_qty),
+                "post_position": str(post_position),
+                "actual_reduction": str(actual_reduction),
+                "expected_reduction": str(requested_close_qty),
+                "retry_attempted": True,
+                "retry_error": retry_error,
+            },
+        ))
+        try:
+            from app.services.notification_service import NotificationService
+            NotificationService(self.db).send_system_alert(title=title, body=body)
+        except Exception as e:
+            logger.warning("MANUAL_CLEANUP_REQUIRED 텔레그램 알림 실패: %s", e)
+        self.db.commit()
 
     def cancel_exchange_order(self, *, symbol: str, order_id: int | None = None, orig_client_order_id: str | None = None) -> dict:
         return self.client.cancel_order(symbol=symbol, order_id=order_id, orig_client_order_id=orig_client_order_id)

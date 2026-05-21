@@ -102,7 +102,18 @@ class StrategyService:
             # 2026-05-04 fix: STOPPING 인 경우 사용자가 어떻게 해결할지 명확한 가이드 제공.
             # 2026-05-15 fix (사용자 #57 MLNUSDT 보고): STOPPING 5분 이상 stuck 시
             # 「30초 안에 자동」 안내가 부정확 → 경과 시간 표시 + force-stop endpoint 명시.
-            if existing.status == "STOPPING":
+            # 2026-05-21 Phase 2 (사장님 요구): MANUAL_CLEANUP_REQUIRED 별도 가이드.
+            if existing.status == "MANUAL_CLEANUP_REQUIRED":
+                hint = (
+                    f"\n\n🆘 전략 #{existing.id} 는 「수동 청산 요청」 상태입니다. "
+                    f"이전 청산이 거래소에서 거절돼 사장님이 직접 처리해야 합니다.\n\n"
+                    f"💡 해결:\n"
+                    f"  1) Binance 거래소 UI 에서 {symbol} {side} 포지션 직접 청산\n"
+                    f"  2) 대시보드에서 #{existing.id} 의 「✅ 처리 완료」 클릭 → STOPPED 전환\n"
+                    f"  3) 그 후 새 전략 시작 가능\n\n"
+                    f"※ 자동 STOPPED 전환 차단된 상태 — 명시적 ack 필수."
+                )
+            elif existing.status == "STOPPING":
                 from datetime import datetime as _dt, timezone as _tz
                 stopping_since = existing.stopped_at or existing.updated_at
                 elapsed_min = None

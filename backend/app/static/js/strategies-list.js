@@ -91,13 +91,12 @@ async function refreshStrategies() {
       return;
     }
 
-    // 위험 신호 감지 (청산 임박, 손절 종료, 크라이시스 모드, STOPPING 갇힘)
+    // 위험 신호 감지 (청산 임박, 손절 종료, 크라이시스 모드, STOPPING 갇힘, 수동 청산 요청)
     const danger = data.find(s => ['LIQUIDATION_IMMINENT', 'KILL_SWITCH_TRIGGERED'].includes((s.status || '').toUpperCase()));
     const crisisActive = data.find(s => s.crisis_mode_triggered_at && !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()));
-    // 2026-05-21 STOPPING 갇힘 감지 (사장님 #77/#78 사례 재발 방지):
-    //   STOPPING 인데 updated_at 이 5분 이상 지났으면 emergency_close 실패 후 정지 상태.
-    //   reconcile 이 자동 정리 못 하는 케이스 (거래소에 포지션 잔재 + close 주문 거절) →
-    //   사장님이 직접 「긴급 종료」 재시도하거나 거래소 UI 에서 수동 청산 필요.
+    // 2026-05-21 Phase 2: MANUAL_CLEANUP_REQUIRED — 사장님 명시적 처리 대기 (최고 우선순위).
+    const manualCleanup = data.find(s => (s.status || '').toUpperCase() === 'MANUAL_CLEANUP_REQUIRED');
+    // 2026-05-21 Phase 1: STOPPING 갇힘 감지 (#77/#78 재발 방지) — 5분 초과 시 표시.
     const stuckStopping = data.find(s => {
       if ((s.status || '').toUpperCase() !== 'STOPPING') return false;
       if (!s.updated_at) return false;
@@ -106,11 +105,16 @@ async function refreshStrategies() {
     });
     if (danger) {
       showAlert(`전략 #${danger.id} ${danger.symbol} ${danger.side} — 즉시 확인 필요`, statusInfo(danger.status).ko);
+    } else if (manualCleanup) {
+      showAlert(
+        `🆘 수동 청산 요청: 전략 #${manualCleanup.id} ${manualCleanup.symbol} ${manualCleanup.side}`,
+        `시스템이 자동 청산하지 못해 사장님 직접 처리 대기 중. 거래소 UI 에서 직접 청산 후 「✅ 처리 완료」 클릭 필요. TP/SL 평가 차단됨.`
+      );
     } else if (stuckStopping) {
       const ageMin = Math.floor((Date.now() - new Date(stuckStopping.updated_at).getTime()) / 60000);
       showAlert(
         `🔴 종료 갇힘: 전략 #${stuckStopping.id} ${stuckStopping.symbol} ${stuckStopping.side} — ${ageMin}분째 STOPPING`,
-        `emergency_close 실패 후 정지 — TP/SL 평가도 차단됨. 「🛑 긴급 종료」 재시도 또는 거래소 UI 에서 직접 청산 필요.`
+        `emergency_close 실패 후 정지 — 곧 MANUAL_CLEANUP_REQUIRED 전환됨. 「🛑 긴급 종료」 재시도 또는 거래소 UI 직접 청산.`
       );
     } else if (crisisActive) {
       const stage2 = !!crisisActive.crisis_first_tp_done_at;
@@ -242,9 +246,17 @@ async function refreshStrategies() {
         ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="현재가에서 다음 단계 즉시 진입 (trigger_price 무시, 사전 계획된 자본 그대로)">▶</button>`
         : '';
       // 2026-05-06 (C-full Step 3): archived row 는 「↻ 복원」 단독 표시.
+      // 2026-05-21 Phase 2: MANUAL_CLEANUP_REQUIRED 는 「✅ 수동 청산 처리 완료」 + 긴급종료 재시도.
+      const isManualCleanup = (s.status || '').toUpperCase() === 'MANUAL_CLEANUP_REQUIRED';
       let stopBtn;
       if (s.is_archived) {
         stopBtn = `<button onclick="event.stopPropagation(); restoreStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="archive 해제 — UI 목록에 다시 표시 (status 그대로)">↻ 복원</button>`;
+      } else if (isManualCleanup) {
+        // 사장님이 거래소에서 직접 청산 후 ack 하는 흐름. 「긴급 종료」 재시도도 함께 노출.
+        stopBtn = `<div class="flex flex-wrap gap-1" style="max-width:160px">
+            <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="긴급 종료 재시도 (시장가 청산 — 거래소 거절 시 status 유지)">🛑 재시도</button>
+            <button onclick="event.stopPropagation(); acknowledgeManualCleanup(${s.id})" class="btn-success btn text-xs" style="${btnStyle};background:#16a34a;color:white" title="거래소에서 직접 청산 완료 — STOPPED 전환 (감사 로그 기록)">✅ 처리 완료</button>
+          </div>`;
       } else if (isTerminal) {
         stopBtn = neverEntered
           ? `<button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="전략 보관 (archive — DB row 보존, UI 숨김, 손익 통계 유지)">🗑</button>`
