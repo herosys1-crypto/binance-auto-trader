@@ -18,7 +18,7 @@ from app.core.strategy_status import TERMINAL_STATUSES
 from app.repositories.exchange_account_repository import ExchangeAccountRepository
 from app.repositories.strategy_repository import StrategyRepository
 from app.schemas.strategy import StrategyActionResponse, StrategyDetailResponse
-from app.services.execution_service import ExecutionService
+from app.services.execution_service import ExecutionService, PreflightCheckFailed
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
@@ -537,6 +537,16 @@ def trigger_next_stage_manually(
         # enter_stage_at_market: 현재가 MARKET, planned_capital 로 qty 재계산.
         # 자체 is_triggered=True 마킹은 우리가 위에서 이미 처리 → no-op.
         execution_service.enter_stage_at_market(strategy.id, stage_no=next_stage_no)
+    except PreflightCheckFailed as e:
+        # Phase 3: 사전 마진 검증 실패 — 거래소 호출 0, 친절 400 에러로 안내.
+        db.execute(
+            sa_update(StrategyStagePlan)
+            .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+            .where(StrategyStagePlan.stage_no == next_stage_no)
+            .values(is_triggered=False)
+        )
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except ValueError as e:
         # claim 롤백 — kill-switch / qty=0 등 사용자 수정 가능 에러
         db.execute(
