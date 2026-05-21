@@ -1,6 +1,6 @@
 import logging
 import time
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
@@ -40,6 +40,16 @@ logger = logging.getLogger(__name__)
 
 class EmergencyCloseInProgress(Exception):
     """다른 caller 가 같은 strategy 의 emergency_close 를 처리 중 — 중복 발사 방지."""
+    pass
+
+
+class PreflightCheckFailed(Exception):
+    """진입 사전 검증 실패 — 거래소 호출 전에 차단 (Phase 3, 2026-05-21 사장님 요구).
+
+    이전엔 ENTRY MARKET 의 거래소 응답이 -2027 (마진 부족) 같은 에러로 와야 알 수 있었음.
+    이제 발송 전에 가용 USDT 잔액 vs 필요 마진 비교해서 사전 차단 → 거래소 호출 0,
+    사용자 친절 에러 메시지로 즉시 안내.
+    """
     pass
 
 class ExecutionService:
@@ -937,6 +947,11 @@ class ExecutionService:
                 f"계산된 수량이 0 — capital={capital} USDT, current_price={current_price}, leverage={leverage}x. "
                 "더 큰 자본 입력 필요."
             )
+        # Phase 3 (2026-05-21 사장님 요구): 사전 마진 검증 — -2027 거래소 거절 사전 차단.
+        self._preflight_entry_market_check(
+            strategy, qty=qty, current_price=current_price,
+            purpose=f"manual_stage_trigger_{stage_no}",
+        )
         order = self._place_market_entry(
             strategy,
             stage_no=stage_no,
@@ -1040,6 +1055,10 @@ class ExecutionService:
                 "더 큰 자본 입력 필요."
             )
         if order_type_u == "MARKET":
+            # Phase 3 (2026-05-21): 사전 마진 검증 — -2027 사전 차단.
+            self._preflight_entry_market_check(
+                strategy, qty=qty, current_price=ref_price, purpose="add_position_market",
+            )
             order = self._place_market_entry(
                 strategy,
                 stage_no=None,  # ad-hoc — stage_no 없음
@@ -1213,6 +1232,95 @@ class ExecutionService:
     # 진입 검증 — 1초 (MARKET 즉시 체결 — 청산 3초보다 짧게).
     # 자동 재시도 안 함 — 중복 진입 위험 (사장님 자본이 두 번 들어갈 수 있음).
     ENTRY_VERIFY_DELAY_SECONDS = 1.0
+
+    # Phase 3 (2026-05-21 사장님 요구): ENTRY MARKET 사전 검증 안전 마진 (수수료/슬리피지 대비).
+    # 0.05 = 5% 버퍼. 필요 마진 × 1.05 < 가용 잔액 이어야 통과.
+    # 너무 작으면 거래소가 -2027 거절, 너무 크면 정상 진입 차단.
+    PREFLIGHT_MARGIN_BUFFER_RATIO = Decimal("1.05")
+
+    def _preflight_entry_market_check(
+        self,
+        strategy,
+        *,
+        qty: Decimal,
+        current_price: Decimal,
+        purpose: str,
+    ) -> None:
+        """ENTRY MARKET 발송 전 가용 USDT 마진 사전 검증 (Phase 3).
+
+        실패 시 `PreflightCheckFailed` 예외 발생 — caller (API endpoint) 가 400 으로 변환.
+        API 호출 자체 실패 (네트워크 등) 는 skip — 거래소가 직접 거절하면 -2027 받음.
+
+        의도:
+          - 거래소 -2027 (Margin is insufficient) 거절을 사전 차단
+          - 사장님이 「💉 포지션 추가」 / 「▶ 다음 단계」 클릭 시 즉시 에러 안내
+            (거래소 응답까지 1~2초 기다리지 않아도 됨)
+          - 사장님 친절 에러 메시지 — 필요 / 가용 USDT 명시
+        """
+        notional = qty * current_price
+        leverage = Decimal(str(strategy.leverage or 1))
+        if leverage <= 0:
+            leverage = Decimal("1")
+        required_margin = (notional / leverage) * self.PREFLIGHT_MARGIN_BUFFER_RATIO
+
+        try:
+            balances = self.client.get_balance()
+        except Exception as e:
+            # 사전 체크 자체 실패 — 거래소가 직접 거절하면 -2027 받음. skip 으로 진행.
+            logger.warning(
+                "Preflight margin check API 실패 (skip, 거래소가 직접 거절 시 -2027): %s", e,
+            )
+            return
+
+        usdt_available = Decimal("0")
+        for b in balances or []:
+            if b.get("asset") == "USDT":
+                # availableBalance = 신규 포지션 가능한 가용 잔액 (다른 포지션 마진 제외).
+                try:
+                    usdt_available = Decimal(str(b.get("availableBalance", "0")))
+                except (InvalidOperation, TypeError):
+                    usdt_available = Decimal("0")
+                break
+
+        if usdt_available >= required_margin:
+            return  # 정상 — 진입 진행
+
+        # 마진 부족 — 사전 차단
+        logger.warning(
+            "Preflight 마진 부족 차단: strategy=%s purpose=%s qty=%s price=%s "
+            "required=%s (×1.05) available=%s",
+            strategy.id, purpose, qty, current_price, required_margin, usdt_available,
+        )
+        # RiskEvent 기록 — 운영 추적
+        self.db.add(RiskEvent(
+            strategy_instance_id=strategy.id,
+            event_type="PREFLIGHT_BLOCKED",
+            severity="WARN",
+            title=f"⛔ 사전 검증 차단 — #{strategy.id} {strategy.symbol} {strategy.side} ({purpose})",
+            message=(
+                f"가용 마진 부족으로 진입 사전 차단됨 (거래소 호출 X).\n"
+                f"  요청 수량: {qty}\n"
+                f"  요청 가격: {current_price}\n"
+                f"  필요 마진 (×1.05 버퍼): {required_margin:.4f} USDT\n"
+                f"  가용 잔액: {usdt_available:.4f} USDT\n"
+                f"\n"
+                f"조치: Binance 계정에 USDT 입금 또는 다른 포지션 청산 후 재시도."
+            ),
+            event_payload={
+                "strategy_id": strategy.id,
+                "purpose": purpose,
+                "qty": str(qty),
+                "current_price": str(current_price),
+                "required_margin": str(required_margin),
+                "usdt_available": str(usdt_available),
+            },
+        ))
+        self.db.commit()
+        raise PreflightCheckFailed(
+            f"가용 USDT 마진 부족 — 필요 ≈ {required_margin:.2f} USDT (수수료/슬리피지 5% 버퍼 포함), "
+            f"가용 {usdt_available:.2f} USDT. "
+            f"Binance 계정에 USDT 입금하거나 다른 포지션을 정리한 후 재시도하세요."
+        )
 
     def _verify_entry_applied(
         self,

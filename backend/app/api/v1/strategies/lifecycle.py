@@ -20,7 +20,7 @@ from app.models.risk_event import RiskEvent
 from app.repositories.exchange_account_repository import ExchangeAccountRepository
 from app.repositories.strategy_repository import StrategyRepository
 from app.schemas.strategy import StrategyActionResponse, StrategyStopRequest
-from app.services.execution_service import EmergencyCloseInProgress, ExecutionService
+from app.services.execution_service import EmergencyCloseInProgress, ExecutionService, PreflightCheckFailed
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
@@ -124,6 +124,9 @@ def add_position_to_strategy(
             order_type=payload.order_type,
             limit_price=payload.limit_price,
         )
+    except PreflightCheckFailed as e:
+        # Phase 3: 사전 마진 검증 실패 — 거래소 호출 0, 친절 400 에러.
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
