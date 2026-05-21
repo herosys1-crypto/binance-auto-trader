@@ -239,9 +239,13 @@ class TestReconcileFullCycleIncludesStoppingStuck:
             f"갇힘 알림 1건 기대했으나 {len(stopping_alerts)}건 (전체 alerts={[a['title'] for a in sent_alerts]})"
         )
 
-        # status 는 STOPPING 그대로 (자동 정리 안 함 — 포지션 잔재 있음)
+        # 2026-05-21 Phase 2: status 가 MANUAL_CLEANUP_REQUIRED 로 자동 전환됨 (사장님 요구).
+        # 이전엔 STOPPING 그대로 두어 reconcile 이 거래소 포지션 0 보면 자동 STOPPED 처리됐는데,
+        # 이제는 「사장님이 거래소에서 직접 청산 후 명시적 ack」 흐름 강제. 자동 STOPPED 차단.
         s2 = db_session.get(StrategyInstance, s.id)
-        assert s2.status == "STOPPING"
+        assert s2.status == "MANUAL_CLEANUP_REQUIRED", (
+            f"5분 초과 STOPPING 은 MANUAL_CLEANUP_REQUIRED 로 전환돼야 함 — 실제: {s2.status}"
+        )
 
         # RiskEvent CRITICAL 기록됨
         events = db_session.execute(
@@ -251,6 +255,10 @@ class TestReconcileFullCycleIncludesStoppingStuck:
         ).scalars().all()
         assert len(events) == 1
         assert events[0].severity == "CRITICAL"
+        # event_payload 에 status 전환 trail 기록
+        payload = events[0].event_payload
+        assert payload.get("previous_status") == "STOPPING"
+        assert payload.get("new_status") == "MANUAL_CLEANUP_REQUIRED"
 
     def test_no_stuck_strategies_no_alert(
         self, db_session, make_strategy, fake_binance, identity_decrypt,

@@ -23,6 +23,7 @@ from app.core.sentry import capture_strategy_event
 from app.core.strategy_status import (
     ACTIVE_WAITING,
     ACTIVE_WITH_POSITION,
+    MANUAL_CLEANUP_REQUIRED,
     OPEN_LIKE_FOR_ORPHAN_CHECK,
     PENDING_TO_OPEN_MAP,
 )
@@ -481,7 +482,14 @@ STOPPING_STUCK_ALERT_REDIS_PREFIX = "stopping_stuck_alert:"
 
 
 def _detect_stopping_stuck(db, *, notif_svc, redis) -> None:
-    """STOPPING 5분 초과 strategy 감지 → 텔레그램 CRITICAL + RiskEvent.
+    """STOPPING 5분 초과 strategy → MANUAL_CLEANUP_REQUIRED 전환 + 텔레그램 CRITICAL.
+
+    2026-05-21 Phase 2 (사장님 요구):
+      Phase 1 은 알림만 발송하고 status 는 STOPPING 그대로 두어, reconcile 의 매칭=None
+      분기가 거래소 포지션 0 을 보면 자동 STOPPED 전환했음. 그 결과 「사장님이 직접
+      처리한 건」 vs 「자동 정리된 건」 구분 불가 → 책임 추적 어려움.
+      이제 5분 초과 시 명시적으로 MANUAL_CLEANUP_REQUIRED 로 전환 — 사장님이 거래소
+      에서 직접 청산 후 「✅ 처리 완료」 클릭해야만 STOPPED 으로 전환됨.
 
     notif_svc / redis 는 호출부에서 만들어 전달 — _do_reconcile 본문이 이미 둘 다
     초기화한 상태라 재생성 비용을 피한다.
@@ -511,6 +519,11 @@ def _detect_stopping_stuck(db, *, notif_svc, redis) -> None:
 
         # cooldown 검사 — Redis 에 키 존재하면 skip. 실패 시 (Redis down) cooldown 무시
         # 하지 말고 알림 발송 — 갇힘은 무시하면 안 됨.
+        # Phase 2: status 가 이미 MANUAL_CLEANUP_REQUIRED 로 전환된 후엔 status 자체가
+        # 「STOPPING != MANUAL_CLEANUP_REQUIRED」 이라 다음 사이클 select 에서 빠짐 →
+        # cooldown 이 사실상 무의미해졌지만, execution_service 의 post-verify 가 곧바로
+        # MANUAL_CLEANUP_REQUIRED 전환한 후 reconcile 이 STOPPING 으로 잡으려는 race 만
+        # 차단하기 위해 유지.
         cooldown_key = f"{STOPPING_STUCK_ALERT_REDIS_PREFIX}{s.id}"
         already_alerted = False
         if redis is not None:
@@ -531,11 +544,16 @@ def _detect_stopping_stuck(db, *, notif_svc, redis) -> None:
             f"부작용: TP/SL 평가가 차단됨 (`_NOT_FOR_TP_SL` 필터) — 그 사이 가격이 익절 "
             f"임계 넘어도 자동 청산 안 됨.\n"
             f"\n"
+            f"status: STOPPING → MANUAL_CLEANUP_REQUIRED 자동 전환됨.\n"
+            f"자동 STOPPED 전환 차단 — 사장님 명시적 확인 필요.\n"
+            f"\n"
             f"조치:\n"
-            f"  1) 대시보드에서 「🛑 긴급 종료」 재시도 (qty 재계산 후 시장가 청산 재시도)\n"
+            f"  1) 대시보드의 「🛑 긴급 종료」 재시도\n"
             f"  2) 실패 시 Binance 거래소 UI 에서 직접 포지션 청산\n"
-            f"  3) reconcile 다음 사이클이 거래소 포지션 0 을 확인하면 자동으로 STOPPED 전환"
+            f"  3) 완료 후 대시보드에서 「✅ 수동 청산 처리 완료」 클릭"
         )
+        # MANUAL_CLEANUP_REQUIRED 전환 + 알림 + RiskEvent.
+        s.status = MANUAL_CLEANUP_REQUIRED
         notif_svc.send_system_alert(title=title, body=body)
         db.add(RiskEvent(
             strategy_instance_id=s.id,
@@ -547,10 +565,12 @@ def _detect_stopping_stuck(db, *, notif_svc, redis) -> None:
                 "strategy_id": s.id,
                 "age_seconds": age_seconds,
                 "updated_at": updated_at.isoformat(),
+                "previous_status": "STOPPING",
+                "new_status": MANUAL_CLEANUP_REQUIRED,
             },
         ))
         logger.critical(
-            "STOPPING stuck detected: strategy_id=%s symbol=%s side=%s age=%dmin",
+            "STOPPING stuck → MANUAL_CLEANUP_REQUIRED: strategy_id=%s symbol=%s side=%s age=%dmin",
             s.id, s.symbol, s.side, age_min,
         )
 

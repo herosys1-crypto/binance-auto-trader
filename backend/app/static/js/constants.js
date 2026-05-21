@@ -76,6 +76,7 @@ const STATUS_MAP = {
   'CLOSED_BY_TP':               { ko: '익절 종료',            sig: 'green',  icon: '💎' },
   'CLOSED_BY_SL':               { ko: '손절 종료',            sig: 'red',    icon: '🛑' },
   'STOPPING':                   { ko: '종료 중 (청산 진행)',  sig: 'yellow', icon: '⏸' },
+  'MANUAL_CLEANUP_REQUIRED':    { ko: '🔴 수동 청산 요청 (확인 필요)', sig: 'red', icon: '🆘' },
   'STOPPED':                    { ko: '수동 종료',            sig: 'gray',   icon: '⏹' },
   'LIQUIDATION_IMMINENT':       { ko: '⚠️ 청산 임박',         sig: 'red',    icon: '🚨' },
   'KILL_SWITCH_TRIGGERED':      { ko: '🚨 긴급 정지 (Kill-Switch)', sig: 'red', icon: '🛑' },
@@ -108,9 +109,12 @@ const PURPOSE_MAP = {
 // 막아주므로 frontend 가시성과 무관.
 const TERMINAL_STATUSES = ['STOPPED', 'COMPLETED', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'REENTRY_READY', 'KILL_SWITCH_TRIGGERED'];
 
-// STOPPING 전용 set — 종료 숨김 토글 대상 아님, 강조 표시 대상.
-// updated_at 5분 초과 시 「갇힘」 의심 — strategies-list.js 가 stuck 배지 표시.
-const STOPPING_STATUSES = ['STOPPING'];
+// 「청산 진행 / 수동 청산 요청」 set — 종료 숨김 토글 대상 아님, 강조 표시 대상.
+// 2026-05-21 Phase 2 (#77/#78 사후 사장님 요구):
+//   - STOPPING: emergency_close 진행 중 — 3초 안에 검증되거나 5분 초과 시 MANUAL_CLEANUP_REQUIRED 전환
+//   - MANUAL_CLEANUP_REQUIRED: 사장님이 거래소에서 직접 청산 후 「✅ 처리 완료」 클릭 전까지 보존
+// strategies-list.js 가 stuck 배지 / 「수동 청산 처리 완료」 버튼 표시에 사용.
+const STOPPING_STATUSES = ['STOPPING', 'MANUAL_CLEANUP_REQUIRED'];
 
 // 갇힘 의심 임계 (ms) — 5분. reconcile_worker 의 알림 임계와 동일하게 맞춤.
 const STOPPING_STUCK_THRESHOLD_MS = 5 * 60 * 1000;
