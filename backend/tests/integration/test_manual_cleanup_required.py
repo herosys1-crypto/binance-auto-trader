@@ -267,6 +267,174 @@ class TestEmergencyClosePostVerify:
 
 
 # ============================================================================
+# A2. 자동 재시도 1회 (사장님 요구 — 부담 ↓)
+# ============================================================================
+class TestEmergencyCloseAutoRetry:
+    """1차 검증 실패 시 10초 후 잔량 재청산 자동 시도.
+
+    재시도 성공 → 정상 종료 (status STOPPING 유지, reconcile 이 STOPPED 처리)
+    재시도 실패 → MANUAL_CLEANUP_REQUIRED 전환 + 텔레그램 (사장님 명시적 처리 필요)
+    """
+
+    def test_first_verify_fails_but_retry_succeeds(
+        self, db_session, make_strategy, fake_binance, fake_trade_client, fake_redis, monkeypatch,
+    ):
+        """1차 검증 실패 → 자동 재시도 → 두 번째 검증 성공 → status STOPPING 유지.
+
+        시나리오: 거래소 일시 지연 — 첫 발송 직후엔 qty 1000 그대로,
+        재시도 10초 후 거래소 internal state 안정화돼 0 으로 반영.
+        """
+        s = make_strategy(
+            symbol_str="PHBUSDT", side="LONG", status="STAGE2_OPEN",
+            current_position_qty=Decimal("1000"),
+            avg_entry_price=Decimal("0.06"),
+        )
+        fake_binance.set_position(
+            "PHBUSDT", position_amt="1000", entry_price="0.06",
+            mark_price="0.065", position_side="LONG",
+        )
+        svc = _make_service(db_session, monkeypatch)
+
+        # 호출 1: emergency_close 의 actual_position 계산용 (qty=1000)
+        # 호출 2: 1차 post-verify — 거래소 아직 반영 안 됨 (qty=1000)
+        # 호출 3: 재시도 후 post-verify — 거래소 반영됨 (qty=0)
+        call_count = {"n": 0}
+        def _staged_get(symbol=None):
+            call_count["n"] += 1
+            if call_count["n"] <= 2:
+                return [{
+                    "symbol": "PHBUSDT", "positionSide": "LONG", "positionAmt": "1000",
+                    "entryPrice": "0.06", "markPrice": "0.065", "unRealizedProfit": "0",
+                    "liquidationPrice": "0", "marginType": "cross", "isolatedMargin": "0",
+                    "leverage": "10", "breakEvenPrice": "0",
+                }]
+            return [{
+                "symbol": "PHBUSDT", "positionSide": "LONG", "positionAmt": "0",
+                "entryPrice": "0.06", "markPrice": "0.065", "unRealizedProfit": "0",
+                "liquidationPrice": "0", "marginType": "cross", "isolatedMargin": "0",
+                "leverage": "10", "breakEvenPrice": "0",
+            }]
+        monkeypatch.setattr(svc.client, "get_position_risk", _staged_get)
+
+        svc.emergency_close_position(s.id, quantity=Decimal("1000"))
+
+        db_session.expire_all()
+        s2 = db_session.get(StrategyInstance, s.id)
+        # 재시도 성공 → MANUAL_CLEANUP_REQUIRED 전환 안 됨, STOPPING 유지
+        assert s2.status == "STOPPING", (
+            f"재시도 성공이면 STOPPING 유지여야 함 — 실제: {s2.status}"
+        )
+
+        # RiskEvent 흐름: RETRY_ATTEMPTED + RETRY_SUCCEEDED
+        events = db_session.execute(
+            select(RiskEvent)
+            .where(RiskEvent.strategy_instance_id == s.id)
+            .where(RiskEvent.event_type.in_([
+                "EMERGENCY_CLOSE_RETRY_ATTEMPTED",
+                "EMERGENCY_CLOSE_RETRY_SUCCEEDED",
+                "EMERGENCY_CLOSE_VERIFY_FAILED",
+            ]))
+        ).scalars().all()
+        types = {e.event_type for e in events}
+        assert "EMERGENCY_CLOSE_RETRY_ATTEMPTED" in types
+        assert "EMERGENCY_CLOSE_RETRY_SUCCEEDED" in types
+        assert "EMERGENCY_CLOSE_VERIFY_FAILED" not in types  # 재시도 성공이므로 manual cleanup 안 함
+
+        # 재시도 trade_client 호출 발생 (1차 + 재시도 = 2건)
+        assert len(fake_trade_client.placed_orders) == 2
+        retry_order = fake_trade_client.placed_orders[1]
+        assert "EXIT_RETRY" in retry_order["newClientOrderId"]
+
+    def test_first_and_retry_both_fail_promotes_to_manual_cleanup(
+        self, db_session, make_strategy, fake_binance, fake_trade_client, fake_redis, monkeypatch,
+    ):
+        """1차 + 재시도 모두 검증 실패 → MANUAL_CLEANUP_REQUIRED 전환.
+
+        fake_binance 가 계속 1000 반환 — 자동 재시도해도 거래소 거절 지속.
+        """
+        s = make_strategy(
+            symbol_str="RONINUSDT", side="SHORT", status="STAGE1_OPEN",
+            current_position_qty=Decimal("-87.1"),
+            avg_entry_price=Decimal("5.0"),
+        )
+        fake_binance.set_position(
+            "RONINUSDT", position_amt="-87.1", entry_price="5.0",
+            mark_price="5.01", position_side="SHORT",
+        )
+        svc = _make_service(db_session, monkeypatch)
+
+        # fake_binance 가 항상 -87.1 반환 (재시도해도 거래소 거절 — 예: 마진 부족)
+        svc.emergency_close_position(s.id, quantity=Decimal("87.1"))
+
+        db_session.expire_all()
+        s2 = db_session.get(StrategyInstance, s.id)
+        assert s2.status == MANUAL_CLEANUP_REQUIRED
+
+        # 흐름: RETRY_ATTEMPTED → (재시도 발송) → VERIFY_FAILED (재시도 후에도)
+        events = db_session.execute(
+            select(RiskEvent)
+            .where(RiskEvent.strategy_instance_id == s.id)
+            .where(RiskEvent.event_type.in_([
+                "EMERGENCY_CLOSE_RETRY_ATTEMPTED",
+                "EMERGENCY_CLOSE_RETRY_SUCCEEDED",
+                "EMERGENCY_CLOSE_VERIFY_FAILED",
+            ]))
+        ).scalars().all()
+        types = {e.event_type for e in events}
+        assert "EMERGENCY_CLOSE_RETRY_ATTEMPTED" in types
+        assert "EMERGENCY_CLOSE_RETRY_SUCCEEDED" not in types
+        assert "EMERGENCY_CLOSE_VERIFY_FAILED" in types
+
+        # payload 에 retry_attempted=True 기록
+        verify_failed = next(e for e in events if e.event_type == "EMERGENCY_CLOSE_VERIFY_FAILED")
+        assert verify_failed.event_payload.get("retry_attempted") is True
+
+        # 재시도 발송 자체는 됐음 (2건)
+        assert len(fake_trade_client.placed_orders) == 2
+
+    def test_retry_call_itself_fails_promotes_to_manual_cleanup(
+        self, db_session, make_strategy, fake_binance, fake_trade_client, fake_redis, monkeypatch,
+    ):
+        """재시도 발송 자체가 거래소 거절 (Exception) → MANUAL_CLEANUP_REQUIRED + retry_error 기록."""
+        s = make_strategy(
+            symbol_str="AAAUSDT", side="LONG", status="STAGE1_OPEN",
+            current_position_qty=Decimal("100"),
+            avg_entry_price=Decimal("1.0"),
+        )
+        fake_binance.set_position(
+            "AAAUSDT", position_amt="100", entry_price="1.0",
+            mark_price="1.0", position_side="LONG",
+        )
+        svc = _make_service(db_session, monkeypatch)
+
+        # 첫 발송은 성공, 재시도는 예외 던지도록 (예: rate limit)
+        original_place = svc.trade_client.place_market_order
+        call_count = {"n": 0}
+        def _fail_on_retry(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return original_place(*args, **kwargs)
+            raise Exception("rate limit exceeded -1003")
+        monkeypatch.setattr(svc.trade_client, "place_market_order", _fail_on_retry)
+
+        svc.emergency_close_position(s.id, quantity=Decimal("100"))
+
+        db_session.expire_all()
+        s2 = db_session.get(StrategyInstance, s.id)
+        assert s2.status == MANUAL_CLEANUP_REQUIRED
+
+        events = db_session.execute(
+            select(RiskEvent)
+            .where(RiskEvent.event_type == "EMERGENCY_CLOSE_VERIFY_FAILED")
+            .where(RiskEvent.strategy_instance_id == s.id)
+        ).scalars().all()
+        assert len(events) == 1
+        payload = events[0].event_payload
+        assert payload.get("retry_attempted") is True
+        assert "rate limit" in (payload.get("retry_error") or "")
+
+
+# ============================================================================
 # B. reconcile_worker 의 자동 STOPPED 차단
 # ============================================================================
 class TestReconcileAutoStoppedBlocked:
