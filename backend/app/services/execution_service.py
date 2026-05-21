@@ -406,13 +406,21 @@ class ExecutionService:
         # 2026-05-21 Phase 2 post-verify (#77/#78 사후 사장님 요구):
         # 청산 주문 「접수」 응답은 받았지만 거래소가 실제로 포지션을 줄였는지 별개.
         # reduceOnly 거절 / 부분 체결 후 멈춤 / 거래소 내부 지연 등의 케이스 발생 가능.
-        # status=STOPPING (전량 강제 청산) 케이스만 대상 — TP 부분 청산은 Phase 2B 에서.
+        #
+        # Phase 2B (사장님 요구 — 진입/TP/SL 도 검증):
+        #   - MARKET 청산 모두 검증 (이전엔 STOPPING 만 — TP/SL 누락됐었음)
+        #   - is_full_close=True (전량): 검증 실패 시 MANUAL_CLEANUP_REQUIRED 전환 (기존 흐름)
+        #   - is_full_close=False (부분 — TP): 검증 실패 시 알림만 (status 변경 X)
+        #     이유: `_execute_take_profit` 가 호출 후 status 를 TP_N_DONE_PARTIAL 로 덮어쓰므로
+        #          여기서 status MANUAL_CLEANUP_REQUIRED 로 set 해도 무효화됨 (race).
         # LIMIT 폴백은 즉시 체결 보장 X → 검증 skip (reconcile/Phase 1 가드가 백업).
-        if strategy.status == "STOPPING" and _ot == "MARKET":
+        if _ot == "MARKET":
+            is_full_close = quantity >= actual_position
             self._verify_emergency_close_applied(
                 strategy,
                 initial_position=actual_position,
                 requested_close_qty=quantity,
+                is_full_close=is_full_close,
             )
 
         return order
@@ -457,20 +465,25 @@ class ExecutionService:
         *,
         initial_position: Decimal,
         requested_close_qty: Decimal,
+        is_full_close: bool = True,
     ) -> None:
-        """청산 주문 후 거래소 포지션 검증 + 자동 재시도 1회 + 실패 시 MANUAL_CLEANUP_REQUIRED.
+        """청산 주문 후 거래소 포지션 검증 + 자동 재시도 1회 + 실패 시 알림/전환.
 
         흐름:
           1) 3초 대기 → 거래소 포지션 조회
-          2) 90% 이상 감소 → 성공, status STOPPING 유지 (reconcile 이 STOPPED 처리)
+          2) 90% 이상 감소 → 성공, status 유지
           3) 1차 검증 실패 → 10초 대기 → 잔량 재청산 발송 (자동 재시도 1회)
-          4) 재시도 검증 → 성공 시 정상, 실패 시 MANUAL_CLEANUP_REQUIRED 전환
+          4) 재시도 검증 → 성공 시 정상, 실패 시:
+             - is_full_close=True (긴급/SL 전량 청산): MANUAL_CLEANUP_REQUIRED 전환 + 텔레그램
+             - is_full_close=False (TP 부분 청산): 알림만 (status 변경 X, race 방지)
 
         의도:
           - 사장님 부담 최소화 — 거래소 일시 지연/부분 체결/rate-limit 케이스 자동 회복
           - 자동 재시도 무의미한 케이스 (-2022 reduceOnly, -2027 마진부족) 는 재시도 후에도
-            같은 결과 → MANUAL_CLEANUP_REQUIRED 로 빠짐 (사장님 조치 필요)
+            같은 결과 → MANUAL_CLEANUP_REQUIRED (전량) 또는 알림 (부분) 로 빠짐
           - 자동 STOPPED 차단 — 사장님이 거래소에서 직접 청산 후 「✅ 처리 완료」 명시적 ack
+          - TP 부분 청산 실패 시 status 변경 안 함 — `_execute_take_profit` 의 status 덮어
+            쓰기 race 방지. 다음 cycle 에서 자연 재평가 + 알림으로 사장님 인지.
 
         검증 호출 자체 실패 (네트워크) 시 status 변경 안 함 — Phase 1 의 5분 가드 백업.
         """
@@ -531,17 +544,18 @@ class ExecutionService:
                 quantity=retry_qty, new_client_order_id=retry_cid,
             )
         except Exception as e:
-            # 재시도 호출 자체 실패 → MANUAL_CLEANUP_REQUIRED (재시도 분기 그대로 진행)
+            # 재시도 호출 자체 실패 → 분기별 처리 (전량: MANUAL_CLEANUP_REQUIRED / 부분: 알림만)
             logger.warning(
-                "emergency_close 재시도 발송 실패: strategy=%s err=%s — MANUAL_CLEANUP_REQUIRED 전환",
+                "emergency_close 재시도 발송 실패: strategy=%s err=%s — fail-handler 분기",
                 strategy.id, e,
             )
-            self._promote_to_manual_cleanup(
+            self._handle_close_verify_failure(
                 strategy,
                 initial_position=initial_position,
                 post_position=post_position,
                 requested_close_qty=requested_close_qty,
                 retry_error=str(e),
+                is_full_close=is_full_close,
             )
             return
 
@@ -549,13 +563,14 @@ class ExecutionService:
         time.sleep(EMERGENCY_CLOSE_VERIFY_DELAY_SECONDS)
         post_retry = self._fetch_current_position_qty(strategy)
         if post_retry is None:
-            # 재시도 후 검증 호출 실패 — 보수적으로 MANUAL_CLEANUP_REQUIRED
-            self._promote_to_manual_cleanup(
+            # 재시도 후 검증 호출 실패 — 보수적으로 fail-handler 분기
+            self._handle_close_verify_failure(
                 strategy,
                 initial_position=initial_position,
                 post_position=post_position,
                 requested_close_qty=requested_close_qty,
                 retry_error="post-retry verify call failed",
+                is_full_close=is_full_close,
             )
             return
 
@@ -586,14 +601,50 @@ class ExecutionService:
             self.db.commit()
             return
 
-        # 재시도도 실패 → 사장님 명시적 처리 필요
-        self._promote_to_manual_cleanup(
+        # 재시도도 실패 → 분기별 fail-handler
+        self._handle_close_verify_failure(
             strategy,
             initial_position=initial_position,
             post_position=post_retry,
             requested_close_qty=requested_close_qty,
             retry_error=None,
+            is_full_close=is_full_close,
         )
+
+    def _handle_close_verify_failure(
+        self,
+        strategy,
+        *,
+        initial_position: Decimal,
+        post_position: Decimal,
+        requested_close_qty: Decimal,
+        retry_error: str | None,
+        is_full_close: bool,
+    ) -> None:
+        """검증 + 재시도 모두 실패 시 분기 처리.
+
+        - is_full_close=True: status STOPPING → MANUAL_CLEANUP_REQUIRED 전환 + 텔레그램
+        - is_full_close=False (TP 부분 청산): status 변경 X, 알림 + RiskEvent 만
+          이유: `_execute_take_profit` 가 호출 후 status TP_N_DONE_PARTIAL 로 덮어쓰므로
+          status MANUAL_CLEANUP_REQUIRED 로 set 해도 무효화 (race). 부분 청산은 다음 cycle
+          에서 자연 재평가 + 사장님 인지로 처리.
+        """
+        if is_full_close:
+            self._promote_to_manual_cleanup(
+                strategy,
+                initial_position=initial_position,
+                post_position=post_position,
+                requested_close_qty=requested_close_qty,
+                retry_error=retry_error,
+            )
+        else:
+            self._notify_partial_close_verify_failed(
+                strategy,
+                initial_position=initial_position,
+                post_position=post_position,
+                requested_close_qty=requested_close_qty,
+                retry_error=retry_error,
+            )
 
     def _promote_to_manual_cleanup(
         self,
@@ -604,10 +655,7 @@ class ExecutionService:
         requested_close_qty: Decimal,
         retry_error: str | None,
     ) -> None:
-        """MANUAL_CLEANUP_REQUIRED 전환 + 텔레그램 CRITICAL + RiskEvent.
-
-        retry_error: 재시도 호출 자체 실패 시 에러 메시지. None 이면 재시도 후 검증 실패.
-        """
+        """전량 청산 검증 실패 — MANUAL_CLEANUP_REQUIRED 전환 + 텔레그램 CRITICAL + RiskEvent."""
         actual_reduction = initial_position - post_position
         logger.critical(
             "emergency_close 재시도 후에도 실패 — MANUAL_CLEANUP_REQUIRED: "
@@ -660,6 +708,75 @@ class ExecutionService:
             NotificationService(self.db).send_system_alert(title=title, body=body)
         except Exception as e:
             logger.warning("MANUAL_CLEANUP_REQUIRED 텔레그램 알림 실패: %s", e)
+        self.db.commit()
+
+    def _notify_partial_close_verify_failed(
+        self,
+        strategy,
+        *,
+        initial_position: Decimal,
+        post_position: Decimal,
+        requested_close_qty: Decimal,
+        retry_error: str | None,
+    ) -> None:
+        """부분 청산 (TP) 검증 실패 — 알림 + RiskEvent (status 변경 안 함).
+
+        TP 부분 청산이 의도된 비율로 안 줄었어도 `_execute_take_profit` 의 status 전환
+        로직 (TP_N_DONE_PARTIAL) 이 진행되어 strategy 는 계속 active. 다음 cycle 에서
+        잔량 + 마크 가격 기준 재평가 — 다음 TP 임계 도달 시 자연 재시도. status 변경
+        은 race 유발하므로 절대 하지 않음.
+
+        사장님 인지가 핵심 — 텔레그램으로 알려서 reconcile 의 qty mismatch 가드도
+        함께 보고 수동 조치 가능.
+        """
+        actual_reduction = initial_position - post_position
+        logger.warning(
+            "TP/부분 청산 검증 실패 (재시도 후): strategy=%s initial=%s post=%s reduced=%s (목표 %s)",
+            strategy.id, initial_position, post_position, actual_reduction, requested_close_qty,
+        )
+        title = (
+            f"⚠️ TP/부분 청산 검증 실패 — #{strategy.id} {strategy.symbol} {strategy.side}"
+        )
+        retry_status_line = (
+            f"  재시도 결과: 발송 실패 ({retry_error})"
+            if retry_error
+            else f"  재시도 후 거래소 qty: {post_position}"
+        )
+        body = (
+            f"⚠️ TP 부분 청산 1차 발송 + 자동 재시도 1회 모두 검증 실패.\n"
+            f"  발송 전 거래소 qty: {initial_position}\n"
+            f"  요청 청산 qty: {requested_close_qty}\n"
+            f"{retry_status_line}\n"
+            f"  실제 감소량: {actual_reduction} (목표 {requested_close_qty})\n\n"
+            f"거래소가 부분 청산을 거절하거나 부분만 체결됨. status 는 변경 안 됨 — "
+            f"strategy 는 계속 active. 다음 cycle 에서 잔량 기준 자연 재평가.\n\n"
+            f"조치:\n"
+            f"  1) 다음 cycle 자동 재평가 확인 (1~2분)\n"
+            f"  2) 안 풀리면 「🛑 긴급 종료」 로 전량 청산 (재검증 + 재시도 자동 적용)\n"
+            f"  3) 또는 Binance UI 에서 직접 처리"
+        )
+        self.db.add(RiskEvent(
+            strategy_instance_id=strategy.id,
+            event_type="PARTIAL_CLOSE_VERIFY_FAILED",
+            severity="WARN",
+            title=title,
+            message=body,
+            event_payload={
+                "strategy_id": strategy.id,
+                "initial_position": str(initial_position),
+                "requested_close_qty": str(requested_close_qty),
+                "post_position": str(post_position),
+                "actual_reduction": str(actual_reduction),
+                "retry_attempted": True,
+                "retry_error": retry_error,
+                "status_unchanged_reason": "TP partial — _execute_take_profit overwrites status",
+            },
+        ))
+        try:
+            from app.services.notification_service import NotificationService
+            NotificationService(self.db).send_system_alert(title=title, body=body)
+        except Exception as e:
+            logger.warning("부분 청산 검증 실패 알림 실패: %s", e)
         self.db.commit()
 
     def cancel_exchange_order(self, *, symbol: str, order_id: int | None = None, orig_client_order_id: str | None = None) -> dict:
@@ -1038,7 +1155,14 @@ class ExecutionService:
         return self.client.place_order(payload)
 
     def _place_market_entry(self, strategy, *, stage_no: int | None, qty: Decimal, current_price: Decimal, suffix: str) -> Order:
-        """공통 MARKET 진입 주문 (stage 또는 ad-hoc)."""
+        """공통 MARKET 진입 주문 (stage 또는 ad-hoc).
+
+        2026-05-21 Phase 2B (사장님 요구): 진입 직후 1초 검증 — qty 가 의도대로 증가했나.
+        자동 재시도는 안 함 (중복 진입 risk) — 알림만으로 사장님 인지.
+        """
+        # 검증 기준 — 발송 전 거래소 실 포지션 (DB current_position_qty 가 stale 일 수 있음).
+        initial_qty = self._fetch_current_position_qty(strategy)
+
         side = "BUY" if strategy.side == "LONG" else "SELL"
         position_side = strategy.side
         client_order_id = self._new_client_order_id(strategy.symbol, suffix)
@@ -1073,7 +1197,100 @@ class ExecutionService:
             raw_response=response,
         )
         self.order_repo.create(order)
+        self.db.commit()
+
+        # ENTRY 검증 — initial_qty 조회 실패 시 (네트워크 등) skip.
+        if initial_qty is not None:
+            self._verify_entry_applied(
+                strategy,
+                initial_qty=initial_qty,
+                expected_increase=qty,
+                stage_no=stage_no,
+            )
+
         return order
+
+    # 진입 검증 — 1초 (MARKET 즉시 체결 — 청산 3초보다 짧게).
+    # 자동 재시도 안 함 — 중복 진입 위험 (사장님 자본이 두 번 들어갈 수 있음).
+    ENTRY_VERIFY_DELAY_SECONDS = 1.0
+
+    def _verify_entry_applied(
+        self,
+        strategy,
+        *,
+        initial_qty: Decimal,
+        expected_increase: Decimal,
+        stage_no: int | None,
+    ) -> None:
+        """MARKET 진입 직후 거래소 포지션 증가 검증 (Phase 2B, 사장님 요구).
+
+        성공: qty 가 expected_increase 의 90% 이상 증가 → log only, 정상 진행
+        실패: RiskEvent + 텔레그램 알림 (자동 재시도 X — 중복 진입 risk)
+
+        자동 재시도 안 하는 이유:
+          - 거래소 응답이 늦게 와서 실제로는 체결됐는데 검증 시점에 0 으로 보일 수도
+          - 재시도하면 자본이 두 번 들어가는 위험 (실측 사례 못 잡으면 큰 손실)
+          - 사장님이 알림 받고 거래소 확인 후 수동 처리 권장
+
+        검증 호출 자체 실패 시 status 변경 안 함 — 보수적 skip (reconcile 백업).
+        """
+        time.sleep(self.ENTRY_VERIFY_DELAY_SECONDS)
+        post_qty = self._fetch_current_position_qty(strategy)
+        if post_qty is None:
+            # 검증 호출 실패 — 보수적 skip. reconcile 이 다음 cycle 에 sync.
+            return
+
+        actual_increase = post_qty - initial_qty
+        success_threshold = expected_increase * EMERGENCY_CLOSE_SUCCESS_THRESHOLD_RATIO
+        if actual_increase >= success_threshold:
+            logger.info(
+                "ENTRY 검증 성공: strategy=%s stage=%s initial=%s post=%s increased=%s",
+                strategy.id, stage_no, initial_qty, post_qty, actual_increase,
+            )
+            return
+
+        # 검증 실패 — 알림만 (자동 재시도 X)
+        logger.warning(
+            "ENTRY 검증 실패 (자동 재시도 안 함 — 중복 진입 risk): "
+            "strategy=%s stage=%s initial=%s post=%s increased=%s expected=%s",
+            strategy.id, stage_no, initial_qty, post_qty, actual_increase, expected_increase,
+        )
+        title = f"⚠️ 진입 검증 실패 — #{strategy.id} {strategy.symbol} {strategy.side}"
+        body = (
+            f"MARKET 진입 주문 발송 후 {self.ENTRY_VERIFY_DELAY_SECONDS:.0f}초 검증 실패.\n"
+            f"  stage: {stage_no or 'ad-hoc'}\n"
+            f"  발송 전 거래소 qty: {initial_qty}\n"
+            f"  요청 진입 qty: +{expected_increase}\n"
+            f"  발송 후 거래소 qty: {post_qty} (증가량 {actual_increase})\n\n"
+            f"거래소가 주문을 접수했으나 포지션이 의도대로 증가하지 않음. "
+            f"체결 지연 / 부분 체결 / 거래소 거절 의심.\n\n"
+            f"⚠️ 자동 재시도 안 함 — 중복 진입 시 자본이 두 번 들어갈 위험.\n\n"
+            f"조치:\n"
+            f"  1) Binance 거래소 UI 에서 실 포지션 상태 확인\n"
+            f"  2) 체결 안 됐으면 「▶ 다음 단계」 또는 「💉 포지션 추가」 로 수동 재시도\n"
+            f"  3) reconcile 이 1~2분 안에 자동 sync 시도"
+        )
+        self.db.add(RiskEvent(
+            strategy_instance_id=strategy.id,
+            event_type="ENTRY_VERIFY_FAILED",
+            severity="WARN",
+            title=title,
+            message=body,
+            event_payload={
+                "strategy_id": strategy.id,
+                "stage_no": stage_no,
+                "initial_qty": str(initial_qty),
+                "expected_increase": str(expected_increase),
+                "post_qty": str(post_qty),
+                "actual_increase": str(actual_increase),
+            },
+        ))
+        try:
+            from app.services.notification_service import NotificationService
+            NotificationService(self.db).send_system_alert(title=title, body=body)
+        except Exception as e:
+            logger.warning("ENTRY 검증 실패 알림 실패: %s", e)
+        self.db.commit()
 
     def _place_limit_entry(self, strategy, *, stage_no: int | None, qty: Decimal, limit_price: Decimal, suffix: str) -> Order:
         """공통 LIMIT 진입 주문 (ad-hoc 지정가 진입용)."""
