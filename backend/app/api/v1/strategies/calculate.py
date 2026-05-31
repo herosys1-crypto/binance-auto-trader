@@ -45,7 +45,7 @@ class PreviewInlineRequest(BaseModel):
     tp8_percent: Decimal | None = Field(default=None)
     tp9_percent: Decimal | None = Field(default=None)
     tp10_percent: Decimal | None = Field(default=None)
-    stop_loss_percent_of_capital: Decimal = Field(default=Decimal("50"))
+    stop_loss_percent_of_capital: Decimal = Field(default=Decimal("80"))
     last_stage_trigger_mode: str | None = None
     last_stage_trigger_percent: Decimal | None = None
 
