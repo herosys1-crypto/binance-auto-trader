@@ -129,7 +129,15 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 _banned_accounts.add(account.id)
                 logger.info("[stage-trigger] API ban active account=%s — skip cycle", account.id)
                 continue
+            next_stage_no: int | None = None  # 2026-06-01: try 진입 전 명시 (except 분기에서 안전 참조)
             try:
+                # 2026-06-01 Critical fix: STAGE_OPEN_PENDING 도 검사 대상 (Sub-account user-stream
+                # ORDER 미수신 시 PENDING 머무름). 단, 실 포지션 없으면 (current_position_qty=0)
+                # 다음 stage 검사 X — 1단계 진입 자체가 아직 안 됐다는 의미. 안전망.
+                if strategy.status and strategy.status.endswith("_OPEN_PENDING"):
+                    cur_qty = strategy.current_position_qty
+                    if cur_qty is None or abs(float(cur_qty)) < 1e-12:
+                        continue  # 1단계 LIMIT 미체결 — 다음 stage 검사 의미 X
                 next_stage_no = (strategy.current_stage or 0) + 1
                 total_stages = _count_total_stages_from_template(templates.get(strategy.strategy_template_id))
                 if next_stage_no > total_stages:
@@ -214,7 +222,7 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 # 2026-05-19: 마진부족(-2019) — 30분 쿨다운 + 알림 1회 (매 cycle spam 차단).
                 # 마진은 포지션 정리/입금 전엔 안 생기므로 blind 재시도 무의미.
                 if _is_margin_insufficient(e):
-                    _sn = next_stage_no if "next_stage_no" in dir() else 0
+                    _sn = next_stage_no if next_stage_no is not None else 0
                     first = _set_margin_cooldown(_redis, strategy.id, _sn)
                     logger.warning(
                         "[stage-trigger] margin insufficient strategy=%s stage=%s — cooldown %dm (alert=%s)",
@@ -239,7 +247,7 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 try:
                     NotificationService(db).send_system_alert(
                         title="[시스템 오류] Stage 자동 진입 실패",
-                        body=f"strategy_id={strategy.id} stage={next_stage_no if 'next_stage_no' in dir() else '?'} error={e}",
+                        body=f"strategy_id={strategy.id} stage={next_stage_no if next_stage_no is not None else '?'} error={e}",
                     )
                 except Exception:
                     pass

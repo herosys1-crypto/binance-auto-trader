@@ -48,6 +48,7 @@ async function saveAsTemplate() {
       last_stage_trigger_percent: inp.last_stage_trigger_percent,
       ..._tpFields,
       stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
+      crisis_max_loss_threshold: tpsl.crisis_max_loss_threshold,  // 2026-06-01 fix: cm-submit.js 와 일관성 (직접입력 모드 누락)
       reentry_policy: 'manual_ready',
     };
     sourceDesc = '현재 직접 입력값';

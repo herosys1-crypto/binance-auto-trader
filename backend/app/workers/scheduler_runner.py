@@ -10,8 +10,10 @@ from app.core.crypto import decrypt_text
 from app.core.redis_client import get_redis_client
 from app.observability.metrics import scheduler_leader_status
 from app.workers.auto_reentry_worker import run_auto_reentry_once
+from app.workers.binance_changelog_monitor import run_binance_changelog_monitor_once
 from app.workers.daily_loss_aggregator import run_daily_loss_check_once
 from app.workers.distributed_scheduler_guard import DistributedSchedulerGuard
+from app.workers.endpoint_health_monitor import run_endpoint_health_monitor_once
 from app.workers.keepalive_worker import run_keepalive_once
 from app.workers.reconcile_worker import run_position_reconcile_once
 from app.workers.run_workers import run_symbol_sync_once, run_tp_sl_once
@@ -98,6 +100,13 @@ def start_scheduler() -> None:
     # Daily loss limit 체크 — 매 1분 (settings.daily_loss_limit_usdt 미설정 시 no-op).
     # audit 2026-05-04: AccountDailyLossLimiter 가 호출되는 곳 0건이라 안전장치 무력 상태였음.
     scheduler.add_job(guarded_job("daily_loss_check", 50, run_daily_loss_check_once), trigger=IntervalTrigger(minutes=1), id="daily_loss_check", replace_existing=True, max_instances=1, coalesce=True)
+    # 2026-06-01 신설 — Binance 공식 API CHANGELOG / WebSocket Change Notice 자동 모니터링.
+    # 2026-04-23 WebSocket /ws/ → /private/ws/ 마이그레이션 같은 외부 변경을 우리가 모니터링 안 해
+    # mainnet 진입 시 모든 chain 문제 한꺼번에 가시화된 사고 재발 방지. 매 6시간 hash 비교.
+    scheduler.add_job(guarded_job("binance_changelog_monitor", 300, run_binance_changelog_monitor_once), trigger=IntervalTrigger(hours=6), id="binance_changelog_monitor", replace_existing=True, max_instances=1, coalesce=True)
+    # 2026-06-01 신설 — Endpoint Health (user-stream WebSocket / ORDER 이벤트 수신 / REST ping).
+    # silent failure (연결은 되지만 이벤트 0건) 자동 감지. 매 30분.
+    scheduler.add_job(guarded_job("endpoint_health_monitor", 300, run_endpoint_health_monitor_once), trigger=IntervalTrigger(minutes=30), id="endpoint_health_monitor", replace_existing=True, max_instances=1, coalesce=True)
     # System heartbeat — 24/7 운영 신뢰성 알림 (2026-05-07).
     # settings.heartbeat_interval_hours 양수일 때만 등록. 비활성 default → 스케줄 등록 0.
     from app.core.config import settings as _cfg

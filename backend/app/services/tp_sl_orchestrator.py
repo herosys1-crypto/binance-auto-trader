@@ -16,7 +16,7 @@ from app.core.risk_constants import (
     USDT_PRICE_PRECISION,
 )
 from app.models.risk_event import RiskEvent
-from app.observability.metrics import strategy_runs_total, strategy_take_profit_total
+from app.observability.metrics import strategy_runs_total, strategy_stop_loss_total, strategy_take_profit_total
 from app.repositories.strategy_repository import StrategyRepository
 from app.services.execution_service import EmergencyCloseInProgress, ExecutionService
 from app.services.notification_service import NotificationService

@@ -98,11 +98,20 @@ PENDING_TO_OPEN_MAP: dict[str, tuple[str, int]] = {
 
 
 # ===== Stage trigger 전용 set =====
-# 다음 stage 진입 검사 대상 — STAGE 1~(MAX-1) 가 OPEN 이면 그 다음 stage 진입 검사.
-# STAGE_MAX (10) 는 마지막 단계라 다음이 없으므로 제외.
+# 다음 stage 진입 검사 대상 — STAGE 1~(MAX-1) 가 OPEN 또는 OPEN_PENDING 이면
+# 그 다음 stage 진입 검사. STAGE_MAX (10) 는 마지막 단계라 다음이 없으므로 제외.
 # stage_trigger_worker 가 사용.
+#
+# 2026-06-01 Critical fix (사장님 mainnet 첫날 발견):
+#   이전엔 STAGE{n}_OPEN 만 포함. Sub-account user-stream 의 ORDER_TRADE_UPDATE
+#   미수신 시 strategy.status 가 STAGE1_OPEN_PENDING 에 머무름 (PENDING → OPEN
+#   전환은 user-stream 책임). → stage_trigger 가 PENDING 을 못 봄 → 가격이
+#   trigger 통과해도 자동 진입 안 됨 (mainnet 0시: 가격 0.359 까지 갔는데 자동
+#   2/3단계 미발사). PENDING 도 포함 — worker 내부에서 current_position_qty 로
+#   실 포지션 확인 후 진행 (안전망).
 STAGES_WITH_NEXT: frozenset[str] = frozenset(
     {f"STAGE{n}_OPEN" for n in range(1, TOTAL_STAGES_MAX)}
+    | {f"STAGE{n}_OPEN_PENDING" for n in range(1, TOTAL_STAGES_MAX)}
 )
 
 

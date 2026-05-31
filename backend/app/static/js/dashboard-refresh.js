@@ -207,6 +207,11 @@ async function refreshHealth() {
 }
 
 // 거래소 잔액 카드 — 첫 active 거래소 계정 기준 (다중 계정이면 별도 처리 필요)
+// 2026-06-01 사장님 요구 fix — 「전체 단계 예약」 모드:
+//   메인 잔액 = our_available_balance (wallet - active strategy 의 5단계 풀 자본 합)
+//   부제목 = wallet / 예약 / strategy 수 / 마진비율
+//   효과: 사장님이 새 strategy 만들 때 진짜 가용 잔액 확인 가능
+//        자동 4/5단계 진입 시 마진 부족(-2019) 절대 안 발생 보장
 async function loadBalance() {
   try {
     const accounts = await api('/exchange-accounts').catch(() => []);
@@ -217,14 +222,23 @@ async function loadBalance() {
     const active = accounts.find(a => a.is_active) || accounts[0];
     const data = await api(`/exchange-accounts/${active.id}/balance`);
     const wallet = Number(data.total_wallet_balance || 0);
-    const available = Number(data.available_balance || 0);
+    const reserved = Number(data.reserved_for_strategies || 0);
+    const ourAvailable = Number(data.our_available_balance || 0);
+    const stratCount = Number(data.active_strategy_count || 0);
     const ratio = Number(data.margin_ratio_pct || 0);
-    // 마진 비율 기반 신호: < 50% green, 50~80% yellow, > 80% red
-    const sig = ratio < 50 ? 'green' : ratio < 80 ? 'yellow' : 'red';
+    // 마진 비율 + 가용 잔액 음수 검사
+    // - ourAvailable < 0  → 빨강 (예약이 wallet 초과, 위험)
+    // - ratio < 50% green / 50~80% yellow / > 80% red
+    let sig;
+    if (ourAvailable < 0) sig = 'red';
+    else if (ratio < 50) sig = 'green';
+    else if (ratio < 80) sig = 'yellow';
+    else sig = 'red';
+    const fmt = (n) => Number(n).toLocaleString('en-US', {maximumFractionDigits: 2});
     setMetric(
       'balance',
-      `${available.toLocaleString('en-US', {maximumFractionDigits: 2})} USDT`,
-      `wallet ${wallet.toLocaleString('en-US', {maximumFractionDigits: 2})} / ${ratio.toFixed(2)}%${data.is_testnet ? ' (testnet)' : ''}`,
+      `${fmt(ourAvailable)} USDT`,
+      `wallet ${fmt(wallet)} / 예약 ${fmt(reserved)} (${stratCount}건) / ${ratio.toFixed(2)}%${data.is_testnet ? ' (testnet)' : ''}`,
       sig,
     );
   } catch (e) {
