@@ -49,7 +49,12 @@ class BinanceUserStreamConsumer:
                 # listen key 발급 성공 = Binance API 인증 + 네트워크 정상.
                 # _on_open 호출 전에도 heartbeat 한 번 set (이중 안전장치).
                 _set_user_stream_health(True)
-                ws_url = f"{self.ws_base_url}/ws/{self.listen_key}"
+                # 2026-06-01 Critical fix: Binance 가 2026-04-23 부터 레거시 /ws/<listenKey>
+                # 경로를 차단함 (WebSocket Change Notice). 신 endpoint /private/ws/<listenKey>
+                # 필수. 차단 후엔 연결은 되지만 ORDER_TRADE_UPDATE / ACCOUNT_UPDATE 등
+                # private event 가 단 한 건도 수신되지 않음 → mainnet Sub-account 운영의
+                # 모든 chain 문제 (PENDING 머무름, realized_pnl 0, 통계 부정확 등) 의 root cause.
+                ws_url = f"{self.ws_base_url}/private/ws/{self.listen_key}"
                 logger.info("Starting Binance user stream consumer: %s", ws_url)
                 self.ws = websocket.WebSocketApp(ws_url, on_open=self._on_open, on_message=self._on_message, on_error=self._on_error, on_close=self._on_close)
                 self.ws.run_forever(ping_interval=20, ping_timeout=10)
@@ -81,6 +86,14 @@ class BinanceUserStreamConsumer:
         _set_user_stream_health(True)
         data = json.loads(message)
         event_type = data.get("e")
+        # 2026-06-01 fix: endpoint_health_monitor 가 ORDER 이벤트 빈도 검사용 카운터 증가.
+        # 12시간 동안 ORDER 이벤트 0건 + 활성 strategy >0 이면 Telegram critical 알림.
+        if event_type == "ORDER_TRADE_UPDATE":
+            try:
+                from app.core.redis_client import get_redis_client
+                get_redis_client().incr("metrics:user_stream:order_events_total")
+            except Exception:
+                pass  # 카운터 실패해도 거래 흐름 영향 X
         db = SessionLocal()
         try:
             service = StreamService(db)

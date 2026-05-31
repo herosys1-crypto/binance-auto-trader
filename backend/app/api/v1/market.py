@@ -25,7 +25,7 @@ def _base_url(testnet: bool) -> str:
 @router.get("/ticker")
 def ticker_price(
     symbol: str = Query(..., min_length=1, max_length=30),
-    testnet: bool = Query(default=True),
+    testnet: bool = Query(default=False),  # 2026-06-01 fix: testnet deprecated (Binance Demo 통합) — mainnet 으로 default 변경
 ) -> dict[str, Any]:
     """단일 가격 (lastPrice). 「💉 포지션 추가」 모달의 미리보기용."""
     try:
@@ -46,7 +46,7 @@ def ticker_price(
 @router.get("/ticker24h")
 def ticker_24hr(
     symbol: str = Query(..., min_length=1, max_length=30),
-    testnet: bool = Query(default=True),
+    testnet: bool = Query(default=False),  # 2026-06-01 fix: testnet deprecated — mainnet default
 ) -> dict[str, Any]:
     """24시간 통계 (마지막 가격 / 고저 / 변동률 / 거래량)."""
     try:
@@ -69,7 +69,7 @@ def klines(
     symbol: str = Query(..., min_length=1, max_length=30),
     interval: str = Query(default="1h", description="1m/5m/15m/1h/4h/1d 등"),
     limit: int = Query(default=24, ge=1, le=500),
-    testnet: bool = Query(default=True),
+    testnet: bool = Query(default=False),  # 2026-06-01 fix: testnet deprecated — mainnet default
 ) -> list[list[Any]]:
     """캔들(OHLCV) 데이터.
 

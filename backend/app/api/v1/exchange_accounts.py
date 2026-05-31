@@ -298,7 +298,7 @@ class BalanceResponse(BaseModel):
     total_unrealized_pnl: Decimal
     # 마진 잔액 (wallet + unrealized)
     total_margin_balance: Decimal
-    # 사용 가능한 잔액 (새 포지션 진입 가능 액수)
+    # 사용 가능한 잔액 (Binance availableBalance — 현재 사용 마진만 차감)
     available_balance: Decimal
     # 활성 포지션의 초기 마진
     total_position_initial_margin: Decimal
@@ -310,6 +310,12 @@ class BalanceResponse(BaseModel):
     margin_ratio_pct: Decimal
     # 활성 포지션 수
     open_positions_count: int
+    # 2026-06-01 사장님 요구 fix — 「전체 단계 예약」 모드:
+    # 시스템 안전 운영의 핵심 사상. 사장님이 새 strategy 만들 때 진짜 가용 잔액
+    # 확인 + 자동 4/5단계 진입 시 마진 부족(-2019) 절대 안 발생 보장.
+    reserved_for_strategies: Decimal = Decimal("0")  # active strategy 의 total_capital 합 (5단계 풀 예약)
+    our_available_balance: Decimal = Decimal("0")    # wallet - reserved (사장님 가용 잔액)
+    active_strategy_count: int = 0                    # 활성 strategy 수 (예약에 포함된 것)
 
 
 @router.get("/{exchange_account_id}/balance", response_model=BalanceResponse)
@@ -355,6 +361,23 @@ def get_balance(
     positions = info.get("positions") or []
     open_count = sum(1 for p in positions if _d(p.get("positionAmt")) != 0)
 
+    # 2026-06-01 사장님 요구 fix — 「전체 단계 예약」 모드 계산:
+    # 활성 strategy 들의 total_capital 합 = 5단계 풀 자본 예약.
+    # 사장님 가용 잔액 = wallet - 예약. 자동 stage 진입 시 마진 부족 절대 안 발생 보장.
+    from app.models.strategy_instance import StrategyInstance
+    from app.core.strategy_status import TERMINAL_STATUSES
+    active_strategies = db.execute(
+        select(StrategyInstance)
+        .where(StrategyInstance.exchange_account_id == exchange_account_id)
+        .where(StrategyInstance.is_archived.is_(False))
+        .where(StrategyInstance.status.notin_(TERMINAL_STATUSES))
+    ).scalars().all()
+    reserved_for_strategies = sum(
+        (s.total_capital or Decimal("0")) for s in active_strategies
+    ) or Decimal("0")
+    our_available_balance = total_wallet - reserved_for_strategies
+    active_strategy_count = len(active_strategies)
+
     return BalanceResponse(
         exchange_account_id=exchange_account_id,
         is_testnet=account.is_testnet,
@@ -367,4 +390,7 @@ def get_balance(
         total_maint_margin=total_maint,
         margin_ratio_pct=margin_ratio,
         open_positions_count=open_count,
+        reserved_for_strategies=reserved_for_strategies,
+        our_available_balance=our_available_balance,
+        active_strategy_count=active_strategy_count,
     )
