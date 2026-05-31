@@ -58,7 +58,7 @@ function _collectTpSl() {
     1: ['10', '25'], 2: ['15', '25'], 3: ['20', '25'],
   };
   const out = {
-    stop_loss_percent_of_capital: v(get('cm-sl-pct'), '50'),
+    stop_loss_percent_of_capital: v(get('cm-sl-pct'), '80'),
   };
   for (let n = 1; n <= 10; n++) {
     const pct = get(`cm-tp${n}-pct`);

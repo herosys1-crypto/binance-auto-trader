@@ -61,7 +61,7 @@ async function openCreateModal(editStrategyId) {
     if (pctEl) pctEl.value = pct;
     if (qtyEl) qtyEl.value = qty;
   }
-  document.getElementById('cm-sl-pct').value = '50';
+  document.getElementById('cm-sl-pct').value = '80';
   document.getElementById('cm-start-price').value = '';
   // UX #18: 레버리지 입력 + 수동수정 플래그 초기화 (모달 열 때마다)
   cmLeverageManuallyEdited = false;
