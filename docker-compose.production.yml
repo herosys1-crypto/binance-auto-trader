@@ -57,6 +57,18 @@ services:
     depends_on: !override
       - redis
 
+  # 2026-05-31 fix: mark-price-stream 도 db 의존 제거 (Neon 사용, 로컬 db 비활성).
+  # 누락 시 `service "mark-price-stream" depends on undefined service "db"` 에러로
+  # docker compose 명령 전체 실패 (사장님 5-31 배포 시 발견).
+  mark-price-stream:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    depends_on: !override
+      - redis
+
   redis:
     ports: !override
       - "127.0.0.1:6380:6379"
