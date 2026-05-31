@@ -26,7 +26,7 @@ from typing import Iterable
 import requests
 
 from app.core.redis_client import get_redis_client
-from app.observability.sentry import capture_strategy_event
+from app.core.sentry import capture_strategy_event
 from app.services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
