@@ -90,6 +90,8 @@ async function openCreateModal(editStrategyId) {
     submit.textContent = '🚀 전략 시작';
     if (inplaceBtn) inplaceBtn.classList.add('hidden');  // 신규 모드엔 숨김
   }
+  // Phase D (2026-06-01 사장님 사상): 실시간 가용 자본 표시 시작.
+  _startWalletInfoLoop();
 }
 
 async function editStrategy(id) {
@@ -104,3 +106,57 @@ async function restartStrategy(id) {
   if (!confirm(`전략 #${id} 의 설정으로 새 전략을 시작합니다.\n\n- 이 종료된 전략은 그대로 보존됩니다 (감사 로그).\n- 같은 심볼/방향/단계 설정으로 새 strategy 가 생성됩니다.\n- 모달에서 시작가/자본 등을 조정한 후 시작 가능합니다.`)) return;
   await openCreateModal(id);
 }
+
+// ==================== Phase D (2026-06-01 사장님 핵심 사상) ====================
+// 신규 전략 모달의 실시간 가용 자본 표시.
+// 1.5초마다 fetch /exchange-accounts/{id}/balance + 사용자 입력 자본 합 비교.
+// 입력 자본 > 가용 시 빨간 경고 (Phase A 백엔드 가드가 어차피 차단할 거니까 미리 안내).
+// 모달이 열려있을 때만 의미 — accountId null 이면 fetch skip.
+async function _updateWalletInfoDisplay() {
+  const el = document.getElementById('cm-wallet-info');
+  if (!el) return;  // 모달 닫혀있음
+  if (!cmState.accountId) {
+    el.innerHTML = '💰 계정 선택 후 가용 자본 표시됩니다.';
+    return;
+  }
+  try {
+    const data = await api(`/exchange-accounts/${cmState.accountId}/balance`);
+    const wallet = Number(data.total_wallet_balance || 0);
+    const reserved = Number(data.reserved_for_strategies || 0);
+    const ourAvail = Number(data.our_available_balance || 0);
+    const stratCount = Number(data.active_strategy_count || 0);
+
+    // 사용자 입력 자본 합산 (1~10단계)
+    let inputTotal = 0;
+    for (let i = 1; i <= 10; i++) {
+      const inp = document.getElementById('cm-cap-' + i);
+      if (inp && inp.value) inputTotal += Number(inp.value) || 0;
+    }
+
+    const fmt = (n) => Number(n).toLocaleString('en-US', {maximumFractionDigits: 2});
+    let html = `💰 가용 자본: <b>${fmt(ourAvail)} USDT</b> &nbsp;(wallet ${fmt(wallet)} − 예약 ${fmt(reserved)} [${stratCount}건])`;
+    let isInsufficient = false;
+    if (inputTotal > 0) {
+      const after = ourAvail - inputTotal;
+      const sign = after >= 0 ? '+' : '';
+      const color = after >= 0 ? 'text-emerald-400' : 'text-red-400';
+      html += `<br>📊 신규 입력 ${fmt(inputTotal)} USDT → 진입 후 잔여 <span class="${color}"><b>${sign}${fmt(after)} USDT</b></span>`;
+      if (after < 0) {
+        html += ` <b class="text-red-400">⚠️ Phase A 가드 차단 (잔액 기반 운영)</b>`;
+        isInsufficient = true;
+      }
+    }
+    el.innerHTML = html;
+    el.className = `text-xs p-2 rounded mt-2 ${isInsufficient ? 'bg-red-900/30 border border-red-500 text-red-200' : 'bg-slate-800 border border-slate-700 text-slate-300'}`;
+  } catch (e) {
+    // API 실패 — 표시 유지 (사용자 영향 X)
+  }
+}
+
+let _walletInfoTimer = null;
+function _startWalletInfoLoop() {
+  if (_walletInfoTimer) return;  // 중복 방지
+  _updateWalletInfoDisplay();
+  _walletInfoTimer = setInterval(_updateWalletInfoDisplay, 1500);
+}
+// 모달 닫을 때 stop 은 안 함 — fetch 가 accountId null 시 skip 이라 무해. (간단함 우선)

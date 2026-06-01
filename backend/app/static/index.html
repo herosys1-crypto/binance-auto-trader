@@ -670,6 +670,11 @@
           </p>
           <div id="cm-capitals-grid" class="space-y-1"><!-- JS 로 10행 입력 채움 --></div>
           <p id="cm-capitals-summary" class="text-xs text-slate-400 mt-2">합계: 0 USDT (0단계)</p>
+          <!-- 2026-06-01 Phase D (사장님 핵심 사상): 신규 전략 입력 시 실시간 가용 자본 표시. -->
+          <!-- wallet - 다른 strategy 예약 = 진짜 가용 자본. 입력 자본이 초과하면 Phase A 가드 차단. -->
+          <div id="cm-wallet-info" class="text-xs p-2 rounded mt-2 bg-slate-800 border border-slate-700 text-slate-300">
+            💰 가용 자본 로딩 중...
+          </div>
 
           <!-- TP / SL 가변 설정 -->
           <details class="mt-3 border border-slate-700 rounded">
