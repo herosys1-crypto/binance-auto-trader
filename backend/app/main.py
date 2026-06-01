@@ -50,10 +50,22 @@ app.include_router(api_router)
 async def _start_health_poller() -> None:
     asyncio.create_task(_poll_health_metrics())
 
+# 2026-06-02 (사장님 요구): static 자산도 매번 ETag 검증 — release 후 사장님 화면이
+# 옛 JS 캐시로 새 UI 못 봄 (Binance 비교 인라인 row #39 가 화면에 안 보였던 사고 재발 방지).
+# ETag conditional GET → 변경 없으면 304 (효율 OK), 변경 있으면 즉시 새 파일.
+class _NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        # 304 응답은 헤더 추가 X (이미 캐시된 것 그대로 사용)
+        if hasattr(response, "headers") and response.status_code != 304:
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 # Static admin dashboard (single-page HTML)
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 if _STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+    app.mount("/static", _NoCacheStaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     @app.get("/admin-ui", include_in_schema=False)
     def admin_ui_root() -> FileResponse:
