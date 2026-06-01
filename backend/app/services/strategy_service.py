@@ -297,13 +297,17 @@ class StrategyService:
             additional_margin_sum = D("0")
         required_margin_total = (required_margin + additional_margin_sum).quantize(D("0.01"))
 
-        # 0-C) 전체 계획자본 예약 체크 (2026-05-19 사용자 요청).
+        # 0-C) 전체 계획자본 예약 체크 (2026-05-19 사용자 요청 + 2026-06-01 자본 기준 강화).
         # 문제: availableBalance 는 「이미 진입한 단계」 마진만 반영. 기존 활성
         # 전략들의 미래 단계(미진입 2~N)는 미반영 → 생성 시점엔 잔액 넉넉해
         # 보여 다수 전략이 다 통과 → 나중 단계 트리거 누적 → Binance -2019.
-        # 해법: 모든 활성 전략을 「전체 단계 다 진입한 것」 으로 가정해 계획자본
-        # 마진을 합산(예약) + 신규 전략 전체 계획자본 ≤ 총 지갑잔액 인지 사전 검증.
-        # (사용자 표현: "단계별 설정금액까지 포지션 진입한 걸로 계산해서 잔액 운영")
+        #
+        # 2026-06-01 사장님 핵심 사상 강화: "거래소 잔액 기준으로 모든게 운영되어야 해.
+        # 증거금 추가도, 포지션 추가도, 다음단계 진입도, 전략 세울 때 모든 걸 잔액 기준."
+        # → 마진 기준 (capital/leverage) 이 아닌 「자본 절대값」 기준으로 검증 (더 엄격).
+        # 효과: 레버리지 효과로 잔액 시뮬레이션 큰 영향 X. 사장님 자본 100% 보호.
+        # 화면 「예약 X USDT」 표시 (exchange_accounts.py 의 reserved_for_strategies) 와
+        # 동일한 기준 → UI 와 검증 일치.
         from app.models.strategy_template import StrategyTemplate as _ST
         _active_rows = self.db.execute(
             select(StrategyInstance, _ST)
@@ -312,39 +316,31 @@ class StrategyService:
             .where(StrategyInstance.status.notin_(_CLOSED_STATUSES))
             .where(StrategyInstance.is_archived.is_(False))
         ).all()
-        existing_reserved = D("0")
+        # 자본 기준 (사장님 안전 사상): 모든 active strategy 의 total_capital 합
+        existing_capital_reserved = D("0")
         for _si, _st in _active_rows:
-            _lev = D(str(_si.leverage)) if _si.leverage and _si.leverage > 0 else D("1")
             _cap = D(str(_st.total_capital or 0))
-            _cfg = _st.stages_config or {}
-            _ams = _cfg.get("additional_margins") or []
-            try:
-                _am_sum = sum((D(str(m)) for m in _ams if m and D(str(m)) > 0), D("0"))
-            except Exception:
-                _am_sum = D("0")
-            existing_reserved += (_cap / _lev + _am_sum)
-        existing_reserved = existing_reserved.quantize(D("0.01"))
+            existing_capital_reserved += _cap
+        existing_capital_reserved = existing_capital_reserved.quantize(D("0.01"))
         total_wallet = D(str(
             acct.get("totalWalletBalance")
             or acct.get("totalMarginBalance", "0")
         ))
-        projected_total = (existing_reserved + required_margin_total).quantize(D("0.01"))
-        if total_wallet > 0 and projected_total > total_wallet:
+        new_capital = D(str(template_model.total_capital or 0)).quantize(D("0.01"))
+        projected_capital_total = (existing_capital_reserved + new_capital).quantize(D("0.01"))
+        if total_wallet > 0 and projected_capital_total > total_wallet:
             raise ValueError(
-                f"💰 전체 계획자본 초과 — 모든 전략이 모든 단계까지 진입한다고 가정한 "
-                f"필요 마진 합이 지갑 잔액을 넘습니다.\n\n"
-                f"📌 계산:\n"
-                f"  • 기존 활성 전략 {len(_active_rows)}개 예약 마진 합 = {existing_reserved:.2f} USDT\n"
-                f"  • + 신규 전략 전체 계획 마진 = {required_margin_total:.2f} USDT\n"
-                f"  • = 총 예약 {projected_total:.2f} USDT  >  지갑 잔액 {total_wallet:.2f} USDT\n\n"
-                f"📖 의미: availableBalance(가용잔액) 는 이미 진입한 단계만 반영하지만, "
-                f"여기서는 모든 전략의 미진입 단계까지 「다 진입한 것」 으로 계산해 "
-                f"나중에 -2019(Margin insufficient) 가 안 나도록 사전 차단합니다.\n\n"
+                f"💰 전체 자본 예약 초과 — 사장님 안전 사상 (잔액 기반 운영) 위반.\n\n"
+                f"📌 계산 (자본 절대값 기준 — 화면 「예약」 카드와 동일):\n"
+                f"  • 기존 활성 전략 {len(_active_rows)}개 자본 합 = {existing_capital_reserved:.2f} USDT\n"
+                f"  • + 신규 전략 자본 = {new_capital:.2f} USDT\n"
+                f"  • = 총 예약 {projected_capital_total:.2f} USDT  >  지갑 잔액 {total_wallet:.2f} USDT\n\n"
+                f"📖 의미: 사장님 핵심 원칙 — 모든 strategy 의 5단계 풀 자본 합이 wallet 을 절대 초과 X.\n"
+                f"   레버리지 무관하게 사장님 자본 절대값으로 보호 (-2019 / 음수 가용잔액 사전 차단).\n\n"
                 "💡 해결 (택1):\n"
-                "  • 활성 전략 일부 정리 (포지션 청산) — 예약 마진 회수\n"
+                "  • 활성 전략 일부 정리 (포지션 청산) — 예약 자본 회수\n"
                 "  • 거래소 USDT 입금\n"
-                "  • 신규 전략의 단계별 설정금액(자본) 또는 추가 증거금 축소\n"
-                "  • 레버리지 상향 (entry 마진 감소, 단 청산 위험 ↑)"
+                "  • 신규 전략의 단계별 자본 축소 (전체 합이 가용 잔액 이내)"
             )
 
         # 1) 가용 잔액 체크 (entry 마진 + 추가 증거금 합)
