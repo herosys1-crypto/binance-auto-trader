@@ -394,3 +394,133 @@ def get_balance(
         our_available_balance=our_available_balance,
         active_strategy_count=active_strategy_count,
     )
+
+
+# 2026-06-01 (사장님 요구): 전략 인스턴스 행 아래 Binance 실데이터 인라인 표시용.
+# Binance UI 의 「Positions」 탭 형식 그대로 → 우리 행과 시각적 비교 즉시 가능.
+@router.get("/{account_id}/binance-positions")
+def get_binance_positions(
+    account_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """Binance 실 포지션 snapshot — UI 비교용 (30초 Redis 캐시).
+
+    응답 형식 = Binance UI 「Positions」 탭 컬럼명 그대로:
+      symbol / size / entry_price / break_even_price / mark_price
+      / liquidation_price / margin / margin_mode / leverage
+      / unrealized_pnl / roi_pct
+    + fetched_at (확인 시각 — UI 에 표시)
+    """
+    import hashlib
+    import hmac
+    import json
+    import time
+    from datetime import datetime, timezone
+
+    import requests
+
+    from app.core.redis_client import get_redis_client
+
+    account = db.execute(
+        select(ExchangeAccount).where(
+            ExchangeAccount.id == account_id,
+            ExchangeAccount.user_id == user_id,
+        )
+    ).scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="계정 없음 또는 본인 소유 X")
+
+    # 30초 캐시 — 「전략 인스턴스」 dashboard refresh 가 자주 호출되므로 부담 최소화
+    cache_key = f"binance:positions:account:{account_id}"
+    redis = None
+    try:
+        redis = get_redis_client()
+        cached = redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+
+    try:
+        ak = decrypt_text(account.api_key_enc)
+        sk = decrypt_text(account.api_secret_enc)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"키 복호화 실패: {e}") from e
+
+    base = "https://testnet.binancefuture.com" if account.is_testnet else "https://fapi.binance.com"
+    ts = int(time.time() * 1000)
+    qs = f"timestamp={ts}&recvWindow=5000"
+    sig = hmac.new(sk.encode(), qs.encode(), hashlib.sha256).hexdigest()
+    try:
+        r = requests.get(
+            f"{base}/fapi/v2/positionRisk?{qs}&signature={sig}",
+            headers={"X-MBX-APIKEY": ak},
+            timeout=10,
+        )
+        r.raise_for_status()
+        raw = r.json()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Binance positionRisk 호출 실패: {e}") from e
+
+    positions: dict = {}
+    for p in raw:
+        try:
+            amt = Decimal(str(p.get("positionAmt", "0")))
+        except Exception:
+            continue
+        if amt == 0:
+            continue
+        entry = Decimal(str(p.get("entryPrice", "0") or "0"))
+        mark = Decimal(str(p.get("markPrice", "0") or "0"))
+        upnl = Decimal(str(p.get("unRealizedProfit", "0") or "0"))
+        liq = Decimal(str(p.get("liquidationPrice", "0") or "0"))
+        try:
+            leverage = int(p.get("leverage", "1") or 1)
+        except Exception:
+            leverage = 1
+        margin_mode = str(p.get("marginType", "isolated")).upper()
+        try:
+            iso_margin = Decimal(str(p.get("isolatedMargin", "0") or "0"))
+        except Exception:
+            iso_margin = Decimal("0")
+
+        # ROI % — Binance UI 와 일치
+        if margin_mode == "ISOLATED" and iso_margin > 0:
+            roi = upnl / iso_margin * 100
+            margin_display = iso_margin
+        else:
+            notional = abs(amt) * entry
+            cross_margin = notional / leverage if leverage > 0 and notional > 0 else Decimal("0")
+            roi = (upnl / cross_margin * 100) if cross_margin > 0 else Decimal("0")
+            margin_display = cross_margin
+
+        positions[p["symbol"]] = {
+            "symbol": p["symbol"],
+            "side": "LONG" if amt > 0 else "SHORT",
+            "size": str(amt),
+            "entry_price": str(entry),
+            # Break Even Price 정확 값은 fapi/v2 응답에 없음 — Binance UI 는 commission 합산 표시.
+            # 근사: entry_price (수수료 무시). 사장님이 commission 0.04% 가정하면 entry × 1.0008 보정 가능.
+            "break_even_price": str(entry),
+            "mark_price": str(mark),
+            "liquidation_price": str(liq) if liq > 0 else None,
+            "margin": str(margin_display.quantize(Decimal("0.01"))) if margin_display > 0 else None,
+            "margin_mode": margin_mode,
+            "leverage": leverage,
+            "unrealized_pnl": str(upnl.quantize(Decimal("0.0001"))),
+            "roi_pct": str(roi.quantize(Decimal("0.01"))),
+        }
+
+    response = {
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "account_id": account_id,
+        "is_testnet": account.is_testnet,
+        "positions": positions,
+    }
+    if redis:
+        try:
+            redis.setex(cache_key, 30, json.dumps(response))
+        except Exception:
+            pass
+    return response
