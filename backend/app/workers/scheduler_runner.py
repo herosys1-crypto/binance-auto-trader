@@ -15,6 +15,7 @@ from app.workers.daily_loss_aggregator import run_daily_loss_check_once
 from app.workers.distributed_scheduler_guard import DistributedSchedulerGuard
 from app.workers.endpoint_health_monitor import run_endpoint_health_monitor_once
 from app.workers.keepalive_worker import run_keepalive_once
+from app.workers.sync_health_monitor import run_sync_health_monitor_once
 from app.workers.reconcile_worker import run_position_reconcile_once
 from app.workers.run_workers import run_symbol_sync_once, run_tp_sl_once
 from app.workers.stage_trigger_worker import run_stage_trigger_once
@@ -107,6 +108,9 @@ def start_scheduler() -> None:
     # 2026-06-01 신설 — Endpoint Health (user-stream WebSocket / ORDER 이벤트 수신 / REST ping).
     # silent failure (연결은 되지만 이벤트 0건) 자동 감지. 매 30분.
     scheduler.add_job(guarded_job("endpoint_health_monitor", 300, run_endpoint_health_monitor_once), trigger=IntervalTrigger(minutes=30), id="endpoint_health_monitor", replace_existing=True, max_instances=1, coalesce=True)
+    # 2026-06-01 신설 (사장님 요구) — DB ↔ Binance 동기화 검증. 매 5분.
+    # 수량/평단가/미실현 비교 → 차이 발견 시 「최근 활동」 알림 (30분 dedup), 정상 시 6시간 1회 summary.
+    scheduler.add_job(guarded_job("sync_health_monitor", 270, run_sync_health_monitor_once), trigger=IntervalTrigger(minutes=5), id="sync_health_monitor", replace_existing=True, max_instances=1, coalesce=True)
     # System heartbeat — 24/7 운영 신뢰성 알림 (2026-05-07).
     # settings.heartbeat_interval_hours 양수일 때만 등록. 비활성 default → 스케줄 등록 0.
     from app.core.config import settings as _cfg
