@@ -17,12 +17,69 @@ from app.api.deps import get_current_user_id, get_db
 from app.core.crypto import decrypt_text
 from app.core.strategy_status import MANUAL_CLEANUP_REQUIRED, TERMINAL_STATUSES
 from app.models.risk_event import RiskEvent
+from app.models.strategy_instance import StrategyInstance
 from app.repositories.exchange_account_repository import ExchangeAccountRepository
 from app.repositories.strategy_repository import StrategyRepository
 from app.schemas.strategy import StrategyActionResponse, StrategyStopRequest
 from app.services.execution_service import EmergencyCloseInProgress, ExecutionService, PreflightCheckFailed
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
+
+
+def _phase_c_wallet_capital_check(db: Session, account, addition_amount: Decimal, action: str) -> None:
+    """Phase C (2026-06-01 사장님 핵심 사상 — 잔액 기반 운영):
+    증거금 추가 / 포지션 추가 시 wallet 자본 검증.
+
+    sum(active strategy total_capital) + addition > wallet → 400 차단.
+    Phase A (전략 생성 시점) + Phase B (자동 stage 진입 시점) + Phase C (수동 추가 시점) = 다층 안전망.
+
+    API 실패 시 skip (preflight 가 백업) — 안전.
+    """
+    from sqlalchemy import select
+    from app.integrations.binance.client import BinanceClient
+
+    try:
+        client = BinanceClient(
+            api_key=decrypt_text(account.api_key_enc),
+            api_secret=decrypt_text(account.api_secret_enc),
+            is_testnet=account.is_testnet,
+        )
+        acct = client.get_account()
+    except Exception:
+        return  # API 실패 — preflight 가 백업
+
+    wallet = Decimal(str(acct.get("totalWalletBalance", "0")))
+    if wallet <= 0:
+        return  # wallet 0 이면 검증 skip (이상 상황, 다른 가드가 처리)
+
+    active = db.execute(
+        select(StrategyInstance)
+        .where(StrategyInstance.exchange_account_id == account.id)
+        .where(StrategyInstance.is_archived.is_(False))
+        .where(StrategyInstance.status.notin_(TERMINAL_STATUSES))
+    ).scalars().all()
+    total_reserved = sum(
+        (Decimal(str(s.total_capital or 0)) for s in active), Decimal("0")
+    )
+    addition = Decimal(str(addition_amount or 0))
+    projected = total_reserved + addition
+
+    if projected > wallet:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"💰 {action} 차단 — 사장님 안전 사상 (잔액 기반 운영) 위반.\n\n"
+                f"📌 계산 (자본 절대값 기준 — 화면 「예약」 카드와 동일):\n"
+                f"  • 활성 strategy {len(active)}개 자본 합: {total_reserved:.2f} USDT\n"
+                f"  • + 추가 ({action}): {addition:.2f} USDT\n"
+                f"  • = 총 예약: {projected:.2f} USDT  >  Wallet: {wallet:.2f} USDT\n"
+                f"  • 부족: {(projected - wallet):.2f} USDT\n\n"
+                f"💡 조치 (택1):\n"
+                f"  • USDT 입금 → wallet 회복\n"
+                f"  • 다른 strategy 일부 청산 → 자본 예약 감소\n"
+                f"  • 추가 금액 축소"
+            ),
+        )
 
 
 class AddMarginRequest(BaseModel):
@@ -50,6 +107,8 @@ def add_margin_to_strategy(
     account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
     if not account:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="⚠️ 거래소 계정이 삭제됐거나 본인 소유가 아닙니다. 「💼 계정」 모달에서 확인하세요.")
+    # Phase C (2026-06-01 사장님 사상): wallet 자본 검증 — 추가 후 sum > wallet 차단.
+    _phase_c_wallet_capital_check(db, account, payload.amount, action="증거금 추가")
     try:
         execution_service = ExecutionService(
             db,
@@ -111,6 +170,8 @@ def add_position_to_strategy(
     account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
     if not account:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="⚠️ 거래소 계정이 삭제됐거나 본인 소유가 아닙니다. 「💼 계정」 모달에서 확인하세요.")
+    # Phase C (2026-06-01 사장님 사상): wallet 자본 검증 — 추가 후 sum > wallet 차단.
+    _phase_c_wallet_capital_check(db, account, payload.amount_usdt, action="포지션 추가")
     try:
         execution_service = ExecutionService(
             db,
