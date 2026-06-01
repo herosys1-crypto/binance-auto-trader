@@ -178,6 +178,52 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     api_secret=decrypt_text(account.api_secret_enc),
                     is_testnet=account.is_testnet,
                 )
+                # 2026-06-01 Phase B (사장님 핵심 사상 — 잔액 기반 운영):
+                # 자동 stage 진입 직전 wallet 기반 자본 검증.
+                # 손실 발생 → wallet 감소 → 활성 strategy 의 자본 예약 합이 wallet 초과 시 자동 진입 차단.
+                # (Phase A 의 strategy 생성 시점 가드 + Phase B 의 자동 진입 시점 가드 = 다층 안전망)
+                try:
+                    _bal_info = exec_service.client.get_account()
+                    _wallet_total = Decimal(str(_bal_info.get('totalWalletBalance', '0')))
+                    # 모든 active strategy 의 total_capital 합 (사장님 안전 사상 — 자본 절대값 기준)
+                    _all_active = db.execute(
+                        select(StrategyInstance)
+                        .where(StrategyInstance.exchange_account_id == account.id)
+                        .where(StrategyInstance.is_archived.is_(False))
+                        .where(StrategyInstance.status.in_(ACTIVE_STAGE_STATUSES))
+                    ).scalars().all()
+                    _total_reserved = sum((Decimal(str(s.total_capital or 0)) for s in _all_active), Decimal('0'))
+                    if _total_reserved > _wallet_total and _wallet_total > 0:
+                        # wallet 부족 — 자동 진입 차단 + cooldown + Telegram (dedup)
+                        _first = _set_margin_cooldown(_redis, strategy.id, next_stage_no)
+                        logger.warning(
+                            "[stage-trigger] Phase B wallet 부족 차단 strategy=%s stage=%s — total_reserved=%s > wallet=%s (alert=%s)",
+                            strategy.id, next_stage_no, _total_reserved, _wallet_total, _first,
+                        )
+                        if _first:
+                            try:
+                                NotificationService(db).send_system_alert(
+                                    title=f"⚠️ [Wallet 부족 — 자동 진입 차단] #{strategy.id} {strategy.symbol} 단계{next_stage_no}",
+                                    body=(
+                                        f"손실 발생으로 wallet 감소 → 활성 strategy 자본 예약 합이 wallet 초과.\n\n"
+                                        f"📌 계산 (사장님 핵심 사상 — 잔액 기반 운영):\n"
+                                        f"  • 활성 strategy {len(_all_active)}개 자본 합: {_total_reserved:.2f} USDT\n"
+                                        f"  • Wallet: {_wallet_total:.2f} USDT\n"
+                                        f"  • 부족: {(_total_reserved - _wallet_total):.2f} USDT\n\n"
+                                        f"⚙️ 자동 stage 진입 차단 (사장님 자본 보호).\n"
+                                        f"💡 조치 (택1):\n"
+                                        f"  • USDT 입금 → wallet 회복\n"
+                                        f"  • 다른 strategy 일부 수동 청산 → 자본 예약 감소\n"
+                                        f"  • {_MARGIN_COOLDOWN_TTL // 60}분 후 자동 재시도 (cooldown)"
+                                    ),
+                                )
+                            except Exception:
+                                pass
+                        continue  # 다음 cycle
+                except Exception as _e:
+                    # wallet 검증 자체 실패 — 진입 진행 (preflight 가 백업 차단)
+                    logger.warning("[stage-trigger] Phase B wallet 검증 실패 (preflight 가 백업): %s", _e)
+
                 logger.info(
                     f"[stage-trigger] firing stage{next_stage_no} for #{strategy.id} "
                     f"{strategy.symbol} {strategy.side} (mark={mark} {'>=' if strategy.side == 'SHORT' else '<='} trig={trigger})"
