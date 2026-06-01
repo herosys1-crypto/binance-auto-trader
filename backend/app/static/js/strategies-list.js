@@ -31,6 +31,71 @@ async function refreshExchangeAccounts() {
   } catch (err) { /* 무시 */ }
 }
 
+// 2026-06-01 (사장님 요구): 전략 인스턴스 행 아래 Binance 실데이터 인라인 비교 표시.
+// account_id 별 snapshot 캐시 — refreshStrategies() 가 동시 fetch 후 _binanceCompareRow 가 읽음.
+// Backend 30초 캐시 + Frontend in-memory cache → API 부담 최소화.
+let _binancePositionsCache = {};  // { [accountId]: { fetched_at, positions: {symbol: {...}} } }
+
+async function _fetchBinancePositionsForAccounts(accountIds) {
+  if (!accountIds || accountIds.length === 0) return;
+  const uniqueIds = [...new Set(accountIds)];
+  await Promise.all(uniqueIds.map(async (id) => {
+    try {
+      const data = await api(`/exchange-accounts/${id}/binance-positions`);
+      _binancePositionsCache[id] = data;
+    } catch (e) {
+      // 실패 시 stale cache 유지 (사장님이 stale 시각 보고 인지)
+      console.warn(`[binance-compare] account=${id} fetch fail:`, e.message);
+    }
+  }));
+}
+
+// 우리 행 1줄 + 그 아래 Binance 비교 1줄 (colspan=9). Binance UI 컬럼명 동일.
+function _binanceCompareRow(s) {
+  const acctData = _binancePositionsCache[s.exchange_account_id];
+  if (!acctData) {
+    return `<tr class="bg-slate-900/40"><td colspan="9" class="text-xs text-slate-500 py-1 px-3">📊 Binance: 로딩 중...</td></tr>`;
+  }
+  const bp = (acctData.positions || {})[s.symbol];
+  const ts = acctData.fetched_at
+    ? new Date(acctData.fetched_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+    : '-';
+  if (!bp) {
+    return `<tr class="bg-slate-900/40">
+      <td colspan="9" class="text-xs py-1 px-3 font-mono">
+        <span class="text-cyan-400">📊 Binance:</span>
+        <span class="text-orange-400 ml-2">⚠ 거래소에 포지션 없음</span>
+        <span class="text-slate-500 ml-3">(우리 DB 와 차이 — 청산됐거나 다른 계정)</span>
+        <span class="text-slate-500 ml-3">확인 ${ts}</span>
+      </td>
+    </tr>`;
+  }
+  const roi = Number(bp.roi_pct);
+  const upnl = Number(bp.unrealized_pnl);
+  const roiCls = roi > 0 ? 'pos' : roi < 0 ? 'neg' : 'text-slate-400';
+  const upnlSign = upnl >= 0 ? '+' : '';
+  const roiSign = roi >= 0 ? '+' : '';
+  const marginDisp = bp.margin ? `${Number(bp.margin).toFixed(2)} USDT` : '-';
+  return `<tr class="bg-slate-900/40">
+    <td colspan="9" class="text-xs text-slate-300 py-1 px-3 font-mono">
+      <span class="text-cyan-400 font-semibold">📊 Binance:</span>
+      <span class="text-slate-500 ml-2">Size</span> <span class="${upnl>=0?'pos':'neg'}">${bp.size}</span>
+      <span class="text-slate-600">|</span>
+      <span class="text-slate-500">Entry</span> ${bp.entry_price}
+      <span class="text-slate-600">|</span>
+      <span class="text-slate-500">BE</span> ${bp.break_even_price}
+      <span class="text-slate-600">|</span>
+      <span class="text-slate-500">Mark</span> ${bp.mark_price}
+      <span class="text-slate-600">|</span>
+      <span class="text-slate-500">Margin</span> ${marginDisp} <span class="text-slate-500" style="font-size:10px">(${bp.margin_mode})</span>
+      <span class="text-slate-600">|</span>
+      <span class="text-slate-500">PNL</span> <span class="${roiCls} font-semibold">${upnlSign}${upnl.toFixed(2)} USDT</span>
+      <span class="${roiCls}">(${roiSign}${roi.toFixed(2)}%)</span>
+      <span class="text-slate-500 ml-3" title="Binance 호출 시각 (30초 캐시)">⏱ ${ts}</span>
+    </td>
+  </tr>`;
+}
+
 // 2026-05-06 (C-full Step 3): archived 보기 토글. localStorage 저장.
 let _showArchivedStrategies = localStorage.getItem('show_archived_strategies') === 'true';
 
@@ -142,6 +207,14 @@ async function refreshStrategies() {
       const bTerm = TERMINAL_STATUSES.includes((b.status || '').toUpperCase()) ? 1 : 0;
       return aTerm - bTerm || b.id - a.id;
     });
+
+    // 2026-06-01 (사장님 요구): 비활성 종료 행은 Binance 비교 X. active 만 fetch.
+    // 표시될 strategies 중 active 의 account_id 모음 → 병렬 fetch (Backend 30초 캐시).
+    const activeAccountIds = sorted
+      .filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()))
+      .map(s => s.exchange_account_id)
+      .filter(Boolean);
+    await _fetchBinancePositionsForAccounts(activeAccountIds);
 
     tbody.innerHTML = sorted.map(s => {
       const info = statusInfo(s.status);
@@ -320,6 +393,8 @@ async function refreshStrategies() {
         const pad = (n) => String(n).padStart(2, '0');
         return `${pad(d.getMonth()+1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
       })() : '-';
+      // 2026-06-01 (사장님 요구): 활성 전략만 Binance 비교 행 표시 (종료된 전략 비교 무의미).
+      const showBinanceCompare = !isTerminal && s.exchange_account_id;
       return `<tr class="row-clickable" onclick="selectStrategy(${s.id})">
         <td>#${s.id}</td>
         <td class="font-mono text-blue-300">
@@ -335,7 +410,7 @@ async function refreshStrategies() {
         <td class="num">${qty}</td>
         <td class="num">${pnl}</td>
         <td>${stopBtn}</td>
-      </tr>`;
+      </tr>${showBinanceCompare ? _binanceCompareRow(s) : ''}`;
     }).join('');
   } catch (err) { toast('전략 조회 실패: ' + err.message, 'error'); }
 }
