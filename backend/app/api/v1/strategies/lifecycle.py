@@ -60,6 +60,14 @@ def add_margin_to_strategy(
         execution_service.add_position_margin(strategy.id, amount=payload.amount)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    # 2026-06-03 (사장님 사상 정확 구현 — LABUSDT #16 -210 USDT 미보호 사고):
+    # 「💰 증거금 추가」 = 청산가 늦추기 위한 사장님 노력.
+    # → strategy.total_capital 도 자동 증가 → SL 임계 / reserved / 모든 안전망 자동 갱신.
+    # 이전: total_capital 갱신 X → SL 한도 옛값 유지 → 한도 도달 시 실손실 한도 훨씬 초과 가능.
+    # 이제: total_capital += amount → SL 한도 = (old + amount) × sl_pct / 100 / lev 자동 적용.
+    prev_capital = Decimal(str(strategy.total_capital or 0))
+    strategy.total_capital = prev_capital + payload.amount
+    db.commit()
     db.refresh(strategy)
     # 2026-05-06 (사용자 요청): 증거금 추가 시 텔레그램 알림 발송.
     try:
@@ -131,6 +139,13 @@ def add_position_to_strategy(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Exchange error: {e}") from e
+    # 2026-06-03 (사장님 사상 정확 구현 — 위 add_margin 와 동일 패턴):
+    # 「💉 포지션 추가」 = 청산 회피 + 이익 둘 다 잡기 위한 사장님 노력.
+    # → strategy.total_capital 도 자동 증가 → SL 임계 / reserved / 모든 안전망 자동 갱신.
+    # payload.amount_usdt = margin 금액 (qty × price / leverage 환산 전 자본).
+    prev_capital = Decimal(str(strategy.total_capital or 0))
+    strategy.total_capital = prev_capital + payload.amount_usdt
+    db.commit()
     db.refresh(strategy)
     order_type_label = payload.order_type.upper()
     # 2026-05-06 (사용자 요청): 포지션 추가 시 텔레그램 알림 발송.
