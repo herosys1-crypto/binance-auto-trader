@@ -336,16 +336,38 @@ def get_balance(
     if not account:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Exchange account not found")
 
+    # 2026-06-02 (#28 보강): Redis 캐시 15초 — frontend 5초 polling 부담 완화.
+    # 캐시는 Binance accountInfo 응답만 (reserved 계산은 매번 — strategy 가 자주 바뀜).
+    import json as _json
+    from app.core.redis_client import get_redis_client
+    _info_cache_key = f"binance:account_info:{exchange_account_id}"
+    _redis = None
+    info = None
     try:
-        client = BinanceClient(
-            api_key=decrypt_text(account.api_key_enc),
-            api_secret=decrypt_text(account.api_secret_enc),
-            is_testnet=account.is_testnet,
-        )
-        info = client.get_account()
-    except Exception as e:
-        logger.error("get_balance Binance call failed: account_id=%s error=%s", exchange_account_id, e)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Binance API 호출 실패: {e}") from e
+        _redis = get_redis_client()
+        cached = _redis.get(_info_cache_key)
+        if cached:
+            info = _json.loads(cached)
+    except Exception:
+        pass
+
+    if info is None:
+        try:
+            client = BinanceClient(
+                api_key=decrypt_text(account.api_key_enc),
+                api_secret=decrypt_text(account.api_secret_enc),
+                is_testnet=account.is_testnet,
+            )
+            info = client.get_account()
+        except Exception as e:
+            logger.error("get_balance Binance call failed: account_id=%s error=%s", exchange_account_id, e)
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Binance API 호출 실패: {e}") from e
+        # 캐시 저장 (Decimal → str)
+        if _redis is not None:
+            try:
+                _redis.setex(_info_cache_key, 15, _json.dumps(info, default=str))
+            except Exception:
+                pass
 
     def _d(v) -> Decimal:
         return Decimal(str(v)) if v is not None else Decimal("0")
