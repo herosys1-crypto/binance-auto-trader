@@ -44,6 +44,10 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
 if (token) {
   showDashboard();
   refreshAll();
+  // 2026-06-02 (#28 fix): 잔액 카드 + 시스템 배너도 5초 polling 에 포함.
+  // 이전 = 페이지 첫 load 후 새로고침 전까지 stale → 사장님이 새 strategy 만들 때 stale 잔액 위험.
+  // loadBalance() = Binance accountInfo 호출 (mainnet); 5초/req × 12회/분 = rate limit 충분.
+  // loadSystemStatus() = kill-switch / zombie 배너 (가벼움).
   setInterval(() => {
     if (!document.hidden) {
       refreshStrategies();
@@ -51,6 +55,8 @@ if (token) {
       refreshActivity();
       refreshStats();
       refreshSysHealth();
+      loadBalance();         // 🆕 거래소 잔액 카드 (5단계 풀 예약 + our_available 실시간)
+      loadSystemStatus();    // 🆕 ⚠️ Kill-switch / Zombie 배너 (안전 사상 가시화)
     }
   }, 5000);
 }
