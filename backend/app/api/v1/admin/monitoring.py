@@ -408,7 +408,7 @@ def get_stats_breakdown(
     if view not in {"strategies", "realized", "losses"}:
         raise HTTPException(status_code=400, detail=f"Unknown view: {view}")
 
-    # 공통 select — 핵심 필드만 (응답 가벼움)
+    # 공통 select — 핵심 필드만 (응답 가벼움). 2026-06-02 (#29): qty + avg_entry 추가 (진입실패 판정용).
     base = sa_select(
         StrategyInstance.id,
         StrategyInstance.symbol,
@@ -424,6 +424,8 @@ def get_stats_breakdown(
         StrategyInstance.started_at,
         StrategyInstance.stopped_at,
         StrategyInstance.created_at,
+        StrategyInstance.current_position_qty,
+        StrategyInstance.avg_entry_price,
     )
 
     # 2026-05-08 fix (사용자 보고): realized 탭이 PNL 절대값 큰 순이라 최신 데이터가
@@ -451,21 +453,64 @@ def get_stats_breakdown(
     else:  # strategies
         rows = db.execute(base.order_by(*_recent_first)).all()
 
-    def _classify(realized, status, stage, crisis, max_loss):
-        # 2026-05-12: 「수동정지」 분류 추가 — STOPPED/STOPPING 인 strategy 명시.
-        # 우선순위: 실현 손익 > 크라이시스 > 수동정지 > 큰 미실현 손실 > 종료/진행.
-        if realized is not None and Decimal(str(realized)) > 0:
-            return "수익"
-        if realized is not None and Decimal(str(realized)) < 0:
-            return "손실"
-        if crisis is not None:
+    def _classify(realized, status, stage, crisis, max_loss, qty, avg_entry):
+        """2026-06-02 (#29 fix) — STOPPED 의 3-way 분리.
+
+        우선순위:
+        1. 🚫진입실패 — STOPPED + 한 번도 체결 안 됨 (LIMIT 미체결 후 종료)
+        2. 🎯자동익절 — TP_FINAL 류 (COMPLETED + realized>0)
+        3. 🤖자동손절 — STOPPED_BY_SL / CLOSED_BY_SL
+        4. ✋수동손절 — STOPPED + 진입했었음 + realized<=0 (사용자가 손실 상태에서 stop)
+        5. ✋수동익절 — STOPPED + 진입했었음 + realized>0 (사용자가 익절 위치에서 stop)
+        6. 🚨크라이시스_진행중 — crisis active + not terminal
+        7. ✅수익 / 📉손실 — realized 기준 (옛 데이터 fallback)
+        8. ⚠️큰낙폭 — max_loss<-10 + 진행중
+        9. BREAKEVEN / 미진입_종료 / 진행중
+        """
+        realized_dec = Decimal(str(realized or 0))
+        stage_n = stage or 0
+        qty_zero = qty is None or Decimal(str(qty or 0)) == 0
+        entry_zero = avg_entry is None or Decimal(str(avg_entry or 0)) == 0
+        st_upper = (status or "").upper()
+
+        # 1. 진입실패 — STOPPED + 한 번도 체결 안 됨
+        if st_upper == "STOPPED" and stage_n == 0 and qty_zero and entry_zero and realized_dec == 0:
+            return "🚫진입실패"
+
+        # 2. 자동손절 — 시스템 SL 발동
+        if st_upper in ("STOPPED_BY_SL", "CLOSED_BY_SL"):
+            return "🤖자동손절"
+
+        # 3. 자동익절 — COMPLETED/REENTRY_READY 면서 수익
+        if st_upper in ("COMPLETED", "CLOSED", "REENTRY_READY") and realized_dec > 0:
+            return "🎯자동익절"
+
+        # 4. 수동손절/익절 — STOPPED 인데 진입했었음
+        if st_upper in ("STOPPED", "STOPPING"):
+            if realized_dec > 0:
+                return "✋수동익절"
+            if realized_dec < 0:
+                return "✋수동손절"
+            return "✋수동정지"  # 진입했지만 손익 0
+
+        # 5. 크라이시스 진행중
+        if crisis is not None and st_upper not in {"STOPPED", "COMPLETED", "REENTRY_READY", "CLOSED"}:
             return "🚨크라이시스"
-        if status in {"STOPPED", "STOPPING"}:
-            return "✋수동정지"
+
+        # 6. realized 기준 fallback
+        if realized_dec > 0:
+            return "✅수익"
+        if realized_dec < 0:
+            return "📉손실"
+
+        # 7. 진행중 큰낙폭
         if max_loss is not None and Decimal(str(max_loss)) < Decimal("-10"):
             return "⚠️큰낙폭"
-        if status in {"COMPLETED", "CLOSED", "REENTRY_READY"}:
-            return "BREAKEVEN" if (stage or 0) > 0 else "미진입_종료"
+
+        # 8. 정상 종료
+        if st_upper in {"COMPLETED", "CLOSED", "REENTRY_READY"}:
+            return "BREAKEVEN" if stage_n > 0 else "미진입_종료"
+
         return "진행중"
 
     items = [
@@ -484,14 +529,23 @@ def get_stats_breakdown(
             "started_at": r[11].isoformat() if r[11] else None,
             "stopped_at": r[12].isoformat() if r[12] else None,
             "created_at": r[13].isoformat() if r[13] else None,
-            "classification": _classify(r[5], r[3], r[4], r[9], r[7]),
+            "current_position_qty": str(r[14] or 0),
+            "avg_entry_price": str(r[15] or 0),
+            "classification": _classify(r[5], r[3], r[4], r[9], r[7], r[14], r[15]),
         }
         for r in rows
     ]
 
-    # 요약 — UI 헤더에 표시
-    profit_count = sum(1 for x in items if x["classification"] == "수익")
-    loss_count = sum(1 for x in items if x["classification"] == "손실")
+    # 요약 — UI 헤더에 표시 (2026-06-02 #29: 새 분류 카운트 추가)
+    def _cnt(cls):
+        return sum(1 for x in items if x["classification"] == cls)
+    profit_count = _cnt("✅수익") + _cnt("🎯자동익절") + _cnt("✋수동익절")
+    loss_count = _cnt("📉손실") + _cnt("🤖자동손절") + _cnt("✋수동손절")
+    never_entered_count = _cnt("🚫진입실패")
+    auto_tp_count = _cnt("🎯자동익절")
+    auto_sl_count = _cnt("🤖자동손절")
+    manual_stop_count = _cnt("✋수동손절") + _cnt("✋수동익절") + _cnt("✋수동정지")
+    crisis_count = sum(1 for x in items if x["crisis_triggered"])
     realized_sum = sum((Decimal(x["realized_pnl"]) for x in items), Decimal("0"))
     archived_count = sum(1 for x in items if x["is_archived"])
 
@@ -502,5 +556,11 @@ def get_stats_breakdown(
         "loss_count": loss_count,
         "archived_count": archived_count,
         "realized_pnl_sum": str(realized_sum),
+        # 2026-06-02 (#29): 분류별 정확한 카운트 — 사장님 통계 신뢰성 회복
+        "never_entered_count": never_entered_count,
+        "auto_tp_count": auto_tp_count,
+        "auto_sl_count": auto_sl_count,
+        "manual_stop_count": manual_stop_count,
+        "crisis_count": crisis_count,
         "items": items,
     }
