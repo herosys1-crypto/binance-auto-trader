@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy import select
@@ -8,6 +9,9 @@ from app.models.risk_event import RiskEvent
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_stage_plan import StrategyStagePlan
 from app.observability.metrics import user_stream_events_total
+
+logger = logging.getLogger(__name__)
+
 
 class StreamService:
     def __init__(self, db) -> None:
@@ -91,8 +95,8 @@ class StreamService:
                         invested_capital=stage_plan.planned_capital if stage_plan else None,
                         avg_entry_price=strategy.avg_entry_price,
                     )
-                except Exception:  # 알림 실패해도 거래 로직은 영향 없음
-                    pass
+                except Exception as _e:  # 알림 실패해도 거래 로직은 영향 없음
+                    logger.warning("[#13] stage_entered_alert 발송 실패 strategy=%s stage=%s: %s", strategy.id, order.stage_no, _e)
             # 2026-06-02 (#11): ENTRY 의 commission 도 차감 (realized_pnl 정확성).
             # ENTRY 는 PnL 0 이지만 commission 은 발생 → strategy.realized_pnl 에서 차감.
             try:
@@ -103,8 +107,8 @@ class StreamService:
                     if entry_commission > 0:
                         prev_realized = Decimal(str(strategy.realized_pnl or 0))
                         strategy.realized_pnl = (prev_realized - entry_commission).quantize(Decimal("0.01"))
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.warning("[#13] ENTRY commission 차감 실패 strategy=%s: %s", strategy.id if strategy else None, _e)
         elif strategy and order.purpose == "EXIT" and order.status in ("FILLED", "PARTIALLY_FILLED"):
             # 부분 청산 (TP1/2/3) vs 전체 청산 구분.
             # Bug fix history:
@@ -203,7 +207,8 @@ class StreamService:
                     try:
                         if commission_asset == "USDT":
                             commission_usdt = Decimal(str(commission_str))
-                    except Exception:
+                    except Exception as _e:
+                        logger.warning("[#13] EXIT commission Decimal 변환 실패 strategy=%s raw=%r: %s", strategy.id, commission_str, _e)
                         commission_usdt = Decimal("0")
                     realized_delta = realized_delta - commission_usdt
                     prev_realized = Decimal(str(strategy.realized_pnl or 0))
@@ -220,10 +225,10 @@ class StreamService:
                             exchange_account_id=strategy.exchange_account_id,
                             realized_delta=realized_delta,
                         )
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as _e:
+                        logger.warning("[#13] AccountDailyLossLimiter add_realized_delta 실패 strategy=%s acc=%s: %s", strategy.id, strategy.exchange_account_id, _e)
+            except Exception as _e:
+                logger.warning("[#13] EXIT realized_pnl 계산 전체 실패 strategy=%s order=%s: %s", strategy.id, order.client_order_id, _e)
         self.db.commit()
 
     def handle_account_update(self, payload: dict) -> None:
@@ -288,7 +293,8 @@ class StreamService:
                     amt = Decimal(str(p.get("positionAmt", "0")))
                     return amt.copy_abs()
             return Decimal("0")  # 매칭 항목 없으면 잔량 0
-        except Exception:
+        except Exception as _e:
+            logger.warning("[#13] _fetch_actual_position_qty 실패 strategy=%s symbol=%s: %s", strategy.id, strategy.symbol, _e)
             return None  # fail-soft
 
     def handle_listen_key_expired(self, payload: dict) -> None:
