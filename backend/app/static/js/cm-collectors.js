@@ -21,44 +21,50 @@ function _collectDirectInputs() {
   const caps = [];
   const triggers = [];
   const additionalMargins = [];
-  // 2026-06-03 (silent drop 방지): 빈값 발견 후 채워진 단계 감지 → submit 차단 + 사장님 confirm.
-  let firstEmpty = 0;  // 0 = 없음. > 0 = 그 단계부터 break.
-  const ignoredAfterEmpty = [];
+  // 2026-06-03 사장님 사상 정확 구현: 빈 단계 자동 압축 + trigger 누적.
+  // "3단계가 비워져있어도 4단계가 있으면 4단계가 3단계가 되어 한단계식 당기면 되고
+  //  3단계 진입금액이 없어도 조건에 10있으면 조건만 적용되고 다음단계에 진입가격에 10%가
+  //  변경이 되면 다음 단계진입해야 해"
+  //
+  // 동작:
+  //   - 빈 자본 단계 → skip (압축)
+  //   - 빈 단계의 trigger % 는 다음 채워진 단계의 trigger 에 누적
+  //   - 결과: 채워진 단계만 1, 2, 3, ... 로 backend 에 전송
+  //
+  // 예시:
+  //   입력  cap-1=50 / cap-2=50 (+10%) / cap-3=빈 (+10%) / cap-4=100 (+10%) / cap-5=150 (+10%)
+  //   변환  [50 (IMMED), 50 (+10%), 100 (+20% — cap-3 의 +10% + cap-4 의 +10% 누적), 150 (+10%)]
+  let pendingTriggerPct = 0;  // 누적된 빈 단계의 trigger %
   for (let i = 1; i <= 10; i++) {
     const v = document.getElementById('cm-cap-' + i).value;
     const valEmpty = (v === '' || v === null || v === undefined || Number(v) === 0);
-    if (firstEmpty > 0 && !valEmpty) {
-      ignoredAfterEmpty.push(i);
-      continue;  // 무시되는 단계 — 사장님 confirm 으로 처리
-    }
+    const tVal = document.getElementById('cm-trg-' + i) ? document.getElementById('cm-trg-' + i).value : '';
+    const tNum = Number(tVal) || 0;
+
     if (valEmpty) {
-      if (firstEmpty === 0) firstEmpty = i;
-      break;
+      // 빈 자본 단계 — trigger 가 있으면 다음 채워진 단계에 누적
+      if (i > 1 && tNum > 0) {
+        pendingTriggerPct += tNum;
+      }
+      continue;  // 자본 없는 단계는 skip (자동 압축)
     }
+
+    // 자본 있는 단계 — 누적 trigger 합산 후 push
     caps.push(String(v));
-    if (i === 1) {
-      triggers.push(null);  // 1단계는 IMMEDIATE
+    if (caps.length === 1) {
+      // 첫 채워진 단계 = 새 1단계 (IMMEDIATE)
+      triggers.push(null);
+      pendingTriggerPct = 0;  // 첫 단계는 누적 무시
     } else {
-      const t = document.getElementById('cm-trg-' + i).value;
-      triggers.push(t === '' ? null : String(t));
+      // 2 단계 이상 — 원 trigger + 빈 단계 누적 trigger
+      const totalT = tNum + pendingTriggerPct;
+      triggers.push(totalT > 0 ? String(totalT) : null);
+      pendingTriggerPct = 0;  // 사용 후 리셋
     }
     // 2026-05-11 (사용자 요청): 단계별 추가 증거금. 빈값/0 이면 null (= 추가 안 함).
     const addEl = document.getElementById('cm-add-margin-' + i);
     const addV = addEl ? addEl.value : '';
     additionalMargins.push((addV === '' || Number(addV) === 0) ? null : String(addV));
-  }
-  // 무시되는 단계 발견 시 사장님 명시 confirm 필요 (silent drop 방지)
-  if (ignoredAfterEmpty.length > 0) {
-    const ok = confirm(
-      `⚠️ 경고: ${firstEmpty}단계 자본이 비어있어서 ${ignoredAfterEmpty.join(', ')}단계는 ` +
-      `저장되지 않습니다 (backend silent drop).\n\n` +
-      `이대로 진행하시려면 OK (캡 ${caps.length}개만 저장), ` +
-      `취소 후 ${firstEmpty}단계 자본 입력 또는 ${ignoredAfterEmpty.join(', ')}단계 자본 삭제 권장.\n\n` +
-      `진행하시겠습니까?`
-    );
-    if (!ok) {
-      throw new Error(`사장님 취소 — ${firstEmpty}단계 빈값 + ${ignoredAfterEmpty.length}개 단계 silent drop 차단`);
-    }
   }
   // 사용자 기획 변경 (2026-04-30): 마지막 단계도 사용자 입력값 (예: 20%) 으로 진입.
   // 이전엔 LIQUIDATION_BUFFER 로 null 로 비웠으나, 이제는 PRICE_UP_PCT/PRICE_DOWN_PCT
