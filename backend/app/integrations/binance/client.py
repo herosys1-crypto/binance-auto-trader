@@ -142,6 +142,18 @@ class BinanceClient:
             signed=True,
         )
 
+    def get_position_mode(self) -> dict[str, Any]:
+        """현재 dualSidePosition 상태 조회 (Hedge mode 검증용).
+
+        2026-06-02 (#17): 신규 Sub-Account 등록 시 자동 검증. response: {"dualSidePosition": True/False}.
+        True = Hedge (LONG+SHORT), False = One-way (BOTH only — 우리 시스템 -4061 발생 원인).
+        """
+        return self._request(
+            "GET",
+            "/fapi/v1/positionSide/dual",
+            signed=True,
+        )
+
     def add_position_margin(
         self,
         *,

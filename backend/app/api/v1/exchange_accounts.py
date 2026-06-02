@@ -98,7 +98,61 @@ def create_exchange_account(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> ExchangeAccountResponse:
-    """거래소 API 키를 등록한다. api_key / api_secret 은 자동으로 암호화되어 저장된다."""
+    """거래소 API 키를 등록한다. api_key / api_secret 은 자동으로 암호화되어 저장된다.
+
+    2026-06-02 (#17): 신규 등록 시 Binance 거래소 직접 검증 + Hedge mode 자동 동기화.
+    - 검증 실패 (key 오류, IP 화이트리스트, 권한 등) → 계정 등록 차단 (DB 변화 X)
+    - mode mismatch (사장님이 hedge_mode_enabled=True 인데 거래소 One-way) → 자동 강제 변경
+    - 강제 변경 실패 (-4045 보유 포지션) → 계정 등록 차단 + 안내
+
+    배경 (사장님 6-01 사고):
+      새 Sub-Account 가 default One-way mode → 우리 시스템은 Hedge 사용 → 첫 거래 -4061.
+      사장님이 수동으로 dualSidePosition=true 호출해서 해결 → 이제 자동화.
+    """
+    # Step 1: 거래소 직접 검증 (DB 저장 전)
+    try:
+        verify_client = BinanceClient(
+            api_key=payload.api_key,
+            api_secret=payload.api_secret,
+            is_testnet=payload.is_testnet,
+        )
+        # Hedge mode 현재 상태 조회
+        mode_info = verify_client.get_position_mode()
+        current_dual = bool(mode_info.get("dualSidePosition"))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"⚠️ Binance API 검증 실패 — 계정 등록 차단: {e}\n\n"
+                f"원인 후보:\n"
+                f"  • API key/secret 오타 (앞뒤 공백 확인)\n"
+                f"  • IP 화이트리스트 미설정 (VPS IP 159.65.137.250 등록 필요)\n"
+                f"  • Futures 권한 없음 (Binance UI 에서 'Enable Futures' 체크)\n"
+                f"  • testnet/mainnet 환경 키 불일치"
+            ),
+        ) from e
+
+    # Step 2: Hedge mode 자동 동기화 (mismatch 시)
+    if current_dual != payload.hedge_mode_enabled:
+        try:
+            verify_client.change_position_mode(dual_side_position=payload.hedge_mode_enabled)
+            logger.info(
+                "Hedge mode auto-synced for new account: %s → %s (is_testnet=%s)",
+                current_dual, payload.hedge_mode_enabled, payload.is_testnet,
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"⚠️ Hedge mode 자동 설정 실패 (현재={current_dual}, 원함={payload.hedge_mode_enabled}): {e}\n\n"
+                    f"원인 후보:\n"
+                    f"  • 거래소에 활성 포지션 또는 미체결 주문 있음 (-4045 — dualSidePosition 변경 불가)\n"
+                    f"  • 해결: Binance UI 에서 모든 포지션/주문 정리 후 재등록\n\n"
+                    f"또는 사장님이 hedge_mode_enabled={not payload.hedge_mode_enabled} 로 등록하시려면 토글 변경 후 재시도."
+                ),
+            ) from e
+
+    # Step 3: 검증 + 동기화 성공 → DB 저장
     try:
         api_key_enc = encrypt_text(payload.api_key)
         api_secret_enc = encrypt_text(payload.api_secret)
