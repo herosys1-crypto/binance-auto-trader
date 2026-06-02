@@ -90,6 +90,55 @@ async function openCreateModal(editStrategyId) {
     submit.textContent = '🚀 전략 시작';
     if (inplaceBtn) inplaceBtn.classList.add('hidden');  // 신규 모드엔 숨김
   }
+  // 2026-06-02 (#35): 손절 ROI % → 실 USDT 손실 동적 미리보기 (사장님 헷갈림 방지)
+  _attachSlLossPreview();
+}
+
+// SL preview — 자본 + 레버리지 + sl% 입력 시 즉시 USDT 손실 계산 표시
+// 사장님 sl_pct=79 입력 시 -142 기대했는데 실 -71 발동했던 사례 재발 방지.
+function _attachSlLossPreview() {
+  const slInp = document.getElementById('cm-sl-pct');
+  const lvInp = document.getElementById('cm-leverage');
+  if (!slInp || !lvInp) return;
+  const recompute = () => {
+    const previewEl = document.getElementById('cm-sl-loss-preview');
+    if (!previewEl) return;
+    const sl = Number(slInp.value || 0);
+    const lev = Number(lvInp.value || 1) || 1;
+    // 모든 capital 입력 합
+    let totalCap = 0;
+    for (let i = 1; i <= 10; i++) {
+      const c = document.getElementById('cm-cap-' + i);
+      if (c && c.value) totalCap += Number(c.value || 0);
+    }
+    if (sl <= 0 || totalCap <= 0) {
+      previewEl.textContent = '';
+      return;
+    }
+    // ROI 기준 손실 = total_capital × sl_pct / 100 / leverage
+    const usdtLoss = totalCap * sl / 100 / lev;
+    previewEl.textContent =
+      `💰 예상 손실: 자본 ${totalCap.toFixed(2)} × ROI ${sl}% / ${lev}x = ` +
+      `약 ${usdtLoss.toFixed(2)} USDT 도달 시 전량 청산`;
+  };
+  // 입력 변경 시마다 recompute (한 번만 등록)
+  if (!slInp.dataset.previewBound) {
+    slInp.addEventListener('input', recompute);
+    slInp.dataset.previewBound = '1';
+  }
+  if (!lvInp.dataset.previewBound) {
+    lvInp.addEventListener('input', recompute);
+    lvInp.dataset.previewBound = '1';
+  }
+  // capital 입력들도 binding
+  for (let i = 1; i <= 10; i++) {
+    const c = document.getElementById('cm-cap-' + i);
+    if (c && !c.dataset.slPreviewBound) {
+      c.addEventListener('input', recompute);
+      c.dataset.slPreviewBound = '1';
+    }
+  }
+  recompute();
 }
 
 async function editStrategy(id) {
