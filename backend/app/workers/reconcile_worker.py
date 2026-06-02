@@ -38,6 +38,7 @@ from app.services.zombie_guardian import (
     enforce_terminal_qty_zero,
     detect_orphan_exchange_positions,
     detect_orphan_exchange_open_orders,
+    detect_orphan_db_orders,
     escalate_stuck_strategy,
     _stuck_inc,
     _stuck_clear,
@@ -440,6 +441,28 @@ def _do_reconcile(decrypt_func) -> None:
                 "detect_orphan_exchange_open_orders failed",
                 level="error", error=e,
                 tags={"event_type": "ORPHAN_OO_DETECTION_LOOP_FAILED"},
+            )
+
+        # ===== Phase 4 안전망 (2026-06-02 #20) — DB → 거래소 sync (외부 cancel 감지) =====
+        # 우리 DB Order.status = NEW/PARTIALLY_FILLED 인데 거래소 openOrders 에 없음
+        # → 사용자가 Binance UI 에서 직접 cancel 했거나 외부 expire
+        # → 우리 DB 가 stale 면 stage_trigger 가 매번 같은 stage 재시도 + 다음 단계 진입 불가
+        # → auto_fix_db=True 로 DB Order.status → CANCELED 자동 정정 + 알림.
+        try:
+            n_orphan_db = detect_orphan_db_orders(
+                db, decrypt_func=decrypt_func, auto_fix_db=True,
+            )
+            if n_orphan_db:
+                logger.warning(
+                    "Zombie Guardian: %d DB order(s) out-of-sync (auto-fixed)", n_orphan_db
+                )
+        except Exception as e:
+            logger.error("detect_orphan_db_orders 실패: %s", e)
+            db.rollback()
+            capture_strategy_event(
+                "detect_orphan_db_orders failed",
+                level="error", error=e,
+                tags={"event_type": "ORPHAN_DB_ORDER_DETECTION_LOOP_FAILED"},
             )
 
         # ===== Phase 4 안전망 — STOPPING 갇힘 감지 (2026-05-21, #77/#78 사례 재발 방지) =====

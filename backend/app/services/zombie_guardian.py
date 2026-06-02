@@ -589,3 +589,129 @@ def detect_orphan_exchange_open_orders(
                 continue
             logger.error("detect_orphan_exchange_open_orders 실패 acc=%s: %s", acc.id, e)
     return found
+
+
+def detect_orphan_db_orders(
+    db: Session,
+    *,
+    decrypt_func,
+    auto_fix_db: bool = True,
+    min_age_seconds: int = 60,
+) -> int:
+    """DB 의 NEW/PARTIALLY_FILLED order 중 거래소 openOrders 에 없는 것 감지.
+
+    2026-06-02 (#20 fix): 기존 detect_orphan_exchange_open_orders 의 반대 방향.
+      - 기존: 거래소에 open 인데 DB 매칭 없음 (orphan 거래소 측)
+      - 신규: DB 에 NEW 인데 거래소 openOrders 에 없음 (외부 cancel / expire)
+
+    문제 케이스:
+      - 사용자가 Binance UI 에서 직접 LIMIT 주문 취소
+      - 거래소가 외부 사유로 expire (시간 초과 등)
+      - 우리 DB Order.status 는 NEW 로 stale → stage_trigger 가 매번 같은 stage 재시도
+        but 실 주문 없음 → silently 실패 → 다음 단계 진입 불가
+
+    안전 가드:
+      - min_age_seconds (default 60) — 최근 생성 order 는 race condition 가능성, skip
+      - account 별 list_open_orders 1회 호출 (API 부담 최소)
+
+    auto_fix_db=True: DB Order.status → CANCELED 정정 (다음 stage_trigger 가 재시도 가능)
+    auto_fix_db=False: WARN RiskEvent 만 (운영자 판단)
+
+    Returns: 정정/감지한 order 건수
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.integrations.binance.client import BinanceClient
+    from app.models.order import Order
+    from app.core.api_backoff import is_account_banned, maybe_record_ban_from_exc
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=min_age_seconds)
+    accounts = db.execute(
+        select(ExchangeAccount).where(ExchangeAccount.is_active.is_(True))
+    ).scalars().all()
+
+    fixed = 0
+    for acc in accounts:
+        if is_account_banned(acc.id):
+            logger.info("detect_orphan_db_orders: API ban active acc=%s — skip", acc.id)
+            continue
+
+        # 이 계정의 active strategy 들 (archived 제외)
+        active_strategy_ids = [
+            row[0] for row in db.execute(
+                select(StrategyInstance.id)
+                .where(StrategyInstance.exchange_account_id == acc.id)
+                .where(StrategyInstance.is_archived.is_(False))
+            ).all()
+        ]
+        if not active_strategy_ids:
+            continue
+
+        # DB 의 NEW/PARTIALLY_FILLED order (min_age 이상)
+        local_orders = db.execute(
+            select(Order)
+            .where(Order.strategy_instance_id.in_(active_strategy_ids))
+            .where(Order.status.in_(["NEW", "PARTIALLY_FILLED"]))
+            .where(Order.created_at < cutoff)
+        ).scalars().all()
+        if not local_orders:
+            continue
+
+        # 거래소 openOrders 1회 호출
+        try:
+            client = BinanceClient(
+                api_key=decrypt_func(acc.api_key_enc),
+                api_secret=decrypt_func(acc.api_secret_enc),
+                is_testnet=acc.is_testnet,
+            )
+            exchange_open = client.list_open_orders()
+        except Exception as e:
+            if maybe_record_ban_from_exc(e, acc.id):
+                logger.warning("detect_orphan_db_orders: rate limit acc=%s — ban 기록, skip", acc.id)
+                continue
+            logger.error("detect_orphan_db_orders Binance 호출 실패 acc=%s: %s", acc.id, e)
+            continue
+
+        if not isinstance(exchange_open, list):
+            continue
+
+        exchange_client_oids = {
+            oo.get("clientOrderId") for oo in exchange_open if oo.get("clientOrderId")
+        }
+
+        # DB 에 있는데 거래소에 없는 것 = 외부 cancel / expire
+        for lo in local_orders:
+            if lo.client_order_id in exchange_client_oids:
+                continue  # 정상 (양쪽 다 있음)
+            old_status = lo.status
+            if auto_fix_db:
+                lo.status = "CANCELED"
+                lo.updated_at = datetime.now(timezone.utc)
+            db.add(RiskEvent(
+                strategy_instance_id=lo.strategy_instance_id,
+                event_type="DB_ORDER_OUT_OF_SYNC",
+                severity="WARN",
+                title="⚠️ DB 주문이 거래소에 없음 — 외부 cancel 감지",
+                message=(
+                    f"DB order {lo.client_order_id} (was status={old_status}) 가 "
+                    f"거래소 openOrders 에 없음. 외부에서 cancel 됐거나 expire. "
+                    + ("DB status → CANCELED 자동 정정." if auto_fix_db else "WARN only.")
+                ),
+                event_payload={
+                    "client_order_id": lo.client_order_id,
+                    "old_status": old_status,
+                    "new_status": "CANCELED" if auto_fix_db else old_status,
+                    "exchange_account_id": acc.id,
+                    "auto_fix_db": auto_fix_db,
+                },
+            ))
+            fixed += 1
+            logger.info(
+                "detect_orphan_db_orders: %s order %s strategy=%s (was %s)",
+                "fixed" if auto_fix_db else "warn",
+                lo.client_order_id, lo.strategy_instance_id, old_status,
+            )
+
+    if fixed > 0:
+        db.commit()
+
+    return fixed
