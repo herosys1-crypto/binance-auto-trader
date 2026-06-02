@@ -117,6 +117,11 @@ function _refreshLiveCalc() {
     let prevPrice = startPrice;
     let cumQty = 0, cumNotional = 0, cumMargin = 0;
     let prevLiq = null;
+    // 2026-06-03 (사장님 안전 sigil): 중간 단계 빈값 시 backend 가 break + 이후 무시.
+    // 사장님이 cap-3 비우고 cap-4 입력하면 미리보기는 표시되지만 실제 저장 X (silent drop).
+    // → 빈값 발견 후 채워진 단계는 '⚠ 무시됨' 빨강 강조 + 사장님 인지.
+    let firstEmptyStage = 0;  // 0 = 빈값 없음. > 0 = 그 단계 (포함) 부터 backend break.
+    const ignoredStages = [];  // 빈값 이후 채워진 단계 — submit 시 무시됨
     for (let i = 1; i <= 10; i++) {
       const capEl = document.getElementById('cm-cap-' + i);
       const trgEl = document.getElementById('cm-trg-' + i);
@@ -127,14 +132,32 @@ function _refreshLiveCalc() {
       const lossUsdEl = document.getElementById('cm-stage-lossusd-' + i);
       if (!capEl || !avgEl) continue;
       const cap = Number(capEl.value);
-      if (!cap || cap <= 0) {
-        if (entryEl) entryEl.textContent = '-';
-        if (avgEl) avgEl.textContent = '-';
-        if (liqEl) liqEl.textContent = '-';
-        if (lossEl) lossEl.textContent = '-';
-        if (lossUsdEl) lossUsdEl.textContent = '-';
+      // CASE A: 빈값 발견 후 채워진 단계 → silent drop 경고
+      if (firstEmptyStage > 0 && cap > 0) {
+        ignoredStages.push(i);
+        if (entryEl) { entryEl.textContent = '⚠ 무시'; entryEl.className = 'col-span-2 text-xs text-right text-red-500 font-bold'; }
+        if (avgEl) { avgEl.textContent = '⚠'; avgEl.className = 'col-span-2 text-xs text-right text-red-500 font-bold'; }
+        if (liqEl) { liqEl.textContent = '⚠'; liqEl.className = 'col-span-1 text-xs text-right text-red-500 font-bold'; }
+        if (lossEl) { lossEl.innerHTML = `<span class="text-red-500 font-bold" title="단계 ${firstEmptyStage} 비움 → 이 단계 submit 시 무시됨">⚠ ${firstEmptyStage} 비움</span>`; lossEl.className = 'col-span-1 text-xs text-right'; }
+        if (lossUsdEl) { lossUsdEl.textContent = '⚠'; lossUsdEl.className = 'col-span-2 text-xs text-right text-red-500 font-bold'; }
+        // capEl 자체에도 빨강 border 표시
+        capEl.classList.add('border-red-500');
+        capEl.style.borderWidth = '2px';
         continue;
       }
+      // CASE B: 빈값 (이게 첫 빈값이면 firstEmptyStage 기록)
+      if (!cap || cap <= 0) {
+        if (firstEmptyStage === 0) firstEmptyStage = i;
+        if (entryEl) { entryEl.textContent = '-'; entryEl.className = 'col-span-2 text-xs text-purple-300 text-right'; }
+        if (avgEl) { avgEl.textContent = '-'; avgEl.className = 'col-span-2 text-xs text-cyan-300 text-right'; }
+        if (liqEl) { liqEl.textContent = '-'; liqEl.className = 'col-span-1 text-xs text-orange-300 text-right'; }
+        if (lossEl) { lossEl.textContent = '-'; lossEl.className = 'col-span-1 text-xs text-red-400 text-right'; }
+        if (lossUsdEl) { lossUsdEl.textContent = '-'; lossUsdEl.className = 'col-span-2 text-xs text-red-300 text-right'; }
+        continue;
+      }
+      // CASE C: 정상 계산 — capEl 의 빨강 border 제거 (이전 cycle 잔재)
+      capEl.classList.remove('border-red-500');
+      capEl.style.borderWidth = '';
       // 1) 이 단계 진입가 (raw, leverage 무관)
       let entryPrice;
       if (i === 1) {
@@ -236,6 +259,26 @@ function _refreshLiveCalc() {
       }
       prevPrice = entryPrice;
       prevLiq = liq;
+    }
+    // 2026-06-03: 무시되는 단계 있으면 capitals 그리드 상단에 큰 경고 박스 표시
+    let warnBox = document.getElementById('cm-capitals-silent-drop-warn');
+    if (ignoredStages.length > 0) {
+      if (!warnBox) {
+        warnBox = document.createElement('div');
+        warnBox.id = 'cm-capitals-silent-drop-warn';
+        warnBox.className = 'mt-2 p-2 rounded bg-red-900/30 border-2 border-red-500';
+        const grid = document.getElementById('cm-capitals-grid');
+        if (grid && grid.parentNode) {
+          grid.parentNode.insertBefore(warnBox, grid.nextSibling);
+        }
+      }
+      warnBox.innerHTML =
+        `<p class="text-sm text-red-300 font-bold">⚠️ 중간 단계 빈값 → submit 시 ${ignoredStages.length}개 단계 무시됨!</p>` +
+        `<p class="text-xs text-slate-200 mt-1">${firstEmptyStage}단계 비움 → 이후 ${ignoredStages.join(', ')}단계 자본은 backend 가 저장하지 않습니다 (silent drop).</p>` +
+        `<p class="text-xs text-yellow-300 mt-1">해결: ${firstEmptyStage}단계 자본 입력 또는 ${ignoredStages.join(', ')}단계 자본 삭제 (마지막 단계부터 비우기 권장).</p>`;
+      warnBox.style.display = 'block';
+    } else if (warnBox) {
+      warnBox.style.display = 'none';
     }
   } catch (e) {
     // silent — 입력 중 일시적 NaN 등 무시
