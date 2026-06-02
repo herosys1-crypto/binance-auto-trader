@@ -215,7 +215,8 @@ async function submitCreateMulti() {
   for (let i = 0; i < symbols.length; i++) {
     const sym = symbols[i];
     try {
-      const tickerData = await api(`/market/ticker?symbol=${sym}&testnet=true`).catch(() => null);
+      // 2026-06-03 fix: 하드코드 testnet=true 제거 — 사장님 mainnet batch 진입 시 testnet 가격 사용 사고 차단.
+      const tickerData = await api(`/market/ticker?symbol=${sym}`).catch(() => null);
       const lastPrice = tickerData && tickerData.lastPrice ? Number(tickerData.lastPrice) : null;
       if (!lastPrice || lastPrice <= 0) {
         results.push({ symbol: sym, status: 'fail', message: '현재가 조회 실패 (심볼 invalid?)' });
