@@ -171,7 +171,9 @@ async function calcPreview() {
     symbol = validChips[0].symbol;
     // 각 심볼이 다른 시작가 사용 — 미리보기는 첫 심볼의 현재가로 산출 (다른 심볼은 자기 시작가 적용).
     try {
-      const ticker = await api(`/market/ticker?symbol=${symbol}&testnet=true`);
+      // 2026-06-03 fix: 하드코드 testnet=true 제거 — 사장님 mainnet 운영 중에 testnet 가격 호출 사고 차단.
+      // backend default = false (mainnet). testnet 계정이면 별도 처리 필요 (사장님 mainnet 만 사용 — 안전).
+      const ticker = await api(`/market/ticker?symbol=${symbol}`);
       startPrice = String(ticker.lastPrice);
       // 시작가 input 도 채워서 사용자에게 보이게 (혹시 단일 모드 전환할 때)
       const sp = document.getElementById('cm-start-price');
