@@ -155,8 +155,20 @@ class StreamService:
             else:
                 # 부분 청산 — delta 만큼 차감 (cur_qty - delta_abs).
                 # status / reentry_ready 는 그대로 (TP partial 진행 중 또는 PARTIAL 후속 대기).
+                #
+                # 2026-06-02 fix (사장님 발견 MYXUSDT alert 3회):
+                #   ACCOUNT_UPDATE 가 정확한 pa 로 먼저 갱신 후 ORDER_TRADE_UPDATE 가 또
+                #   delta 차감 → 중복 차감 (DB -408 vs 거래소 -611, 정확히 TP2 청산량 203 차이).
+                #   해결: partial 청산도 actual_position REST 호출로 정확한 잔량 사용.
+                #   REST 1회 추가 부담 < 동기화 정확성. failure 시 기존 delta 차감 fallback.
                 sign = Decimal("-1") if strategy.side == "SHORT" else Decimal("1")
-                strategy.current_position_qty = (remaining_abs * sign).quantize(Decimal("0.00000001"))
+                actual_remaining_partial = self._fetch_actual_position_qty(strategy)
+                if actual_remaining_partial is not None:
+                    # Binance 실 잔량 우선 — ACCOUNT_UPDATE 와 충돌 회피
+                    strategy.current_position_qty = (actual_remaining_partial * sign).quantize(Decimal("0.00000001"))
+                else:
+                    # REST 실패 fallback — 기존 delta 차감
+                    strategy.current_position_qty = (remaining_abs * sign).quantize(Decimal("0.00000001"))
                 # unrealized_pnl 은 다음 ACCOUNT_UPDATE 가 갱신
             # 실현 손익 누적 — delta 기반 (이번 이벤트 신규 체결분만 PnL 반영)
             try:
