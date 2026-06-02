@@ -253,8 +253,8 @@ class TPSLOrchestratorService:
                         time.sleep(0.2)
                         try:
                             self.db.refresh(close_order)
-                        except Exception:
-                            pass
+                        except Exception as _e:
+                            logger.warning("[#13] db.refresh(close_order) failed strategy=%s: %s", strategy.id, _e)
             # 마지막 fallback: latest_position.mark_price (stream 까지 fail 시 추정)
             if exit_px is None:
                 from app.repositories.position_repository import PositionRepository
@@ -271,8 +271,8 @@ class TPSLOrchestratorService:
                     realized_pnl = (close_qty * (avg_entry - exit_px)).quantize(USDT_PRICE_PRECISION)
                 pnl_pct = (raw_pct * leverage).quantize(USDT_PRICE_PRECISION)
                 avg_exit_price = exit_px
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.warning("[#13] TP pnl_pct 계산 실패 strategy=%s level=%s: %s", strategy.id, level, _e)
 
         self.notification_service.send_take_profit_alert(
             strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side, level=level,
@@ -301,8 +301,8 @@ class TPSLOrchestratorService:
             leverage = Decimal(str(strategy.leverage)) if strategy.leverage else LEVERAGE_FALLBACK
             if capital > 0:
                 pnl_pct = (loss_amount * leverage / capital * PERCENT_DENOMINATOR).quantize(USDT_PRICE_PRECISION)
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.warning("[#13] SL pnl_pct 계산 실패 strategy=%s: %s", strategy.id, _e)
 
         self.notification_service.send_stop_loss_alert(
             strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
@@ -343,8 +343,8 @@ class TPSLOrchestratorService:
                     mark = Decimal(str(latest_pos.mark_price))
                     cur_pnl = ((mark - avg_entry) / avg_entry * PERCENT_DENOMINATOR) if strategy.side == "LONG" else ((avg_entry - mark) / avg_entry * PERCENT_DENOMINATOR)
                     strategy.peak_pnl_pct_after_first_tp = cur_pnl
-            except Exception:
-                pass
+            except Exception as _e:
+                logger.warning("[#13] peak_pnl_pct_after_first_tp 갱신 실패 strategy=%s: %s", strategy.id, _e)
             self.db.commit()
             strategy_take_profit_total.labels(symbol=strategy.symbol, side=strategy.side, level="CRISIS_TP1").inc()
             self.notification_service.send_crisis_first_tp(
@@ -372,7 +372,8 @@ class TPSLOrchestratorService:
                     avg = Decimal(str(strategy.avg_entry_price))
                     mark = Decimal(str(latest_pos.mark_price))
                     cur_pnl = str((mark - avg) / avg * PERCENT_DENOMINATOR if strategy.side == "LONG" else (avg - mark) / avg * PERCENT_DENOMINATOR)
-            except Exception:
+            except Exception as _e:
+                logger.warning("[#13] CRISIS_TRAIL_FULL cur_pnl 계산 실패 strategy=%s: %s", strategy.id, _e)
                 cur_pnl = "?"
             self.notification_service.send_crisis_trailing_full(
                 strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
@@ -396,7 +397,8 @@ class TPSLOrchestratorService:
                     avg = Decimal(str(strategy.avg_entry_price))
                     mark = Decimal(str(latest_pos.mark_price))
                     cur_pnl = str((mark - avg) / avg * PERCENT_DENOMINATOR if strategy.side == "LONG" else (avg - mark) / avg * PERCENT_DENOMINATOR)
-            except Exception:
+            except Exception as _e:
+                logger.warning("[#13] CRISIS_HARD_SL cur_pnl 계산 실패 strategy=%s: %s", strategy.id, _e)
                 cur_pnl = "?"
             self.notification_service.send_crisis_hard_sl(
                 strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side, pnl_pct=cur_pnl,
