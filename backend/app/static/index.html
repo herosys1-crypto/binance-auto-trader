@@ -807,6 +807,21 @@
                 <p class="text-xs text-slate-500 mt-1">⚠️ 손실 한도 도달 시 잔량 100% <strong>강제 청산 (포지션 종료)</strong>. 사용자 정의 % 가 정확히 적용됨 (2026-05-14 fix).</p>
                 <!-- 2026-06-02 (#35): 실 USDT 손실 동적 계산 — 사장님이 자본/레버리지/sl 입력 시 즉시 표시 -->
                 <p id="cm-sl-loss-preview" class="text-xs text-yellow-300 mt-1 font-mono"></p>
+                <!-- 2026-06-03 신규: 자본 추가 자동 갱신 정책 (PR #55 의 빨강 박스와 짝) -->
+                <div class="mt-2 p-2 rounded bg-green-900/20 border border-green-700/40">
+                  <p class="text-xs text-green-300 font-semibold">✅ 자본 추가 → SL 한도 자동 갱신 (2026-06-03 fix)</p>
+                  <p class="text-xs text-slate-300 mt-1">
+                    사장님이 「💰 증거금 추가」 또는 「💉 포지션 추가」 클릭 시
+                    <code class="text-green-300">strategy.total_capital += amount</code> 자동 적용.
+                  </p>
+                  <p class="text-xs text-slate-400 mt-1">
+                    📊 예시: 자본 200 + 증거금 50 추가 → total_capital = 250 → SL 한도 = 250 × 80% / 2x = <strong>100 USDT</strong> (이전 80 → 100)
+                    <br>→ 사장님 청산가 늦추기 노력이 SL 한도에도 자동 보호.
+                  </p>
+                  <p class="text-xs text-blue-300 mt-1">
+                    💡 영향 안전망 (자동 정확): SL 임계 / reserved (5단계 풀 예약) / 잔액 표시 / 통계
+                  </p>
+                </div>
               </div>
               <p class="text-xs text-slate-500 mt-2">트레일링 익절: 피크 ≥ +5% 후 피크 대비 -5% 회귀 시 잔량 100% 청산 (자동, stage>=3 + TP3+ 후).</p>
 
