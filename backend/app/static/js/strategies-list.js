@@ -51,6 +51,8 @@ async function _fetchBinancePositionsForAccounts(accountIds) {
 }
 
 // 우리 행 1줄 + 그 아래 Binance 비교 1줄 (colspan=9). Binance UI 컬럼명 동일.
+// 2026-06-02 보강: 우리 DB vs Binance 차이 자동 감지 → 차이 발견 시 빨강 배경 + ⚠ 강조.
+// 임계 = sync_health_monitor 와 동일 (수량 1%, 진입가 0.1%, uPnL 1 USDT).
 function _binanceCompareRow(s) {
   const acctData = _binancePositionsCache[s.exchange_account_id];
   if (!acctData) {
@@ -60,28 +62,61 @@ function _binanceCompareRow(s) {
   const ts = acctData.fetched_at
     ? new Date(acctData.fetched_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
     : '-';
+  // CASE A: Binance 에 포지션 없음 — 우리 DB 와 큰 차이 (가장 위험)
   if (!bp) {
-    return `<tr class="bg-slate-900/40">
+    return `<tr class="bg-red-900/40 border-l-4 border-red-500">
       <td colspan="9" class="text-xs py-1 px-3 font-mono">
-        <span class="text-cyan-400">📊 Binance:</span>
-        <span class="text-orange-400 ml-2">⚠ 거래소에 포지션 없음</span>
-        <span class="text-slate-500 ml-3">(우리 DB 와 차이 — 청산됐거나 다른 계정)</span>
-        <span class="text-slate-500 ml-3">확인 ${ts}</span>
+        <span class="text-red-300 font-bold">📊 Binance: ⚠ 거래소에 포지션 없음 — 큰 차이!</span>
+        <span class="text-slate-400 ml-3">(우리 DB 만 있음 — 청산됐거나 다른 계정)</span>
+        <span class="text-slate-500 ml-3">⏱ ${ts}</span>
       </td>
     </tr>`;
   }
+  // CASE B: 양쪽 다 있음 — 필드별 차이 계산
+  const ourQty = Number(s.current_position_qty || 0);
+  const ourEntry = Number(s.avg_entry_price || 0);
+  const ourUpnl = Number(s.unrealized_pnl || 0);
+  const bnQty = Number(bp.size);
+  const bnEntry = Number(bp.entry_price);
+  const bnUpnl = Number(bp.unrealized_pnl);
+
+  // sync_health_monitor 와 동일 임계
+  const qtyDiffPct = ourQty !== 0 ? Math.abs((ourQty - bnQty) / ourQty * 100) : (bnQty !== 0 ? 100 : 0);
+  const entryDiffPct = ourEntry > 0 ? Math.abs((ourEntry - bnEntry) / ourEntry * 100) : 0;
+  const upnlDiff = Math.abs(ourUpnl - bnUpnl);
+  const qtyMismatch = qtyDiffPct > 1.0;       // 수량 1% 이상 차이
+  const entryMismatch = entryDiffPct > 0.1;   // 진입가 0.1% 이상 차이
+  const upnlMismatch = upnlDiff > 1.0;        // 미실현 1 USDT 이상 차이
+  const mismatchCount = (qtyMismatch?1:0) + (entryMismatch?1:0) + (upnlMismatch?1:0);
+  const hasAnyMismatch = mismatchCount > 0;
+
   const roi = Number(bp.roi_pct);
   const upnl = Number(bp.unrealized_pnl);
   const roiCls = roi > 0 ? 'pos' : roi < 0 ? 'neg' : 'text-slate-400';
   const upnlSign = upnl >= 0 ? '+' : '';
   const roiSign = roi >= 0 ? '+' : '';
   const marginDisp = bp.margin ? `${Number(bp.margin).toFixed(2)} USDT` : '-';
-  return `<tr class="bg-slate-900/40">
+
+  // 배경 + 헤더 — 차이 있으면 빨강, 없으면 회색 + ✓
+  const rowBg = hasAnyMismatch ? 'bg-red-900/30 border-l-4 border-red-500' : 'bg-slate-900/40';
+  const header = hasAnyMismatch
+    ? `<span class="text-red-400 font-bold" title="차이 ${mismatchCount}건 — 호버로 우리 DB 값 확인">📊 Binance: ⚠ 차이 ${mismatchCount}건</span>`
+    : `<span class="text-cyan-400 font-semibold">📊 Binance:</span> <span class="text-green-400 text-xs">✓ 일치</span>`;
+
+  // 필드별 강조 — 차이 있는 필드만 빨강 + ⚠ + tooltip 으로 우리 DB 값
+  const sizeCls = qtyMismatch ? 'text-red-400 font-bold' : (upnl>=0?'pos':'neg');
+  const sizeWarn = qtyMismatch ? `<span class="text-red-400 ml-1" title="우리 DB: ${ourQty} (차이 ${qtyDiffPct.toFixed(1)}%)">⚠</span>` : '';
+  const entryCls = entryMismatch ? 'text-red-400 font-bold' : 'text-slate-200';
+  const entryWarn = entryMismatch ? `<span class="text-red-400 ml-1" title="우리 DB: ${ourEntry} (차이 ${entryDiffPct.toFixed(3)}%)">⚠</span>` : '';
+  const pnlCls = upnlMismatch ? 'text-red-400 font-bold' : roiCls;
+  const pnlWarn = upnlMismatch ? `<span class="text-red-400 ml-1" title="우리 DB: ${ourUpnl.toFixed(2)} USDT (차이 ${upnlDiff.toFixed(2)} USDT)">⚠</span>` : '';
+
+  return `<tr class="${rowBg}">
     <td colspan="9" class="text-xs text-slate-300 py-1 px-3 font-mono">
-      <span class="text-cyan-400 font-semibold">📊 Binance:</span>
-      <span class="text-slate-500 ml-2">Size</span> <span class="${upnl>=0?'pos':'neg'}">${bp.size}</span>
+      ${header}
+      <span class="text-slate-500 ml-2">Size</span> <span class="${sizeCls}">${bp.size}</span>${sizeWarn}
       <span class="text-slate-600">|</span>
-      <span class="text-slate-500">Entry</span> ${bp.entry_price}
+      <span class="text-slate-500">Entry</span> <span class="${entryCls}">${bp.entry_price}</span>${entryWarn}
       <span class="text-slate-600">|</span>
       <span class="text-slate-500">BE</span> ${bp.break_even_price}
       <span class="text-slate-600">|</span>
@@ -89,7 +124,7 @@ function _binanceCompareRow(s) {
       <span class="text-slate-600">|</span>
       <span class="text-slate-500">Margin</span> ${marginDisp} <span class="text-slate-500" style="font-size:10px">(${bp.margin_mode})</span>
       <span class="text-slate-600">|</span>
-      <span class="text-slate-500">PNL</span> <span class="${roiCls} font-semibold">${upnlSign}${upnl.toFixed(2)} USDT</span>
+      <span class="text-slate-500">PNL</span> <span class="${pnlCls}">${upnlSign}${upnl.toFixed(2)} USDT</span>${pnlWarn}
       <span class="${roiCls}">(${roiSign}${roi.toFixed(2)}%)</span>
       <span class="text-slate-500 ml-3" title="Binance 호출 시각 (30초 캐시)">⏱ ${ts}</span>
     </td>
