@@ -59,16 +59,19 @@ class RiskService:
         if (strategy.current_stage or 0) < total_stages:
             return False
         current_loss_amount = Decimal(str(strategy.realized_pnl)) + Decimal(str(strategy.unrealized_pnl))
-        # SL 은 레버리지 적용된 ROI 기준.
-        # threshold = total_capital × (sl_pct/100) / leverage.
-        # ROI -sl_pct% 도달 → USD 손실 = -capital × (sl_pct/100) / leverage.
-        # 2026-05-14 fix (사용자 발견 버그): 이전엔 Decimal("0.50") hardcoded —
-        # template.stop_loss_percent_of_capital (사용자 입력) 무시됐음.
-        # 사용자가 「🛑 손절: 90」 입력해도 코드는 50% 만 사용 → 사용자 의도 위배.
-        # 이제 template 값 우선 (NULL 또는 0 이하면 default 50%).
+        # 2026-06-03 (사장님 사상 정확화): SL = 투자금 대비 손실 % (레버리지 무관).
+        # threshold = total_capital × (sl_pct/100)
+        # 사장님 명시: "투자금에 -80%일때 실행되어야해 레버리지 와 상관없이
+        #               증거금과 포지션추가를 했을때 전체금액에 손실이 -80% 일때 발동.
+        #               리스크가 투자금액의 80%가 없어지는거야"
+        #
+        # 이전 계산 (잘못): threshold = capital × sl_pct / 100 / leverage  ← ROI 기준 = 레버리지 적용
+        # 신규 계산 (정확): threshold = capital × sl_pct / 100              ← 자본 절대값 % = 레버리지 무관
+        #
+        # total_capital 은 PR #56 (2026-06-03) 으로 「💰 증거금 추가」/「💉 포지션 추가」 시
+        # 자동 += amount → 모든 자본 노력 (단계 + 수동/자동 추가) 합산 자동 반영.
         from app.core.risk_constants import (
             DEFAULT_SL_PCT_OF_CAPITAL,
-            LEVERAGE_FALLBACK,
             PERCENT_DENOMINATOR,
         )
         from app.models.strategy_template import StrategyTemplate
@@ -76,13 +79,32 @@ class RiskService:
         sl_pct = (
             Decimal(str(tpl.stop_loss_percent_of_capital))
             if tpl and tpl.stop_loss_percent_of_capital and Decimal(str(tpl.stop_loss_percent_of_capital)) > 0
-            else DEFAULT_SL_PCT_OF_CAPITAL  # template 미설정 시 default 50%
+            else DEFAULT_SL_PCT_OF_CAPITAL  # template 미설정 시 default 80%
         )
-        leverage = Decimal(str(strategy.leverage)) if strategy.leverage else LEVERAGE_FALLBACK
-        threshold = (Decimal(str(strategy.total_capital)) * (sl_pct / PERCENT_DENOMINATOR)) / leverage
+        total_capital = Decimal(str(strategy.total_capital))
+        # 사장님 사상 — 레버리지 무관, 투자금 대비 직접 비율
+        threshold = total_capital * (sl_pct / PERCENT_DENOMINATOR)
         is_stop = current_loss_amount <= (-threshold)
         if is_stop:
-            self.db.add(RiskEvent(strategy_instance_id=strategy.id, event_type="STOP_LOSS_TRIGGERED", severity="CRITICAL", title="🛑 손절 발동 (Stop Loss)", message=f"현재 손실 {current_loss_amount} USDT 가 한도 {-threshold} USDT 초과 → 강제 전량 청산", event_payload={"current_loss_amount": str(current_loss_amount), "threshold": str(-threshold)}))
+            actual_loss_pct = (-current_loss_amount / total_capital * 100) if total_capital > 0 else Decimal("0")
+            self.db.add(RiskEvent(
+                strategy_instance_id=strategy.id,
+                event_type="STOP_LOSS_TRIGGERED",
+                severity="CRITICAL",
+                title="🛑 손절 발동 (Stop Loss)",
+                message=(
+                    f"투자금 {total_capital} USDT 대비 손실 {actual_loss_pct:.2f}% "
+                    f"({current_loss_amount} USDT) → 한도 {sl_pct}% ({-threshold} USDT) 초과 → 강제 전량 청산. "
+                    f"(레버리지 무관 — 사장님 사상 2026-06-03 적용)"
+                ),
+                event_payload={
+                    "current_loss_amount": str(current_loss_amount),
+                    "threshold": str(-threshold),
+                    "total_capital": str(total_capital),
+                    "sl_pct": str(sl_pct),
+                    "actual_loss_pct": str(actual_loss_pct),
+                },
+            ))
             strategy_stop_loss_total.labels(symbol=strategy.symbol, side=strategy.side).inc()
             self.db.flush()
         return is_stop

@@ -90,21 +90,24 @@ async function openCreateModal(editStrategyId) {
     submit.textContent = '🚀 전략 시작';
     if (inplaceBtn) inplaceBtn.classList.add('hidden');  // 신규 모드엔 숨김
   }
-  // 2026-06-02 (#35): 손절 ROI % → 실 USDT 손실 동적 미리보기 (사장님 헷갈림 방지)
+  // 2026-06-03 (사장님 사상 정확 적용): SL = 투자금 대비 손실 % (레버리지 무관)
   _attachSlLossPreview();
 }
 
-// SL preview — 자본 + 레버리지 + sl% 입력 시 즉시 USDT 손실 계산 표시
-// 사장님 sl_pct=79 입력 시 -142 기대했는데 실 -71 발동했던 사례 재발 방지.
+// SL preview — 자본 + sl% 입력 시 즉시 USDT 손실 계산 표시 (레버리지 무관).
+// 2026-06-03 사장님 명확한 사상:
+//   "투자금에 -80%일때 실행되어야해 레버리지 와 상관없이
+//    증거금과 포지션추가를 했을때 전체금액에 손실이 -80% 일때 발동.
+//    리스크가 투자금액의 80%가 없어지는거야"
 function _attachSlLossPreview() {
   const slInp = document.getElementById('cm-sl-pct');
-  const lvInp = document.getElementById('cm-leverage');
-  if (!slInp || !lvInp) return;
+  const lvInp = document.getElementById('cm-leverage');  // 표시용 — 계산엔 사용 X
+  if (!slInp) return;
   const recompute = () => {
     const previewEl = document.getElementById('cm-sl-loss-preview');
     if (!previewEl) return;
     const sl = Number(slInp.value || 0);
-    const lev = Number(lvInp.value || 1) || 1;
+    const lev = Number(lvInp ? lvInp.value || 1 : 1) || 1;
     // 모든 capital 입력 합
     let totalCap = 0;
     for (let i = 1; i <= 10; i++) {
@@ -115,11 +118,12 @@ function _attachSlLossPreview() {
       previewEl.textContent = '';
       return;
     }
-    // ROI 기준 손실 = total_capital × sl_pct / 100 / leverage
-    const usdtLoss = totalCap * sl / 100 / lev;
+    // 사장님 사상 (레버리지 무관): 투자금 × sl_pct / 100 = 손실 한도
+    const usdtLoss = totalCap * sl / 100;
     previewEl.textContent =
-      `💰 예상 손실: 자본 ${totalCap.toFixed(2)} × ROI ${sl}% / ${lev}x = ` +
-      `약 ${usdtLoss.toFixed(2)} USDT 도달 시 전량 청산`;
+      `💰 예상 손실: 투자금 ${totalCap.toFixed(2)} × ${sl}% = ` +
+      `약 ${usdtLoss.toFixed(2)} USDT 도달 시 전량 청산 ` +
+      `(레버리지 ${lev}x 무관 — 자본 기준)`;
   };
   // 입력 변경 시마다 recompute (한 번만 등록)
   if (!slInp.dataset.previewBound) {
