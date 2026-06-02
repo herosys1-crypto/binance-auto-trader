@@ -93,38 +93,88 @@ function _localizeActivity(text) {
   return out;
 }
 
+// 2026-06-02 (#16): client-side cache + 필터 — fetch 한 번 후 type/검색 즉시 반영
+let _activityCache = [];           // 마지막 fetch 결과 (filter 적용 전)
+let _activityTypeFilter = 'ALL';   // ALL / ORDER / RISK / NOTIFY
+let _activitySearchTerm = '';
+
+function setActivityTypeFilter(type) {
+  _activityTypeFilter = type;
+  // 버튼 active 표시
+  document.querySelectorAll('.activity-type-filter').forEach(b => {
+    if (b.dataset.type === type) {
+      b.classList.add('btn-primary'); b.classList.remove('btn-ghost');
+    } else {
+      b.classList.add('btn-ghost'); b.classList.remove('btn-primary');
+    }
+  });
+  applyActivityFilter();
+}
+
+function applyActivityFilter() {
+  const searchInp = document.getElementById('activity-search-input');
+  _activitySearchTerm = searchInp ? searchInp.value.trim().toUpperCase() : '';
+  _renderActivityFeed();
+}
+
+function _renderActivityFeed() {
+  const el = document.getElementById('activity-feed');
+  if (!el) return;
+  let filtered = _activityCache;
+  // type 필터
+  if (_activityTypeFilter !== 'ALL') {
+    filtered = filtered.filter(t => t.kind === _activityTypeFilter);
+  }
+  // 검색 (symbol 또는 #ID)
+  if (_activitySearchTerm) {
+    const needle = _activitySearchTerm;
+    const idMatch = needle.match(/^#?(\d+)$/);
+    const idNum = idMatch ? Number(idMatch[1]) : null;
+    filtered = filtered.filter(t => {
+      if (idNum !== null && t.strategy_id === idNum) return true;
+      if (t.symbol && t.symbol.toUpperCase().includes(needle)) return true;
+      return false;
+    });
+  }
+  const lbl = document.getElementById('activity-count-label');
+  if (lbl) {
+    const filterDesc = (_activityTypeFilter === 'ALL' ? '' : ` ${_activityTypeFilter}`) +
+                       (_activitySearchTerm ? ` 검색="${_activitySearchTerm}"` : '');
+    lbl.textContent = `(${filtered.length} / ${_activityCache.length}건${filterDesc})`;
+  }
+  if (!filtered.length) {
+    el.innerHTML = `<p class="text-slate-500 text-sm text-center py-4">필터 조건에 맞는 활동 없음 ${_activityCache.length > 0 ? '(전체 ' + _activityCache.length + '건 중 0건)' : '(이력 없음)'}</p>`;
+    return;
+  }
+  const kindColor = { ORDER: 'text-blue-300', RISK: 'text-red-300', NOTIFY: 'text-slate-400' };
+  el.innerHTML = filtered.map(t => {
+    const ts = new Date(t.ts);
+    const tsStr = ts.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const kindCls = kindColor[t.kind] || 'text-slate-300';
+    const stratLink = t.strategy_id
+      ? `<button onclick="event.stopPropagation(); selectStrategy(${t.strategy_id})" class="text-blue-400 hover:underline">#${t.strategy_id}</button>`
+      : '<span class="text-slate-500">-</span>';
+    return `<div class="flex gap-3 py-1.5 border-b border-slate-700 last:border-0 text-xs">
+      <div class="text-slate-500 font-mono whitespace-nowrap" style="min-width:120px">${tsStr}</div>
+      <div class="text-lg leading-tight">${t.icon}</div>
+      <div class="whitespace-nowrap" style="min-width:100px">${stratLink} <span class="text-slate-400">${escapeHtml(t.symbol || '')}</span></div>
+      <div class="flex-1">
+        <div class="${kindCls} font-semibold">${escapeHtml(_localizeActivity(t.title))}</div>
+        <div class="text-slate-400 text-xs mt-0.5">${escapeHtml(_localizeActivity((t.detail || '')).slice(0, 200))}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 async function refreshActivity() {
   try {
     // 2026-05-12 (사용자 요청): 20건 hardcode → 사용자 선택 (20/50/100/200/500).
     const limitSel = document.getElementById('activity-limit-select');
     const limit = limitSel ? Number(limitSel.value || 50) : 50;
     const data = await api(`/admin/recent-activity?limit=${limit}`);
-    const el = document.getElementById('activity-feed');
+    _activityCache = Array.isArray(data) ? data : [];
     document.getElementById('activity-updated').textContent = '갱신 ' + new Date().toLocaleTimeString('ko-KR');
-    const lbl = document.getElementById('activity-count-label');
-    if (lbl) lbl.textContent = `(최신순 ${data.length}건${data.length >= limit ? ' — 더 보려면 ↑ 표시 변경' : ''})`;
-    if (!data.length) {
-      el.innerHTML = '<p class="text-slate-500 text-sm text-center py-4">활동 이력 없음</p>';
-      return;
-    }
-    const kindColor = { ORDER: 'text-blue-300', RISK: 'text-red-300', NOTIFY: 'text-slate-400' };
-    el.innerHTML = data.map(t => {
-      const ts = new Date(t.ts);
-      const tsStr = ts.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const kindCls = kindColor[t.kind] || 'text-slate-300';
-      const stratLink = t.strategy_id
-        ? `<button onclick="event.stopPropagation(); selectStrategy(${t.strategy_id})" class="text-blue-400 hover:underline">#${t.strategy_id}</button>`
-        : '<span class="text-slate-500">-</span>';
-      return `<div class="flex gap-3 py-1.5 border-b border-slate-700 last:border-0 text-xs">
-        <div class="text-slate-500 font-mono whitespace-nowrap" style="min-width:120px">${tsStr}</div>
-        <div class="text-lg leading-tight">${t.icon}</div>
-        <div class="whitespace-nowrap" style="min-width:100px">${stratLink} <span class="text-slate-400">${escapeHtml(t.symbol || '')}</span></div>
-        <div class="flex-1">
-          <div class="${kindCls} font-semibold">${escapeHtml(_localizeActivity(t.title))}</div>
-          <div class="text-slate-400 text-xs mt-0.5">${escapeHtml(_localizeActivity((t.detail || '')).slice(0, 200))}</div>
-        </div>
-      </div>`;
-    }).join('');
+    _renderActivityFeed();  // 필터 적용된 상태로 렌더
   } catch (err) { /* 실패는 무시 */ }
 }
 

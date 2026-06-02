@@ -915,7 +915,16 @@
   <div class="card rounded-lg mb-2">
     <div class="card-header text-xs flex justify-between items-center flex-wrap gap-2" style="padding:8px 12px">
       <span>📡 최근 활동 <span id="activity-count-label" class="text-slate-400">(최신순 20건)</span></span>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 flex-wrap">
+        <!-- 2026-06-02 (#16): type 필터 + 검색 — client-side, 데이터 보존 -->
+        <div class="flex items-center gap-1" title="활동 type 필터 (client-side)">
+          <button class="activity-type-filter btn-primary btn text-xs" data-type="ALL" onclick="setActivityTypeFilter('ALL')" style="padding:2px 6px">전체</button>
+          <button class="activity-type-filter btn-ghost btn text-xs" data-type="ORDER" onclick="setActivityTypeFilter('ORDER')" style="padding:2px 6px" title="주문 체결 / 발송 이벤트">📦 주문</button>
+          <button class="activity-type-filter btn-ghost btn text-xs" data-type="RISK" onclick="setActivityTypeFilter('RISK')" style="padding:2px 6px" title="위험 이벤트 / SL / 크라이시스 / mismatch">⚠️ 위험</button>
+          <button class="activity-type-filter btn-ghost btn text-xs" data-type="NOTIFY" onclick="setActivityTypeFilter('NOTIFY')" style="padding:2px 6px" title="Telegram 알림 / 시스템 통지">📢 알림</button>
+        </div>
+        <input id="activity-search-input" type="text" placeholder="🔍 검색 (심볼 또는 #ID)" oninput="applyActivityFilter()"
+               class="bg-slate-800 border border-slate-600 rounded text-xs px-2 py-0.5" style="width:140px" title="symbol 또는 strategy ID 검색 (client-side)">
         <!-- 2026-05-12 (사용자 요청): 20건 한도 → 50/100/200/500 선택 + 「더 보기」. -->
         <label class="text-xs text-slate-400 flex items-center gap-1" title="한 번에 가져올 활동 건수">
           표시:
