@@ -93,6 +93,18 @@ class StreamService:
                     )
                 except Exception:  # 알림 실패해도 거래 로직은 영향 없음
                     pass
+            # 2026-06-02 (#11): ENTRY 의 commission 도 차감 (realized_pnl 정확성).
+            # ENTRY 는 PnL 0 이지만 commission 은 발생 → strategy.realized_pnl 에서 차감.
+            try:
+                commission_str = mapped.get("commission") or "0"
+                commission_asset = (mapped.get("commission_asset") or "").upper()
+                if commission_asset == "USDT":
+                    entry_commission = Decimal(str(commission_str))
+                    if entry_commission > 0:
+                        prev_realized = Decimal(str(strategy.realized_pnl or 0))
+                        strategy.realized_pnl = (prev_realized - entry_commission).quantize(Decimal("0.01"))
+            except Exception:
+                pass
         elif strategy and order.purpose == "EXIT" and order.status in ("FILLED", "PARTIALLY_FILLED"):
             # 부분 청산 (TP1/2/3) vs 전체 청산 구분.
             # Bug fix history:
@@ -170,7 +182,10 @@ class StreamService:
                     # REST 실패 fallback — 기존 delta 차감
                     strategy.current_position_qty = (remaining_abs * sign).quantize(Decimal("0.00000001"))
                 # unrealized_pnl 은 다음 ACCOUNT_UPDATE 가 갱신
-            # 실현 손익 누적 — delta 기반 (이번 이벤트 신규 체결분만 PnL 반영)
+            # 실현 손익 누적 — delta 기반 (이번 이벤트 신규 체결분만 PnL 반영).
+            # 2026-06-02 (#11 fix): commission 즉시 차감 — 이전엔 gross PnL 만 누적해서
+            # realized_pnl_sync_worker (매 1분) 가 보정할 때까지 사장님 화면에 부정확 표시.
+            # 이제 ORDER 이벤트 처리 시 즉시 net (gross - commission) 누적.
             try:
                 if order.avg_price and strategy.avg_entry_price and delta_abs > 0:
                     avg_entry = Decimal(str(strategy.avg_entry_price))
@@ -180,6 +195,17 @@ class StreamService:
                         realized_delta = qty * (exit_px - avg_entry)
                     else:
                         realized_delta = qty * (avg_entry - exit_px)
+                    # commission 차감 — USDT 수수료만 (BNB 는 mark price 환산 필요 → 별도 task).
+                    # 사장님 setup = 거의 USDT 수수료. BNB Burn 사용 시 0 으로 처리 (보수적).
+                    commission_str = mapped.get("commission") or "0"
+                    commission_asset = (mapped.get("commission_asset") or "").upper()
+                    commission_usdt = Decimal("0")
+                    try:
+                        if commission_asset == "USDT":
+                            commission_usdt = Decimal(str(commission_str))
+                    except Exception:
+                        commission_usdt = Decimal("0")
+                    realized_delta = realized_delta - commission_usdt
                     prev_realized = Decimal(str(strategy.realized_pnl or 0))
                     strategy.realized_pnl = (prev_realized + realized_delta).quantize(Decimal("0.01"))
                     # 2026-05-04 v2: 일일 손실 한도 incremental 누적.
