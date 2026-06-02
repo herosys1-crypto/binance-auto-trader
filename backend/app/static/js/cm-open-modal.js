@@ -78,8 +78,9 @@ async function openCreateModal(editStrategyId) {
   if (editStrategyId) {
     banner.classList.remove('hidden');
     document.getElementById('cm-edit-banner-detail').textContent =
-      `「↻ 설정만 수정」 — 포지션/단계 유지, TP/SL만 즉시 갱신 (거래소 호출 없음).` +
-      `\n「🔄 종료 후 새로 시작」 — 미체결 주문 취소 + 1단계부터 새 전략 시작.`;
+      `「↻ 설정만 수정」 — 포지션/단계 유지, TP/SL만 즉시 갱신 (거래소 호출 없음). 시작가 무시.\n` +
+      `「🔄 종료 후 새로 시작」 — 미체결 주문 취소 + 1단계부터 새 전략 시작.\n` +
+      `🆕 2026-06-03: 시작가 자동으로 현재가 적용 (옛 가격 미사용) → 트리거가 + 평단 + 청산가 모두 현재가 기준 재계산.`;
     title.textContent = `✏️ 전략 #${editStrategyId} 수정`;
     submit.textContent = '🔄 종료 후 새로 시작';
     if (inplaceBtn) inplaceBtn.classList.remove('hidden');  // in-place 버튼 노출

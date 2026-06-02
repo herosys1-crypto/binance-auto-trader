@@ -102,17 +102,21 @@ async function loadPrevBlueprint(strategyId, silent) {
     document.getElementById('cm-sl-pct').value = bp.stop_loss_percent_of_capital;
     // 2026-05-14: 크라이시스 dropdown 제거됨 (사용자 결정 「손절만 사용」).
     // 새 strategy 는 자동으로 -100 (비활성) 적용 — _collectTpSl 참조.
-    // 5) 시작가 — 수정 모드면 원래 시작가 유지, 일반 불러오기는 비움
-    if (cmState.editingStrategyId && bp.start_price) {
-      document.getElementById('cm-start-price').value = bp.start_price;
-    } else {
-      document.getElementById('cm-start-price').value = '';
-    }
+    // 5) 시작가 — 2026-06-03 사장님 사상 변경:
+    // 이전: 수정 모드면 옛 bp.start_price 채움 → 사장님이 옛 가격 기준 미리보기 보고
+    //       「🔄 종료 후 새로 시작」 시 옛 LIMIT 가격으로 진입 위험.
+    // 변경: 수정 모드든 일반 불러오기든 시작가는 항상 빈값 → loadCmMarketInfo 가
+    //       자동으로 현재가 채움 → 트리거가 + 평단 + 청산가 모두 현재가 기준 재계산.
+    // 옛 가격 참고 필요하면 사장님이 수동 입력 가능.
+    document.getElementById('cm-start-price').value = '';
     onCapitalsChange();
     if (!silent) {
-      toast(`전략 #${bp.source_strategy_id} 설정을 불러왔습니다. 종목/시작가만 변경하세요`, 'success');
+      const editNote = cmState.editingStrategyId
+        ? ` (수정 모드 — 시작가는 현재가로 자동 갱신됨, 옛 시작가 ${bp.start_price || '?'} 참고용)`
+        : '';
+      toast(`전략 #${bp.source_strategy_id} 설정을 불러왔습니다. 종목/시작가 확인 후 진행${editNote}`, 'success');
     }
-    // 시세 다시 로드
+    // 시세 다시 로드 → 자동으로 현재가가 cm-start-price 에 채워짐 → _refreshLiveCalc 트리거
     loadCmMarketInfo();
   } catch (e) { toast('불러오기 실패: '+e.message, 'error'); }
 }
