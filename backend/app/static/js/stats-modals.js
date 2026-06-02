@@ -138,8 +138,16 @@ async function loadStatsBreakdown(view) {
     sumEl.textContent = (sumNum >= 0 ? '+' : '') + sumNum.toFixed(4) + ' USDT';
     sumEl.className = 'text-base font-bold ' + (sumNum > 0 ? 'pos' : sumNum < 0 ? 'neg' : '');
     const archivedNote = r.archived_count > 0 ? ` · 그 중 archive ${r.archived_count}` : '';
+    // 2026-06-02 (#29): 새 분류 카운트도 같이 표시 — 사장님 한눈에 신뢰성 회복
+    const classCountParts = [];
+    if (r.never_entered_count > 0) classCountParts.push(`🚫진입실패 ${r.never_entered_count}`);
+    if (r.auto_tp_count > 0) classCountParts.push(`🎯자동익절 ${r.auto_tp_count}`);
+    if (r.auto_sl_count > 0) classCountParts.push(`🤖자동손절 ${r.auto_sl_count}`);
+    if (r.manual_stop_count > 0) classCountParts.push(`✋수동 ${r.manual_stop_count}`);
+    if (r.crisis_count > 0) classCountParts.push(`🚨크라이시스 ${r.crisis_count}`);
+    const classCountNote = classCountParts.length > 0 ? `  ·  ${classCountParts.join(' · ')}` : '';
     document.getElementById('sb-summary').textContent =
-      `view=${view} · ${r.count}건${archivedNote} · 합계 ${(sumNum >= 0 ? '+' : '') + sumNum.toFixed(4)} USDT`;
+      `view=${view} · ${r.count}건${archivedNote} · 합계 ${(sumNum >= 0 ? '+' : '') + sumNum.toFixed(4)} USDT${classCountNote}`;
 
     const items = r.items || [];
     const rowsEl = document.getElementById('sb-rows');
@@ -147,9 +155,18 @@ async function loadStatsBreakdown(view) {
       rowsEl.innerHTML = '<tr><td colspan="12" class="text-center text-slate-500 py-2 text-xs">데이터 없음</td></tr>';
       return;
     }
+    // 2026-06-02 (#29): 새 분류 매핑 — 진입실패 / 자동손절 / 수동손절 명확 구분
     const classBadge = (cls) => {
-      if (cls === '수익') return '<span class="badge badge-green">수익</span>';
-      if (cls === '손실') return '<span class="badge badge-red">손실</span>';
+      if (cls === '🚫진입실패') return '<span class="badge badge-gray" title="LIMIT 미체결 후 STOPPED — 한 번도 거래 없음">🚫 진입실패</span>';
+      if (cls === '🎯자동익절') return '<span class="badge badge-green" title="TP_FINAL/TRAILING — 시스템 자동 익절 완료">🎯 자동익절</span>';
+      if (cls === '🤖자동손절') return '<span class="badge badge-red" title="STOPPED_BY_SL — 시스템 SL 자동 손절">🤖 자동손절</span>';
+      if (cls === '✋수동손절') return '<span class="badge badge-red" title="사용자 직접 stop/emergency_stop — 손실 상태">✋ 수동손절</span>';
+      if (cls === '✋수동익절') return '<span class="badge badge-green" title="사용자 직접 stop — 익절 상태">✋ 수동익절</span>';
+      if (cls === '✋수동정지') return '<span class="badge badge-yellow" title="사용자 직접 stop — 손익 0">✋ 수동정지</span>';
+      if (cls === '🚨크라이시스') return '<span class="badge badge-red">🚨 크라이시스</span>';
+      if (cls === '⚠️큰낙폭') return '<span class="badge badge-yellow">⚠️ 큰낙폭</span>';
+      if (cls === '✅수익' || cls === '수익') return '<span class="badge badge-green">✅ 수익</span>';
+      if (cls === '📉손실' || cls === '손실') return '<span class="badge badge-red">📉 손실</span>';
       if (cls === 'BREAKEVEN') return '<span class="badge badge-yellow">BREAKEVEN</span>';
       if (cls === '미진입_종료') return '<span class="badge badge-gray">미진입종료</span>';
       return '<span class="badge badge-blue">진행중</span>';

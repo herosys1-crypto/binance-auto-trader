@@ -150,7 +150,12 @@ def _fetch_tp_counts_batch(db: Session, strategy_ids: set[int]) -> dict[int, dic
 def _resolve_close_reason(strategy, counts: dict, total_active_tps: int) -> str:
     """status + 발동 카운트로 마지막 종료 사유 추론.
 
-    Returns: TP_FINAL / TRAILING / SL / MANUAL / NONE
+    Returns: TP_FINAL / TRAILING / SL / MANUAL / NEVER_ENTERED / NONE
+
+    2026-06-02 (#29 fix): STOPPED 가 무조건 MANUAL 이었던 분류 부정확 해소.
+      - stage=0 + qty=0 + avg_entry=0 + realized=0 인 STOPPED 는 NEVER_ENTERED (진입실패)
+        → LIMIT 가격 잘못 입력해서 한 번도 체결 안 된 strategy
+      - 그 외 STOPPED 는 MANUAL (사용자 emergency_stop / stop 클릭)
     """
     st = (strategy.status or "").upper()
     tp_count = counts.get("tp_count", 0) if counts else 0
@@ -158,6 +163,16 @@ def _resolve_close_reason(strategy, counts: dict, total_active_tps: int) -> str:
     if st in ("CLOSED_BY_SL", "STOPPED_BY_SL"):
         return "SL"
     if st == "STOPPED":
+        # 진입실패 판정: 단계 0 + 수량 0 + 평단 0 + 실현손익 0 (한 번도 거래 X)
+        stage = getattr(strategy, "current_stage", 0) or 0
+        qty = getattr(strategy, "current_position_qty", None)
+        avg_entry = getattr(strategy, "avg_entry_price", None)
+        realized = getattr(strategy, "realized_pnl", None)
+        qty_zero = qty is None or float(qty or 0) == 0
+        entry_zero = avg_entry is None or float(avg_entry or 0) == 0
+        realized_zero = realized is None or float(realized or 0) == 0
+        if stage == 0 and qty_zero and entry_zero and realized_zero:
+            return "NEVER_ENTERED"
         return "MANUAL"
     if st == "COMPLETED" or st == "REENTRY_READY":
         if has_trailing:
