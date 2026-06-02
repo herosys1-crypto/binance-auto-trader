@@ -397,9 +397,12 @@ async function refreshStrategies() {
       const showBinanceCompare = !isTerminal && s.exchange_account_id;
       return `<tr class="row-clickable" onclick="selectStrategy(${s.id})">
         <td>#${s.id}</td>
-        <td class="font-mono text-blue-300">
+        <td class="font-mono">
           <div class="text-xs leading-tight">
-            <span>${s.symbol}</span>${renderWhitelistBadge(s.symbol)}<br>
+            <a href="https://www.binance.com/en/futures/${s.symbol}" target="_blank" rel="noopener"
+               onclick="event.stopPropagation()"
+               class="text-blue-300 hover:text-blue-100 hover:underline"
+               title="🔗 ${s.symbol} — 바이낸스 선물 차트 새 탭 열기">${s.symbol}</a>${renderWhitelistBadge(s.symbol)}<br>
             <span class="text-slate-500" style="font-size:10px" title="전략 생성 일시">${createdShort}</span>
           </div>
         </td>
