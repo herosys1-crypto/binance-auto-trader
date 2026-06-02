@@ -132,9 +132,13 @@ async function loadSymbolRanking(period, direction) {
       const action = createModalOpen
         ? `<button class="btn-success btn text-xs" style="padding:3px 10px" onclick="selectSymbolFromRanking('${it.symbol}', '${it.last_price}')">↑ 선택</button>`
         : `<span class="text-slate-500 text-xs">-</span>`;
+      // 2026-06-02 (사장님 요구): 심볼 클릭 → Binance 선물 차트 새 탭. 매 클릭마다 별도 탭.
+      const symbolLink = `<a href="https://www.binance.com/en/futures/${it.symbol}" target="_blank" rel="noopener"
+            class="text-blue-300 hover:text-blue-100 hover:underline"
+            title="🔗 ${it.symbol} — 바이낸스 선물 차트 새 탭 열기">${it.symbol}</a>`;
       return `<tr>
         <td>${i + 1}</td>
-        <td class="font-mono text-blue-300">${it.symbol}${renderWhitelistBadge(it.symbol)}</td>
+        <td class="font-mono">${symbolLink}${renderWhitelistBadge(it.symbol)}</td>
         <td class="num">${fmtNum(it.last_price)}</td>
         <td class="num ${cls}">${sign}${chg.toFixed(2)}%</td>
         <td class="num text-slate-400 text-xs">${volStr} USDT</td>
