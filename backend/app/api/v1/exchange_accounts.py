@@ -364,6 +364,13 @@ def get_balance(
     # 2026-06-01 사장님 요구 fix — 「전체 단계 예약」 모드 계산:
     # 활성 strategy 들의 total_capital 합 = 5단계 풀 자본 예약.
     # 사장님 가용 잔액 = wallet - 예약. 자동 stage 진입 시 마진 부족 절대 안 발생 보장.
+    #
+    # 2026-06-02 보강 (#31): 수동 증거금/포지션 추가 반영.
+    # 문제: 사장님이 「💰 증거금 추가」 또는 「💉 포지션 추가」 클릭 후 실 사용 자본이
+    #       template.total_capital 초과해도 reserved 가 안 늘어 → our_available 과대 표시.
+    # 해결: 각 strategy 별 max(계획_total_capital, Binance_실_init_margin) 사용.
+    #       Binance 측 실 사용 자본 > 계획 → 그 값 사용 (안전 측).
+    #       Binance 측 실 사용 자본 ≤ 계획 → 계획값 유지 (5단계 풀 예약 보장).
     from app.models.strategy_instance import StrategyInstance
     from app.core.strategy_status import TERMINAL_STATUSES
     active_strategies = db.execute(
@@ -372,9 +379,32 @@ def get_balance(
         .where(StrategyInstance.is_archived.is_(False))
         .where(StrategyInstance.status.notin_(TERMINAL_STATUSES))
     ).scalars().all()
+
+    # Binance positions 중 active strategy 의 symbol 매칭 → 실 init_margin 추출.
+    # ISOLATED: isolatedMargin (직접 마진 추가분 포함)
+    # CROSS: positionInitialMargin (initial margin only)
+    active_symbols_upper = {(s.symbol or "").upper() for s in active_strategies}
+    binance_margin_by_symbol: dict[str, Decimal] = {}
+    for p in positions:
+        sym_upper = (p.get("symbol") or "").upper()
+        if not sym_upper or sym_upper not in active_symbols_upper:
+            continue
+        iso = _d(p.get("isolatedMargin"))
+        init = _d(p.get("positionInitialMargin"))
+        # ISOLATED 면 iso, CROSS 면 init. 보수적으로 더 큰 값 (대개 같음).
+        actual_margin = max(iso, init)
+        # 한 symbol 에 multiple positions (예: LONG+SHORT hedge mode) 합산
+        prev = binance_margin_by_symbol.get(sym_upper, Decimal("0"))
+        binance_margin_by_symbol[sym_upper] = prev + actual_margin
+
+    def _reserved_one(s) -> Decimal:
+        planned = s.total_capital or Decimal("0")
+        actual = binance_margin_by_symbol.get((s.symbol or "").upper(), Decimal("0"))
+        return max(planned, actual)
+
     reserved_for_strategies = sum(
-        (s.total_capital or Decimal("0")) for s in active_strategies
-    ) or Decimal("0")
+        (_reserved_one(s) for s in active_strategies), Decimal("0")
+    )
     our_available_balance = total_wallet - reserved_for_strategies
     active_strategy_count = len(active_strategies)
 
