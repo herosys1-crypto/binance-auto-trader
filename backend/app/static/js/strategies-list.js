@@ -384,16 +384,19 @@ async function refreshStrategies() {
         ? `<span class="text-yellow-400" title="운영자가 입력한 1단계 LIMIT 가격">${fmtNum(s.start_price)}</span>`
         : '<span class="text-slate-500">-</span>';
 
-      // 크라이시스 모드 배지 (Stage1: TP1 미발동, Stage2: TP1 발동 후 보호 활성)
+      // 크라이시스 모드 배지 (2026-06-03 보강: 정확한 의미 + 임계값 표시)
+      // Stage1 = max_loss_pct 임계 (default -50%) 도달 → TP 임계 자동 낮춤 (10/15/20/30 → 5/10/15/20)
+      // Stage2 = TP1 발동 후 → 트레일링 -5% + 빠른 손절 -1% (보호 강화)
+      // SL (사용자 -80%) 과 독립적 — 크라이시스는 청산 X (TP 임계만 조정)
       let modeBadge;
       if (s.crisis_mode_triggered_at) {
         if (s.crisis_first_tp_done_at) {
-          modeBadge = '<span class="badge badge-red" title="크라이시스 [Stage 2] — 트레일링 -5% + 빠른 손절 -1% 활성">🛡 크라이시스 보호</span>';
+          modeBadge = '<span class="badge badge-red" title="크라이시스 Stage 2 — TP1 익절 후 보호 강화 활성. 트레일링 -5% + 빠른 손절 -1%. SL(사용자 설정)과 독립적">🛡 크라이시스 Stage 2 (보호)</span>';
         } else {
-          modeBadge = '<span class="badge badge-yellow" title="크라이시스 [Stage 1] — TP1 임계 +5% (정상 -50% 손절 유지)">🚨 크라이시스</span>';
+          modeBadge = '<span class="badge badge-yellow" title="크라이시스 Stage 1 — max_loss_pct 임계 도달 → TP 임계 자동 낮춤 (5/10/15/20%). 손절(SL) 미발동, TP 만 빠르게 회복 익절 시도">🚨 크라이시스 Stage 1 (TP 임계↓)</span>';
         }
       } else {
-        modeBadge = '<span class="badge badge-gray">정상</span>';
+        modeBadge = '<span class="badge badge-gray" title="정상 모드 — 사용자 설정 TP + SL 그대로 작동">정상</span>';
       }
 
       // 최대 손실/이익
@@ -415,11 +418,28 @@ async function refreshStrategies() {
           stuckBadge = `<span class="badge badge-red" title="STOPPING 상태가 ${ageMin}분째 지속 — emergency_close 실패. TP/SL 평가도 차단됨. 「🛑 긴급 종료」 재시도 또는 거래소 UI 에서 직접 청산.">⚠️ 갇힘 ${ageMin}분</span>`;
         }
       }
+
+      // 2026-06-03 신규 (사장님 LABUSDT #16 -161% ROI 미청산 사례):
+      // SL 미발동 경고 — 부분 진입 (current < total) + 큰 손실 시 즉시 가시화.
+      // 시스템 정책: SL 은 '모든 단계 진입 완료' 후만 발동 → 부분 진입 + 큰 손실 = silent risk.
+      let slBlockedBadge = '';
+      const _curStage = s.current_stage || 0;
+      const _totStages = s.total_active_stages || 4;
+      const _isPartialEntry = !isTerminal && _curStage > 0 && _curStage < _totStages;
+      // 손실 큰 기준: 전략 ROI (실현+미실현 / 자본) < -30%
+      const _stratLoss = (sCap > 0 && sLev > 0) ? (pnlNum * sLev / sCap * 100) : 0;
+      if (_isPartialEntry && _stratLoss < -30) {
+        slBlockedBadge = `<span class="badge badge-red" style="font-size:9px;padding:1px 4px"
+          title="SL 미발동 경고 — 시스템 정책상 모든 단계 진입 완료 후만 SL 발동.
+현재 ${_curStage}/${_totStages} 단계 + 손실 ${_stratLoss.toFixed(1)}% → SL 도달해도 청산 X.
+옵션: ① 다음 단계 자동 진입 대기 (trigger %) / ② 💰 증거금 추가 / ③ 🛑 긴급 종료 수동 청산">🚨 SL 미발동 ${_curStage}/${_totStages}</span>`;
+      }
       // 상태 셀에 모드 배지 + 최대손익 tooltip 까지 합쳐 9 컬럼으로 압축.
       const stateCell = `
         <div class="flex flex-col gap-1" title="모드: ${modeBadge.replace(/<[^>]+>/g,'').trim()} / 진입요청가: ${s.start_price ? fmtNum(s.start_price) : '-'} / 최대 손실: ${s.max_loss_pct !== null && s.max_loss_pct !== undefined ? fmtNum(s.max_loss_pct)+'%' : '-'} / 최대 이익: ${s.max_profit_pct !== null && s.max_profit_pct !== undefined ? '+'+fmtNum(s.max_profit_pct)+'%' : '-'}">
           <span class="badge badge-${info.sig}">${info.icon} ${info.ko}</span>
           ${stuckBadge}
+          ${slBlockedBadge}
           ${s.crisis_mode_triggered_at ? modeBadge : ''}
         </div>`;
       // 진입일시 (created_at) — 짧게 MM/DD HH:MM 형식
