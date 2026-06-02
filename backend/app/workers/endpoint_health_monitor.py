@@ -212,8 +212,80 @@ def _check_binance_rest_ping() -> bool:
         return False
 
 
+def _check_mark_price_stream(redis_client) -> None:
+    """mark-price-stream 헬스 — 활성 strategy 의 symbol 들이 Redis mark_price 캐시에 있는지.
+
+    2026-06-02 (#14): mark-price-stream 이 silent 끊김 (process up 인데 WS reconnect 실패)
+    시 사장님 인지 불가 → 실시간 PnL stale → trailing/SL 부정확.
+
+    체크:
+    - active strategy 의 symbol set (status NOT IN TERMINAL + qty != 0)
+    - Redis 의 mark_price:{SYMBOL} key 들과 비교
+    - 활성 symbol 중 누락 또는 stale (TTL 만료 임박) 발견 시 알림
+    """
+    from app.core.database import SessionLocal
+    from app.core.strategy_status import ACTIVE_WITH_POSITION
+    from app.models.strategy_instance import StrategyInstance
+    from sqlalchemy import select as _sel
+
+    db = SessionLocal()
+    try:
+        rows = db.execute(
+            _sel(StrategyInstance.symbol)
+            .where(StrategyInstance.is_archived.is_(False))
+            .where(StrategyInstance.status.in_(ACTIVE_WITH_POSITION))
+            .where(StrategyInstance.current_position_qty != 0)
+        ).all()
+        active_symbols = {r[0].upper() for r in rows if r[0]}
+    finally:
+        db.close()
+
+    if not active_symbols:
+        # 활성 포지션 없음 — 체크 의미 X
+        return
+
+    # Redis 의 mark_price:{SYMBOL} key 들
+    try:
+        cached_keys = redis_client.keys("mark_price:*")
+        cached_symbols = {
+            (k.decode() if isinstance(k, bytes) else k).split(":", 1)[1].upper()
+            for k in cached_keys if k
+        }
+    except Exception as e:
+        logger.warning("[endpoint-health] mark_price KEYS 실패: %s", e)
+        return
+
+    missing = active_symbols - cached_symbols
+    if missing:
+        sample = sorted(missing)[:5]
+        more = f" (외 {len(missing)-5}개)" if len(missing) > 5 else ""
+        _alert_once(
+            redis_client,
+            kind="mark_price_stream_missing",
+            title=f"🚨 [Endpoint Health] mark-price-stream 캐시 누락 — 활성 symbol {len(missing)}개",
+            body=(
+                f"활성 포지션 {len(active_symbols)}개 중 {len(missing)}개의 mark_price Redis 캐시 누락.\n"
+                f"누락 symbols: {', '.join(sample)}{more}\n\n"
+                f"원인 추정:\n"
+                f"  - mark-price-stream 컨테이너 끊김 또는 reconnect 실패\n"
+                f"  - 새 strategy 진입 후 SUBSCRIBE 갱신 안 됨 (30s cycle 대기 중)\n"
+                f"  - Binance fstream 측 일시 장애\n\n"
+                f"조치:\n"
+                f"  - docker compose ps | grep mark-price-stream  (Up 확인)\n"
+                f"  - docker compose logs mark-price-stream --tail=50  (reconnect 시도 확인)\n"
+                f"  - 필요 시 docker compose restart mark-price-stream"
+            ),
+        )
+    else:
+        # 정상 — dedup TTL 만료 (다음 cycle 알림 가능)
+        try:
+            redis_client.delete("endpoint_health:alert:mark_price_stream_missing")
+        except Exception:
+            pass
+
+
 def run_endpoint_health_monitor_once() -> None:
-    """1회 실행 — 3가지 health check 후 이상 시 알림.
+    """1회 실행 — 4가지 health check 후 이상 시 알림.
 
     scheduler 가 매 30분 호출.
     """
@@ -241,6 +313,9 @@ def run_endpoint_health_monitor_once() -> None:
                 "조치: VPS 에서 직접 curl 시도 → 외부 네트워크 점검."
             ),
         )
+
+    # 4. 2026-06-02 (#14): mark-price-stream 캐시 누락 체크
+    _check_mark_price_stream(redis)
 
 
 if __name__ == "__main__":
