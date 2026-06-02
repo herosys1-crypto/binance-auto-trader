@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 
 # Binance 공식 changelog / 공지 페이지 (각각 hash 비교).
-# 추가 가능: WebSocket Change Notice, REST API endpoints 등 자주 바뀌는 페이지.
+# 2026-06-02 (#33 보강): User Data Streams 추가 (6-04-23 ORDER 이벤트 형식 변경 직결).
 _MONITORED_URLS: tuple[tuple[str, str], ...] = (
     (
         "binance_futures_changelog",
@@ -43,9 +43,18 @@ _MONITORED_URLS: tuple[tuple[str, str], ...] = (
         "binance_websocket_change_notice",
         "https://developers.binance.com/docs/derivatives/usds-margined-futures/websocket-market-streams/Important-WebSocket-Change-Notice",
     ),
+    (
+        "binance_user_data_streams",
+        "https://developers.binance.com/docs/derivatives/usds-margined-futures/user-data-streams",
+    ),
+    (
+        "binance_position_mode",
+        "https://developers.binance.com/docs/derivatives/usds-margined-futures/account/rest-api/Change-Position-Mode",
+    ),
 )
 
 _HASH_KEY_TPL = "binance_changelog:hash:{name}"
+_LAST_CHECK_KEY = "binance_changelog:last_check_at"  # 사장님 검증용 — 워커가 마지막 호출된 ISO timestamp
 _HASH_TTL_SEC = 86400 * 30  # 30일
 
 
@@ -104,6 +113,15 @@ def run_binance_changelog_monitor_once() -> None:
 
     if changes_detected:
         _notify_changes(changes_detected)
+
+    # 2026-06-02 (#33 보강): 사장님 검증용 last_check_at 기록.
+    # 검증 명령: docker compose exec redis redis-cli GET "binance_changelog:last_check_at"
+    # → 마지막 호출 시각 + 6h 주기 확인 → 워커 죽으면 6h 이상 지난 값 → 알림 대상.
+    try:
+        from datetime import datetime, timezone
+        redis.set(_LAST_CHECK_KEY, datetime.now(timezone.utc).isoformat(), ex=_HASH_TTL_SEC)
+    except Exception as e:
+        logger.warning("[binance-monitor] last_check_at 기록 실패: %s", e)
 
 
 def _notify_changes(changes: Iterable[tuple[str, str]]) -> None:
