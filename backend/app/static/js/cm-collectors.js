@@ -21,9 +21,20 @@ function _collectDirectInputs() {
   const caps = [];
   const triggers = [];
   const additionalMargins = [];
+  // 2026-06-03 (silent drop 방지): 빈값 발견 후 채워진 단계 감지 → submit 차단 + 사장님 confirm.
+  let firstEmpty = 0;  // 0 = 없음. > 0 = 그 단계부터 break.
+  const ignoredAfterEmpty = [];
   for (let i = 1; i <= 10; i++) {
     const v = document.getElementById('cm-cap-' + i).value;
-    if (v === '' || v === null || v === undefined || Number(v) === 0) break;
+    const valEmpty = (v === '' || v === null || v === undefined || Number(v) === 0);
+    if (firstEmpty > 0 && !valEmpty) {
+      ignoredAfterEmpty.push(i);
+      continue;  // 무시되는 단계 — 사장님 confirm 으로 처리
+    }
+    if (valEmpty) {
+      if (firstEmpty === 0) firstEmpty = i;
+      break;
+    }
     caps.push(String(v));
     if (i === 1) {
       triggers.push(null);  // 1단계는 IMMEDIATE
@@ -35,6 +46,19 @@ function _collectDirectInputs() {
     const addEl = document.getElementById('cm-add-margin-' + i);
     const addV = addEl ? addEl.value : '';
     additionalMargins.push((addV === '' || Number(addV) === 0) ? null : String(addV));
+  }
+  // 무시되는 단계 발견 시 사장님 명시 confirm 필요 (silent drop 방지)
+  if (ignoredAfterEmpty.length > 0) {
+    const ok = confirm(
+      `⚠️ 경고: ${firstEmpty}단계 자본이 비어있어서 ${ignoredAfterEmpty.join(', ')}단계는 ` +
+      `저장되지 않습니다 (backend silent drop).\n\n` +
+      `이대로 진행하시려면 OK (캡 ${caps.length}개만 저장), ` +
+      `취소 후 ${firstEmpty}단계 자본 입력 또는 ${ignoredAfterEmpty.join(', ')}단계 자본 삭제 권장.\n\n` +
+      `진행하시겠습니까?`
+    );
+    if (!ok) {
+      throw new Error(`사장님 취소 — ${firstEmpty}단계 빈값 + ${ignoredAfterEmpty.length}개 단계 silent drop 차단`);
+    }
   }
   // 사용자 기획 변경 (2026-04-30): 마지막 단계도 사용자 입력값 (예: 20%) 으로 진입.
   // 이전엔 LIQUIDATION_BUFFER 로 null 로 비웠으나, 이제는 PRICE_UP_PCT/PRICE_DOWN_PCT
