@@ -804,14 +804,53 @@
               <div class="pt-2 border-t border-slate-700">
                 <label class="text-slate-400 text-xs" title="ROI (레버리지 적용 손실) % 기준 강제 청산. 예: 80 = ROI -80% (자본 80%/레버리지 손실) 도달 시 발동. 자본 180+2x 면 80 = -72 USDT.">🛑 손절 — ROI 손실 % (레버리지 적용)</label>
                 <input id="cm-sl-pct" type="number" step="1" value="80" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
-                <p class="text-xs text-slate-500 mt-1">⚠️ 손실 한도 도달 시 잔량 100% 강제 청산. 사용자 정의 % 가 정확히 적용됨 (2026-05-14 fix).</p>
+                <p class="text-xs text-slate-500 mt-1">⚠️ 손실 한도 도달 시 잔량 100% <strong>강제 청산 (포지션 종료)</strong>. 사용자 정의 % 가 정확히 적용됨 (2026-05-14 fix).</p>
                 <!-- 2026-06-02 (#35): 실 USDT 손실 동적 계산 — 사장님이 자본/레버리지/sl 입력 시 즉시 표시 -->
                 <p id="cm-sl-loss-preview" class="text-xs text-yellow-300 mt-1 font-mono"></p>
               </div>
-              <!-- 2026-05-14 (사용자 요청): 크라이시스 모드 옵션 제거 — 손절만 사용. -->
-              <!-- 시스템은 자동으로 crisis_max_loss_threshold = -100 (Crisis 비활성) 으로 새 strategy 생성. -->
               <p class="text-xs text-slate-500 mt-2">트레일링 익절: 피크 ≥ +5% 후 피크 대비 -5% 회귀 시 잔량 100% 청산 (자동, stage>=3 + TP3+ 후).</p>
-              <p class="text-xs text-blue-400 mt-1">💡 크라이시스 모드 비활성 (사용자 결정) — 깊은 손실 시 회복 익절 모드 안 들어감. 손절만 작동.</p>
+
+              <!-- 2026-06-03 (#35 보강): 크라이시스 모드 정확한 정의 + 손절과의 관계 -->
+              <!-- 사장님 의문: LABUSDT(#16) 크라이시스 활성 vs UI '비활성' 메시지 모순 → 명확화 -->
+              <details class="mt-2 p-2 rounded bg-slate-900/50 border border-slate-700">
+                <summary class="cursor-pointer text-xs text-blue-300 font-semibold">
+                  🚨 크라이시스 모드란? (손절과 다른 안전망 — 펼쳐서 확인)
+                </summary>
+                <div class="mt-2 text-xs text-slate-300 space-y-2 pl-2">
+                  <p>
+                    <strong class="text-red-300">손절 (SL) 과 완전히 다른 안전망</strong>입니다.
+                    포지션 청산이 아니라 <strong>TP 임계를 자동 낮춰</strong> 회복 시 빠른 익절을 유도합니다.
+                  </p>
+                  <div class="grid grid-cols-2 gap-2 p-2 rounded bg-slate-800/40">
+                    <div>
+                      <p class="text-slate-400 text-xs">정상 TP 임계 (default)</p>
+                      <p class="font-mono text-slate-200">TP1/2/3/4 = 10/15/20/30%</p>
+                    </div>
+                    <div>
+                      <p class="text-slate-400 text-xs">크라이시스 시 TP 임계 (자동)</p>
+                      <p class="font-mono text-yellow-300">TP1/2/3/4 = <strong>5/10/15/20%</strong></p>
+                    </div>
+                  </div>
+                  <p>
+                    <strong>발동 조건</strong>: 누적 <code class="text-blue-300">max_loss_pct</code> ≤ 임계 (default <strong class="text-red-300">-50%</strong>)
+                    + 모든 단계 진입 완료 (또는 <code>「💉 포지션 추가」</code> 사용)
+                  </p>
+                  <div class="p-2 rounded bg-slate-800/40">
+                    <p class="text-slate-400 mb-1"><strong>손절과의 관계 (둘은 독립적)</strong>:</p>
+                    <p>• <strong class="text-yellow-300">-50% 도달</strong> → 🚨 크라이시스 진입 (TP 임계 낮춤, <span class="text-green-300">청산 X</span>)</p>
+                    <p>• <strong class="text-red-300">-80% 도달</strong> → 🛑 손절 발동 (<span class="text-red-300">강제 전량 청산</span>, 크라이시스 무관)</p>
+                    <p class="text-slate-500 mt-1">예시 흐름: -50% → 크라이시스 (TP 5%/10% 등으로 빨리 익절 시도) → 회복 못 하고 -80% 도달 → 손절 청산</p>
+                  </div>
+                  <p class="text-orange-300 p-2 rounded bg-orange-900/20">
+                    ⚠️ <strong>본 모달의 신규 strategy = 크라이시스 비활성</strong> (사용자 결정 2026-05-14, <code>-100</code> sentinel).
+                    <br>→ 신규는 손절(SL)만 작동. 깊은 손실 시 회복 익절 모드 안 들어감.
+                    <br><br>
+                    📌 <strong>기존 strategy 는 옛 설정값으로 작동 중</strong>:
+                    <br>• 옛 default = -50% → 자동 크라이시스 진입 가능
+                    <br>• 예: <code>#16 LABUSDT</code> 같은 옛 strategy 가 현재 크라이시스 활성 = NULL/-50% 임계 도달
+                  </p>
+                </div>
+              </details>
             </div>
           </details>
         </div>

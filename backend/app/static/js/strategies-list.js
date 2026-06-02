@@ -384,16 +384,19 @@ async function refreshStrategies() {
         ? `<span class="text-yellow-400" title="운영자가 입력한 1단계 LIMIT 가격">${fmtNum(s.start_price)}</span>`
         : '<span class="text-slate-500">-</span>';
 
-      // 크라이시스 모드 배지 (Stage1: TP1 미발동, Stage2: TP1 발동 후 보호 활성)
+      // 크라이시스 모드 배지 (2026-06-03 보강: 정확한 의미 + 임계값 표시)
+      // Stage1 = max_loss_pct 임계 (default -50%) 도달 → TP 임계 자동 낮춤 (10/15/20/30 → 5/10/15/20)
+      // Stage2 = TP1 발동 후 → 트레일링 -5% + 빠른 손절 -1% (보호 강화)
+      // SL (사용자 -80%) 과 독립적 — 크라이시스는 청산 X (TP 임계만 조정)
       let modeBadge;
       if (s.crisis_mode_triggered_at) {
         if (s.crisis_first_tp_done_at) {
-          modeBadge = '<span class="badge badge-red" title="크라이시스 [Stage 2] — 트레일링 -5% + 빠른 손절 -1% 활성">🛡 크라이시스 보호</span>';
+          modeBadge = '<span class="badge badge-red" title="크라이시스 Stage 2 — TP1 익절 후 보호 강화 활성. 트레일링 -5% + 빠른 손절 -1%. SL(사용자 설정)과 독립적">🛡 크라이시스 Stage 2 (보호)</span>';
         } else {
-          modeBadge = '<span class="badge badge-yellow" title="크라이시스 [Stage 1] — TP1 임계 +5% (정상 -50% 손절 유지)">🚨 크라이시스</span>';
+          modeBadge = '<span class="badge badge-yellow" title="크라이시스 Stage 1 — max_loss_pct 임계 도달 → TP 임계 자동 낮춤 (5/10/15/20%). 손절(SL) 미발동, TP 만 빠르게 회복 익절 시도">🚨 크라이시스 Stage 1 (TP 임계↓)</span>';
         }
       } else {
-        modeBadge = '<span class="badge badge-gray">정상</span>';
+        modeBadge = '<span class="badge badge-gray" title="정상 모드 — 사용자 설정 TP + SL 그대로 작동">정상</span>';
       }
 
       // 최대 손실/이익
