@@ -212,6 +212,76 @@ def _check_binance_rest_ping() -> bool:
         return False
 
 
+def _check_account_auth(redis_client) -> None:
+    """모든 active 계정의 API key 인증 정기 검증 (사장님 큰 사고 방지).
+
+    2026-06-03 신설 — 사장님 다중 Sub-Account 운영 + key 만료/회수 사고 차단.
+    매 30분 각 active 계정의 BinanceClient.get_account() 호출.
+    실패 시 즉시 Telegram 알림 + RiskEvent + 1일 dedup.
+
+    감지 사고 패턴:
+    - API key 만료 (Binance UI 에서 expire 설정)
+    - API key 회수 (사용자가 삭제 또는 해킹)
+    - Futures 권한 회수
+    - IP 화이트리스트 추가 변경 (다른 IP 등록 시 우리 VPS 차단 가능)
+    - Binance 자체 ban (-1003 등)
+    """
+    from app.core.database import SessionLocal
+    from app.core.crypto import decrypt_text
+    from app.core.api_backoff import is_account_banned
+    from app.integrations.binance.client import BinanceClient
+    from app.models.exchange_account import ExchangeAccount
+    from sqlalchemy import select as _sel
+
+    db = SessionLocal()
+    try:
+        accounts = db.execute(
+            _sel(ExchangeAccount).where(ExchangeAccount.is_active.is_(True))
+        ).scalars().all()
+        for acc in accounts:
+            if is_account_banned(acc.id):
+                continue  # ban 중 — 다른 안전망 동작 중
+            try:
+                client = BinanceClient(
+                    api_key=decrypt_text(acc.api_key_enc),
+                    api_secret=decrypt_text(acc.api_secret_enc),
+                    is_testnet=acc.is_testnet,
+                )
+                info = client.get_account()
+                if info and "totalWalletBalance" in info:
+                    continue  # 정상
+                # 정상 응답인데 필드 누락 — 의심
+                _alert_once(
+                    redis_client,
+                    kind=f"account_auth_partial_{acc.id}",
+                    title=f"⚠️ [API key 검증] 계정 #{acc.id} 응답 부정확",
+                    body=(
+                        f"계정 #{acc.id} get_account() 응답에 totalWalletBalance 누락.\n"
+                        f"가능성: API 권한 일부 회수, Binance 정책 변경.\n"
+                        f"조치: Binance UI 에서 API key 권한 확인 (Read + Enable Futures)."
+                    ),
+                )
+            except Exception as e:
+                _alert_once(
+                    redis_client,
+                    kind=f"account_auth_fail_{acc.id}",
+                    title=f"🚨 [API key 인증 실패] 계정 #{acc.id} — 거래 불가",
+                    body=(
+                        f"계정 #{acc.id} ({acc.exchange_name}) API key 인증 실패: {e}\n\n"
+                        f"원인 후보:\n"
+                        f"  • API key 만료 / 삭제 / 회수 (Binance UI 에서 갱신 필요)\n"
+                        f"  • Futures 권한 회수 (Read + Enable Futures 재체크)\n"
+                        f"  • IP 화이트리스트 변경 (159.65.137.250 다시 등록)\n"
+                        f"  • Binance ban (-1003 rate limit / -2014 invalid signature)\n\n"
+                        f"조치: 즉시 Binance UI 확인 + 「💼 계정」 모달에서 「🔑 키 변경」.\n"
+                        f"⚠️ 이 계정의 모든 strategy 거래 차단 중!"
+                    ),
+                )
+                logger.warning("[endpoint-health] account_auth_fail acc=%s: %s", acc.id, e)
+    finally:
+        db.close()
+
+
 def run_endpoint_health_monitor_once() -> None:
     """1회 실행 — 3가지 health check 후 이상 시 알림.
 
@@ -241,6 +311,9 @@ def run_endpoint_health_monitor_once() -> None:
                 "조치: VPS 에서 직접 curl 시도 → 외부 네트워크 점검."
             ),
         )
+
+    # 4. 2026-06-03 신설: 각 active 계정의 API key 인증 검증 (사장님 큰 사고 방지)
+    _check_account_auth(redis)
 
 
 if __name__ == "__main__":
