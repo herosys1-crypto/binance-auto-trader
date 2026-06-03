@@ -242,41 +242,66 @@ async function refreshHealth() {
   }
 }
 
-// 거래소 잔액 카드 — 첫 active 거래소 계정 기준 (다중 계정이면 별도 처리 필요)
-// 2026-06-01 사장님 요구 fix — 「전체 단계 예약」 모드:
-//   메인 잔액 = our_available_balance (wallet - active strategy 의 5단계 풀 자본 합)
-//   부제목 = wallet / 예약 / strategy 수 / 마진비율
-//   효과: 사장님이 새 strategy 만들 때 진짜 가용 잔액 확인 가능
-//        자동 4/5단계 진입 시 마진 부족(-2019) 절대 안 발생 보장
+// 거래소 잔액 카드 — 2026-06-03 다중 계정 합산 (모든 active 계정 병렬 호출).
+// 이전: 첫 active 계정만 → 사장님 다중 Sub-Account 운영 시 부정확
+// 신규: 모든 active 계정 합산 + tooltip 으로 개별 (사장님 통합 모니터링)
 async function loadBalance() {
   try {
     const accounts = await api('/exchange-accounts').catch(() => []);
-    if (!accounts || !accounts.length) {
+    const activeAccounts = (accounts || []).filter(a => a.is_active);
+    if (!activeAccounts.length) {
       setMetric('balance', '-', '거래소 계정 없음', 'gray');
       return;
     }
-    const active = accounts.find(a => a.is_active) || accounts[0];
-    const data = await api(`/exchange-accounts/${active.id}/balance`);
-    const wallet = Number(data.total_wallet_balance || 0);
-    const reserved = Number(data.reserved_for_strategies || 0);
-    const ourAvailable = Number(data.our_available_balance || 0);
-    const stratCount = Number(data.active_strategy_count || 0);
-    const ratio = Number(data.margin_ratio_pct || 0);
-    // 마진 비율 + 가용 잔액 음수 검사
-    // - ourAvailable < 0  → 빨강 (예약이 wallet 초과, 위험)
-    // - ratio < 50% green / 50~80% yellow / > 80% red
+    // 모든 active 계정 병렬 호출 (backend Redis 15s 캐시 — 부담 작음, PR #46)
+    const balances = await Promise.all(activeAccounts.map(a =>
+      api(`/exchange-accounts/${a.id}/balance`).catch(() => null)
+    ));
+    const valid = balances.filter(b => b !== null);
+    if (!valid.length) {
+      setMetric('balance', '-', '잔액 조회 실패 (모든 계정)', 'red');
+      return;
+    }
+    // 합산
+    let walletSum = 0, reservedSum = 0, ourAvailSum = 0, stratSum = 0;
+    let maintMarginSum = 0, marginBalSum = 0;
+    let hasTestnet = false;
+    for (const b of valid) {
+      walletSum += Number(b.total_wallet_balance || 0);
+      reservedSum += Number(b.reserved_for_strategies || 0);
+      ourAvailSum += Number(b.our_available_balance || 0);
+      stratSum += Number(b.active_strategy_count || 0);
+      maintMarginSum += Number(b.total_maint_margin || 0);
+      marginBalSum += Number(b.total_margin_balance || 0);
+      if (b.is_testnet) hasTestnet = true;
+    }
+    // 합산 마진 비율 = total maint / total margin balance
+    const aggRatio = marginBalSum > 0 ? (maintMarginSum / marginBalSum * 100) : 0;
     let sig;
-    if (ourAvailable < 0) sig = 'red';
-    else if (ratio < 50) sig = 'green';
-    else if (ratio < 80) sig = 'yellow';
+    if (ourAvailSum < 0) sig = 'red';
+    else if (aggRatio < 50) sig = 'green';
+    else if (aggRatio < 80) sig = 'yellow';
     else sig = 'red';
     const fmt = (n) => Number(n).toLocaleString('en-US', {maximumFractionDigits: 2});
+    // tooltip 으로 계정별 detail
+    const perAccountLines = valid.map((b, idx) => {
+      const acc = activeAccounts[idx];
+      return `#${acc.id}: wallet ${fmt(Number(b.total_wallet_balance || 0))} / avail ${fmt(Number(b.our_available_balance || 0))} / strat ${b.active_strategy_count}`;
+    }).join('\n');
+    const detailMain = `wallet ${fmt(walletSum)} / 예약 ${fmt(reservedSum)} (${stratSum}건) / ${aggRatio.toFixed(2)}%${hasTestnet ? ' (testnet 포함)' : ''}`;
+    const accountInfo = valid.length > 1 ? ` · ${valid.length}계정 합산` : '';
+    // setMetric: title arg 는 tooltip 으로 사용 가능 (helpers.js 의 setMetric 확인 필요 — 일단 textContent 만)
     setMetric(
       'balance',
-      `${fmt(ourAvailable)} USDT`,
-      `wallet ${fmt(wallet)} / 예약 ${fmt(reserved)} (${stratCount}건) / ${ratio.toFixed(2)}%${data.is_testnet ? ' (testnet)' : ''}`,
+      `${fmt(ourAvailSum)} USDT`,
+      detailMain + accountInfo,
       sig,
     );
+    // 추가 tooltip 으로 계정별 detail (DOM 직접 접근)
+    const balCard = document.getElementById('card-balance') || document.querySelector('[data-metric="balance"]');
+    if (balCard && valid.length > 1) {
+      balCard.title = `📊 ${valid.length}개 active 계정 합산\n\n${perAccountLines}`;
+    }
   } catch (e) {
     setMetric('balance', '-', '잔액 조회 실패', 'red');
   }
