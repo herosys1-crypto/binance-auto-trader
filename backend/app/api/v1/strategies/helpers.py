@@ -48,6 +48,10 @@ def _enrich_response(resp: StrategyDetailResponse, tpl) -> StrategyDetailRespons
     """
     resp.total_active_stages = _count_active_stages(tpl)
     resp.total_active_tps = _count_active_tps(tpl)
+    # 2026-06-03: SL 한도 시각화용 — frontend 「전략 인스턴스」 카드에
+    # SL 한도 USDT (total_capital × sl_pct / 100, 레버리지 무관 PR #57) 표시.
+    if tpl and getattr(tpl, "stop_loss_percent_of_capital", None) is not None:
+        resp.stop_loss_percent_of_capital = Decimal(str(tpl.stop_loss_percent_of_capital))
     return resp
 
 

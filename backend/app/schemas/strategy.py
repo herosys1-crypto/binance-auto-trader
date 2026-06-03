@@ -92,6 +92,10 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # last_close_reason: TP_FINAL / TRAILING / SL / MANUAL / NONE
     tp_triggered_count: int = 0
     last_close_reason: str = "NONE"
+    # 2026-06-03 신규 (사장님 SL 한도 시각화): template 의 stop_loss_percent_of_capital.
+    # frontend 「전략 인스턴스」 카드에 SL 한도 (total_capital × sl_pct / 100) 표시용.
+    # 사장님 사상 (PR #57): SL = 투자금 대비 손실 % (레버리지 무관) → SL 한도 USDT 즉시 계산 가능.
+    stop_loss_percent_of_capital: Decimal | None = None
     # ─── Soft delete (2026-05-06 PR #7 + C-full) ───
     # is_archived=true 면 default UI list 에서 숨김. ?include_archived=true 로 조회 시 표시 +
     # 「↻ 복원」 버튼 노출. archived_at 은 archive 시점 (audit log).
