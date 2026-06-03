@@ -157,6 +157,15 @@ async function restoreStrategy(id) {
   } catch (e) { toast('복원 실패: ' + e.message, 'error'); }
 }
 
+// 2026-06-03 신규: 정렬 dropdown 변경 시 호출 — localStorage 저장 + 즉시 재정렬
+function onStrategiesSortChange() {
+  const sel = document.getElementById('strategies-sort-by');
+  if (sel) {
+    localStorage.setItem('strategies_sort_by', sel.value);
+    refreshStrategies();  // 즉시 재정렬 표시
+  }
+}
+
 async function refreshStrategies() {
   try {
     const url = '/strategies' + (_showArchivedStrategies ? '?include_archived=true' : '');
@@ -236,11 +245,32 @@ async function refreshStrategies() {
       return;
     }
 
-    // 활성 전략 우선 정렬
+    // 2026-06-03 신규: 사장님 정렬 옵션 — localStorage 저장. 위험 strategy 우선 확인 가능.
+    const sortBy = localStorage.getItem('strategies_sort_by') || 'default';
+    const _selSort = document.getElementById('strategies-sort-by');
+    if (_selSort && _selSort.value !== sortBy) _selSort.value = sortBy;
+    const _slProgress = (s) => {
+      const cap = Number(s.total_capital || 0);
+      const slPct = Number(s.stop_loss_percent_of_capital || 0);
+      const pnl = Number(s.unrealized_pnl || 0);
+      const slThr = (cap > 0 && slPct > 0) ? cap * slPct / 100 : 0;
+      return (slThr > 0 && pnl < 0) ? (Math.abs(pnl) / slThr * 100) : 0;
+    };
     const sorted = [...visible].sort((a, b) => {
       const aTerm = TERMINAL_STATUSES.includes((a.status || '').toUpperCase()) ? 1 : 0;
       const bTerm = TERMINAL_STATUSES.includes((b.status || '').toUpperCase()) ? 1 : 0;
-      return aTerm - bTerm || b.id - a.id;
+      // 활성 우선 (항상)
+      if (aTerm !== bTerm) return aTerm - bTerm;
+      // 사장님 선택 정렬
+      switch (sortBy) {
+        case 'sl_progress_desc': return _slProgress(b) - _slProgress(a);  // 🚨 SL 임박
+        case 'pnl_asc': return Number(a.unrealized_pnl || 0) - Number(b.unrealized_pnl || 0);  // 📉 손실 큰 순
+        case 'pnl_desc': return Number(b.unrealized_pnl || 0) - Number(a.unrealized_pnl || 0);  // 📈 이익 큰 순
+        case 'stage_desc': return (b.current_stage || 0) - (a.current_stage || 0);  // 📊 단계 많은 순
+        case 'created_desc': return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+        case 'created_asc': return new Date(a.created_at || 0) - new Date(b.created_at || 0);
+        default: return b.id - a.id;  // 기본
+      }
     });
 
     // 2026-06-01 (사장님 요구): 비활성 종료 행은 Binance 비교 X. active 만 fetch.

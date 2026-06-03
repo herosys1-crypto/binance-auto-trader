@@ -316,7 +316,20 @@
     <div id="section-strategies" class="card rounded-lg md:col-span-3">
       <div class="card-header text-xs flex justify-between items-center flex-wrap gap-2" style="padding:8px 12px">
         <span>🎯 전략 인스턴스</span>
-        <div class="flex gap-3 items-center">
+        <div class="flex gap-3 items-center flex-wrap">
+          <!-- 2026-06-03 신규: 정렬 옵션 — 사장님 운영 효율 (위험한 strategy 우선 확인) -->
+          <label class="text-xs font-normal flex items-center gap-1" title="정렬 기준 — localStorage 저장">
+            <span class="text-slate-400">정렬:</span>
+            <select id="strategies-sort-by" onchange="onStrategiesSortChange()" class="bg-slate-800 border border-slate-600 rounded text-xs px-1 py-0.5">
+              <option value="default">기본 (활성+ID)</option>
+              <option value="sl_progress_desc">🚨 SL 임박 (위험 우선)</option>
+              <option value="pnl_asc">📉 손실 큰 순</option>
+              <option value="pnl_desc">📈 이익 큰 순</option>
+              <option value="stage_desc">📊 단계 많은 순</option>
+              <option value="created_desc">🕐 진입 최신순</option>
+              <option value="created_asc">🕓 진입 오래된 순</option>
+            </select>
+          </label>
           <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
             <input type="checkbox" id="hide-terminated" onchange="refreshStrategies()" checked />
             <span class="text-slate-300">종료 숨김</span>
