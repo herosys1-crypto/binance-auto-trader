@@ -312,95 +312,33 @@ class TPSLOrchestratorService:
         )
         self.risk_service.mark_reentry_ready(strategy.id)
 
-    # ──────────────── 크라이시스 복구 모드 액션 (Phase D-2) ────────────────
+    # ──────────────── 크라이시스 복구 모드 액션 (Phase D-2) — 🚨 DEAD CODE ────────────────
     def _execute_crisis_action(self, strategy, action: str) -> None:
-        """크라이시스 모드 3 액션 처리 — TP1(+5%) / TRAIL_FULL / HARD_SL."""
-        from datetime import datetime, timezone
-        # SHORT 포지션은 음수 qty 로 저장됨 — abs() 로 양수화 후 청산.
-        # 이전엔 `current_qty <= 0` 이라 SHORT 크라이시스가 모두 return 되는 버그가 있었음.
-        current_qty = abs(Decimal(str(strategy.current_position_qty)))
-        if current_qty == 0:
-            return
+        """🚨 DEAD CODE (2026-06-03 #12 분석 확인) — 호출처 없음 + Stage 2 보호 미연결.
 
-        if action == "CRISIS_TP1":
-            # 25% 청산 — 첫 TP 발동
-            # 크라이시스 첫 TP — 25% 청산 (CRISIS_QTY_RATIO_DEFAULT["TP1"] / 100).
-            close_qty = (current_qty * (_CRISIS_QTY_RATIO_DEFAULT["TP1"] / PERCENT_DENOMINATOR)).quantize(QTY_PRECISION)
-            if close_qty <= 0:
-                return
-            try:
-                self.execution_service.emergency_close_position(strategy.id, quantity=close_qty)
-            except EmergencyCloseInProgress:
-                return  # #120 fix: 다른 caller 가 청산 중
-            strategy.status = "CRISIS_TP1_DONE"
-            strategy.crisis_first_tp_done_at = datetime.now(timezone.utc)
-            # 피크 PnL 초기화 (지금부터 추적 시작)
-            avg_entry = Decimal(str(strategy.avg_entry_price)) if strategy.avg_entry_price else None
-            try:
-                from app.repositories.position_repository import PositionRepository
-                latest_pos = PositionRepository(self.db).latest_by_strategy(strategy.id)
-                if latest_pos and latest_pos.mark_price and avg_entry:
-                    mark = Decimal(str(latest_pos.mark_price))
-                    cur_pnl = ((mark - avg_entry) / avg_entry * PERCENT_DENOMINATOR) if strategy.side == "LONG" else ((avg_entry - mark) / avg_entry * PERCENT_DENOMINATOR)
-                    strategy.peak_pnl_pct_after_first_tp = cur_pnl
-            except Exception as _e:
-                logger.warning("[#13] peak_pnl_pct_after_first_tp 갱신 실패 strategy=%s: %s", strategy.id, _e)
-            self.db.commit()
-            strategy_take_profit_total.labels(symbol=strategy.symbol, side=strategy.side, level="CRISIS_TP1").inc()
-            self.notification_service.send_crisis_first_tp(
-                strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
-                pnl_pct=str(strategy.peak_pnl_pct_after_first_tp or "5"), closed_qty=close_qty,
-            )
+        호출처 검색: `grep _execute_crisis_action backend/app/` → 0건 (정의만 있음).
 
-        elif action == "CRISIS_TRAIL_FULL":
-            # 남은 전량 청산 — 트레일링 보호 발동
-            try:
-                self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
-            except EmergencyCloseInProgress:
-                return  # #120 fix: 다른 caller 가 청산 중
-            strategy.status = "COMPLETED"
-            strategy.reentry_ready = False
-            self.risk_service.reset_peak_pnl(strategy.id)
-            self.db.commit()
-            strategy_take_profit_total.labels(symbol=strategy.symbol, side=strategy.side, level="CRISIS_TRAIL_FULL").inc()
-            # 현재 PnL 추출
-            try:
-                from app.repositories.position_repository import PositionRepository
-                latest_pos = PositionRepository(self.db).latest_by_strategy(strategy.id)
-                cur_pnl = "?"
-                if latest_pos and latest_pos.mark_price and strategy.avg_entry_price:
-                    avg = Decimal(str(strategy.avg_entry_price))
-                    mark = Decimal(str(latest_pos.mark_price))
-                    cur_pnl = str((mark - avg) / avg * PERCENT_DENOMINATOR if strategy.side == "LONG" else (avg - mark) / avg * PERCENT_DENOMINATOR)
-            except Exception as _e:
-                logger.warning("[#13] CRISIS_TRAIL_FULL cur_pnl 계산 실패 strategy=%s: %s", strategy.id, _e)
-                cur_pnl = "?"
-            self.notification_service.send_crisis_trailing_full(
-                strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
-                peak_pnl_pct=str(strategy.peak_pnl_pct_after_first_tp or "?"), current_pnl_pct=cur_pnl,
-            )
+        원래 의도 (Phase D-2 미완성):
+          - CRISIS_TP1:        TP1 발동 후 25% 청산 + Stage 2 진입 (status=CRISIS_TP1_DONE)
+          - CRISIS_TRAIL_FULL: 피크 대비 트레일링 -5% 회귀 → 전량 청산
+          - CRISIS_HARD_SL:    피크 대비 -1% 회귀 → 전량 빠른 손절
 
-        elif action == "CRISIS_HARD_SL":
-            # 남은 전량 손절 — 빠른 손절
-            try:
-                self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
-            except EmergencyCloseInProgress:
-                return  # #120 fix: 다른 caller 가 청산 중
-            strategy.status = "STOPPING"
-            self.db.commit()
-            strategy_stop_loss_total.labels(symbol=strategy.symbol, side=strategy.side).inc()
-            try:
-                from app.repositories.position_repository import PositionRepository
-                latest_pos = PositionRepository(self.db).latest_by_strategy(strategy.id)
-                cur_pnl = "?"
-                if latest_pos and latest_pos.mark_price and strategy.avg_entry_price:
-                    avg = Decimal(str(strategy.avg_entry_price))
-                    mark = Decimal(str(latest_pos.mark_price))
-                    cur_pnl = str((mark - avg) / avg * PERCENT_DENOMINATOR if strategy.side == "LONG" else (avg - mark) / avg * PERCENT_DENOMINATOR)
-            except Exception as _e:
-                logger.warning("[#13] CRISIS_HARD_SL cur_pnl 계산 실패 strategy=%s: %s", strategy.id, _e)
-                cur_pnl = "?"
-            self.notification_service.send_crisis_hard_sl(
-                strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side, pnl_pct=cur_pnl,
-            )
-            self.risk_service.mark_reentry_ready(strategy.id)
+        미연결 이유:
+          - risk_service.evaluate_take_profit_level 가 'CRISIS_TRAIL_FULL'/'CRISIS_HARD_SL' 반환 X
+          - 크라이시스 모드 시 정상 TP 흐름 (_execute_take_profit) 이 TP override 만 처리 (5/10/15/20%)
+          - Stage 2 보호 정책 자체가 미구현
+
+        사장님 결정 (2026-05-14): 크라이시스 비활성 (-100 sentinel)
+          → 신규 strategy 는 크라이시스 진입 X → 이 함수 wire-up 필요성 매우 낮음
+
+        미래 wire-up 시 참고 (원본 코드 = git history 에 보존):
+          1. risk_service.evaluate_take_profit_level 가 Stage 2 보호 액션 반환하도록 추가
+          2. process_action 에서 이 함수 호출
+          3. 또는 별도 worker (crisis_stage2_protection_monitor) 신설
+
+        안전 가드: 호출 시 NotImplementedError raise (silent 실행 차단).
+        """
+        raise NotImplementedError(
+            f"_execute_crisis_action({action!r}) DEAD CODE — Stage 2 보호 미구현. "
+            "docstring 참고 후 wire-up 또는 함수 영구 제거."
+        )
