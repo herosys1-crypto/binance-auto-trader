@@ -322,16 +322,35 @@ async function refreshStrategies() {
             <br>${addMarginBtnInQty}${addPositionBtn}
           </div>`
         : `<div class="text-xs leading-tight"><span class="text-slate-500">-</span><br><span class="text-slate-400 text-xs" title="계획 총 마진">${plannedMargin > 0 ? plannedMargin.toFixed(2)+' USDT' : '-'}</span>${addPositionBtn ? '<br>'+addPositionBtn : ''}</div>`;
-      // PnL/ROI — 3 줄 stack: PnL + 포지션 ROI (Binance 일치) + 전략 ROI (전체 자본 대비, 보조)
+      // PnL/ROI — 4 줄 stack: PnL + 포지션 ROI + 전략 ROI + 🆕 SL 한도 시각 (2026-06-03)
       const posSign = positionRoi > 0 ? '+' : '';
       const stratSign = strategyRoi > 0 ? '+' : '';
       const posTooltip = `포지션 ROI = pnl ÷ 현재 사용 마진 × 100 (Binance UI 와 일치). 마진=${positionMargin.toFixed(2)} USDT`;
       const stratTooltip = `전략 ROI = pnl × 레버리지 ÷ 전체 전략 자본 × 100 (전체 단계 모두 진입 시 = 포지션 ROI). 자본=${sCap.toFixed(2)} USDT, lev=${sLev}x`;
+      // 2026-06-03 SL 한도 시각화 (사장님 사상 PR #57: 레버리지 무관, 투자금 × sl_pct / 100)
+      // 사장님이 SL 발동까지 얼마나 남았는지 즉시 인지 — 운영 안전 핵심.
+      const slPctNum = Number(s.stop_loss_percent_of_capital || 0);
+      const slThreshold = (sCap > 0 && slPctNum > 0) ? sCap * slPctNum / 100 : 0;
+      // SL 까지 진행률 (0% = 안전, 100% = 발동 직전, > 100% = 한도 초과 발동 임박)
+      const slProgressPct = (slThreshold > 0 && pnlNum < 0) ? (Math.abs(pnlNum) / slThreshold * 100) : 0;
+      const slRemainingUsd = slThreshold + pnlNum;  // pnlNum 음수면 작아짐
+      let slClass = 'text-slate-500';
+      let slIcon = '';
+      if (slProgressPct >= 80) { slClass = 'text-red-400 font-bold'; slIcon = '🚨 '; }
+      else if (slProgressPct >= 50) { slClass = 'text-orange-400'; slIcon = '⚠ '; }
+      else if (slProgressPct >= 30) { slClass = 'text-yellow-400'; }
+      else if (slProgressPct > 0) { slClass = 'text-slate-400'; }
+      const slTooltip = slThreshold > 0
+        ? `SL 한도: -${slThreshold.toFixed(2)} USDT (투자금 ${sCap.toFixed(2)} × ${slPctNum}%, 레버리지 무관 — 사장님 사상 PR #57). 진행률 ${slProgressPct.toFixed(1)}% (남은 ${slRemainingUsd.toFixed(2)} USDT). 모든 단계 진입 후 발동.`
+        : 'SL 정보 없음';
+      const slDisplay = slThreshold > 0
+        ? `<br><span class="${slClass} text-xs" style="font-size:10px" title="${slTooltip}">${slIcon}SL ${slProgressPct.toFixed(0)}% (-${slThreshold.toFixed(0)} USDT)</span>`
+        : '';
       const pnl = hasPosition
         ? `<div class="text-xs leading-tight">
             <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span><br>
             <span class="${positionRoi>0?'pos':positionRoi<0?'neg':'text-slate-400'} text-xs" title="${posTooltip}">${posSign}${positionRoi.toFixed(2)}%</span><br>
-            <span class="${strategyRoi>0?'pos':strategyRoi<0?'neg':'text-slate-500'} text-xs" style="font-size:10px; opacity:0.7" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>
+            <span class="${strategyRoi>0?'pos':strategyRoi<0?'neg':'text-slate-500'} text-xs" style="font-size:10px; opacity:0.7" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slDisplay}
           </div>`
         : '<span class="text-slate-500">-</span>';
 
