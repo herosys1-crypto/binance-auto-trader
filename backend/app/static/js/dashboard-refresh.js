@@ -101,14 +101,50 @@ async function refreshActivity() {
     const data = await api(`/admin/recent-activity?limit=${limit}`);
     const el = document.getElementById('activity-feed');
     document.getElementById('activity-updated').textContent = '갱신 ' + new Date().toLocaleTimeString('ko-KR');
+
+    // 2026-06-03 신규: 계정별 필터 — window._strategiesById (strategies-list.js 가 채움) 활용.
+    // strategy_id → exchange_account_id 매핑 후 client-side 필터.
+    const accSel = document.getElementById('activity-account-filter');
+    const strategiesIdx = window._strategiesById || {};
+    // 활성 계정 목록 추출 (data 의 strategy_id → exchange_account_id)
+    const uniqAccIds = new Set();
+    data.forEach(t => {
+      if (t.strategy_id && strategiesIdx[t.strategy_id]) {
+        const accId = strategiesIdx[t.strategy_id].exchange_account_id;
+        if (accId) uniqAccIds.add(accId);
+      }
+    });
+    // dropdown 동적 채움
+    if (accSel) {
+      const curVal = accSel.value || 'all';
+      const sortedIds = [...uniqAccIds].sort((a, b) => a - b);
+      accSel.innerHTML = `<option value="all">전체</option>` +
+        sortedIds.map(id => `<option value="${id}">계정 #${id}</option>`).join('');
+      // 선택값 복원 (없어진 옵션이면 'all' 로)
+      accSel.value = curVal === 'all' || sortedIds.includes(Number(curVal)) ? curVal : 'all';
+    }
+    // 필터 적용
+    const accFilter = accSel ? accSel.value : 'all';
+    let filtered = data;
+    if (accFilter !== 'all') {
+      filtered = data.filter(t => {
+        if (!t.strategy_id) return false;  // strategy 없는 알림은 계정 필터 시 제외
+        const s = strategiesIdx[t.strategy_id];
+        return s && String(s.exchange_account_id) === String(accFilter);
+      });
+    }
+
     const lbl = document.getElementById('activity-count-label');
-    if (lbl) lbl.textContent = `(최신순 ${data.length}건${data.length >= limit ? ' — 더 보려면 ↑ 표시 변경' : ''})`;
-    if (!data.length) {
-      el.innerHTML = '<p class="text-slate-500 text-sm text-center py-4">활동 이력 없음</p>';
+    if (lbl) {
+      const filterNote = accFilter !== 'all' ? ` 계정 #${accFilter}` : '';
+      lbl.textContent = `(${filtered.length}/${data.length}건${filterNote}${data.length >= limit ? ' — ↑ 표시 변경' : ''})`;
+    }
+    if (!filtered.length) {
+      el.innerHTML = `<p class="text-slate-500 text-sm text-center py-4">필터 결과 없음 (전체 ${data.length}건 중 0건)</p>`;
       return;
     }
     const kindColor = { ORDER: 'text-blue-300', RISK: 'text-red-300', NOTIFY: 'text-slate-400' };
-    el.innerHTML = data.map(t => {
+    el.innerHTML = filtered.map(t => {
       const ts = new Date(t.ts);
       const tsStr = ts.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
       const kindCls = kindColor[t.kind] || 'text-slate-300';
