@@ -330,6 +330,14 @@
               <option value="created_asc">🕓 진입 오래된 순</option>
             </select>
           </label>
+          <!-- 2026-06-03 신규: 계정별 필터 — 다중 Sub-Account 운영 시 한 계정만 보기 -->
+          <label class="text-xs font-normal flex items-center gap-1" title="계정별 필터 — localStorage 저장. 다중 Sub-Account 운영 시 유용.">
+            <span class="text-slate-400">계정:</span>
+            <select id="strategies-account-filter" onchange="onStrategiesAccountFilterChange()" class="bg-slate-800 border border-slate-600 rounded text-xs px-1 py-0.5">
+              <option value="all">전체</option>
+              <!-- 계정 옵션은 refreshStrategies 가 동적 채움 -->
+            </select>
+          </label>
           <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
             <input type="checkbox" id="hide-terminated" onchange="refreshStrategies()" checked />
             <span class="text-slate-300">종료 숨김</span>

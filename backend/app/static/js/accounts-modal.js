@@ -24,6 +24,89 @@ function closeAccountsModal() {
   document.getElementById('accounts-modal').classList.add('hidden');
 }
 
+// 2026-06-03 신규: 모달 안에서 신규 계정 등록 폼 직접 — Swagger UI 대체.
+// 사장님 다중 계정 (Sub-Account 최대 10개) 운영 + 등록 편의.
+function openAddAccountForm() {
+  const html = `
+    <div id="add-account-form" class="mb-4 p-3 rounded border-2 border-blue-500 bg-slate-800/60">
+      <h3 class="text-sm font-bold mb-2 text-blue-300">➕ 신규 거래소 계정 등록</h3>
+      <p class="text-xs text-slate-400 mb-3">
+        📌 사전 작업 (사장님 Binance):
+        ① Sub-Account 생성 → ② API Management 에서 키 발급
+        (Read + Enable Futures, IP whitelist <code class="text-yellow-300">159.65.137.250</code>)
+      </p>
+      <div class="grid grid-cols-1 gap-2">
+        <input type="text" id="new-acc-api-key" placeholder="API Key (앞뒤 공백 X)"
+          class="px-2 py-1 bg-slate-900 border border-slate-600 rounded text-white text-sm font-mono" />
+        <input type="password" id="new-acc-api-secret" placeholder="API Secret"
+          class="px-2 py-1 bg-slate-900 border border-slate-600 rounded text-white text-sm font-mono" />
+        <div class="flex items-center gap-3">
+          <label class="text-xs cursor-pointer flex items-center gap-1">
+            <input type="checkbox" id="new-acc-testnet" />
+            <span>testnet (보통 OFF)</span>
+          </label>
+          <label class="text-xs cursor-pointer flex items-center gap-1">
+            <input type="checkbox" id="new-acc-hedge" checked />
+            <span>Hedge mode (PR #50: 자동 검증)</span>
+          </label>
+          <label class="text-xs flex items-center gap-1">
+            <span>일일 한도(USDT):</span>
+            <input type="number" id="new-acc-daily-limit" placeholder="비움=폴백"
+              class="w-20 px-1 py-0.5 bg-slate-900 border border-slate-600 rounded text-white text-xs" />
+          </label>
+        </div>
+        <div class="flex gap-2 mt-2">
+          <button onclick="submitNewAccount()" class="btn-success btn text-xs">
+            ✅ 등록 (자동 검증)
+          </button>
+          <button onclick="cancelNewAccount()" class="btn-ghost btn text-xs">
+            취소
+          </button>
+        </div>
+        <p class="text-xs text-blue-300 mt-1">
+          💡 등록 시 자동 검증 (PR #50): API key 유효성 + IP whitelist + Futures 권한 + Hedge mode 일치.
+          실패 시 친절 에러로 원인 안내.
+        </p>
+      </div>
+    </div>
+  `;
+  const body = document.getElementById('accounts-modal-body');
+  if (body) body.insertAdjacentHTML('afterbegin', html);
+}
+
+function cancelNewAccount() {
+  const form = document.getElementById('add-account-form');
+  if (form) form.remove();
+}
+
+async function submitNewAccount() {
+  const apiKey = document.getElementById('new-acc-api-key').value.trim();
+  const apiSecret = document.getElementById('new-acc-api-secret').value.trim();
+  const isTestnet = document.getElementById('new-acc-testnet').checked;
+  const hedgeMode = document.getElementById('new-acc-hedge').checked;
+  const dailyLimitRaw = document.getElementById('new-acc-daily-limit').value.trim();
+  const dailyLimit = dailyLimitRaw ? Number(dailyLimitRaw) : null;
+  if (!apiKey || apiKey.length < 10) { toast('⚠️ API Key 입력 (최소 10자)', 'error'); return; }
+  if (!apiSecret || apiSecret.length < 10) { toast('⚠️ API Secret 입력 (최소 10자)', 'error'); return; }
+  const body = {
+    exchange_name: 'binance',
+    market_type: 'usds_m_futures',
+    api_key: apiKey,
+    api_secret: apiSecret,
+    is_testnet: isTestnet,
+    hedge_mode_enabled: hedgeMode,
+  };
+  if (dailyLimit !== null && dailyLimit >= 0) body.daily_loss_limit_usdt = dailyLimit;
+  try {
+    const res = await api('/exchange-accounts', { method: 'POST', body });
+    toast(`✅ 계정 #${res.id} 등록 완료 (자동 검증 + Hedge mode 동기화). 워커들이 15분 이내 자동 감지.`, 'success');
+    cancelNewAccount();
+    await renderAccountsModalBody();  // 목록 refresh
+  } catch (e) {
+    toast('등록 실패: ' + e.message, 'error');
+  }
+}
+
 async function renderAccountsModalBody() {
   const body = document.getElementById('accounts-modal-body');
   // 2026-05-07 사용자 요청: 화이트리스트 운영 토글 (DB 영속, 즉시 적용)
@@ -55,9 +138,12 @@ async function renderAccountsModalBody() {
       body.innerHTML = whitelistHtml + `
         <div class="text-center py-8">
           <div class="text-yellow-300 mb-2">⚠️ 등록된 거래소 계정이 없습니다.</div>
-          <div class="text-slate-400 text-xs">
-            <a href="/docs#/exchange-accounts/create_exchange_account_api_v1_exchange_accounts_post" target="_blank" class="text-blue-400 underline">Swagger UI</a> 에서 등록하세요.
+          <div class="text-slate-400 text-xs mb-3">
+            아래 「➕ 계정 추가」 버튼으로 등록하세요.
           </div>
+          <button onclick="openAddAccountForm()" class="btn-success btn text-sm">
+            ➕ 계정 추가
+          </button>
         </div>`;
       return;
     }
@@ -122,6 +208,12 @@ async function renderAccountsModalBody() {
         </tr>`;
     }).join('');
     body.innerHTML = whitelistHtml + `
+      <div class="mb-2 flex justify-between items-center">
+        <span class="text-sm text-slate-300">등록된 계정 ${accounts.length}개 (최대 권장: <strong class="text-yellow-300">10개</strong> — 2vCPU/8GB 안전 한도)</span>
+        <button onclick="openAddAccountForm()" class="btn-success btn text-xs">
+          ➕ 계정 추가
+        </button>
+      </div>
       <table class="min-w-full">
         <thead>
           <tr class="text-slate-400 text-xs">

@@ -166,6 +166,15 @@ function onStrategiesSortChange() {
   }
 }
 
+// 2026-06-03 신규: 계정별 필터 dropdown 변경 시 호출 — 다중 Sub-Account 운영 시
+function onStrategiesAccountFilterChange() {
+  const sel = document.getElementById('strategies-account-filter');
+  if (sel) {
+    localStorage.setItem('strategies_account_filter', sel.value);
+    refreshStrategies();
+  }
+}
+
 async function refreshStrategies() {
   try {
     const url = '/strategies' + (_showArchivedStrategies ? '?include_archived=true' : '');
@@ -235,11 +244,32 @@ async function refreshStrategies() {
       hideAlert();
     }
 
+    // 2026-06-03 신규: 계정별 dropdown 동적 채움 + localStorage 복원
+    const accountFilter = localStorage.getItem('strategies_account_filter') || 'all';
+    const accSelEl = document.getElementById('strategies-account-filter');
+    if (accSelEl) {
+      const uniqAccIds = [...new Set(data.map(s => s.exchange_account_id).filter(Boolean))].sort((a,b)=>a-b);
+      // 옵션 재구성 (전체 + 각 계정)
+      const curVal = accSelEl.value || accountFilter;
+      accSelEl.innerHTML = `<option value="all">전체 (${data.length}건)</option>` +
+        uniqAccIds.map(id => {
+          const cnt = data.filter(s => s.exchange_account_id === id).length;
+          return `<option value="${id}">계정 #${id} (${cnt}건)</option>`;
+        }).join('');
+      // 선택값 복원
+      accSelEl.value = uniqAccIds.includes(Number(curVal)) || curVal === 'all' ? curVal : 'all';
+    }
+    // 계정 필터 적용
+    let filteredByAccount = data;
+    if (accountFilter !== 'all') {
+      filteredByAccount = data.filter(s => String(s.exchange_account_id) === String(accountFilter));
+    }
+
     // 종료된 전략 숨김 토글
     const hideTerm = document.getElementById('hide-terminated')?.checked;
-    let visible = data;
-    if (hideTerm) visible = data.filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()));
-    const hiddenCount = data.length - visible.length;
+    let visible = filteredByAccount;
+    if (hideTerm) visible = filteredByAccount.filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()));
+    const hiddenCount = filteredByAccount.length - visible.length;
     if (visible.length === 0 && hiddenCount > 0) {
       tbody.innerHTML = `<tr><td colspan="9" class="text-center text-slate-500 py-3 text-xs">진행 중인 전략 없음 (종료 ${hiddenCount}건 숨김)</td></tr>`;
       return;
