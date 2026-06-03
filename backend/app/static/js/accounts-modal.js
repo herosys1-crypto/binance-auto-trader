@@ -61,7 +61,11 @@ async function renderAccountsModalBody() {
         </div>`;
       return;
     }
-    const rows = accounts.map(a => {
+    // 2026-06-03 신규: 각 계정의 balance + 활성 strategy 수 병렬 조회 (사장님 통합 모니터링).
+    const balances = await Promise.all(accounts.map(a =>
+      api(`/exchange-accounts/${a.id}/balance`).catch(() => null)
+    ));
+    const rows = accounts.map((a, idx) => {
       const limit = a.daily_loss_limit_usdt;
       const limitText = limit === null || limit === undefined
         ? `<span class="text-slate-400" title="settings.daily_loss_limit_usdt 폴백">global 폴백</span>`
@@ -74,12 +78,39 @@ async function renderAccountsModalBody() {
       const activeBadge = a.is_active
         ? '<span class="badge badge-green">active</span>'
         : '<span class="badge badge-gray">inactive</span>';
+      // 2026-06-03 신규: balance 정보 표시 (사장님 통합 모니터링)
+      const bal = balances[idx];
+      let balText, upnlText, stratText, ratioText;
+      if (bal) {
+        const wallet = Number(bal.total_wallet_balance || 0);
+        const ourAvail = Number(bal.our_available_balance || 0);
+        const reserved = Number(bal.reserved_for_strategies || 0);
+        const upnl = Number(bal.total_unrealized_pnl || 0);
+        const stratCount = Number(bal.active_strategy_count || 0);
+        const ratio = Number(bal.margin_ratio_pct || 0);
+        const availCls = ourAvail < 0 ? 'text-red-400 font-bold' : 'text-green-300';
+        balText = `<span class="${availCls}" title="가용 잔액 = wallet - reserved (5단계 풀 예약 기준)">${ourAvail.toFixed(2)}</span> <span class="text-slate-500">/ ${wallet.toFixed(2)}</span>`;
+        const upnlCls = upnl > 0 ? 'text-green-400' : upnl < 0 ? 'text-red-400' : 'text-slate-400';
+        upnlText = `<span class="${upnlCls}">${upnl >= 0 ? '+' : ''}${upnl.toFixed(2)}</span>`;
+        stratText = `<span class="text-blue-300">${stratCount}건</span> <span class="text-slate-500">(예약 ${reserved.toFixed(0)})</span>`;
+        const ratioCls = ratio >= 80 ? 'text-red-400 font-bold' : ratio >= 50 ? 'text-yellow-300' : 'text-slate-400';
+        ratioText = `<span class="${ratioCls}">${ratio.toFixed(1)}%</span>`;
+      } else {
+        balText = '<span class="text-slate-500">조회 실패</span>';
+        upnlText = '<span class="text-slate-500">-</span>';
+        stratText = '<span class="text-slate-500">-</span>';
+        ratioText = '<span class="text-slate-500">-</span>';
+      }
       return `
         <tr>
           <td class="text-xs">#${a.id}</td>
           <td class="text-xs">${a.exchange_name}</td>
           <td>${envBadge}</td>
           <td>${activeBadge}</td>
+          <td class="text-xs font-mono" title="가용 / wallet (USDT)">${balText}</td>
+          <td class="text-xs font-mono">${upnlText}</td>
+          <td class="text-xs">${stratText}</td>
+          <td class="text-xs">${ratioText}</td>
           <td class="text-xs">${limitText}</td>
           <td class="space-x-1">
             <button class="btn-ghost btn text-xs" style="padding:4px 8px"
@@ -98,12 +129,17 @@ async function renderAccountsModalBody() {
             <th class="text-left p-2">거래소</th>
             <th class="text-left p-2">환경</th>
             <th class="text-left p-2">상태</th>
+            <th class="text-left p-2" title="가용 잔액 / 전체 wallet (USDT)">잔액 (가용/wallet)</th>
+            <th class="text-left p-2" title="미실현 손익 (USDT)">uPnL</th>
+            <th class="text-left p-2" title="활성 strategy 수 + 5단계 풀 예약 자본">활성 / 예약</th>
+            <th class="text-left p-2" title="마진 비율 (>=80% 청산 위험)">마진 %</th>
             <th class="text-left p-2">일일 손실 한도</th>
             <th class="text-left p-2">액션</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
-      </table>`;
+      </table>
+      <p class="text-xs text-slate-500 mt-2">💡 잔액 조회 = 30초 캐시 (Binance accountInfo). 모달 열 때마다 갱신.</p>`;
   } catch (err) {
     body.innerHTML = whitelistHtml + `<div class="text-red-400 text-sm">계정 조회 실패: ${err.message}</div>`;
   }
