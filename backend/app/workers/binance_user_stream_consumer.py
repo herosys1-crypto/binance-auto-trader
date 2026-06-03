@@ -54,7 +54,13 @@ class BinanceUserStreamConsumer:
                 # 필수. 차단 후엔 연결은 되지만 ORDER_TRADE_UPDATE / ACCOUNT_UPDATE 등
                 # private event 가 단 한 건도 수신되지 않음 → mainnet Sub-account 운영의
                 # 모든 chain 문제 (PENDING 머무름, realized_pnl 0, 통계 부정확 등) 의 root cause.
-                ws_url = f"{self.ws_base_url}/private/ws/{self.listen_key}"
+                #
+                # 2026-06-03 보강 (binance_changelog_monitor 자동 감지 + 사장님 요청):
+                # Binance WebSocket Change Notice 페이지 update 감지 → 최신 권장 형식 채택.
+                # path 형식 (/private/ws/<key>) 도 계속 작동하지만, Binance 가 query string
+                # 형식 (/private/ws?listenKey=<key>) 을 신규 표준으로 제시 → 사전 마이그레이션.
+                # events 필터는 미사용 (모든 이벤트 수신 — listenKeyExpired 등 critical 누락 방지).
+                ws_url = f"{self.ws_base_url}/private/ws?listenKey={self.listen_key}"
                 logger.info("Starting Binance user stream consumer: %s", ws_url)
                 self.ws = websocket.WebSocketApp(ws_url, on_open=self._on_open, on_message=self._on_message, on_error=self._on_error, on_close=self._on_close)
                 self.ws.run_forever(ping_interval=20, ping_timeout=10)
