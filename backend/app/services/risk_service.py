@@ -1,7 +1,10 @@
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 
 from app.core.redis_client import get_redis_client
+
+logger = logging.getLogger(__name__)
 from app.models.risk_event import RiskEvent
 from app.observability.metrics import strategy_stop_loss_total
 from app.repositories.position_repository import PositionRepository
@@ -143,6 +146,9 @@ class RiskService:
         self._update_pnl_extremes(strategy, pnl_ratio)
         new_max_loss = strategy.max_loss_pct
         self._maybe_send_loss_threshold_alert(strategy, prev_max_loss, new_max_loss)
+        # 2026-06-03 신규: SL 진행률 80% 도달 시 1회 알림 (사장님 사상 PR #57 자본 기준).
+        # PR #64 의 시각화 (빨강 배지) + Telegram 즉시 인지 = 사장님 운영 안전 보강.
+        self._maybe_send_sl_progress_alert(strategy)
         if not strategy.crisis_mode_triggered_at and self._should_trigger_crisis_mode(strategy, pnl_ratio):
             self._enter_crisis_mode(strategy)
 
@@ -339,6 +345,113 @@ class RiskService:
         if max_loss > threshold:  # 예: threshold -60, max_loss -45 면 -60 미달 → skip
             return False
         return True
+
+    def _maybe_send_sl_progress_alert(self, strategy) -> None:
+        """SL 진행률 80% 도달 시 1회 Telegram 알림 (사장님 사상 PR #57: 자본 기준).
+
+        2026-06-03 신설 — PR #64 (전략 인스턴스 카드 SL 시각화) 의 Telegram 보완.
+        사장님이 화면 안 봐도 SL 발동 임박 즉시 인지 → 결정 도움.
+
+        계산 (PR #57 사장님 사상 일치):
+          SL 한도 = total_capital × sl_pct / 100  (레버리지 무관)
+          현재 손실 = realized + unrealized
+          진행률 = abs(현재 손실) / SL 한도 × 100  (현재 손실 음수일 때)
+
+        Dedup: Redis 'sl_progress_alerted:{strategy_id}' TTL 1시간.
+          - 첫 80% 도달 시 알림 + flag SET
+          - 1시간 안 재알림 X (spam 방지)
+          - 1시간 후 재계산 — 여전히 80% 면 재알림 (사장님 인지 강화)
+          - 진행률 < 50% 회복 시 flag DEL (다음 80% 도달 시 새로 알림)
+        """
+        try:
+            from app.core.redis_client import get_redis_client
+            from app.models.strategy_template import StrategyTemplate
+            from app.core.risk_constants import DEFAULT_SL_PCT_OF_CAPITAL, PERCENT_DENOMINATOR
+
+            total_capital = Decimal(str(strategy.total_capital or 0))
+            if total_capital <= 0:
+                return
+            current_loss = Decimal(str(strategy.realized_pnl or 0)) + Decimal(str(strategy.unrealized_pnl or 0))
+            if current_loss >= 0:
+                return  # 이익 중 — 알림 의미 X
+            tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id) if strategy.strategy_template_id else None
+            sl_pct = (
+                Decimal(str(tpl.stop_loss_percent_of_capital))
+                if tpl and tpl.stop_loss_percent_of_capital and Decimal(str(tpl.stop_loss_percent_of_capital)) > 0
+                else DEFAULT_SL_PCT_OF_CAPITAL
+            )
+            sl_threshold = total_capital * (sl_pct / PERCENT_DENOMINATOR)
+            if sl_threshold <= 0:
+                return
+            progress_pct = abs(current_loss) / sl_threshold * 100
+
+            try:
+                redis = get_redis_client()
+            except Exception:
+                redis = None
+            flag_key = f"sl_progress_alerted:{strategy.id}"
+
+            if progress_pct < 50:
+                # 회복 중 — flag 제거 (다음 80% 도달 시 새 알림)
+                if redis:
+                    try: redis.delete(flag_key)
+                    except Exception: pass
+                return
+
+            if progress_pct < 80:
+                return  # 80% 미달
+
+            # 80% 도달 — dedup 확인
+            if redis:
+                try:
+                    if redis.get(flag_key):
+                        return  # 1시간 내 이미 알림
+                    redis.setex(flag_key, 3600, "1")
+                except Exception:
+                    pass
+
+            # 알림 발송 — RiskEvent + Telegram
+            remaining_usd = sl_threshold + current_loss  # current_loss 음수
+            self.db.add(RiskEvent(
+                strategy_instance_id=strategy.id,
+                event_type="SL_PROGRESS_80PCT_REACHED",
+                severity="WARNING",
+                title=f"🚨 SL 발동 임박 — {progress_pct:.0f}% 도달",
+                message=(
+                    f"{strategy.symbol} {strategy.side} 손실 {current_loss:.2f} USDT / SL 한도 {-sl_threshold:.2f} USDT "
+                    f"= 진행률 {progress_pct:.1f}%. 남은 마진 {remaining_usd:.2f} USDT. "
+                    f"투자금 {total_capital} USDT × {sl_pct}% (PR #57 사장님 사상, 레버리지 무관). "
+                    "긴급 종료 / 증거금 추가 검토 권장."
+                ),
+                event_payload={
+                    "progress_pct": str(progress_pct),
+                    "current_loss": str(current_loss),
+                    "sl_threshold": str(sl_threshold),
+                    "remaining_usd": str(remaining_usd),
+                    "total_capital": str(total_capital),
+                    "sl_pct": str(sl_pct),
+                },
+            ))
+            self.db.flush()
+            try:
+                from app.services.notification_service import NotificationService
+                NotificationService(self.db).send_system_alert(
+                    title=f"🚨 [SL 임박] {strategy.symbol} {strategy.side} — {progress_pct:.0f}% 도달",
+                    body=(
+                        f"📌 strategy #{strategy.id}\n"
+                        f"💰 손실: {current_loss:.2f} USDT (한도 {-sl_threshold:.2f})\n"
+                        f"📊 진행률: {progress_pct:.1f}% (남은 {remaining_usd:.2f} USDT)\n"
+                        f"🔢 투자금 {total_capital} × {sl_pct}% (레버리지 무관)\n\n"
+                        f"⚠️ 옵션:\n"
+                        f"  • 💰 증거금 추가 (SL 한도 자동 증가 PR #56)\n"
+                        f"  • 💉 포지션 추가 (평단 회복)\n"
+                        f"  • 🛑 긴급 종료 (수동 청산)"
+                    ),
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning("[sl-progress-alert] strategy=%s failed: %s", strategy.id, e)
 
     def _maybe_send_loss_threshold_alert(
         self, strategy, prev_max_loss, new_max_loss
