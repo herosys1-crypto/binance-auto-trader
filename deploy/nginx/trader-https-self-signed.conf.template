@@ -1,0 +1,86 @@
+# =============================================================================
+# Nginx HTTPS (self-signed) — 도메인 없이 IP 기반 운영용
+# =============================================================================
+# 2026-06-03 #10: 사장님 다중 Sub-Account 운영 시 API key 평문 전송 차단.
+# 도메인 없이 IP `159.65.137.250` 그대로 HTTPS 적용.
+# 브라우저 경고 우회: 사장님이 「고급 → 진행」 1회 클릭 (또는 cert 인증서 export).
+#
+# 사용 (사장님 VPS):
+#   1. bash deploy/setup-https-self-signed.sh   (cert 자동 생성 + nginx 설치)
+#   2. ln -s /etc/nginx/sites-available/trader /etc/nginx/sites-enabled/
+#   3. nginx -t && nginx -s reload
+#
+# 사장님이 도메인 구매 후 Let's Encrypt 로 교체:
+#   bash deploy/setup-https-letsencrypt.sh trader.yourdomain.com
+# =============================================================================
+
+# HTTP → HTTPS 강제 리다이렉트 (모든 평문 접속 차단)
+server {
+    listen 80;
+    listen [::]:80;
+    server_name _;  # 모든 호스트 (도메인 X, IP 만)
+
+    # ACME challenge 만 HTTP 허용 (Let's Encrypt 향후 교체 시 필요)
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    # 그 외 모두 HTTPS 강제
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# HTTPS server (self-signed cert)
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name _;  # 모든 호스트
+
+    # 2026-06-03 #10: self-signed cert (setup-https-self-signed.sh 가 생성)
+    ssl_certificate /etc/nginx/ssl/trader-self-signed.crt;
+    ssl_certificate_key /etc/nginx/ssl/trader-self-signed.key;
+
+    # 보안 옵션 (TLS 1.2+)
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    # 보안 헤더
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    # HSTS (한번 적용 후 사장님 브라우저가 HTTP 시도 차단) — 신중!
+    # add_header Strict-Transport-Security "max-age=63072000" always;
+
+    client_max_body_size 1m;
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+    proxy_connect_timeout 60s;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket 지원
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    location = /health {
+        proxy_pass http://127.0.0.1:8000/health;
+        access_log off;
+    }
+
+    location = /metrics {
+        deny all;
+        return 403;
+    }
+}
