@@ -995,7 +995,15 @@
   <div class="card rounded-lg mb-2">
     <div class="card-header text-xs flex justify-between items-center flex-wrap gap-2" style="padding:8px 12px">
       <span>📡 최근 활동 <span id="activity-count-label" class="text-slate-400">(최신순 20건)</span></span>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 flex-wrap">
+        <!-- 2026-06-03 신규: 계정별 필터 — 다중 Sub-Account 운영 시. window._strategiesById 활용. -->
+        <label class="text-xs text-slate-400 flex items-center gap-1" title="계정별 필터 — strategy_id → exchange_account_id 매핑 (client-side)">
+          계정:
+          <select id="activity-account-filter" onchange="refreshActivity()" class="bg-slate-800 border border-slate-600 rounded text-xs px-1 py-0.5">
+            <option value="all">전체</option>
+            <!-- refreshActivity 가 동적 채움 -->
+          </select>
+        </label>
         <!-- 2026-05-12 (사용자 요청): 20건 한도 → 50/100/200/500 선택 + 「더 보기」. -->
         <label class="text-xs text-slate-400 flex items-center gap-1" title="한 번에 가져올 활동 건수">
           표시:

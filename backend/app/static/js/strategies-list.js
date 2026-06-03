@@ -175,10 +175,19 @@ function onStrategiesAccountFilterChange() {
   }
 }
 
+// 2026-06-03 신규: 전역 strategies 인덱스 (id → strategy) — 「최근 활동」 카드의 계정 필터용.
+// refreshStrategies 가 매번 갱신. 다른 모듈 (dashboard-refresh) 이 활용.
+window._strategiesById = {};
+
 async function refreshStrategies() {
   try {
     const url = '/strategies' + (_showArchivedStrategies ? '?include_archived=true' : '');
     const data = await api(url);
+    // 인덱스 갱신 (activity 필터용)
+    window._strategiesById = {};
+    for (const s of data) {
+      window._strategiesById[s.id] = s;
+    }
     const active = data.filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()) && !s.is_archived);
     let totalUnrealized = 0;
     let totalMarginUsed = 0;  // 마진 합 = sum(capital / leverage) — 사용자 실제 사용 자본
