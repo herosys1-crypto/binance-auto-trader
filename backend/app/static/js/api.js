@@ -72,15 +72,29 @@ async function api(path, opts = {}) {
 function toast(msg, type) {
   // 2026-05-13 (사용자 모바일 UX): backend 에러의 literal "\n" 을 실 줄바꿈으로 표시.
   // 또한 JSON detail 추출 — "400: {\"detail\":\"...\"}" → "400: ..."
+  // 2026-06-03 (#18 fix): Pydantic 422 의 list 형식 detail 도 파싱 (필드별 명확 표시).
   const el = document.getElementById('toast');
   let display = String(msg || '');
-  // JSON detail 추출 (e.g., '400: {"detail":"..."}')
+  // JSON detail 추출 (e.g., '400: {"detail":"..."}' 또는 '422: {"detail":[{"loc":[...],...}]}')
   const jsonMatch = display.match(/^(\d{3}):\s*(\{.*\})$/s);
   if (jsonMatch) {
     try {
       const parsed = JSON.parse(jsonMatch[2]);
-      if (parsed && parsed.detail) {
-        display = `${jsonMatch[1]}: ${parsed.detail}`;
+      if (parsed && parsed.detail !== undefined && parsed.detail !== null) {
+        if (Array.isArray(parsed.detail)) {
+          // Pydantic 422 — 필드별 validation 에러 list. 사장님이 어느 필드 invalid 인지 명확 표시.
+          const errors = parsed.detail.map(d => {
+            // loc = ["body", "field_name", ...] → "field_name" 만 추출 (가독성)
+            const loc = (d.loc || []).filter(x => x !== 'body' && typeof x === 'string').join('.') || '(root)';
+            const msg = d.msg || JSON.stringify(d);
+            const inputHint = d.input !== undefined ? ` (입력: ${JSON.stringify(d.input).slice(0, 50)})` : '';
+            return `  • ${loc}: ${msg}${inputHint}`;
+          }).join('\n');
+          display = `${jsonMatch[1]} 검증 실패 (${parsed.detail.length}개 필드):\n${errors}`;
+        } else {
+          // 일반 string detail (FastAPI HTTPException)
+          display = `${jsonMatch[1]}: ${parsed.detail}`;
+        }
       }
     } catch (_) { /* 파싱 실패 시 원본 유지 */ }
   }
