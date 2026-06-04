@@ -384,18 +384,37 @@ async function refreshStrategies() {
                   style="padding:2px 6px;font-size:10px;line-height:1.2"
                   title="포지션 추가 (ad-hoc) — 자유 금액 시장가/지정가 즉시 진입. qty + 평단 갱신, stage 진행 X. v4 안전망: 사용 시 max_loss 임계 도달하면 Crisis 발동 (stage 미완료라도)">💉 포지션 추가</button>`
         : '';
-      // 2026-06-05 사장님 헷갈림 해소: 「수량/마진」 컬럼 라벨 명시
-      // 이전: "19,224 / 175.03 / 125.00 USDT" — 사장님이 모든 숫자를 마진으로 오해
-      // 신규: "📦 수량 19,224 / 💰 마진 175 (계획 125)" — 각 값 의미 명확
+      // 2026-06-05 v2 사장님 「계획」 의미 명확화 + 계획 초과 경고:
+      // 「계획 마진」 = strategy 생성 시 「자본 ÷ 레버리지」 = 모든 단계 진입 시 lock 예정 마진.
+      // 사장님이 운영 중 증거금/포지션 추가 → 실 마진 > 계획 시 ⚠️ 표시 (사장님 자본 갱신 필요 인지).
+      // 표현: "🔒 마진 175 USDT (📋 계획 125 = 자본 250÷2x) ⚠️ 초과 +50 (140%)"
+      const planExceeded = positionMargin > plannedMargin * 1.05;  // 5% 초과 = 의미 있는 차이
+      const planExceedPct = plannedMargin > 0 ? (positionMargin / plannedMargin * 100) : 0;
+      const exceedAmount = positionMargin - plannedMargin;
+      const planTooltip = `📋 계획 마진 ${plannedMargin.toFixed(2)} USDT\n   = 전체 자본 ${sCap.toFixed(2)} ÷ 레버리지 ${sLev}x\n   = 사장님 strategy 생성 시 입력한 자본 (모든 단계 진입 시 lock 될 마진)\n\n🔒 현재 사용 ${positionMargin.toFixed(2)} USDT\n   = 수량 × 평단 ÷ 레버리지\n   = Binance 가 지금 실제 lock 중인 마진${planExceeded ? `\n\n⚠️ 계획 초과 +${exceedAmount.toFixed(2)} USDT (${planExceedPct.toFixed(0)}%)\n   — 사장님이 증거금/포지션 추가 → 실 마진 증가\n   — 자본 미갱신 → SL 한도가 옛 자본 기준 (사장님 노력 미반영)\n   — ✏️ 수정 모드로 자본 갱신 권장 (SL 한도 정확 계산)` : ''}`;
+      const planExceedBadge = planExceeded
+        ? `<span class="text-orange-400 ml-1" style="font-size:10px" title="${planTooltip}">⚠️${planExceedPct.toFixed(0)}%</span>`
+        : '';
       const qtyStack = hasPosition
         ? `<div class="text-xs leading-tight">
             <div title="포지션 수량 (절대값 = 실제 보유, 부호 = 방향)"><span class="text-slate-400" style="font-size:10px">📦 수량</span> <span class="${sQtyNum<0?'neg':'pos'} font-semibold">${fmtQty(sQtyNum)}</span></div>
-            <div title="현재 사용 마진 (qty×평단÷lev) / 계획 총 마진 (전체 자본÷lev). 모든 단계 진입 완료 시 두 값 일치"><span class="text-slate-400" style="font-size:10px">💰 마진</span> <span class="text-slate-200">${positionMargin.toFixed(2)}</span> <span class="text-slate-500" style="font-size:10px">(계획 ${plannedMargin.toFixed(2)})</span> <span class="text-slate-500" style="font-size:10px">USDT</span></div>
+            <div title="${planTooltip}">
+              <span class="text-slate-400" style="font-size:10px">🔒 마진</span>
+              <span class="text-slate-200">${positionMargin.toFixed(2)}</span>
+              <span class="text-slate-500" style="font-size:10px">USDT</span>
+              ${planExceedBadge}
+            </div>
+            <div style="font-size:10px" title="${planTooltip}">
+              <span class="text-slate-500">📋 계획</span>
+              <span class="text-slate-400">${plannedMargin.toFixed(2)}</span>
+              <span class="text-slate-600">(자본 ${sCap.toFixed(0)} ÷ ${sLev}x)</span>
+            </div>
             ${addMarginBtnInQty}${addPositionBtn}
           </div>`
         : `<div class="text-xs leading-tight">
             <span class="text-slate-500">- (미진입)</span><br>
-            <span class="text-slate-400" style="font-size:10px" title="계획 총 마진 (전체 자본÷lev) — 모든 단계 진입 시 필요한 마진">💰 계획 마진 ${plannedMargin > 0 ? plannedMargin.toFixed(2)+' USDT' : '-'}</span>
+            <span class="text-slate-400" style="font-size:10px" title="${planTooltip}">📋 계획 ${plannedMargin > 0 ? plannedMargin.toFixed(2)+' USDT' : '-'}</span>
+            <br><span class="text-slate-600" style="font-size:9px">자본 ${sCap.toFixed(0)} ÷ ${sLev}x</span>
             ${addPositionBtn ? '<br>'+addPositionBtn : ''}
           </div>`;
       // PnL/ROI — 4 줄 stack: PnL + 포지션 ROI + 전략 ROI + 🆕 SL 한도 시각 (2026-06-03)
