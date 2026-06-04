@@ -351,14 +351,17 @@ async function refreshStrategies() {
       // 2026-05-04 v3 (Binance ROI 일치): 두 가지 ROI 분리.
       //   포지션 ROI = pnl / 현재_사용_마진 × 100  ← Binance UI 와 일치 (실제 진입한 부분만).
       //   전략 ROI   = pnl × leverage / total_capital × 100  ← 전체 전략 자본 대비.
-      // 마지막까지 모든 단계 진입하면 두 값이 같아짐 (현재_사용_마진 == 계획_총_마진).
-      // 1단계만 진입한 6단계 전략은 두 값이 크게 다름 — 사용자 비교 혼란 원인이었음.
       const positionNotional = hasPosition ? sQtyAbs * sAvg : 0;
       const positionMargin = positionNotional > 0 && sLev > 0 ? positionNotional / sLev : 0;
       const positionRoi = positionMargin > 0 ? (pnlNum / positionMargin * 100) : 0;
       const strategyRoi = sCap > 0 ? (pnlNum * sLev / sCap * 100) : 0;
-      // 계획된 마진 (전체 단계 진입 시) — 「수량/마진」 컬럼의 보조 정보용.
-      const plannedMargin = sCap > 0 && sLev > 0 ? sCap / sLev : 0;
+      // 2026-06-05 사장님 사상 정확 반영 (옵션 A):
+      // total_capital = 사장님 입력 「자본」 = 마진 단위 (PR #57 SL 계산식 확정)
+      // 「계획 마진」 = total_capital (그대로) — 모든 단계 진입 시 lock 될 마진
+      // 「거래 규모 (notional)」 = total_capital × leverage — 사장님 강조 "자본 2000 + 2x = 4000"
+      // 이전: plannedMargin = sCap / sLev (잘못 — ÷ leverage 가 사장님 사상 위반)
+      const plannedMargin = sCap > 0 ? sCap : 0;
+      const plannedNotional = sCap > 0 && sLev > 0 ? sCap * sLev : 0;
 
       // 평단/마크/청산 — 3 줄 stack (Binance 스타일)
       const priceStack = hasPosition
@@ -384,37 +387,36 @@ async function refreshStrategies() {
                   style="padding:2px 6px;font-size:10px;line-height:1.2"
                   title="포지션 추가 (ad-hoc) — 자유 금액 시장가/지정가 즉시 진입. qty + 평단 갱신, stage 진행 X. v4 안전망: 사용 시 max_loss 임계 도달하면 Crisis 발동 (stage 미완료라도)">💉 포지션 추가</button>`
         : '';
-      // 2026-06-05 v2 사장님 「계획」 의미 명확화 + 계획 초과 경고:
-      // 「계획 마진」 = strategy 생성 시 「자본 ÷ 레버리지」 = 모든 단계 진입 시 lock 예정 마진.
-      // 사장님이 운영 중 증거금/포지션 추가 → 실 마진 > 계획 시 ⚠️ 표시 (사장님 자본 갱신 필요 인지).
-      // 표현: "🔒 마진 175 USDT (📋 계획 125 = 자본 250÷2x) ⚠️ 초과 +50 (140%)"
-      const planExceeded = positionMargin > plannedMargin * 1.05;  // 5% 초과 = 의미 있는 차이
-      const planExceedPct = plannedMargin > 0 ? (positionMargin / plannedMargin * 100) : 0;
-      const exceedAmount = positionMargin - plannedMargin;
-      const planTooltip = `📋 계획 마진 ${plannedMargin.toFixed(2)} USDT\n   = 전체 자본 ${sCap.toFixed(2)} ÷ 레버리지 ${sLev}x\n   = 사장님 strategy 생성 시 입력한 자본 (모든 단계 진입 시 lock 될 마진)\n\n🔒 현재 사용 ${positionMargin.toFixed(2)} USDT\n   = 수량 × 평단 ÷ 레버리지\n   = Binance 가 지금 실제 lock 중인 마진${planExceeded ? `\n\n⚠️ 계획 초과 +${exceedAmount.toFixed(2)} USDT (${planExceedPct.toFixed(0)}%)\n   — 사장님이 증거금/포지션 추가 → 실 마진 증가\n   — 자본 미갱신 → SL 한도가 옛 자본 기준 (사장님 노력 미반영)\n   — ✏️ 수정 모드로 자본 갱신 권장 (SL 한도 정확 계산)` : ''}`;
-      const planExceedBadge = planExceeded
-        ? `<span class="text-orange-400 ml-1" style="font-size:10px" title="${planTooltip}">⚠️${planExceedPct.toFixed(0)}%</span>`
-        : '';
+      // 2026-06-05 v3 (옵션 A): total_capital = 사장님 입력 자본 = 마진 단위 (사장님 사상 PR #57)
+      // 표시 의미:
+      //   📦 수량 = 포지션 수량
+      //   🔒 현재 마진 = qty × 평단 ÷ lev (Binance 실 lock)
+      //   💼 사장님 자본 = total_capital (마진 의도, SL 계산 기준)
+      //   📊 거래 규모 = total_capital × leverage (notional)
+      // 진입률 = 현재 마진 ÷ 사장님 자본 (목표 도달 %)
+      const entryPct = plannedMargin > 0 ? (positionMargin / plannedMargin * 100) : 0;
+      const entryColor = entryPct >= 95 ? 'text-green-400' : entryPct >= 50 ? 'text-yellow-400' : 'text-slate-300';
+      const planTooltip = `💼 사장님 자본: ${plannedMargin.toFixed(2)} USDT (= 마진 lock 목표)\n   strategy 생성 시 입력 — SL 한도 기준 (사장님 사상 PR #57)\n\n📊 거래 규모: ${plannedNotional.toFixed(2)} USDT (= 자본 × ${sLev}x)\n   모든 단계 진입 + 거래소 표시 notional value\n\n🔒 현재 마진 (Binance lock): ${positionMargin.toFixed(2)} USDT\n   = 수량 ${sQtyAbs.toFixed(0)} × 평단 ${sAvg.toFixed(4)} ÷ ${sLev}x\n\n📈 진입률: ${entryPct.toFixed(1)}% (현재 ÷ 자본)\n   100% = 모든 단계 진입 완료\n   100% 초과 = 사장님이 증거금/포지션 추가`;
       const qtyStack = hasPosition
         ? `<div class="text-xs leading-tight">
             <div title="포지션 수량 (절대값 = 실제 보유, 부호 = 방향)"><span class="text-slate-400" style="font-size:10px">📦 수량</span> <span class="${sQtyNum<0?'neg':'pos'} font-semibold">${fmtQty(sQtyNum)}</span></div>
             <div title="${planTooltip}">
               <span class="text-slate-400" style="font-size:10px">🔒 마진</span>
               <span class="text-slate-200">${positionMargin.toFixed(2)}</span>
-              <span class="text-slate-500" style="font-size:10px">USDT</span>
-              ${planExceedBadge}
+              <span class="text-slate-500" style="font-size:10px">/ <span class="text-slate-300">${plannedMargin.toFixed(2)}</span> USDT</span>
+              <span class="${entryColor} ml-1" style="font-size:10px">${entryPct.toFixed(0)}%</span>
             </div>
             <div style="font-size:10px" title="${planTooltip}">
-              <span class="text-slate-500">📋 계획</span>
-              <span class="text-slate-400">${plannedMargin.toFixed(2)}</span>
-              <span class="text-slate-600">(자본 ${sCap.toFixed(0)} ÷ ${sLev}x)</span>
+              <span class="text-slate-500">📊 거래규모</span>
+              <span class="text-slate-400">${plannedNotional.toFixed(0)} USDT</span>
+              <span class="text-slate-600">(자본 ${plannedMargin.toFixed(0)} × ${sLev}x)</span>
             </div>
             ${addMarginBtnInQty}${addPositionBtn}
           </div>`
         : `<div class="text-xs leading-tight">
             <span class="text-slate-500">- (미진입)</span><br>
-            <span class="text-slate-400" style="font-size:10px" title="${planTooltip}">📋 계획 ${plannedMargin > 0 ? plannedMargin.toFixed(2)+' USDT' : '-'}</span>
-            <br><span class="text-slate-600" style="font-size:9px">자본 ${sCap.toFixed(0)} ÷ ${sLev}x</span>
+            <span class="text-slate-400" style="font-size:10px" title="${planTooltip}">💼 자본 ${plannedMargin > 0 ? plannedMargin.toFixed(2)+' USDT' : '-'}</span>
+            <br><span class="text-slate-600" style="font-size:9px">거래규모 ${plannedNotional.toFixed(0)} (= 자본 × ${sLev}x)</span>
             ${addPositionBtn ? '<br>'+addPositionBtn : ''}
           </div>`;
       // PnL/ROI — 4 줄 stack: PnL + 포지션 ROI + 전략 ROI + 🆕 SL 한도 시각 (2026-06-03)
