@@ -39,13 +39,17 @@ let _binancePositionsCache = {};  // { [accountId]: { fetched_at, positions: {sy
 async function _fetchBinancePositionsForAccounts(accountIds) {
   if (!accountIds || accountIds.length === 0) return;
   const uniqueIds = [...new Set(accountIds)];
+  // 2026-06-05 사장님 진단: Binance 비교 행이 사장님 화면에 안 보이는 문제.
+  // 로깅 강화 — fetch 성공/실패/포지션 수 모두 console 에 기록.
+  console.log(`[binance-compare] fetch accounts:`, uniqueIds);
   await Promise.all(uniqueIds.map(async (id) => {
     try {
       const data = await api(`/exchange-accounts/${id}/binance-positions`);
       _binancePositionsCache[id] = data;
+      const posCount = Object.keys(data.positions || {}).length;
+      console.log(`[binance-compare] account=${id} ✅ fetched ${posCount} positions, fetched_at=${data.fetched_at}`);
     } catch (e) {
-      // 실패 시 stale cache 유지 (사장님이 stale 시각 보고 인지)
-      console.warn(`[binance-compare] account=${id} fetch fail:`, e.message);
+      console.warn(`[binance-compare] account=${id} ❌ fetch fail:`, e.message || e);
     }
   }));
 }
@@ -56,7 +60,8 @@ async function _fetchBinancePositionsForAccounts(accountIds) {
 function _binanceCompareRow(s) {
   const acctData = _binancePositionsCache[s.exchange_account_id];
   if (!acctData) {
-    return `<tr class="bg-slate-900/40"><td colspan="9" class="text-xs text-slate-500 py-1 px-3">📊 Binance: 로딩 중...</td></tr>`;
+    // 2026-06-05 사장님 진단: cache 비어 있는 이유 명확 표시 (단순 "로딩 중..." 보다 진단 도움)
+    return `<tr class="bg-yellow-900/30 border-l-4 border-yellow-500"><td colspan="9" class="text-xs text-yellow-300 py-1 px-3">📊 Binance 비교: ⏳ 데이터 로딩 중 또는 API 호출 실패 (account=${s.exchange_account_id}) — F12 Console 확인</td></tr>`;
   }
   const bp = (acctData.positions || {})[s.symbol];
   const ts = acctData.fetched_at
