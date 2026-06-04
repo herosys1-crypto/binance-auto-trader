@@ -389,36 +389,27 @@ async function refreshStrategies() {
                   style="padding:2px 6px;font-size:10px;line-height:1.2"
                   title="포지션 추가 (ad-hoc) — 자유 금액 시장가/지정가 즉시 진입. qty + 평단 갱신, stage 진행 X. v4 안전망: 사용 시 max_loss 임계 도달하면 Crisis 발동 (stage 미완료라도)">💉 포지션 추가</button>`
         : '';
-      // 2026-06-05 옵션 A (사장님 사상): total_capital = 사장님 자본 = 마진 단위
-      // 표시:
-      //   📦 수량 = 포지션 수량
-      //   🔒 현재 마진 = qty × 평단 ÷ lev (Binance 실 lock)
-      //   💼 사장님 자본 = total_capital (마진 의도, SL 계산 기준)
-      //   📊 거래 규모 = total_capital × leverage (notional)
-      //   진입률 = 현재 마진 ÷ 사장님 자본 (모든 단계 진입까지 %)
+      // 2026-06-05 바이낸스 UI 스타일 단순화 (사장님 요구):
+      // 바이낸스 = Size / Margin / PNL 단순 — 「계획」 같은 거 없음.
+      // 우리도 단순화: 수량 + 마진 (자본 중 X%) 만. 거래 규모는 tooltip 으로만.
       const entryPct = plannedMargin > 0 ? (positionMargin / plannedMargin * 100) : 0;
       const entryColor = entryPct >= 95 ? 'text-green-400' : entryPct >= 50 ? 'text-yellow-400' : 'text-slate-300';
-      const planTooltip = `💼 사장님 자본: ${plannedMargin.toFixed(2)} USDT (= 마진 lock 목표)\n   strategy 생성 시 입력 — SL 한도 기준 (사장님 사상 PR #57)\n   "투자금 대비 손실 %" = 자본 × sl_pct/100\n\n📊 거래 규모: ${plannedNotional.toFixed(2)} USDT (= 자본 × ${sLev}x)\n   모든 단계 진입 + 거래소 표시 notional value\n\n🔒 현재 마진 (Binance lock): ${positionMargin.toFixed(2)} USDT\n   = 수량 ${sQtyAbs.toFixed(0)} × 평단 ${sAvg.toFixed(4)} ÷ ${sLev}x\n\n📈 진입률: ${entryPct.toFixed(1)}% (현재 ÷ 자본)\n   100% = 모든 단계 진입 완료\n   100% 초과 = 사장님이 증거금/포지션 추가 후 자본 자동 합산 (PR #56)`;
+      // tooltip = 자세 설명 (사장님이 필요 시 hover 로 확인)
+      const planTooltip = `💼 사장님 자본: ${plannedMargin.toFixed(2)} USDT (= 마진 lock 목표, SL 기준)\n📊 거래 규모: ${plannedNotional.toFixed(2)} USDT (= 자본 × ${sLev}x)\n🔒 현재 마진: ${positionMargin.toFixed(2)} USDT (Binance lock)\n📈 진입률: ${entryPct.toFixed(1)}% (모든 단계 진입까지 ${(100-entryPct).toFixed(1)}% 남음)`;
       const qtyStack = hasPosition
         ? `<div class="text-xs leading-tight">
-            <div title="포지션 수량 (절대값 = 실제 보유, 부호 = 방향)"><span class="text-slate-400" style="font-size:10px">📦 수량</span> <span class="${sQtyNum<0?'neg':'pos'} font-semibold">${fmtQty(sQtyNum)}</span></div>
+            <div title="포지션 수량"><span class="text-slate-400" style="font-size:10px">수량</span> <span class="${sQtyNum<0?'neg':'pos'} font-semibold">${fmtQty(sQtyNum)}</span></div>
             <div title="${planTooltip}">
-              <span class="text-slate-400" style="font-size:10px">🔒 마진</span>
+              <span class="text-slate-400" style="font-size:10px">마진</span>
               <span class="text-slate-200">${positionMargin.toFixed(2)}</span>
-              <span class="text-slate-500" style="font-size:10px">/ <span class="text-slate-300">${plannedMargin.toFixed(2)}</span> USDT</span>
-              <span class="${entryColor} ml-1" style="font-size:10px">${entryPct.toFixed(0)}%</span>
-            </div>
-            <div style="font-size:10px" title="${planTooltip}">
-              <span class="text-slate-500">📊 거래규모</span>
-              <span class="text-slate-400">${plannedNotional.toFixed(0)} USDT</span>
-              <span class="text-slate-600">(자본 ${plannedMargin.toFixed(0)} × ${sLev}x)</span>
+              <span class="text-slate-500" style="font-size:10px"> / ${plannedMargin.toFixed(2)} USDT</span>
+              <span class="${entryColor}" style="font-size:10px"> ${entryPct.toFixed(0)}%</span>
             </div>
             ${addMarginBtnInQty}${addPositionBtn}
           </div>`
         : `<div class="text-xs leading-tight">
             <span class="text-slate-500">- (미진입)</span><br>
-            <span class="text-slate-400" style="font-size:10px" title="${planTooltip}">💼 자본 ${plannedMargin > 0 ? plannedMargin.toFixed(2)+' USDT' : '-'}</span>
-            <br><span class="text-slate-600" style="font-size:9px">📊 거래규모 ${plannedNotional.toFixed(0)} (= 자본 × ${sLev}x)</span>
+            <span class="text-slate-400" style="font-size:10px" title="${planTooltip}">자본 ${plannedMargin > 0 ? plannedMargin.toFixed(2)+' USDT' : '-'}</span>
             ${addPositionBtn ? '<br>'+addPositionBtn : ''}
           </div>`;
       // PnL/ROI — 4 줄 stack: PnL + 포지션 ROI + 전략 ROI + 🆕 SL 한도 시각 (2026-06-03)
