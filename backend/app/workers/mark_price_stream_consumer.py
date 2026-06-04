@@ -102,7 +102,13 @@ class MarkPriceStreamConsumer:
     # ---- 연결·구독 ----
 
     def _connect_and_run(self) -> None:
-        ws_url = f"{self.ws_base}/stream"
+        # 2026-06-05 Critical: Binance 2026-04-23 deadline 후 옛 /stream endpoint 차단됨
+        # (binance_websocket_change_notice 페이지 update 자동 감지 → WebFetch 검증).
+        # markPrice = "Market data" 분류 → /market/stream endpoint 사용 필수.
+        # 옛 /stream 은 deadline 후에도 부분 작동 중이지만 언제든 차단 가능 → 사전 마이그레이션.
+        # 매핑 참조: https://developers.binance.com/docs/derivatives/usds-margined-futures/
+        #            websocket-market-streams/Important-WebSocket-Change-Notice
+        ws_url = f"{self.ws_base}/market/stream"
         logger.info("markPrice consumer 연결 시도 %s (testnet=%s)", ws_url, self.is_testnet)
         self._subscribed = set()
         self.ws = websocket.WebSocketApp(
