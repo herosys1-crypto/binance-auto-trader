@@ -219,12 +219,18 @@ def get_recent_activity(
         })
 
     # 최근 리스크 이벤트 (크라이시스/손절 등)
+    # 2026-06-05 N+1 Query fix (Sentry 자동 발견 첫 사례):
+    # 이전: r.strategy_instance.symbol → lazy load → row 별 SELECT (사장님 폴링마다 발생)
+    # 신규: selectinload 로 eager load → 1 SELECT 로 모든 strategy_instance 미리 fetch
+    from sqlalchemy.orm import selectinload as _selectinload
     risk_events = db.execute(
-        sa_select(RiskEvent).order_by(RiskEvent.created_at.desc()).limit(limit)
+        sa_select(RiskEvent)
+        .options(_selectinload(RiskEvent.strategy_instance))
+        .order_by(RiskEvent.created_at.desc()).limit(limit)
     ).scalars().all()
     for r in risk_events:
         sev_icon = {"CRITICAL": "🚨", "WARNING": "⚠️", "INFO": "ℹ️"}.get(r.severity, "📌")
-        # strategy 의 symbol 가져오기 (relationship)
+        # strategy 의 symbol 가져오기 (relationship — 위 selectinload 로 prefetch 됨)
         sym = r.strategy_instance.symbol if r.strategy_instance else "?"
         items.append({
             "ts": r.created_at.isoformat(),
@@ -237,8 +243,11 @@ def get_recent_activity(
         })
 
     # 최근 알림 (Telegram 발송)
+    # 2026-06-05 N+1 Query fix: notifications 도 selectinload eager load
     notifications = db.execute(
-        sa_select(Notification).order_by(Notification.created_at.desc()).limit(limit)
+        sa_select(Notification)
+        .options(_selectinload(Notification.strategy_instance))
+        .order_by(Notification.created_at.desc()).limit(limit)
     ).scalars().all()
     for n in notifications:
         status_icon = "✉️" if (n.send_status or "").upper() == "SENT" else "❌"
