@@ -62,6 +62,12 @@ class StrategyInstanceResponse(BaseModel):
 class StrategyDetailResponse(StrategyInstanceResponse):
     leverage: int
     current_stage: int
+    # 2026-06-05 fix (사장님 진단 박스 발견):
+    # frontend strategies-list.js 의 Binance 비교 인라인 행 (PR #39) 이
+    # s.exchange_account_id 필드 사용 → activeAccountIds 추출 → /binance-positions fetch.
+    # 그러나 이 schema 에 필드 누락 → frontend = undefined → fetch skip → Binance 비교 행 표시 안 됨.
+    # DB column 은 존재 (StrategyInstance.exchange_account_id), schema 만 노출 빠뜨림.
+    exchange_account_id: int | None = None
     start_price: Decimal | None = None      # 운영자가 입력한 1단계 LIMIT 진입요청가
     avg_entry_price: Decimal | None = None
     current_position_qty: Decimal
