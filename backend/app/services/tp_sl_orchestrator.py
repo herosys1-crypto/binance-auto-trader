@@ -195,6 +195,20 @@ class TPSLOrchestratorService:
             sLev = Decimal(str(strategy.leverage or 1))
             sCap = Decimal(str(strategy.total_capital or 0))
 
+            # 2026-06-05 사장님 보호 안전장치 (옵션 B):
+            # 수동 익절 후 1시간 동안 = qty_based 만 사용 (capital_based skip)
+            # 이유: 사장님이 수동 청산 (예: 80%) 후 = 잔여 qty 작음 → capital_based 초과 시
+            # 다음 자동 TP = 전체 청산 → 사장님 "잔여 유지" 의도 위배.
+            # Redis flag (TTL 1h) 로 일시 보호 → 1h 후 = PR #88 정상 로직 복귀.
+            manual_tp_protect_active = False
+            try:
+                from app.core.redis_client import get_redis_client
+                redis = get_redis_client()
+                if redis.exists(f"manual_tp_protect:strategy:{strategy.id}"):
+                    manual_tp_protect_active = True
+            except Exception:
+                pass  # Redis 실패 = 정상 PR #88 로직 사용
+
             # Position 의 최신 isolated_margin (reconcile_worker 가 매 사이클 갱신)
             # 사장님이 Binance UI 직접 추가한 증거금/포지션도 isolated_margin 에 즉시 반영
             from app.models.position import Position as _Position
@@ -213,8 +227,22 @@ class TPSLOrchestratorService:
             # 효과 마진 = max(DB 자본, Binance 실 마진) — 사장님 어디서 추가하든 보호
             effective_margin = max(sCap, binance_isolated)
 
-            if avg_entry > 0 and sLev > 0 and effective_margin > 0:
-                # 자본 기준 청산: target_qty = (effective_margin × ratio × leverage) / avg_entry
+            if manual_tp_protect_active:
+                # 사장님 수동 청산 후 1h 보호 모드 — qty_based 만 사용 (잔여 유지)
+                raw_qty = qty_based
+                self.db.add(RiskEvent(
+                    strategy_instance_id=strategy.id,
+                    event_type="MANUAL_TP_PROTECT_APPLIED",
+                    severity="INFO",
+                    title=f"🛡 수동 청산 후 보호 ({level}) — qty 기준만 적용",
+                    message=(
+                        f"사장님 최근 수동 청산 (1h 이내) → 잔여 유지 보호 모드. "
+                        f"TP {level} 청산 = qty_based ({qty_based:.4f}) 만 사용 "
+                        f"(capital_based {(effective_margin * close_ratio * sLev / avg_entry):.4f} skip)."
+                    ),
+                ))
+            elif avg_entry > 0 and sLev > 0 and effective_margin > 0:
+                # PR #88 정상 로직: 자본 기준 = max(qty, capital) 채택
                 capital_based = (effective_margin * close_ratio * sLev) / avg_entry
                 raw_qty = max(qty_based, capital_based)
                 # 보유 초과 방지 (current_qty 보다 클 수 없음 — Binance 실 보유)
