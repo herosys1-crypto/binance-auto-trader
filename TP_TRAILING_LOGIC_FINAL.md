@@ -254,3 +254,143 @@ db.close()
 | 밤 2차 | **v6 (final)** | **TP qty 균일 25% + last_active_tp shortcut 폐지** |
 
 **v6 가 사용자 의도와 정확히 일치 — 더 이상 변경 X.**
+
+---
+
+## 🆕 2026-06-05 update — 사장님 사상 v7 (Mainnet 운영 반영)
+
+### 1. SL 정책 변경 — 「투자금 대비 손실 %」 (레버리지 무관) — PR #57
+
+#### 사상 정확화
+- **이전**: SL = `ROI ≤ -sl_pct` (레버리지 영향, 사장님 의도와 차이)
+- **신규**: SL = `손실 USDT ≥ total_capital × sl_pct / 100` (레버리지 무관)
+
+#### 정확한 식
+```python
+sl_threshold_usd = total_capital × sl_pct / 100   # 절대 손실 한도 USDT
+sl_triggered    = abs(unrealized_pnl) ≥ sl_threshold_usd  # pnl 음수 시
+```
+
+#### 예시 (사장님 EPICUSDT)
+```
+사장님 자본 (total_capital) = 1,860 USDT
+sl_pct                       = 80%
+SL 한도 USDT                 = 1,860 × 80 / 100 = 1,488 USDT
+→ 손실 1,488 USDT 도달 시 자동 청산 (레버리지 2x 무관)
+```
+
+#### 사장님 의도 100% 일치
+> "투자금에 -80% 일때 실행, 레버리지 상관없이"
+
+### 2. 증거금/포지션 추가 시 total_capital 자동 합산 — PR #56
+
+#### 사장님 노력 보호 사상
+- 사장님이 청산 늦추기 위해 = 증거금 또는 포지션 수동 추가
+- 옛: total_capital 그대로 → SL 한도 = 옛 기준 (사장님 노력 미반영)
+- **신규**: 모든 추가 = total_capital += amount 자동 합산
+
+#### 영향
+- SL 한도 자동 ↑ (사장님 추가 자본 반영)
+- reserved_for_strategies 자동 ↑
+- 잔액 카드 정확 표시
+
+### 3. 자본 자동 동기화 (reconcile_worker) — PR #84
+
+#### Binance UI 직접 추가 대응
+- 사장님이 Binance UI 에서 증거금 직접 추가 = 우리 시스템 우회
+- reconcile_worker (30초 주기) 매 사이클 검증:
+  ```python
+  binance_actual_margin = max(isolatedMargin, positionInitialMargin)
+  if binance_actual_margin > DB total_capital × 1.05 (+ 차이 > 1 USDT):
+      strategy.total_capital = binance_actual_margin  # 자동 갱신
+      RiskEvent (TOTAL_CAPITAL_AUTO_SYNC) audit log
+  ```
+- 사장님이 어디서 추가하든 = 30초 내 우리 DB 자동 반영
+
+### 4. TP 청산 수량 = max(qty 기준, capital 기준) — PR #87+#88
+
+#### 사장님 명시 의도 (PR #88 commit 메시지)
+> "TP1 부터 익절은 포지션과 증거금 포함해서 전체금액에 25%씩 익절하고
+>  남은 포지션금액에 25%씩 익절"
+> "수동포지션과 증거금 추가한 금액모두를 기준"
+
+#### 옛 로직 (v6 — 5-12)
+```python
+close_qty = current_qty × close_ratio
+# qty 만 25% — 증거금 추가 무관
+```
+
+#### 신규 로직 (v7 — 2026-06-05)
+```python
+# 사장님 자본 (DB) vs Binance 실 마진 (사장님 외부 추가 포함) — 둘 중 max
+effective_margin = max(DB total_capital, latest_position.isolated_margin)
+
+qty_based     = current_qty × close_ratio
+capital_based = (effective_margin × close_ratio × leverage) / avg_entry
+raw_qty       = max(qty_based, capital_based)
+close_qty     = min(raw_qty, current_qty)  # 보유 초과 방지
+```
+
+#### 사장님 EPICUSDT 시뮬레이션
+| 항목 | 옛 v6 | 신 v7 (case A) | 신 v7 (case B) |
+|---|---|---|---|
+| total_capital | - | 1,860 | 2,760 |
+| current_qty | 3,396.70 | 3,396.70 | 3,396.70 |
+| effective_margin | - | 1,860 | 2,760 |
+| **close_qty** | **849** | **1,525** | **2,394** |
+| vs v6 | - | **1.8배 ↑** | **2.8배 ↑** |
+
+→ 사장님 자본 추가 노력 = TP 청산 자동 반영 = 더 빨리 회복 익절
+
+### 5. total_capital 의미 변경 — 옵션 A (마진 단위) — PR #79+#80
+
+#### 명확화
+- **`total_capital` = 사장님 입력 자본 = 「마진 단위」** (notional X)
+- 사장님이 strategy 생성 시 "1860 USDT" 입력 = Binance lock 마진 1,860 의도
+- 거래 규모 (notional) = `total_capital × leverage` (별도 표시)
+
+#### UI 표시
+```
+📦 수량 19,224
+🔒 마진 175.03 / 1860 USDT  9%  ← 현재 / 사장님 자본 + 진입률
+📊 거래규모 3720 USDT (= 자본 1860 × 2x)  ← tooltip
+```
+
+### 6. 빈 단계 자동 압축 + trigger 누적 — PR #60
+
+#### 사장님 사상
+> "4단계가 3단계가 되어 한단계식 당기면 되고, 3단계 trigger 10% 누적"
+
+#### 동작
+- 사장님이 단계 capital 빈 칸 + trigger 채움 → 자동 압축
+- 빈 단계의 trigger = 다음 채워진 단계로 누적 합산
+
+### 7. SL 진행률 시각화 + 80% 알림 — PR #64+#68
+
+#### UI 표시 (전략 인스턴스 카드 PNL 컬럼)
+```
+SL 5% (-200 USDT)    회색 (진행률 5%)
+SL 30% (-200 USDT)   노랑 (진행률 30%)
+SL 60% (-200 USDT)   주황 (진행률 60%)
+SL 85% (-200 USDT)   빨강 🚨 (진행률 80% 초과)
+```
+
+#### Telegram 자동 알림
+- SL 진행률 80% 도달 시 자동 알림 (1h dedup)
+- 사장님이 화면 안 봐도 즉시 인지
+
+---
+
+## 📋 정책 변경 시간선 (전체)
+
+| 시점 | 버전 | 변경 |
+|---|---|---|
+| 5-12 새벽 | v3 | trailing TP4+ armed (보수적) |
+| 5-12 저녁 | v4 | trailing TP3+ armed |
+| 5-12 밤 1차 | v5 | trailing + current_stage >= 3 |
+| 5-12 밤 2차 | **v6** | TP qty 균일 25% + last_active_tp shortcut 폐지 |
+| **6-01** | **mainnet 진입** | 8 critical fix |
+| **6-03** | **사상 정확화 PR #57** | SL = total_capital × sl_pct / 100 (레버리지 무관) |
+| **6-05** | **v7 (옵션 A + TP capital 기준)** | 사장님 자본 = 마진 단위 + TP 청산 = max(qty, capital) × 25% |
+
+**v7 = 사장님 mainnet 운영 완벽 반영 + 사장님 노력 영구 보호.**
