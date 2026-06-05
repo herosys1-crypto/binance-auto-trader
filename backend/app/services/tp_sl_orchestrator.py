@@ -175,27 +175,49 @@ class TPSLOrchestratorService:
             # 너무 정밀한 수량을 보내면 -1111 "Precision is over the maximum"
             # 에러로 거절됨. 이제 심볼의 step_size 로 floor 한다.
 
-            # 2026-06-05 사장님 사상 옵션 B (자본 기준 25% 청산):
-            # 이전: raw_qty = current_qty × close_ratio (qty 만 25% 청산)
-            # 신규: max(qty 기준, 자본 기준) — 사장님이 증거금/포지션 추가 시 자동 반영
+            # 2026-06-05 사장님 사상 옵션 B v2 (사장님 명시):
+            # "TP1 부터 익절은 포지션과 증거금 포함해서 전체금액에 25%씩 익절
+            #  중간에 수동포지션과 증거금 추가한 금액모두를 기준으로 하는겁니다."
             #
-            # 사장님 의도: "TP 청산 = 모든 포지션 진입금액의 25%" (qty 만 X, 마진 포함)
-            # - DB total_capital = 사장님 입력 자본 (마진 단위, PR #57)
-            # - 자본 기준 청산 qty = (total_capital × close_ratio × leverage) / avg_entry
-            # - qty 기준 청산 qty = current_qty × close_ratio
-            # - 둘 중 max 채택 = 사장님 노력 보호 (자본 추가 = 더 많은 청산)
-            # - min(target, current_qty) = 보유 초과 방지
+            # = TP 청산 기준 = max(DB total_capital, Binance isolated_margin)
+            # - DB total_capital = 사장님 strategy 생성 시 입력 (✏️ 수정 가능)
+            # - Binance isolated_margin = 실 lock 마진 (단계 진입 + 증거금 + 수동 포지션 추가 모두 포함)
+            # - 사장님이 어디서 추가하든 = 둘 중 큰 값 사용 = 사장님 노력 100% 보호
+            #
+            # 청산 수량 계산:
+            #   qty_based = current_qty × close_ratio (옛 거래소 표준)
+            #   effective_margin = max(total_capital, latest_isolated_margin)
+            #   capital_based = (effective_margin × close_ratio × leverage) / avg_entry
+            #   raw_qty = max(qty_based, capital_based)  ← 사장님 의도 정확
+            #   close_qty = min(raw_qty, current_qty)    ← 보유 초과 방지
             qty_based = current_qty * close_ratio
             avg_entry = Decimal(str(strategy.avg_entry_price or 0))
             sLev = Decimal(str(strategy.leverage or 1))
             sCap = Decimal(str(strategy.total_capital or 0))
-            if avg_entry > 0 and sLev > 0 and sCap > 0:
-                # 자본 기준 청산: target_margin = total_capital × ratio
-                # target_notional = target_margin × leverage
-                # target_qty = target_notional / avg_entry
-                capital_based = (sCap * close_ratio * sLev) / avg_entry
+
+            # Position 의 최신 isolated_margin (reconcile_worker 가 매 사이클 갱신)
+            # 사장님이 Binance UI 직접 추가한 증거금/포지션도 isolated_margin 에 즉시 반영
+            from app.models.position import Position as _Position
+            latest_pos = self.db.execute(
+                select(_Position)
+                .where(_Position.strategy_instance_id == strategy.id)
+                .order_by(_Position.id.desc())
+                .limit(1)
+            ).scalars().first()
+            binance_isolated = (
+                Decimal(str(latest_pos.isolated_margin))
+                if latest_pos and latest_pos.isolated_margin
+                else Decimal("0")
+            )
+
+            # 효과 마진 = max(DB 자본, Binance 실 마진) — 사장님 어디서 추가하든 보호
+            effective_margin = max(sCap, binance_isolated)
+
+            if avg_entry > 0 and sLev > 0 and effective_margin > 0:
+                # 자본 기준 청산: target_qty = (effective_margin × ratio × leverage) / avg_entry
+                capital_based = (effective_margin * close_ratio * sLev) / avg_entry
                 raw_qty = max(qty_based, capital_based)
-                # 보유 초과 방지 (current_qty 보다 클 수 없음)
+                # 보유 초과 방지 (current_qty 보다 클 수 없음 — Binance 실 보유)
                 if raw_qty > current_qty:
                     raw_qty = current_qty
             else:
