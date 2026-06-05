@@ -394,6 +394,14 @@ async function refreshStrategies() {
                   style="padding:2px 6px;font-size:10px;line-height:1.2"
                   title="포지션 추가 (ad-hoc) — 자유 금액 시장가/지정가 즉시 진입. qty + 평단 갱신, stage 진행 X. v4 안전망: 사용 시 max_loss 임계 도달하면 Crisis 발동 (stage 미완료라도)">💉 포지션 추가</button>`
         : '';
+      // 2026-06-05 사장님 신규: 「💰 수동 익절」 — 보유 포지션의 N% 시장가 청산.
+      // 사장님이 직감 또는 빠른 익절 결정 시 사용.
+      const manualTpBtn = (_activeForAddPos && hasPosition)
+        ? `<button onclick="event.stopPropagation(); openManualTPModal(${s.id}, '${s.symbol}', '${s.side}', ${sQtyAbs}, ${sAvg}, ${sLev})"
+                  class="btn-success btn text-xs mt-1 ml-1"
+                  style="padding:2px 6px;font-size:10px;line-height:1.2;background:#16a34a;color:white"
+                  title="수동 익절 — 현재 보유 포지션 의 N% 시장가 청산 (25%/50%/75%/100% 빠른 선택 또는 직접 입력)">💰 수동 익절</button>`
+        : '';
       // 2026-06-05 바이낸스 UI 스타일 단순화 (사장님 요구):
       // 바이낸스 = Size / Margin / PNL 단순 — 「계획」 같은 거 없음.
       // 우리도 단순화: 수량 + 마진 (자본 중 X%) 만. 거래 규모는 tooltip 으로만.
@@ -410,7 +418,7 @@ async function refreshStrategies() {
               <span class="text-slate-500" style="font-size:10px"> / ${plannedMargin.toFixed(2)} USDT</span>
               <span class="${entryColor}" style="font-size:10px"> ${entryPct.toFixed(0)}%</span>
             </div>
-            ${addMarginBtnInQty}${addPositionBtn}
+            ${addMarginBtnInQty}${addPositionBtn}${manualTpBtn}
           </div>`
         : `<div class="text-xs leading-tight">
             <span class="text-slate-500">- (미진입)</span><br>
@@ -568,5 +576,111 @@ async function refreshStrategies() {
       </tr>${showBinanceCompare ? _binanceCompareRow(s) : ''}`;
     }).join('');
   } catch (err) { toast('전략 조회 실패: ' + err.message, 'error'); }
+}
+
+// 2026-06-05 신규: 💰 수동 익절 모달 — 사장님 보유 포지션 의 N% 시장가 청산.
+// 빠른 선택 (25/50/75/100%) + 직접 입력 + 미리보기 + 확인 (실수 방지).
+function openManualTPModal(strategyId, symbol, side, currentQty, avgEntry, leverage) {
+  // 기존 모달 있으면 제거 (중복 방지)
+  const existing = document.getElementById('manual-tp-modal');
+  if (existing) existing.remove();
+
+  const sideEmoji = side === 'SHORT' ? '📉' : '📈';
+  const modal = document.createElement('div');
+  modal.id = 'manual-tp-modal';
+  modal.style.cssText = 'position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; display:flex; align-items:center; justify-content:center;';
+  modal.innerHTML = `
+    <div style="background:#1e293b; padding:24px; border-radius:8px; max-width:480px; width:90%; border:2px solid #16a34a; box-shadow:0 0 20px rgba(22,163,74,0.5);">
+      <h3 style="color:#86efac; font-size:18px; margin:0 0 12px; font-weight:bold">
+        💰 수동 익절 — ${sideEmoji} ${symbol} ${side}
+      </h3>
+      <div style="background:#0f172a; padding:12px; border-radius:4px; margin-bottom:16px; font-family:monospace; font-size:13px; color:#cbd5e1">
+        <div>📦 현재 보유: <span style="color:#fbbf24">${currentQty.toFixed(4)} qty</span></div>
+        <div>💵 평단가: <span style="color:#94a3b8">${avgEntry.toFixed(6)} USDT</span></div>
+        <div>⚡ 레버리지: <span style="color:#94a3b8">${leverage}x</span></div>
+      </div>
+      <label style="color:#cbd5e1; font-size:13px; display:block; margin-bottom:8px">
+        ⚡ 빠른 선택 (보유 포지션 의 N%):
+      </label>
+      <div style="display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap">
+        <button onclick="_setManualTPPercent(10, ${currentQty})" class="btn btn-ghost" style="padding:6px 12px; font-size:13px">10%</button>
+        <button onclick="_setManualTPPercent(25, ${currentQty})" class="btn btn-ghost" style="padding:6px 12px; font-size:13px; background:#16a34a; color:white">25%</button>
+        <button onclick="_setManualTPPercent(50, ${currentQty})" class="btn btn-ghost" style="padding:6px 12px; font-size:13px">50%</button>
+        <button onclick="_setManualTPPercent(75, ${currentQty})" class="btn btn-ghost" style="padding:6px 12px; font-size:13px">75%</button>
+        <button onclick="_setManualTPPercent(100, ${currentQty})" class="btn btn-ghost" style="padding:6px 12px; font-size:13px; background:#dc2626; color:white">100% (전체)</button>
+      </div>
+      <label style="color:#cbd5e1; font-size:13px; display:block; margin-bottom:4px">
+        🎯 또는 직접 입력 (1~100%):
+      </label>
+      <input type="number" id="manual-tp-percent" min="1" max="100" step="1" value="25"
+             oninput="_updateManualTPPreview(${currentQty})"
+             style="width:100%; padding:8px; background:#0f172a; border:1px solid #475569; border-radius:4px; color:#fff; font-family:monospace; font-size:14px; margin-bottom:12px"/>
+      <div id="manual-tp-preview" style="background:#0f172a; padding:12px; border-radius:4px; margin-bottom:16px; border-left:3px solid #16a34a">
+        <div style="color:#86efac; font-size:13px; margin-bottom:4px">📊 청산 미리보기:</div>
+        <div id="manual-tp-preview-content" style="color:#fbbf24; font-family:monospace; font-size:14px">
+          ${(currentQty * 0.25).toFixed(4)} qty (= ${currentQty.toFixed(4)} × 25%)
+        </div>
+        <div id="manual-tp-preview-remaining" style="color:#94a3b8; font-family:monospace; font-size:12px; margin-top:4px">
+          남은 수량: ${(currentQty * 0.75).toFixed(4)} qty
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end">
+        <button onclick="_closeManualTPModal()" class="btn btn-ghost" style="padding:8px 16px">취소</button>
+        <button onclick="_confirmManualTP(${strategyId}, '${symbol}', '${side}', ${currentQty})"
+                class="btn btn-success"
+                style="padding:8px 16px; background:#16a34a; color:white; font-weight:bold">
+          💰 시장가 청산
+        </button>
+      </div>
+      <p style="color:#fca5a5; font-size:11px; margin-top:12px; text-align:center">
+        ⚠️ 시장가 즉시 체결 — 취소 불가. 신중히 진행.
+      </p>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function _setManualTPPercent(percent, currentQty) {
+  document.getElementById('manual-tp-percent').value = percent;
+  _updateManualTPPreview(currentQty);
+}
+
+function _updateManualTPPreview(currentQty) {
+  const percent = Number(document.getElementById('manual-tp-percent').value || 0);
+  const target = currentQty * percent / 100;
+  const remaining = currentQty - target;
+  document.getElementById('manual-tp-preview-content').textContent =
+    `${target.toFixed(4)} qty (= ${currentQty.toFixed(4)} × ${percent}%)`;
+  document.getElementById('manual-tp-preview-remaining').textContent =
+    `남은 수량: ${remaining.toFixed(4)} qty`;
+}
+
+function _closeManualTPModal() {
+  const modal = document.getElementById('manual-tp-modal');
+  if (modal) modal.remove();
+}
+
+async function _confirmManualTP(strategyId, symbol, side, currentQty) {
+  const percent = Number(document.getElementById('manual-tp-percent').value || 0);
+  if (percent <= 0 || percent > 100) {
+    toast('⚠️ 비율 1~100% 사이로 입력하세요', 'error');
+    return;
+  }
+  const target = (currentQty * percent / 100).toFixed(4);
+  if (!confirm(`💰 수동 익절 확인\n\n${symbol} ${side} 의 ${percent}% (${target} qty) 시장가 청산 진행할까요?\n\n⚠️ 즉시 체결 — 취소 불가.`)) {
+    return;
+  }
+  try {
+    const r = await api(`/strategies/${strategyId}/manual-tp`, {
+      method: 'POST',
+      body: JSON.stringify({percent: percent}),
+    });
+    toast(`✅ ${r.message || '수동 익절 완료'}`, 'success');
+    _closeManualTPModal();
+    // 즉시 새로고침
+    refreshStrategies();
+  } catch (e) {
+    toast(`❌ 수동 익절 실패: ${e.message || e}`, 'error');
+  }
 }
 
