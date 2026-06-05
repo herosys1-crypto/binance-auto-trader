@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -42,6 +43,12 @@ init_sentry()
 # 2026-05-04: encryption_key 가 invalid 면 startup 실패 — 첫 거래 시점에 crash 방지.
 validate_encryption_key()
 app = FastAPI(title=settings.app_name)
+# 2026-06-05 코드 최적화 Phase 4 Step 3 — gzip 압축 (CODE_OPTIMIZATION_PLAN.md):
+# - 1KB 이상 응답 = 자동 gzip (JSON 보통 70% 압축)
+# - 사장님 폴링 부담 ↓ (네트워크 latency 절감)
+# - 모바일 사용 시 효과 큼
+# - 위험 = 0 (FastAPI 표준 middleware)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(IdempotencyMiddleware)
 app.include_router(api_router)
 
