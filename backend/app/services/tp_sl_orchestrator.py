@@ -174,7 +174,34 @@ class TPSLOrchestratorService:
             # 심볼별 LOT_SIZE 의 stepSize 를 따라야 함 (예: BTCUSDT=0.001).
             # 너무 정밀한 수량을 보내면 -1111 "Precision is over the maximum"
             # 에러로 거절됨. 이제 심볼의 step_size 로 floor 한다.
-            raw_qty = current_qty * close_ratio
+
+            # 2026-06-05 사장님 사상 옵션 B (자본 기준 25% 청산):
+            # 이전: raw_qty = current_qty × close_ratio (qty 만 25% 청산)
+            # 신규: max(qty 기준, 자본 기준) — 사장님이 증거금/포지션 추가 시 자동 반영
+            #
+            # 사장님 의도: "TP 청산 = 모든 포지션 진입금액의 25%" (qty 만 X, 마진 포함)
+            # - DB total_capital = 사장님 입력 자본 (마진 단위, PR #57)
+            # - 자본 기준 청산 qty = (total_capital × close_ratio × leverage) / avg_entry
+            # - qty 기준 청산 qty = current_qty × close_ratio
+            # - 둘 중 max 채택 = 사장님 노력 보호 (자본 추가 = 더 많은 청산)
+            # - min(target, current_qty) = 보유 초과 방지
+            qty_based = current_qty * close_ratio
+            avg_entry = Decimal(str(strategy.avg_entry_price or 0))
+            sLev = Decimal(str(strategy.leverage or 1))
+            sCap = Decimal(str(strategy.total_capital or 0))
+            if avg_entry > 0 and sLev > 0 and sCap > 0:
+                # 자본 기준 청산: target_margin = total_capital × ratio
+                # target_notional = target_margin × leverage
+                # target_qty = target_notional / avg_entry
+                capital_based = (sCap * close_ratio * sLev) / avg_entry
+                raw_qty = max(qty_based, capital_based)
+                # 보유 초과 방지 (current_qty 보다 클 수 없음)
+                if raw_qty > current_qty:
+                    raw_qty = current_qty
+            else:
+                # 자본/평단/lev 정보 없으면 fallback = 옛 qty 기준
+                raw_qty = qty_based
+
             sym = self.db.execute(select(Symbol).where(Symbol.symbol == strategy.symbol)).scalars().first()
             step = Decimal(str(sym.step_size)) if sym and sym.step_size and sym.step_size > 0 else DEFAULT_STEP_SIZE_FALLBACK
             # floor to step: floor(raw / step) * step
