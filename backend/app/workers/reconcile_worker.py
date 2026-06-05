@@ -307,6 +307,56 @@ def _do_reconcile(decrypt_func) -> None:
                     leverage=int(matched.get("leverage", strategy.leverage)) if matched.get("leverage") else strategy.leverage,
                     source="POSITION_RISK_SYNC",
                 ))
+
+                # 2026-06-05 자본 자동 동기화 (사장님 사상 PR #56 확장):
+                # 사장님이 Binance UI 에서 직접 증거금/포지션 추가 → 우리 시스템 통과 X
+                # → DB total_capital 미갱신 → SL 한도 옛 자본 기준 (사장님 노력 보호 안 됨).
+                # 매 사이클 Binance 실 마진 vs DB total_capital 비교:
+                # - 실 마진 > 자본 × 1.05 (5% 초과) = 사장님 추가 감지
+                # - DB total_capital = max(현재, 실 마진) 으로 자동 갱신
+                # - audit log + Telegram 알림 (사장님 인지)
+                # 사장님 사상: total_capital = 마진 단위 (PR #57 SL 계산 기준)
+                try:
+                    iso_margin = Decimal(str(matched.get("isolatedMargin", "0")))
+                    init_margin = Decimal(str(matched.get("positionInitialMargin", "0")))
+                    binance_actual_margin = max(iso_margin, init_margin)
+                    cur_total_capital = Decimal(str(strategy.total_capital or 0))
+                    # 5% 초과 + 절대 차이 1 USDT 초과 = 의미 있는 차이 (소수점 노이즈 회피)
+                    if (binance_actual_margin > cur_total_capital * Decimal("1.05")
+                            and (binance_actual_margin - cur_total_capital) > Decimal("1")):
+                        old_capital = cur_total_capital
+                        new_capital = binance_actual_margin
+                        strategy.total_capital = new_capital
+                        delta = new_capital - old_capital
+                        delta_pct = (delta / old_capital * 100) if old_capital > 0 else Decimal("0")
+                        db.add(RiskEvent(
+                            strategy_instance_id=strategy.id,
+                            event_type="TOTAL_CAPITAL_AUTO_SYNC",
+                            severity="INFO",
+                            title=f"💰 자본 자동 동기화 ({strategy.symbol}): {old_capital:.2f} → {new_capital:.2f} USDT (+{delta:.2f})",
+                            message=(
+                                f"Binance 실 마진 {binance_actual_margin:.2f} USDT 가 DB total_capital "
+                                f"{old_capital:.2f} 보다 큼 (사장님 외부 증거금/포지션 추가 감지). "
+                                f"DB 자동 갱신 → SL 한도 자동 재계산 (사장님 노력 보호 PR #56 확장)."
+                            ),
+                            event_payload={
+                                "old_capital": str(old_capital),
+                                "new_capital": str(new_capital),
+                                "delta": str(delta),
+                                "delta_pct": f"{delta_pct:.2f}",
+                                "binance_isolated_margin": str(iso_margin),
+                                "binance_init_margin": str(init_margin),
+                            },
+                        ))
+                        logger.info(
+                            "[capital-sync] strategy=%d %s total_capital %.2f → %.2f USDT (+%.2f, +%.1f%%)",
+                            strategy.id, strategy.symbol, float(old_capital), float(new_capital),
+                            float(delta), float(delta_pct),
+                        )
+                except Exception as e:
+                    # 자본 동기화 실패 = 다음 사이클 재시도 (reconcile 본 로직 영향 X)
+                    logger.warning("[capital-sync] strategy=%d failed: %s", strategy.id, e)
+
                 local_qty = Decimal(str(strategy.current_position_qty or 0))
                 if local_qty != exchange_position_amt:
                     n_stuck = _stuck_inc(strategy.id)
