@@ -273,10 +273,11 @@ grep -rn "\.strategy_instance\.\|\.template\.\|\.exchange_account\." backend/app
 - P95 응답 시간 추적
 - 1주일 후 = baseline 결정 + 최적화 우선순위
 
-### Step 3 — /strategies Redis 캐싱 (다음 주)
-- TTL 3초 (사장님 폴링 5초 < TTL = cache miss 적음)
-- invalidation: strategy 변경 시 (생성/수정/종료)
-- 효과: 사장님 폴링 시 DB query 90% 감소
+### Step 3 — /strategies Redis 캐싱 (분석 후 보류)
+- **2026-06-05 분석 결과**: 사장님 단일 client + 5초 폴링 = cache TTL 3초 와 충돌 (매 폴링 cache miss)
+- TTL 늘려서 (10초) = cache hit 50%, 다만 stale risk + 11 endpoint invalidate 누락 위험
+- **결론**: 효과 ↔ 위험 균형 = 적용 보류
+- 다중 client (모바일 + PC) 운영 시 = 재검토
 
 ### Step 4 — DB 인덱스 (다음 주)
 - Sentry Performance 의 slow query 발견
