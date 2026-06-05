@@ -260,6 +260,22 @@ def manual_take_profit(
             detail=f"⚠️ 청산 실패: {e}",
         )
 
+    # 2026-06-05 사장님 보호 안전장치 (옵션 B):
+    # 수동 청산 후 1시간 동안 = 다음 자동 TP 발동 시 = qty_based 만 사용 (capital_based skip)
+    # 이유: 잔여 qty 가 작을 때 (수동 청산 80%+ 후) = capital_based 초과 시 자동 전체 청산
+    # → 사장님 "잔여 유지" 의도 보호. 1h 후 자동 만료 = PR #88 정상 로직 복귀.
+    try:
+        from app.core.redis_client import get_redis_client
+        redis = get_redis_client()
+        redis.setex(
+            f"manual_tp_protect:strategy:{strategy.id}",
+            3600,  # 1 hour TTL
+            f"percent={payload.percent},ts={datetime.now(timezone.utc).isoformat()}",
+        )
+    except Exception:
+        # Redis 실패 시 = audit log + 청산 진행 (보호 없음, 다만 청산은 성공)
+        pass
+
     # Audit log (RiskEvent — 「최근 활동」 카드에도 표시됨)
     db.add(RiskEvent(
         strategy_instance_id=strategy.id,
@@ -268,13 +284,15 @@ def manual_take_profit(
         title=f"💰 수동 익절 ({payload.percent}%) — {strategy.symbol} {strategy.side}",
         message=(
             f"사장님 수동 익절 진행. "
-            f"보유 {current_qty:.4f} qty 중 {payload.percent}% = {target_qty:.4f} qty 시장가 청산."
+            f"보유 {current_qty:.4f} qty 중 {payload.percent}% = {target_qty:.4f} qty 시장가 청산. "
+            f"※ 1시간 동안 다음 자동 TP = qty 기준만 적용 (잔여 보호, PR #88 capital 기준 일시 skip)."
         ),
         event_payload={
             "percent": str(payload.percent),
             "target_qty": str(target_qty),
             "current_qty_before": str(current_qty),
             "close_order_id": str(close_order.get("orderId")) if close_order else None,
+            "manual_tp_protect_until": (datetime.now(timezone.utc).timestamp() + 3600),
         },
     ))
     db.commit()
