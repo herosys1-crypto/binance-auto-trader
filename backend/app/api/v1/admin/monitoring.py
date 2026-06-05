@@ -124,12 +124,17 @@ def get_notifications_by_title(
         title_like='%[TRAILING_TP 익절%' → 트레일링 청산 모두
     """
     from sqlalchemy import select as sa_select
+    from sqlalchemy.orm import selectinload
     from app.models.notification import Notification
     if not title_like or len(title_like) > 200:
         raise HTTPException(status_code=400, detail="title_like 1~200자")
     limit = max(1, min(limit, 1000))
+    # 2026-06-05 N+1 Query fix (Sentry 발견 선제 fix — recent-activity 와 동일 패턴):
+    # 사장님 「운영 통계 → TP1/TRAIL 카운트 클릭」 시 호출 = 매번 N+1 발생 위험.
+    # selectinload 로 strategy_instance 미리 prefetch.
     rows = db.execute(
         sa_select(Notification)
+        .options(selectinload(Notification.strategy_instance))
         .where(Notification.title.like(title_like))
         .order_by(Notification.created_at.desc())
         .limit(limit)
