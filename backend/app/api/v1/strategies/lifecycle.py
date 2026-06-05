@@ -174,6 +174,122 @@ def add_position_to_strategy(
     )
 
 
+class ManualTPRequest(BaseModel):
+    percent: Decimal = Field(
+        ..., gt=0, le=100,
+        description="청산할 비율 (1~100%). 현재 보유 qty 의 N% 시장가 청산.",
+    )
+
+
+@router.post("/{strategy_id}/manual-tp", response_model=StrategyActionResponse)
+def manual_take_profit(
+    strategy_id: int,
+    payload: ManualTPRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyActionResponse:
+    """💰 수동 익절 — 사장님이 현재 보유 포지션의 N% 시장가 청산.
+
+    2026-06-05 사장님 신규 요구: 진입한 전체 포지션 에서 % (직접 입력 또는
+    바이낸스 스타일 빠른 선택 25/50/75/100%) 청산.
+
+    동작:
+    1. 활성 strategy + 보유 포지션 검증
+    2. 청산 qty = current_qty × percent / 100
+    3. ExecutionService.emergency_close_position 호출 (시장가 = -4131 폴백 = LIMIT GTC)
+    4. RiskEvent (MANUAL_TP) audit log 생성
+    5. Telegram 알림 (emergency_close 가 자동 발송)
+
+    사용 사례:
+    - 사장님이 수동으로 일부 청산 (가격 상승/하락 직감)
+    - TP 임계 도달 전 빠른 익절
+    - 자동 SL 발동 전 손실 제한
+
+    Step size flooring + 최소 step 보장 = ExecutionService 내부 자동 처리.
+    100% 청산 시 = 전체 청산 (= status STOPPED 전환은 reconcile 이 자동).
+    """
+    from decimal import ROUND_DOWN
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.",
+        )
+
+    if strategy.status in TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"⚠️ 종료된 strategy (status={strategy.status}) 수동 익절 불가",
+        )
+
+    current_qty = abs(Decimal(str(strategy.current_position_qty or 0)))
+    if current_qty <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="⚠️ 보유 포지션 없음 — 수동 익절 불가",
+        )
+
+    # 청산 qty 계산 (ExecutionService 내부에서 step_size flooring 자동 적용)
+    target_qty = (current_qty * payload.percent / Decimal("100")).quantize(
+        Decimal("0.00000001"), rounding=ROUND_DOWN
+    )
+    if target_qty <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"⚠️ 청산 수량 0 ({payload.percent}% × {current_qty} = {target_qty})",
+        )
+
+    try:
+        execution = ExecutionService(db)
+        close_order = execution.emergency_close_position(
+            strategy.id, quantity=target_qty
+        )
+    except EmergencyCloseInProgress:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="⚠️ 다른 청산 진행 중 — 잠시 후 재시도",
+        )
+    except PreflightCheckFailed as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"⚠️ 사전 검증 실패: {e}",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"⚠️ 청산 실패: {e}",
+        )
+
+    # Audit log (RiskEvent — 「최근 활동」 카드에도 표시됨)
+    db.add(RiskEvent(
+        strategy_instance_id=strategy.id,
+        event_type="MANUAL_TP",
+        severity="INFO",
+        title=f"💰 수동 익절 ({payload.percent}%) — {strategy.symbol} {strategy.side}",
+        message=(
+            f"사장님 수동 익절 진행. "
+            f"보유 {current_qty:.4f} qty 중 {payload.percent}% = {target_qty:.4f} qty 시장가 청산."
+        ),
+        event_payload={
+            "percent": str(payload.percent),
+            "target_qty": str(target_qty),
+            "current_qty_before": str(current_qty),
+            "close_order_id": str(close_order.get("orderId")) if close_order else None,
+        },
+    ))
+    db.commit()
+
+    return StrategyActionResponse(
+        strategy_id=strategy.id,
+        status=strategy.status,
+        message=(
+            f"💰 수동 익절 완료 — {payload.percent}% "
+            f"({target_qty:.4f} / {current_qty:.4f}) 시장가 청산 요청. "
+            f"실 체결 = Telegram 알림 확인."
+        ),
+    )
+
+
 @router.post("/{strategy_id}/force-stop", response_model=StrategyActionResponse)
 def force_stop_strategy(
     strategy_id: int,
