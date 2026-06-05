@@ -325,6 +325,43 @@ async function refreshStrategies() {
       .filter(Boolean);
     await _fetchBinancePositionsForAccounts(activeAccountIds);
 
+    // 2026-06-05 디버깅 박스 (사장님 진단 도움 — 화면 우측 하단 항상 표시).
+    // 사장님 캡쳐 1번만 보내면 우리가 정확 원인 진단 가능.
+    // Binance 비교 행 (PR #39) 이 사장님 화면에 표시 안 되는 문제 추적용.
+    try {
+      let debugBox = document.getElementById('binance-compare-debug-box');
+      if (!debugBox) {
+        debugBox = document.createElement('div');
+        debugBox.id = 'binance-compare-debug-box';
+        debugBox.style.cssText = 'position:fixed; bottom:10px; right:10px; background:#000; color:#0f0; padding:10px; font-family:monospace; font-size:11px; z-index:9999; border:2px solid #0f0; max-width:480px; line-height:1.4; box-shadow:0 0 12px #0f0; border-radius:4px;';
+        debugBox.title = '🔍 Binance 비교 진단 박스 — 사장님 캡쳐 보내주시면 우리가 진단';
+        document.body.appendChild(debugBox);
+      }
+      const cacheKeys = Object.keys(_binancePositionsCache);
+      const activeStrats = sorted.filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()));
+      const cacheDetail = cacheKeys.length === 0
+        ? '<span style="color:#f00">❌ EMPTY (fetch 실패 또는 호출 안 됨)</span>'
+        : cacheKeys.map(k => {
+            const d = _binancePositionsCache[k];
+            const posCount = d && d.positions ? Object.keys(d.positions).length : 'X';
+            const symbols = d && d.positions ? Object.keys(d.positions).join(',') : '';
+            return `acc=${k} → ${posCount}pos [${symbols}]`;
+          }).join('<br>');
+      debugBox.innerHTML = `
+        <div style="color:#ff0; font-weight:bold; margin-bottom:4px">🔍 BINANCE 비교 진단</div>
+        <div style="color:#888; font-size:10px">${new Date().toLocaleTimeString()} | refresh #${(window._debugRefreshCount = (window._debugRefreshCount || 0) + 1)}</div>
+        <div>━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+        <div>📊 활성 strategy: <b>${activeStrats.length}건</b></div>
+        <div>🎯 fetch accountIds: [<b>${activeAccountIds.join(', ')}</b>]</div>
+        <div>📦 cache: ${cacheDetail}</div>
+        <div>━━━━━━━━━━━━━━━━━━━━━━━━━━</div>
+        <div style="font-size:10px; color:#888">${activeStrats.map(s => `#${s.id} ${s.symbol} acc=${s.exchange_account_id}`).join(' | ')}</div>
+        <div style="font-size:9px; color:#666; margin-top:4px">[디버깅용 — 진단 끝나면 제거]</div>
+      `;
+    } catch (e) {
+      console.error('[debug-box] error:', e);
+    }
+
     tbody.innerHTML = sorted.map(s => {
       const info = statusInfo(s.status);
       // 단계 진행도 + TP 진행도 두 줄 stack — 분모는 template 의 활성 단계/TP 수 (동적).
