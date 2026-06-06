@@ -385,6 +385,38 @@ def manual_take_profit(
             detail=f"⚠️ 청산 실패 ({err_type}): {e}",
         )
 
+    # 🚨 2026-06-06 critical fix (사장님 사상 PR #56 대칭):
+    # PR #56 = 증거금/포지션 추가 시 total_capital 자동 합산 (✅ 구현).
+    # 그러나 = 청산 시 total_capital 차감 = 미구현 (silent bug!) → 사장님 운용 가용 잔액 음수.
+    #
+    # 사장님 사상 명시 (2026-06-06):
+    #   "포지션 2760에 10%면 276이고 남은 포지션이 약 2500 정도 되는데 여기서 25%면 650 정도"
+    #   "둘을 합하면 약 900 정도 잔고에 남아야 해"
+    #
+    # = 수동 익절 = 사장님 자본 회수 → total_capital 즉시 차감 필수!
+    #
+    # 차감 공식 (사장님 의도 정확):
+    #   new_total_capital = old_total_capital × (1 - percent/100)
+    #
+    # 예: total_capital 2,760 USDT
+    #   10% 익절 → 2,760 × 0.9  = 2,484 (회수 276)
+    #   25% 익절 → 2,484 × 0.75 = 1,863 (회수 621)
+    #   합계 회수 = 897 USDT → 사장님 의도 정확!
+    #
+    # 효과:
+    # - 예약 (reserved_for_strategies) 즉시 감소 = 운용 가용 정확
+    # - 사장님 수동 정리 노력 = 시스템 즉시 인식
+    # - 사장님 사상 PR #56 대칭 회복 (추가 + 청산 양방향)
+    old_total_capital = Decimal(str(strategy.total_capital or 0))
+    if old_total_capital > 0:
+        new_total_capital = old_total_capital * (Decimal("100") - payload.percent) / Decimal("100")
+        strategy.total_capital = new_total_capital
+        logger.info(
+            "[manual-tp] total_capital deducted strategy_id=%s old=%s percent=%s new=%s recovered=%s",
+            strategy_id, old_total_capital, payload.percent, new_total_capital,
+            (old_total_capital - new_total_capital),
+        )
+
     # 2026-06-05 사장님 보호 안전장치 (옵션 B):
     # 수동 청산 후 1시간 동안 = 다음 자동 TP 발동 시 = qty_based 만 사용 (capital_based skip)
     # 이유: 잔여 qty 가 작을 때 (수동 청산 80%+ 후) = capital_based 초과 시 자동 전체 청산
