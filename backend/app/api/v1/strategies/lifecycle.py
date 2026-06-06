@@ -239,8 +239,21 @@ def manual_take_profit(
             detail=f"⚠️ 청산 수량 0 ({payload.percent}% × {current_qty} = {target_qty})",
         )
 
+    # ExecutionService 초기화 — api_key + api_secret 필수 (다른 endpoint 패턴)
+    account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="⚠️ 거래소 계정이 삭제됐거나 본인 소유가 아닙니다.",
+        )
+
     try:
-        execution = ExecutionService(db)
+        execution = ExecutionService(
+            db,
+            api_key=decrypt_text(account.api_key_enc),
+            api_secret=decrypt_text(account.api_secret_enc),
+            is_testnet=account.is_testnet,
+        )
         close_order = execution.emergency_close_position(
             strategy.id, quantity=target_qty
         )
