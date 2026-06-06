@@ -333,9 +333,17 @@ def manual_take_profit(
         close_order = execution.emergency_close_position(
             strategy.id, quantity=target_qty
         )
+        # 2026-06-06 강화: close_order 필드 명시적 logging — Sentry/log 즉시 확인
+        # Sub-Account 권한/잔액/precision 등 silent 실패 추적 핵심
         logger.info(
-            "[manual-tp] emergency_close_position SUCCESS strategy_id=%s order=%s",
-            strategy_id, close_order,
+            "[manual-tp] emergency_close_position SUCCESS strategy_id=%s "
+            "order_db_id=%s exchange_order_id=%s status=%s executed_qty=%s avg_price=%s",
+            strategy_id,
+            close_order.id if close_order else None,
+            close_order.exchange_order_id if close_order else None,
+            close_order.status if close_order else None,
+            close_order.executed_qty if close_order else None,
+            close_order.avg_price if close_order else None,
         )
     except EmergencyCloseInProgress:
         logger.warning(
@@ -408,19 +416,53 @@ def manual_take_profit(
             "percent": str(payload.percent),
             "target_qty": str(target_qty),
             "current_qty_before": str(current_qty),
-            "close_order_id": str(close_order.get("orderId")) if close_order else None,
+            # 🚨 2026-06-06 critical fix: close_order = SQLAlchemy `Order` model 객체,
+            # dict 가 아님. 이전엔 `close_order.get("orderId")` 호출 시 AttributeError
+            # 발생 → audit log try-block 밖에서 unhandled exception → 사장님 UI 「청산 실패」
+            # 표시 (거래소는 이미 청산됨, silent partial 사고).
+            # 정확: close_order.id (DB row id) + close_order.exchange_order_id (Binance orderId)
+            "close_order_db_id": close_order.id if close_order else None,
+            "close_order_exchange_id": (
+                str(close_order.exchange_order_id)
+                if close_order and close_order.exchange_order_id
+                else None
+            ),
+            "close_order_status": close_order.status if close_order else None,
+            "close_order_executed_qty": (
+                str(close_order.executed_qty)
+                if close_order and close_order.executed_qty is not None
+                else None
+            ),
+            "close_order_avg_price": (
+                str(close_order.avg_price)
+                if close_order and close_order.avg_price is not None
+                else None
+            ),
             "manual_tp_protect_until": (datetime.now(timezone.utc).timestamp() + 3600),
         },
     ))
     db.commit()
 
+    # 2026-06-06 강화: 응답에 = 실제 체결 정보 포함 (사장님 즉시 검증 가능).
+    # 이전엔 "Telegram 알림 확인" 만 → 사장님이 = 진짜 청산 됐는지 즉시 모름.
+    # 신규: order_id + executed_qty + status 직접 표시 → UI 토스트에서 즉시 인지.
+    exchange_oid = (
+        close_order.exchange_order_id if close_order and close_order.exchange_order_id else "—"
+    )
+    exec_qty = (
+        close_order.executed_qty if close_order and close_order.executed_qty is not None else "—"
+    )
+    avg_px = (
+        close_order.avg_price if close_order and close_order.avg_price is not None else "—"
+    )
     return StrategyActionResponse(
         strategy_id=strategy.id,
         status=strategy.status,
         message=(
-            f"💰 수동 익절 완료 — {payload.percent}% "
-            f"({target_qty:.4f} / {current_qty:.4f}) 시장가 청산 요청. "
-            f"실 체결 = Telegram 알림 확인."
+            f"💰 수동 익절 완료 — {payload.percent}% ({target_qty:.4f} / {current_qty:.4f}) "
+            f"청산 발송. Binance #{exchange_oid} status={close_order.status if close_order else '?'} "
+            f"체결={exec_qty} @ {avg_px}. "
+            f"※ 1h 보호 활성 (다음 자동 TP = qty 기준만)."
         ),
     )
 
