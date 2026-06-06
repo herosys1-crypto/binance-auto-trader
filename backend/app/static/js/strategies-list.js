@@ -671,9 +671,11 @@ async function _confirmManualTP(strategyId, symbol, side, currentQty) {
     return;
   }
   try {
+    // 2026-06-05 fix: api() 가 자동 JSON.stringify + Content-Type 설정
+    // → body 는 object 그대로 전달 (수동 stringify X = double encoding 422 에러 방지)
     const r = await api(`/strategies/${strategyId}/manual-tp`, {
       method: 'POST',
-      body: JSON.stringify({percent: percent}),
+      body: {percent: percent},
     });
     toast(`✅ ${r.message || '수동 익절 완료'}`, 'success');
     _closeManualTPModal();
