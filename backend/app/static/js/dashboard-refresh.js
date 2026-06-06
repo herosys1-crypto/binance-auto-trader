@@ -292,7 +292,22 @@ async function loadBalance() {
     else if (reservedRatio < 95) sig = 'yellow';    // 80~95% = 주의
     else sig = 'red';                                // 95%+ = 신규 strategy 거의 불가
     const fmt = (n) => Number(n).toLocaleString('en-US', {maximumFractionDigits: 2});
-    // tooltip 으로 계정별 detail (3 구간 표시)
+    // 2026-06-06 사장님 직관 정확화 (재정의):
+    //   사장님 명시: "예약 3,140은 대부분 포지션에 진입했고 예약에 남아 있는 잔액만 표현해야"
+    //
+    // 옛 「예약」 = 전체 계획 자본 (= 사장님 자본 합 = 실 + 미진입 단계) ← 사장님 직관 무시 (중복 카운트)
+    // 신 「예약 (남은)」 = 계획 자본 - 실 사용 = 앞으로 lock 될 예정만 ← 사장님 직관 정확!
+    //
+    // = 상호 배타적 3 구간 (실 + 예약남은 + 운용가용 = 거래소 잔액)
+    //
+    // 합산 검증 (사장님 EPICUSDT 사례):
+    //   🔒 실 1,395  +  📦 예약(남은) 1,745  +  💵 운용 가용 -32  =  3,108 ✅
+    //   = 거래소 잔액 일치! 한눈에 명확.
+    //
+    // 운용 가용 계산 = 변경 없음 (지갑 - 전체 계획 자본). 표시 「예약」 만 = 남은 = 직관.
+    const reservedRemainingSum = Math.max(0, reservedSum - actualMarginSum);  // 음수 방지
+
+    // tooltip 으로 계정별 detail (4 구간 표시)
     const perAccountLines = valid.map((b, idx) => {
       const acc = activeAccounts[idx];
       const wlt = Number(b.total_wallet_balance || 0);
@@ -300,15 +315,17 @@ async function loadBalance() {
       const act = Number(b.total_position_initial_margin || 0);
       const avl = Number(b.our_available_balance || 0);
       const cnt = Number(b.active_strategy_count || 0);
-      return `#${acc.id}: 지갑 ${fmt(wlt)} | 🔒 실 ${fmt(act)} | 📦 예약 ${fmt(rsv)} | 💵 운용 가용 ${fmt(avl)} (${cnt}건)`;
+      const rsvRemaining = Math.max(0, rsv - act);  // 계정별 남은 예약
+      return `#${acc.id}: 지갑 ${fmt(wlt)} | 🔒 실 ${fmt(act)} | 📦 예약(남은) ${fmt(rsvRemaining)} | 💵 운용 가용 ${fmt(avl)} (${cnt}건)`;
     }).join('\n');
-    // 신규 표시 형식 (사장님 6-05 요구 정확 반영):
+    // 신규 표시 형식 (사장님 2026-06-06 요구 — 직관 정확):
     //   큰 글씨   = 지갑 총액 (사장님 직관 = "내 돈 전체")
-    //   작은 글씨 = 🔒 실 N USDT | 📦 예약 M USDT | 💵 운용 가용 X USDT (전략 K건, 예약률 P%)
-    //     🔒 실   = 현재 Binance lock 마진 (실제 사용)
-    //     📦 예약 = 자본 단위 보수 (전체 단계 진입 가정 — 사장님 사상)
-    //     💵 운용 가용 = 지갑 - 예약 = 신규 strategy 가능 한도
-    const detailMain = `🔒 실 ${fmt(actualMarginSum)} | 📦 예약 ${fmt(reservedSum)} | 💵 운용 가용 ${fmt(ourAvailSum)} (${stratSum}건, 예약률 ${reservedRatio.toFixed(1)}%)${hasTestnet ? ' · testnet 포함' : ''}`;
+    //   작은 글씨 = 🔒 실 N | 📦 예약(남은) M | 💵 운용 가용 X (전략 K건, 예약률 P%)
+    //     🔒 실        = 현재 Binance lock 마진 (이미 사용 — 진입한 단계까지)
+    //     📦 예약(남은) = 사장님 계획 자본 중 = 앞으로 lock 될 예정 (= 미진입 단계 예약)
+    //     💵 운용 가용 = 지갑 - 전체 계획 자본 = 신규 strategy 가능 한도 (음수 = 예약 초과)
+    //   = 상호 배타적, 합 = 거래소 잔액 (사장님 한눈에)
+    const detailMain = `🔒 실 ${fmt(actualMarginSum)} | 📦 예약(남은) ${fmt(reservedRemainingSum)} | 💵 운용 가용 ${fmt(ourAvailSum)} (${stratSum}건, 예약률 ${reservedRatio.toFixed(1)}%)${hasTestnet ? ' · testnet 포함' : ''}`;
     const accountInfo = valid.length > 1 ? ` · ${valid.length}계정 합산` : '';
     setMetric(
       'balance',
@@ -320,15 +337,17 @@ async function loadBalance() {
     const balCard = document.getElementById('card-balance') || document.querySelector('[data-metric="balance"]');
     if (balCard) {
       const ratioInfo = `마진율: ${aggRatio.toFixed(2)}% (유지 ${fmt(maintMarginSum)} / 마진 잔고 ${fmt(marginBalSum)})`;
-      const reservedHelp = `📊 잔액 구간 의미:\n\n` +
-        `🔒 「실 사용 마진」 = Binance 가 현재 lock 한 마진 (positionInitialMargin 합)\n` +
-        `   = 모든 활성 strategy 의 현재 사용 마진 합 (단위: 마진)\n\n` +
-        `📦 「보수 예약」 = 모든 활성 strategy 의 「계획 자본 합」 (사장님 사상 PR #30)\n` +
-        `   = max(strategy 계획 자본, Binance 실 마진) 의 합 (단위: 자본 = notional)\n` +
-        `   = 최악의 경우 (전체 단계 진입 + 자본 그대로 lock) 가정 → 마진 단위보다 큼\n` +
-        `   = 사장님 사상: 신규 strategy 생성 시 이 예약 ≤ 지갑 검증 (생성 후 -2019 사전 차단)\n\n` +
-        `💵 「운용 가용」 = 지갑 - 보수 예약 = 신규 strategy 추가 가능 한도 (음수 = 예약 초과)\n\n` +
-        `※ 「실」 vs 「예약」 차이 = 자본 단위 보수 가드 (사장님 안전 마진 사상)`;
+      const reservedHelp = `📊 잔액 구간 의미 (2026-06-06 사장님 직관 정확화):\n\n` +
+        `🔒 「실」 (이미 lock) = ${fmt(actualMarginSum)} USDT\n` +
+        `   = Binance 가 현재 lock 한 마진 (진입한 단계까지 실제 사용)\n\n` +
+        `📦 「예약 (남은)」 (앞으로 lock) = ${fmt(reservedRemainingSum)} USDT\n` +
+        `   = 사장님 계획 자본 ${fmt(reservedSum)} - 실 사용 ${fmt(actualMarginSum)}\n` +
+        `   = 미진입 단계까지 lock 될 예정 자본 (= 자동 단계 진입 시 사용)\n\n` +
+        `💵 「운용 가용」 (자유 잔액) = ${fmt(ourAvailSum)} USDT\n` +
+        `   = 거래소 잔액 - 계획 자본 = 신규 strategy 생성 가능 한도\n` +
+        `   = 음수 시: 계획 자본 초과 → 신규 strategy 생성 차단 (안전망)\n\n` +
+        `✅ 합산 검증: 🔒 ${fmt(actualMarginSum)} + 📦 ${fmt(reservedRemainingSum)} + 💵 ${fmt(ourAvailSum)} = ${fmt(walletSum)} 💼\n` +
+        `   = 거래소 잔액 일치 (사장님 한눈에 OK)`;
       balCard.title = valid.length > 1
         ? `📊 ${valid.length}개 active 계정 합산\n\n${perAccountLines}\n\n${ratioInfo}\n\n${reservedHelp}`
         : `${ratioInfo}\n\n${reservedHelp}`;
