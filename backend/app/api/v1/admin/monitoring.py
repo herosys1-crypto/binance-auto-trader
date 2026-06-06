@@ -578,3 +578,155 @@ def get_stats_breakdown(
         "crisis_count": crisis_count,
         "items": items,
     }
+
+
+# ============================================================================
+# 2026-06-06 — Diagnostic endpoint (사장님 EPICUSDT #23 미청산 분석)
+# ============================================================================
+# docker compose exec ... python -c "..." 가 stdout buffering 으로 0 라인 출력 문제 발생.
+# HTTP API 로 우회 = 사장님 브라우저 또는 curl 로 즉시 확인.
+#
+# 사용:
+#   브라우저: https://[domain]/api/v1/admin/diagnostic/strategy/23
+#   curl:     curl -H "Authorization: Bearer $TOKEN" https://[domain]/api/v1/admin/diagnostic/strategy/23
+#
+# 반환: 전략 핵심 필드 (status, crisis_*, peak, pnl 등) + Redis peak + trailing 발동 조건 평가
+# ============================================================================
+
+
+@router.get("/diagnostic/strategy/{strategy_id}")
+def diagnose_strategy(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """전략 인스턴스의 핵심 필드 + Redis peak + trailing 발동 조건 평가.
+
+    EPICUSDT (#23) 같은 「TP3 발동 + 가격 하락 = 미청산」 원인 진단용.
+    """
+    from app.models.strategy_instance import StrategyInstance
+    from app.core.risk_constants import (
+        TRAILING_MIN_TP_INDEX,
+        TRAILING_MIN_STAGE,
+        TRAILING_PEAK_THRESHOLD_PCT,
+        TRAILING_RETRACE_PCT,
+    )
+
+    s = db.get(StrategyInstance, strategy_id)
+    if not s:
+        raise HTTPException(404, f"Strategy {strategy_id} not found")
+
+    # Redis peak 키 (정상 모드 trailing 의 진짜 peak)
+    redis_peak = None
+    redis_err = None
+    try:
+        from app.core.redis_client import get_redis_client
+        val = get_redis_client().get(f"strategy:{strategy_id}:peak_pnl_pct")
+        if val is not None:
+            redis_peak = val.decode() if isinstance(val, bytes) else val
+    except Exception as e:
+        redis_err = str(e)
+
+    # Position 의 latest mark_price + isolated_margin
+    from app.models.position import Position
+    from sqlalchemy import select
+    latest_pos = db.execute(
+        select(Position)
+        .where(Position.strategy_instance_id == strategy_id)
+        .order_by(Position.id.desc())
+        .limit(1)
+    ).scalars().first()
+
+    # Trailing 발동 조건 자체 평가 (real-time)
+    TRAILING_ARMED_STATUSES = (
+        {f"TP{n}_DONE_PARTIAL" for n in range(TRAILING_MIN_TP_INDEX, 11)}
+        | {"TRAILING_ARMED"}
+    )
+    status_upper = (s.status or "").upper()
+    cond_status = status_upper in TRAILING_ARMED_STATUSES
+    cond_stage = (s.current_stage or 0) >= TRAILING_MIN_STAGE
+
+    # peak = max(redis, max_profit_pct, current pnl_ratio)
+    from decimal import Decimal
+    candidates = []
+    if redis_peak:
+        try:
+            candidates.append(Decimal(redis_peak))
+        except Exception:
+            pass
+    if s.max_profit_pct is not None:
+        candidates.append(Decimal(str(s.max_profit_pct)))
+
+    true_peak = max(candidates) if candidates else None
+
+    # Current pnl_ratio = (mark - entry) / entry * 100 * leverage
+    cur_pnl_ratio = None
+    if (
+        latest_pos
+        and latest_pos.mark_price is not None
+        and s.avg_entry_price is not None
+        and s.leverage
+    ):
+        try:
+            avg_entry = Decimal(str(s.avg_entry_price))
+            mark = Decimal(str(latest_pos.mark_price))
+            raw_pct = (
+                (mark - avg_entry) / avg_entry * Decimal("100")
+                if (s.side or "").upper() == "LONG"
+                else (avg_entry - mark) / avg_entry * Decimal("100")
+            )
+            cur_pnl_ratio = raw_pct * Decimal(str(s.leverage))
+        except Exception:
+            pass
+
+    cond_peak = (true_peak is not None) and (true_peak >= TRAILING_PEAK_THRESHOLD_PCT)
+    cond_retrace = (
+        true_peak is not None
+        and cur_pnl_ratio is not None
+        and cur_pnl_ratio <= (true_peak - TRAILING_RETRACE_PCT)
+    )
+
+    trailing_should_fire = cond_status and cond_stage and cond_peak and cond_retrace
+
+    return {
+        "id": s.id,
+        "symbol": s.symbol,
+        "side": s.side,
+        "status": s.status,
+        "current_stage": s.current_stage,
+        "leverage": s.leverage,
+        "total_capital": str(s.total_capital) if s.total_capital is not None else None,
+        "avg_entry_price": str(s.avg_entry_price) if s.avg_entry_price is not None else None,
+        "current_position_qty": str(s.current_position_qty) if s.current_position_qty is not None else None,
+        "unrealized_pnl": str(s.unrealized_pnl) if s.unrealized_pnl is not None else None,
+        "realized_pnl": str(s.realized_pnl) if s.realized_pnl is not None else None,
+        "max_profit_pct": str(s.max_profit_pct) if s.max_profit_pct is not None else None,
+        "max_loss_pct": str(s.max_loss_pct) if s.max_loss_pct is not None else None,
+        "peak_pnl_pct_after_first_tp": str(s.peak_pnl_pct_after_first_tp) if s.peak_pnl_pct_after_first_tp is not None else None,
+        "crisis_mode_triggered_at": s.crisis_mode_triggered_at.isoformat() if s.crisis_mode_triggered_at else None,
+        "crisis_first_tp_done_at": s.crisis_first_tp_done_at.isoformat() if s.crisis_first_tp_done_at else None,
+        "latest_mark_price": str(latest_pos.mark_price) if latest_pos and latest_pos.mark_price is not None else None,
+        "latest_isolated_margin": str(latest_pos.isolated_margin) if latest_pos and latest_pos.isolated_margin is not None else None,
+        "redis_peak_pnl_pct": redis_peak,
+        "redis_error": redis_err,
+        "computed": {
+            "true_peak": str(true_peak) if true_peak is not None else None,
+            "current_pnl_ratio": str(cur_pnl_ratio) if cur_pnl_ratio is not None else None,
+        },
+        "trailing_conditions": {
+            "status_ok": cond_status,
+            "status_required": list(TRAILING_ARMED_STATUSES),
+            "stage_ok": cond_stage,
+            "stage_required": f">= {TRAILING_MIN_STAGE}",
+            "peak_ok": cond_peak,
+            "peak_required": f">= {TRAILING_PEAK_THRESHOLD_PCT}%",
+            "retrace_ok": cond_retrace,
+            "retrace_required": f"current <= peak - {TRAILING_RETRACE_PCT}%p",
+        },
+        "trailing_should_fire": trailing_should_fire,
+        "diagnosis_hint": (
+            "✅ 모든 조건 만족 — TRAILING_TP 즉시 발동되어야 (process_action 호출 안 됨 의심)"
+            if trailing_should_fire
+            else "❌ 조건 미달 — 위 trailing_conditions 의 false 항목 확인"
+        ),
+    }
