@@ -197,11 +197,25 @@ def update_strategy_settings_in_place(
     if not old_tpl:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="⚠️ 원본 전략 템플릿이 삭제됐습니다. 「🔄 다시 시작」 으로 새 전략을 생성하세요.")
 
-    # 새 template 생성 — 모든 필드 복사 + payload override.
-    # name 에 strategy id + timestamp 부착 → 중복 회피 + 추적 용이.
-    ts = int(_dt.now().timestamp())
+    # 🚨 2026-06-07 critical fix (Sentry IntegrityError UniqueViolation 발견):
+    # 옛: name = f"{old_tpl.name}_inplace_s{strategy.id}_{ts}"[:120]
+    # 문제: 매번 「↻ 설정만 수정」 호출 = `_inplace_s{id}_{ts}` 누적 추가
+    #       → 5번 시도 후 120 chars 초과 = truncated → 같은 prefix → UniqueViolation
+    #       → 사장님 「↻ 설정만 수정」 영원히 500!
+    #
+    # Fix: 옛 inplace suffix (1개 이상) 모두 제거 → base name + 신 suffix (1번만)
+    #      microsecond 추가 = 같은 초 여러 호출도 안전.
+    import re as _re
+    base_name = _re.sub(r'(_inplace_s\d+_\d+)+', '', old_tpl.name or '')
+    now_dt = _dt.now()
+    ts_full = f"{int(now_dt.timestamp())}_{now_dt.microsecond}"
+    new_name = f"{base_name}_inplace_s{strategy.id}_{ts_full}"[:120]
+    logger.info(
+        "[update-settings] template name 생성 strategy_id=%s old_name_len=%s base_name_len=%s new_name=%s",
+        strategy.id, len(old_tpl.name or ''), len(base_name), new_name,
+    )
     new_tpl = StrategyTemplate(
-        name=f"{old_tpl.name}_inplace_s{strategy.id}_{ts}"[:120],
+        name=new_name,
         strategy_type=old_tpl.strategy_type,
         side=old_tpl.side,
         leverage=old_tpl.leverage,
