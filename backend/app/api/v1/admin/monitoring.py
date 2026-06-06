@@ -637,6 +637,46 @@ def diagnose_strategy(
         .limit(1)
     ).scalars().first()
 
+    # 2026-06-06 critical: notifications (TP 발동 이력) 확인 — UI 카운트 vs DB status 모순 분석용
+    # EPICUSDT (#23) = UI 3/10 익절 vs DB TP2_DONE_PARTIAL = 알림은 3건인데 status 는 TP2?
+    # = TP3 알림 발송 후 status update 실패 silent bug 의심
+    from app.models.notification import Notification
+    notif_rows = db.execute(
+        select(Notification.id, Notification.title, Notification.send_status, Notification.created_at)
+        .where(Notification.strategy_instance_id == strategy_id)
+        .where(Notification.title.like("%[TP%"))
+        .order_by(Notification.created_at.asc())
+    ).all()
+    notifications = [
+        {
+            "id": n.id,
+            "title": n.title,
+            "status": n.send_status,
+            "created_at": n.created_at.isoformat() if n.created_at else None,
+        }
+        for n in notif_rows
+    ]
+
+    # Orders 의 TP 발동 이력 (status 와 진짜 비교용)
+    from app.models.order import Order
+    order_rows = db.execute(
+        select(Order.id, Order.purpose, Order.status, Order.executed_qty, Order.avg_price, Order.created_at)
+        .where(Order.strategy_instance_id == strategy_id)
+        .where(Order.purpose == "TAKE_PROFIT")
+        .order_by(Order.created_at.asc())
+    ).all()
+    tp_orders = [
+        {
+            "id": o.id,
+            "purpose": o.purpose,
+            "status": o.status,
+            "executed_qty": str(o.executed_qty) if o.executed_qty else None,
+            "avg_price": str(o.avg_price) if o.avg_price else None,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+        }
+        for o in order_rows
+    ]
+
     # Trailing 발동 조건 자체 평가 (real-time)
     TRAILING_ARMED_STATUSES = (
         {f"TP{n}_DONE_PARTIAL" for n in range(TRAILING_MIN_TP_INDEX, 11)}
@@ -729,4 +769,24 @@ def diagnose_strategy(
             if trailing_should_fire
             else "❌ 조건 미달 — 위 trailing_conditions 의 false 항목 확인"
         ),
+        # 2026-06-06 critical 진단 — UI 카운트 vs DB status 모순 분석
+        "notifications_tp": notifications,
+        "tp_orders": tp_orders,
+        "notification_count": len(notifications),
+        "tp_order_count": len(tp_orders),
+        "status_mismatch_check": {
+            "ui_count_from_notifications": len(notifications),
+            "db_status": s.status,
+            "expected_status_from_count": (
+                f"TP{len(notifications)}_DONE_PARTIAL"
+                if len(notifications) > 0 and len(notifications) <= 10
+                else None
+            ),
+            "is_mismatch": (
+                len(notifications) > 0
+                and s.status
+                and s.status != f"TP{len(notifications)}_DONE_PARTIAL"
+                and s.status != "COMPLETED"
+            ),
+        },
     }
