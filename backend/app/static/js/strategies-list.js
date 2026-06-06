@@ -394,14 +394,20 @@ async function refreshStrategies() {
                   style="padding:2px 6px;font-size:10px;line-height:1.2"
                   title="포지션 추가 (ad-hoc) — 자유 금액 시장가/지정가 즉시 진입. qty + 평단 갱신, stage 진행 X. v4 안전망: 사용 시 max_loss 임계 도달하면 Crisis 발동 (stage 미완료라도)">💉 포지션 추가</button>`
         : '';
-      // 2026-06-05 사장님 신규: 「💰 수동 익절」 — 보유 포지션의 N% 시장가 청산.
-      // 사장님이 직감 또는 빠른 익절 결정 시 사용.
+      // 2026-06-06 사장님 자본 보호 — 수동 익절 기능 일시 비활성화.
+      // 배경: 6-05~06 mainnet 운영 중 4번 fix 후에도 500 에러 발생 → 사장님 손실.
+      // 결정: v2 방어적 재작성 (PR 머지 후) backend 검증 완료까지 = UI 버튼 숨김.
+      // 사장님 안전: Binance UI 직접 청산 → 30초 내 우리 시스템 자동 동기화.
+      // 재활성화: v2 logger 로 정확 원인 진단 + 검증 완료 후 사장님 확인 시.
+      const manualTpBtn = '';
+      /* DISABLED — 사장님 검증 완료 후 다시 활성화
       const manualTpBtn = (_activeForAddPos && hasPosition)
         ? `<button onclick="event.stopPropagation(); openManualTPModal(${s.id}, '${s.symbol}', '${s.side}', ${sQtyAbs}, ${sAvg}, ${sLev})"
                   class="btn-success btn text-xs mt-1 ml-1"
                   style="padding:2px 6px;font-size:10px;line-height:1.2;background:#16a34a;color:white"
                   title="수동 익절 — 현재 보유 포지션 의 N% 시장가 청산 (25%/50%/75%/100% 빠른 선택 또는 직접 입력)">💰 수동 익절</button>`
         : '';
+      */
       // 2026-06-05 바이낸스 UI 스타일 단순화 (사장님 요구):
       // 바이낸스 = Size / Margin / PNL 단순 — 「계획」 같은 거 없음.
       // 우리도 단순화: 수량 + 마진 (자본 중 X%) 만. 거래 규모는 tooltip 으로만.
