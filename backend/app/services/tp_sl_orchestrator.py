@@ -301,6 +301,45 @@ class TPSLOrchestratorService:
         if strategy.status == "COMPLETED":
             strategy.reentry_ready = False
             self.risk_service.reset_peak_pnl(strategy.id)
+            # 🚨 2026-06-06: COMPLETED 시 = 모든 자본 회수 = total_capital = 0
+            # = 잔여 strategy 의 운용 가용 잔액 정확 (전체 자본 회수 반영)
+            strategy.total_capital = Decimal("0")
+        else:
+            # 🚨 2026-06-06 critical fix (사장님 직접 발견 — 사장님 사상 PR #56 대칭):
+            # 자동 TP (TP1/2/3...) 청산 시 = total_capital 자동 차감 (수동 익절 PR 와 동일 정책).
+            #
+            # 사장님 사상 (manual-tp PR 와 동일):
+            #   "포지션 2760에 10%면 276이고... 합하면 약 900 정도 잔고에 남아야 해"
+            # = 자동 TP 도 사장님 자본 회수 → total_capital 즉시 차감 필수.
+            #
+            # 차감 공식 (close_ratio = TP 의 청산 비율, 예: TP1 25% = 0.25):
+            #   new_total_capital = old_total_capital × (1 - close_ratio)
+            #
+            # 예: TP1 (25%) 발동, total_capital 2,760 USDT
+            #   → 신 total_capital = 2,760 × 0.75 = 2,070 USDT (회수 690)
+            # 다음 TP2 (25%) 발동:
+            #   → 신 total_capital = 2,070 × 0.75 = 1,553 USDT (회수 518)
+            #
+            # 효과:
+            # - 자동 TP 발동 시 = 사장님 운용 가용 잔액 즉시 정확
+            # - 다음 자동 TP 의 청산 비율 = 차감된 capital 기준 (정확)
+            # - 사장님 사상 PR #56 대칭 완성 (추가 + 청산 양방향 모두)
+            try:
+                old_total_capital = Decimal(str(strategy.total_capital or 0))
+                if old_total_capital > 0 and close_ratio > 0:
+                    new_total_capital = old_total_capital * (Decimal("1") - close_ratio)
+                    strategy.total_capital = new_total_capital
+                    logger.info(
+                        "[tp-deduct] total_capital deducted strategy_id=%s level=%s "
+                        "old=%s close_ratio=%s new=%s recovered=%s",
+                        strategy.id, level, old_total_capital, close_ratio,
+                        new_total_capital, (old_total_capital - new_total_capital),
+                    )
+            except Exception as _e:
+                logger.warning(
+                    "[tp-deduct] total_capital 차감 실패 strategy_id=%s level=%s err=%s",
+                    strategy.id, level, _e,
+                )
         self.db.commit()
         strategy_take_profit_total.labels(symbol=strategy.symbol, side=strategy.side, level=level).inc()
 
