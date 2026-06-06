@@ -282,7 +282,7 @@ async function loadBalance() {
     // 2026-06-05 사장님 요구 정확 반영 (3 구간 분해):
     //   ① 실 사용 마진 (Binance lock 중)  = actualMarginSum  ← 단위: 마진
     //   ② 보수 예약 (자본 단위 합)         = reservedSum     ← 단위: 자본 (사장님 사상 PR #30/#44)
-    //   ③ 자유 잔액 (신규 가능)            = ourAvailSum     ← 지갑 - 예약
+    //   ③ 운용 가용 (신규 가능)            = ourAvailSum     ← 지갑 - 예약 (2026-06-06: 「자유」 → 「운용 가용」 명확화)
     // 예약 ≥ 실 사용 (자본 단위 보수 가드 = 마진 단위보다 큼 = 안전 마진 사장님 사상)
     // 사장님 직관: 큰 글씨 = 지갑 (내 돈 전체). 작은 글씨 = 3 구간 분해.
     const reservedRatio = walletSum > 0 ? (reservedSum / walletSum * 100) : 0;
@@ -300,15 +300,15 @@ async function loadBalance() {
       const act = Number(b.total_position_initial_margin || 0);
       const avl = Number(b.our_available_balance || 0);
       const cnt = Number(b.active_strategy_count || 0);
-      return `#${acc.id}: 지갑 ${fmt(wlt)} | 🔒 실 ${fmt(act)} | 📦 예약 ${fmt(rsv)} | 💵 자유 ${fmt(avl)} (${cnt}건)`;
+      return `#${acc.id}: 지갑 ${fmt(wlt)} | 🔒 실 ${fmt(act)} | 📦 예약 ${fmt(rsv)} | 💵 운용 가용 ${fmt(avl)} (${cnt}건)`;
     }).join('\n');
     // 신규 표시 형식 (사장님 6-05 요구 정확 반영):
     //   큰 글씨   = 지갑 총액 (사장님 직관 = "내 돈 전체")
-    //   작은 글씨 = 🔒 실 N USDT | 📦 예약 M USDT | 💵 자유 X USDT (전략 K건, 예약률 P%)
+    //   작은 글씨 = 🔒 실 N USDT | 📦 예약 M USDT | 💵 운용 가용 X USDT (전략 K건, 예약률 P%)
     //     🔒 실   = 현재 Binance lock 마진 (실제 사용)
     //     📦 예약 = 자본 단위 보수 (전체 단계 진입 가정 — 사장님 사상)
-    //     💵 자유 = 지갑 - 예약 = 신규 strategy 가능 한도
-    const detailMain = `🔒 실 ${fmt(actualMarginSum)} | 📦 예약 ${fmt(reservedSum)} | 💵 자유 ${fmt(ourAvailSum)} (${stratSum}건, 예약률 ${reservedRatio.toFixed(1)}%)${hasTestnet ? ' · testnet 포함' : ''}`;
+    //     💵 운용 가용 = 지갑 - 예약 = 신규 strategy 가능 한도
+    const detailMain = `🔒 실 ${fmt(actualMarginSum)} | 📦 예약 ${fmt(reservedSum)} | 💵 운용 가용 ${fmt(ourAvailSum)} (${stratSum}건, 예약률 ${reservedRatio.toFixed(1)}%)${hasTestnet ? ' · testnet 포함' : ''}`;
     const accountInfo = valid.length > 1 ? ` · ${valid.length}계정 합산` : '';
     setMetric(
       'balance',
@@ -327,7 +327,7 @@ async function loadBalance() {
         `   = max(strategy 계획 자본, Binance 실 마진) 의 합 (단위: 자본 = notional)\n` +
         `   = 최악의 경우 (전체 단계 진입 + 자본 그대로 lock) 가정 → 마진 단위보다 큼\n` +
         `   = 사장님 사상: 신규 strategy 생성 시 이 예약 ≤ 지갑 검증 (생성 후 -2019 사전 차단)\n\n` +
-        `💵 「자유 잔액」 = 지갑 - 보수 예약 = 신규 strategy 추가 가능 한도\n\n` +
+        `💵 「운용 가용」 = 지갑 - 보수 예약 = 신규 strategy 추가 가능 한도 (음수 = 예약 초과)\n\n` +
         `※ 「실」 vs 「예약」 차이 = 자본 단위 보수 가드 (사장님 안전 마진 사상)`;
       balCard.title = valid.length > 1
         ? `📊 ${valid.length}개 active 계정 합산\n\n${perAccountLines}\n\n${ratioInfo}\n\n${reservedHelp}`
