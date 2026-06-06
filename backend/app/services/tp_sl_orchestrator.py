@@ -1,8 +1,15 @@
+import logging
 import time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
+
+# 🚨 2026-06-07 hotfix: 자동 TP total_capital 차감 fix (어제 PR) 에서 logger 사용했으나
+# 모듈 level logger 정의 누락 → NameError: name 'logger' is not defined
+# → 모든 자동 TP 평가 실패 → 사장님 자본 보호 critical 영향!
+# 즉시 fix: 표준 logging 패턴 적용.
+logger = logging.getLogger(__name__)
 from app.core.risk_constants import (
     CRISIS_QTY_RATIO_DEFAULT as _CRISIS_QTY_RATIO_DEFAULT,
     CRISIS_RATIO_KEYS as _CRISIS_RATIO_KEYS,
