@@ -229,14 +229,23 @@ def manual_take_profit(
             detail="⚠️ 보유 포지션 없음 — 수동 익절 불가",
         )
 
-    # 청산 qty 계산 (ExecutionService 내부에서 step_size flooring 자동 적용)
-    target_qty = (current_qty * payload.percent / Decimal("100")).quantize(
-        Decimal("0.00000001"), rounding=ROUND_DOWN
-    )
+    # 청산 qty 계산 + step_size flooring (Binance -1111 "Precision over max" 방지)
+    # 2026-06-06 fix: emergency_close_position 은 caller 가 정확 step 으로 전달해야 함
+    # (TP/SL orchestrator 도 동일 패턴 — tp_sl_orchestrator.py L181 참조)
+    from app.models.symbol import Symbol
+    from sqlalchemy import select as _sa_select
+    sym = db.execute(_sa_select(Symbol).where(Symbol.symbol == strategy.symbol)).scalars().first()
+    step = Decimal(str(sym.step_size)) if sym and sym.step_size and sym.step_size > 0 else Decimal("0.001")
+    raw_qty = (current_qty * payload.percent / Decimal("100"))
+    # floor to step: (raw // step) × step — Binance LOT_SIZE 정밀 일치
+    target_qty = (raw_qty // step) * step
+    # step_size 미만 잔량 = 최소 1 step 보장 (사장님 의도 청산 충족)
+    if target_qty <= 0 and current_qty >= step:
+        target_qty = step
     if target_qty <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"⚠️ 청산 수량 0 ({payload.percent}% × {current_qty} = {target_qty})",
+            detail=f"⚠️ 청산 수량 0 ({payload.percent}% × {current_qty} = step 미만)",
         )
 
     # ExecutionService 초기화 — api_key + api_secret 필수 (다른 endpoint 패턴)
