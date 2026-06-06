@@ -188,35 +188,37 @@ def manual_take_profit(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> StrategyActionResponse:
-    """💰 수동 익절 — 사장님이 현재 보유 포지션의 N% 시장가 청산.
+    """💰 수동 익절 v2 — 방어적 재작성 (2026-06-06).
 
-    2026-06-05 사장님 신규 요구: 진입한 전체 포지션 에서 % (직접 입력 또는
-    바이낸스 스타일 빠른 선택 25/50/75/100%) 청산.
-
-    동작:
-    1. 활성 strategy + 보유 포지션 검증
-    2. 청산 qty = current_qty × percent / 100
-    3. ExecutionService.emergency_close_position 호출 (시장가 = -4131 폴백 = LIMIT GTC)
-    4. RiskEvent (MANUAL_TP) audit log 생성
-    5. Telegram 알림 (emergency_close 가 자동 발송)
-
-    사용 사례:
-    - 사장님이 수동으로 일부 청산 (가격 상승/하락 직감)
-    - TP 임계 도달 전 빠른 익절
-    - 자동 SL 발동 전 손실 제한
-
-    Step size flooring + 최소 step 보장 = ExecutionService 내부 자동 처리.
-    100% 청산 시 = 전체 청산 (= status STOPPED 전환은 reconcile 이 자동).
+    사장님 mainnet 운영 중 손실 발생 후 = 모든 단계 logger.info + 명확 에러 메시지.
+    Sentry + backend logs 모두에서 정확 원인 추적 가능.
     """
-    from decimal import ROUND_DOWN
+    import logging
+    import traceback
+    logger = logging.getLogger(__name__)
+
+    logger.info(
+        "[manual-tp] START strategy_id=%s user_id=%s percent=%s",
+        strategy_id, user_id, payload.percent,
+    )
+
+    # ===== Step 1: Strategy 검증 =====
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
+        logger.warning(
+            "[manual-tp] strategy not found or unauthorized strategy_id=%s user_id=%s",
+            strategy_id, user_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.",
         )
 
     if strategy.status in TERMINAL_STATUSES:
+        logger.warning(
+            "[manual-tp] strategy already terminal strategy_id=%s status=%s",
+            strategy_id, strategy.status,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"⚠️ 종료된 strategy (status={strategy.status}) 수동 익절 불가",
@@ -224,62 +226,155 @@ def manual_take_profit(
 
     current_qty = abs(Decimal(str(strategy.current_position_qty or 0)))
     if current_qty <= 0:
+        logger.warning(
+            "[manual-tp] no position strategy_id=%s current_qty=%s",
+            strategy_id, current_qty,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="⚠️ 보유 포지션 없음 — 수동 익절 불가",
         )
 
-    # 청산 qty 계산 + step_size flooring (Binance -1111 "Precision over max" 방지)
-    # 2026-06-06 fix: emergency_close_position 은 caller 가 정확 step 으로 전달해야 함
-    # (TP/SL orchestrator 도 동일 패턴 — tp_sl_orchestrator.py L181 참조)
+    logger.info(
+        "[manual-tp] strategy validated id=%s symbol=%s side=%s qty=%s status=%s",
+        strategy.id, strategy.symbol, strategy.side, current_qty, strategy.status,
+    )
+
+    # ===== Step 2: Symbol step_size 조회 =====
     from app.models.symbol import Symbol
     from sqlalchemy import select as _sa_select
     sym = db.execute(_sa_select(Symbol).where(Symbol.symbol == strategy.symbol)).scalars().first()
-    step = Decimal(str(sym.step_size)) if sym and sym.step_size and sym.step_size > 0 else Decimal("0.001")
+    if not sym:
+        logger.error(
+            "[manual-tp] Symbol not found in DB strategy_id=%s symbol=%s",
+            strategy_id, strategy.symbol,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"⚠️ Symbol meta 없음 ({strategy.symbol}) — symbol_sync 필요",
+        )
+    if not sym.step_size or sym.step_size <= 0:
+        logger.warning(
+            "[manual-tp] Symbol.step_size invalid symbol=%s step_size=%s — fallback 0.001",
+            strategy.symbol, sym.step_size,
+        )
+        step = Decimal("0.001")
+    else:
+        step = Decimal(str(sym.step_size))
+
+    logger.info(
+        "[manual-tp] step_size resolved symbol=%s step=%s",
+        strategy.symbol, step,
+    )
+
+    # ===== Step 3: target_qty 계산 + flooring =====
     raw_qty = (current_qty * payload.percent / Decimal("100"))
-    # floor to step: (raw // step) × step — Binance LOT_SIZE 정밀 일치
     target_qty = (raw_qty // step) * step
-    # step_size 미만 잔량 = 최소 1 step 보장 (사장님 의도 청산 충족)
     if target_qty <= 0 and current_qty >= step:
         target_qty = step
+        logger.info("[manual-tp] target_qty 0 → fallback to min step=%s", step)
     if target_qty <= 0:
+        logger.warning(
+            "[manual-tp] target_qty 0 after floor percent=%s current_qty=%s step=%s",
+            payload.percent, current_qty, step,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"⚠️ 청산 수량 0 ({payload.percent}% × {current_qty} = step 미만)",
+            detail=f"⚠️ 청산 수량 0 (percent={payload.percent}% × current={current_qty} = step {step} 미만)",
         )
 
-    # ExecutionService 초기화 — api_key + api_secret 필수 (다른 endpoint 패턴)
+    logger.info(
+        "[manual-tp] target_qty calculated raw=%s step=%s target=%s",
+        raw_qty, step, target_qty,
+    )
+
+    # ===== Step 4: Account 조회 + decrypt =====
     account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
     if not account:
+        logger.error(
+            "[manual-tp] account not found strategy_id=%s exchange_account_id=%s",
+            strategy_id, strategy.exchange_account_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="⚠️ 거래소 계정이 삭제됐거나 본인 소유가 아닙니다.",
+            detail=f"⚠️ 거래소 계정 없음 (id={strategy.exchange_account_id})",
         )
 
     try:
+        api_key = decrypt_text(account.api_key_enc)
+        api_secret = decrypt_text(account.api_secret_enc)
+    except Exception as e:
+        logger.error(
+            "[manual-tp] decrypt failed account_id=%s err=%s",
+            account.id, e,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"⚠️ API key 복호화 실패: {e} — ENCRYPTION_KEY 확인 필요",
+        )
+
+    logger.info(
+        "[manual-tp] account validated id=%s testnet=%s",
+        account.id, account.is_testnet,
+    )
+
+    # ===== Step 5: ExecutionService.emergency_close_position 호출 =====
+    try:
         execution = ExecutionService(
             db,
-            api_key=decrypt_text(account.api_key_enc),
-            api_secret=decrypt_text(account.api_secret_enc),
+            api_key=api_key,
+            api_secret=api_secret,
             is_testnet=account.is_testnet,
+        )
+        logger.info(
+            "[manual-tp] calling emergency_close_position strategy_id=%s qty=%s",
+            strategy_id, target_qty,
         )
         close_order = execution.emergency_close_position(
             strategy.id, quantity=target_qty
         )
+        logger.info(
+            "[manual-tp] emergency_close_position SUCCESS strategy_id=%s order=%s",
+            strategy_id, close_order,
+        )
     except EmergencyCloseInProgress:
+        logger.warning(
+            "[manual-tp] EmergencyCloseInProgress strategy_id=%s (다른 청산 진행 중)",
+            strategy_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="⚠️ 다른 청산 진행 중 — 잠시 후 재시도",
+            detail="⚠️ 다른 청산 진행 중 — 5초 후 재시도",
         )
     except PreflightCheckFailed as e:
+        logger.warning(
+            "[manual-tp] PreflightCheckFailed strategy_id=%s err=%s",
+            strategy_id, e,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"⚠️ 사전 검증 실패: {e}",
         )
+    except ValueError as e:
+        # emergency_close_position 내부 ValueError (예: actual_position == 0)
+        logger.warning(
+            "[manual-tp] ValueError from emergency_close strategy_id=%s err=%s",
+            strategy_id, e,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"⚠️ 청산 거부: {e}",
+        )
     except Exception as e:
+        # 모든 예외 = full traceback logger + Sentry 자동 capture
+        logger.exception(
+            "[manual-tp] UNEXPECTED ERROR strategy_id=%s qty=%s err=%s",
+            strategy_id, target_qty, e,
+        )
+        err_type = type(e).__name__
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"⚠️ 청산 실패: {e}",
+            detail=f"⚠️ 청산 실패 ({err_type}): {e}",
         )
 
     # 2026-06-05 사장님 보호 안전장치 (옵션 B):
