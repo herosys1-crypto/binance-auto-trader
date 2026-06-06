@@ -163,9 +163,23 @@ def update_strategy_settings_in_place(
     제약:
     - 종료된 strategy 는 거부 (재시작이 의미 — /stop 후 새 전략 시작이 정확)
     - side / leverage / stages_config 변경 거부 (위험)
+
+    🛡 2026-06-07 방어적 강화 (사장님 EPICUSDT #23 500 에러 사례 후):
+    - 모든 단계 logger.info 추가 → Sentry/log 즉시 추적
+    - calculate_preview None 필드 사전 검증 → InvalidOperation 차단
+    - unhandled exception 시 = logger.exception + 친절 에러 메시지 반환
     """
+    import logging
+    import traceback
+    logger = logging.getLogger(__name__)
     from app.models.strategy_template import StrategyTemplate
     from datetime import datetime as _dt
+
+    logger.info(
+        "[update-settings] START strategy_id=%s user_id=%s payload_keys=%s",
+        strategy_id, user_id,
+        sorted([k for k in payload.model_dump(exclude_none=True).keys()]),
+    )
 
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
@@ -355,6 +369,41 @@ def update_strategy_settings_in_place(
                 quantity_precision=sym_model.quantity_precision or 8,
             )
             calc = StrategyCalculator(sym_rule)
+            # 🛡 2026-06-07 방어적 검증 — calculate_preview None 필드 사전 차단
+            # (사장님 EPICUSDT #23 500 사례: 어느 필드 None 시 → Decimal('None') → InvalidOperation)
+            missing_fields = []
+            if strategy.start_price is None:
+                missing_fields.append("strategy.start_price")
+            if strategy.total_capital is None:
+                missing_fields.append("strategy.total_capital")
+            if strategy.leverage is None:
+                missing_fields.append("strategy.leverage")
+            for n in (1, 2, 3):
+                if getattr(new_tpl, f"tp{n}_percent", None) is None:
+                    missing_fields.append(f"new_tpl.tp{n}_percent")
+            if new_tpl.stop_loss_percent_of_capital is None:
+                missing_fields.append("new_tpl.stop_loss_percent_of_capital")
+
+            if missing_fields:
+                logger.error(
+                    "[update-settings] preview 계산 차단 strategy_id=%s missing=%s",
+                    strategy.id, missing_fields,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"⚠️ 설정 수정 불가 — 필수 필드 누락: {', '.join(missing_fields)}\n\n"
+                        f"💡 strategy 또는 template 의 위 필드가 None 입니다. "
+                        f"먼저 「✏️ 수정」 모드에서 = 누락 필드 입력 후 재시도 권장."
+                    ),
+                )
+
+            logger.info(
+                "[update-settings] preview 계산 시작 strategy_id=%s start_price=%s capital=%s tp=(%s,%s,%s) sl=%s",
+                strategy.id, strategy.start_price, strategy.total_capital,
+                new_tpl.tp1_percent, new_tpl.tp2_percent, new_tpl.tp3_percent,
+                new_tpl.stop_loss_percent_of_capital,
+            )
             try:
                 preview = calc.calculate_preview(
                     symbol=strategy.symbol,
@@ -416,12 +465,39 @@ def update_strategy_settings_in_place(
                     detail=f"새 stages_config 로 plan 재계산 실패: {e}",
                 ) from e
 
-    db.commit()
-    db.refresh(strategy)
-
-    # response — template 기반 enrichment 만 (tp_count batch 는 list endpoint 가 처리).
-    resp = _enrich_response(StrategyDetailResponse.model_validate(strategy), new_tpl)
-    return resp
+    # 🛡 2026-06-07 방어적 commit + response (사장님 EPICUSDT #23 500 사례 후):
+    # commit/refresh/_enrich_response 실패 = unhandled → 500. 모든 단계 try/except.
+    try:
+        db.commit()
+        logger.info(
+            "[update-settings] commit OK strategy_id=%s new_template_id=%s",
+            strategy.id, new_tpl.id,
+        )
+        db.refresh(strategy)
+        # response — template 기반 enrichment 만 (tp_count batch 는 list endpoint 가 처리).
+        resp = _enrich_response(StrategyDetailResponse.model_validate(strategy), new_tpl)
+        logger.info(
+            "[update-settings] SUCCESS strategy_id=%s new_status=%s",
+            strategy.id, strategy.status,
+        )
+        return resp
+    except HTTPException:
+        raise
+    except Exception as e:
+        # 모든 예외 = full traceback logger + Sentry 자동 capture
+        logger.exception(
+            "[update-settings] UNEXPECTED ERROR strategy_id=%s err=%s",
+            strategy_id, e,
+        )
+        err_type = type(e).__name__
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"⚠️ 설정 수정 실패 ({err_type}): {e}\n\n"
+                f"💡 backend logs + Sentry 확인 필요. "
+                f"strategy_id={strategy_id}, new_template_id={new_tpl.id if new_tpl else '?'}"
+            ),
+        )
 
 
 @router.post("/{strategy_id}/trigger-next-stage", response_model=StrategyActionResponse)
