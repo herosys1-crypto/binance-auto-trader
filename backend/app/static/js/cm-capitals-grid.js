@@ -31,13 +31,18 @@ function buildCapitalsGrid() {
   const grid = document.getElementById('cm-capitals-grid');
   // 헤더 + 10행 — 단계 / 자본 / 트리거% / 단계 진입가 / 누적 평균진입 / 청산가 / 누적 손실%
   // (실시간 계산 — 입력 즉시 갱신)
+  // 2026-06-08 사장님 요구: 「자본」 input = 만 단위 (5자) 까지 잘 보이게 가로 확장.
+  // 옛 col-span-1 (12분의 1 ≈ 8.3%) = 100 단위 (3자) 만 보이고 잘림.
+  // 신 col-span-2 = 12분의 2 ≈ 16.7% = 만 단위 ~ 십만 단위 (5~6자) 충분.
+  // 「평균진입」 col-span 2 → 1 로 축소 (계산값 = 보통 7자 = col-span 1 = 약 60px = 충분).
+  // 합계 12 유지: 단계(1) + 자본(2) + 트리%(1) + 증거금(1) + 진입가(2) + 평균(1) + 청산(1) + 손실율(1) + 손실$(2) = 12 ✅
   let html = `<div class="grid grid-cols-12 gap-1 text-xs text-slate-500 px-1 pb-1 border-b border-slate-700 mb-1">
     <div class="col-span-1">단계</div>
-    <div class="col-span-1">💵 자본</div>
+    <div class="col-span-2">💵 자본</div>
     <div class="col-span-1">📊 트리%</div>
     <div class="col-span-1 text-yellow-400" title="단계 진입 직후 추가로 투입할 isolated 증거금 (USDT). 비우거나 0 = 추가 안 함. 청산가를 멀리 밀어 안전 마진 확보 (사용자 요청, 2026-05-11)">💰 증거금</div>
     <div class="col-span-2 text-right text-purple-400" title="이 단계의 LIMIT 진입 가격 (이전 단계 × (1±trigger%))">단계 진입가</div>
-    <div class="col-span-2 text-right text-cyan-400" title="이 단계까지 누적 가중평균 진입가">평균진입</div>
+    <div class="col-span-1 text-right text-cyan-400" title="이 단계까지 누적 가중평균 진입가">평균진입</div>
     <div class="col-span-1 text-right text-orange-400" title="누적 평균 기준 예상 청산가 (Isolated 보수적)">청산가</div>
     <div class="col-span-1 text-right text-red-400" title="이 단계 진입 직전→직후 누적 ROI %">손실율</div>
     <div class="col-span-2 text-right text-red-300" title="이 단계 진입 시점의 누적 손실 USDT">손실$</div>
@@ -58,12 +63,13 @@ function buildCapitalsGrid() {
       triggerValue = _defaultTriggerPct(i);  // 기본값 미리 채움 → ▲▼ 즉시 동작
     }
     const capPlaceholder = i === 1 ? '예: 100' : '비움';
+    // 2026-06-08 사장님 요구: 자본 col-span 1→2 (만 단위 보이게) + 평균 2→1 (합 12 유지)
     html += `<div class="grid grid-cols-12 gap-1 items-center">
       <div class="col-span-1 text-xs text-slate-300 font-semibold">${i}단계</div>
-      <div class="col-span-1">
+      <div class="col-span-2">
         <input type="number" min="0" step="any" id="cm-cap-${i}" placeholder="${capPlaceholder}"
           oninput="onCapitalsChange(); _refreshLiveCalc()"
-          title="단계별 투입 자본 (USDT). 1단계 필수, 2단계 이후 비우면 그 단계 사용 안 함."
+          title="단계별 투입 자본 (USDT). 1단계 필수, 2단계 이후 비우면 그 단계 사용 안 함. 만 단위까지 입력 가능."
           class="w-full px-1 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm" />
       </div>
       <div class="col-span-1">
@@ -79,7 +85,7 @@ function buildCapitalsGrid() {
           class="w-full px-1 py-1 bg-slate-900 border border-yellow-800 rounded text-yellow-300 text-sm" />
       </div>
       <div class="col-span-2 text-xs text-purple-300 text-right" id="cm-stage-entry-${i}" title="이 단계의 LIMIT 진입가">-</div>
-      <div class="col-span-2 text-xs text-cyan-300 text-right" id="cm-stage-avg-${i}" title="이 단계까지 누적 평균 진입가">-</div>
+      <div class="col-span-1 text-xs text-cyan-300 text-right" id="cm-stage-avg-${i}" title="이 단계까지 누적 평균 진입가">-</div>
       <div class="col-span-1 text-xs text-orange-300 text-right" id="cm-stage-liq-${i}" title="평균 기준 예상 청산가">-</div>
       <div class="col-span-1 text-xs text-red-400 text-right" id="cm-stage-loss-${i}" title="이 단계 진입 시점의 누적 ROI %">-</div>
       <div class="col-span-2 text-xs text-red-300 text-right" id="cm-stage-lossusd-${i}" title="이 단계 진입 시점의 누적 손실 USDT (단조 증가)">-</div>
@@ -137,7 +143,7 @@ function _refreshLiveCalc() {
       if (!cap || cap <= 0) {
         if (i > 1 && tNum > 0) pendingTriggerPct += tNum;
         if (entryEl) { entryEl.textContent = '-'; entryEl.className = 'col-span-2 text-xs text-purple-300 text-right'; }
-        if (avgEl) { avgEl.textContent = '-'; avgEl.className = 'col-span-2 text-xs text-cyan-300 text-right'; }
+        if (avgEl) { avgEl.textContent = '-'; avgEl.className = 'col-span-1 text-xs text-cyan-300 text-right'; }
         if (liqEl) { liqEl.textContent = '-'; liqEl.className = 'col-span-1 text-xs text-orange-300 text-right'; }
         if (lossEl) {
           const note = tNum > 0
