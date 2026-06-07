@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
@@ -1440,12 +1441,19 @@ class ExecutionService:
         self.order_repo.create(order)
         return order
 
+    # 🛡 2026-06-07 사장님 메인넷 재발 사례 후 강화 (Binance API -1100 = invalid character):
+    # Binance Futures legal range = ^[A-Z:/a-z0-9_-]{1,36}$ (대소문자 + 콜론/슬래시/언더바/하이픈, 1~36자)
+    # 우리 코드 = 안전 포맷이지만 = 만일에 invalid character 통과 시 = 사전 차단.
+    # = silent bug 사전 방지 (Binance 거절 전 = ValueError 즉시 raise + Sentry capture)
+    _BINANCE_CID_PATTERN = re.compile(r'^[A-Za-z0-9_]{1,36}$')
+
     @staticmethod
     def _new_client_order_id(symbol: str, suffix: str) -> str:
         """Binance newClientOrderId — 절대 안전 포맷 (사용자 #26 JELLYJELLYUSDT 3차 fix).
 
         2026-05-12 v1 (35자) → 2026-05-13 v2 (32자, 하이픈) → 32자도 -4015 reject 됨.
         2026-05-13 v3: 하이픈 → 언더스코어 + 28자 cap.
+        2026-06-07 v4: 사장님 메인넷 재발 -1100 사례 후 사전 검증 추가.
 
         근거 — Binance Futures 공식 spec:
             newClientOrderId: STRING ^[a-zA-Z0-9_]*$ length<36
@@ -1457,13 +1465,45 @@ class ExecutionService:
         - SAGAUSDT(8) + ENTRY10M(8) → base 18, uuid 10 → 28자 ✓
         - BTCUSDT(7) + EXIT(4) → base 13, uuid 15 → 28자 ✓
         모든 케이스 ≤28자 + alphanumeric/underscore 만 → Binance Futures 절대 안전.
+
+        v4 (2026-06-07) 추가:
+        - Input sanitize: symbol/suffix 안 invalid character 사전 제거
+        - Pattern 사전 검증: 반환 전 = regex 확인 → 미일치 시 ValueError + logger.error
+        - 사장님 자본 보호 = Binance 거절 전 = silent bug 즉시 catch
         """
+        import re as _re_local
         MAX_LEN = 28              # v3: Binance Futures 매우 보수적 cap (실 한도 < 32 추정)
         PREFERRED_UUID = 16       # 충분한 충돌 방지 (64 bits)
         # MIN_UUID = 4 (=16^4 = 65536 unique). 실 운영은 sub-minute 단위 발사라 충분.
         # 더 큰 prefix (긴 symbol+suffix) 는 prefix 보존 우선 — uuid 줄여서 MAX_LEN 보장.
         MIN_UUID = 4
-        base_len = len(symbol) + 1 + len(suffix) + 1  # symbol + "_" + suffix + "_"
+
+        # 🛡 v4 input sanitize — symbol/suffix 안 invalid character 사전 제거
+        # (사장님 메인넷 -1100 재발 사례: symbol/suffix 출처 외부일 수도 + 방어적)
+        safe_symbol = _re_local.sub(r'[^A-Za-z0-9_]', '', str(symbol or ''))
+        safe_suffix = _re_local.sub(r'[^A-Za-z0-9_]', '', str(suffix or ''))
+        if not safe_symbol:
+            safe_symbol = "UNKNOWN"  # symbol 없으면 safe default
+        if not safe_suffix:
+            safe_suffix = "X"  # suffix 없으면 1자 default
+
+        base_len = len(safe_symbol) + 1 + len(safe_suffix) + 1  # symbol + "_" + suffix + "_"
         uuid_len = max(MIN_UUID, min(PREFERRED_UUID, MAX_LEN - base_len))
-        cid = f"{symbol}_{suffix}_{uuid4().hex[:uuid_len]}"  # ← 하이픈 → 언더스코어
-        return cid[:MAX_LEN]      # 안전장치 — 어떤 입력에도 28자 보장
+        cid = f"{safe_symbol}_{safe_suffix}_{uuid4().hex[:uuid_len]}"  # ← 하이픈 → 언더스코어
+        final = cid[:MAX_LEN]      # 안전장치 — 어떤 입력에도 28자 보장
+
+        # 🛡 v4 사전 검증 — Binance Futures pattern 일치 확인
+        if not ExecutionService._BINANCE_CID_PATTERN.match(final):
+            # Binance 거절 전 즉시 알림 (silent bug 차단)
+            logger.error(
+                "[cid-invalid] _new_client_order_id 생성 결과 = Binance 패턴 미일치! "
+                "cid=%s symbol=%s safe_symbol=%s suffix=%s safe_suffix=%s "
+                "(이 메시지 = Sentry 자동 capture + 사장님 즉시 인지 필요)",
+                final, symbol, safe_symbol, suffix, safe_suffix,
+            )
+            raise ValueError(
+                f"⚠️ client_order_id 생성 실패 (Binance 패턴 위반): "
+                f"cid='{final}' from symbol='{symbol}' suffix='{suffix}'. "
+                f"필수: ^[A-Za-z0-9_]{{1,36}}$"
+            )
+        return final
