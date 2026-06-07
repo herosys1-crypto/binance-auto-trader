@@ -296,12 +296,12 @@ async function loadBalance() {
     //   사장님 명시: "예약 3,140은 대부분 포지션에 진입했고 예약에 남아 있는 잔액만 표현해야"
     //
     // 옛 「예약」 = 전체 계획 자본 (= 사장님 자본 합 = 실 + 미진입 단계) ← 사장님 직관 무시 (중복 카운트)
-    // 신 「예약 (남은)」 = 계획 자본 - 실 사용 = 앞으로 lock 될 예정만 ← 사장님 직관 정확!
+    // 신 「포지션 예약됨」 = 계획 자본 - 실 사용 = 앞으로 lock 될 예정만 ← 사장님 직관 정확!
     //
     // = 상호 배타적 3 구간 (실 + 예약남은 + 운용가용 = 거래소 잔액)
     //
     // 합산 검증 (사장님 EPICUSDT 사례):
-    //   🔒 실 1,395  +  📦 예약(남은) 1,745  +  💵 운용 가용 -32  =  3,108 ✅
+    //   🔒 실 1,395  +  📦 포지션 예약됨 1,745  +  💵 운용 가용 -32  =  3,108 ✅
     //   = 거래소 잔액 일치! 한눈에 명확.
     //
     // 운용 가용 계산 = 변경 없음 (지갑 - 전체 계획 자본). 표시 「예약」 만 = 남은 = 직관.
@@ -316,16 +316,16 @@ async function loadBalance() {
       const avl = Number(b.our_available_balance || 0);
       const cnt = Number(b.active_strategy_count || 0);
       const rsvRemaining = Math.max(0, rsv - act);  // 계정별 남은 예약
-      return `#${acc.id}: 지갑 ${fmt(wlt)} | 🔒 실 ${fmt(act)} | 📦 예약(남은) ${fmt(rsvRemaining)} | 💵 운용 가용 ${fmt(avl)} (${cnt}건)`;
+      return `#${acc.id}: 지갑 ${fmt(wlt)} | 🔒 실 ${fmt(act)} | 📦 포지션 예약됨 ${fmt(rsvRemaining)} | 💵 운용 가용 ${fmt(avl)} (${cnt}건)`;
     }).join('\n');
     // 신규 표시 형식 (사장님 2026-06-06 요구 — 직관 정확):
     //   큰 글씨   = 지갑 총액 (사장님 직관 = "내 돈 전체")
-    //   작은 글씨 = 🔒 실 N | 📦 예약(남은) M | 💵 운용 가용 X (전략 K건, 예약률 P%)
+    //   작은 글씨 = 🔒 실 N | 📦 포지션 예약됨 M | 💵 운용 가용 X (전략 K건, 예약률 P%)
     //     🔒 실        = 현재 Binance lock 마진 (이미 사용 — 진입한 단계까지)
-    //     📦 예약(남은) = 사장님 계획 자본 중 = 앞으로 lock 될 예정 (= 미진입 단계 예약)
+    //     📦 포지션 예약됨 = 사장님 계획 자본 중 = 앞으로 lock 될 예정 (= 미진입 단계 예약)
     //     💵 운용 가용 = 지갑 - 전체 계획 자본 = 신규 strategy 가능 한도 (음수 = 예약 초과)
     //   = 상호 배타적, 합 = 거래소 잔액 (사장님 한눈에)
-    const detailMain = `🔒 실 ${fmt(actualMarginSum)} | 📦 예약(남은) ${fmt(reservedRemainingSum)} | 💵 운용 가용 ${fmt(ourAvailSum)} (${stratSum}건, 예약률 ${reservedRatio.toFixed(1)}%)${hasTestnet ? ' · testnet 포함' : ''}`;
+    const detailMain = `🔒 실 ${fmt(actualMarginSum)} | 📦 포지션 예약됨 ${fmt(reservedRemainingSum)} | 💵 운용 가용 ${fmt(ourAvailSum)} (${stratSum}건, 예약률 ${reservedRatio.toFixed(1)}%)${hasTestnet ? ' · testnet 포함' : ''}`;
     const accountInfo = valid.length > 1 ? ` · ${valid.length}계정 합산` : '';
     setMetric(
       'balance',
@@ -340,7 +340,7 @@ async function loadBalance() {
       const reservedHelp = `📊 잔액 구간 의미 (2026-06-06 사장님 직관 정확화):\n\n` +
         `🔒 「실」 (이미 lock) = ${fmt(actualMarginSum)} USDT\n` +
         `   = Binance 가 현재 lock 한 마진 (진입한 단계까지 실제 사용)\n\n` +
-        `📦 「예약 (남은)」 (앞으로 lock) = ${fmt(reservedRemainingSum)} USDT\n` +
+        `📦 「포지션 예약됨」 (앞으로 lock) = ${fmt(reservedRemainingSum)} USDT\n` +
         `   = 사장님 계획 자본 ${fmt(reservedSum)} - 실 사용 ${fmt(actualMarginSum)}\n` +
         `   = 미진입 단계까지 lock 될 예정 자본 (= 자동 단계 진입 시 사용)\n\n` +
         `💵 「운용 가용」 (자유 잔액) = ${fmt(ourAvailSum)} USDT\n` +

@@ -178,14 +178,20 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     api_secret=decrypt_text(account.api_secret_enc),
                     is_testnet=account.is_testnet,
                 )
-                # 2026-06-01 Phase B (사장님 핵심 사상 — 잔액 기반 운영):
-                # 자동 stage 진입 직전 wallet 기반 자본 검증.
-                # 손실 발생 → wallet 감소 → 활성 strategy 의 자본 예약 합이 wallet 초과 시 자동 진입 차단.
-                # (Phase A 의 strategy 생성 시점 가드 + Phase B 의 자동 진입 시점 가드 = 다층 안전망)
+                # 🚨 2026-06-08 사장님 사상 strict (사장님 직접 명시):
+                # "거래소 잔액 - (실포지션금액 + 예약금액) = 운용가용잔액인데 잔액이 0을 넘어 마이너스가 되면 안되는데"
+                # "거래소 잔액에서 실포지션과 단계별 포지션 진입예약이 거래소잔액을 넘을수 없어"
+                #
+                # 옛 검증: Σ total_capital (= 예약 남은) ≤ wallet
+                # 신 검증: Σ total_capital + total_position_initial_margin (= 실 마진) ≤ wallet
+                #
+                # = 사장님 운용 가용 잔액 = 항상 ≥ 0 보장 (음수 발생 차단)
+                # = 자동 stage 진입 시 = "실 + 예약 ≤ wallet" 확인 (UI 의 합과 일치)
                 try:
                     _bal_info = exec_service.client.get_account()
                     _wallet_total = Decimal(str(_bal_info.get('totalWalletBalance', '0')))
-                    # 모든 active strategy 의 total_capital 합 (사장님 안전 사상 — 자본 절대값 기준)
+                    _real_margin = Decimal(str(_bal_info.get('totalPositionInitialMargin', '0')))  # 신: Binance 실 lock
+                    # 모든 active strategy 의 total_capital 합 (= 「포지션 예약됨」 = 사장님 자본 잔여)
                     _all_active = db.execute(
                         select(StrategyInstance)
                         .where(StrategyInstance.exchange_account_id == account.id)
@@ -193,27 +199,34 @@ def run_stage_trigger_once(decrypt_text) -> None:
                         .where(StrategyInstance.status.in_(ACTIVE_STAGE_STATUSES))
                     ).scalars().all()
                     _total_reserved = sum((Decimal(str(s.total_capital or 0)) for s in _all_active), Decimal('0'))
-                    if _total_reserved > _wallet_total and _wallet_total > 0:
-                        # wallet 부족 — 자동 진입 차단 + cooldown + Telegram (dedup)
+                    # 🚨 신 검증: 실 마진 + 예약 ≤ wallet (사장님 사상 정확)
+                    _total_committed = _real_margin + _total_reserved  # 실 + 예약 합
+                    if _total_committed > _wallet_total and _wallet_total > 0:
+                        # 🚨 wallet 부족 — 자동 진입 차단 + cooldown + Telegram (dedup)
                         _first = _set_margin_cooldown(_redis, strategy.id, next_stage_no)
                         logger.warning(
-                            "[stage-trigger] Phase B wallet 부족 차단 strategy=%s stage=%s — total_reserved=%s > wallet=%s (alert=%s)",
-                            strategy.id, next_stage_no, _total_reserved, _wallet_total, _first,
+                            "[stage-trigger] strict wallet 부족 차단 strategy=%s stage=%s — "
+                            "실=%s + 예약=%s = %s > wallet=%s (alert=%s)",
+                            strategy.id, next_stage_no, _real_margin, _total_reserved,
+                            _total_committed, _wallet_total, _first,
                         )
                         if _first:
                             try:
                                 NotificationService(db).send_system_alert(
-                                    title=f"⚠️ [Wallet 부족 — 자동 진입 차단] #{strategy.id} {strategy.symbol} 단계{next_stage_no}",
+                                    title=f"🚨 [Wallet 부족 — 자동 진입 차단] #{strategy.id} {strategy.symbol} 단계{next_stage_no}",
                                     body=(
-                                        f"손실 발생으로 wallet 감소 → 활성 strategy 자본 예약 합이 wallet 초과.\n\n"
-                                        f"📌 계산 (사장님 핵심 사상 — 잔액 기반 운영):\n"
-                                        f"  • 활성 strategy {len(_all_active)}개 자본 합: {_total_reserved:.2f} USDT\n"
-                                        f"  • Wallet: {_wallet_total:.2f} USDT\n"
-                                        f"  • 부족: {(_total_reserved - _wallet_total):.2f} USDT\n\n"
-                                        f"⚙️ 자동 stage 진입 차단 (사장님 자본 보호).\n"
+                                        f"사장님 사상 strict 검증: 실 + 예약 ≤ wallet 위반 → 자동 진입 차단.\n\n"
+                                        f"📌 계산 (사장님 명시 2026-06-08):\n"
+                                        f"  • 🔒 실 사용 마진 (Binance lock): {_real_margin:.2f} USDT\n"
+                                        f"  • 📦 포지션 예약됨 (활성 {len(_all_active)}개 자본 잔여): {_total_reserved:.2f} USDT\n"
+                                        f"  • 합 (실 + 예약): {_total_committed:.2f} USDT\n"
+                                        f"  • 💼 Wallet: {_wallet_total:.2f} USDT\n"
+                                        f"  • 부족 (운용 가용 음수): {(_total_committed - _wallet_total):.2f} USDT\n\n"
+                                        f"⚙️ 자동 stage 진입 차단 (사장님 자본 보호 — 운용 가용 음수 방지).\n"
                                         f"💡 조치 (택1):\n"
                                         f"  • USDT 입금 → wallet 회복\n"
-                                        f"  • 다른 strategy 일부 수동 청산 → 자본 예약 감소\n"
+                                        f"  • 다른 strategy 일부 수동 청산 → 실/예약 감소\n"
+                                        f"  • EPICUSDT total_capital 동기화 (PR #107 머지 + ✏️ 수정)\n"
                                         f"  • {_MARGIN_COOLDOWN_TTL // 60}분 후 자동 재시도 (cooldown)"
                                     ),
                                 )
