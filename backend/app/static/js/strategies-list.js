@@ -412,8 +412,11 @@ async function refreshStrategies() {
       const entryColor = entryPct >= 95 ? 'text-green-400' : entryPct >= 50 ? 'text-yellow-400' : 'text-slate-300';
       // tooltip = 자세 설명 (사장님이 필요 시 hover 로 확인)
       const planTooltip = `💼 사장님 자본: ${plannedMargin.toFixed(2)} USDT (= 마진 lock 목표, SL 기준)\n📊 거래 규모: ${plannedNotional.toFixed(2)} USDT (= 자본 × ${sLev}x)\n🔒 현재 마진: ${positionMargin.toFixed(2)} USDT (Binance lock)\n📈 진입률: ${entryPct.toFixed(1)}% (모든 단계 진입까지 ${(100-entryPct).toFixed(1)}% 남음)`;
+      // 2026-06-08 사장님 요구: 메인 숫자 (수량/마진/PNL) 폰트 = 조금 크게.
+      // wrapper text-xs (12px) → text-sm (14px). 라벨 (수량/마진/등) = font-size:10px 유지 (구분).
+      // 메인 값만 = 14px 자동 적용 = 사장님 가독성 ↑.
       const qtyStack = hasPosition
-        ? `<div class="text-xs leading-tight">
+        ? `<div class="text-sm leading-tight">
             <div title="포지션 수량"><span class="text-slate-400" style="font-size:10px">수량</span> <span class="${sQtyNum<0?'neg':'pos'} font-semibold">${fmtQty(sQtyNum)}</span></div>
             <div title="${planTooltip}">
               <span class="text-slate-400" style="font-size:10px">마진</span>
@@ -423,7 +426,7 @@ async function refreshStrategies() {
             </div>
             ${addMarginBtnInQty}${addPositionBtn}${manualTpBtn}
           </div>`
-        : `<div class="text-xs leading-tight">
+        : `<div class="text-sm leading-tight">
             <span class="text-slate-500">- (미진입)</span><br>
             <span class="text-slate-400" style="font-size:10px" title="${planTooltip}">자본 ${plannedMargin > 0 ? plannedMargin.toFixed(2)+' USDT' : '-'}</span>
             ${addPositionBtn ? '<br>'+addPositionBtn : ''}
@@ -452,11 +455,13 @@ async function refreshStrategies() {
       const slDisplay = slThreshold > 0
         ? `<br><span class="${slClass} text-xs" style="font-size:10px" title="${slTooltip}">${slIcon}SL ${slProgressPct.toFixed(0)}% (-${slThreshold.toFixed(0)} USDT)</span>`
         : '';
+      // 2026-06-08 사장님 요구: PnL/ROI 메인 값 = 폰트 조금 크게 (text-xs → text-sm).
+      // 전략 ROI + SL = font-size:10px 유지 (보조 정보).
       const pnl = hasPosition
-        ? `<div class="text-xs leading-tight">
+        ? `<div class="text-sm leading-tight">
             <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span><br>
-            <span class="${positionRoi>0?'pos':positionRoi<0?'neg':'text-slate-400'} text-xs" title="${posTooltip}">${posSign}${positionRoi.toFixed(2)}%</span><br>
-            <span class="${strategyRoi>0?'pos':strategyRoi<0?'neg':'text-slate-500'} text-xs" style="font-size:10px; opacity:0.7" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slDisplay}
+            <span class="${positionRoi>0?'pos':positionRoi<0?'neg':'text-slate-400'}" title="${posTooltip}">${posSign}${positionRoi.toFixed(2)}%</span><br>
+            <span class="${strategyRoi>0?'pos':strategyRoi<0?'neg':'text-slate-500'}" style="font-size:10px; opacity:0.7" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slDisplay}
           </div>`
         : '<span class="text-slate-500">-</span>';
 
