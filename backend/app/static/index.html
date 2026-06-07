@@ -61,7 +61,7 @@
 
   table { width: 100%; }
   th { text-align: left; padding: 10px 12px; background: #0f172a; font-size: 11px; color: #94a3b8; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-  td { padding: 3px 10px; border-top: 1px solid #334155; font-size: 13px; }  /* 2026-06-08 v2 사장님: 행 공백 거의 0 (6px → 3px) + 좌우 12px → 10px */
+  td { padding: 1px 10px; border-top: 1px solid #334155; font-size: 13px; line-height: 1.1; }  /* 2026-06-08 v3 사장님: 행 공백 거의 완전 0 (3px → 1px) + line-height 1.1 (행 내부 컨텐츠 압축) */
   tr.row-clickable { cursor: pointer; transition: background 0.1s; }
   tr.row-clickable:hover { background: rgba(59,130,246,0.05); }
   /* 2026-05-12 (사용자 요청): div 셀 (운영 통계 등) 도 cursor pointer + hover 표시.

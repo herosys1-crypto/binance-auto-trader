@@ -339,7 +339,7 @@ async function refreshStrategies() {
       const closeReason = s.last_close_reason || 'NONE';
       const stageBar = s.current_stage > 0 ? renderStageBar(s.current_stage, totalStages) : '<span class="text-slate-500">대기</span>';
       const tpBar = renderTpBar(tpCount, totalTps, closeReason);
-      const stage = `<div class="text-xs leading-tight"><span class="text-slate-400" style="font-size:12px">진입</span> ${stageBar}<br><span class="text-slate-400" style="font-size:12px">익절</span> ${tpBar}</div>`;
+      const stage = `<div class="text-xs leading-none"><span class="text-slate-400" style="font-size:12px">진입</span> ${stageBar}<br><span class="text-slate-400" style="font-size:12px">익절</span> ${tpBar}</div>`;
       const pnlNum = Number(s.unrealized_pnl || 0);
       const sCap = Number(s.total_capital || 0);
       const sLev = Number(s.leverage || 1) || 1;
@@ -372,7 +372,7 @@ async function refreshStrategies() {
 
       // 평단/마크/청산 — 3 줄 stack (Binance 스타일)
       const priceStack = hasPosition
-        ? `<div class="text-xs leading-tight"><span class="text-slate-300" title="평단가">${fmtNum(sAvg)}</span><br><span class="text-cyan-300" title="마크가">${fmtNum(sMark)}</span><br><span class="text-red-300" title="청산예정">${fmtNum(sLiq)}</span></div>`
+        ? `<div class="text-xs leading-none"><span class="text-slate-300" title="평단가">${fmtNum(sAvg)}</span><br><span class="text-cyan-300" title="마크가">${fmtNum(sMark)}</span><br><span class="text-red-300" title="청산예정">${fmtNum(sLiq)}</span></div>`
         : '<span class="text-slate-500">-</span>';
       // 수량/마진 — 2 줄 stack + 「💰 증거금 추가」 버튼 (포지션 보유 시).
       // 마진은 「현재 사용 마진 / 계획 총 마진」 형식.
@@ -416,7 +416,7 @@ async function refreshStrategies() {
       // wrapper text-xs (12px) → text-sm (14px). 라벨 (수량/마진/등) = font-size:12px 유지 (구분).
       // 메인 값만 = 14px 자동 적용 = 사장님 가독성 ↑.
       const qtyStack = hasPosition
-        ? `<div class="text-sm leading-tight">
+        ? `<div class="text-sm leading-none">
             <div title="포지션 수량"><span class="text-slate-400" style="font-size:12px">수량</span> <span class="${sQtyNum<0?'neg':'pos'} font-semibold">${fmtQty(sQtyNum)}</span></div>
             <div title="${planTooltip}">
               <span class="text-slate-400" style="font-size:12px">마진</span>
@@ -426,7 +426,7 @@ async function refreshStrategies() {
             </div>
             ${addMarginBtnInQty}${addPositionBtn}${manualTpBtn}
           </div>`
-        : `<div class="text-sm leading-tight">
+        : `<div class="text-sm leading-none">
             <span class="text-slate-500">- (미진입)</span><br>
             <span class="text-slate-400" style="font-size:12px" title="${planTooltip}">자본 ${plannedMargin > 0 ? plannedMargin.toFixed(2)+' USDT' : '-'}</span>
             ${addPositionBtn ? '<br>'+addPositionBtn : ''}
@@ -458,7 +458,7 @@ async function refreshStrategies() {
       // 2026-06-08 사장님 요구: PnL/ROI 메인 값 = 폰트 조금 크게 (text-xs → text-sm).
       // 전략 ROI + SL = font-size:12px 유지 (보조 정보).
       const pnl = hasPosition
-        ? `<div class="text-sm leading-tight">
+        ? `<div class="text-sm leading-none">
             <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span><br>
             <span class="${positionRoi>0?'pos':positionRoi<0?'neg':'text-slate-400'}" title="${posTooltip}">${posSign}${positionRoi.toFixed(2)}%</span><br>
             <span class="${strategyRoi>0?'pos':strategyRoi<0?'neg':'text-slate-500'}" style="font-size:12px; opacity:0.7" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slDisplay}
@@ -536,7 +536,7 @@ async function refreshStrategies() {
       const maxProfit = s.max_profit_pct !== null && s.max_profit_pct !== undefined
         ? `<span class="text-green-400">+${fmtNum(s.max_profit_pct)}%</span>`
         : '<span class="text-slate-500">-</span>';
-      const maxCell = `<div class="text-xs leading-tight">${maxLoss}<br>${maxProfit}</div>`;
+      const maxCell = `<div class="text-xs leading-none">${maxLoss}<br>${maxProfit}</div>`;
 
       // 2026-05-21 STOPPING 갇힘 배지 — updated_at 5분 초과면 「⚠️ 갇힘 N분」 표시.
       // reconcile 이 자동 정리 못 하는 케이스 (포지션 잔재) — 사장님이 인지해야 함.
@@ -566,7 +566,7 @@ async function refreshStrategies() {
       return `<tr class="row-clickable" onclick="selectStrategy(${s.id})">
         <td>#${s.id}</td>
         <td class="font-mono">
-          <div class="text-xs leading-tight">
+          <div class="text-xs leading-none">
             <a href="https://www.binance.com/en/futures/${s.symbol}" target="_blank" rel="noopener"
                onclick="event.stopPropagation()"
                class="text-blue-300 hover:text-blue-100 hover:underline"
