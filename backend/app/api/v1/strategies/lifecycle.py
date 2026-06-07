@@ -25,6 +25,68 @@ from app.services.execution_service import EmergencyCloseInProgress, ExecutionSe
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
 
+# 🚨 2026-06-08 사장님 사상 v2 (130% 정책):
+# "거래소 잔액에 130% 까지 허용하는 걸로만 하자"
+# = 증거금 추가 + 포지션 추가 도 같은 검증 적용 (사장님 직접 요구)
+_MAX_COMMITTED_RATIO = Decimal("1.30")  # wallet 의 130% 까지 허용
+
+
+def _check_wallet_130_percent_or_raise(
+    db: Session,
+    account,
+    execution_service: ExecutionService,
+    *,
+    additional_amount: Decimal = Decimal("0"),
+    action_label: str = "추가 작업",
+) -> None:
+    """사장님 사상 (2026-06-08): 실 + 예약 + additional ≤ wallet × 1.30 검증.
+
+    증거금 추가 / 포지션 추가 시 = 사장님 자본 한도 위반 사전 차단.
+    stage_trigger_worker 와 동일 정책 (DRY — 다음 PR 헬퍼 통합 후보).
+
+    Raises:
+        HTTPException 400 시 = 예약률 130% 초과 (사장님 즉시 인지)
+    """
+    from app.models.strategy_instance import StrategyInstance
+    from app.core.strategy_status import ACTIVE_STAGE_STATUSES
+    from sqlalchemy import select
+    try:
+        _bal_info = execution_service.client.get_account()
+        _wallet_total = Decimal(str(_bal_info.get('totalWalletBalance', '0')))
+        _real_margin = Decimal(str(_bal_info.get('totalPositionInitialMargin', '0')))
+        _all_active = db.execute(
+            select(StrategyInstance)
+            .where(StrategyInstance.exchange_account_id == account.id)
+            .where(StrategyInstance.is_archived.is_(False))
+            .where(StrategyInstance.status.in_(ACTIVE_STAGE_STATUSES))
+        ).scalars().all()
+        _total_reserved = sum((Decimal(str(s.total_capital or 0)) for s in _all_active), Decimal('0'))
+        _total_committed = _real_margin + _total_reserved + additional_amount
+        _max_allowed = _wallet_total * _MAX_COMMITTED_RATIO
+        if _total_committed > _max_allowed and _wallet_total > 0:
+            _committed_ratio = (_total_committed / _wallet_total * 100) if _wallet_total > 0 else 0
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"⚠️ {action_label} 차단 — 예약률 130% 초과\n\n"
+                    f"📌 계산 (실 + 예약 + 신규 = wallet 의 X%):\n"
+                    f"  • 🔒 실 사용 마진: {_real_margin:.2f} USDT\n"
+                    f"  • 📦 포지션 예약됨 (활성 {len(_all_active)}개): {_total_reserved:.2f} USDT\n"
+                    f"  • ➕ 신규 추가 시도: {additional_amount:.2f} USDT\n"
+                    f"  • 합: {_total_committed:.2f} USDT\n"
+                    f"  • 💼 Wallet: {_wallet_total:.2f} USDT\n"
+                    f"  • 📊 예약률: {_committed_ratio:.1f}% (허용: 130%)\n"
+                    f"  • 초과: {(_total_committed - _max_allowed):.2f} USDT\n\n"
+                    f"💡 조치: USDT 입금 / strategy 일부 청산 / 신규 금액 줄이기"
+                ),
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        # wallet 조회 자체 실패 = 검증 skip (preflight 가 백업)
+        pass
+
+
 class AddMarginRequest(BaseModel):
     amount: Decimal = Field(..., gt=0, description="추가할 증거금 (USDT, 양수). 거래소 ISOLATED 모드 포지션에만 가능.")
 
@@ -56,6 +118,13 @@ def add_margin_to_strategy(
             api_key=decrypt_text(account.api_key_enc),
             api_secret=decrypt_text(account.api_secret_enc),
             is_testnet=account.is_testnet,
+        )
+        # 🚨 2026-06-08 사장님 사상 v2 (130%): 증거금 추가 = total_capital 증가 = 예약 증가
+        # → 사전 검증 = 실 + 예약 + 신규 ≤ wallet × 1.30 차단
+        _check_wallet_130_percent_or_raise(
+            db, account, execution_service,
+            additional_amount=payload.amount,
+            action_label="증거금 추가",
         )
         execution_service.add_position_margin(strategy.id, amount=payload.amount)
     except ValueError as e:
@@ -125,6 +194,13 @@ def add_position_to_strategy(
             api_key=decrypt_text(account.api_key_enc),
             api_secret=decrypt_text(account.api_secret_enc),
             is_testnet=account.is_testnet,
+        )
+        # 🚨 2026-06-08 사장님 사상 v2 (130%): 포지션 추가 = total_capital + qty 증가
+        # → 사전 검증 = 실 + 예약 + 신규 ≤ wallet × 1.30 차단
+        _check_wallet_130_percent_or_raise(
+            db, account, execution_service,
+            additional_amount=payload.amount_usdt,
+            action_label="포지션 추가",
         )
         order = execution_service.add_position_now(
             strategy.id,
