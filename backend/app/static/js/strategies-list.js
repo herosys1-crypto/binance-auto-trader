@@ -61,7 +61,7 @@ function _binanceCompareRow(s) {
   const acctData = _binancePositionsCache[s.exchange_account_id];
   if (!acctData) {
     // 2026-06-05 사장님 진단: cache 비어 있는 이유 명확 표시 (단순 "로딩 중..." 보다 진단 도움)
-    return `<tr class="bg-yellow-900/30 border-l-4 border-yellow-500"><td colspan="9" class="text-xs text-yellow-300 py-1 px-3">📊 Binance 비교: ⏳ 데이터 로딩 중 또는 API 호출 실패 (account=${s.exchange_account_id}) — F12 Console 확인</td></tr>`;
+    return `<tr class="bg-yellow-900/30 border-l-4 border-yellow-500"><td colspan="9" class="text-xs text-yellow-300 py-0 px-3">📊 Binance 비교: ⏳ 데이터 로딩 중 또는 API 호출 실패 (account=${s.exchange_account_id}) — F12 Console 확인</td></tr>`;
   }
   const bp = (acctData.positions || {})[s.symbol];
   const ts = acctData.fetched_at
@@ -70,7 +70,7 @@ function _binanceCompareRow(s) {
   // CASE A: Binance 에 포지션 없음 — 우리 DB 와 큰 차이 (가장 위험)
   if (!bp) {
     return `<tr class="bg-red-900/40 border-l-4 border-red-500">
-      <td colspan="9" class="text-xs py-1 px-3 font-mono">
+      <td colspan="9" class="text-xs py-0 px-3 font-mono">
         <span class="text-red-300 font-bold">📊 Binance: ⚠ 거래소에 포지션 없음 — 큰 차이!</span>
         <span class="text-slate-400 ml-3">(우리 DB 만 있음 — 청산됐거나 다른 계정)</span>
         <span class="text-slate-500 ml-3">⏱ ${ts}</span>
@@ -117,7 +117,7 @@ function _binanceCompareRow(s) {
   const pnlWarn = upnlMismatch ? `<span class="text-red-400 ml-1" title="우리 DB: ${ourUpnl.toFixed(2)} USDT (차이 ${upnlDiff.toFixed(2)} USDT)">⚠</span>` : '';
 
   return `<tr class="${rowBg}">
-    <td colspan="9" class="text-xs text-slate-300 py-1 px-3 font-mono">
+    <td colspan="9" class="text-xs text-slate-300 py-0 px-3 font-mono">
       ${header}
       <span class="text-slate-500 ml-2">Size</span> <span class="${sizeCls}">${bp.size}</span>${sizeWarn}
       <span class="text-slate-600">|</span>
@@ -127,7 +127,7 @@ function _binanceCompareRow(s) {
       <span class="text-slate-600">|</span>
       <span class="text-slate-500">Mark</span> ${bp.mark_price}
       <span class="text-slate-600">|</span>
-      <span class="text-slate-500">Margin</span> ${marginDisp} <span class="text-slate-500" style="font-size:11px">(${bp.margin_mode})</span>
+      <span class="text-slate-500">Margin</span> ${marginDisp} <span class="text-slate-500" style="font-size:12px">(${bp.margin_mode})</span>
       <span class="text-slate-600">|</span>
       <span class="text-slate-500">PNL</span> <span class="${pnlCls}">${upnlSign}${upnl.toFixed(2)} USDT</span>${pnlWarn}
       <span class="${roiCls}">(${roiSign}${roi.toFixed(2)}%)</span>
@@ -339,7 +339,7 @@ async function refreshStrategies() {
       const closeReason = s.last_close_reason || 'NONE';
       const stageBar = s.current_stage > 0 ? renderStageBar(s.current_stage, totalStages) : '<span class="text-slate-500">대기</span>';
       const tpBar = renderTpBar(tpCount, totalTps, closeReason);
-      const stage = `<div class="text-xs leading-tight"><span class="text-slate-400" style="font-size:11px">진입</span> ${stageBar}<br><span class="text-slate-400" style="font-size:11px">익절</span> ${tpBar}</div>`;
+      const stage = `<div class="text-xs leading-tight"><span class="text-slate-400" style="font-size:12px">진입</span> ${stageBar}<br><span class="text-slate-400" style="font-size:12px">익절</span> ${tpBar}</div>`;
       const pnlNum = Number(s.unrealized_pnl || 0);
       const sCap = Number(s.total_capital || 0);
       const sLev = Number(s.leverage || 1) || 1;
@@ -382,7 +382,7 @@ async function refreshStrategies() {
       const addMarginBtnInQty = hasPosition
         ? `<button onclick="event.stopPropagation(); addMargin(${s.id}, '${s.symbol}', '${s.side}')"
                   class="btn-warning btn text-xs mt-1"
-                  style="padding:2px 6px;font-size:11px;line-height:1.2"
+                  style="padding:2px 6px;font-size:12px;line-height:1.2"
                   title="증거금 추가 — ISOLATED 모드 포지션의 청산가 완화 (CROSS 면 거래소 거절)">💰 증거금 추가</button>`
         : '';
       // 2026-05-04 (사용자 요청): 「💉 포지션 추가」 — ad-hoc 자유 금액 시장가/지정가 진입.
@@ -391,7 +391,7 @@ async function refreshStrategies() {
       const addPositionBtn = _activeForAddPos
         ? `<button onclick="event.stopPropagation(); openAddPositionModal(${s.id}, '${s.symbol}', '${s.side}', ${s.leverage || 1})"
                   class="btn-primary btn text-xs mt-1 ml-1"
-                  style="padding:2px 6px;font-size:11px;line-height:1.2"
+                  style="padding:2px 6px;font-size:12px;line-height:1.2"
                   title="포지션 추가 (ad-hoc) — 자유 금액 시장가/지정가 즉시 진입. qty + 평단 갱신, stage 진행 X. v4 안전망: 사용 시 max_loss 임계 도달하면 Crisis 발동 (stage 미완료라도)">💉 포지션 추가</button>`
         : '';
       // 2026-06-06 evening 재활성화 — 사장님 Sub-Account 운영 + Binance UI 직접 청산 불가
@@ -402,7 +402,7 @@ async function refreshStrategies() {
       const manualTpBtn = (_activeForAddPos && hasPosition)
         ? `<button onclick="event.stopPropagation(); openManualTPModal(${s.id}, '${s.symbol}', '${s.side}', ${sQtyAbs}, ${sAvg}, ${sLev})"
                   class="btn-success btn text-xs mt-1 ml-1"
-                  style="padding:2px 6px;font-size:11px;line-height:1.2;background:#16a34a;color:white"
+                  style="padding:2px 6px;font-size:12px;line-height:1.2;background:#16a34a;color:white"
                   title="수동 익절 — 현재 보유 포지션 의 N% 시장가 청산 (25%/50%/75%/100% 빠른 선택 또는 직접 입력). Sub-Account 청산 유일 수단.">💰 수동 익절</button>`
         : '';
       // 2026-06-05 바이낸스 UI 스타일 단순화 (사장님 요구):
@@ -413,22 +413,22 @@ async function refreshStrategies() {
       // tooltip = 자세 설명 (사장님이 필요 시 hover 로 확인)
       const planTooltip = `💼 사장님 자본: ${plannedMargin.toFixed(2)} USDT (= 마진 lock 목표, SL 기준)\n📊 거래 규모: ${plannedNotional.toFixed(2)} USDT (= 자본 × ${sLev}x)\n🔒 현재 마진: ${positionMargin.toFixed(2)} USDT (Binance lock)\n📈 진입률: ${entryPct.toFixed(1)}% (모든 단계 진입까지 ${(100-entryPct).toFixed(1)}% 남음)`;
       // 2026-06-08 사장님 요구: 메인 숫자 (수량/마진/PNL) 폰트 = 조금 크게.
-      // wrapper text-xs (12px) → text-sm (14px). 라벨 (수량/마진/등) = font-size:11px 유지 (구분).
+      // wrapper text-xs (12px) → text-sm (14px). 라벨 (수량/마진/등) = font-size:12px 유지 (구분).
       // 메인 값만 = 14px 자동 적용 = 사장님 가독성 ↑.
       const qtyStack = hasPosition
         ? `<div class="text-sm leading-tight">
-            <div title="포지션 수량"><span class="text-slate-400" style="font-size:11px">수량</span> <span class="${sQtyNum<0?'neg':'pos'} font-semibold">${fmtQty(sQtyNum)}</span></div>
+            <div title="포지션 수량"><span class="text-slate-400" style="font-size:12px">수량</span> <span class="${sQtyNum<0?'neg':'pos'} font-semibold">${fmtQty(sQtyNum)}</span></div>
             <div title="${planTooltip}">
-              <span class="text-slate-400" style="font-size:11px">마진</span>
+              <span class="text-slate-400" style="font-size:12px">마진</span>
               <span class="text-slate-200">${positionMargin.toFixed(2)}</span>
-              <span class="text-slate-500" style="font-size:11px"> / ${plannedMargin.toFixed(2)} USDT</span>
-              <span class="${entryColor}" style="font-size:11px"> ${entryPct.toFixed(0)}%</span>
+              <span class="text-slate-500" style="font-size:12px"> / ${plannedMargin.toFixed(2)} USDT</span>
+              <span class="${entryColor}" style="font-size:12px"> ${entryPct.toFixed(0)}%</span>
             </div>
             ${addMarginBtnInQty}${addPositionBtn}${manualTpBtn}
           </div>`
         : `<div class="text-sm leading-tight">
             <span class="text-slate-500">- (미진입)</span><br>
-            <span class="text-slate-400" style="font-size:11px" title="${planTooltip}">자본 ${plannedMargin > 0 ? plannedMargin.toFixed(2)+' USDT' : '-'}</span>
+            <span class="text-slate-400" style="font-size:12px" title="${planTooltip}">자본 ${plannedMargin > 0 ? plannedMargin.toFixed(2)+' USDT' : '-'}</span>
             ${addPositionBtn ? '<br>'+addPositionBtn : ''}
           </div>`;
       // PnL/ROI — 4 줄 stack: PnL + 포지션 ROI + 전략 ROI + 🆕 SL 한도 시각 (2026-06-03)
@@ -453,15 +453,15 @@ async function refreshStrategies() {
         ? `SL 한도: -${slThreshold.toFixed(2)} USDT (투자금 ${sCap.toFixed(2)} × ${slPctNum}%, 레버리지 무관 — 사장님 사상 PR #57). 진행률 ${slProgressPct.toFixed(1)}% (남은 ${slRemainingUsd.toFixed(2)} USDT). 모든 단계 진입 후 발동.`
         : 'SL 정보 없음';
       const slDisplay = slThreshold > 0
-        ? `<br><span class="${slClass} text-xs" style="font-size:11px" title="${slTooltip}">${slIcon}SL ${slProgressPct.toFixed(0)}% (-${slThreshold.toFixed(0)} USDT)</span>`
+        ? `<br><span class="${slClass} text-xs" style="font-size:12px" title="${slTooltip}">${slIcon}SL ${slProgressPct.toFixed(0)}% (-${slThreshold.toFixed(0)} USDT)</span>`
         : '';
       // 2026-06-08 사장님 요구: PnL/ROI 메인 값 = 폰트 조금 크게 (text-xs → text-sm).
-      // 전략 ROI + SL = font-size:11px 유지 (보조 정보).
+      // 전략 ROI + SL = font-size:12px 유지 (보조 정보).
       const pnl = hasPosition
         ? `<div class="text-sm leading-tight">
             <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span><br>
             <span class="${positionRoi>0?'pos':positionRoi<0?'neg':'text-slate-400'}" title="${posTooltip}">${posSign}${positionRoi.toFixed(2)}%</span><br>
-            <span class="${strategyRoi>0?'pos':strategyRoi<0?'neg':'text-slate-500'}" style="font-size:11px; opacity:0.7" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slDisplay}
+            <span class="${strategyRoi>0?'pos':strategyRoi<0?'neg':'text-slate-500'}" style="font-size:12px; opacity:0.7" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slDisplay}
           </div>`
         : '<span class="text-slate-500">-</span>';
 
@@ -479,7 +479,7 @@ async function refreshStrategies() {
       // 2026-05-04 (사용자 피드백): 액션 버튼 컴팩트화 — 아이콘만 + nowrap + flex inline.
       const totalStagesForBtn = s.total_active_stages || 4;
       const canTriggerNext = !isTerminal && (s.current_stage || 0) < totalStagesForBtn;
-      const btnStyle = "padding:3px 6px;font-size:11px;white-space:nowrap;line-height:1.3";
+      const btnStyle = "padding:3px 6px;font-size:12px;white-space:nowrap;line-height:1.3";
       const triggerNextBtn = canTriggerNext
         ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="현재가에서 다음 단계 즉시 진입 (trigger_price 무시, 사전 계획된 자본 그대로)">▶</button>`
         : '';
@@ -571,7 +571,7 @@ async function refreshStrategies() {
                onclick="event.stopPropagation()"
                class="text-blue-300 hover:text-blue-100 hover:underline"
                title="🔗 ${s.symbol} — 바이낸스 선물 차트 새 탭 열기">${s.symbol}</a>${renderWhitelistBadge(s.symbol)}<br>
-            <span class="text-slate-500" style="font-size:11px" title="전략 생성 일시">${createdShort}</span>
+            <span class="text-slate-500" style="font-size:12px" title="전략 생성 일시">${createdShort}</span>
           </div>
         </td>
         <td>${sideBadge(s.side, s.leverage)}</td>
@@ -640,7 +640,7 @@ function openManualTPModal(strategyId, symbol, side, currentQty, avgEntry, lever
           💰 시장가 청산
         </button>
       </div>
-      <p style="color:#fca5a5; font-size:11px; margin-top:12px; text-align:center">
+      <p style="color:#fca5a5; font-size:12px; margin-top:12px; text-align:center">
         ⚠️ 시장가 즉시 체결 — 취소 불가. 신중히 진행.
       </p>
     </div>
