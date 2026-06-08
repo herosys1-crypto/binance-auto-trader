@@ -62,6 +62,26 @@ async function triggerNextStage(id) {
   }
 }
 
+// 🌟 2026-06-08 사장님 신 기능: 미진입 단계 trigger_price = 현재가 기준 재계산
+// 사장님 명시: "포지션 유지하고 다음단계 진입을 할수 있게 현재가 기준으로 10%더 상승하면 진입하게 해줘"
+async function recalcUntriggeredFromCurrent(id) {
+  if (!confirm(
+    `🔄 전략 #${id} 미진입 단계 진입가 재계산\n\n` +
+    `- 진입한 단계 = 영향 X (사장님 자본 보호)\n` +
+    `- 미진입 단계 trigger_price = 현재가 × 1.10, 1.21, 1.331, ...\n` +
+    `- SHORT: 가격 +10% 상승 시 진입 / LONG: -10% 하락 시 진입\n` +
+    `- trigger_percent = 10% 유지\n\n` +
+    `진행할까요?`
+  )) return;
+  try {
+    await api(`/strategies/${id}/recalc-untriggered-from-current`, { method: 'POST' });
+    toast(`✅ 미진입 단계 재계산 완료 (현재가 기준 +10% 누적)`, 'success');
+    refreshStrategies();
+  } catch (err) {
+    toast(`재계산 실패: ${err.message}`, 'error');
+  }
+}
+
 // 2026-05-21 Phase 2 (사장님 요구 — #77/#78 사례 후속):
 // MANUAL_CLEANUP_REQUIRED 상태에서 사장님이 거래소 UI 에서 직접 청산 완료 후
 // 「✅ 처리 완료」 클릭 → STOPPED 전환 (자동 STOPPED 차단된 상태였음).
