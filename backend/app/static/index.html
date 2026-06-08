@@ -144,6 +144,26 @@
   #create-modal input[type="text"], #create-modal input[type="number"] { padding-top: 0.3rem !important; padding-bottom: 0.3rem !important; }
   #create-modal .py-2 { padding-top: 0.3rem !important; padding-bottom: 0.3rem !important; }
   #create-modal h2 { line-height: 1.2; }
+
+  /* 🌟 2026-06-09 사장님 모바일 간략 페이지 (= ≤ 768px)
+     표시: 거래소 잔액, 미실현/실현, 전략 인스턴스, 새 전략 버튼만
+     숨김: 즐겨찾기 템플릿, 외부 포지션, 운영 통계 detail, 최근 활동, 시스템 상태 detail */
+  @media (max-width: 768px) {
+    /* 사장님 명시 = 「mobile-hide」 attribute = 자동 숨김 */
+    [data-mobile-hide="true"] { display: none !important; }
+    /* 전략 인스턴스 가로 스크롤 = 카드 바닥에 명확 표시 */
+    .strategies-table-wrap {
+      overflow-x: auto !important;
+      overflow-y: auto !important;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: auto;
+    }
+    .strategies-table-wrap::-webkit-scrollbar { height: 12px !important; background: #1e293b; }
+    .strategies-table-wrap::-webkit-scrollbar-thumb { background: #64748b !important; border-radius: 6px; }
+    .strategies-table-wrap::-webkit-scrollbar-track { background: #1e293b !important; }
+    /* 모바일 = 전략 인스턴스 폰트/패딩 = 더 작게 */
+    .strategies-table-wrap td, .strategies-table-wrap th { padding: 4px 6px !important; font-size: 11px !important; }
+  }
 </style>
 </head>
 <body class="min-h-screen">
@@ -220,9 +240,18 @@
   <!-- ============ Page: Dashboard (default) ============ -->
   <main id="page-dashboard">
 
+  <!-- 🌟 2026-06-09 사장님 모바일 floating 「+ 새 전략」 버튼 (PC 숨김) -->
+  <button
+    onclick="openCreateModal()"
+    class="md:hidden fixed bottom-4 right-4 z-40 btn-success rounded-full shadow-lg"
+    style="width:64px;height:64px;font-size:24px;background:#16a34a;color:white;border:2px solid #166534"
+    title="새 전략 시작">
+    ➕
+  </button>
+
   <!-- 5-card metrics — 모바일 2단 / 데스크톱 5단. 거래소 잔액 카드 추가 (2026-05-03) -->
   <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-2">
-    <div id="card-system" class="card rounded-lg p-2 signal-gray" onclick="scrollToSection('section-syshealth')" title="클릭하면 시스템 상태로 이동">
+    <div id="card-system" class="card rounded-lg p-2 signal-gray" onclick="scrollToSection('section-syshealth')" title="클릭하면 시스템 상태로 이동" data-mobile-hide="true">
       <p class="text-xs text-slate-400">시스템 상태 ▾</p>
       <p id="metric-system" class="text-base sm:text-lg font-bold leading-tight">-</p>
       <p id="metric-system-detail" class="text-xs text-slate-500">-</p>
@@ -242,7 +271,7 @@
       <p id="metric-pnl" class="text-base sm:text-lg font-bold leading-tight">-</p>
       <p id="metric-pnl-detail" class="text-xs text-slate-500">실시간 (클릭: 실적)</p>
     </div>
-    <div id="card-templates" class="card rounded-lg p-2 signal-gray" onclick="scrollToSection('section-templates')" title="클릭하면 전략 템플릿으로 이동">
+    <div id="card-templates" class="card rounded-lg p-2 signal-gray" onclick="scrollToSection('section-templates')" title="클릭하면 전략 템플릿으로 이동" data-mobile-hide="true">
       <p class="text-xs text-slate-400">전략 템플릿 ▾</p>
       <p id="metric-templates" class="text-base sm:text-lg font-bold leading-tight">-</p>
       <p id="metric-templates-detail" class="text-xs text-slate-500">-</p>
@@ -253,8 +282,8 @@
   <!-- 비율 1:3 (좌측 좁게, 전략인스턴스 넓게) -->
   <div class="grid grid-cols-1 md:grid-cols-4 gap-2 mb-2">
     <!-- LEFT 컬럼 (25%) — 3 패널 stacked. h-full + 시스템상태 flex-grow 로 우측 전략인스턴스 높이에 정확히 매치 -->
-    <div class="md:col-span-1 flex flex-col gap-2 h-full">
-      <!-- 시스템 상태 — flex-1 로 빈 공간 자동 채움 -->
+    <div class="md:col-span-1 flex flex-col gap-2 h-full" data-mobile-hide="true">
+      <!-- 시스템 상태 — flex-1 로 빈 공간 자동 채움 (모바일 숨김) -->
       <div id="section-syshealth" class="card rounded-lg flex-1 flex flex-col">
         <div class="card-header text-xs flex justify-between items-center" style="padding:8px 12px">
           <span>⚙️ 시스템 상태</span>
@@ -390,8 +419,8 @@
     </div>
   </div>
 
-  <!-- ⭐ 즐겨찾기 템플릿 — 2026-06-09 사장님 요구 (= 1 클릭 신 전략) -->
-  <div class="card rounded-xl p-4 mb-3">
+  <!-- ⭐ 즐겨찾기 템플릿 — 2026-06-09 사장님 요구 (= 1 클릭 신 전략) [모바일 숨김] -->
+  <div class="card rounded-xl p-4 mb-3" data-mobile-hide="true">
     <div class="flex justify-between items-center mb-2 flex-wrap gap-2">
       <h3 class="text-sm sm:text-base font-bold">⭐ 즐겨찾기 템플릿
         <span class="text-xs font-normal text-slate-400" title="사장님 자주 쓰는 템플릿 (최대 5개). 카드 클릭 = 1 클릭 신 전략 시작 (시작가 = 현재가 자동).">(1 클릭 신 전략 — 최대 5개)</span>
@@ -406,8 +435,8 @@
     </div>
   </div>
 
-  <!-- 📊 외부 포지션 (도구 밖 수동 진입) — 2026-05-21 사장님 요구 -->
-  <div class="card rounded-xl p-4 mb-3">
+  <!-- 📊 외부 포지션 (도구 밖 수동 진입) — 2026-05-21 사장님 요구 [모바일 숨김] -->
+  <div class="card rounded-xl p-4 mb-3" data-mobile-hide="true">
     <div class="flex justify-between items-center mb-2 flex-wrap gap-2">
       <h3 class="text-sm sm:text-base font-bold">📊 외부 포지션
         <span class="text-xs font-normal text-slate-400" title="도구가 추적하지 않는 거래소 포지션 — 사장님이 거래소에서 직접 진입한 경우. 자동 청산/관리 X.">(도구 밖 수동 진입 — 자동 관리 X)</span>
@@ -1035,8 +1064,8 @@
     </div>
   </div>
 
-  <!-- 최근 활동 피드 — 전체폭 (전략 인스턴스는 상단 우측으로 이동됨) -->
-  <div class="card rounded-lg mb-2">
+  <!-- 최근 활동 피드 — 전체폭 (전략 인스턴스는 상단 우측으로 이동됨) [모바일 숨김] -->
+  <div class="card rounded-lg mb-2" data-mobile-hide="true">
     <div class="card-header text-xs flex justify-between items-center flex-wrap gap-2" style="padding:8px 12px">
       <span>📡 최근 활동 <span id="activity-count-label" class="text-slate-400">(최신순 20건)</span></span>
       <div class="flex items-center gap-2 flex-wrap">
