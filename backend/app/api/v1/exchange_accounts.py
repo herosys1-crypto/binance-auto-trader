@@ -419,9 +419,45 @@ def get_balance(
         prev = binance_margin_by_symbol.get(sym_upper, Decimal("0"))
         binance_margin_by_symbol[sym_upper] = prev + actual_margin
 
+    # 🚨 2026-06-08 사장님 critical 발견 silent bug fix (Pattern 4 — Asymmetric):
+    # 사장님 BEATUSDT 4/6 진입 (= 5/6 단계 미진입, 자본 2,500 USDT 예약 필요)
+    # 표시 = 「포지션 예약됨 0」 ← silent bug!
+    #
+    # 원인 (PR #84 자동 동기화 영향):
+    # 1. 사장님 「💉 포지션 추가」 → isolated_margin > total_capital
+    # 2. reconcile_worker (PR #84) = total_capital 자동 갱신 (= isolated_margin)
+    # 3. = total_capital 이 "전체 단계 합" 의미 잃음 → "Binance 실 lock" 와 동일
+    # 4. = max(planned, actual) = 동일 값 → 미진입 단계 예약 누락!
+    #
+    # Fix: template 의 stages_config.capitals 합 = "사장님 모든 단계 자본 합" 정확 사용
+    # = PR #84 영향 없는 = 변하지 않는 사장님 의도 (= template 자체)
+    # = 사장님 「↻ 설정만 수정」 으로만 변경 가능 (= 자동 동기화 영향 X)
+    from app.models.strategy_template import StrategyTemplate
+    template_ids = {s.strategy_template_id for s in active_strategies if s.strategy_template_id}
+    templates_map = (
+        {t.id: t for t in db.query(StrategyTemplate).filter(StrategyTemplate.id.in_(template_ids)).all()}
+        if template_ids else {}
+    )
+
     def _reserved_one(s) -> Decimal:
-        planned = s.total_capital or Decimal("0")
         actual = binance_margin_by_symbol.get((s.symbol or "").upper(), Decimal("0"))
+        # 🌟 신: template stages_config.capitals 합 (= 모든 단계 자본 합)
+        tpl = templates_map.get(s.strategy_template_id)
+        stages_sum = Decimal("0")
+        if tpl and tpl.stages_config:
+            capitals = tpl.stages_config.get("capitals") or []
+            for c in capitals:
+                if c is None:
+                    continue
+                try:
+                    stages_sum += Decimal(str(c))
+                except Exception:
+                    continue
+        # max(모든 단계 자본 합, Binance 실 lock) — 사장님 자본 보호 사상
+        if stages_sum > 0:
+            return max(stages_sum, actual)
+        # fallback (legacy: stages_config 없음 시)
+        planned = s.total_capital or Decimal("0")
         return max(planned, actual)
 
     reserved_for_strategies = sum(
