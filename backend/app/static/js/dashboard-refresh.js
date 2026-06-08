@@ -340,11 +340,19 @@ async function loadBalance() {
     else if (newStrategyRatio < 80) newSig = 'green';
     else if (newStrategyRatio < 95) newSig = 'yellow';
     else newSig = 'red';
-    const detailMain =
-      `🔒 실 ${fmt(actualMarginSum)} + 📦 예약 ${fmt(reservedRemainingSum)} = 사용 ${fmt(usedTotal)} | ` +
-      `💵 실 여유 ${fmt(realFreedom)}\n` +
-      `⚡ 130% 한도 ${fmt(wallet130Sum)} | 신 전략 가용 +${fmt(newStratAvailSum)} (${newStrategyRatio.toFixed(1)}%)` +
-      `${hasTestnet ? ' · testnet 포함' : ''}`;
+    // 🌟 2026-06-09 모바일 v2: 모바일 = 줄바꿈 정리 + 핵심만, 데스크탑 = 풀 detail
+    const isMobile = window.innerWidth <= 768;
+    const detailMain = isMobile
+      ? // 모바일 = 3줄 깔끔 (각 줄 한 가지 정보)
+        `🔒 실 ${fmt(actualMarginSum)}  📦 예약 ${fmt(reservedRemainingSum)}\n` +
+        `💵 여유 ${fmt(realFreedom)}  ⚡ 130% ${fmt(wallet130Sum)}\n` +
+        `🆕 신 전략 +${fmt(newStratAvailSum)} (${newStrategyRatio.toFixed(0)}%)` +
+        `${hasTestnet ? ' · testnet' : ''}`
+      : // 데스크탑 = 기존 풀 detail (사장님 한눈 파악)
+        `🔒 실 ${fmt(actualMarginSum)} + 📦 예약 ${fmt(reservedRemainingSum)} = 사용 ${fmt(usedTotal)} | ` +
+        `💵 실 여유 ${fmt(realFreedom)}\n` +
+        `⚡ 130% 한도 ${fmt(wallet130Sum)} | 신 전략 가용 +${fmt(newStratAvailSum)} (${newStrategyRatio.toFixed(1)}%)` +
+        `${hasTestnet ? ' · testnet 포함' : ''}`;
     const accountInfo = valid.length > 1 ? ` · ${valid.length}계정 합산` : '';
     setMetric(
       'balance',
