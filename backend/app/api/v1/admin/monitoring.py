@@ -917,3 +917,243 @@ def diagnose_reserved(
             "source_used 확인 + 해당 source 의 값 점검."
         ),
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🔍 사장님 거래내역 분석 endpoint v2 (2026-06-08)
+#
+# 사장님 명시: "전략 #39와 #36의 포지션 추가와 단계별수정 등등을 거래내역을
+#              먼저 분석해서 기획을 해줘 오늘 거래도 같이 분석해서"
+#
+# 데이터 통합:
+#   - Orders (= 신규 + 청산 주문 + 시간순)
+#   - RiskEvents (= 자동 TP/SL/manual_tp/crisis/edit/포지션추가)
+#   - Notifications (= 사장님 알림)
+#   - StrategyStagePlan (= 단계별 진입 결과)
+#
+# 사용:
+#   https://VPS_IP/api/v1/admin/diagnostic/strategy-history/39   ← BEATUSDT
+#   https://VPS_IP/api/v1/admin/diagnostic/strategy-history/36   ← VELVET
+#   https://VPS_IP/api/v1/admin/diagnostic/today-trades          ← 오늘 모든 거래
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/diagnostic/strategy-history/{strategy_id}")
+def diagnose_strategy_history(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """전략별 거래내역 전체 분석 (Orders + RiskEvents + Notifications + StagePlans).
+
+    사장님 「수정 모드」 spec 기획 = 실 거래 데이터 기반 정확 분석용.
+    """
+    from sqlalchemy import select
+    from app.models.strategy_instance import StrategyInstance
+    from app.models.strategy_stage_plan import StrategyStagePlan
+    from app.models.order import Order
+    from app.models.risk_event import RiskEvent
+    from app.models.notification import Notification
+
+    s = db.get(StrategyInstance, strategy_id)
+    if not s or s.user_id != user_id:
+        raise HTTPException(404, f"Strategy {strategy_id} not found or not yours")
+
+    # Orders 전체 (= 시간순)
+    orders = db.execute(
+        select(Order)
+        .where(Order.strategy_instance_id == strategy_id)
+        .order_by(Order.created_at.asc())
+    ).scalars().all()
+
+    # RiskEvents (= 시간순)
+    events = db.execute(
+        select(RiskEvent)
+        .where(RiskEvent.strategy_instance_id == strategy_id)
+        .order_by(RiskEvent.created_at.asc())
+    ).scalars().all()
+
+    # Notifications (= 시간순, 최근 50건)
+    notifs = db.execute(
+        select(Notification)
+        .where(Notification.strategy_instance_id == strategy_id)
+        .order_by(Notification.created_at.desc())
+        .limit(50)
+    ).scalars().all()
+
+    # StagePlans
+    plans = db.execute(
+        select(StrategyStagePlan)
+        .where(StrategyStagePlan.strategy_instance_id == strategy_id)
+        .order_by(StrategyStagePlan.stage_no.asc())
+    ).scalars().all()
+
+    return {
+        "strategy": {
+            "id": s.id,
+            "symbol": s.symbol,
+            "side": s.side,
+            "leverage": s.leverage,
+            "status": s.status,
+            "current_stage": s.current_stage,
+            "start_price": str(s.start_price) if s.start_price else None,
+            "avg_entry_price": str(s.avg_entry_price) if s.avg_entry_price else None,
+            "current_position_qty": str(s.current_position_qty) if s.current_position_qty else None,
+            "total_capital": str(s.total_capital) if s.total_capital else None,
+            "invested_capital": str(s.invested_capital) if s.invested_capital else None,
+            "realized_pnl": str(s.realized_pnl) if s.realized_pnl else None,
+            "max_loss_pct": str(s.max_loss_pct) if s.max_loss_pct else None,
+            "max_profit_pct": str(s.max_profit_pct) if s.max_profit_pct else None,
+            "crisis_mode_triggered_at": s.crisis_mode_triggered_at.isoformat() if s.crisis_mode_triggered_at else None,
+            "tp1_pct_override": str(s.tp1_pct_override) if s.tp1_pct_override else None,
+            "trailing_retrace_pct": str(s.trailing_retrace_pct) if s.trailing_retrace_pct else None,
+            "started_at": s.started_at.isoformat() if s.started_at else None,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+        },
+        "stage_plans": [
+            {
+                "stage_no": p.stage_no,
+                "trigger_mode": p.trigger_mode,
+                "trigger_percent": str(p.trigger_percent) if p.trigger_percent else None,
+                "trigger_price": str(p.trigger_price) if p.trigger_price else None,
+                "planned_capital": str(p.planned_capital) if p.planned_capital else None,
+                "planned_qty": str(p.planned_qty) if p.planned_qty else None,
+                "additional_margin_usdt": str(p.additional_margin_usdt) if p.additional_margin_usdt else None,
+                "is_enabled": p.is_enabled,
+                "is_triggered": p.is_triggered,
+                "triggered_at": p.triggered_at.isoformat() if p.triggered_at else None,
+            }
+            for p in plans
+        ],
+        "orders_count": len(orders),
+        "orders": [
+            {
+                "id": o.id,
+                "stage_no": o.stage_no,
+                "purpose": o.purpose,
+                "side": o.side,
+                "order_type": o.order_type,
+                "client_order_id": o.client_order_id,
+                "exchange_order_id": str(o.exchange_order_id) if o.exchange_order_id else None,
+                "trigger_price": str(o.trigger_price) if o.trigger_price else None,
+                "price": str(o.price) if o.price else None,
+                "orig_qty": str(o.orig_qty) if o.orig_qty else None,
+                "executed_qty": str(o.executed_qty) if o.executed_qty else None,
+                "avg_price": str(o.avg_price) if o.avg_price else None,
+                "status": o.status,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+                "updated_at": o.updated_at.isoformat() if o.updated_at else None,
+            }
+            for o in orders
+        ],
+        "risk_events_count": len(events),
+        "risk_events": [
+            {
+                "id": e.id,
+                "event_type": e.event_type,
+                "severity": e.severity,
+                "title": e.title,
+                "message": e.message,
+                "event_payload": e.event_payload,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in events
+        ],
+        "notifications_count": len(notifs),
+        "notifications": [
+            {
+                "id": n.id,
+                "title": n.title if hasattr(n, "title") else None,
+                "message": n.message if hasattr(n, "message") else None,
+                "created_at": n.created_at.isoformat() if hasattr(n, "created_at") and n.created_at else None,
+            }
+            for n in notifs
+        ],
+        "note": (
+            "사장님 「수정 모드」 spec 기획용 전체 거래내역. "
+            "Orders + RiskEvents + Notifications + StagePlans 시간순. "
+            "사장님 = JSON 결과 보내주시면 = 분석 후 spec 정확 기획."
+        ),
+    }
+
+
+@router.get("/diagnostic/today-trades")
+def diagnose_today_trades(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """오늘 모든 거래 분석 (Orders + RiskEvents, UTC 자정 기준)."""
+    from datetime import datetime, timezone, timedelta
+    from sqlalchemy import select
+    from app.models.strategy_instance import StrategyInstance
+    from app.models.order import Order
+    from app.models.risk_event import RiskEvent
+
+    # 오늘 자정 KST = UTC -9h
+    now = datetime.now(timezone.utc)
+    today_kst_midnight = (now + timedelta(hours=9)).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_utc_start = today_kst_midnight - timedelta(hours=9)
+
+    # 사장님 strategy 만
+    user_strategy_ids = [
+        s.id for s in db.execute(
+            select(StrategyInstance).where(StrategyInstance.user_id == user_id)
+        ).scalars().all()
+    ]
+
+    # 오늘 Orders
+    orders = db.execute(
+        select(Order)
+        .where(Order.strategy_instance_id.in_(user_strategy_ids))
+        .where(Order.created_at >= today_utc_start)
+        .order_by(Order.created_at.asc())
+    ).scalars().all() if user_strategy_ids else []
+
+    # 오늘 RiskEvents
+    events = db.execute(
+        select(RiskEvent)
+        .where(RiskEvent.strategy_instance_id.in_(user_strategy_ids))
+        .where(RiskEvent.created_at >= today_utc_start)
+        .order_by(RiskEvent.created_at.asc())
+    ).scalars().all() if user_strategy_ids else []
+
+    return {
+        "today_kst_midnight_utc": today_utc_start.isoformat(),
+        "user_strategy_ids": user_strategy_ids,
+        "orders_count": len(orders),
+        "orders": [
+            {
+                "id": o.id,
+                "strategy_id": o.strategy_instance_id,
+                "symbol": o.symbol,
+                "stage_no": o.stage_no,
+                "purpose": o.purpose,
+                "side": o.side,
+                "order_type": o.order_type,
+                "trigger_price": str(o.trigger_price) if o.trigger_price else None,
+                "price": str(o.price) if o.price else None,
+                "orig_qty": str(o.orig_qty) if o.orig_qty else None,
+                "executed_qty": str(o.executed_qty) if o.executed_qty else None,
+                "avg_price": str(o.avg_price) if o.avg_price else None,
+                "status": o.status,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+            }
+            for o in orders
+        ],
+        "risk_events_count": len(events),
+        "risk_events": [
+            {
+                "id": e.id,
+                "strategy_id": e.strategy_instance_id,
+                "event_type": e.event_type,
+                "severity": e.severity,
+                "title": e.title,
+                "message": e.message,
+                "event_payload": e.event_payload,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in events
+        ],
+        "note": "오늘 KST 자정 기준 사장님 모든 거래 + risk events. spec 기획 분석용.",
+    }
