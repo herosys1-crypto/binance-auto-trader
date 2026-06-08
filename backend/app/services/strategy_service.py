@@ -372,15 +372,23 @@ class StrategyService:
         new_capital_notional = D(str(template_model.total_capital or 0))
         new_margin = (new_capital_notional / D(str(effective_lev or 1))).quantize(D("0.01"))
         projected_capital_total = (existing_capital_reserved + new_margin).quantize(D("0.01"))
-        if total_wallet > 0 and projected_capital_total > total_wallet:
+        # 🌟 2026-06-09 사장님 신 정책: 130% 한도 (= wallet × 1.30)
+        # 사장님 명시: "wallet 130% 까지 = 신 전략 세팅 가능. 부족한 30% = 사장님 책임."
+        # 예: wallet 5925 × 1.30 = 7702.5 USDT 마진 한도
+        # 모든 strategy 진입 완료 시 = 자본 부족 = 사장님 = 「💉 포지션 추가」 차단 또는 = 다른 strategy 청산
+        wallet_limit_130 = (total_wallet * D("1.30")).quantize(D("0.01"))
+        if total_wallet > 0 and projected_capital_total > wallet_limit_130:
             raise ValueError(
-                f"💰 전체 마진 예약 초과 — 사장님 안전 사상 (지갑 마진 기준).\n\n"
+                f"💰 마진 예약 130% 초과 — 사장님 안전 사상.\n\n"
                 f"📌 계산 (마진 = 사장님 자금 = 자본 / 레버리지):\n"
                 f"  • 기존 활성 전략 {len(_active_rows)}개 마진 합 = {existing_capital_reserved:.2f} USDT\n"
                 f"  • + 신규 전략 마진 = {new_margin:.2f} USDT (자본 {new_capital_notional:.2f} / {effective_lev}x)\n"
-                f"  • = 총 마진 {projected_capital_total:.2f} USDT  >  지갑 잔액 {total_wallet:.2f} USDT\n\n"
-                f"📖 의미: 사장님 핵심 원칙 — 모든 strategy 의 실제 마진 (= 자본/레버리지) 합이 wallet 초과 X.\n"
-                f"   레버리지 적용 = 자본 입력 = 거래 규모, 마진 = 사장님 자금 (= 자본/lev).\n\n"
+                f"  • = 총 마진 {projected_capital_total:.2f} USDT  >  130% 한도 {wallet_limit_130:.2f} USDT\n"
+                f"     (지갑 잔액 {total_wallet:.2f} × 1.30 = 130% 마진 한도)\n\n"
+                f"📖 의미: 사장님 신 정책 (2026-06-09):\n"
+                f"  • 전체 마진 합 ≤ wallet × 130% = 신 전략 세팅 가능\n"
+                f"  • 부족한 30% = 모든 strategy 진입 완료 시 = 「💉 포지션 추가」/증거금 자동 차단\n"
+                f"  • = 사장님 자율 + 신축적 운영 (= 옛 100% 보다 30% 더 자유)\n\n"
                 "💡 해결 (택1):\n"
                 "  • 활성 전략 일부 정리 (포지션 청산) — 예약 마진 회수\n"
                 "  • 거래소 USDT 입금\n"
