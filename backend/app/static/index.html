@@ -127,6 +127,14 @@
 
   /* 가로 스크롤 테이블 — 모바일에서 끝이 보이도록 그림자 */
   .overflow-auto { -webkit-overflow-scrolling: touch; }
+
+  /* 2026-06-08 사장님 fix v2 — 「전략 인스턴스」 테이블 가로 스크롤바
+     PC (= > 768px) = 가로 스크롤 X (= 깔끔, PR #144) */
+  .strategies-table-wrap { overflow-x: hidden; }
+  /* 모바일 (= ≤ 768px) = 가로 스크롤 O (= 사장님 시각, 컬럼 안 잘림) */
+  @media (max-width: 768px) {
+    .strategies-table-wrap { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
+  }
 </style>
 </head>
 <body class="min-h-screen">
@@ -349,10 +357,10 @@
           </label>
         </div>
       </div>
-      <!-- 2026-06-08 사장님 fix: 「Binance 비교」 행이 화면 너비 초과 시 = 가로 스크롤바 노출
-           = 사장님 시각 침해. overflow-x:hidden 로 가로 스크롤바 자체 제거.
-           세로 스크롤은 그대로 유지 (max-height 560px). -->
-      <div class="overflow-y-auto" style="max-height:560px;overflow-x:hidden">
+      <!-- 2026-06-08 사장님 fix v2: 가로 스크롤바
+           PC (= 큰 화면, > 768px) = overflow-x: hidden (= 깔끔, 옛 PR #144)
+           모바일 (= 작은 화면, ≤ 768px) = overflow-x: auto (= 사장님 모바일 시각) -->
+      <div class="strategies-table-wrap overflow-y-auto" style="max-height:560px">
         <table class="min-w-max">
           <thead>
             <tr>
