@@ -174,6 +174,137 @@ def add_position_to_strategy(
     )
 
 
+# 🌟 2026-06-09 사장님 신 기능: 「💉 포지션 추가 + 단계 진행」 통합
+# spec: ADD_POSITION_WITH_STAGE_SPEC_2026-06-09.md
+class AddPositionWithStageRequest(BaseModel):
+    amount_usdt: Decimal = Field(..., gt=0, description="추가할 자본 (USDT, margin)")
+    order_type: str = Field(..., description="MARKET 또는 LIMIT")
+    limit_price: Decimal | None = Field(None, gt=0, description="LIMIT 시 지정가")
+
+
+@router.post("/{strategy_id}/add-position-with-stage", response_model=StrategyActionResponse)
+def add_position_with_stage(
+    strategy_id: int,
+    payload: AddPositionWithStageRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyActionResponse:
+    """💉 포지션 추가 + 단계 진행 통합 (= 사장님 TP3 빠른 활성화).
+
+    사장님 사상 (2026-06-09):
+    - 「💉 포지션 추가」 (= 마진 추가 + 단계 진행 동시!)
+    - current_stage += 1 (= 신 단계 번호)
+    - 신 stage_plan 추가 (= triggered=True, 사장님 입력 자본)
+    - 효과: TP3 조건 (stage >= 3) 빠른 만족 = trailing armed 빠른 자본 보호!
+    """
+    import logging
+    from decimal import Decimal
+    from datetime import datetime, timezone
+    from app.models.strategy_stage_plan import StrategyStagePlan
+    from app.models.risk_event import RiskEvent
+    logger = logging.getLogger(__name__)
+
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
+    if strategy.status in TERMINAL_STATUSES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"⚠️ 종료된 strategy ({strategy.status}) 는 단계 진행 X.")
+
+    # stage 10 상한 검증
+    new_stage_no = (strategy.current_stage or 0) + 1
+    if new_stage_no > 10:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"⚠️ stage 10 상한 초과 (current={strategy.current_stage}) — 단계 진행 X")
+
+    account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
+    if not account:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="⚠️ 거래소 계정 없음.")
+
+    # Step 1: 「💉 포지션 추가」 (= 기존 add-position 패턴)
+    try:
+        execution_service = ExecutionService(
+            db,
+            api_key=decrypt_text(account.api_key_enc),
+            api_secret=decrypt_text(account.api_secret_enc),
+            is_testnet=account.is_testnet,
+        )
+        order = execution_service.add_position_now(
+            strategy.id,
+            amount_usdt=payload.amount_usdt,
+            order_type=payload.order_type,
+            limit_price=payload.limit_price,
+        )
+    except PreflightCheckFailed as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Exchange error: {e}") from e
+
+    # Step 2: total_capital 자동 갱신 (= 기존 add-position 동일)
+    prev_capital = Decimal(str(strategy.total_capital or 0))
+    strategy.total_capital = prev_capital + payload.amount_usdt
+
+    # Step 3: 🌟 신 stage_plan 추가 + current_stage += 1
+    entry_price = (
+        Decimal(str(payload.limit_price)) if payload.limit_price
+        else Decimal(str(order.avg_price or order.price or 0))
+    )
+    trigger_mode = "IMMEDIATE"  # 사장님 수동 = 즉시 진입
+    new_plan = StrategyStagePlan(
+        strategy_instance_id=strategy.id,
+        stage_no=new_stage_no,
+        side=strategy.side,
+        trigger_mode=trigger_mode,
+        trigger_percent=None,
+        trigger_price=entry_price,
+        planned_capital=payload.amount_usdt,
+        is_enabled=True,
+        is_triggered=True,
+        triggered_at=datetime.now(timezone.utc),
+    )
+    db.add(new_plan)
+    strategy.current_stage = new_stage_no
+
+    # Step 4: Audit log
+    db.add(RiskEvent(
+        strategy_instance_id=strategy.id,
+        event_type="STAGE_ADVANCED_MANUAL",
+        severity="INFO",
+        title=f"💉➕ 포지션 추가 + 단계 진행 — {strategy.symbol} {strategy.side}",
+        message=(
+            f"사장님 「💉 포지션 추가 + 단계 진행」 실행. "
+            f"amount={payload.amount_usdt} USDT, type={payload.order_type}, "
+            f"current_stage={strategy.current_stage - 1} → {new_stage_no}. "
+            f"TP3 조건 (stage>=3) {'✅ 만족' if new_stage_no >= 3 else '⏳ 대기'}. "
+            f"Trailing armed 가속 = 사장님 자본 보호 강화."
+        ),
+        event_payload={
+            "amount_usdt": str(payload.amount_usdt),
+            "order_type": payload.order_type,
+            "limit_price": str(payload.limit_price) if payload.limit_price else None,
+            "old_stage": strategy.current_stage - 1,
+            "new_stage": new_stage_no,
+            "trailing_armed_eligible": new_stage_no >= 3,
+        },
+    ))
+    db.commit()
+    db.refresh(strategy)
+    logger.info(
+        "[add-position-with-stage] strategy_id=%s amount=%s new_stage=%s order_id=%s",
+        strategy_id, payload.amount_usdt, new_stage_no, order.id if order else None,
+    )
+
+    return StrategyActionResponse(
+        strategy_id=strategy.id,
+        status=strategy.status,
+        message=(
+            f"💉➕ 포지션 추가 + 단계 진행 완료. "
+            f"amount={payload.amount_usdt} USDT, current_stage={new_stage_no}. "
+            f"{'TP3 조건 ✅ 만족 = Trailing armed 가능!' if new_stage_no >= 3 else f'TP3 까지 {3 - new_stage_no} 단계 더!'}"
+        ),
+    )
+
+
 class ManualTPRequest(BaseModel):
     percent: Decimal = Field(
         ..., gt=0, le=100,

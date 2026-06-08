@@ -86,8 +86,10 @@ from app.api.v1.strategies.control import (  # noqa: E402, F401
 from app.api.v1.strategies.lifecycle import (  # noqa: E402, F401
     AddMarginRequest,
     AddPositionRequest,
+    AddPositionWithStageRequest,
     add_margin_to_strategy,
     add_position_to_strategy,
+    add_position_with_stage,
     delete_strategy,
     force_stop_strategy,
     restore_strategy,

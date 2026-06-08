@@ -605,12 +605,21 @@
         <div class="text-xs text-slate-400 mb-1">미리보기</div>
         <div id="ap-preview" class="text-sm text-slate-300">— 금액과 가격 입력 시 미리보기 표시 —</div>
       </div>
+      <!-- 🌟 2026-06-09 사장님 신 기능: 단계 진행 통합 옵션 -->
+      <div class="mb-3 p-2 rounded bg-blue-900/30 border border-blue-700">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" id="ap-advance-stage" />
+          <span class="text-xs">📈 <b>단계 진행 적용</b> (= current_stage +1, TP3 빠른 활성화)
+            <span class="text-slate-400 ml-1" title="신 stage_plan 추가 + stage >= 3 도달 시 = Trailing armed 가능 = 사장님 자본 보호 강화. 사장님 자율 (= 체크 시만).">ℹ️</span>
+          </span>
+        </label>
+      </div>
       <div class="flex gap-2 justify-end">
         <button onclick="closeAddPositionModal()" class="btn btn-ghost">취소</button>
         <button id="ap-submit" onclick="submitAddPosition()" class="btn btn-primary">💉 진입</button>
       </div>
       <p class="text-xs text-slate-500 mt-3">
-        ⚠️ ad-hoc 진입 — 단계별 stage_plan 과 무관. 체결 시 평단/qty 자동 갱신됨.
+        ⚠️ ad-hoc 진입 — 체결 시 평단/qty 자동 갱신. 「단계 진행」 체크 시 = current_stage +1.
       </p>
     </div>
   </div>

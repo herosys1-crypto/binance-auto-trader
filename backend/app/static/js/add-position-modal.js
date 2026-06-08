@@ -94,12 +94,20 @@ async function submitAddPosition() {
     order_type: isLimit ? 'LIMIT' : 'MARKET',
   };
   if (isLimit) body.limit_price = limitPrice;
+  // 🌟 2026-06-09 사장님 신 기능: 단계 진행 옵션 (= TP3 빠른 활성화)
+  // 체크 = /add-position-with-stage (= current_stage +1 + stage_plan 추가)
+  // 미체크 = /add-position (= 옛 그대로, 마진만 추가)
+  const advanceStage = document.getElementById('ap-advance-stage')?.checked || false;
+  const endpoint = advanceStage
+    ? `/strategies/${id}/add-position-with-stage`
+    : `/strategies/${id}/add-position`;
   try {
     const btn = document.getElementById('ap-submit');
     btn.disabled = true;
     btn.textContent = '발송 중...';
-    const resp = await api(`/strategies/${id}/add-position`, { method: 'POST', body });
-    toast(`✅ ${resp.message || '포지션 추가 주문 발송됨'}`, 'success');
+    const resp = await api(endpoint, { method: 'POST', body });
+    const stageNote = advanceStage ? ' 📈 단계 진행 적용!' : '';
+    toast(`✅ ${resp.message || '포지션 추가 주문 발송됨'}${stageNote}`, 'success');
     closeAddPositionModal();
     refreshStrategies();
   } catch (err) {
