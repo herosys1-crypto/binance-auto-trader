@@ -317,16 +317,17 @@ class StrategyService:
             .where(StrategyInstance.status.notin_(_CLOSED_STATUSES))
             .where(StrategyInstance.is_archived.is_(False))
         ).all()
-        # 🚨 2026-06-09 사장님 critical silent bug fix:
-        # 옛: _st.total_capital 사용 = template.total_capital (= 사장님 입력 합과 불일치 가능)
-        # = 사장님 VELVETUSDT 사례: template.total_capital=7010 vs stages_config 합=2420 = 차이!
-        # = 신 전략 차단 silent bug
+        # 🚨 2026-06-09 사장님 critical silent bug fix v2:
+        # 사장님 명시: "1000 입력 = 마진 500 = 사장님 자금. wallet 와 비교 = 마진 단위!"
+        # = wallet validation = 자본 합 (notional) X = 마진 합 (= 자본 / leverage)
         #
-        # 사장님 사상 정확 fix (= 「예약」 카드 fix v5 와 일관):
-        # 1순위: strategy_stage_plans.planned_capital 합 (= 사장님 본인 strategy 영구 데이터)
-        # 2순위: template.stages_config.capitals 합
-        # 3순위: total_capital (= legacy fallback)
-        existing_capital_reserved = D("0")
+        # 옛 v1 (잘못): existing_capital_reserved = stage_plans 합 (notional)
+        # = 자본 3000 vs wallet 5500 = 단위 불일치 silent bug
+        #
+        # 신 v2 (정확): existing_margin_reserved = (stage_plans / leverage) 합 (margin)
+        # = 마진 1500 + 신 마진 300 = 1800 vs wallet 5500 = 통과! ✅
+        # = 사장님 자본 보호 = wallet 단위 일관성
+        existing_margin_reserved = D("0")
         # stage_plans 일괄 조회 (= N+1 회피)
         _strategy_ids = [_si.id for _si, _ in _active_rows]
         _plans_sum_by_strategy: dict[int, D] = {}
@@ -343,44 +344,45 @@ class StrategyService:
                 )
         for _si, _st in _active_rows:
             # 1순위: stage_plans 합 (= 사장님 본인 데이터, 영구)
-            _ps = _plans_sum_by_strategy.get(_si.id, D("0"))
-            if _ps > 0:
-                existing_capital_reserved += _ps
-                continue
-            # 2순위: template.stages_config.capitals 합
-            _stages_sum = D("0")
-            if _st.stages_config and isinstance(_st.stages_config, dict):
-                _capitals = _st.stages_config.get("capitals") or []
-                for _c in _capitals:
-                    if _c is None:
-                        continue
-                    try:
-                        _stages_sum += D(str(_c))
-                    except Exception:
-                        continue
-            if _stages_sum > 0:
-                existing_capital_reserved += _stages_sum
-                continue
-            # 3순위: total_capital (= legacy)
-            existing_capital_reserved += D(str(_st.total_capital or 0))
-        existing_capital_reserved = existing_capital_reserved.quantize(D("0.01"))
+            _capital = _plans_sum_by_strategy.get(_si.id, D("0"))
+            if _capital <= 0:
+                # 2순위: template.stages_config.capitals 합
+                if _st.stages_config and isinstance(_st.stages_config, dict):
+                    _capitals = _st.stages_config.get("capitals") or []
+                    for _c in _capitals:
+                        if _c is None:
+                            continue
+                        try:
+                            _capital += D(str(_c))
+                        except Exception:
+                            continue
+            if _capital <= 0:
+                # 3순위: total_capital (= legacy)
+                _capital = D(str(_st.total_capital or 0))
+            # 🌟 마진 단위 변환 (= 사장님 사상: wallet 와 같은 단위)
+            _lev = D(str(_st.leverage or _si.leverage or 1))
+            _margin = _capital / _lev if _lev > 0 else _capital
+            existing_margin_reserved += _margin
+        existing_capital_reserved = existing_margin_reserved.quantize(D("0.01"))
         total_wallet = D(str(
             acct.get("totalWalletBalance")
             or acct.get("totalMarginBalance", "0")
         ))
-        new_capital = D(str(template_model.total_capital or 0)).quantize(D("0.01"))
-        projected_capital_total = (existing_capital_reserved + new_capital).quantize(D("0.01"))
+        # 🌟 2026-06-09 사장님 사상 정확: 신 strategy 자본 = 마진 단위로 변환
+        new_capital_notional = D(str(template_model.total_capital or 0))
+        new_margin = (new_capital_notional / D(str(effective_lev or 1))).quantize(D("0.01"))
+        projected_capital_total = (existing_capital_reserved + new_margin).quantize(D("0.01"))
         if total_wallet > 0 and projected_capital_total > total_wallet:
             raise ValueError(
-                f"💰 전체 자본 예약 초과 — 사장님 안전 사상 (잔액 기반 운영) 위반.\n\n"
-                f"📌 계산 (자본 절대값 기준 — 화면 「예약」 카드와 동일):\n"
-                f"  • 기존 활성 전략 {len(_active_rows)}개 자본 합 = {existing_capital_reserved:.2f} USDT\n"
-                f"  • + 신규 전략 자본 = {new_capital:.2f} USDT\n"
-                f"  • = 총 예약 {projected_capital_total:.2f} USDT  >  지갑 잔액 {total_wallet:.2f} USDT\n\n"
-                f"📖 의미: 사장님 핵심 원칙 — 모든 strategy 의 5단계 풀 자본 합이 wallet 을 절대 초과 X.\n"
-                f"   레버리지 무관하게 사장님 자본 절대값으로 보호 (-2019 / 음수 가용잔액 사전 차단).\n\n"
+                f"💰 전체 마진 예약 초과 — 사장님 안전 사상 (지갑 마진 기준).\n\n"
+                f"📌 계산 (마진 = 사장님 자금 = 자본 / 레버리지):\n"
+                f"  • 기존 활성 전략 {len(_active_rows)}개 마진 합 = {existing_capital_reserved:.2f} USDT\n"
+                f"  • + 신규 전략 마진 = {new_margin:.2f} USDT (자본 {new_capital_notional:.2f} / {effective_lev}x)\n"
+                f"  • = 총 마진 {projected_capital_total:.2f} USDT  >  지갑 잔액 {total_wallet:.2f} USDT\n\n"
+                f"📖 의미: 사장님 핵심 원칙 — 모든 strategy 의 실제 마진 (= 자본/레버리지) 합이 wallet 초과 X.\n"
+                f"   레버리지 적용 = 자본 입력 = 거래 규모, 마진 = 사장님 자금 (= 자본/lev).\n\n"
                 "💡 해결 (택1):\n"
-                "  • 활성 전략 일부 정리 (포지션 청산) — 예약 자본 회수\n"
+                "  • 활성 전략 일부 정리 (포지션 청산) — 예약 마진 회수\n"
                 "  • 거래소 USDT 입금\n"
                 "  • 신규 전략의 단계별 자본 축소 (전체 합이 가용 잔액 이내)"
             )
