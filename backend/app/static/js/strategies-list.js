@@ -343,7 +343,28 @@ async function refreshStrategies() {
       const closeReason = s.last_close_reason || 'NONE';
       const stageBar = s.current_stage > 0 ? renderStageBar(s.current_stage, totalStages) : '<span class="text-slate-500">대기</span>';
       const tpBar = renderTpBar(tpCount, totalTps, closeReason);
-      const stage = `<div class="text-xs leading-none"><span class="text-slate-400" style="font-size:12px">진입</span> ${stageBar}<br><span class="text-slate-400" style="font-size:12px">익절</span> ${tpBar}</div>`;
+      // 🌟 2026-06-08 사장님 TP1 임계 옵션 드롭다운 (Phase 3 — spec).
+      // 위치: 「익절」 라벨 옆 (= 사장님 캡쳐 의도, 단계 컬럼 영역).
+      // 활성 strategy 만 노출 (= TERMINAL X). 변경 즉시 PATCH = 다음 risk cycle 적용.
+      // 정상 모드: TP1 = 사장님 옵션 (10/15/20/25)
+      // Crisis 모드: 사장님 옵션 무시 = TP1 +5% 고정 (옛 CRISIS_OVERRIDE 그대로)
+      // 🚨 event 3개 stopPropagation 필수 (parent <tr onclick> 차단)
+      const _tp1Pct = (s.tp1_pct_override != null) ? Number(s.tp1_pct_override) : 10;
+      const _isActiveForTp1 = !TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
+      const tp1ThresholdSelect = _isActiveForTp1
+        ? `<select onclick="event.stopPropagation()"
+                  onmousedown="event.stopPropagation()"
+                  onchange="event.stopPropagation(); updateTp1Threshold(${s.id}, this.value)"
+                  class="bg-slate-800 border border-slate-600 rounded text-slate-300"
+                  style="font-size:10px;padding:0 2px;margin-left:4px;cursor:pointer"
+                  title="TP1 임계 옵션 — 정상 모드: 사장님 옵션 (10/15/20/25) 적용. Crisis 모드: 옵션 무시 = TP1 +5% 고정 (빠른 회복 익절). 운영 중 변경 즉시 적용. spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md">
+            <option value="10" ${_tp1Pct===10 ? 'selected':''}>TP1 +10%</option>
+            <option value="15" ${_tp1Pct===15 ? 'selected':''}>TP1 +15%</option>
+            <option value="20" ${_tp1Pct===20 ? 'selected':''}>TP1 +20%</option>
+            <option value="25" ${_tp1Pct===25 ? 'selected':''}>TP1 +25%</option>
+          </select>`
+        : '';
+      const stage = `<div class="text-xs leading-none"><span class="text-slate-400" style="font-size:12px">진입</span> ${stageBar}<br><span class="text-slate-400" style="font-size:12px">익절</span> ${tpBar}${tp1ThresholdSelect}</div>`;
       const pnlNum = Number(s.unrealized_pnl || 0);
       const sCap = Number(s.total_capital || 0);
       const sLev = Number(s.leverage || 1) || 1;
@@ -729,6 +750,28 @@ async function updateTrailingRetrace(strategyId, pctStr) {
     });
     toast(`✅ Trailing retrace -${pct}% 적용 (다음 cycle 부터)`, 'success');
     // 즉시 새로고침 = UI 의 selected 값 확인
+    refreshStrategies();
+  } catch (e) {
+    toast(`❌ 변경 실패: ${e.message || e}`, 'error');
+  }
+}
+
+// 🌟 2026-06-08 사장님 TP1 임계 옵션 (Phase 3)
+// spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md
+// 정상 모드: TP1 = 사장님 옵션 (10/15/20/25)
+// Crisis 모드: 사장님 옵션 무시 = TP1 +5% 고정 (옛 CRISIS_OVERRIDE 그대로)
+async function updateTp1Threshold(strategyId, pctStr) {
+  const pct = Number(pctStr);
+  if (![10, 15, 20, 25].includes(pct)) {
+    toast(`❌ 옵션 오류: ${pctStr}`, 'error');
+    return;
+  }
+  try {
+    await api(`/strategies/${strategyId}/tp1-threshold`, {
+      method: 'PATCH',
+      body: { pct: pct },
+    });
+    toast(`✅ TP1 +${pct}% 적용 (Crisis 시 +5% 고정)`, 'success');
     refreshStrategies();
   } catch (e) {
     toast(`❌ 변경 실패: ${e.message || e}`, 'error');

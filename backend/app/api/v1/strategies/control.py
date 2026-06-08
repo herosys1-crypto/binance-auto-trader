@@ -789,3 +789,105 @@ def update_trailing_retrace(
         if strategy.strategy_template_id else None
     )
     return _enrich_response(StrategyDetailResponse.model_validate(strategy), tpl)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🌟 사장님 TP1 임계 옵션 (Phase 2 — 2026-06-08)
+# spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md
+#
+# 정상 모드: TP1 = 사장님 옵션 (10/15/20/25) 적용
+# Crisis 모드: 사장님 옵션 무시 = CRISIS_OVERRIDE 그대로 (TP1=5/TP2=10/TP3=15/TP4=20)
+#   = 큰 손실 후 빠른 회복 익절 (= 사장님 자본 보호)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ALLOWED_TP1_PCT = {Decimal("10"), Decimal("15"), Decimal("20"), Decimal("25")}
+
+
+class Tp1ThresholdRequest(BaseModel):
+    pct: Decimal = Field(
+        ...,
+        description="TP1 임계 % (10/15/20/25). 정상 모드 적용, Crisis 시 -5% 자동.",
+    )
+
+
+@router.patch("/{strategy_id}/tp1-threshold", response_model=StrategyDetailResponse)
+def update_tp1_threshold(
+    strategy_id: int,
+    payload: Tp1ThresholdRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyDetailResponse:
+    """사장님 TP1 임계 옵션 실시간 변경.
+
+    핵심 (사장님 사상 2026-06-08):
+    - 정상 모드: TP1 = 사장님 옵션 (10/15/20/25)
+    - Crisis 모드: 사장님 옵션 무시 = TP1 +5% 고정 (옛 CRISIS_OVERRIDE 그대로)
+    - 운영 중 변경 = 다음 risk evaluation cycle 부터 즉시 적용
+
+    검증:
+    - 본인 소유 strategy
+    - 종료된 strategy 거부 (TERMINAL)
+    - pct ∈ {10, 15, 20, 25}
+
+    spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md
+    """
+    import logging
+    from app.models.risk_event import RiskEvent
+    logger = logging.getLogger(__name__)
+
+    if payload.pct not in _ALLOWED_TP1_PCT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"⚠️ TP1 임계 % 는 10/15/20/25 중 하나여야 합니다 "
+                f"(입력: {payload.pct}). spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md"
+            ),
+        )
+
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.",
+        )
+    if strategy.status in TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"⚠️ 이미 종료된 전략 (상태: {strategy.status}) 은 변경이 불가합니다."
+            ),
+        )
+
+    old_pct = strategy.tp1_pct_override
+    strategy.tp1_pct_override = payload.pct
+
+    db.add(RiskEvent(
+        strategy_instance_id=strategy.id,
+        event_type="TP1_THRESHOLD_UPDATED",
+        severity="INFO",
+        title=f"📍 TP1 임계 변경 — {strategy.symbol} {strategy.side}",
+        message=(
+            f"사장님 TP1 임계 옵션 변경: "
+            f"{old_pct or '10 (default)'} → {payload.pct}%. "
+            f"정상 모드 = +{payload.pct}% 도달 시 TP1 발동. "
+            f"Crisis 모드 = +5% 고정 (사장님 옵션 무시, 빠른 회복 익절). "
+            f"다음 risk evaluation cycle 부터 즉시 적용."
+        ),
+        event_payload={
+            "old_pct": str(old_pct) if old_pct is not None else None,
+            "new_pct": str(payload.pct),
+        },
+    ))
+    db.commit()
+    db.refresh(strategy)
+    logger.info(
+        "[tp1-threshold] update strategy_id=%s old=%s new=%s",
+        strategy_id, old_pct, payload.pct,
+    )
+
+    from app.models.strategy_template import StrategyTemplate
+    tpl = (
+        db.get(StrategyTemplate, strategy.strategy_template_id)
+        if strategy.strategy_template_id else None
+    )
+    return _enrich_response(StrategyDetailResponse.model_validate(strategy), tpl)

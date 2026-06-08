@@ -167,9 +167,14 @@ class RiskService:
                 tp_levels.append((f"TP{n}", Decimal(str(val))))
 
         # ─────────── 크라이시스 모드 — TP 임계치 override (사용자 기획) ───────────
-        # 정상 모드: TP1/2/3/4 = 10/15/20/30% (템플릿 값 사용)
-        # 크라이시스: TP1/2/3/4 = 5/10/15/20% (회복 시점에 더 빨리 익절)
+        # 정상 모드: TP1 = 사장님 옵션 (10/15/20/25) 또는 template default, TP2-4 = template
+        # 크라이시스: TP1/2/3/4 = 5/10/15/20% (= 옛 그대로, 사장님 옵션 무시)
         # TP5 는 크라이시스 모드에서 사용 안 함 (4단계 TP 까지만)
+        #
+        # 🌟 2026-06-08 사장님 TP1 옵션 정책 (alembic 0018):
+        # 정상 모드 = 사장님 선택 TP1 임계 적용 (10/15/20/25)
+        # Crisis 모드 = 사장님 옵션 무시 = TP1 +5% 고정 (= 빠른 회복 익절, 사장님 자본 보호)
+        # spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md
         if strategy.crisis_mode_triggered_at:
             CRISIS_OVERRIDE = {
                 "TP1": Decimal("5"), "TP2": Decimal("10"),
@@ -177,6 +182,14 @@ class RiskService:
             }
             tp_levels = [(label, CRISIS_OVERRIDE[label]) for label, _ in tp_levels if label in CRISIS_OVERRIDE]
             tp_levels.sort(key=lambda x: x[1], reverse=True)  # 내림차순 (TP4 부터 검사)
+        else:
+            # 정상 모드: 사장님 TP1 옵션 override (= template tp1_percent 덮어씀)
+            if strategy.tp1_pct_override is not None:
+                _override = Decimal(str(strategy.tp1_pct_override))
+                tp_levels = [
+                    (label, _override if label == "TP1" else val)
+                    for label, val in tp_levels
+                ]
 
         # 2026-05-04 critical fix (사용자 #98 LABUSDT 사례):
         # 트레일링 체크가 TP threshold loop 보다 우선해야 함.
