@@ -112,6 +112,8 @@ async function submitCreate() {
     closeCreateModal();
     refreshStrategies();
     refreshTemplates();
+    // 🌟 2026-06-09 사장님 요청: 전략 생성 시 = 즉시 잔액 갱신 (5초 polling 기다리지 X)
+    if (typeof loadBalance === 'function') loadBalance();
   } catch (e) {
     toast('전략 생성 실패: '+e.message, 'error');
     document.getElementById('cm-submit').disabled = false;
