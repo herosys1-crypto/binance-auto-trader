@@ -116,7 +116,60 @@ async function loadPrevBlueprint(strategyId, silent) {
         : '';
       toast(`전략 #${bp.source_strategy_id} 설정을 불러왔습니다. 종목/시작가 확인 후 진행${editNote}`, 'success');
     }
+    // 🌟 2026-06-08 사장님 사상: 수정 모드 = 진입 단계 시각 구분 + 입력 disabled
+    // 사장님 명시: "미진입 단계는 자동이 아니라 수동 = 사장님 직접 입력"
+    // 진입 단계 (1~current_stage) = 자본/트리%/증거금 input disabled + 회색 배경 + ✅ 진입 배지
+    _disableTriggeredStages();
     // 시세 다시 로드 → 자동으로 현재가가 cm-start-price 에 채워짐 → _refreshLiveCalc 트리거
     loadCmMarketInfo();
   } catch (e) { toast('불러오기 실패: '+e.message, 'error'); }
+}
+
+// 🌟 2026-06-08 사장님 사상 (Phase 2):
+// 수정 모드 진입 시 = 진입 단계 (is_triggered=True) input = disabled + 시각 구분
+// = 사장님 자본 보호: 사장님이 = 이미 진입한 단계 = 절대 수정 X
+// = 미진입 단계만 = 사장님 직접 입력 (= 자동 X, 사장님 사상)
+function _disableTriggeredStages() {
+  if (!cmState.editingStrategyId) return;
+  const strategy = (window._strategiesById || {})[cmState.editingStrategyId];
+  if (!strategy) return;
+  const currentStage = Number(strategy.current_stage || 0);
+  if (currentStage < 1) return;
+  for (let i = 1; i <= currentStage; i++) {
+    const cap = document.getElementById('cm-cap-' + i);
+    const trg = document.getElementById('cm-trg-' + i);
+    const addM = document.getElementById('cm-add-margin-' + i);
+    const tooltip = `${i}단계 = 이미 진입 완료 — 수정 불가 (사장님 자본 보호). 미진입 단계만 사장님 직접 입력 가능.`;
+    if (cap) {
+      cap.disabled = true;
+      cap.style.opacity = '0.5';
+      cap.style.cursor = 'not-allowed';
+      cap.style.background = '#1e293b';
+      cap.style.color = '#94a3b8';
+      cap.title = tooltip;
+    }
+    if (trg) {
+      trg.disabled = true;
+      trg.style.opacity = '0.5';
+      trg.style.cursor = 'not-allowed';
+      trg.style.background = '#1e293b';
+      trg.style.color = '#94a3b8';
+      trg.title = tooltip;
+    }
+    if (addM) {
+      addM.disabled = true;
+      addM.style.opacity = '0.5';
+      addM.style.cursor = 'not-allowed';
+      addM.title = tooltip;
+    }
+    // 단계 라벨에 ✅ 진입 배지 추가 (= 진입 완료 시각 표시)
+    const stageLabel = cap?.closest('.grid')?.querySelector('.col-span-1');
+    if (stageLabel && !stageLabel.querySelector('.entered-badge')) {
+      stageLabel.innerHTML = `${i}단계 <span class="entered-badge text-green-400" style="font-size:10px" title="이미 진입 완료">✅</span>`;
+    }
+  }
+  // 사장님 안내 toast
+  if (typeof toast === 'function') {
+    toast(`✅ ${currentStage}단계까지 진입 완료 = 수정 불가 (사장님 자본 보호). ${currentStage + 1}단계부터 사장님 직접 입력 가능.`, 'success');
+  }
 }
