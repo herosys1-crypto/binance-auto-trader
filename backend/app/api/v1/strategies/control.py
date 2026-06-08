@@ -907,6 +907,201 @@ def update_tp1_threshold(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+class AddUntriggeredStageItem(BaseModel):
+    """미진입 단계 추가 1건."""
+    stage_no: int = Field(..., ge=1, le=10, description="단계 번호 (1~10)")
+    planned_capital: Decimal = Field(..., gt=0, description="이 단계 자본 (USDT)")
+    trigger_percent: Decimal | None = Field(
+        default=Decimal("10"),
+        gt=0,
+        description="이전 단계 대비 트리거 % (default 10). 이 endpoint 에서는 = 현재가 기준 누적.",
+    )
+
+
+class AddUntriggeredStagesRequest(BaseModel):
+    stages: list[AddUntriggeredStageItem] = Field(
+        ...,
+        min_length=1,
+        max_length=10,
+        description="추가할 미진입 단계들 (4~10단계 등). stage_no = 진입_단계 + 1 부터.",
+    )
+
+
+@router.post("/{strategy_id}/add-untriggered-stages", response_model=StrategyDetailResponse)
+def add_untriggered_stages(
+    strategy_id: int,
+    payload: AddUntriggeredStagesRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyDetailResponse:
+    """미진입 단계 추가/수정 — 진입 단계 절대 보존 + 현재가 기준 신 trigger_price.
+
+    사장님 사상 (2026-06-08 옵션 2):
+    - 진입 단계 (= is_triggered=True) = 절대 변경 X (= 사장님 자본 보호)
+    - 미진입 단계 (= is_triggered=False, 또는 신 추가) = 신 trigger_price + 자본
+    - trigger_price = 현재가 × (1.10)^N (= SHORT) 또는 × (0.90)^N (= LONG)
+      N = stage_no - 진입_단계_count (= 진입 후 몇 번째 단계)
+    - planned_capital = 사장님 입력 그대로
+
+    검증:
+    - 본인 소유 + 활성 strategy
+    - 현재가 = Redis mark_price_cache
+    - stage_no = 진입_단계_count 보다 커야 함 (= 진입 단계 수정 거부)
+    - 사장님 자본 검증 (130% 정책)
+    """
+    import logging
+    from app.models.risk_event import RiskEvent
+    from app.models.strategy_stage_plan import StrategyStagePlan
+    from app.services.mark_price_cache import get_mark_price
+    from sqlalchemy import select as sa_select
+    logger = logging.getLogger(__name__)
+
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.",
+        )
+    if strategy.status in TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"⚠️ 종료된 strategy ({strategy.status}) 는 단계 추가 불가.",
+        )
+
+    current_price = get_mark_price(strategy.symbol)
+    if not current_price or current_price <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"⚠️ {strategy.symbol} 현재가 조회 실패 — Redis 캐시 없음. 1분 후 재시도.",
+        )
+
+    # 진입 단계 수 = 사장님 자본 보호 기준
+    triggered_count = db.execute(
+        sa_select(StrategyStagePlan)
+        .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+        .where(StrategyStagePlan.is_triggered.is_(True))
+    ).scalars().all()
+    triggered_max_stage = max((p.stage_no for p in triggered_count), default=0)
+
+    # 사장님 입력 단계 = 모두 triggered_max_stage 보다 커야!
+    for item in payload.stages:
+        if item.stage_no <= triggered_max_stage:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"⚠️ stage_no {item.stage_no} = 이미 진입한 단계 (= 진입 완료 stage_no={triggered_max_stage}). "
+                    f"진입 단계는 절대 수정 불가 (사장님 자본 보호). "
+                    f"stage_no = {triggered_max_stage + 1} 부터 가능."
+                ),
+            )
+
+    # stage_no 중복 검증 + 순서대로 정렬
+    sorted_items = sorted(payload.stages, key=lambda x: x.stage_no)
+    stage_nos = [item.stage_no for item in sorted_items]
+    if len(set(stage_nos)) != len(stage_nos):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"⚠️ stage_no 중복: {stage_nos}",
+        )
+
+    # SHORT/LONG 방향
+    is_short = (strategy.side or "").upper() == "SHORT"
+    direction = Decimal("1.10") if is_short else Decimal("0.90")
+
+    changes = []
+    for i, item in enumerate(sorted_items, start=1):
+        # 신 trigger_price = 현재가 × direction^i
+        # i = 1 (= 신 첫 단계) → 현재가 × 1.10 (SHORT)
+        # i = 2 → 현재가 × 1.21
+        new_trigger = (current_price * (direction ** i)).quantize(Decimal("0.00000001"))
+
+        # 기존 plan 조회 (= 신 추가 vs 옛 수정 결정)
+        existing = db.execute(
+            sa_select(StrategyStagePlan)
+            .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+            .where(StrategyStagePlan.stage_no == item.stage_no)
+        ).scalar_one_or_none()
+
+        if existing:
+            # 기존 미진입 단계 = 수정
+            if existing.is_triggered:
+                # 안전망 (위에서 검증했지만 race condition 방지)
+                continue
+            old_trigger = existing.trigger_price
+            old_capital = existing.planned_capital
+            existing.trigger_price = new_trigger
+            existing.trigger_percent = item.trigger_percent or Decimal("10")
+            existing.planned_capital = item.planned_capital
+            existing.is_enabled = True
+            changes.append({
+                "stage_no": item.stage_no,
+                "action": "updated",
+                "old_trigger_price": str(old_trigger) if old_trigger else None,
+                "new_trigger_price": str(new_trigger),
+                "old_planned_capital": str(old_capital) if old_capital else None,
+                "new_planned_capital": str(item.planned_capital),
+            })
+        else:
+            # 신 단계 추가
+            trigger_mode = "PRICE_UP_PCT" if is_short else "PRICE_DOWN_PCT"
+            new_plan = StrategyStagePlan(
+                strategy_instance_id=strategy.id,
+                stage_no=item.stage_no,
+                side=strategy.side,
+                trigger_mode=trigger_mode,
+                trigger_percent=item.trigger_percent or Decimal("10"),
+                trigger_price=new_trigger,
+                planned_capital=item.planned_capital,
+                is_enabled=True,
+                is_triggered=False,
+            )
+            db.add(new_plan)
+            changes.append({
+                "stage_no": item.stage_no,
+                "action": "added",
+                "new_trigger_price": str(new_trigger),
+                "new_planned_capital": str(item.planned_capital),
+            })
+
+    db.add(RiskEvent(
+        strategy_instance_id=strategy.id,
+        event_type="UNTRIGGERED_STAGES_ADDED",
+        severity="INFO",
+        title=f"➕ 미진입 단계 추가/수정 — {strategy.symbol} {strategy.side}",
+        message=(
+            f"사장님 미진입 단계 추가/수정. "
+            f"현재가 {current_price} 기준 × ({'1.10' if is_short else '0.90'})^N. "
+            f"진입 단계 {triggered_max_stage}개 = 영향 X. "
+            f"변경된 단계: {len(changes)}건 = {[c['stage_no'] for c in changes]}."
+        ),
+        event_payload={
+            "current_price": str(current_price),
+            "direction": str(direction),
+            "side": strategy.side,
+            "triggered_max_stage": triggered_max_stage,
+            "changes": changes,
+        },
+    ))
+    db.commit()
+    db.refresh(strategy)
+    logger.info(
+        "[add-untriggered-stages] strategy_id=%s current_price=%s changes=%s",
+        strategy_id, current_price, len(changes),
+    )
+
+    from app.models.strategy_template import StrategyTemplate
+    tpl = (
+        db.get(StrategyTemplate, strategy.strategy_template_id)
+        if strategy.strategy_template_id else None
+    )
+    return _enrich_response(StrategyDetailResponse.model_validate(strategy), tpl)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# (옛 endpoint 그대로 유지)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 @router.post("/{strategy_id}/recalc-untriggered-from-current", response_model=StrategyDetailResponse)
 def recalc_untriggered_from_current(
     strategy_id: int,

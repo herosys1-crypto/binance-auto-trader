@@ -82,6 +82,96 @@ async function recalcUntriggeredFromCurrent(id) {
   }
 }
 
+// 🌟 2026-06-08 사장님 신 기능 (옵션 B): 미진입 단계 추가/수정 (= 4~10단계 신 추가)
+// 사장님 명시: "4~10단계 추가 = 현재가 기준 신 trigger"
+// 사장님이 입력 = stage_no + 자본 (= 트리%는 10% 고정)
+// 신 trigger = 현재가 × 1.10^N (= 사장님 자본 보호 + 의도 정확)
+function openAddUntriggeredStagesModal(id, symbol, side, currentStage) {
+  const startStage = (currentStage || 0) + 1;
+  if (startStage > 10) {
+    toast(`⚠️ 이미 10단계 모두 진입 — 추가 불가`, 'error');
+    return;
+  }
+
+  // 동적 단계 입력 행
+  let rowsHtml = '';
+  for (let n = startStage; n <= 10; n++) {
+    rowsHtml += `
+      <tr>
+        <td class="text-center text-slate-300" style="padding:4px">${n}단계</td>
+        <td><input type="number" id="add-stage-capital-${n}" placeholder="자본 (USDT)" min="0" step="1" class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm" style="width:100%"></td>
+        <td><input type="number" id="add-stage-pct-${n}" value="10" min="1" max="100" step="0.1" class="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm" style="width:60px"></td>
+      </tr>
+    `;
+  }
+
+  const modalHtml = `
+    <div id="add-stages-modal-backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center" onclick="if(event.target.id==='add-stages-modal-backdrop')closeAddUntriggeredStagesModal()">
+      <div style="background:#1e293b;border-radius:8px;padding:20px;max-width:520px;width:90%;max-height:80vh;overflow-y:auto">
+        <h3 style="font-size:16px;font-weight:bold;margin-bottom:8px;color:#10b981">➕ 미진입 단계 추가/수정 — #${id} ${symbol} ${side}</h3>
+        <p style="font-size:12px;color:#94a3b8;margin-bottom:12px">
+          진입 단계 (1~${currentStage}) = 절대 보존 (사장님 자본 보호)<br>
+          신 단계 trigger = 현재가 × 1.10^N (${side === 'SHORT' ? '가격 상승' : '가격 하락'} 시 진입)
+        </p>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
+          <thead>
+            <tr style="border-bottom:1px solid #334155;font-size:12px;color:#94a3b8">
+              <th style="text-align:center;padding:4px;width:50px">단계</th>
+              <th style="text-align:left;padding:4px">자본 (USDT)</th>
+              <th style="text-align:left;padding:4px;width:80px">트리%</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button onclick="closeAddUntriggeredStagesModal()" class="btn-ghost btn text-xs" style="padding:6px 16px">취소</button>
+          <button onclick="submitAddUntriggeredStages(${id})" class="btn-success btn text-xs" style="padding:6px 16px;background:#10b981;color:white">➕ 적용</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+function closeAddUntriggeredStagesModal() {
+  const m = document.getElementById('add-stages-modal-backdrop');
+  if (m) m.remove();
+}
+
+async function submitAddUntriggeredStages(id) {
+  const stages = [];
+  for (let n = 1; n <= 10; n++) {
+    const capInput = document.getElementById(`add-stage-capital-${n}`);
+    if (!capInput) continue;
+    const cap = parseFloat(capInput.value || '0');
+    if (cap > 0) {
+      const pctInput = document.getElementById(`add-stage-pct-${n}`);
+      const pct = parseFloat(pctInput?.value || '10');
+      stages.push({ stage_no: n, planned_capital: cap, trigger_percent: pct });
+    }
+  }
+  if (stages.length === 0) {
+    toast(`⚠️ 자본 입력된 단계가 없습니다`, 'error');
+    return;
+  }
+  if (!confirm(
+    `➕ 미진입 단계 ${stages.length}개 추가/수정\n\n` +
+    stages.map(s => `  ${s.stage_no}단계: 자본 ${s.planned_capital} USDT, 트리 ${s.trigger_percent}%`).join('\n') +
+    `\n\n진입 단계 = 절대 보존\n신 trigger = 현재가 × 1.10^N\n\n진행할까요?`
+  )) return;
+  try {
+    await api(`/strategies/${id}/add-untriggered-stages`, {
+      method: 'POST',
+      body: { stages: stages },
+    });
+    toast(`✅ ${stages.length}개 단계 추가/수정 완료!`, 'success');
+    closeAddUntriggeredStagesModal();
+    refreshStrategies();
+  } catch (err) {
+    toast(`추가 실패: ${err.message}`, 'error');
+  }
+}
+
 // 2026-05-21 Phase 2 (사장님 요구 — #77/#78 사례 후속):
 // MANUAL_CLEANUP_REQUIRED 상태에서 사장님이 거래소 UI 에서 직접 청산 완료 후
 // 「✅ 처리 완료」 클릭 → STOPPED 전환 (자동 STOPPED 차단된 상태였음).

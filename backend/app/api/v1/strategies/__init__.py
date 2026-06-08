@@ -69,8 +69,10 @@ from app.api.v1.strategies.crud import (  # noqa: E402, F401
 
 # control.py
 from app.api.v1.strategies.control import (  # noqa: E402, F401
+    AddUntriggeredStagesRequest,
     StrategySettingsUpdate,
     TrailingRetracePctRequest,
+    add_untriggered_stages,
     recalc_untriggered_from_current,
     start_strategy,
     trigger_next_stage_manually,
@@ -120,6 +122,8 @@ __all__ = [
     "trigger_next_stage_manually",
     "update_strategy_settings_in_place",
     "recalc_untriggered_from_current",
+    "add_untriggered_stages",
+    "AddUntriggeredStagesRequest",
     # lifecycle
     "AddMarginRequest",
     "AddPositionRequest",
