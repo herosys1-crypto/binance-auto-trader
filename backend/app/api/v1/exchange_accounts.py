@@ -419,33 +419,40 @@ def get_balance(
         prev = binance_margin_by_symbol.get(sym_upper, Decimal("0"))
         binance_margin_by_symbol[sym_upper] = prev + actual_margin
 
-    # 🚨 2026-06-08 사장님 critical 발견 silent bug fix v3 (= 진짜 원인):
-    # 사장님 BEATUSDT 4/6 진입 (= 5/6 단계 미진입, 자본 예약 필요)
-    # PR #131 (template stages_config 합) 배포 후에도 = 「포지션 예약됨 0」 여전!
+    # 🚨 2026-06-08 사장님 critical 진짜 사상 fix v5 (= fix v3+v4 진단 후 발견):
+    #
+    # fix v4 진단 endpoint 결과 (사장님 직접 확인):
+    #   BEATUSDT: plans_sum=4200 vs actual=4174 → max=4200 → reserved-actual=26
+    #   VELVET:   plans_sum=2420 vs actual=3297 → max=3297 → reserved-actual=0
+    #   합산:     reservedSum 6620 - actualMarginSum 7471 = -851 → max(0,-851)=0!
     #
     # 진짜 원인:
-    # 1. PR #131 = template.stages_config.capitals 합 사용
-    # 2. 사장님 strategy 의 template = stages_config = NULL 또는 capitals 합 ≤ actual
-    # 3. = fallback (= total_capital) → PR #84 자동 동기화로 = 실 lock 과 동일 → 0!
+    # - 사장님 「💉 포지션 추가」 + 「💰 증거금 추가」 = 실 lock > 사장님 입력 합
+    # - max(plans_sum, actual) = actual (= 더 큼) = reserved-actual = 0!
     #
-    # 진짜 사장님 사상 fix v3:
-    # → strategy_stage_plans.planned_capital 합 사용 (= 사장님 본인 strategy 영구 데이터)
-    # → 신 strategy 생성 시 = 사장님 입력 자본 = 단계별로 strategy_stage_plans 테이블 영구 저장
-    # → PR #84 자동 동기화 = total_capital 만 변경 = planned_capital 안 건드림!
-    # → template 데이터 의존 X = 사장님 본인 의도 100% 영구 보존
+    # 진짜 사장님 사상 fix v5:
+    # → reserved = actual + 미진입_단계_planned_capital 합
+    # → "실 lock (= 진입 단계) + 앞으로 lock 될 예정 (= 미진입 단계)" = 전체 예약
+    # → 사장님 BEATUSDT: actual 4174 + 미진입 (1000+1500) = 6674 → 표시 2500 ✅
+    # → 사장님 VELVET: actual 3297 + 미진입 (1000) = 4297 → 표시 1000 ✅
+    # → 합계 3500 USDT (= 사장님 본래 직관 정확!)
     from app.models.strategy_stage_plan import StrategyStagePlan
     strategy_ids = [s.id for s in active_strategies]
-    plans_sum_by_strategy: dict[int, Decimal] = {}
+    untriggered_sum_by_strategy: dict[int, Decimal] = {}
+    has_plans_by_strategy: dict[int, bool] = {}
     if strategy_ids:
-        # 단계별 planned_capital 조회 → strategy_id 별 합산
         all_plans = db.execute(
             select(StrategyStagePlan)
             .where(StrategyStagePlan.strategy_instance_id.in_(strategy_ids))
-            .where(StrategyStagePlan.is_enabled.is_(True))
         ).scalars().all()
         for p in all_plans:
-            prev = plans_sum_by_strategy.get(p.strategy_instance_id, Decimal("0"))
-            plans_sum_by_strategy[p.strategy_instance_id] = prev + (p.planned_capital or Decimal("0"))
+            has_plans_by_strategy[p.strategy_instance_id] = True
+            # 미진입 단계 만 (= is_enabled=True AND is_triggered=False)
+            if p.is_enabled and not p.is_triggered:
+                prev = untriggered_sum_by_strategy.get(p.strategy_instance_id, Decimal("0"))
+                untriggered_sum_by_strategy[p.strategy_instance_id] = (
+                    prev + (p.planned_capital or Decimal("0"))
+                )
 
     # template 도 보조 fallback 으로 보존 (= 옛 PR #131 안전망)
     from app.models.strategy_template import StrategyTemplate
@@ -457,10 +464,11 @@ def get_balance(
 
     def _reserved_one(s) -> Decimal:
         actual = binance_margin_by_symbol.get((s.symbol or "").upper(), Decimal("0"))
-        # 🌟 fix v3: strategy_stage_plans.planned_capital 합 (= 사장님 본인 데이터, 영구)
-        plans_sum = plans_sum_by_strategy.get(s.id, Decimal("0"))
-        if plans_sum > 0:
-            return max(plans_sum, actual)
+        # 🌟 fix v5 (사장님 진짜 사상): actual + 미진입 단계 자본 합
+        # = "실 lock (= 진입 완료) + 앞으로 lock 될 예정 (= 미진입 단계)" = 전체 예약
+        if has_plans_by_strategy.get(s.id):
+            untriggered_sum = untriggered_sum_by_strategy.get(s.id, Decimal("0"))
+            return actual + untriggered_sum
         # fallback 1: template stages_config (= 옛 PR #131 안전망)
         tpl = templates_map.get(s.strategy_template_id)
         stages_sum = Decimal("0")
