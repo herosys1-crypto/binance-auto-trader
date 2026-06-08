@@ -73,6 +73,8 @@ from app.api.v1.strategies.control import (  # noqa: E402, F401
     StrategySettingsUpdate,
     TrailingRetracePctRequest,
     add_untriggered_stages,
+    cancel_open_order,
+    list_open_orders,
     recalc_untriggered_from_current,
     start_strategy,
     trigger_next_stage_manually,
