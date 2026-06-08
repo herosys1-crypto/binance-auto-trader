@@ -256,6 +256,11 @@ class ExecutionService:
             quantity = actual_position  # 요청 없거나 실 포지션 초과 시 풀 청산
         else:
             quantity = req_qty  # 부분 청산 정상 진행 (TP1 25% 등)
+        # 🚨 2026-06-08 사장님 critical fix (BEATUSDT silent bug):
+        # 사장님 수동 익절 25% 실행 → STAGE4_OPEN → STOPPING 강제 = 「종료 중」 표시
+        # = 사장님 의도 X! (사장님 = 25% 만 청산 + strategy 유지 의도)
+        # 진짜 fix: is_full_close 검증 = 부분 청산 시 = 옛 status 유지.
+        is_full_close = (req_qty <= 0 or req_qty >= actual_position)
         side = "SELL" if strategy.side == "LONG" else "BUY"
         position_side = strategy.side
         client_order_id = self._new_client_order_id(strategy.symbol, "EXIT")
@@ -272,9 +277,12 @@ class ExecutionService:
         # 단, _execute_take_profit 에서 호출되는 경우 status 가 이미 TP/COMPLETED 로 갔으므로
         # 무조건 STOPPING 으로 덮어쓰지 않게 — current status 가 STAGE_X_OPEN 류일 때만.
         # 2026-05-06: TP1~10_DONE_PARTIAL 모두 보호 (10단계 익절 확장).
+        # 🌟 2026-06-08: is_full_close 검증 추가 (부분 청산 = 옛 status 유지 = 사장님 의도)
         _TP_PARTIAL_SET = {f"TP{n}_DONE_PARTIAL" for n in range(1, 11)}
         if strategy.status not in ({"COMPLETED", "REENTRY_READY", "STOPPED"} | _TP_PARTIAL_SET):
-            strategy.status = "STOPPING"
+            if is_full_close:
+                strategy.status = "STOPPING"  # 풀 청산 = STOPPING 정상
+            # 부분 청산 = 옛 status (예: STAGE4_OPEN) 유지 = 사장님 자율 운영 보장
         self.db.commit()
         # A03 fix (audit 2026-05-02): 거래소 호출 실패 시 명시적 로깅 + RiskEvent 기록.
         # 2026-05-13 v4 fix (사용자 #26 JELLYJELLYUSDT 4차 fix):
