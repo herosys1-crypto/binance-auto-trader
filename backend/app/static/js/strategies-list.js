@@ -116,10 +116,10 @@ function _binanceCompareRow(s) {
   const pnlCls = upnlMismatch ? 'text-red-400 font-bold' : roiCls;
   const pnlWarn = upnlMismatch ? `<span class="text-red-400 ml-1" title="우리 DB: ${ourUpnl.toFixed(2)} USDT (차이 ${upnlDiff.toFixed(2)} USDT)">⚠</span>` : '';
 
-  // 🌟 2026-06-08 사장님 fix: 가로 스크롤바 = 행 위에 보임 (= 시각 침해)
-  // 해결 = white-space: normal + word-break: break-word = 2줄 줄바꿈 허용 = 스크롤 제거
+  // 2026-06-08 revert (사장님): PR #141/#142 의 white-space:normal 제거.
+  // 사장님 = "세로는 기존방식으로 그냥둬 지금보다 기존ui가 좋아" = 한 줄 UI 복원.
   return `<tr class="${rowBg}">
-    <td colspan="9" class="text-xs text-slate-300 py-0 px-3 font-mono" style="white-space:normal;word-break:break-word">
+    <td colspan="9" class="text-xs text-slate-300 py-0 px-3 font-mono">
       ${header}
       <span class="text-slate-500 ml-2">Size</span> <span class="${sizeCls}">${bp.size}</span>${sizeWarn}
       <span class="text-slate-600">|</span>
