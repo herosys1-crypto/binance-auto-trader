@@ -3,6 +3,18 @@
 > **사장님 명시 (2026-06-08)**:
 > > "tp1 발동 +15 +20 +25 이렇게 3개로 진행할수 있게 해줘
 > >  그럼 크라이시스과 문제없게 기획해서 만들어줘"
+>
+> **사장님 정책 최종 명확화 (2026-06-08 추가, 사장님 본인 정정 후)**:
+> > "크라이시스만 -5% 부터 기본으로 실행하고 익절 tp1 시작을 기본 +10% 에서
+> >  +15 +20 +25 를 선택할 수 있게 하는 거야"
+> > → **Crisis 모드 = 옛 그대로 (TP1 +5%, TP2 +10%, TP3 +15%, TP4 +20%)**
+> > → **TP1 옵션 = 정상 모드만 적용 (10/15/20/25), Crisis 시 무시**
+> > → 옵션 위치 = 「단계」 컬럼 옆 (= 진입/익절 바 영역)
+>
+> **사장님 trailing retrace 확인 답변 (2026-06-08)**:
+> > Q: "지금 만든 것도 TP3 단계 진행 후 최고가에서 다시 수익이 내려오면 적용되는 거지?"
+> > A: ✅ 정확! 현재 trailing retrace 코드 = `status TP3+_DONE_PARTIAL + stage ≥ 3 + peak ≥ 5% + retrace 회귀` = 사장님 사상 100% 작동
+> > = trailing retrace 옵션 (5/10/15/20%) = 이미 PR #127 머지 완료 (= TP3 + TP4+ 모두 적용)
 
 이 문서 = 영구 보존. 향후 모든 TP1 관련 코드 변경 = 이 spec 100% 적용.
 
@@ -15,10 +27,10 @@
 - 신 옵션: **+15% / +20% / +25%** (사장님 선택)
 - 더 보수적 = 더 큰 수익 후 발동 = 사장님 의도
 
-### 2. **Crisis 모드 = 그대로 (= 충돌 없음)**
-- Crisis 진입 시 = TP1 override = +5% (현재 유지)
-- 사장님 선택 (15/20/25) = 정상 모드에만 적용
-- = 큰 손실 후 회복 시 = 빠른 익절 (5%) = 사장님 의도
+### 2. **Crisis 모드 = 옛 그대로 (= 사장님 옵션 무시, 충돌 없음)**
+- Crisis 진입 시 = TP1=5 / TP2=10 / TP3=15 / TP4=20 (옛 CRISIS_OVERRIDE 그대로)
+- 사장님 선택 (10/15/20/25) = **정상 모드에만 적용**
+- = 큰 손실 후 회복 시 = 빠른 익절 (TP1 +5%) = 사장님 자본 보호 사상
 
 ### 3. **운영 중 실시간 변경 + 즉시 적용**
 - 전략 인스턴스 카드 = 드롭다운 (3 옵션 + default)
@@ -59,18 +71,25 @@ Crisis 모드: ROI +5% 도달 → TP1 발동 (= 그대로!) ✅ 충돌 X
 ### 코드 흐름 (risk_service.py evaluate_take_profit_level):
 ```python
 if strategy.crisis_mode_triggered_at:
-    # Crisis 모드 → CRISIS_OVERRIDE 사용 (TP1=5, TP2=10, TP3=15, TP4=20)
-    tp_levels = [(label, CRISIS_OVERRIDE[label]) ...]
+    # Crisis 모드 → 옛 CRISIS_OVERRIDE 그대로 (= 사장님 옵션 무시)
+    CRISIS_OVERRIDE = {
+        "TP1": Decimal("5"),  "TP2": Decimal("10"),
+        "TP3": Decimal("15"), "TP4": Decimal("20"),
+    }
+    tp_levels = [(label, CRISIS_OVERRIDE[label]) for label, _ in tp_levels]
 else:
-    # 정상 모드 → template tp_levels 사용 + 사장님 옵션 (= 15/20/25)
+    # 정상 모드 → template tp_levels + 사장님 옵션 (10/15/20/25)
     if strategy.tp1_pct_override:
-        # 사장님 옵션 = template tp1_percent 덮어씀
-        tp_levels = [(label, override_pct) ...]
-    else:
-        tp_levels = [...]  # template default
+        tp_levels = [
+            (label, strategy.tp1_pct_override if label == "TP1" else val)
+            for label, val in tp_levels
+        ]
+    # else = template default 그대로
 ```
 
-→ **Crisis 모드 진입 시 = 사장님 옵션 무시 = 빠른 회복 익절 (5%)** ✅
+→ **Crisis 시 = 사장님 옵션 무시 = TP1 +5% 빠른 익절 = 사장님 자본 보호**
+→ TP2/3/4 = 옛 그대로 (= 변경 X)
+→ 코드 단순 + 안전 (= 옛 동작 그대로)
 
 ---
 

@@ -86,6 +86,11 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # peak 대비 -X% 회귀 시 전량 청산 (TRAILING_TP).
     # NULL/5 = default, 10/15/20 = 사장님 선택. 운영 중 실시간 변경.
     trailing_retrace_pct: Decimal | None = None
+    # ─── 사장님 TP1 임계 옵션 (alembic 0018, 2026-06-08) ───
+    # 정상 모드 = 사장님 옵션 (10/15/20/25) 적용
+    # Crisis 모드 = 옵션 무시 = 옛 CRISIS_OVERRIDE 그대로 (TP1=5)
+    # NULL = template default. 운영 중 PATCH 실시간 변경.
+    tp1_pct_override: Decimal | None = None
     # ─── 진입 일시 (대시보드 표시용) ───
     created_at: datetime | None = None       # strategy 생성 시점
     # 2026-05-21 STOPPING 갇힘 감지용 — frontend 가 updated_at 기준 5분 초과 시

@@ -49,6 +49,13 @@ class StrategyInstance(Base):
     # spec: TRAILING_RETRACE_POLICY_SPEC_2026-06-08.md
     trailing_retrace_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
 
+    # ─────────── 사장님 TP1 임계 옵션 (alembic 0018, 2026-06-08) ───────────
+    # 정상 모드 = 사장님 옵션 (10/15/20/25) 적용 (NULL = template default 10)
+    # Crisis 모드 = 사장님 옵션 무시 = 옛 CRISIS_OVERRIDE 그대로 (TP1=5/2=10/3=15/4=20)
+    # 운영 중 PATCH /strategies/{id}/tp1-threshold = 실시간 변경
+    # spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md
+    tp1_pct_override: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+
     # ─────────── Soft delete (alembic 0011, 2026-05-06) ───────────
     # DELETE endpoint 와 cleanup 스크립트가 row 자체를 삭제하면 realized_pnl 이
     # 통계 합계에서 영구 누락 (#96 +867 USDT 사례). 삭제 대신 archived 마킹.
