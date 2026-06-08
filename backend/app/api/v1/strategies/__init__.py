@@ -70,9 +70,11 @@ from app.api.v1.strategies.crud import (  # noqa: E402, F401
 # control.py
 from app.api.v1.strategies.control import (  # noqa: E402, F401
     StrategySettingsUpdate,
+    TrailingRetracePctRequest,
     start_strategy,
     trigger_next_stage_manually,
     update_strategy_settings_in_place,
+    update_trailing_retrace,
 )
 
 # lifecycle.py

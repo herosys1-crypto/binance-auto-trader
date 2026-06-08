@@ -192,11 +192,19 @@ class RiskService:
             {f"TP{n}_DONE_PARTIAL" for n in range(TRAILING_MIN_TP_INDEX, 11)}
             | {"TRAILING_ARMED"}
         )
+        # 🌟 2026-06-08 사장님 trailing retrace 옵션 (alembic 0017):
+        # NULL/5 = default (옛 동작), 10/15/20 = 사장님 선택 (= buffer 더 큼)
+        # spec: TRAILING_RETRACE_POLICY_SPEC_2026-06-08.md
+        _strategy_retrace = (
+            Decimal(str(strategy.trailing_retrace_pct))
+            if strategy.trailing_retrace_pct is not None
+            else TRAILING_TP_RETRACE_AMOUNT  # global default = 5
+        )
         if (
             (strategy.status or "").upper() in TRAILING_ARMED_STATUSES
             and (strategy.current_stage or 0) >= TRAILING_MIN_STAGE
             and peak >= TRAILING_TP_PEAK_THRESHOLD
-            and pnl_ratio <= (peak - TRAILING_TP_RETRACE_AMOUNT)
+            and pnl_ratio <= (peak - _strategy_retrace)
             and pnl_ratio < peak
         ):
             return "TRAILING_TP"
