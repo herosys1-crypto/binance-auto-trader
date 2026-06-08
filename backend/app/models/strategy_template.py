@@ -89,6 +89,10 @@ class StrategyTemplate(Base):
     # auto 정책 — 새 start_price 계산 오프셋 % (현재가에서 SHORT 위 / LONG 아래 방향).
     reentry_offset_pct: Mapped[Decimal] = mapped_column(Numeric(8, 4), default=Decimal("1.0"), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # 2026-06-09 사장님 즐겨찾기 (alembic 0019):
+    # True = 「⭐ 즐겨찾기 템플릿」 카드 노출 (최대 5개 권장).
+    # 사장님 = 카드에서 = 1 클릭 = 신 전략 시작.
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
