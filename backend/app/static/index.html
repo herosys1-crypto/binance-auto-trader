@@ -151,13 +151,9 @@
   #cm-recent-strategies-list { display: flex !important; flex-wrap: nowrap !important; gap: 4px; }
   #cm-recent-strategies-list button { flex: 1 1 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 
-  /* 🌟 2026-06-09 사장님 모바일 간략 페이지 (= ≤ 768px)
-     표시: 거래소 잔액, 미실현/실현, 전략 인스턴스, 새 전략 버튼만
-     숨김: 즐겨찾기 템플릿, 외부 포지션, 운영 통계 detail, 최근 활동, 시스템 상태 detail */
+  /* 🌟 2026-06-09 사장님 모바일 v2 — 전문가 디자인 */
   @media (max-width: 768px) {
-    /* 사장님 명시 = 「mobile-hide」 attribute = 자동 숨김 */
     [data-mobile-hide="true"] { display: none !important; }
-    /* 전략 인스턴스 가로 스크롤 = 카드 바닥에 명확 표시 */
     .strategies-table-wrap {
       overflow-x: auto !important;
       overflow-y: auto !important;
@@ -167,8 +163,58 @@
     .strategies-table-wrap::-webkit-scrollbar { height: 12px !important; background: #1e293b; }
     .strategies-table-wrap::-webkit-scrollbar-thumb { background: #64748b !important; border-radius: 6px; }
     .strategies-table-wrap::-webkit-scrollbar-track { background: #1e293b !important; }
-    /* 모바일 = 전략 인스턴스 폰트/패딩 = 더 작게 */
     .strategies-table-wrap td, .strategies-table-wrap th { padding: 4px 6px !important; font-size: 11px !important; }
+
+    /* 🎨 모바일 5-card metrics → 전문가 디자인
+       거래소 잔액 = 전체폭 (가장 중요!) + 큰 숫자 + 시각적 계층 */
+    .grid.grid-cols-2.md\:grid-cols-5 { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
+    #card-balance {
+      grid-column: 1 / -1 !important;
+      background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+      border: 1px solid #fbbf24;
+      padding: 14px !important;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    #card-balance > p:first-child { font-size: 11px !important; color: #fbbf24; margin-bottom: 2px; }
+    #card-balance #metric-balance {
+      font-size: 1.6rem !important;
+      font-weight: 700;
+      color: #fbbf24;
+      line-height: 1.1;
+      margin-bottom: 6px;
+    }
+    #card-balance #metric-balance-detail {
+      font-size: 11px !important;
+      line-height: 1.6;
+      color: #cbd5e1;
+      white-space: normal;
+    }
+    #card-active, #card-pnl { padding: 10px !important; }
+    #card-pnl #metric-pnl { font-size: 1.3rem !important; font-weight: 700; }
+    #card-active #metric-active { font-size: 1.4rem !important; font-weight: 700; color: #10b981; }
+
+    /* 정렬/계정 dropdown = 모바일 = 작게 */
+    #strategies-sort-by, #strategies-account-filter {
+      max-width: 130px !important;
+      font-size: 11px !important;
+      padding: 4px 6px !important;
+    }
+    /* floating 「+ 새 전략」 = 강조 효과 */
+    button.md\:hidden.fixed.bottom-4.right-4 {
+      box-shadow: 0 6px 20px rgba(22, 163, 74, 0.6) !important;
+      animation: pulse-green 2.5s ease-in-out infinite;
+    }
+    @keyframes pulse-green {
+      0%, 100% { box-shadow: 0 6px 16px rgba(22, 163, 74, 0.5); transform: scale(1); }
+      50% { box-shadow: 0 8px 24px rgba(22, 163, 74, 0.8); transform: scale(1.05); }
+    }
+    /* 「전략 인스턴스」 헤더 = 한 줄 + compact */
+    #section-strategies .card-header { flex-wrap: wrap; gap: 6px; }
+    #section-strategies h3 { font-size: 14px !important; }
+    #section-strategies label.text-xs { font-size: 10px !important; }
+
+    /* body padding 줄임 = 모바일 더 넓게 사용 */
+    body main, body #page-dashboard { padding-left: 6px !important; padding-right: 6px !important; }
   }
 </style>
 </head>
@@ -246,11 +292,12 @@
   <!-- ============ Page: Dashboard (default) ============ -->
   <main id="page-dashboard">
 
-  <!-- 🌟 2026-06-09 사장님 모바일 floating 「+ 새 전략」 버튼 (PC 숨김) -->
+  <!-- 🌟 2026-06-09 사장님 모바일 floating 「+ 새 전략」 버튼 v2 (PC 숨김)
+       위치: bottom-20 (= 80px) = dropdown 가림 방지 + 키보드 가림 방지 -->
   <button
     onclick="openCreateModal()"
-    class="md:hidden fixed bottom-4 right-4 z-40 btn-success rounded-full shadow-lg"
-    style="width:64px;height:64px;font-size:24px;background:#16a34a;color:white;border:2px solid #166534"
+    class="md:hidden fixed z-40 btn-success rounded-full shadow-lg"
+    style="bottom:20px;right:16px;width:64px;height:64px;font-size:28px;background:linear-gradient(135deg,#16a34a 0%,#15803d 100%);color:white;border:3px solid #fbbf24"
     title="새 전략 시작">
     ➕
   </button>
