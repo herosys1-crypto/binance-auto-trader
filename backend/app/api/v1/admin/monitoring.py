@@ -798,3 +798,122 @@ def diagnose_strategy(
             ),
         },
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🔍 사장님 「포지션 예약됨 0」 silent bug 진단 endpoint (fix v4 — 2026-06-08)
+#
+# 사장님 발견: PR #131 (template stages_config) + fix v3 (strategy_stage_plans)
+# 머지 + 배포 후에도 「포지션 예약됨 0」 여전.
+#
+# 진짜 원인 식별 도구 (= 브라우저에서 즉시 확인 가능):
+#   https://VPS_IP/api/v1/admin/diagnostic/reserved
+#
+# 각 active strategy 별:
+#   - total_capital (DB 저장)
+#   - strategy_stage_plans 의 planned_capital 합 (= fix v3 핵심)
+#   - template.stages_config.capitals 합 (= fix v2 fallback)
+#   - 어떤 source 가 사용되는지 (= 사장님 가시성)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/diagnostic/reserved")
+def diagnose_reserved(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """사장님 「포지션 예약됨」 silent bug 진단.
+
+    각 active strategy 별 = 모든 fallback 데이터 source 표시 + 사용된 source 명시.
+    사장님이 = 브라우저에서 = JSON 직접 확인 = 진짜 원인 즉시 식별.
+    """
+    from sqlalchemy import select
+    from app.models.strategy_instance import StrategyInstance
+    from app.models.strategy_stage_plan import StrategyStagePlan
+    from app.models.strategy_template import StrategyTemplate
+    from app.core.strategy_status import TERMINAL_STATUSES
+
+    active = db.execute(
+        select(StrategyInstance)
+        .where(StrategyInstance.user_id == user_id)
+        .where(StrategyInstance.is_archived.is_(False))
+        .where(StrategyInstance.status.notin_(TERMINAL_STATUSES))
+    ).scalars().all()
+
+    results = []
+    for s in active:
+        # 1. strategy_stage_plans (= fix v3 우선 source)
+        plans = db.execute(
+            select(StrategyStagePlan)
+            .where(StrategyStagePlan.strategy_instance_id == s.id)
+        ).scalars().all()
+        plans_sum_enabled = sum((p.planned_capital or Decimal("0")) for p in plans if p.is_enabled)
+        plans_sum_all = sum((p.planned_capital or Decimal("0")) for p in plans)
+        plans_detail = [
+            {
+                "stage_no": p.stage_no,
+                "is_enabled": p.is_enabled,
+                "is_triggered": p.is_triggered,
+                "planned_capital": str(p.planned_capital) if p.planned_capital is not None else None,
+                "additional_margin_usdt": (
+                    str(p.additional_margin_usdt) if p.additional_margin_usdt is not None else None
+                ),
+            }
+            for p in sorted(plans, key=lambda x: x.stage_no)
+        ]
+
+        # 2. template stages_config (= fix v2 fallback)
+        tpl = db.get(StrategyTemplate, s.strategy_template_id) if s.strategy_template_id else None
+        tpl_stages_sum = Decimal("0")
+        tpl_capitals_raw = None
+        if tpl and tpl.stages_config:
+            tpl_capitals_raw = tpl.stages_config.get("capitals")
+            for c in tpl_capitals_raw or []:
+                if c is None:
+                    continue
+                try:
+                    tpl_stages_sum += Decimal(str(c))
+                except Exception:
+                    continue
+
+        # 3. _reserved_one() 의 실제 결정 source 시뮬레이션
+        if plans_sum_enabled > 0:
+            source_used = "strategy_stage_plans (fix v3)"
+            source_value = plans_sum_enabled
+        elif tpl_stages_sum > 0:
+            source_used = "template.stages_config (fix v2)"
+            source_value = tpl_stages_sum
+        else:
+            source_used = "total_capital (legacy)"
+            source_value = s.total_capital or Decimal("0")
+
+        results.append({
+            "id": s.id,
+            "symbol": s.symbol,
+            "side": s.side,
+            "status": s.status,
+            "current_stage": s.current_stage,
+            "strategy_template_id": s.strategy_template_id,
+            "total_capital": str(s.total_capital) if s.total_capital is not None else None,
+            "plans_count": len(plans),
+            "plans_enabled_count": sum(1 for p in plans if p.is_enabled),
+            "plans_triggered_count": sum(1 for p in plans if p.is_triggered),
+            "plans_sum_enabled": str(plans_sum_enabled),
+            "plans_sum_all": str(plans_sum_all),
+            "tpl_stages_config_raw": tpl_capitals_raw,
+            "tpl_stages_sum": str(tpl_stages_sum),
+            "source_used": source_used,
+            "source_value": str(source_value),
+            "plans_detail": plans_detail,
+        })
+
+    return {
+        "user_id": user_id,
+        "active_count": len(active),
+        "strategies": results,
+        "note": (
+            "사장님 「포지션 예약됨 = source_value - actual_margin (Binance lock)」. "
+            "= 0 이면 = source_value ≤ actual = silent bug. "
+            "source_used 확인 + 해당 source 의 값 점검."
+        ),
+    }
