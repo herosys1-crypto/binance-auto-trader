@@ -419,19 +419,35 @@ def get_balance(
         prev = binance_margin_by_symbol.get(sym_upper, Decimal("0"))
         binance_margin_by_symbol[sym_upper] = prev + actual_margin
 
-    # 🚨 2026-06-08 사장님 critical 발견 silent bug fix (Pattern 4 — Asymmetric):
-    # 사장님 BEATUSDT 4/6 진입 (= 5/6 단계 미진입, 자본 2,500 USDT 예약 필요)
-    # 표시 = 「포지션 예약됨 0」 ← silent bug!
+    # 🚨 2026-06-08 사장님 critical 발견 silent bug fix v3 (= 진짜 원인):
+    # 사장님 BEATUSDT 4/6 진입 (= 5/6 단계 미진입, 자본 예약 필요)
+    # PR #131 (template stages_config 합) 배포 후에도 = 「포지션 예약됨 0」 여전!
     #
-    # 원인 (PR #84 자동 동기화 영향):
-    # 1. 사장님 「💉 포지션 추가」 → isolated_margin > total_capital
-    # 2. reconcile_worker (PR #84) = total_capital 자동 갱신 (= isolated_margin)
-    # 3. = total_capital 이 "전체 단계 합" 의미 잃음 → "Binance 실 lock" 와 동일
-    # 4. = max(planned, actual) = 동일 값 → 미진입 단계 예약 누락!
+    # 진짜 원인:
+    # 1. PR #131 = template.stages_config.capitals 합 사용
+    # 2. 사장님 strategy 의 template = stages_config = NULL 또는 capitals 합 ≤ actual
+    # 3. = fallback (= total_capital) → PR #84 자동 동기화로 = 실 lock 과 동일 → 0!
     #
-    # Fix: template 의 stages_config.capitals 합 = "사장님 모든 단계 자본 합" 정확 사용
-    # = PR #84 영향 없는 = 변하지 않는 사장님 의도 (= template 자체)
-    # = 사장님 「↻ 설정만 수정」 으로만 변경 가능 (= 자동 동기화 영향 X)
+    # 진짜 사장님 사상 fix v3:
+    # → strategy_stage_plans.planned_capital 합 사용 (= 사장님 본인 strategy 영구 데이터)
+    # → 신 strategy 생성 시 = 사장님 입력 자본 = 단계별로 strategy_stage_plans 테이블 영구 저장
+    # → PR #84 자동 동기화 = total_capital 만 변경 = planned_capital 안 건드림!
+    # → template 데이터 의존 X = 사장님 본인 의도 100% 영구 보존
+    from app.models.strategy_stage_plan import StrategyStagePlan
+    strategy_ids = [s.id for s in active_strategies]
+    plans_sum_by_strategy: dict[int, Decimal] = {}
+    if strategy_ids:
+        # 단계별 planned_capital 조회 → strategy_id 별 합산
+        all_plans = db.execute(
+            select(StrategyStagePlan)
+            .where(StrategyStagePlan.strategy_instance_id.in_(strategy_ids))
+            .where(StrategyStagePlan.is_enabled.is_(True))
+        ).scalars().all()
+        for p in all_plans:
+            prev = plans_sum_by_strategy.get(p.strategy_instance_id, Decimal("0"))
+            plans_sum_by_strategy[p.strategy_instance_id] = prev + (p.planned_capital or Decimal("0"))
+
+    # template 도 보조 fallback 으로 보존 (= 옛 PR #131 안전망)
     from app.models.strategy_template import StrategyTemplate
     template_ids = {s.strategy_template_id for s in active_strategies if s.strategy_template_id}
     templates_map = (
@@ -441,7 +457,11 @@ def get_balance(
 
     def _reserved_one(s) -> Decimal:
         actual = binance_margin_by_symbol.get((s.symbol or "").upper(), Decimal("0"))
-        # 🌟 신: template stages_config.capitals 합 (= 모든 단계 자본 합)
+        # 🌟 fix v3: strategy_stage_plans.planned_capital 합 (= 사장님 본인 데이터, 영구)
+        plans_sum = plans_sum_by_strategy.get(s.id, Decimal("0"))
+        if plans_sum > 0:
+            return max(plans_sum, actual)
+        # fallback 1: template stages_config (= 옛 PR #131 안전망)
         tpl = templates_map.get(s.strategy_template_id)
         stages_sum = Decimal("0")
         if tpl and tpl.stages_config:
@@ -453,10 +473,9 @@ def get_balance(
                     stages_sum += Decimal(str(c))
                 except Exception:
                     continue
-        # max(모든 단계 자본 합, Binance 실 lock) — 사장님 자본 보호 사상
         if stages_sum > 0:
             return max(stages_sum, actual)
-        # fallback (legacy: stages_config 없음 시)
+        # fallback 2: total_capital (= legacy, PR #84 자동 동기화 영향 가능)
         planned = s.total_capital or Decimal("0")
         return max(planned, actual)
 
