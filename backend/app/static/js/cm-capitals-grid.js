@@ -21,9 +21,10 @@
  */
 
 function _defaultTriggerPct(stageNo) {
-  // 1단계는 IMMEDIATE, 2/3/4단계=10, 5단계 이후=20
+  // 🌟 2026-06-09 사장님 신 default: 2단계만 10%, 3~10단계 모두 20%
+  // 사장님 명시: "2단계만 트리거 10으로 하고 나머진 20%로 해줘"
   if (stageNo === 1) return '';
-  if (stageNo <= 4) return '10';
+  if (stageNo === 2) return '10';
   return '20';
 }
 
