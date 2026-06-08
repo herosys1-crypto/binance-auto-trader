@@ -309,6 +309,7 @@ class StrategyService:
         # 화면 「예약 X USDT」 표시 (exchange_accounts.py 의 reserved_for_strategies) 와
         # 동일한 기준 → UI 와 검증 일치.
         from app.models.strategy_template import StrategyTemplate as _ST
+        from app.models.strategy_stage_plan import StrategyStagePlan as _SSP
         _active_rows = self.db.execute(
             select(StrategyInstance, _ST)
             .join(_ST, StrategyInstance.strategy_template_id == _ST.id)
@@ -316,11 +317,52 @@ class StrategyService:
             .where(StrategyInstance.status.notin_(_CLOSED_STATUSES))
             .where(StrategyInstance.is_archived.is_(False))
         ).all()
-        # 자본 기준 (사장님 안전 사상): 모든 active strategy 의 total_capital 합
+        # 🚨 2026-06-09 사장님 critical silent bug fix:
+        # 옛: _st.total_capital 사용 = template.total_capital (= 사장님 입력 합과 불일치 가능)
+        # = 사장님 VELVETUSDT 사례: template.total_capital=7010 vs stages_config 합=2420 = 차이!
+        # = 신 전략 차단 silent bug
+        #
+        # 사장님 사상 정확 fix (= 「예약」 카드 fix v5 와 일관):
+        # 1순위: strategy_stage_plans.planned_capital 합 (= 사장님 본인 strategy 영구 데이터)
+        # 2순위: template.stages_config.capitals 합
+        # 3순위: total_capital (= legacy fallback)
         existing_capital_reserved = D("0")
+        # stage_plans 일괄 조회 (= N+1 회피)
+        _strategy_ids = [_si.id for _si, _ in _active_rows]
+        _plans_sum_by_strategy: dict[int, D] = {}
+        if _strategy_ids:
+            _all_plans = self.db.execute(
+                select(_SSP)
+                .where(_SSP.strategy_instance_id.in_(_strategy_ids))
+                .where(_SSP.is_enabled.is_(True))
+            ).scalars().all()
+            for _p in _all_plans:
+                prev = _plans_sum_by_strategy.get(_p.strategy_instance_id, D("0"))
+                _plans_sum_by_strategy[_p.strategy_instance_id] = (
+                    prev + D(str(_p.planned_capital or 0))
+                )
         for _si, _st in _active_rows:
-            _cap = D(str(_st.total_capital or 0))
-            existing_capital_reserved += _cap
+            # 1순위: stage_plans 합 (= 사장님 본인 데이터, 영구)
+            _ps = _plans_sum_by_strategy.get(_si.id, D("0"))
+            if _ps > 0:
+                existing_capital_reserved += _ps
+                continue
+            # 2순위: template.stages_config.capitals 합
+            _stages_sum = D("0")
+            if _st.stages_config and isinstance(_st.stages_config, dict):
+                _capitals = _st.stages_config.get("capitals") or []
+                for _c in _capitals:
+                    if _c is None:
+                        continue
+                    try:
+                        _stages_sum += D(str(_c))
+                    except Exception:
+                        continue
+            if _stages_sum > 0:
+                existing_capital_reserved += _stages_sum
+                continue
+            # 3순위: total_capital (= legacy)
+            existing_capital_reserved += D(str(_st.total_capital or 0))
         existing_capital_reserved = existing_capital_reserved.quantize(D("0.01"))
         total_wallet = D(str(
             acct.get("totalWalletBalance")
