@@ -349,7 +349,10 @@
           </label>
         </div>
       </div>
-      <div class="overflow-auto" style="max-height:560px">
+      <!-- 2026-06-08 사장님 fix: 「Binance 비교」 행이 화면 너비 초과 시 = 가로 스크롤바 노출
+           = 사장님 시각 침해. overflow-x:hidden 로 가로 스크롤바 자체 제거.
+           세로 스크롤은 그대로 유지 (max-height 560px). -->
+      <div class="overflow-y-auto" style="max-height:560px;overflow-x:hidden">
         <table class="min-w-max">
           <thead>
             <tr>
