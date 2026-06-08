@@ -62,17 +62,19 @@ class RiskService:
         if (strategy.current_stage or 0) < total_stages:
             return False
         current_loss_amount = Decimal(str(strategy.realized_pnl)) + Decimal(str(strategy.unrealized_pnl))
-        # 2026-06-03 (사장님 사상 정확화): SL = 투자금 대비 손실 % (레버리지 무관).
-        # threshold = total_capital × (sl_pct/100)
-        # 사장님 명시: "투자금에 -80%일때 실행되어야해 레버리지 와 상관없이
-        #               증거금과 포지션추가를 했을때 전체금액에 손실이 -80% 일때 발동.
-        #               리스크가 투자금액의 80%가 없어지는거야"
+        # 🌟 2026-06-09 사장님 사상 정확화 v3 — SL = 마진 (= 사장님 자금) × sl_pct
+        # 사장님 명시 (2026-06-09):
+        # "1000 입력 = 마진 500 = 사장님 자금. 2x 레버리지 = 40% 하락 = -80% 손실 = 강제청산"
+        # = SL 발동 시점 = ROI -80% = 마진 × 80% 손실 시
+        # = Binance 마진콜 (= -100%) 직전 = 사장님 자본 보호!
         #
-        # 이전 계산 (잘못): threshold = capital × sl_pct / 100 / leverage  ← ROI 기준 = 레버리지 적용
-        # 신규 계산 (정확): threshold = capital × sl_pct / 100              ← 자본 절대값 % = 레버리지 무관
+        # 옛 (잘못, PR #57): threshold = total_capital × sl_pct  (= notional × 80%)
+        # = 자본 3000, lev 2x → SL 2400 USDT 손실 = 마진 1500 다 잃고도 청산 X
+        # = Binance 자동 청산 (= 마진 -100%) 이 먼저 = 사장님 자본 보호 X!
         #
-        # total_capital 은 PR #56 (2026-06-03) 으로 「💰 증거금 추가」/「💉 포지션 추가」 시
-        # 자동 += amount → 모든 자본 노력 (단계 + 수동/자동 추가) 합산 자동 반영.
+        # 신 (정확): threshold = (total_capital / leverage) × sl_pct  (= margin × 80%)
+        # = 자본 3000, lev 2x → 마진 1500 → SL 1200 USDT 손실 = ROI -80%
+        # = 사장님 자본 보호 = Binance 마진콜 전 = 안전!
         from app.core.risk_constants import (
             DEFAULT_SL_PCT_OF_CAPITAL,
             PERCENT_DENOMINATOR,
@@ -85,8 +87,10 @@ class RiskService:
             else DEFAULT_SL_PCT_OF_CAPITAL  # template 미설정 시 default 80%
         )
         total_capital = Decimal(str(strategy.total_capital))
-        # 사장님 사상 — 레버리지 무관, 투자금 대비 직접 비율
-        threshold = total_capital * (sl_pct / PERCENT_DENOMINATOR)
+        leverage = Decimal(str(strategy.leverage or 1))
+        # 🌟 사장님 신 사상 (2026-06-09): SL = 마진 × 80% (= ROI -80% 청산)
+        margin = total_capital / leverage if leverage > 0 else total_capital
+        threshold = margin * (sl_pct / PERCENT_DENOMINATOR)
         is_stop = current_loss_amount <= (-threshold)
         if is_stop:
             actual_loss_pct = (-current_loss_amount / total_capital * 100) if total_capital > 0 else Decimal("0")
@@ -401,7 +405,10 @@ class RiskService:
                 if tpl and tpl.stop_loss_percent_of_capital and Decimal(str(tpl.stop_loss_percent_of_capital)) > 0
                 else DEFAULT_SL_PCT_OF_CAPITAL
             )
-            sl_threshold = total_capital * (sl_pct / PERCENT_DENOMINATOR)
+            # 🌟 2026-06-09 사장님 사상 정확: SL = 마진 (= 사장님 자금) × sl_pct
+            leverage = Decimal(str(strategy.leverage or 1))
+            margin = total_capital / leverage if leverage > 0 else total_capital
+            sl_threshold = margin * (sl_pct / PERCENT_DENOMINATOR)
             if sl_threshold <= 0:
                 return
             progress_pct = abs(current_loss) / sl_threshold * 100
