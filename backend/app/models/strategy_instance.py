@@ -42,6 +42,13 @@ class StrategyInstance(Base):
     # 첫 TP 발동 후 피크 PnL % — 트레일링 -5% 계산용
     peak_pnl_pct_after_first_tp: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
 
+    # ─────────── 사장님 trailing retrace 옵션 (alembic 0017, 2026-06-08) ───────────
+    # peak 대비 -X% 회귀 시 전량 청산 (TRAILING_TP).
+    # NULL/5 = default (옛 동작), 10/15/20 = 사장님 선택 (= buffer 더 큼)
+    # 운영 중 PATCH /strategies/{id}/trailing-retrace = 실시간 변경
+    # spec: TRAILING_RETRACE_POLICY_SPEC_2026-06-08.md
+    trailing_retrace_pct: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+
     # ─────────── Soft delete (alembic 0011, 2026-05-06) ───────────
     # DELETE endpoint 와 cleanup 스크립트가 row 자체를 삭제하면 realized_pnl 이
     # 통계 합계에서 영구 누락 (#96 +867 USDT 사례). 삭제 대신 archived 마킹.

@@ -691,3 +691,101 @@ def trigger_next_stage_manually(
         status=strategy.status,
         message=f"수동 진입 — stage {next_stage_no} 시장가 즉시 진입 (capital={plan.planned_capital} USDT). 체결되면 평단/qty 자동 갱신됨.",
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🌟 사장님 trailing retrace 옵션 (Phase 2 — 2026-06-08)
+# spec: TRAILING_RETRACE_POLICY_SPEC_2026-06-08.md
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ALLOWED_RETRACE_PCT = {Decimal("5"), Decimal("10"), Decimal("15"), Decimal("20")}
+
+
+class TrailingRetracePctRequest(BaseModel):
+    pct: Decimal = Field(
+        ...,
+        description="Trailing retrace % (5/10/15/20). peak 대비 -X% 회귀 시 전량 청산.",
+    )
+
+
+@router.patch("/{strategy_id}/trailing-retrace", response_model=StrategyDetailResponse)
+def update_trailing_retrace(
+    strategy_id: int,
+    payload: TrailingRetracePctRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyDetailResponse:
+    """사장님 trailing retrace 옵션 실시간 변경.
+
+    핵심 (사장님 사상 2026-06-08):
+    - peak 대비 -X% 회귀 시 전량 청산
+    - 옵션: 5 (default) / 10 / 15 / 20
+    - 운영 중 변경 = 다음 risk evaluation cycle 부터 즉시 적용
+
+    검증:
+    - 본인 소유 strategy
+    - 종료된 strategy 거부 (TERMINAL)
+    - pct ∈ {5, 10, 15, 20}
+
+    spec: TRAILING_RETRACE_POLICY_SPEC_2026-06-08.md
+    """
+    import logging
+    from app.models.risk_event import RiskEvent
+    logger = logging.getLogger(__name__)
+
+    if payload.pct not in _ALLOWED_RETRACE_PCT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"⚠️ Trailing retrace % 는 5/10/15/20 중 하나여야 합니다 "
+                f"(입력: {payload.pct}). spec: TRAILING_RETRACE_POLICY_SPEC_2026-06-08.md"
+            ),
+        )
+
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.",
+        )
+    if strategy.status in TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"⚠️ 이미 종료된 전략 (상태: {strategy.status}) 은 변경이 불가합니다."
+            ),
+        )
+
+    old_pct = strategy.trailing_retrace_pct
+    strategy.trailing_retrace_pct = payload.pct
+
+    # Audit log (RiskEvent — 사장님 변경 이력 영구 보존)
+    db.add(RiskEvent(
+        strategy_instance_id=strategy.id,
+        event_type="TRAILING_RETRACE_UPDATED",
+        severity="INFO",
+        title=f"📐 Trailing retrace 변경 — {strategy.symbol} {strategy.side}",
+        message=(
+            f"사장님 trailing retrace 옵션 변경: "
+            f"{old_pct or '5 (default)'} → {payload.pct}%. "
+            f"다음 risk evaluation cycle 부터 즉시 적용. "
+            f"peak 대비 -{payload.pct}% 회귀 시 전량 청산 (TRAILING_TP)."
+        ),
+        event_payload={
+            "old_pct": str(old_pct) if old_pct is not None else None,
+            "new_pct": str(payload.pct),
+        },
+    ))
+    db.commit()
+    db.refresh(strategy)
+    logger.info(
+        "[trailing-retrace] update strategy_id=%s old=%s new=%s",
+        strategy_id, old_pct, payload.pct,
+    )
+
+    from app.models.strategy_template import StrategyTemplate
+    tpl = (
+        db.get(StrategyTemplate, strategy.strategy_template_id)
+        if strategy.strategy_template_id else None
+    )
+    return _enrich_response(StrategyDetailResponse.model_validate(strategy), tpl)

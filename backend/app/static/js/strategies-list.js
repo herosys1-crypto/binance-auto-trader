@@ -457,11 +457,25 @@ async function refreshStrategies() {
       const slInline = slThreshold > 0
         ? ` <span class="${slClass}" style="font-size:12px" title="${slTooltip}">· ${slIcon}SL ${slProgressPct.toFixed(0)}% (-${slThreshold.toFixed(0)})</span>`
         : '';
+      // 🌟 2026-06-08 사장님 trailing retrace 옵션 드롭다운 (Phase 3 — spec).
+      // 활성 strategy 만 노출 (= TERMINAL X). 변경 즉시 PATCH = 다음 risk cycle 적용.
+      const _trailingRetracePct = (s.trailing_retrace_pct != null) ? Number(s.trailing_retrace_pct) : 5;
+      const trailingRetraceSelect = (!TERMINAL_STATUSES.includes((s.status || '').toUpperCase()) && hasPosition)
+        ? `<select onchange="event.stopPropagation(); updateTrailingRetrace(${s.id}, this.value)"
+                  class="bg-slate-800 border border-slate-600 rounded text-slate-300"
+                  style="font-size:10px;padding:0 2px;margin-left:4px;cursor:pointer"
+                  title="Trailing retrace 옵션 — peak 대비 -X% 회귀 시 전량 청산. 운영 중 변경 즉시 적용. spec: TRAILING_RETRACE_POLICY_SPEC_2026-06-08.md">
+            <option value="5"  ${_trailingRetracePct===5  ? 'selected':''}>-5%</option>
+            <option value="10" ${_trailingRetracePct===10 ? 'selected':''}>-10%</option>
+            <option value="15" ${_trailingRetracePct===15 ? 'selected':''}>-15%</option>
+            <option value="20" ${_trailingRetracePct===20 ? 'selected':''}>-20%</option>
+          </select>`
+        : '';
       const pnl = hasPosition
         ? `<div class="text-sm leading-none">
             <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span>
             <span class="${positionRoi>0?'pos':positionRoi<0?'neg':'text-slate-400'}" title="${posTooltip}">(${posSign}${positionRoi.toFixed(2)}%)</span><br>
-            <span class="${strategyRoi>0?'pos':strategyRoi<0?'neg':'text-slate-500'}" style="font-size:12px; opacity:0.8" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slInline}
+            <span class="${strategyRoi>0?'pos':strategyRoi<0?'neg':'text-slate-500'}" style="font-size:12px; opacity:0.8" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slInline}${trailingRetraceSelect}
           </div>`
         : '<span class="text-slate-500">-</span>';
 
@@ -691,6 +705,29 @@ async function _confirmManualTP(strategyId, symbol, side, currentQty) {
     refreshStrategies();
   } catch (e) {
     toast(`❌ 수동 익절 실패: ${e.message || e}`, 'error');
+  }
+}
+
+
+// 🌟 2026-06-08 사장님 trailing retrace 옵션 (Phase 3)
+// spec: TRAILING_RETRACE_POLICY_SPEC_2026-06-08.md
+// 드롭다운 변경 즉시 PATCH = 다음 risk evaluation cycle 부터 적용 (= 새로고침 X)
+async function updateTrailingRetrace(strategyId, pctStr) {
+  const pct = Number(pctStr);
+  if (![5, 10, 15, 20].includes(pct)) {
+    toast(`❌ 옵션 오류: ${pctStr}`, 'error');
+    return;
+  }
+  try {
+    await api(`/strategies/${strategyId}/trailing-retrace`, {
+      method: 'PATCH',
+      body: { pct: pct },
+    });
+    toast(`✅ Trailing retrace -${pct}% 적용 (다음 cycle 부터)`, 'success');
+    // 즉시 새로고침 = UI 의 selected 값 확인
+    refreshStrategies();
+  } catch (e) {
+    toast(`❌ 변경 실패: ${e.message || e}`, 'error');
   }
 }
 

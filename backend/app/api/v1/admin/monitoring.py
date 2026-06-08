@@ -720,10 +720,18 @@ def diagnose_strategy(
             pass
 
     cond_peak = (true_peak is not None) and (true_peak >= TRAILING_PEAK_THRESHOLD_PCT)
+    # 🌟 2026-06-08 사장님 trailing retrace 옵션 반영 (spec):
+    # strategy 별 trailing_retrace_pct > 0 = 사장님 선택 (5/10/15/20)
+    # NULL = global TRAILING_RETRACE_PCT (= default 5)
+    _strategy_retrace = (
+        Decimal(str(s.trailing_retrace_pct))
+        if s.trailing_retrace_pct is not None
+        else TRAILING_RETRACE_PCT
+    )
     cond_retrace = (
         true_peak is not None
         and cur_pnl_ratio is not None
-        and cur_pnl_ratio <= (true_peak - TRAILING_RETRACE_PCT)
+        and cur_pnl_ratio <= (true_peak - _strategy_retrace)
     )
 
     trailing_should_fire = cond_status and cond_stage and cond_peak and cond_retrace
@@ -761,7 +769,7 @@ def diagnose_strategy(
             "peak_ok": cond_peak,
             "peak_required": f">= {TRAILING_PEAK_THRESHOLD_PCT}%",
             "retrace_ok": cond_retrace,
-            "retrace_required": f"current <= peak - {TRAILING_RETRACE_PCT}%p",
+            "retrace_required": f"current <= peak - {_strategy_retrace}%p (사장님 옵션, default {TRAILING_RETRACE_PCT})",
         },
         "trailing_should_fire": trailing_should_fire,
         "diagnosis_hint": (
