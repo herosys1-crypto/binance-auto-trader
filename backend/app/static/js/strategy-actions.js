@@ -154,11 +154,46 @@ async function submitAddUntriggeredStages(id) {
     toast(`⚠️ 자본 입력된 단계가 없습니다`, 'error');
     return;
   }
-  if (!confirm(
+
+  // 🌟 2026-06-08 사장님 안전: 신 trigger 가격 사전 미리보기 (= 사장님 자본 보호)
+  // 현재가 = strategy 의 mark_price 또는 = window._strategiesById 에서 조회
+  const strategy = (window._strategiesById || {})[id];
+  let currentPrice = 0;
+  let side = 'SHORT';
+  if (strategy) {
+    side = (strategy.side || 'SHORT').toUpperCase();
+    // 마크가 = avg + pnl/qty (LONG) | avg - pnl/qty (SHORT)
+    const qty = Math.abs(Number(strategy.current_position_qty || 0));
+    const avg = Number(strategy.avg_entry_price || 0);
+    const pnl = Number(strategy.unrealized_pnl || 0);
+    if (qty > 0 && avg > 0) {
+      currentPrice = side === 'LONG' ? (avg + pnl/qty) : (avg - pnl/qty);
+    }
+  }
+  // Binance positions cache fallback
+  if (!currentPrice && window._binancePositionsCache && strategy) {
+    const bp = (window._binancePositionsCache[strategy.exchange_account_id]?.positions || {})[strategy.symbol];
+    if (bp && bp.mark_price) currentPrice = Number(bp.mark_price);
+  }
+
+  const direction = side === 'SHORT' ? 1.10 : 0.90;
+  const sortedStages = [...stages].sort((a,b) => a.stage_no - b.stage_no);
+  const previewLines = sortedStages.map((s, i) => {
+    const N = i + 1;
+    const newTrigger = currentPrice > 0 ? (currentPrice * Math.pow(direction, N)).toFixed(8) : '?';
+    return `  ${s.stage_no}단계: 자본 ${s.planned_capital} USDT, 트리 ${s.trigger_percent}% → 신 진입가 ${newTrigger}`;
+  });
+
+  const confirmMsg =
     `➕ 미진입 단계 ${stages.length}개 추가/수정\n\n` +
-    stages.map(s => `  ${s.stage_no}단계: 자본 ${s.planned_capital} USDT, 트리 ${s.trigger_percent}%`).join('\n') +
-    `\n\n진입 단계 = 절대 보존\n신 trigger = 현재가 × 1.10^N\n\n진행할까요?`
-  )) return;
+    `📊 현재가 (Binance): ${currentPrice > 0 ? currentPrice.toFixed(8) : '?'} ${side}\n` +
+    `📐 신 진입가 = 현재가 × ${side === 'SHORT' ? '1.10' : '0.90'}^N\n\n` +
+    previewLines.join('\n') +
+    `\n\n✅ 진입 단계 = 절대 보존 (사장님 자본 보호)\n` +
+    `✅ 거래소 호출 X (= 청산 X)\n\n` +
+    `진행할까요?`;
+  if (!confirm(confirmMsg)) return;
+
   try {
     await api(`/strategies/${id}/add-untriggered-stages`, {
       method: 'POST',
