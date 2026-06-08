@@ -524,6 +524,11 @@ async function refreshStrategies() {
       const triggerNextBtn = canTriggerNext
         ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="현재가에서 다음 단계 즉시 진입 (trigger_price 무시, 사전 계획된 자본 그대로)">▶</button>`
         : '';
+      // 🌟 2026-06-08 사장님 신 기능: 미진입 단계 trigger_price = 현재가 × 1.10, 1.21, ... 재계산
+      // = 진입 단계 유지 + 미진입 단계만 = "현재가 기준 +10% 상승 시 진입"
+      const recalcBtn = canTriggerNext
+        ? `<button onclick="event.stopPropagation(); recalcUntriggeredFromCurrent(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="미진입 단계 trigger_price = 현재가 × 1.10, 1.21, 1.331 ... 재계산. 진입 단계 영향 X. 사장님 자본 보호.">🔄</button>`
+        : '';
       // 2026-05-06 (C-full Step 3): archived row 는 「↻ 복원」 단독 표시.
       // 2026-05-21 Phase 2: MANUAL_CLEANUP_REQUIRED 는 「✅ 수동 청산 처리 완료」 + 긴급종료 재시도.
       const isManualCleanup = (s.status || '').toUpperCase() === 'MANUAL_CLEANUP_REQUIRED';
@@ -544,9 +549,10 @@ async function refreshStrategies() {
               <button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="전략 보관 (archive — DB row 보존, UI 숨김, 손익 통계 유지)">🗑</button>
             </div>`;
       } else {
-        stopBtn = `<div class="flex flex-wrap gap-1" style="max-width:130px">
+        stopBtn = `<div class="flex flex-wrap gap-1" style="max-width:180px">
             <button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="설정 수정 (in-place 또는 종료+재시작)">✏️</button>
             ${triggerNextBtn}
+            ${recalcBtn}
             <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="${btnStyle}" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
             <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="긴급 종료 (포지션 시장가 청산)">🛑</button>
           </div>`;

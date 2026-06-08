@@ -891,3 +891,128 @@ def update_tp1_threshold(
         if strategy.strategy_template_id else None
     )
     return _enrich_response(StrategyDetailResponse.model_validate(strategy), tpl)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🌟 사장님 신 기능 (2026-06-08): 미진입 단계 trigger_price = 현재가 기준 재계산
+#
+# 사장님 명시:
+# "포지션 유지하고 다음단계 진입을 할수 있게 현재가 기준으로 10%더 상승하면 진입하게 해줘"
+#
+# 사용 시나리오 (= 사장님 BEATUSDT/VELVET 사례):
+# - SHORT strategy = 가격 폭등 = stage 5/6 미진입 + trigger_price 통과
+# - 사장님 = 신 trigger_price 원함 = "현재가 × 1.10, 1.21, 1.331, ..."
+# - 이 endpoint = 미진입 단계 만 = trigger_price 재계산
+# - 진입한 단계 = 영향 X (= 사장님 자본 보호)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/{strategy_id}/recalc-untriggered-from-current", response_model=StrategyDetailResponse)
+def recalc_untriggered_from_current(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyDetailResponse:
+    """미진입 단계의 trigger_price = 현재가 × (1.10)^N 재계산.
+
+    사장님 사상 (2026-06-08):
+    - 포지션 + 진입 단계 = 그대로 유지
+    - 다음 미진입 단계 = 현재가 × 1.10
+    - 그 다음 단계 = 현재가 × 1.21 (= 1.10^2)
+    - trigger_percent = 10% 유지
+
+    검증:
+    - 본인 소유 + 활성 strategy
+    - 현재가 = Redis mark_price_cache 조회
+    - 미진입 단계 (is_triggered=False) 만 수정
+    - 진입 단계 = 영향 X (사장님 자본 보호)
+    """
+    import logging
+    from app.models.risk_event import RiskEvent
+    from app.models.strategy_stage_plan import StrategyStagePlan
+    from app.services.mark_price_cache import get_mark_price
+    from sqlalchemy import select as sa_select
+    logger = logging.getLogger(__name__)
+
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.",
+        )
+    if strategy.status in TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"⚠️ 종료된 strategy ({strategy.status}) 는 재계산 불가.",
+        )
+
+    current_price = get_mark_price(strategy.symbol)
+    if not current_price or current_price <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"⚠️ {strategy.symbol} 현재가 조회 실패 — Redis 캐시 없음. 1분 후 재시도.",
+        )
+
+    untriggered_plans = db.execute(
+        sa_select(StrategyStagePlan)
+        .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+        .where(StrategyStagePlan.is_triggered.is_(False))
+        .where(StrategyStagePlan.is_enabled.is_(True))
+        .order_by(StrategyStagePlan.stage_no.asc())
+    ).scalars().all()
+
+    if not untriggered_plans:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="⚠️ 미진입 단계가 없습니다 (= 모든 단계 진입 완료).",
+        )
+
+    # SHORT: trigger = 현재가 × (1.10)^N (가격 상승 시 진입)
+    # LONG:  trigger = 현재가 × (0.90)^N (가격 하락 시 진입)
+    is_short = (strategy.side or "").upper() == "SHORT"
+    direction = Decimal("1.10") if is_short else Decimal("0.90")
+
+    changes = []
+    for i, plan in enumerate(untriggered_plans, start=1):
+        old_trigger = plan.trigger_price
+        new_trigger = (current_price * (direction ** i)).quantize(Decimal("0.00000001"))
+        plan.trigger_price = new_trigger
+        plan.trigger_percent = Decimal("10")
+        changes.append({
+            "stage_no": plan.stage_no,
+            "old_trigger_price": str(old_trigger) if old_trigger else None,
+            "new_trigger_price": str(new_trigger),
+            "step": i,
+        })
+
+    db.add(RiskEvent(
+        strategy_instance_id=strategy.id,
+        event_type="UNTRIGGERED_STAGES_RECALC",
+        severity="INFO",
+        title=f"🔄 미진입 단계 재계산 — {strategy.symbol} {strategy.side}",
+        message=(
+            f"사장님 미진입 단계 trigger_price 재계산. "
+            f"현재가 {current_price} 기준 × ({'1.10' if is_short else '0.90'})^N. "
+            f"변경된 단계: {len(changes)}건 = {[c['stage_no'] for c in changes]}. "
+            f"진입 단계 영향 X (사장님 자본 보호)."
+        ),
+        event_payload={
+            "current_price": str(current_price),
+            "direction": str(direction),
+            "side": strategy.side,
+            "changes": changes,
+        },
+    ))
+    db.commit()
+    db.refresh(strategy)
+    logger.info(
+        "[recalc-untriggered] strategy_id=%s current_price=%s changes=%s",
+        strategy_id, current_price, len(changes),
+    )
+
+    from app.models.strategy_template import StrategyTemplate
+    tpl = (
+        db.get(StrategyTemplate, strategy.strategy_template_id)
+        if strategy.strategy_template_id else None
+    )
+    return _enrich_response(StrategyDetailResponse.model_validate(strategy), tpl)
