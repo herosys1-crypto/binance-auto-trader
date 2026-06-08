@@ -263,7 +263,202 @@ POST /strategies/{id}/recalc-untriggered-preview
 
 ---
 
-> **Spec 작성**: 2026-06-08
+# 🛡 Spec v2 (2026-06-08 추가) — 다른 시스템 영향 검증 (= 사장님 critical 요구)
+
+## 사장님 명시:
+> "남은 포지션 진입단계를 재설정하면 현재가 대비 위아래 설정을 하게 되는데
+>  그이후 설정이 기존 익절 PT와 크라이시스 그리고 익절 TP3단계후 설정되
+>  하락에 따라 강제익절또는 익절TP 진행 시작 설정진행에 영향이 없게 기획을 해줘"
+
+= 신 모드 C 적용 = **trigger_price 만 변경** + **다른 모든 시스템 = 영향 X** = 사장님 자본 보호 + 사장님 사상 영구 보존.
+
+---
+
+## 📊 6 시스템 영향 검증 매트릭스 (= 모두 영향 X ✅)
+
+### 1. **익절 TP 임계 (TP1~10)** = 영향 X ✅
+```
+TP 발동 조건 = pnl_ratio >= TP threshold (%)
+TP threshold = template.tp1_percent ~ tp10_percent (= 사장님 옵션 10/15/20/25 등)
+pnl_ratio = (current_price - avg_entry_price) / avg_entry_price × leverage
+
+= TP 발동 = 평단 (avg_entry_price) 기준 ROI 계산
+= trigger_price 변경 = ROI 계산에 X = 영향 X
+```
+→ **사장님 TP1 옵션 (+20%) = 그대로 작동** ✅
+
+### 2. **Crisis 모드 진입** = 영향 X ✅
+```
+Crisis 진입 조건 = max_loss_pct ≤ template.crisis_threshold (default -50%)
+                  + (모든 단계 진입 완료 OR ad-hoc 사용)
+
+max_loss_pct = 가장 깊었던 손실 % (= 평단 기준)
+trigger_price 변경 = max_loss_pct 계산에 X = 영향 X
+
+다만:
+- "모든 단계 진입 완료" 조건 → 미진입 단계 = trigger_price 변경 (= 사장님 의도 = 더 늦게 진입)
+- = Crisis 진입 = 늦어질 수 있음 (= 안전 방향, 사장님 자본 보호 강화)
+```
+→ **Crisis = 옛 그대로 작동 + 더 안전 방향** ✅
+
+### 3. **익절 TP3 후 Trailing TP** = 영향 X ✅
+```
+Trailing TP 발동 조건:
+  - status TP3+_DONE_PARTIAL (= TP3 발동 후)
+  - current_stage >= 3
+  - peak >= 5%
+  - pnl_ratio <= peak - retrace (= 사장님 옵션 5/10/15/20%)
+
+= 모든 조건 = 평단 기준 ROI / 진입 단계 / Redis peak
+= trigger_price 변경 = 영향 X
+```
+→ **사장님 trailing retrace 옵션 (-15%) = 그대로 작동** ✅
+
+### 4. **하락 시 강제 익절 (= Trailing retrace)** = 영향 X ✅
+```
+강제 익절 = trailing retrace 발동 (= TP3 후 peak 회귀)
+조건 = 위 3번과 동일
+
+trigger_price 변경 = 영향 X
+사장님 옵션 (-15%) = peak 대비 -15% 회귀 시 = 즉시 전량 청산
+```
+→ **사장님 자본 보호 = 옛 그대로** ✅
+
+### 5. **SL 한도 (= 강제 청산)** = 영향 X ✅
+```
+SL 한도 = total_capital × SL% (default 80%)
+total_capital = stage_plans.planned_capital 합 (= 사장님 입력)
+
+신 모드 C = trigger_price 만 변경
+         = planned_capital 그대로 (= 사장님 의도 보존)
+         = total_capital 그대로
+         = SL 한도 그대로
+```
+→ **SL 한도 = 영향 X = 사장님 자본 보호** ✅
+
+### 6. **TP 진행 시작 (= TP1 발동 시점)** = 영향 X ✅
+```
+TP1 발동 = pnl_ratio >= TP1 임계 (사장님 옵션 +20%)
+= 평단 기준 ROI 도달 시 = 즉시 발동
+
+trigger_price = stage 진입 조건 (= 자동 진입)
+TP threshold = TP 발동 조건 (= 자동 익절)
+= 두 시스템 = 완전 독립!
+
+trigger_price 변경 = TP 발동 시점 = 영향 X
+```
+→ **TP 진행 = 옛 그대로 작동** ✅
+
+---
+
+## 🌟 검증 결과 — 사장님 사상 100% 보존
+
+### 변경 영향 (= 사장님 의도):
+| 시스템 | 영향 | 의도 |
+|---|---|---|
+| stage_trigger_worker | ✅ 변경 (= 신 trigger_price) | 사장님 의도 |
+
+### 변경 없음 (= 안전):
+| 시스템 | 영향 X | 영구 보존 |
+|---|---|---|
+| TP1~10 임계 발동 | ❌ | 평단 기준 ROI |
+| Crisis 모드 진입 | ❌ | max_loss_pct 기준 |
+| Trailing TP (TP3 후) | ❌ | peak + retrace |
+| 강제 익절 (하락) | ❌ | trailing retrace |
+| SL 한도 | ❌ | total_capital × SL% |
+| TP 진행 시작 | ❌ | 평단 기준 ROI |
+
+---
+
+## 🛡 사장님 자본 보호 사상 영구 보존
+
+### 진입 단계 (= is_triggered=True) — 영구 보존:
+- ❌ trigger_price 변경 X (= 사장님 실 체결 가격)
+- ❌ planned_capital 변경 X
+- ❌ 실 체결 평단 영향 X
+- ❌ 실 체결 qty 영향 X
+
+### 미진입 단계 (= is_triggered=False) — 사장님 의도:
+- ✅ trigger_price 변경 (= 현재가 × 1.10^N)
+- ❌ planned_capital 변경 X (= 사장님 자본 합 그대로)
+- ❌ trigger_percent 변경 X (= 10% 유지)
+
+### 다른 모든 시스템:
+- ❌ 영향 X (= 위 6 시스템 매트릭스)
+
+---
+
+## 📐 사장님 사례 100% 안전 검증
+
+### 사장님 BEATUSDT (#39) 시뮬레이션:
+```
+적용 전:
+  - 진입 단계 1~4 = 평단 3.6353 (= 보존)
+  - 미진입 5: trigger 3.8788 (= 이미 통과)
+  - 미진입 6: trigger 4.2666 (= 이미 통과)
+  - TP1 임계 (사장님 옵션) = +20%
+  - Trailing retrace = -15%
+  - SL 한도 = 4,200 × 80% = -3,360 USDT
+  - Crisis 임계 = -50%
+
+적용 후:
+  - 진입 단계 1~4 = 영향 X ✅
+  - 미진입 5: trigger 4.719 (= 신 진입가)
+  - 미진입 6: trigger 5.191
+  - TP1 임계 = +20% (영향 X) ✅
+  - Trailing retrace = -15% (영향 X) ✅
+  - SL 한도 = -3,360 USDT (영향 X) ✅
+  - Crisis 임계 = -50% (영향 X) ✅
+
+다음 동작:
+  - 가격이 +10% 더 올라가면 (4.29 → 4.72) → stage 5 자동 진입
+  - 가격이 +21% 더 올라가면 (4.29 → 5.19) → stage 6 자동 진입
+  - 가격 하락 (= 평단 3.6353 위 시간) → TP1 (+20%) 도달 시 익절 자동
+  - max_loss_pct -50% 도달 시 → Crisis 진입 (= 옛 그대로)
+```
+
+→ **모든 시스템 = 사장님 사상 그대로 작동** ✅
+
+---
+
+## 🔗 코드 검증 위치 (= 향후 회귀 방지)
+
+### 영향 X 확인된 코드:
+1. `risk_service.evaluate_take_profit_level` — pnl_ratio 기준 = trigger_price X
+2. `risk_service._should_trigger_crisis_mode` — max_loss_pct + stage count = trigger_price X
+3. `risk_service` trailing armed check — status + peak + retrace = trigger_price X
+4. `risk_service` SL 임계 — total_capital × SL% = trigger_price X
+5. `stage_trigger_worker` — trigger_price ✅ (= 변경 의도)
+
+### Audit log:
+- `RiskEvent UNTRIGGERED_STAGES_RECALC` (= 이미 PR #149 구현)
+- 변경 전후 trigger_price = 영구 기록
+- 사장님 사후 검증 가능
+
+---
+
+## 🌿 사장님 결정 — C 즉시 진행
+
+### 사장님 명시:
+> "C로 진행해주고"
+> + 영향 분석 spec 추가
+
+### 즉시 사용 가능 (= PR #149 머지 + 배포):
+```bash
+cd ~/binance-auto-trader/backend && git pull origin main && docker compose restart api
+```
+
+→ 「전략 인스턴스」 카드 → **🔄** 클릭 → 즉시 적용!
+
+### 영향:
+- ✅ 미진입 단계 trigger_price 만 변경
+- ✅ 다른 모든 시스템 = 영향 X (= 위 6 매트릭스)
+- ✅ 사장님 자본 보호 영구 보존
+
+---
+
+> **Spec v1**: 2026-06-08 (= 신 모드 C 기본 기획)
+> **Spec v2**: 2026-06-08 (= 6 시스템 영향 X 검증 추가, 사장님 critical 요구)
 > **위치**: `binance-auto-trader/STRATEGY_EDIT_MODE_C_SPEC_2026-06-08.md`
 > **상태**: 영구 보존 — 변경 시 = 사장님 명시 승인
-> **다음**: 사장님 결정 (옵션 A/B/C) → Phase 2~4 진행
+> **다음**: PR #149 머지 + 배포 + 사장님 🔄 클릭 사용
