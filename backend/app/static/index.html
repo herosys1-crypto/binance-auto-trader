@@ -381,6 +381,22 @@
     </div>
   </div>
 
+  <!-- ⭐ 즐겨찾기 템플릿 — 2026-06-09 사장님 요구 (= 1 클릭 신 전략) -->
+  <div class="card rounded-xl p-4 mb-3">
+    <div class="flex justify-between items-center mb-2 flex-wrap gap-2">
+      <h3 class="text-sm sm:text-base font-bold">⭐ 즐겨찾기 템플릿
+        <span class="text-xs font-normal text-slate-400" title="사장님 자주 쓰는 템플릿 (최대 5개). 카드 클릭 = 1 클릭 신 전략 시작 (시작가 = 현재가 자동).">(1 클릭 신 전략 — 최대 5개)</span>
+      </h3>
+      <div class="flex gap-2">
+        <button onclick="refreshFavoriteTemplates()" class="btn-ghost btn text-xs" style="padding:3px 8px;font-size:11px" title="즐겨찾기 목록 새로고침">🔄</button>
+        <button onclick="openTemplateFavoritePicker()" class="btn-ghost btn text-xs" style="padding:3px 8px;font-size:11px" title="템플릿 ⭐ 즐겨찾기 관리 (= 모든 template 중 5개 선택)">+ 즐겨찾기 관리</button>
+      </div>
+    </div>
+    <div id="favorite-templates-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+      <div class="col-span-full text-center text-slate-500 text-xs py-4">로딩 중... (또는 = 즐겨찾기 미설정 → 「+ 즐겨찾기 관리」 클릭)</div>
+    </div>
+  </div>
+
   <!-- 📊 외부 포지션 (도구 밖 수동 진입) — 2026-05-21 사장님 요구 -->
   <div class="card rounded-xl p-4 mb-3">
     <div class="flex justify-between items-center mb-2 flex-wrap gap-2">
@@ -1216,6 +1232,7 @@
 <script src="/static/js/chart-detail.js?v=20260602"></script>
 <script src="/static/js/accounts-modal.js?v=20260602"></script>
 <script src="/static/js/add-position-modal.js?v=20260602"></script>
+<script src="/static/js/favorite-templates.js?v=20260609"></script>
 <script src="/static/js/strategy-actions.js?v=20260602"></script>
 <script src="/static/js/admin-shortcuts.js?v=20260602"></script>
 <script src="/static/js/page-router.js?v=20260602"></script>

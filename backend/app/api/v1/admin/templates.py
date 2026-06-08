@@ -90,7 +90,9 @@ class StrategyTemplateResponse(BaseModel):
     tp1_percent: Decimal
     tp2_percent: Decimal
     tp3_percent: Decimal
+    stop_loss_percent_of_capital: Decimal | None = None
     is_active: bool
+    is_favorite: bool = False
 
 
 @router.post("/strategy-templates", response_model=StrategyTemplateResponse, status_code=status.HTTP_201_CREATED)
@@ -348,3 +350,51 @@ def cleanup_quick_templates(
         if force_close_errors:
             msg += f", 청산 에러 {len(force_close_errors)}건: {'; '.join(force_close_errors[:3])}"
     return MessageResponse(message=msg)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 🌟 사장님 즐겨찾기 템플릿 (2026-06-09)
+#
+# 사장님 명시: "기본 세팅 5개 만들수 있게 + 1 클릭 신 전략"
+# - is_favorite=True 마킹된 template 만 조회 (최대 5개 권장)
+# - 「⭐ 즐겨찾기 템플릿」 카드 = 사장님 자주 쓰는 신 전략 1 클릭
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/strategy-templates/favorites", response_model=list[StrategyTemplateResponse])
+def list_favorite_templates(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> list[StrategyTemplateResponse]:
+    """is_favorite=True + is_active=True 인 template 조회 (= 사장님 즐겨찾기).
+
+    사장님 「⭐ 즐겨찾기 템플릿」 카드 = 최대 5개 권장.
+    """
+    rows = (
+        db.query(StrategyTemplate)
+        .filter(StrategyTemplate.is_favorite.is_(True))
+        .filter(StrategyTemplate.is_active.is_(True))
+        .order_by(StrategyTemplate.id.desc())
+        .limit(10)  # 안전 한도 (사장님 권장 5개)
+        .all()
+    )
+    return [StrategyTemplateResponse.model_validate(r) for r in rows]
+
+
+@router.post("/strategy-templates/{template_id}/toggle-favorite", response_model=StrategyTemplateResponse)
+def toggle_favorite_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyTemplateResponse:
+    """template 즐겨찾기 토글 (= True/False 자동 전환).
+
+    사장님 = 「⭐」 클릭 = 즐겨찾기 추가/제거.
+    """
+    tpl = db.get(StrategyTemplate, template_id)
+    if not tpl:
+        raise HTTPException(status_code=404, detail=f"Template {template_id} not found")
+    tpl.is_favorite = not bool(tpl.is_favorite)
+    db.commit()
+    db.refresh(tpl)
+    return StrategyTemplateResponse.model_validate(tpl)
