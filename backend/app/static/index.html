@@ -135,6 +135,15 @@
   @media (max-width: 768px) {
     .strategies-table-wrap { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
   }
+
+  /* 🌟 2026-06-09 사장님 새 전략 모달 compact — 한 화면 표시 */
+  #create-modal .mb-4 { margin-bottom: 0.5rem !important; }
+  #create-modal .mb-3 { margin-bottom: 0.3rem !important; }
+  #create-modal .mb-2 { margin-bottom: 0.2rem !important; }
+  #create-modal label.block { margin-bottom: 0.2rem !important; }
+  #create-modal input[type="text"], #create-modal input[type="number"] { padding-top: 0.3rem !important; padding-bottom: 0.3rem !important; }
+  #create-modal .py-2 { padding-top: 0.3rem !important; padding-bottom: 0.3rem !important; }
+  #create-modal h2 { line-height: 1.2; }
 </style>
 </head>
 <body class="min-h-screen">
@@ -616,10 +625,11 @@
   </div>
 
   <div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
-       style="background:rgba(0,0,0,0.7); padding:20px;">
-    <div class="card rounded-xl p-6" style="max-width:720px; width:100%; max-height:90vh; overflow-y:auto;">
-      <div class="flex justify-between items-center mb-4">
-        <h2 id="cm-title" class="text-xl font-bold">➕ 새 전략 시작</h2>
+       style="background:rgba(0,0,0,0.7); padding:10px;">
+    <!-- 2026-06-09 사장님 compact: padding p-6 → p-3, max-height 90vh → 95vh, max-width 720 → 760 -->
+    <div class="card rounded-xl p-3" style="max-width:760px; width:100%; max-height:95vh; overflow-y:auto;">
+      <div class="flex justify-between items-center mb-2">
+        <h2 id="cm-title" class="text-lg font-bold">➕ 새 전략 시작</h2>
         <button onclick="closeCreateModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
       </div>
 
@@ -708,12 +718,19 @@
           <button id="cm-mode-prev" onclick="setCmMode('prev')"
             class="btn flex-1 btn-ghost" style="font-size:12px;padding:6px 10px">📂 이전 전략 불러오기</button>
         </div>
+        <!-- 🌟 2026-06-09 사장님 신 기능: 최근 전략 5개 빠른 선택 (1 클릭 자동 로드) -->
+        <div id="cm-recent-strategies" class="mb-2 p-2 bg-slate-900/50 rounded text-xs">
+          <div class="text-slate-400 mb-1">⚡ 최근 전략 (1 클릭 자동 로드):</div>
+          <div id="cm-recent-strategies-list" class="flex flex-wrap gap-1">
+            <span class="text-slate-500">로딩 중...</span>
+          </div>
+        </div>
 
         <!-- 직접 입력 모드 -->
         <div id="cm-direct-panel">
           <p class="text-xs text-slate-400 mb-2">
             <strong class="text-slate-200">💵 수량 (USDT)</strong> = 각 단계에 투입할 USDT 금액. 1단계는 필수, 나머지는 사용할 단계만.<br>
-            <strong class="text-slate-200">📊 진입 조건</strong> = 직전 단계 대비 가격 변동 %. 기본값 (<strong>2/3/4단계 +10%</strong>, <strong>5단계 이후 +20%</strong>) 사용 가능, 직접 수정도 가능.<br>
+            <strong class="text-slate-200">📊 진입 조건</strong> = 직전 단계 대비 가격 변동 %. 기본값 (<strong>2단계 +10%</strong>, <strong>3단계 이후 +20%</strong>) 사용 가능, 직접 수정도 가능.<br>
             <strong>1단계 진입가</strong> 는 아래 <strong>4️⃣ 시작가</strong> 에서 입력. 마지막 단계는 사용자가 입력한 % 상승/하락 시 진입 (예: +20%).
           </p>
           <div id="cm-capitals-grid" class="space-y-1"><!-- JS 로 10행 입력 채움 --></div>

@@ -93,6 +93,39 @@ async function openCreateModal(editStrategyId) {
   }
   // 2026-06-03 (사장님 사상 정확 적용): SL = 투자금 대비 손실 % (레버리지 무관)
   _attachSlLossPreview();
+  // 🌟 2026-06-09 사장님 신 기능: 최근 전략 5개 빠른 선택 자동 로드
+  if (typeof loadRecentStrategiesQuick === 'function') {
+    loadRecentStrategiesQuick();
+  }
+}
+
+// 🌟 2026-06-09 사장님 신 기능: 최근 전략 5개 빠른 선택 (1 클릭 자동 로드)
+async function loadRecentStrategiesQuick() {
+  const container = document.getElementById('cm-recent-strategies-list');
+  if (!container) return;
+  try {
+    const all = await api('/strategies?include_archived=false');
+    if (!all || all.length === 0) {
+      container.innerHTML = '<span class="text-slate-500">최근 전략 없음</span>';
+      return;
+    }
+    // 최근 5개 (= ID 내림차순)
+    const recent = all.sort((a, b) => b.id - a.id).slice(0, 5);
+    container.innerHTML = recent.map(s => {
+      const sideColor = s.side === 'SHORT' ? 'text-red-400' : 'text-green-400';
+      const sideIcon = s.side === 'SHORT' ? '📉' : '📈';
+      return `<button onclick="loadPrevBlueprint(${s.id})"
+        class="px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-xs"
+        title="#${s.id} ${s.symbol} ${s.side} ${s.leverage}x — 클릭 = 자동 로드">
+        <span class="${sideColor}">${sideIcon}</span>
+        <span class="font-mono text-blue-300">#${s.id}</span>
+        <span class="font-semibold">${s.symbol}</span>
+        <span class="text-slate-400">${s.leverage}x</span>
+      </button>`;
+    }).join('');
+  } catch (e) {
+    container.innerHTML = `<span class="text-red-400">조회 실패: ${e.message || e}</span>`;
+  }
 }
 
 // SL preview — 자본 + sl% 입력 시 즉시 USDT 손실 계산 표시 (레버리지 무관).
