@@ -266,6 +266,8 @@ async function loadBalance() {
     let walletSum = 0, reservedSum = 0, ourAvailSum = 0, stratSum = 0;
     let maintMarginSum = 0, marginBalSum = 0;
     let actualMarginSum = 0;  // 2026-06-05: 실제 lock 마진 합 (total_position_initial_margin)
+    // 🌟 2026-06-09 사장님 신 130% 정책 필드
+    let wallet130Sum = 0, newStratAvailSum = 0;
     let hasTestnet = false;
     for (const b of valid) {
       walletSum += Number(b.total_wallet_balance || 0);
@@ -275,6 +277,8 @@ async function loadBalance() {
       maintMarginSum += Number(b.total_maint_margin || 0);
       marginBalSum += Number(b.total_margin_balance || 0);
       actualMarginSum += Number(b.total_position_initial_margin || 0);
+      wallet130Sum += Number(b.wallet_limit_130 || 0);
+      newStratAvailSum += Number(b.new_strategy_available || 0);
       if (b.is_testnet) hasTestnet = true;
     }
     // 합산 마진 비율 = total maint / total margin balance
@@ -325,13 +329,28 @@ async function loadBalance() {
     //     📦 포지션 예약됨 = 사장님 계획 자본 중 = 앞으로 lock 될 예정 (= 미진입 단계 예약)
     //     💵 운용 가용 = 지갑 - 전체 계획 자본 = 신규 strategy 가능 한도 (음수 = 예약 초과)
     //   = 상호 배타적, 합 = 거래소 잔액 (사장님 한눈에)
-    const detailMain = `🔒 실 ${fmt(actualMarginSum)} | 📦 포지션 예약됨 ${fmt(reservedRemainingSum)} | 💵 운용 가용 ${fmt(ourAvailSum)} (${stratSum}건, 예약률 ${reservedRatio.toFixed(1)}%)${hasTestnet ? ' · testnet 포함' : ''}`;
+    // 🌟 2026-06-09 사장님 신 정책 표시 (= 130% 한도 + 신 전략 가용):
+    // 사장님 명시: "실 사용 + 예약 합 + 130% 한도 + 신 전략 가용 = 한눈 파악"
+    // 예: 실 3500 + 예약 1500 = 사용 5000, 한도 7702 (= wallet 5925 × 1.30), 신 전략 가용 +2702
+    const usedTotal = actualMarginSum + reservedRemainingSum;  // 실 + 예약 = 사용 중
+    const realFreedom = walletSum - actualMarginSum;  // 실 자본 여유 (= wallet - 진입 마진)
+    const newStrategyRatio = wallet130Sum > 0 ? (usedTotal / wallet130Sum * 100) : 0;
+    let newSig;
+    if (newStratAvailSum <= 0) newSig = 'red';
+    else if (newStrategyRatio < 80) newSig = 'green';
+    else if (newStrategyRatio < 95) newSig = 'yellow';
+    else newSig = 'red';
+    const detailMain =
+      `🔒 실 ${fmt(actualMarginSum)} + 📦 예약 ${fmt(reservedRemainingSum)} = 사용 ${fmt(usedTotal)} | ` +
+      `💵 실 여유 ${fmt(realFreedom)}\n` +
+      `⚡ 130% 한도 ${fmt(wallet130Sum)} | 신 전략 가용 +${fmt(newStratAvailSum)} (${newStrategyRatio.toFixed(1)}%)` +
+      `${hasTestnet ? ' · testnet 포함' : ''}`;
     const accountInfo = valid.length > 1 ? ` · ${valid.length}계정 합산` : '';
     setMetric(
       'balance',
       `${fmt(walletSum)} USDT`,                       // 큰 글씨 = 지갑 총액 (사장님 직관)
-      detailMain + accountInfo,                       // 작은 글씨 = 3 구간 분해
-      sig,
+      detailMain + accountInfo,                       // 작은 글씨 = 사용 + 130% 한도
+      newSig,
     );
     // tooltip — 마진율 + 계정별 detail + 단위 차이 + 「예약」 의미 설명
     const balCard = document.getElementById('card-balance') || document.querySelector('[data-metric="balance"]');
