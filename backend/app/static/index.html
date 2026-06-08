@@ -144,6 +144,12 @@
   #create-modal input[type="text"], #create-modal input[type="number"] { padding-top: 0.3rem !important; padding-bottom: 0.3rem !important; }
   #create-modal .py-2 { padding-top: 0.3rem !important; padding-bottom: 0.3rem !important; }
   #create-modal h2 { line-height: 1.2; }
+  /* 🌟 2026-06-09 사장님 v2: 단계 행 = 한 줄 강제 (= 2줄 X) */
+  #cm-capitals-grid > div > div { white-space: nowrap !important; overflow: hidden; text-overflow: ellipsis; }
+  #cm-capitals-grid input { min-width: 0; }
+  /* 최근 전략 = 3개 가로 = 한 줄 강제 */
+  #cm-recent-strategies-list { display: flex !important; flex-wrap: nowrap !important; gap: 4px; }
+  #cm-recent-strategies-list button { flex: 1 1 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 
   /* 🌟 2026-06-09 사장님 모바일 간략 페이지 (= ≤ 768px)
      표시: 거래소 잔액, 미실현/실현, 전략 인스턴스, 새 전략 버튼만
@@ -655,8 +661,8 @@
 
   <div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
        style="background:rgba(0,0,0,0.7); padding:10px;">
-    <!-- 2026-06-09 사장님 compact: padding p-6 → p-3, max-height 90vh → 95vh, max-width 720 → 760 -->
-    <div class="card rounded-xl p-3" style="max-width:760px; width:100%; max-height:95vh; overflow-y:auto;">
+    <!-- 2026-06-09 사장님 v2: max-width 760 → 95vw (가로 확장 = 행 2줄 X) -->
+    <div class="card rounded-xl p-3" style="max-width:95vw; width:100%; max-height:95vh; overflow-y:auto;">
       <div class="flex justify-between items-center mb-2">
         <h2 id="cm-title" class="text-lg font-bold">➕ 새 전략 시작</h2>
         <button onclick="closeCreateModal()" class="text-slate-400 hover:text-white text-xl">✕</button>

@@ -99,7 +99,9 @@ async function openCreateModal(editStrategyId) {
   }
 }
 
-// 🌟 2026-06-09 사장님 신 기능: 최근 전략 5개 빠른 선택 (1 클릭 자동 로드)
+// 🌟 2026-06-09 사장님 신 기능: 최근 전략 3개 빠른 선택 (1 클릭 자동 로드, 중복 제거)
+// 사장님 명시: "한 줄에 3개만 + 중복 없게"
+// = symbol+side 기준 중복 제거 = 다른 strategy 3개만
 async function loadRecentStrategiesQuick() {
   const container = document.getElementById('cm-recent-strategies-list');
   if (!container) return;
@@ -109,13 +111,23 @@ async function loadRecentStrategiesQuick() {
       container.innerHTML = '<span class="text-slate-500">최근 전략 없음</span>';
       return;
     }
-    // 최근 5개 (= ID 내림차순)
-    const recent = all.sort((a, b) => b.id - a.id).slice(0, 5);
-    container.innerHTML = recent.map(s => {
+    // 최근 ID 내림차순 + symbol+side 중복 제거 = 3개만
+    const sorted = all.sort((a, b) => b.id - a.id);
+    const seen = new Set();
+    const unique = [];
+    for (const s of sorted) {
+      const key = `${s.symbol}_${s.side}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(s);
+      if (unique.length >= 3) break;
+    }
+    container.innerHTML = unique.map(s => {
       const sideColor = s.side === 'SHORT' ? 'text-red-400' : 'text-green-400';
       const sideIcon = s.side === 'SHORT' ? '📉' : '📈';
       return `<button onclick="loadPrevBlueprint(${s.id})"
-        class="px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-xs"
+        class="px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-xs flex-1"
+        style="min-width:0"
         title="#${s.id} ${s.symbol} ${s.side} ${s.leverage}x — 클릭 = 자동 로드">
         <span class="${sideColor}">${sideIcon}</span>
         <span class="font-mono text-blue-300">#${s.id}</span>
