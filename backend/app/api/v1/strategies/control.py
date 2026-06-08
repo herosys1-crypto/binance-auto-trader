@@ -362,6 +362,34 @@ def update_strategy_settings_in_place(
             old_cfg["last_stage_trigger_percent"] = str(payload.last_stage_trigger_percent)
         new_tpl.stages_config = old_cfg
 
+        # 🚨 2026-06-08 사장님 critical 발견 (헌법 Pattern 4 — Asymmetric Policy):
+        # 사장님 명시: "초과한 전략 예약률을 조정하기 위해서 진입하지 않고 남은 전략 단계를 축소"
+        # → 단계 capital 변경 시 = total_capital 자동 동기화 필수!
+        #
+        # 옛 silent bug: strategy.total_capital 변경 X
+        # → 사장님이 단계 줄여도 = 예약 그대로 = 의도 X
+        #
+        # 신: total_capital = sum(new_capitals) — 모든 단계 (진입+미진입) 자본 합
+        # → 130% 정책 (stage_trigger_worker) 의 예약 = 즉시 정확 반영
+        # → 사장님 자본 보호 + 예약률 조정 = 정확 작동
+        try:
+            _new_capital_sum = sum(
+                (Decimal(str(c)) for c in new_capitals if c is not None),
+                Decimal("0"),
+            )
+            if _new_capital_sum > 0:
+                _old_total = Decimal(str(strategy.total_capital or 0))
+                strategy.total_capital = _new_capital_sum
+                logger.info(
+                    "[update-settings] total_capital 자동 동기화 strategy_id=%s old=%s new=%s (단계 capital 변경 반영)",
+                    strategy.id, _old_total, _new_capital_sum,
+                )
+        except Exception as _e:
+            logger.warning(
+                "[update-settings] total_capital 동기화 실패 strategy_id=%s err=%s",
+                strategy.id, _e,
+            )
+
     db.add(new_tpl)
     db.flush()
     strategy.strategy_template_id = new_tpl.id
