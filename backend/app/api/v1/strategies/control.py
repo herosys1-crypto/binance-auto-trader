@@ -1098,6 +1098,153 @@ def add_untriggered_stages(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 🌟 사장님 신 기능 (2026-06-08): 미체결 LIMIT 주문 시각 + 개별 취소
+#
+# 사장님 명시: "「💉 포지션 추가」 지정가 진입예정 = 어디서 관리?"
+# = 사장님 = 미체결 LIMIT 주문 시각 + 개별 취소 의도
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/{strategy_id}/open-orders")
+def list_open_orders(
+    strategy_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """미체결 주문 조회 (LIMIT 등 status=NEW + PARTIALLY_FILLED).
+
+    사장님 사상: 「💉 포지션 추가」 지정가 + 자동 단계 LIMIT 모두 추적.
+    """
+    from sqlalchemy import select as sa_select
+    from app.models.order import Order
+
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(404, "전략을 찾을 수 없거나 본인 소유가 아닙니다.")
+
+    orders = db.execute(
+        sa_select(Order)
+        .where(Order.strategy_instance_id == strategy_id)
+        .where(Order.status.in_(["NEW", "PARTIALLY_FILLED"]))
+        .order_by(Order.created_at.desc())
+    ).scalars().all()
+
+    return {
+        "strategy_id": strategy_id,
+        "symbol": strategy.symbol,
+        "side": strategy.side,
+        "count": len(orders),
+        "orders": [
+            {
+                "id": o.id,
+                "stage_no": o.stage_no,
+                "purpose": o.purpose,
+                "side": o.side,
+                "order_type": o.order_type,
+                "trigger_price": str(o.trigger_price) if o.trigger_price else None,
+                "price": str(o.price) if o.price else None,
+                "orig_qty": str(o.orig_qty) if o.orig_qty else None,
+                "executed_qty": str(o.executed_qty) if o.executed_qty else None,
+                "status": o.status,
+                "client_order_id": o.client_order_id,
+                "exchange_order_id": str(o.exchange_order_id) if o.exchange_order_id else None,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+                "is_adhoc": o.stage_no is None,  # ad-hoc (= 「💉 포지션 추가」)
+            }
+            for o in orders
+        ],
+    }
+
+
+@router.delete("/{strategy_id}/open-orders/{order_id}")
+def cancel_open_order(
+    strategy_id: int,
+    order_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """개별 미체결 주문 취소.
+
+    검증:
+    - 본인 소유 strategy
+    - 주문 = 해당 strategy 소속
+    - 주문 status = NEW 또는 PARTIALLY_FILLED
+    """
+    import logging
+    from sqlalchemy import select as sa_select
+    from app.models.order import Order
+    from app.models.risk_event import RiskEvent
+    from app.services.execution_service import ExecutionService
+    logger = logging.getLogger(__name__)
+
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(404, "전략을 찾을 수 없거나 본인 소유가 아닙니다.")
+
+    order = db.execute(
+        sa_select(Order)
+        .where(Order.id == order_id)
+        .where(Order.strategy_instance_id == strategy_id)
+    ).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "주문을 찾을 수 없습니다.")
+    if order.status not in ("NEW", "PARTIALLY_FILLED"):
+        raise HTTPException(400, f"이미 종료된 주문 (status={order.status})")
+
+    # 거래소 호출 (= lifecycle.py manual-tp 패턴)
+    try:
+        from app.repositories.exchange_account_repository import ExchangeAccountRepository
+        from app.core.security import decrypt_text
+        account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
+        if not account:
+            raise HTTPException(400, f"거래소 계정 없음 (id={strategy.exchange_account_id})")
+        api_key = decrypt_text(account.api_key_enc)
+        api_secret = decrypt_text(account.api_secret_enc)
+        execution = ExecutionService(
+            db, api_key=api_key, api_secret=api_secret, is_testnet=account.is_testnet,
+        )
+        result = execution.cancel_exchange_order(
+            symbol=order.symbol,
+            order_id=int(order.exchange_order_id) if order.exchange_order_id else None,
+            orig_client_order_id=order.client_order_id,
+        )
+        logger.info(
+            "[cancel-open-order] strategy_id=%s order_id=%s exchange_oid=%s status=%s",
+            strategy_id, order_id, order.exchange_order_id, (result or {}).get("status"),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("[cancel-open-order] 거래소 호출 실패: %s", e)
+        raise HTTPException(502, f"거래소 호출 실패: {e}")
+
+    # DB 갱신
+    order.status = "CANCELED"
+    db.add(RiskEvent(
+        strategy_instance_id=strategy.id,
+        event_type="OPEN_ORDER_CANCELED_MANUAL",
+        severity="INFO",
+        title=f"❌ 미체결 주문 수동 취소 — {strategy.symbol} {strategy.side}",
+        message=(
+            f"사장님 수동 취소. order_id={order_id} stage_no={order.stage_no} "
+            f"type={order.order_type} qty={order.orig_qty} @{order.price or '-'}"
+        ),
+        event_payload={
+            "order_id": order_id,
+            "exchange_order_id": str(order.exchange_order_id) if order.exchange_order_id else None,
+            "stage_no": order.stage_no,
+            "is_adhoc": order.stage_no is None,
+        },
+    ))
+    db.commit()
+    return {
+        "ok": True,
+        "order_id": order_id,
+        "message": f"주문 #{order_id} 취소 완료",
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # (옛 endpoint 그대로 유지)
 # ─────────────────────────────────────────────────────────────────────────────
 

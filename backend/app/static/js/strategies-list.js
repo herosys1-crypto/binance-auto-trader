@@ -550,9 +550,16 @@ async function refreshStrategies() {
               <button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="전략 보관 (archive — DB row 보존, UI 숨김, 손익 통계 유지)">🗑</button>
             </div>`;
       } else {
-        stopBtn = `<div class="flex flex-wrap gap-1" style="max-width:130px">
+        // 🌟 2026-06-08 사장님 신 기능: 미체결 LIMIT 주문 시각 + 개별 취소
+        // 옛: 사장님 = 「💉 포지션 추가」 지정가 진입예정 = 관리 위치 X (= silent bug)
+        // 신: 📋 버튼 = 미체결 주문 모달 (= 사장님 자본 보호 + 시각)
+        const openOrdersBtn = canTriggerNext
+          ? `<button onclick="event.stopPropagation(); openOpenOrdersModal(${s.id}, '${s.symbol}', '${s.side}')" class="btn-ghost btn text-xs" style="${btnStyle}" title="미체결 주문 보기 (= 자동 단계 LIMIT + 💉 포지션 추가 LIMIT). 개별 취소 가능.">📋</button>`
+          : '';
+        stopBtn = `<div class="flex flex-wrap gap-1" style="max-width:180px">
             <button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="설정 수정 (in-place 또는 종료+재시작) — 미진입 단계 재계산은 「수정 모드」 모달 → 「현재가」 버튼 사용">✏️</button>
             ${triggerNextBtn}
+            ${openOrdersBtn}
             <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="${btnStyle}" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
             <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="긴급 종료 (포지션 시장가 청산)">🛑</button>
           </div>`;

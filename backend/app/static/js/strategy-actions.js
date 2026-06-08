@@ -138,6 +138,86 @@ function closeAddUntriggeredStagesModal() {
   if (m) m.remove();
 }
 
+// 🌟 2026-06-08 사장님 신 기능: 미체결 LIMIT 주문 시각 + 개별 취소
+// 사장님 명시: "「💉 포지션 추가」 지정가 진입예정 어디서 관리?" → 신 모달
+async function openOpenOrdersModal(id, symbol, side) {
+  let data;
+  try {
+    data = await api(`/strategies/${id}/open-orders`);
+  } catch (err) {
+    toast(`미체결 주문 조회 실패: ${err.message}`, 'error');
+    return;
+  }
+  const orders = data.orders || [];
+  const fmt = (n) => n != null ? Number(n).toLocaleString('en-US', {maximumFractionDigits: 8}) : '-';
+  const rowsHtml = orders.length === 0
+    ? `<tr><td colspan="6" class="text-center py-4 text-slate-400">미체결 주문 없음</td></tr>`
+    : orders.map(o => `
+        <tr style="border-bottom:1px solid #334155">
+          <td style="padding:6px;text-align:center">
+            ${o.stage_no != null ? `<span class="text-blue-300">${o.stage_no}단계</span>` : `<span class="text-purple-300">💉 추가</span>`}
+          </td>
+          <td style="padding:6px;text-align:center">
+            <span class="${o.side === 'SELL' ? 'text-red-400' : 'text-green-400'}">${o.side}</span>
+          </td>
+          <td style="padding:6px;text-align:center">${o.order_type}</td>
+          <td style="padding:6px;text-align:right;font-family:monospace">${fmt(o.price || o.trigger_price)}</td>
+          <td style="padding:6px;text-align:right;font-family:monospace">${fmt(o.orig_qty)}</td>
+          <td style="padding:6px;text-align:center">
+            <button onclick="cancelOpenOrder(${id}, ${o.id}, this)" class="btn-danger btn text-xs" style="padding:3px 8px;background:#dc2626;color:white">❌ 취소</button>
+          </td>
+        </tr>
+      `).join('');
+
+  const modalHtml = `
+    <div id="open-orders-modal-backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center" onclick="if(event.target.id==='open-orders-modal-backdrop')closeOpenOrdersModal()">
+      <div style="background:#1e293b;border-radius:8px;padding:20px;max-width:640px;width:90%;max-height:80vh;overflow-y:auto">
+        <h3 style="font-size:16px;font-weight:bold;margin-bottom:8px;color:#3b82f6">📋 미체결 주문 — #${id} ${symbol} ${side}</h3>
+        <p style="font-size:12px;color:#94a3b8;margin-bottom:12px">
+          총 ${orders.length}건 (= 자동 단계 LIMIT + 「💉 포지션 추가」 LIMIT). 개별 취소 가능.
+        </p>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
+          <thead>
+            <tr style="border-bottom:1px solid #475569;font-size:12px;color:#94a3b8">
+              <th style="text-align:center;padding:6px">단계</th>
+              <th style="text-align:center;padding:6px">방향</th>
+              <th style="text-align:center;padding:6px">유형</th>
+              <th style="text-align:right;padding:6px">가격</th>
+              <th style="text-align:right;padding:6px">수량</th>
+              <th style="text-align:center;padding:6px">액션</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button onclick="closeOpenOrdersModal()" class="btn-ghost btn text-xs" style="padding:6px 16px">닫기</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+function closeOpenOrdersModal() {
+  const m = document.getElementById('open-orders-modal-backdrop');
+  if (m) m.remove();
+}
+
+async function cancelOpenOrder(strategyId, orderId, btn) {
+  if (!confirm(`주문 #${orderId} 를 취소하시겠습니까?\n\n거래소 호출 = 즉시 취소\n사장님 자본 = 영향 X (= 미체결만 취소)`)) return;
+  try {
+    btn.disabled = true;
+    btn.textContent = '취소 중...';
+    await api(`/strategies/${strategyId}/open-orders/${orderId}`, { method: 'DELETE' });
+    toast(`✅ 주문 #${orderId} 취소 완료`, 'success');
+    closeOpenOrdersModal();
+    refreshStrategies();
+  } catch (err) {
+    toast(`취소 실패: ${err.message}`, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '❌ 취소'; }
+  }
+}
+
 async function submitAddUntriggeredStages(id) {
   const stages = [];
   for (let n = 1; n <= 10; n++) {
