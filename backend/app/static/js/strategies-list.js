@@ -743,6 +743,7 @@ async function _confirmManualTP(strategyId, symbol, side, currentQty) {
     _closeManualTPModal();
     // 즉시 새로고침
     refreshStrategies();
+    if (typeof loadBalance === 'function') loadBalance();  // 🌟 즉시 잔액 갱신 (수동 익절 = margin release)
   } catch (e) {
     toast(`❌ 수동 익절 실패: ${e.message || e}`, 'error');
   }

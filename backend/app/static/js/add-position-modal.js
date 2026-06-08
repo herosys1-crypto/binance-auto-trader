@@ -102,6 +102,8 @@ async function submitAddPosition() {
     toast(`✅ ${resp.message || '포지션 추가 주문 발송됨'}`, 'success');
     closeAddPositionModal();
     refreshStrategies();
+    // 🌟 2026-06-09 사장님 요청: 포지션 추가 시 = 즉시 잔액 갱신
+    if (typeof loadBalance === 'function') loadBalance();
   } catch (err) {
     toast(`포지션 추가 실패: ${err.message}`, 'error');
   } finally {

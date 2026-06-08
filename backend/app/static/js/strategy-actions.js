@@ -17,6 +17,7 @@ async function emergencyStop(id) {
     await api(`/strategies/${id}/stop`, {method: 'POST', body: {mode: 'emergency_stop', reason: '대시보드에서 긴급 종료'}});
     toast(`전략 #${id} 긴급 종료 요청 발송`, 'warning');
     refreshStrategies();
+    if (typeof loadBalance === 'function') loadBalance();  // 🌟 즉시 잔액 갱신
   } catch (err) { toast('긴급 종료 실패: ' + err.message, 'error'); }
 }
 
@@ -39,6 +40,7 @@ async function deleteStrategy(id) {
     const r = await api(`/strategies/${id}`, {method: 'DELETE'});
     toast(r.message || `전략 #${id} 보관 처리 완료`, 'success');
     refreshStrategies();
+    if (typeof loadBalance === 'function') loadBalance();  // 🌟 즉시 잔액 갱신 (reserved 변경)
   } catch (err) { toast('보관 처리 실패: ' + err.message, 'error'); }
 }
 
@@ -57,6 +59,7 @@ async function triggerNextStage(id) {
     const resp = await api(`/strategies/${id}/trigger-next-stage`, { method: 'POST' });
     toast(`✅ ${resp.message || '다음 단계 시장가 진입 요청 발송'}`, 'success');
     refreshStrategies();
+    if (typeof loadBalance === 'function') loadBalance();  // 🌟 즉시 잔액 갱신 (마진 lock)
   } catch (err) {
     toast(`다음 단계 진입 실패: ${err.message}`, 'error');
   }
@@ -77,6 +80,7 @@ async function recalcUntriggeredFromCurrent(id) {
     await api(`/strategies/${id}/recalc-untriggered-from-current`, { method: 'POST' });
     toast(`✅ 미진입 단계 재계산 완료 (현재가 기준 +10% 누적)`, 'success');
     refreshStrategies();
+    if (typeof loadBalance === 'function') loadBalance();  // 🌟 즉시 잔액 갱신
   } catch (err) {
     toast(`재계산 실패: ${err.message}`, 'error');
   }
@@ -212,6 +216,7 @@ async function cancelOpenOrder(strategyId, orderId, btn) {
     toast(`✅ 주문 #${orderId} 취소 완료`, 'success');
     closeOpenOrdersModal();
     refreshStrategies();
+    if (typeof loadBalance === 'function') loadBalance();  // 🌟 즉시 잔액 갱신 (미체결 취소 = margin release)
   } catch (err) {
     toast(`취소 실패: ${err.message}`, 'error');
     if (btn) { btn.disabled = false; btn.textContent = '❌ 취소'; }
@@ -282,6 +287,7 @@ async function submitAddUntriggeredStages(id) {
     toast(`✅ ${stages.length}개 단계 추가/수정 완료!`, 'success');
     closeAddUntriggeredStagesModal();
     refreshStrategies();
+    if (typeof loadBalance === 'function') loadBalance();  // 🌟 즉시 잔액 갱신 (미진입 = reserved 증가)
   } catch (err) {
     toast(`추가 실패: ${err.message}`, 'error');
   }
@@ -307,6 +313,7 @@ async function acknowledgeManualCleanup(id) {
     const resp = await api(`/strategies/${id}/acknowledge-manual-cleanup`, { method: 'POST' });
     toast(`✅ ${resp.message || `전략 #${id} 수동 청산 처리 완료 확인됨`}`, 'success');
     refreshStrategies();
+    if (typeof loadBalance === 'function') loadBalance();  // 🌟 즉시 잔액 갱신 (수동 청산 = margin release)
   } catch (err) {
     toast(`수동 청산 처리 확인 실패: ${err.message}`, 'error');
   }
@@ -336,6 +343,7 @@ async function addMargin(id, symbol, side) {
     });
     toast(`✅ ${resp.message || `증거금 ${amount} USDT 추가 완료`}`, 'success');
     refreshStrategies();
+    if (typeof loadBalance === 'function') loadBalance();  // 🌟 즉시 잔액 갱신 (증거금 추가 = margin lock)
   } catch (err) {
     toast(`증거금 추가 실패: ${err.message}`, 'error');
   }
