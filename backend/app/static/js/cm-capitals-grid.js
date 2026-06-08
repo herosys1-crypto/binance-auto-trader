@@ -164,12 +164,34 @@ function _refreshLiveCalc() {
       // border 제거 (이전 cycle 잔재)
       capEl.classList.remove('border-red-500');
       capEl.style.borderWidth = '';
+      // 🌟 2026-06-08 사장님 「수정 모드」 사상 (Phase 3):
+      // 신 strategy: 모든 단계 = 시작가 부터 누적 (옛 로직 그대로)
+      // 수정 모드: 진입 단계 (1~current_stage) = 옛 진입가 시각 (= 사장님 보호)
+      //           첫 미진입 단계 = **시작가 (= 현재가) × (1 + trigger%)** ⭐
+      //           이후 미진입 단계 = 첫 미진입 단계 기준 누적
+      let _editCurrentStage = 0;
+      if (cmState.editingStrategyId) {
+        const _srcStrategy = (window._strategiesById || {})[cmState.editingStrategyId];
+        _editCurrentStage = Number(_srcStrategy?.current_stage || 0);
+      }
       // 1) 이 단계 진입가 (raw, leverage 무관) — 사장님 사상: 빈 단계 trigger 누적
       let entryPrice;
       if (compressedStageNo === 1) {
         // 첫 채워진 단계 = 새 1단계 (IMMEDIATE) — 압축 후 idx 무관 시작가 사용
         entryPrice = startPrice;
         pendingTriggerPct = 0;  // 첫 단계 누적 무시
+      } else if (cmState.editingStrategyId && _editCurrentStage > 0 && i === _editCurrentStage + 1) {
+        // 🌟 사장님 「수정 모드」: 첫 미진입 단계 = 시작가 기준 (= 현재가 × (1 + trigger%))
+        // 진입 단계 (1~current_stage) 의 옛 진입가 = 무시 + 신 미진입 단계 = 현재가 새로 시작
+        let trgPct = tNum;
+        if (i === lastStageNo && trgPct === 0) trgPct = DEFAULT_LAST_TRIGGER_PCT;
+        const effectiveTrgPct = trgPct + pendingTriggerPct;
+        pendingTriggerPct = 0;
+        if (side === 'SHORT') {
+          entryPrice = startPrice * (1 + effectiveTrgPct / 100);
+        } else {
+          entryPrice = startPrice * (1 - effectiveTrgPct / 100);
+        }
       } else {
         // 사용자 #5-07 fix: 마지막 단계 trigger 비어있으면 backend 기본 20%
         let trgPct = tNum;
