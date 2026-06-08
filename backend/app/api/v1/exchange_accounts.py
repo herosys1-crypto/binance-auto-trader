@@ -313,9 +313,12 @@ class BalanceResponse(BaseModel):
     # 2026-06-01 사장님 요구 fix — 「전체 단계 예약」 모드:
     # 시스템 안전 운영의 핵심 사상. 사장님이 새 strategy 만들 때 진짜 가용 잔액
     # 확인 + 자동 4/5단계 진입 시 마진 부족(-2019) 절대 안 발생 보장.
-    reserved_for_strategies: Decimal = Decimal("0")  # active strategy 의 total_capital 합 (5단계 풀 예약)
+    reserved_for_strategies: Decimal = Decimal("0")  # active strategy 의 마진 합 (5단계 풀 예약, 마진 단위)
     our_available_balance: Decimal = Decimal("0")    # wallet - reserved (사장님 가용 잔액)
     active_strategy_count: int = 0                    # 활성 strategy 수 (예약에 포함된 것)
+    # 🌟 2026-06-09 사장님 130% 정책 신 필드 (= 신 전략 세팅 가용)
+    wallet_limit_130: Decimal = Decimal("0")          # wallet × 1.30 = 마진 한도
+    new_strategy_available: Decimal = Decimal("0")    # wallet × 1.30 - reserved (= 신 전략 추가 가능)
 
 
 @router.get("/{exchange_account_id}/balance", response_model=BalanceResponse)
@@ -464,12 +467,16 @@ def get_balance(
 
     def _reserved_one(s) -> Decimal:
         actual = binance_margin_by_symbol.get((s.symbol or "").upper(), Decimal("0"))
-        # 🌟 fix v5 (사장님 진짜 사상): actual + 미진입 단계 자본 합
-        # = "실 lock (= 진입 완료) + 앞으로 lock 될 예정 (= 미진입 단계)" = 전체 예약
+        # 🌟 2026-06-09 사장님 신 정책 v6: actual + 미진입 단계 마진 (= 자본 / leverage)
+        # 사장님 명시: "실 사용 = 마진 단위 + 예약 = 마진 단위 + wallet 비교 = 모두 마진 일치"
+        # = 예약 (= 미진입 단계) = 사장님 입력 자본 / leverage = 마진!
+        lev = Decimal(str(s.leverage or 1))
         if has_plans_by_strategy.get(s.id):
-            untriggered_sum = untriggered_sum_by_strategy.get(s.id, Decimal("0"))
-            return actual + untriggered_sum
-        # fallback 1: template stages_config (= 옛 PR #131 안전망)
+            untriggered_capital = untriggered_sum_by_strategy.get(s.id, Decimal("0"))
+            # 마진 단위 변환 (= 사장님 사상)
+            untriggered_margin = (untriggered_capital / lev) if lev > 0 else untriggered_capital
+            return actual + untriggered_margin
+        # fallback 1: template stages_config (= 옛 PR #131 안전망, 마진 변환)
         tpl = templates_map.get(s.strategy_template_id)
         stages_sum = Decimal("0")
         if tpl and tpl.stages_config:
@@ -482,16 +489,23 @@ def get_balance(
                 except Exception:
                     continue
         if stages_sum > 0:
-            return max(stages_sum, actual)
-        # fallback 2: total_capital (= legacy, PR #84 자동 동기화 영향 가능)
+            stages_margin = (stages_sum / lev) if lev > 0 else stages_sum
+            return max(stages_margin, actual)
+        # fallback 2: total_capital (= legacy)
         planned = s.total_capital or Decimal("0")
-        return max(planned, actual)
+        planned_margin = (planned / lev) if lev > 0 else planned
+        return max(planned_margin, actual)
 
     reserved_for_strategies = sum(
         (_reserved_one(s) for s in active_strategies), Decimal("0")
     )
     our_available_balance = total_wallet - reserved_for_strategies
     active_strategy_count = len(active_strategies)
+    # 🌟 2026-06-09 사장님 130% 정책 신 필드:
+    wallet_limit_130 = total_wallet * Decimal("1.30")
+    new_strategy_available = wallet_limit_130 - reserved_for_strategies
+    if new_strategy_available < 0:
+        new_strategy_available = Decimal("0")
 
     return BalanceResponse(
         exchange_account_id=exchange_account_id,
@@ -508,6 +522,8 @@ def get_balance(
         reserved_for_strategies=reserved_for_strategies,
         our_available_balance=our_available_balance,
         active_strategy_count=active_strategy_count,
+        wallet_limit_130=wallet_limit_130,
+        new_strategy_available=new_strategy_available,
     )
 
 
