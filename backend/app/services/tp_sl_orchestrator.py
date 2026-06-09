@@ -301,6 +301,57 @@ class TPSLOrchestratorService:
             return  # 다른 caller 가 청산 중 — status/qty 변경 없이 대기, 다음 cycle 재평가
         # 청산 후 남은 수량 계산
         remaining_qty = (current_qty - close_qty).quantize(QTY_PRECISION)
+
+        # 🌟 2026-06-10 v20 사장님 critical: TP 청산 실시간 자동 분석 (silent bug 영구 차단)
+        # = 의도 % vs 실제 % 자동 비교 → 차이 > 5% = WARN / > 20% = CRITICAL
+        # = trade_anomaly_monitor worker 가 = 매 5분 분석 + Telegram (1h dedup)
+        # = 사장님 자본 보호 = silent bug 즉시 감지
+        try:
+            expected_close_pct = float(close_ratio * 100)
+            actual_close_pct = float((close_qty / current_qty) * 100) if current_qty > 0 else 0
+            pct_diff = abs(expected_close_pct - actual_close_pct)
+            # severity 결정 (= 사장님 안전 임계)
+            if pct_diff > 20:
+                _severity = "CRITICAL"  # 의도 vs 실제 = 큰 차이 (= silent bug 가능성)
+            elif pct_diff > 5:
+                _severity = "WARN"
+            else:
+                _severity = "INFO"  # 정상
+            self.db.add(RiskEvent(
+                strategy_instance_id=strategy.id,
+                event_type="TP_EXECUTION_AUDIT",
+                severity=_severity,
+                title=f"📊 TP 청산 audit ({_severity}) — #{strategy.id} {strategy.symbol} {level}",
+                message=(
+                    f"TP 청산 의도 vs 실제 자동 분석 (v20):\n"
+                    f"  • TP level: {level}\n"
+                    f"  • 의도 % (close_ratio): {expected_close_pct:.2f}%\n"
+                    f"  • 실제 % (close_qty/current_qty): {actual_close_pct:.2f}%\n"
+                    f"  • 차이: {pct_diff:.2f}%\n"
+                    f"  • current_qty: {current_qty}\n"
+                    f"  • close_qty: {close_qty}\n"
+                    f"  • remaining_qty: {remaining_qty}\n"
+                    f"  • current_stage: {strategy.current_stage}\n"
+                    f"  • avg_entry: {strategy.avg_entry_price}\n"
+                    f"  • total_capital: {strategy.total_capital}\n\n"
+                    f"{'🚨 silent bug 가능성 = 사장님 즉시 확인!' if _severity == 'CRITICAL' else ('⚠️ 차이 발생 = 검토 권장' if _severity == 'WARN' else '✅ 정상')}"
+                ),
+                event_payload={
+                    "level": level,
+                    "expected_pct": expected_close_pct,
+                    "actual_pct": actual_close_pct,
+                    "pct_diff": pct_diff,
+                    "current_qty": str(current_qty),
+                    "close_qty": str(close_qty),
+                    "remaining_qty": str(remaining_qty),
+                    "current_stage": strategy.current_stage,
+                    "avg_entry": str(strategy.avg_entry_price or 0),
+                    "total_capital": str(strategy.total_capital or 0),
+                },
+            ))
+            self.db.flush()
+        except Exception as _e:
+            logger.warning("[tp-audit] RiskEvent 기록 실패 (= 청산 자체는 정상 진행): %s", _e)
         # 상태 진행 — 2026-05-06: TP1~10 동적 (10단계 익절 확장).
         is_final = (level == "TRAILING_TP" or close_ratio >= FULL_CLOSE_RATIO)
         if level == "TRAILING_TP":

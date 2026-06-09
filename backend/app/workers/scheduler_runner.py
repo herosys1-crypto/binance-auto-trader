@@ -20,6 +20,7 @@ from app.workers.reconcile_worker import run_position_reconcile_once
 from app.workers.run_workers import run_symbol_sync_once, run_tp_sl_once
 from app.workers.stage_trigger_worker import run_stage_trigger_once
 from app.workers.self_check_worker import run_self_check_once  # 🌟 v17: silent bug 자동 차단
+from app.workers.trade_anomaly_monitor import run_trade_anomaly_monitor_once  # 🌟 v20: TP 청산 silent bug 자동 차단
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,12 @@ def start_scheduler() -> None:
     # = silent bug 자동 차단 (= reserved 계산 일치, stage_plans 무결성, DB ↔ 거래소)
     # = 사장님 자본 보호 자동화 (= 사람 의존 X)
     scheduler.add_job(guarded_job("self_check", 300, run_self_check_once), trigger=IntervalTrigger(hours=1), id="self_check", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-06-10 v20 사장님 critical (= TP 청산 silent bug 영구 차단):
+    # 사장님 사상: "왜 이런 일이 일어나면 안 되는 부분이잖아" (VELVETUSDT TP1 전량 청산)
+    # = TP 청산 직후 = tp_sl_orchestrator 가 TP_EXECUTION_AUDIT RiskEvent 자동 기록
+    # = 이 worker = 매 5분 분석 + CRITICAL = 즉시 Telegram (1h dedup)
+    # = 사장님 자본 보호 = silent bug 즉시 감지
+    scheduler.add_job(guarded_job("trade_anomaly_monitor", 60, run_trade_anomaly_monitor_once), trigger=IntervalTrigger(minutes=5), id="trade_anomaly_monitor", replace_existing=True, max_instances=1, coalesce=True)
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.
