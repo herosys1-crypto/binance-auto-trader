@@ -44,6 +44,24 @@ async function submitCreate() {
     const startPriceNum = parseFloat(startPrice);
     if (currentPrice > 0 && startPriceNum > 0) {
       const ratio = Math.max(currentPrice, startPriceNum) / Math.min(currentPrice, startPriceNum);
+      // 🌟 2026-06-10 v22 사장님 critical = BTWUSDT 75만 배 차이 사례!
+      // 차이 > 10배 = 무조건 강제 차단 (= confirm 무시 = 사장님 자본 보호 우선)
+      if (ratio > 10) {
+        alert(
+          `🚨🚨🚨 시작가 자동 차단! (silent bug 100%!)\n\n` +
+          `📌 시작가 (입력): ${startPriceNum}\n` +
+          `📌 현재가 (Binance): ${currentPrice}\n` +
+          `📌 차이: ${ratio.toFixed(0)}배!\n\n` +
+          `🚨 시작가 vs 현재가 = 10배 이상 차이 = 100% silent bug!\n` +
+          `= 사장님 자본 보호 = 무조건 차단!\n\n` +
+          `💡 해결:\n` +
+          `  • 시작가 옆 「💲 현재가」 버튼 클릭\n` +
+          `  • 또는 = 직접 ${currentPrice} 입력`
+        );
+        document.getElementById('cm-submit').disabled = false;
+        document.getElementById('cm-submit').textContent = editingId ? '🔄 종료 후 새로 시작' : '🚀 전략 시작';
+        return;  // 강제 차단! (= confirm 무시)
+      }
       if (ratio > 1.5) {
         const pctDiff = ((ratio - 1) * 100).toFixed(1);
         const sideLabel = cmState.side === 'SHORT' ? '📉 SHORT' : '📈 LONG';
