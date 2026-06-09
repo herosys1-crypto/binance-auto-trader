@@ -464,8 +464,8 @@ async function refreshStrategies() {
         `여기서는 직관 위해 절대값 + 방향 아이콘 (${qtySideIcon}) 표시합니다.`;
       const qtyStack = hasPosition
         ? `<div class="text-sm leading-none">
-            <span class="${qtyColor}" style="font-size:11px" title="${qtyTooltip}">${qtySideIcon} ${fmtQty(sQtyAbs)}</span>
-            <span class="text-slate-200 font-semibold" title="${planTooltip}" style="font-size:14px"> ${positionMargin.toFixed(0)}/${plannedMargin.toFixed(0)} <span class="${entryColor}">${entryPct.toFixed(0)}%</span></span>
+            <span class="${qtyColor}" style="font-size:10px" title="${qtyTooltip}">${qtySideIcon} ${fmtQty(sQtyAbs)}</span>
+            <span class="text-slate-100 font-bold" title="${planTooltip}" style="font-size:16px"> ${positionMargin.toFixed(0)}/${plannedMargin.toFixed(0)} <span class="${entryColor}">${entryPct.toFixed(0)}%</span></span>
             <div class="mt-0.5">${addMarginBtnInQty}${addPositionBtn}${manualTpBtn}</div>
           </div>`
         : `<div class="text-sm leading-none">
