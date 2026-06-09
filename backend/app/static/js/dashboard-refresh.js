@@ -247,54 +247,69 @@ async function refreshHealth() {
 // 3-grid mini: 🔒 실 / 📦 예약 / 💵 여유 (= 카드 안 한눈 파악)
 // 신 전략 가용: 음수 = 빨강 (= 신 전략 차단 위험)
 function _updateBalanceCardV3({used, limit, pct, real, reserved, free, newStratAvail}) {
-  const bar = document.getElementById('balance-progress-bar');
-  const pctEl = document.getElementById('balance-progress-pct');
-  const usedEl = document.getElementById('balance-progress-used');
-  const limitEl = document.getElementById('balance-progress-limit');
-  const realEl = document.getElementById('balance-mini-real');
-  const reservedEl = document.getElementById('balance-mini-reserved');
-  const freeEl = document.getElementById('balance-mini-free');
-  const newStratEl = document.getElementById('balance-new-strategy');
-  if (!bar) {
-    // 🌟 v8 fallback: 신 DOM 없음 (= 옛 HTML 캐시 또는 배포 안 됨)
-    // → #metric-balance-detail 에 잔액 정보 통합 표시 (= 사장님 화면에 표시되게)
+  // 🌟 v9: 신/구 DOM 양쪽 항상 채움 + try/catch (= 사장님 silent bug 차단)
+  // = 옛 HTML / 신 HTML 어느 경우든 사장님 화면에 데이터 표시 보장
+  // 안전 값 (= NaN 방지)
+  used = Number(used || 0); limit = Number(limit || 0); pct = Number(pct || 0);
+  real = Number(real || 0); reserved = Number(reserved || 0); free = Number(free || 0);
+  newStratAvail = Number(newStratAvail || 0);
+
+  // === 1. legacy detail 항상 채움 (= 옛 HTML 호환 + 신 HTML 의 hidden 해제) ===
+  try {
     const legacyDetail = document.getElementById('metric-balance-detail');
     if (legacyDetail) {
       legacyDetail.classList.remove('hidden');
+      legacyDetail.style.display = '';  // hidden 클래스 외 inline style 도 reset
+      const pctColor = pct >= 95 ? '#f87171' : pct >= 80 ? '#fb923c' : pct >= 50 ? '#facc15' : '#34d399';
+      const stratColor = newStratAvail <= 0 ? '#fca5a5' : '#86efac';
       legacyDetail.innerHTML =
         `🔒 실 <b>${fmt(real)}</b> · 📦 예약 <b>${fmt(reserved)}</b> · 💵 여유 <b>${fmt(free)}</b><br>` +
-        `⚡ <b>${fmt(used)}</b> / ${fmt(limit)} <b style="color:${pct >= 95 ? '#f87171' : pct >= 80 ? '#fb923c' : pct >= 50 ? '#facc15' : '#34d399'}">${pct.toFixed(1)}%</b>` +
-        ` · 🆕 신 전략 <b style="color:${newStratAvail <= 0 ? '#fca5a5' : '#86efac'}">${newStratAvail <= 0 ? '🚫 차단' : '+' + fmt(newStratAvail)}</b>`;
+        `⚡ <b>${fmt(used)}</b> / ${fmt(limit)} <b style="color:${pctColor}">${pct.toFixed(1)}%</b>` +
+        ` · 🆕 신 전략 <b style="color:${stratColor}">${newStratAvail <= 0 ? '🚫 차단' : '+' + fmt(newStratAvail)}</b>`;
     }
-    return;
+  } catch (e) {
+    console.error('[balance v3 legacy fill]', e);
   }
-  // 진행바 너비 (= 0~100 clamp)
-  const w = Math.max(0, Math.min(100, pct));
-  bar.style.width = w + '%';
-  // 진행바 + pct 뱃지 색상 분기
-  const colorClass = pct >= 95 ? 'warn-red' : (pct >= 80 ? 'warn-orange' : (pct >= 50 ? 'warn-yellow' : ''));
-  bar.classList.remove('warn-yellow','warn-orange','warn-red');
-  pctEl.classList.remove('warn-yellow','warn-orange','warn-red');
-  if (colorClass) {
-    bar.classList.add(colorClass);
-    pctEl.classList.add(colorClass);
-  }
-  // 텍스트 채움
-  if (usedEl) usedEl.textContent = fmt(used);
-  if (limitEl) limitEl.textContent = fmt(limit);
-  if (pctEl) pctEl.textContent = pct.toFixed(1) + '%';
-  if (realEl) realEl.textContent = fmt(real);
-  if (reservedEl) reservedEl.textContent = fmt(reserved);
-  if (freeEl) freeEl.textContent = fmt(free);
-  // 신 전략 가용 (음수 = 빨강)
-  if (newStratEl) {
-    if (newStratAvail <= 0) {
-      newStratEl.textContent = `🚫 신 전략 차단 (한도 초과 ${fmt(Math.abs(newStratAvail))})`;
-      newStratEl.classList.add('warn-red');
-    } else {
-      newStratEl.textContent = `🆕 신 전략 가용 +${fmt(newStratAvail)}`;
-      newStratEl.classList.remove('warn-red');
+
+  // === 2. 신 DOM 도 채움 (= 있으면) ===
+  try {
+    const bar = document.getElementById('balance-progress-bar');
+    if (!bar) return;  // 신 DOM 없음 = legacy 만으로 충분 (= 위에서 채움)
+    const pctEl = document.getElementById('balance-progress-pct');
+    const usedEl = document.getElementById('balance-progress-used');
+    const limitEl = document.getElementById('balance-progress-limit');
+    const realEl = document.getElementById('balance-mini-real');
+    const reservedEl = document.getElementById('balance-mini-reserved');
+    const freeEl = document.getElementById('balance-mini-free');
+    const newStratEl = document.getElementById('balance-new-strategy');
+
+    // 진행바 너비 (= 0~100 clamp)
+    const w = Math.max(0, Math.min(100, pct));
+    bar.style.width = w + '%';
+    const colorClass = pct >= 95 ? 'warn-red' : (pct >= 80 ? 'warn-orange' : (pct >= 50 ? 'warn-yellow' : ''));
+    bar.classList.remove('warn-yellow','warn-orange','warn-red');
+    if (colorClass) bar.classList.add(colorClass);
+    if (pctEl) {
+      pctEl.classList.remove('warn-yellow','warn-orange','warn-red');
+      if (colorClass) pctEl.classList.add(colorClass);
+      pctEl.textContent = pct.toFixed(1) + '%';
     }
+    if (usedEl) usedEl.textContent = fmt(used);
+    if (limitEl) limitEl.textContent = fmt(limit);
+    if (realEl) realEl.textContent = fmt(real);
+    if (reservedEl) reservedEl.textContent = fmt(reserved);
+    if (freeEl) freeEl.textContent = fmt(free);
+    if (newStratEl) {
+      if (newStratAvail <= 0) {
+        newStratEl.textContent = `🚫 신 전략 차단 (한도 초과 ${fmt(Math.abs(newStratAvail))})`;
+        newStratEl.classList.add('warn-red');
+      } else {
+        newStratEl.textContent = `🆕 신 전략 가용 +${fmt(newStratAvail)}`;
+        newStratEl.classList.remove('warn-red');
+      }
+    }
+  } catch (e) {
+    console.error('[balance v3 new DOM fill]', e);
   }
 }
 
