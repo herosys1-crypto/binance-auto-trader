@@ -314,12 +314,13 @@ function _updateBalanceCardV3({used, limit, pct, real, reserved, free, newStratA
     if (reservedEl) reservedEl.textContent = fmt(reserved);
     if (freeEl) freeEl.textContent = fmt(free);
     if (newStratEl) {
+      // v12: <b id="balance-new-strategy"> 안에 단순 표시 (= 옆 라벨 「신 전략」 이미 HTML 에)
       if (newStratAvail <= 0) {
-        newStratEl.textContent = `🚫 신 전략 차단 (한도 초과 ${fmt(Math.abs(newStratAvail))})`;
-        newStratEl.classList.add('warn-red');
+        newStratEl.textContent = `🚫 차단`;
+        newStratEl.style.color = '#fca5a5';
       } else {
-        newStratEl.textContent = `🆕 신 전략 가용 +${fmt(newStratAvail)}`;
-        newStratEl.classList.remove('warn-red');
+        newStratEl.textContent = `+${fmt(newStratAvail)}`;
+        newStratEl.style.color = '#86efac';
       }
     }
   } catch (e) {

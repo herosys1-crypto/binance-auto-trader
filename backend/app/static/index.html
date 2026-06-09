@@ -178,21 +178,36 @@
   .balance-new-strategy.warn-red {
     color: #fca5a5; background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3);
   }
-  /* 🌟 2026-06-09 v11 사장님 「가로로 펼치고 세로 줄임」 = 거래소 잔액 = 진짜 한 줄 layout (52px)
-     v11 fix: legacy detail = 신 HTML 에서 항상 hidden (= 중복 표시 차단) */
+  /* 🌟 2026-06-09 v12 사장님 「진행바 박스 안에 실/예약/여유/투자율 모두」 */
   #card-balance #metric-balance-detail { display: none !important; }
   @media (min-width: 768px) {
-    /* 거래소 잔액 = 2 col 차지 + 내부 = 가로 펼침 (= 세로 1 row 만, 52px) */
+    /* 거래소 잔액 = 2 col 차지 = 좌측 큰 잔액 + 우측 모든 정보 */
     #card-balance.balance-card-wide {
       display: grid !important;
-      grid-template-columns: minmax(120px, auto) 1fr auto auto;  /* 잔액 | 진행바 | mini-grid | 신 전략 */
-      gap: 6px !important;
+      grid-template-columns: minmax(140px, auto) 1fr;  /* 잔액 | 진행바+모든 정보 */
+      gap: 8px !important;
       align-items: center;
-      padding: 3px 8px !important;
-      max-height: 52px !important;
+      padding: 4px 8px !important;
+      max-height: 60px !important;
       min-height: 0 !important;
-      overflow: hidden !important;  /* 카드 밖 텍스트 흘러나옴 차단 */
+      overflow: hidden !important;
     }
+    /* v12 신: 진행바 박스 안 = 4가지 정보 한 줄 펼침 */
+    .balance-info-row {
+      display: flex !important; flex-direction: row !important;
+      gap: 8px !important; margin: 2px 0 0 0 !important;
+      font-family: monospace; font-size: 11px !important; line-height: 1.2 !important;
+      flex-wrap: wrap;
+    }
+    .balance-info-cell {
+      display: inline-flex; align-items: center; gap: 2px;
+      white-space: nowrap; color: #cbd5e1;
+    }
+    .balance-info-cell b { color: #fbbf24; font-weight: 700; }
+    .balance-info-icon { font-size: 10px; }
+    /* 진행바 = 가로 풀 */
+    #card-balance .balance-progress-wrap { margin: 0 !important; width: 100%; }
+    #card-balance .balance-progress-track { height: 5px !important; }
     /* 좌측 = 잔액 큰 글자 (= 카드 label + value) */
     #card-balance .balance-left {
       display: flex; flex-direction: column; justify-content: center;
@@ -614,32 +629,30 @@
     <!-- 2. 💰 거래소 잔액 (amber accent) — 사장님 자본 = 가장 중요! = 2 col 차지 (= 좌측 큰 숫자 / 우측 진행바+mini) -->
     <div id="card-balance" class="card-metric card-amber rounded-lg p-3 signal-gray md:col-span-2 balance-card-wide" onclick="loadBalance()" title="클릭하면 잔액 새로고침">
       <!-- 좌측: 큰 숫자 + label -->
+      <!-- 좌측 = 큰 잔액 -->
       <div class="balance-left">
         <p class="card-metric-label">💰 거래소 잔액</p>
         <p id="metric-balance" class="card-metric-value card-metric-value-lg">-</p>
-        <!-- 3-grid mini (실/예약/여유) — 좌측 하단 -->
-        <div class="balance-mini-grid">
-          <div class="balance-mini-cell"><span class="balance-mini-icon">🔒</span><span class="balance-mini-label">실</span><span id="balance-mini-real" class="balance-mini-num">-</span></div>
-          <div class="balance-mini-cell"><span class="balance-mini-icon">📦</span><span class="balance-mini-label">예약</span><span id="balance-mini-reserved" class="balance-mini-num">-</span></div>
-          <div class="balance-mini-cell"><span class="balance-mini-icon">💵</span><span class="balance-mini-label">여유</span><span id="balance-mini-free" class="balance-mini-num">-</span></div>
-        </div>
       </div>
-      <!-- 우측: 130% 진행바 + 신 전략 가용 -->
+      <!-- 우측 = 진행바 + 사장님 「실 / 예약 / 여유 / 투자율」 4가지 정보 모두 (v12 사장님 요청) -->
       <div class="balance-right">
         <div class="balance-progress-wrap" title="130% 한도 사용률 (예약 + 실)">
-          <p class="balance-progress-title">⚡ 130% 한도 사용률</p>
+          <!-- 진행바 -->
           <div class="balance-progress-track">
             <div id="balance-progress-bar" class="balance-progress-fill" style="width:0%"></div>
           </div>
-          <p class="balance-progress-text">
-            <span id="balance-progress-used">-</span>
-            <span class="text-slate-500"> / </span>
-            <span id="balance-progress-limit">-</span>
-            <span id="balance-progress-pct" class="balance-progress-pct">-</span>
+          <!-- 진행바 아래 = 4가지 정보 한 줄 (실 + 예약 + 여유 + 투자율) -->
+          <p class="balance-info-row">
+            <span class="balance-info-cell"><span class="balance-info-icon">🔒</span>실 <b id="balance-mini-real">-</b></span>
+            <span class="balance-info-cell"><span class="balance-info-icon">📦</span>예약 <b id="balance-mini-reserved">-</b></span>
+            <span class="balance-info-cell"><span class="balance-info-icon">💵</span>여유 <b id="balance-mini-free">-</b></span>
+            <span class="balance-info-cell"><span class="balance-info-icon">⚡</span>투자율 <b id="balance-progress-pct" class="balance-progress-pct">-</b></span>
+            <span class="balance-info-cell"><span class="balance-info-icon">🆕</span>신 전략 <b id="balance-new-strategy">-</b></span>
           </p>
+          <!-- hidden = legacy JS 호환 (= used / limit 보존) -->
+          <span id="balance-progress-used" class="hidden">-</span>
+          <span id="balance-progress-limit" class="hidden">-</span>
         </div>
-        <!-- 신 전략 가용 (= 130% 한도 - 사용) -->
-        <p id="balance-new-strategy" class="balance-new-strategy">🆕 신 전략 가용: -</p>
       </div>
       <!-- 🌟 v11 critical fix: legacy detail HTML 자체에서 영구 제거 (= 다시는 중복 표시 X) -->
     </div>
