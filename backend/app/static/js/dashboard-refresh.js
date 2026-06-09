@@ -242,6 +242,50 @@ async function refreshHealth() {
   }
 }
 
+// 🌟 2026-06-09 v3 사장님 전문가 디자인 — 거래소 잔액 카드 신 DOM 채우기
+// 진행바 색상 분기: < 50% green / 50-79 yellow / 80-94 orange / ≥95 red+pulse
+// 3-grid mini: 🔒 실 / 📦 예약 / 💵 여유 (= 카드 안 한눈 파악)
+// 신 전략 가용: 음수 = 빨강 (= 신 전략 차단 위험)
+function _updateBalanceCardV3({used, limit, pct, real, reserved, free, newStratAvail}) {
+  const bar = document.getElementById('balance-progress-bar');
+  const pctEl = document.getElementById('balance-progress-pct');
+  const usedEl = document.getElementById('balance-progress-used');
+  const limitEl = document.getElementById('balance-progress-limit');
+  const realEl = document.getElementById('balance-mini-real');
+  const reservedEl = document.getElementById('balance-mini-reserved');
+  const freeEl = document.getElementById('balance-mini-free');
+  const newStratEl = document.getElementById('balance-new-strategy');
+  if (!bar) return;  // 신 DOM 없음 = 옛 화면 (no-op)
+  // 진행바 너비 (= 0~100 clamp)
+  const w = Math.max(0, Math.min(100, pct));
+  bar.style.width = w + '%';
+  // 진행바 + pct 뱃지 색상 분기
+  const colorClass = pct >= 95 ? 'warn-red' : (pct >= 80 ? 'warn-orange' : (pct >= 50 ? 'warn-yellow' : ''));
+  bar.classList.remove('warn-yellow','warn-orange','warn-red');
+  pctEl.classList.remove('warn-yellow','warn-orange','warn-red');
+  if (colorClass) {
+    bar.classList.add(colorClass);
+    pctEl.classList.add(colorClass);
+  }
+  // 텍스트 채움
+  if (usedEl) usedEl.textContent = fmt(used);
+  if (limitEl) limitEl.textContent = fmt(limit);
+  if (pctEl) pctEl.textContent = pct.toFixed(1) + '%';
+  if (realEl) realEl.textContent = fmt(real);
+  if (reservedEl) reservedEl.textContent = fmt(reserved);
+  if (freeEl) freeEl.textContent = fmt(free);
+  // 신 전략 가용 (음수 = 빨강)
+  if (newStratEl) {
+    if (newStratAvail <= 0) {
+      newStratEl.textContent = `🚫 신 전략 차단 (한도 초과 ${fmt(Math.abs(newStratAvail))})`;
+      newStratEl.classList.add('warn-red');
+    } else {
+      newStratEl.textContent = `🆕 신 전략 가용 +${fmt(newStratAvail)}`;
+      newStratEl.classList.remove('warn-red');
+    }
+  }
+}
+
 // 거래소 잔액 카드 — 2026-06-03 다중 계정 합산 (모든 active 계정 병렬 호출).
 // 이전: 첫 active 계정만 → 사장님 다중 Sub-Account 운영 시 부정확
 // 신규: 모든 active 계정 합산 + tooltip 으로 개별 (사장님 통합 모니터링)
@@ -357,9 +401,19 @@ async function loadBalance() {
     setMetric(
       'balance',
       `${fmt(walletSum)} USDT`,                       // 큰 글씨 = 지갑 총액 (사장님 직관)
-      detailMain + accountInfo,                       // 작은 글씨 = 사용 + 130% 한도
+      detailMain + accountInfo,                       // 작은 글씨 = 사용 + 130% 한도 (legacy hidden)
       newSig,
     );
+    // 🌟 2026-06-09 v3 신 카드 = 진행바 + 3-grid mini + 신 전략 가용 (전문가 디자인)
+    _updateBalanceCardV3({
+      used: usedTotal,
+      limit: wallet130Sum,
+      pct: newStrategyRatio,
+      real: actualMarginSum,
+      reserved: reservedRemainingSum,
+      free: realFreedom,
+      newStratAvail: newStratAvailSum,
+    });
     // tooltip — 마진율 + 계정별 detail + 단위 차이 + 「예약」 의미 설명
     const balCard = document.getElementById('card-balance') || document.querySelector('[data-metric="balance"]');
     if (balCard) {

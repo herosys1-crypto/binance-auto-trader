@@ -212,6 +212,13 @@ async function refreshStrategies() {
       active.length === 0 ? '진행 중인 전략 없음' : `전체 ${data.length}건 중`,
       active.length === 0 ? 'gray' : 'green');
 
+    // 🌟 2026-06-09 v3: 전략 활성률 진행바 (active/total)
+    const activeBar = document.getElementById('active-progress-bar');
+    if (activeBar) {
+      const ratio = data.length > 0 ? (active.length / data.length * 100) : 0;
+      activeBar.style.width = ratio + '%';
+    }
+
     // 2026-06-08 사장님 요구: 「🎯 전략 인스턴스」 헤더 옆에 활성 건수 표시
     const _activeCountEl = document.getElementById('strategies-active-count');
     if (_activeCountEl) _activeCountEl.textContent = `(${active.length}건)`;
@@ -220,8 +227,15 @@ async function refreshStrategies() {
     const pnlEl = document.getElementById('metric-pnl');
     const roiSign = overallRoiPct > 0 ? '+' : '';
     pnlEl.innerHTML = `${fmtPnL(totalUnrealized)} USDT <span class="text-xs font-normal">(${roiSign}${overallRoiPct.toFixed(2)}%)</span>`;
-    pnlEl.className = 'text-2xl font-bold ' + (totalUnrealized > 0 ? 'pos' : totalUnrealized < 0 ? 'neg' : '');
+    pnlEl.className = 'card-metric-value card-metric-value-xl ' + (totalUnrealized > 0 ? 'pos' : totalUnrealized < 0 ? 'neg' : '');
     setSignal('card-pnl', pnlSig);
+
+    // 🌟 2026-06-09 v3: PNL 카드 = 의미 색상 border 동적 적용 (pos/neg/neutral)
+    const pnlCard = document.getElementById('card-pnl');
+    if (pnlCard) {
+      pnlCard.classList.remove('card-pnl-pos','card-pnl-neg','card-pnl-neutral');
+      pnlCard.classList.add(totalUnrealized > 0 ? 'card-pnl-pos' : totalUnrealized < 0 ? 'card-pnl-neg' : 'card-pnl-neutral');
+    }
 
     const tbody = document.getElementById('strategies-tbody');
     if (data.length === 0) {
