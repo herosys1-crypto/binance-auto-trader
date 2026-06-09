@@ -192,22 +192,24 @@
       min-height: 0 !important;
       overflow: hidden !important;
     }
-    /* v12-3 신: 진행바 박스 안 = 작은 숫자 layout (사장님 「이전과 같은 작은 숫자」) */
+    /* v12-4 신: 사장님 「숫자 더 크게 + 진행바 선 제거」 */
     .balance-info-row {
       display: flex !important; flex-direction: row !important;
-      gap: 6px !important; margin: 2px 0 0 0 !important;
-      font-family: monospace; font-size: 10px !important; line-height: 1.1 !important;
+      gap: 8px !important; margin: 0 !important;
+      font-family: monospace; font-size: 13px !important; line-height: 1.2 !important;
       flex-wrap: wrap;
+      align-items: center;
     }
     .balance-info-cell {
-      display: inline-flex; align-items: center; gap: 2px;
+      display: inline-flex; align-items: center; gap: 3px;
       white-space: nowrap; color: #94a3b8;  /* 라벨 = 회색 */
     }
-    .balance-info-cell b { color: #fbbf24; font-weight: 600; font-size: 10px; }  /* 작은 숫자 + 노란색 */
-    .balance-info-icon { font-size: 9px; }
-    /* 진행바 = 가로 풀 */
+    .balance-info-cell b { color: #fbbf24; font-weight: 700; font-size: 13px; }  /* 사장님 「더 크게」 = 13px bold */
+    .balance-info-icon { font-size: 12px; }
+    /* 사장님 「선택한 선은 빼줘」 = 진행바 가로 라인 제거 */
     #card-balance .balance-progress-wrap { margin: 0 !important; width: 100%; }
-    #card-balance .balance-progress-track { height: 5px !important; }
+    #card-balance .balance-progress-track { display: none !important; }
+    #card-balance .balance-progress-fill { display: none !important; }
     /* 좌측 = 잔액 큰 글자 (= 카드 label + value) */
     #card-balance .balance-left {
       display: flex; flex-direction: column; justify-content: center;
@@ -1658,40 +1660,40 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260609v12-3"></script>
-<script src="/static/js/api.js?v=20260609v12-3"></script>
-<script src="/static/js/helpers.js?v=20260609v12-3"></script>
-<script src="/static/js/stats-modals.js?v=20260609v12-3"></script>
-<script src="/static/js/health-page.js?v=20260609v12-3"></script>
-<script src="/static/js/ranking-page.js?v=20260609v12-3"></script>
-<script src="/static/js/ranking-modal.js?v=20260609v12-3"></script>
-<script src="/static/js/trade-history-modal.js?v=20260609v12-3"></script>
-<script src="/static/js/system-banner.js?v=20260609v12-3"></script>
-<script src="/static/js/cm-collectors.js?v=20260609v12-3"></script>
-<script src="/static/js/cm-loaders.js?v=20260609v12-3"></script>
-<script src="/static/js/cm-market-info.js?v=20260609v12-3"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260609v12-3"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260609v12-3"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260609v12-3"></script>
-<script src="/static/js/cm-preview.js?v=20260609v12-3"></script>
-<script src="/static/js/cm-open-modal.js?v=20260609v12-3"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260609v12-3"></script>
-<script src="/static/js/templates-panel.js?v=20260609v12-3"></script>
-<script src="/static/js/indicators.js?v=20260609v12-3"></script>
-<script src="/static/js/strategies-list.js?v=20260609v12-3"></script>
-<script src="/static/js/external-positions.js?v=20260609v12-3"></script>
-<script src="/static/js/multi-symbol.js?v=20260609v12-3"></script>
-<script src="/static/js/template-save.js?v=20260609v12-3"></script>
-<script src="/static/js/cm-submit.js?v=20260609v12-3"></script>
-<script src="/static/js/strategy-detail.js?v=20260609v12-3"></script>
-<script src="/static/js/chart-detail.js?v=20260609v12-3"></script>
-<script src="/static/js/accounts-modal.js?v=20260609v12-3"></script>
-<script src="/static/js/add-position-modal.js?v=20260609v12-3"></script>
+<script src="/static/js/constants.js?v=20260609v12-4"></script>
+<script src="/static/js/api.js?v=20260609v12-4"></script>
+<script src="/static/js/helpers.js?v=20260609v12-4"></script>
+<script src="/static/js/stats-modals.js?v=20260609v12-4"></script>
+<script src="/static/js/health-page.js?v=20260609v12-4"></script>
+<script src="/static/js/ranking-page.js?v=20260609v12-4"></script>
+<script src="/static/js/ranking-modal.js?v=20260609v12-4"></script>
+<script src="/static/js/trade-history-modal.js?v=20260609v12-4"></script>
+<script src="/static/js/system-banner.js?v=20260609v12-4"></script>
+<script src="/static/js/cm-collectors.js?v=20260609v12-4"></script>
+<script src="/static/js/cm-loaders.js?v=20260609v12-4"></script>
+<script src="/static/js/cm-market-info.js?v=20260609v12-4"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260609v12-4"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260609v12-4"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260609v12-4"></script>
+<script src="/static/js/cm-preview.js?v=20260609v12-4"></script>
+<script src="/static/js/cm-open-modal.js?v=20260609v12-4"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260609v12-4"></script>
+<script src="/static/js/templates-panel.js?v=20260609v12-4"></script>
+<script src="/static/js/indicators.js?v=20260609v12-4"></script>
+<script src="/static/js/strategies-list.js?v=20260609v12-4"></script>
+<script src="/static/js/external-positions.js?v=20260609v12-4"></script>
+<script src="/static/js/multi-symbol.js?v=20260609v12-4"></script>
+<script src="/static/js/template-save.js?v=20260609v12-4"></script>
+<script src="/static/js/cm-submit.js?v=20260609v12-4"></script>
+<script src="/static/js/strategy-detail.js?v=20260609v12-4"></script>
+<script src="/static/js/chart-detail.js?v=20260609v12-4"></script>
+<script src="/static/js/accounts-modal.js?v=20260609v12-4"></script>
+<script src="/static/js/add-position-modal.js?v=20260609v12-4"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260609v12-3"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260609v12-3"></script>
-<script src="/static/js/page-router.js?v=20260609v12-3"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260609v12-3"></script>
+<script src="/static/js/strategy-actions.js?v=20260609v12-4"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260609v12-4"></script>
+<script src="/static/js/page-router.js?v=20260609v12-4"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260609v12-4"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
