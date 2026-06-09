@@ -107,8 +107,16 @@ async function loadPrevBlueprint(strategyId, silent) {
     //       「🔄 종료 후 새로 시작」 시 옛 LIMIT 가격으로 진입 위험.
     // 변경: 수정 모드든 일반 불러오기든 시작가는 항상 빈값 → loadCmMarketInfo 가
     //       자동으로 현재가 채움 → 트리거가 + 평단 + 청산가 모두 현재가 기준 재계산.
-    // 옛 가격 참고 필요하면 사장님이 수동 입력 가능.
+    // 🌟 2026-06-09 v16 사장님 critical fix (SLXUSDT 가 63100 BTC 가격 표시 버그):
+    // _cmCurrentPrice 옛 cache (= 마지막 조회한 BTC 등 다른 심볼 가격) 강제 초기화
+    // → loadCmMarketInfo 완료 후 = 신 symbol 의 실제 현재가만 사용
     document.getElementById('cm-start-price').value = '';
+    if (typeof _cmCurrentPrice !== 'undefined') {
+      _cmCurrentPrice = null;  // ⭐ critical: 옛 BTC/다른 심볼 캐시 무효화
+    }
+    // 시세 자리도 임시 "-" 표시 (= loadCmMarketInfo 완료까지)
+    const _mktEl = document.getElementById('cm-mkt-price');
+    if (_mktEl) _mktEl.textContent = '-';
     onCapitalsChange();
     if (!silent) {
       const editNote = cmState.editingStrategyId
