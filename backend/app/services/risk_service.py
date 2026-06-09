@@ -175,17 +175,35 @@ class RiskService:
         # 크라이시스: TP1/2/3/4 = 5/10/15/20% (= 옛 그대로, 사장님 옵션 무시)
         # TP5 는 크라이시스 모드에서 사용 안 함 (4단계 TP 까지만)
         #
-        # 🌟 2026-06-08 사장님 TP1 옵션 정책 (alembic 0018):
-        # 정상 모드 = 사장님 선택 TP1 임계 적용 (10/15/20/25)
-        # Crisis 모드 = 사장님 옵션 무시 = TP1 +5% 고정 (= 빠른 회복 익절, 사장님 자본 보호)
-        # spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md
+        # 🌟 2026-06-10 v23 사장님 신 critical 사상 (= SENTUSDT 사례!):
+        # 사장님 명시: "운영자가 크라이시스를 해제하고 다른 선택을 했어 그러면 그렇게 되어야해
+        #              자동을 맞기는건 내가 관여할수 없을때야"
+        # = 사장님 (운영자) 수동 변경 = 절대 우선! Crisis 라도!
+        # = 자동 시스템 (Crisis) = 사장님 관여 X 일 때만 동작!
+        #
+        # 신 fix:
+        # 1. 사장님이 tp1_pct_override 설정 = "운영자 관여" 신호 = Crisis 옵션 무시 X
+        # 2. 사장님이 trailing_retrace_override 설정 = 동일
+        # = 사장님 수동 변경 = 항상 우선 적용!
         if strategy.crisis_mode_triggered_at:
+            # Crisis 모드 = 옛 정책 = TP1/2/3/4 = 5/10/15/20%
             CRISIS_OVERRIDE = {
                 "TP1": Decimal("5"), "TP2": Decimal("10"),
                 "TP3": Decimal("15"), "TP4": Decimal("20"),
             }
             tp_levels = [(label, CRISIS_OVERRIDE[label]) for label, _ in tp_levels if label in CRISIS_OVERRIDE]
             tp_levels.sort(key=lambda x: x[1], reverse=True)  # 내림차순 (TP4 부터 검사)
+            # 🌟 v23 사장님 사상: Crisis 라도 = 사장님 옵션이 있으면 = 사장님 우선!
+            if strategy.tp1_pct_override is not None:
+                _override = Decimal(str(strategy.tp1_pct_override))
+                tp_levels = [
+                    (label, _override if label == "TP1" else val)
+                    for label, val in tp_levels
+                ]
+                logger.info(
+                    "[risk] Crisis 모드이지만 사장님 TP1 옵션 우선 적용 (v23): strategy=%s TP1=%s",
+                    strategy.id, _override,
+                )
         else:
             # 정상 모드: 사장님 TP1 옵션 override (= template tp1_percent 덮어씀)
             if strategy.tp1_pct_override is not None:
@@ -334,6 +352,20 @@ class RiskService:
         """
         if strategy.crisis_mode_triggered_at:
             return False
+        # 🌟 2026-06-10 v23 사장님 신 critical 사상 (= 운영자 우선!):
+        # 사장님이 옵션 변경 (tp1, trailing 등) = Redis flag 설정 = 24시간 Crisis 재진입 차단
+        # = "운영자가 크라이시스를 해제하고 다른 선택을 했어 = 그러면 그렇게 되어야 해"
+        try:
+            from app.core.redis_client import get_redis_client
+            _redis = get_redis_client()
+            if _redis.get(f"crisis_user_override:strategy:{strategy.id}"):
+                logger.info(
+                    "[risk] Crisis 자동 진입 차단 (사장님 v23 override 활성): strategy=%s",
+                    strategy.id,
+                )
+                return False
+        except Exception:
+            pass
         # Template 별 크라이시스 임계 결정
         from app.models.strategy_template import StrategyTemplate
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id) if strategy.strategy_template_id else None
