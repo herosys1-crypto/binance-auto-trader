@@ -20,6 +20,17 @@
  *   - DOM: #zg-banner, #zg-banner-title, #zg-banner-body, #zg-banner-detail
  */
 
+// 🌟 2026-06-09 사장님 「위로 올림 (접기)」: 일정 시간 배너 숨김 + 신 critical 시 재표시
+function dismissSystemBanner(hours) {
+  const dismissUntil = Date.now() + (hours * 60 * 60 * 1000);
+  localStorage.setItem('zgBannerDismissUntil', String(dismissUntil));
+  // 신 critical 발생 시 = 다시 표시 (= 갯수 기준 변경 감지)
+  localStorage.setItem('zgBannerDismissCount', localStorage.getItem('zgBannerLastCount') || '0');
+  const banner = document.getElementById('zg-banner');
+  if (banner) banner.classList.add('hidden');
+  if (typeof toast === 'function') toast(`✅ 시스템 경고 ${hours}시간 숨김 (신 이벤트 발생 시 자동 표시)`, 'info');
+}
+
 async function loadSystemStatus(forceRefresh = false) {
   try {
     const data = await api('/admin/system-status');
@@ -31,6 +42,20 @@ async function loadSystemStatus(forceRefresh = false) {
     if (data.is_healthy) {
       banner.classList.add('hidden');
       return;
+    }
+    // 🌟 사장님 「접기」 처리: 시간 안 지났고 + critical 수 동일 = 숨김 유지
+    const dismissUntil = Number(localStorage.getItem('zgBannerDismissUntil') || 0);
+    const dismissCount = Number(localStorage.getItem('zgBannerDismissCount') || 0);
+    const currentCount = (data.critical_events_recent || []).length + (data.kill_switches_active || []).length;
+    localStorage.setItem('zgBannerLastCount', String(currentCount));
+    if (!forceRefresh && Date.now() < dismissUntil && currentCount <= dismissCount) {
+      banner.classList.add('hidden');
+      return;
+    }
+    // 신 이벤트 발생 = dismiss 해제
+    if (currentCount > dismissCount) {
+      localStorage.removeItem('zgBannerDismissUntil');
+      localStorage.removeItem('zgBannerDismissCount');
     }
     banner.classList.remove('hidden');
     const parts = [];
