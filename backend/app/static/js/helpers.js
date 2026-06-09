@@ -105,8 +105,13 @@ function fmtPnL(v) {
 }
 
 function setMetric(name, value, detail, signal) {
-  document.getElementById('metric-' + name).textContent = value;
-  if (detail !== undefined) document.getElementById('metric-' + name + '-detail').textContent = detail;
+  // v11 fix: null-safe (= metric-balance-detail 삭제 가능 = 안전 처리)
+  const valEl = document.getElementById('metric-' + name);
+  if (valEl) valEl.textContent = value;
+  if (detail !== undefined) {
+    const detEl = document.getElementById('metric-' + name + '-detail');
+    if (detEl) detEl.textContent = detail;
+  }
   setSignal('card-' + name, signal);
 }
 function setSignal(cardId, sig) {

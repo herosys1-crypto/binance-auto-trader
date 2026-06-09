@@ -247,34 +247,48 @@ async function refreshHealth() {
 // 3-grid mini: 🔒 실 / 📦 예약 / 💵 여유 (= 카드 안 한눈 파악)
 // 신 전략 가용: 음수 = 빨강 (= 신 전략 차단 위험)
 function _updateBalanceCardV3({used, limit, pct, real, reserved, free, newStratAvail}) {
-  // 🌟 v9: 신/구 DOM 양쪽 항상 채움 + try/catch (= 사장님 silent bug 차단)
-  // = 옛 HTML / 신 HTML 어느 경우든 사장님 화면에 데이터 표시 보장
+  // 🌟 v11 fix: 신 DOM 있으면 = 신 DOM 만 채움 (legacy 는 hidden 유지!)
+  //              신 DOM 없으면 = legacy 채움 (fallback)
+  // = 사장님 「중복 표시 + layout 깨짐」 silent bug 차단
   // 안전 값 (= NaN 방지)
   used = Number(used || 0); limit = Number(limit || 0); pct = Number(pct || 0);
   real = Number(real || 0); reserved = Number(reserved || 0); free = Number(free || 0);
   newStratAvail = Number(newStratAvail || 0);
 
-  // === 1. legacy detail 항상 채움 (= 옛 HTML 호환 + 신 HTML 의 hidden 해제) ===
-  try {
-    const legacyDetail = document.getElementById('metric-balance-detail');
-    if (legacyDetail) {
-      legacyDetail.classList.remove('hidden');
-      legacyDetail.style.display = '';  // hidden 클래스 외 inline style 도 reset
-      const pctColor = pct >= 95 ? '#f87171' : pct >= 80 ? '#fb923c' : pct >= 50 ? '#facc15' : '#34d399';
-      const stratColor = newStratAvail <= 0 ? '#fca5a5' : '#86efac';
-      legacyDetail.innerHTML =
-        `🔒 실 <b>${fmt(real)}</b> · 📦 예약 <b>${fmt(reserved)}</b> · 💵 여유 <b>${fmt(free)}</b><br>` +
-        `⚡ <b>${fmt(used)}</b> / ${fmt(limit)} <b style="color:${pctColor}">${pct.toFixed(1)}%</b>` +
-        ` · 🆕 신 전략 <b style="color:${stratColor}">${newStratAvail <= 0 ? '🚫 차단' : '+' + fmt(newStratAvail)}</b>`;
-    }
-  } catch (e) {
-    console.error('[balance v3 legacy fill]', e);
-  }
-
-  // === 2. 신 DOM 도 채움 (= 있으면) ===
+  // === 신 DOM 우선 채움 (= v3 HTML 정상 표시) ===
   try {
     const bar = document.getElementById('balance-progress-bar');
-    if (!bar) return;  // 신 DOM 없음 = legacy 만으로 충분 (= 위에서 채움)
+    const realEl = document.getElementById('balance-mini-real');
+    if (bar && realEl) {
+      // 신 DOM 모두 있음 = 신 DOM 만 채움 + legacy 는 hidden 유지 (= 중복 표시 방지!)
+      const legacyDetail = document.getElementById('metric-balance-detail');
+      if (legacyDetail) {
+        legacyDetail.classList.add('hidden');  // 강제 hidden = 카드 layout 깨짐 방지
+      }
+      // 아래 신 DOM 채움 계속
+    } else {
+      // === fallback: 신 DOM 없음 (= 옛 HTML 캐시) → legacy detail 에 채움 ===
+      const legacyDetail = document.getElementById('metric-balance-detail');
+      if (legacyDetail) {
+        legacyDetail.classList.remove('hidden');
+        legacyDetail.style.display = '';
+        const pctColor = pct >= 95 ? '#f87171' : pct >= 80 ? '#fb923c' : pct >= 50 ? '#facc15' : '#34d399';
+        const stratColor = newStratAvail <= 0 ? '#fca5a5' : '#86efac';
+        legacyDetail.innerHTML =
+          `🔒 실 <b>${fmt(real)}</b> · 📦 예약 <b>${fmt(reserved)}</b> · 💵 여유 <b>${fmt(free)}</b><br>` +
+          `⚡ <b>${fmt(used)}</b> / ${fmt(limit)} <b style="color:${pctColor}">${pct.toFixed(1)}%</b>` +
+          ` · 🆕 신 전략 <b style="color:${stratColor}">${newStratAvail <= 0 ? '🚫 차단' : '+' + fmt(newStratAvail)}</b>`;
+      }
+      return;  // legacy 만 채움 = 종료
+    }
+  } catch (e) {
+    console.error('[balance v11 dom check]', e);
+  }
+
+  // === 신 DOM 채움 (= mini-grid + 진행바 + 신 전략) ===
+  try {
+    const bar = document.getElementById('balance-progress-bar');
+    if (!bar) return;  // 안전망 (= 위에서 이미 체크)
     const pctEl = document.getElementById('balance-progress-pct');
     const usedEl = document.getElementById('balance-progress-used');
     const limitEl = document.getElementById('balance-progress-limit');
