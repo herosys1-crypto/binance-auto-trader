@@ -262,6 +262,20 @@
   @media (max-width: 768px) {
     .strategies-table-wrap { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
   }
+  /* 🌟 2026-06-09 v5 사장님 「전략 인스턴스 최대한 많이」 — 데스크탑 cell 가로 여백 축소 */
+  @media (min-width: 769px) {
+    .strategies-table-wrap td, .strategies-table-wrap th {
+      padding-left: 5px !important;
+      padding-right: 5px !important;
+    }
+    /* 테이블 좌우 자체 padding 줄임 */
+    #section-strategies .strategies-table-wrap {
+      padding-left: 0 !important;
+      padding-right: 0 !important;
+    }
+    /* 카드 내부 = 우측까지 꽉 차게 */
+    #section-strategies { padding-left: 4px !important; padding-right: 4px !important; }
+  }
 
   /* 🌟 2026-06-09 사장님 새 전략 모달 compact — 한 화면 표시 */
   #create-modal .mb-4 { margin-bottom: 0.5rem !important; }
@@ -511,10 +525,11 @@
     </div>
   </div>
 
-  <!-- Row: [시스템상태 + 빠른작업 + 운영통계 좌측 25%] | [전략 인스턴스 우측 75%] -->
-  <!-- 비율 1:3 (좌측 좁게, 전략인스턴스 넓게) -->
-  <div class="grid grid-cols-1 md:grid-cols-4 gap-2 mb-2">
-    <!-- LEFT 컬럼 (25%) — 3 패널 stacked. h-full + 시스템상태 flex-grow 로 우측 전략인스턴스 높이에 정확히 매치 -->
+  <!-- 🌟 2026-06-09 v5 사장님 「전략 인스턴스 최대한 많이」 요청: 좌측 25% → 20% 축소, 우측 75% → 80% 확장 -->
+  <!-- Row: [시스템상태 + 빠른작업 + 운영통계 좌측 20%] | [전략 인스턴스 우측 80%] -->
+  <!-- 비율 1:4 (좌측 더 좁게, 전략인스턴스 더 넓게) -->
+  <div class="grid grid-cols-1 md:grid-cols-5 gap-2 mb-2">
+    <!-- LEFT 컬럼 (20%) — 3 패널 stacked. h-full + 시스템상태 flex-grow 로 우측 전략인스턴스 높이에 정확히 매치 -->
     <div class="md:col-span-1 flex flex-col gap-2 h-full" data-mobile-hide="true">
       <!-- 시스템 상태 — flex-1 로 빈 공간 자동 채움 (모바일 숨김) -->
       <div id="section-syshealth" class="card rounded-lg flex-1 flex flex-col">
@@ -591,8 +606,8 @@
       </div>
     </div>
 
-    <!-- RIGHT 컬럼 (75%) — 전략 인스턴스 (좌측 3패널 합친 높이만큼 자연스럽게 늘어남) -->
-    <div id="section-strategies" class="card rounded-lg md:col-span-3">
+    <!-- RIGHT 컬럼 (80%) — 전략 인스턴스 (좌측 3패널 합친 높이만큼 자연스럽게 늘어남) -->
+    <div id="section-strategies" class="card rounded-lg md:col-span-4">
       <div class="card-header text-xs flex justify-between items-center flex-wrap gap-2" style="padding:8px 12px">
         <span>🎯 전략 인스턴스 <span id="strategies-active-count" class="text-emerald-400 font-bold">(0)</span></span>
         <div class="flex gap-3 items-center flex-wrap">
@@ -887,9 +902,11 @@
   </div>
 
   <div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
-       style="background:rgba(0,0,0,0.7); padding:4px;">
-    <!-- 2026-06-09 사장님 v3: max-width 95vw → 99vw (사장님 「이전보다 가로 조금 크게」 요청) -->
-    <div class="card rounded-xl p-3" style="max-width:99vw; width:99vw; max-height:97vh; overflow-y:auto;">
+       style="background:rgba(0,0,0,0.7); padding:10px;">
+    <!-- 2026-06-09 사장님 v5: 99vw → 1280px (이전 사이즈 + 가로 아주 조금만 확대 = 사장님 명시) -->
+    <!-- 옛 max-width 760 → v2 95vw → v3 99vw 풀화면 (= 사장님 너무 큼 평가)
+         = 원복 후 미세 확대 (1280px = 옛 760 의 1.7배, 적정 크기) -->
+    <div class="card rounded-xl p-3" style="max-width:1280px; width:96vw; max-height:95vh; overflow-y:auto;">
       <div class="flex justify-between items-center mb-2">
         <h2 id="cm-title" class="text-lg font-bold">➕ 새 전략 시작</h2>
         <button onclick="closeCreateModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
