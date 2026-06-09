@@ -125,6 +125,30 @@ async function loadPrevBlueprint(strategyId, silent) {
       toast(`전략 #${bp.source_strategy_id} 설정을 불러왔습니다. 종목/시작가 확인 후 진행${editNote}`, 'success');
     }
     // 시세 다시 로드 → 자동으로 현재가가 cm-start-price 에 채워짐 → _refreshLiveCalc 트리거
-    loadCmMarketInfo();
+    await loadCmMarketInfo();
+    // 🌟 2026-06-10 v21 사장님 critical (= VELVETUSDT 시작가 silent bug 영구 차단):
+    // loadCmMarketInfo() 완료 후 = cm-start-price 가 신 현재가로 채워졌는지 강제 검증
+    // = 만약 빈값이면 = 사장님께 명시적 알림 + 「현재가」 버튼 강조
+    try {
+      const startPriceEl = document.getElementById('cm-start-price');
+      const currentVal = startPriceEl ? startPriceEl.value : '';
+      if (!currentVal || parseFloat(currentVal) <= 0) {
+        // 현재가 자동 채움 실패 = 사장님 즉시 알림!
+        toast('⚠️ 시작가 자동 채움 실패! 「현재가」 버튼 클릭하세요 (= silent bug 차단!)', 'warning');
+        if (startPriceEl) {
+          startPriceEl.style.border = '2px solid #f00';
+          startPriceEl.style.backgroundColor = '#fee';
+          setTimeout(() => {
+            startPriceEl.style.border = '';
+            startPriceEl.style.backgroundColor = '';
+          }, 8000);
+        }
+      } else if (typeof _cmCurrentPrice !== 'undefined' && _cmCurrentPrice && Math.abs(parseFloat(currentVal) - _cmCurrentPrice) / _cmCurrentPrice > 0.1) {
+        // 채워진 값 vs _cmCurrentPrice 차이 > 10% = silent bug 가능성!
+        toast(`⚠️ 시작가 ${currentVal} vs 현재가 ${_cmCurrentPrice} = 큰 차이! 확인하세요!`, 'warning');
+      }
+    } catch (e) {
+      console.warn('[v21] 시작가 자동 검증 실패:', e);
+    }
   } catch (e) { toast('불러오기 실패: '+e.message, 'error'); }
 }
