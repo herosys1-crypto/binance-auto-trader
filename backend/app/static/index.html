@@ -213,6 +213,21 @@
   }
   #card-active .card-metric-value { color: #60a5fa; }  /* blue */
   #card-templates .card-metric-value { color: #c084fc; }  /* purple */
+  /* 🌟 2026-06-09 v5 — 다른 4개 카드 = min-height 제거 + 컴팩트 padding (= 세로 좁게) */
+  @media (min-width: 768px) {
+    #card-system, #card-active, #card-pnl, #card-templates {
+      min-height: 0 !important;       /* 자기 콘텐츠 높이만 (= 세로 컴팩트) */
+      padding: 10px 12px !important;  /* 패딩 줄임 = 더 컴팩트 */
+    }
+    #card-system .card-metric-detail,
+    #card-active .card-metric-detail,
+    #card-pnl .card-metric-detail,
+    #card-templates .card-metric-detail {
+      margin-top: 2px;  /* detail 라인 간격 축소 */
+    }
+    /* 거래소 잔액만 = min-height 유지 (= 정보 가득 채움) */
+    #card-balance.balance-card-wide { min-height: 96px; }
+  }
   /* 클릭 시 대상 섹션 하이라이트 */
   @keyframes section-flash {
     0%, 100% { box-shadow: none; }
@@ -422,10 +437,11 @@
     ➕
   </button>
 
-  <!-- 🌟 2026-06-09 사장님 5-card metrics v4 — 6 col 그리드 + 거래소 잔액 = 2 col (사장님 「잔액 2칸 + 나머지 빈공간 없게」 요청)
+  <!-- 🌟 2026-06-09 사장님 5-card metrics v5 — 6 col + 잔액 2 col + items-start (= 다른 카드 세로 자기 콘텐츠만큼만)
        데스크탑 = 6 col (잔액 2 + 시스템 1 + 진행 1 + PNL 1 + 템플릿 1)
+       items-start = 거래소 잔액이 늘어나도 다른 카드는 자기 콘텐츠 높이만 = 세로 컴팩트 (사장님 「가로만 줄이고 세로 좁게」)
        모바일 = 2 col (잔액 = 전체폭, 나머지 = 각 1 col) -->
-  <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-2" id="metrics-row">
+  <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-2 items-start" id="metrics-row">
     <!-- 1. 시스템 상태 (gray accent) -->
     <div id="card-system" class="card-metric card-gray rounded-lg p-3 signal-gray" onclick="scrollToSection('section-syshealth')" title="클릭하면 시스템 상태로 이동" data-mobile-hide="true">
       <p class="card-metric-label">⚙️ 시스템 상태 ▾</p>
