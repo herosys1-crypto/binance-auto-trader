@@ -66,8 +66,11 @@ TRAILING_PEAK_THRESHOLD_PCT: Final[Decimal] = Decimal("5")
 TRAILING_RETRACE_PCT: Final[Decimal] = Decimal("5")
 # Trailing 발동 최소 TP index (TP3 이상부터 활성).
 TRAILING_MIN_TP_INDEX: Final[int] = 3
-# Trailing 발동 최소 stage (stage 3 이상부터 활성, v5 2026-05-12 밤).
-TRAILING_MIN_STAGE: Final[int] = 3
+# 🌟 2026-06-09 v8 사장님 BEATUSDT 사례로 완화 (= 1단계만 진입해도 트레일링 발동):
+# 사장님 의도: 'tp3 정상 익절후 계속 유지하고 tp4를 못가도 최고가 대비 -15% 빠져야 익절청산'
+# = stage<3 인 strategy 도 트레일링 작동해야 함
+# (= v5 옛 의도 「stage>=3 만 trailing」 폐기, v7 단축 익절 폐기와 함께)
+TRAILING_MIN_STAGE: Final[int] = 1
 # Redis peak 키 TTL (30일).
 PEAK_REDIS_TTL_SECONDS: Final[int] = 60 * 60 * 24 * 30
 
