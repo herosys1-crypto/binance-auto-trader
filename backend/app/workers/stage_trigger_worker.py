@@ -201,14 +201,27 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     _bal_info = exec_service.client.get_account()
                     _wallet_total = Decimal(str(_bal_info.get('totalWalletBalance', '0')))
                     _real_margin = Decimal(str(_bal_info.get('totalPositionInitialMargin', '0')))  # Binance 실 lock
-                    # 모든 active strategy 의 total_capital 합 (= 「포지션 예약됨」 = 사장님 자본 잔여)
+                    # 🌟 2026-06-09 v17-critical silent bug fix (사장님 SLXUSDT #82 발견):
+                    # 옛 계산 (잘못!): sum(s.total_capital) = 모든 단계 자본 합 (= 사장님 화면과 다름!)
+                    # 신 계산 (= 화면과 동일, fix v5 사상):
+                    #   _total_reserved = sum(미진입 단계 자본 합)  ← 사장님 진짜 사상!
+                    # = 사장님 = 화면 90.5% 인데 worker = 212.7% 차단 silent bug 해소!
+                    from app.models.strategy_stage_plan import StrategyStagePlan
                     _all_active = db.execute(
                         select(StrategyInstance)
                         .where(StrategyInstance.exchange_account_id == account.id)
                         .where(StrategyInstance.is_archived.is_(False))
                         .where(StrategyInstance.status.in_(ACTIVE_STAGE_STATUSES))
                     ).scalars().all()
-                    _total_reserved = sum((Decimal(str(s.total_capital or 0)) for s in _all_active), Decimal('0'))
+                    # 미진입 단계 자본 합 (= 사장님 화면과 동일 = 진짜 사상)
+                    _total_reserved = Decimal('0')
+                    for _s in _all_active:
+                        _unentered = db.execute(
+                            select(StrategyStagePlan)
+                            .where(StrategyStagePlan.strategy_instance_id == _s.id)
+                            .where(StrategyStagePlan.is_triggered.is_(False))
+                        ).scalars().all()
+                        _total_reserved += sum((Decimal(str(p.planned_capital or 0)) for p in _unentered), Decimal('0'))
                     _total_committed = _real_margin + _total_reserved  # 실 + 예약 합
                     _max_allowed = _wallet_total * _MAX_COMMITTED_RATIO  # 사장님 정책: wallet × 1.30
                     if _total_committed > _max_allowed and _wallet_total > 0:
