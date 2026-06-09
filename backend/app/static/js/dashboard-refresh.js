@@ -456,6 +456,23 @@ async function loadBalance() {
       free: realFreedom,
       newStratAvail: newStratAvailSum,
     });
+    // 🌟 v12-3 사장님 critical: 신 mini DOM 강제 채움 = 안전망 (= silent bug 차단)
+    // _updateBalanceCardV3 가 어떤 이유로든 실패해도 = 여기서 직접 채움
+    try {
+      const _re = document.getElementById('balance-mini-real');
+      const _rv = document.getElementById('balance-mini-reserved');
+      const _fr = document.getElementById('balance-mini-free');
+      const _ns = document.getElementById('balance-new-strategy');
+      const _pc = document.getElementById('balance-progress-pct');
+      if (_re) _re.textContent = fmt(actualMarginSum);
+      if (_rv) _rv.textContent = fmt(reservedRemainingSum);
+      if (_fr) _fr.textContent = fmt(realFreedom);
+      if (_pc) _pc.textContent = newStrategyRatio.toFixed(1) + '%';
+      if (_ns) {
+        _ns.textContent = newStratAvailSum <= 0 ? '🚫' : '+' + fmt(newStratAvailSum);
+        _ns.style.color = newStratAvailSum <= 0 ? '#fca5a5' : '#86efac';
+      }
+    } catch (e) { console.error('[balance v12-3 force fill]', e); }
     // tooltip — 마진율 + 계정별 detail + 단위 차이 + 「예약」 의미 설명
     const balCard = document.getElementById('card-balance') || document.querySelector('[data-metric="balance"]');
     if (balCard) {
