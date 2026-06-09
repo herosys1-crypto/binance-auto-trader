@@ -320,6 +320,20 @@ async function refreshStrategies() {
       const slThr = (cap > 0 && slPct > 0) ? cap * slPct / 100 : 0;
       return (slThr > 0 && pnl < 0) ? (Math.abs(pnl) / slThr * 100) : 0;
     };
+    // 🌟 2026-06-09 v12-7 사장님 「마진율순 + 실투입 합계 정렬」 신 옵션
+    const _positionMargin = (s) => {
+      const qty = Math.abs(Number(s.current_position_qty || 0));
+      const avg = Number(s.last_avg_entry_price || 0);
+      const lev = Number(s.leverage || 1);
+      return (qty > 0 && avg > 0 && lev > 0) ? (qty * avg / lev) : 0;
+    };
+    const _marginRatio = (s) => {
+      const cap = Number(s.total_capital || 0);
+      const lev = Number(s.leverage || 1);
+      const planned = (cap > 0 && lev > 0) ? cap / lev : 0;
+      const position = _positionMargin(s);
+      return planned > 0 ? (position / planned * 100) : 0;
+    };
     const sorted = [...visible].sort((a, b) => {
       const aTerm = TERMINAL_STATUSES.includes((a.status || '').toUpperCase()) ? 1 : 0;
       const bTerm = TERMINAL_STATUSES.includes((b.status || '').toUpperCase()) ? 1 : 0;
@@ -330,6 +344,8 @@ async function refreshStrategies() {
         case 'sl_progress_desc': return _slProgress(b) - _slProgress(a);  // 🚨 SL 임박
         case 'pnl_asc': return Number(a.unrealized_pnl || 0) - Number(b.unrealized_pnl || 0);  // 📉 손실 큰 순
         case 'pnl_desc': return Number(b.unrealized_pnl || 0) - Number(a.unrealized_pnl || 0);  // 📈 이익 큰 순
+        case 'margin_ratio_desc': return _marginRatio(b) - _marginRatio(a);  // 💯 마진율 (= 진입률 %) 큰 순
+        case 'position_margin_desc': return _positionMargin(b) - _positionMargin(a);  // 🔒 실 투입 USDT 큰 순
         case 'stage_desc': return (b.current_stage || 0) - (a.current_stage || 0);  // 📊 단계 많은 순
         case 'created_desc': return new Date(b.created_at || 0) - new Date(a.created_at || 0);
         case 'created_asc': return new Date(a.created_at || 0) - new Date(b.created_at || 0);
