@@ -102,10 +102,11 @@
     box-shadow: 0 4px 12px rgba(59,130,246,0.25);
   }
 
-  /* 🌟 2026-06-09 사장님 5-card metrics v3 전문가 디자인
-     2026-06-09 v8: 사장님 「상단 반으로 더 줄이기」 = 추가 절반 축소 */
+  /* 🌟 2026-06-09 사장님 5-card metrics v9 = 진짜 절반 (60px max) */
   /* 공통 메트릭 카드 스타일 */
-  .card-metric { position: relative; overflow: hidden; min-height: 0; padding: 4px 8px !important; max-height: 80px; }
+  .card-metric { position: relative; overflow: hidden; min-height: 0; padding: 3px 8px !important; max-height: 60px; }
+  /* 상단 metrics 행 = gap 축소 + margin bottom 축소 */
+  #metrics-row { margin-bottom: 4px !important; gap: 4px !important; }
   .card-metric::before {
     content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
     background: #475569;  /* default gray */
@@ -278,10 +279,15 @@
     #section-strategies { padding-left: 4px !important; padding-right: 4px !important; }
   }
 
-  /* 🌟 2026-06-09 v8 사장님 「상단 더 축소 + 인스턴스 더 확장」 */
+  /* 🌟 2026-06-09 v9 사장님 「한 페이지에 모두 + 상단 진짜 절반」 */
   @media (min-width: 769px) {
-    /* 전략 인스턴스 = 화면 끝까지 (v8: 상단 더 축소되어 인스턴스 더 늘릴 수 있음) */
-    #section-strategies .strategies-table-wrap { max-height: calc(100vh - 160px) !important; }
+    /* body 자체 padding 제거 = 화면 풀 사용 */
+    body { padding: 0 !important; }
+    body main, body #page-dashboard { padding: 2px 4px !important; }
+    /* 헤더 컴팩트 */
+    body header, body nav, body .header { padding: 2px 8px !important; min-height: 32px !important; }
+    /* 전략 인스턴스 = 진짜 화면 끝까지 (v9: 더 확장) */
+    #section-strategies .strategies-table-wrap { max-height: calc(100vh - 140px) !important; }
     /* 전략 행 = 위아래 padding 최소 (= 행간 공간 최소) */
     .strategies-table-wrap tbody tr td { padding-top: 3px !important; padding-bottom: 3px !important; }
     /* Binance 비교 행 = 더 컴팩트 */
