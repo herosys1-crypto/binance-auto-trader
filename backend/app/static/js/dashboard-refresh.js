@@ -255,7 +255,19 @@ function _updateBalanceCardV3({used, limit, pct, real, reserved, free, newStratA
   const reservedEl = document.getElementById('balance-mini-reserved');
   const freeEl = document.getElementById('balance-mini-free');
   const newStratEl = document.getElementById('balance-new-strategy');
-  if (!bar) return;  // 신 DOM 없음 = 옛 화면 (no-op)
+  if (!bar) {
+    // 🌟 v8 fallback: 신 DOM 없음 (= 옛 HTML 캐시 또는 배포 안 됨)
+    // → #metric-balance-detail 에 잔액 정보 통합 표시 (= 사장님 화면에 표시되게)
+    const legacyDetail = document.getElementById('metric-balance-detail');
+    if (legacyDetail) {
+      legacyDetail.classList.remove('hidden');
+      legacyDetail.innerHTML =
+        `🔒 실 <b>${fmt(real)}</b> · 📦 예약 <b>${fmt(reserved)}</b> · 💵 여유 <b>${fmt(free)}</b><br>` +
+        `⚡ <b>${fmt(used)}</b> / ${fmt(limit)} <b style="color:${pct >= 95 ? '#f87171' : pct >= 80 ? '#fb923c' : pct >= 50 ? '#facc15' : '#34d399'}">${pct.toFixed(1)}%</b>` +
+        ` · 🆕 신 전략 <b style="color:${newStratAvail <= 0 ? '#fca5a5' : '#86efac'}">${newStratAvail <= 0 ? '🚫 차단' : '+' + fmt(newStratAvail)}</b>`;
+    }
+    return;
+  }
   // 진행바 너비 (= 0~100 clamp)
   const w = Math.max(0, Math.min(100, pct));
   bar.style.width = w + '%';

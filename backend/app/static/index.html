@@ -103,9 +103,9 @@
   }
 
   /* 🌟 2026-06-09 사장님 5-card metrics v3 전문가 디자인
-     2026-06-09 v6: 사장님 「세로 반으로 줄이기」 요청 = padding/font 모두 축소 */
+     2026-06-09 v8: 사장님 「상단 반으로 더 줄이기」 = 추가 절반 축소 */
   /* 공통 메트릭 카드 스타일 */
-  .card-metric { position: relative; overflow: hidden; min-height: 0; padding: 6px 10px !important; }
+  .card-metric { position: relative; overflow: hidden; min-height: 0; padding: 4px 8px !important; max-height: 80px; }
   .card-metric::before {
     content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
     background: #475569;  /* default gray */
@@ -118,19 +118,19 @@
   .card-pnl-neutral::before { background: linear-gradient(180deg, #64748b 0%, #475569 100%); }
   .card-pnl-pos::before { background: linear-gradient(180deg, #34d399 0%, #059669 100%); }
   .card-pnl-neg::before { background: linear-gradient(180deg, #f87171 0%, #b91c1c 100%); }
-  /* 카드 label / value / detail — v6 컴팩트 (세로 절반) */
-  .card-metric-label { font-size: 10px; color: #94a3b8; margin-bottom: 1px; line-height: 1.1; }
-  .card-metric-value { font-size: 1.2rem; font-weight: 700; line-height: 1.1; color: #e2e8f0; }
-  .card-metric-value-lg { font-size: 1.35rem; color: #fbbf24; }  /* 잔액 = amber */
-  .card-metric-value-xl { font-size: 1.45rem; }  /* PNL = 가장 강조 */
-  .card-metric-detail { font-size: 10px; color: #64748b; margin-top: 1px; line-height: 1.2; }
+  /* 카드 label / value / detail — v8 (한번 더 절반) */
+  .card-metric-label { font-size: 9px; color: #94a3b8; margin-bottom: 0; line-height: 1.0; }
+  .card-metric-value { font-size: 1rem; font-weight: 700; line-height: 1.05; color: #e2e8f0; }
+  .card-metric-value-lg { font-size: 1.1rem; color: #fbbf24; }  /* 잔액 = amber */
+  .card-metric-value-xl { font-size: 1.15rem; }  /* PNL = 가장 강조 */
+  .card-metric-detail { font-size: 9px; color: #64748b; margin-top: 0; line-height: 1.1; }
   /* PNL 색상 동적 */
   #card-pnl.card-pnl-pos #metric-pnl { color: #34d399; }
   #card-pnl.card-pnl-neg #metric-pnl { color: #f87171; }
-  /* 거래소 잔액 — 130% 진행바 — v6 컴팩트 */
-  .balance-progress-wrap { margin-top: 3px; }
+  /* 거래소 잔액 — 130% 진행바 — v8 더 컴팩트 */
+  .balance-progress-wrap { margin-top: 2px; }
   .balance-progress-track {
-    background: #1e293b; height: 5px; border-radius: 3px; overflow: hidden;
+    background: #1e293b; height: 4px; border-radius: 2px; overflow: hidden;
     border: 1px solid #334155;
   }
   .balance-progress-fill {
@@ -278,10 +278,10 @@
     #section-strategies { padding-left: 4px !important; padding-right: 4px !important; }
   }
 
-  /* 🌟 2026-06-09 v6 사장님 「전략 인스턴스 맨 아래까지 확장 + 전략 사이 공간 최소」 */
+  /* 🌟 2026-06-09 v8 사장님 「상단 더 축소 + 인스턴스 더 확장」 */
   @media (min-width: 769px) {
-    /* 전략 인스턴스 = 화면 끝까지 (= max-height 확장) */
-    #section-strategies .strategies-table-wrap { max-height: calc(100vh - 220px) !important; }
+    /* 전략 인스턴스 = 화면 끝까지 (v8: 상단 더 축소되어 인스턴스 더 늘릴 수 있음) */
+    #section-strategies .strategies-table-wrap { max-height: calc(100vh - 160px) !important; }
     /* 전략 행 = 위아래 padding 최소 (= 행간 공간 최소) */
     .strategies-table-wrap tbody tr td { padding-top: 3px !important; padding-bottom: 3px !important; }
     /* Binance 비교 행 = 더 컴팩트 */
