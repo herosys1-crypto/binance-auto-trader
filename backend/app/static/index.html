@@ -466,79 +466,11 @@
   #cm-recent-strategies-list { display: flex !important; flex-wrap: nowrap !important; gap: 4px; }
   #cm-recent-strategies-list button { flex: 1 1 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 
-  /* 🌟 2026-06-09 사장님 모바일 v2 — 전문가 디자인 */
-  @media (max-width: 768px) {
-    [data-mobile-hide="true"] { display: none !important; }
-    .strategies-table-wrap {
-      overflow-x: auto !important;
-      overflow-y: auto !important;
-      -webkit-overflow-scrolling: touch;
-      scrollbar-width: auto;
-    }
-    .strategies-table-wrap::-webkit-scrollbar { height: 12px !important; background: #1e293b; }
-    .strategies-table-wrap::-webkit-scrollbar-thumb { background: #64748b !important; border-radius: 6px; }
-    .strategies-table-wrap::-webkit-scrollbar-track { background: #1e293b !important; }
-    .strategies-table-wrap td, .strategies-table-wrap th { padding: 4px 6px !important; font-size: 11px !important; }
-
-    /* 🎨 모바일 5-card metrics → 전문가 디자인
-       거래소 잔액 = 전체폭 (가장 중요!) + 큰 숫자 + 시각적 계층 */
-    .grid.grid-cols-2.md\:grid-cols-5,
-    .grid.grid-cols-2.md\:grid-cols-6 { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
-    /* 모바일 = 잔액 카드 = 전체폭 (= col-span 2 무시, 단독 row) + 좌우 분할 X (= 세로 stack) */
-    #card-balance.balance-card-wide { display: block !important; }
-    #card-balance .balance-right { border-left: 0 !important; padding-left: 0 !important; }
-    #card-balance {
-      grid-column: 1 / -1 !important;
-      background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-      border: 1px solid #fbbf24;
-      padding: 14px !important;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-    }
-    #card-balance > p:first-child { font-size: 11px !important; color: #fbbf24; margin-bottom: 2px; }
-    #card-balance #metric-balance {
-      font-size: 1.6rem !important;
-      font-weight: 700;
-      color: #fbbf24;
-      line-height: 1.1;
-      margin-bottom: 6px;
-    }
-    #card-balance #metric-balance-detail {
-      font-size: 11px !important;
-      line-height: 1.6;
-      color: #cbd5e1;
-      white-space: normal;
-    }
-    /* 모바일 = 진행바 + mini-grid 도 유지 (전문가 디자인 일관) */
-    #card-balance .balance-mini-grid { gap: 3px; padding-top: 4px; }
-    #card-balance .balance-mini-icon { font-size: 10px; }
-    #card-balance .balance-mini-num { font-size: 10px; }
-    #card-active, #card-pnl { padding: 10px !important; }
-    #card-pnl .card-metric-value-xl { font-size: 1.4rem !important; }
-    #card-active .card-metric-value { font-size: 1.3rem !important; }
-
-    /* 정렬/계정 dropdown = 모바일 = 작게 */
-    #strategies-sort-by, #strategies-account-filter {
-      max-width: 130px !important;
-      font-size: 11px !important;
-      padding: 4px 6px !important;
-    }
-    /* floating 「+ 새 전략」 = 강조 효과 */
-    button.md\:hidden.fixed.bottom-4.right-4 {
-      box-shadow: 0 6px 20px rgba(22, 163, 74, 0.6) !important;
-      animation: pulse-green 2.5s ease-in-out infinite;
-    }
-    @keyframes pulse-green {
-      0%, 100% { box-shadow: 0 6px 16px rgba(22, 163, 74, 0.5); transform: scale(1); }
-      50% { box-shadow: 0 8px 24px rgba(22, 163, 74, 0.8); transform: scale(1.05); }
-    }
-    /* 「전략 인스턴스」 헤더 = 한 줄 + compact */
-    #section-strategies .card-header { flex-wrap: wrap; gap: 6px; }
-    #section-strategies h3 { font-size: 14px !important; }
-    #section-strategies label.text-xs { font-size: 10px !important; }
-
-    /* body padding 줄임 = 모바일 더 넓게 사용 */
-    body main, body #page-dashboard { padding-left: 6px !important; padding-right: 6px !important; }
-  }
+  /* 🌟 2026-06-09 사장님 「모바일 취소 + 데스크탑 단일」
+     = data-mobile-hide 무력화 (= 모바일에서도 데스크탑 layout 그대로)
+     = 모바일 전용 CSS 모두 제거 = 작은 화면 = 데스크탑 layout 그대로 (가로 스크롤 가능)
+     = 사장님 = 모바일 사용 안 함, 데스크탑 단일 디자인 */
+  [data-mobile-hide="true"] { display: revert !important; }
 </style>
 </head>
 <body class="min-h-screen">
@@ -618,15 +550,7 @@
   <!-- ============ Page: Dashboard (default) ============ -->
   <main id="page-dashboard">
 
-  <!-- 🌟 2026-06-09 사장님 모바일 floating 「+ 새 전략」 버튼 v2 (PC 숨김)
-       위치: bottom-20 (= 80px) = dropdown 가림 방지 + 키보드 가림 방지 -->
-  <button
-    onclick="openCreateModal()"
-    class="md:hidden fixed z-40 btn-success rounded-full shadow-lg"
-    style="bottom:20px;right:16px;width:64px;height:64px;font-size:28px;background:linear-gradient(135deg,#16a34a 0%,#15803d 100%);color:white;border:3px solid #fbbf24"
-    title="새 전략 시작">
-    ➕
-  </button>
+  <!-- 🌟 2026-06-09 사장님 「모바일 취소 + 데스크탑 단일」 = floating 버튼 제거됨 -->
 
   <!-- 🌟 2026-06-09 사장님 5-card metrics v5 — 6 col + 잔액 2 col + items-start (= 다른 카드 세로 자기 콘텐츠만큼만)
        데스크탑 = 6 col (잔액 2 + 시스템 1 + 진행 1 + PNL 1 + 템플릿 1)
@@ -1675,40 +1599,40 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260609v12-7"></script>
-<script src="/static/js/api.js?v=20260609v12-7"></script>
-<script src="/static/js/helpers.js?v=20260609v12-7"></script>
-<script src="/static/js/stats-modals.js?v=20260609v12-7"></script>
-<script src="/static/js/health-page.js?v=20260609v12-7"></script>
-<script src="/static/js/ranking-page.js?v=20260609v12-7"></script>
-<script src="/static/js/ranking-modal.js?v=20260609v12-7"></script>
-<script src="/static/js/trade-history-modal.js?v=20260609v12-7"></script>
-<script src="/static/js/system-banner.js?v=20260609v12-7"></script>
-<script src="/static/js/cm-collectors.js?v=20260609v12-7"></script>
-<script src="/static/js/cm-loaders.js?v=20260609v12-7"></script>
-<script src="/static/js/cm-market-info.js?v=20260609v12-7"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260609v12-7"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260609v12-7"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260609v12-7"></script>
-<script src="/static/js/cm-preview.js?v=20260609v12-7"></script>
-<script src="/static/js/cm-open-modal.js?v=20260609v12-7"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260609v12-7"></script>
-<script src="/static/js/templates-panel.js?v=20260609v12-7"></script>
-<script src="/static/js/indicators.js?v=20260609v12-7"></script>
-<script src="/static/js/strategies-list.js?v=20260609v12-7"></script>
-<script src="/static/js/external-positions.js?v=20260609v12-7"></script>
-<script src="/static/js/multi-symbol.js?v=20260609v12-7"></script>
-<script src="/static/js/template-save.js?v=20260609v12-7"></script>
-<script src="/static/js/cm-submit.js?v=20260609v12-7"></script>
-<script src="/static/js/strategy-detail.js?v=20260609v12-7"></script>
-<script src="/static/js/chart-detail.js?v=20260609v12-7"></script>
-<script src="/static/js/accounts-modal.js?v=20260609v12-7"></script>
-<script src="/static/js/add-position-modal.js?v=20260609v12-7"></script>
+<script src="/static/js/constants.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/api.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/helpers.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/stats-modals.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/health-page.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/ranking-page.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/ranking-modal.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/trade-history-modal.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/system-banner.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/cm-collectors.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/cm-loaders.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/cm-market-info.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/cm-preview.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/cm-open-modal.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/templates-panel.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/indicators.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/strategies-list.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/external-positions.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/multi-symbol.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/template-save.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/cm-submit.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/strategy-detail.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/chart-detail.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/accounts-modal.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/add-position-modal.js?v=20260609v13-mobile-off"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260609v12-7"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260609v12-7"></script>
-<script src="/static/js/page-router.js?v=20260609v12-7"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260609v12-7"></script>
+<script src="/static/js/strategy-actions.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/page-router.js?v=20260609v13-mobile-off"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260609v13-mobile-off"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
