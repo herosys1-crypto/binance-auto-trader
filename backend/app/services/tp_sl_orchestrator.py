@@ -142,30 +142,15 @@ class TPSLOrchestratorService:
         #   대안 안전망: TP10 default 100% + crisis 모드 + SL -50% + 사용자 수동 stop.
         #   사용자가 TP3 만 enable + trailing 발동 안 하는 시나리오 우려시 → 명시적
         #   tp3_qty_ratio = 100 으로 setting (코드는 사용자 setting 우선).
-        # 사용자 기획 v7 (2026-05-14): 단축 익절 — stage<3 인데 TP3+ 발동 시 잔량 100% 즉시 청산.
-        # 이유: trailing 자격 (stage>=3) 미달 → trailing 영영 미발동.
-        # 대신 TP3 (+20% threshold) 까지 갔다는 건 충분한 수익 = 잔량 빠르게 정리하는 게 안전.
-        # 적용 조건:
-        #   - level == TPx (x >= TRAILING_MIN_TP_INDEX = 3)
-        #   - current_stage < TRAILING_MIN_STAGE = 3
-        #   - 크라이시스 모드 아닐 때만 (크라이시스는 별도 ratio)
-        from app.services.risk_service import TRAILING_MIN_TP_INDEX, TRAILING_MIN_STAGE
-        v7_short_exit = False
-        if (
-            level.startswith("TP") and level[2:].isdigit()
-            and not strategy.crisis_mode_triggered_at
-        ):
-            try:
-                tp_n = int(level[2:])
-                if tp_n >= TRAILING_MIN_TP_INDEX and (strategy.current_stage or 0) < TRAILING_MIN_STAGE:
-                    v7_short_exit = True
-            except ValueError:
-                pass
+        # 🌟 2026-06-09 v8 사장님 BEATUSDT 사례로 v7 폐기!
+        # 사장님 분명한 의도: 'tp3 정상 익절후 계속 유지하고 tp4를 못가도 최고가 대비 -15% 빠져야 익절청산'
+        # = TP3 후 = 25% 청산 + 잔량 유지 + 트레일링 작동
+        # = 트레일링 발동 조건 = stage>=1 로 완화 (= 1단계만 진입해도 트레일링 가능)
+        # v7 코드 영구 폐기 (= 모든 TP = 25% 청산, TP10만 100%)
+        v7_short_exit = False  # 영구 비활성화
 
         if level == "TRAILING_TP":
             close_ratio = FULL_CLOSE_RATIO  # 트레일링은 항상 100% (v6 변경 없음)
-        elif v7_short_exit:
-            close_ratio = FULL_CLOSE_RATIO  # v7: 단축 익절 — 잔량 100% (stage 미달 + TP3+)
         elif strategy.crisis_mode_triggered_at and level in crisis_qty_ratio:
             close_ratio = crisis_qty_ratio[level] / PERCENT_DENOMINATOR
         else:
