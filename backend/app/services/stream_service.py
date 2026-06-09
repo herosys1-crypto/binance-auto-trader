@@ -298,6 +298,32 @@ class StreamService:
             return None  # fail-soft
 
     def handle_listen_key_expired(self, payload: dict) -> None:
+        # 🌟 2026-06-09 사장님 critical UX fix:
+        # listenKey 만료 = Binance 24시간 표준 자동 만료 (= 정상 동작!)
+        # consumer 가 자동 재연결 (binance_user_stream_consumer.py while True)
+        # = CRITICAL 아닌 INFO 격하 + 친절한 메시지 (= 사장님 안심)
         user_stream_events_total.labels(event_type="listenKeyExpired").inc()
-        self.db.add(RiskEvent(strategy_instance_id=None, event_type="LISTEN_KEY_EXPIRED", severity="CRITICAL", title="🚨 Binance listenKey 만료", message="거래소 user data stream 끊김 — 새 주문 차단 (재연결까지 대기)", event_payload=payload))
+        self.db.add(RiskEvent(
+            strategy_instance_id=None,
+            event_type="LISTEN_KEY_EXPIRED",
+            severity="INFO",  # CRITICAL → INFO (= Binance 표준 자동 동작)
+            title="🔄 Binance 24시간 자동 만료 (정상)",
+            message="Binance 표준 자동 만료 - 자동 재연결 진행 중 (= 사장님 행동 X, 안심하세요)",
+            event_payload=payload,
+        ))
+        self.db.commit()
+
+    def handle_listen_key_renewed(self) -> None:
+        """🌟 2026-06-09 신 메서드: listenKey 자동 재발급 성공 시 호출.
+        = 사장님 화면에 "✅ 복구됨" 알림 = 안심
+        """
+        user_stream_events_total.labels(event_type="listenKeyRenewed").inc()
+        self.db.add(RiskEvent(
+            strategy_instance_id=None,
+            event_type="LISTEN_KEY_RENEWED",
+            severity="INFO",
+            title="✅ user-stream 자동 복구 완료",
+            message="Binance user-stream 재연결 성공 - 정상 주문 처리 가능",
+            event_payload={},
+        ))
         self.db.commit()

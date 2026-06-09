@@ -86,6 +86,19 @@ class BinanceUserStreamConsumer:
     def _on_open(self, ws) -> None:
         user_stream_connected.set(1)
         _set_user_stream_health(True)
+        # 🌟 2026-06-09 사장님 UX fix: 재연결 성공 시 = "✅ 복구됨" 알림
+        # = listenKey 만료 후 자동 회복 가시화 (= 사장님 「해결 됐는지」 안심)
+        # 첫 연결 (= server 시작) 도 알림 가능하나, 너무 자주 = noise → 재연결만 알림
+        if getattr(self, '_was_disconnected', False):
+            try:
+                db = SessionLocal()
+                try:
+                    StreamService(db).handle_listen_key_renewed()
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.warning("renewed alert 실패: %s", e)
+            self._was_disconnected = False
 
     def _on_message(self, ws, message: str) -> None:
         # 메시지 수신할 때마다 heartbeat 갱신 (60s TTL refresh)
@@ -129,6 +142,8 @@ class BinanceUserStreamConsumer:
     def _on_close(self, ws, close_status_code, close_msg) -> None:
         user_stream_connected.set(0)
         _set_user_stream_health(False)
+        # 🌟 2026-06-09: 다음 _on_open 시 = "✅ 복구됨" 알림 트리거용 flag
+        self._was_disconnected = True
         logger.warning("Binance user stream closed code=%s msg=%s", close_status_code, close_msg)
 
     def _notify_system_error(self, message: str) -> None:
