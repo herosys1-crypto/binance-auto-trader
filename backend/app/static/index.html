@@ -385,23 +385,32 @@
     .strategies-table-wrap tbody tr.binance-compare-row td,
     .strategies-table-wrap tbody tr td[colspan] { padding-top: 1px !important; padding-bottom: 1px !important; font-size: 11px !important; }
 
-    /* 좌측 sidebar (시스템 상태 + 빠른작업 + 운영통계) = 절반 이상 축소 */
-    #section-syshealth .card-header { padding: 4px 8px !important; font-size: 11px !important; }
-    #section-syshealth .p-2 { padding: 4px !important; gap: 3px !important; }
-    #syshealth-grid { gap: 3px !important; padding: 4px !important; }
-    #syshealth-grid > div { padding: 3px 6px !important; font-size: 10px !important; line-height: 1.2 !important; }
-    #syshealth-grid > div p, #syshealth-grid > div span { font-size: 10px !important; line-height: 1.2 !important; }
-    /* 빠른 작업 버튼 = 작게 */
+    /* 좌측 sidebar v12-5 (사장님 「공백 빼고 축소」) — 더 컴팩트 */
+    #section-syshealth .card-header { padding: 2px 6px !important; font-size: 10px !important; }
+    #section-syshealth .p-2 { padding: 2px !important; gap: 2px !important; }
+    #syshealth-grid { gap: 2px !important; padding: 2px !important; }
+    #syshealth-grid > div { padding: 2px 4px !important; font-size: 9px !important; line-height: 1.1 !important; }
+    #syshealth-grid > div p, #syshealth-grid > div span { font-size: 9px !important; line-height: 1.1 !important; }
+    /* 빠른 작업 버튼 = 더 작게 */
     .card-header + .flex.gap-2 button, [class*="빠른"] ~ button,
-    div[class*="card"][class*="flex gap-2"] button.btn { padding: 4px 8px !important; min-height: 24px !important; font-size: 10px !important; }
-    /* 빠른 작업 카드 자체 padding 축소 */
-    .card.rounded-lg.flex.gap-2 { padding: 4px 6px !important; }
-    /* 운영 통계 = 항목 padding 축소 */
+    div[class*="card"][class*="flex gap-2"] button.btn { padding: 2px 5px !important; min-height: 20px !important; font-size: 9px !important; }
+    .card.rounded-lg.flex.gap-2 { padding: 2px 4px !important; gap: 2px !important; }
+    /* 운영 통계 = 더 작게 */
     #section-stats { padding: 0 !important; }
-    #section-stats .card-header { padding: 4px 8px !important; font-size: 11px !important; }
-    #section-stats > .grid > div { padding: 3px 6px !important; }
-    #section-stats > .grid > div > p { font-size: 10px !important; line-height: 1.2 !important; margin: 0 !important; }
-    #section-stats > .grid > div > p:nth-child(2) { font-size: 14px !important; }
+    #section-stats .card-header { padding: 2px 6px !important; font-size: 10px !important; }
+    #section-stats > .grid > div { padding: 2px 4px !important; }
+    #section-stats > .grid > div > p { font-size: 9px !important; line-height: 1.1 !important; margin: 0 !important; }
+    #section-stats > .grid > div > p:nth-child(2) { font-size: 13px !important; }
+    /* TP1~TP10 카운터 = 더 작게 */
+    #section-stats .grid.grid-cols-11, #section-stats [class*="grid-cols-11"] { gap: 1px !important; }
+    #section-stats .grid.grid-cols-11 > div, #section-stats [class*="grid-cols-11"] > div { padding: 1px 2px !important; font-size: 8px !important; }
+    /* 좌측 sidebar 컬럼 자체 = gap 축소 */
+    .md\:col-span-1.flex.flex-col.gap-2 { gap: 4px !important; }
+    /* 신: 즐겨찾기 사이드바 카드 (v12-5) */
+    #section-favorites-sidebar .card-header { padding: 2px 6px !important; font-size: 10px !important; }
+    #section-favorites-sidebar #favorite-templates-grid { gap: 2px !important; padding: 2px !important; }
+    #section-favorites-sidebar .favorite-card { padding: 3px 5px !important; font-size: 9px !important; }
+    #section-favorites-sidebar .favorite-card button { padding: 2px 4px !important; font-size: 9px !important; min-height: 18px !important; }
   }
 
   /* 🌟 2026-06-09 사장님 새 전략 모달 compact v9 — 한 화면 안에 진짜 모두 (세로 공백 0) */
@@ -769,6 +778,20 @@
           <div class="row-clickable" onclick="openTpNotificationsModal('TRAILING_TP', '트레일링 청산')" title="클릭: TRAILING_TP 청산 알림 목록 — 피크 -5% 회귀 시 발동"><p class="text-xs text-yellow-400">🌀TRAIL 🔍</p><p id="stats-trailing" class="text-sm font-semibold text-yellow-300">-</p></div>
         </div>
       </div>
+
+      <!-- 🌟 v12-5 사장님 「즐겨찾기 = 사이드바 안으로」 = 운영 통계 아래 위치 -->
+      <div id="section-favorites-sidebar" class="card rounded-lg" data-mobile-hide="true">
+        <div class="card-header text-xs flex justify-between items-center" style="padding:4px 8px">
+          <span>⭐ 즐겨찾기 템플릿</span>
+          <div class="flex gap-1">
+            <button onclick="refreshFavoriteTemplates()" class="btn-ghost btn" style="padding:1px 5px;font-size:10px" title="새로고침">🔄</button>
+            <button onclick="openTemplateFavoritePicker()" class="btn-ghost btn" style="padding:1px 5px;font-size:10px" title="즐겨찾기 관리">+</button>
+          </div>
+        </div>
+        <div id="favorite-templates-grid" class="grid grid-cols-1 gap-1 p-1">
+          <div class="text-center text-slate-500 text-xs py-2" style="font-size:10px">로딩 중...</div>
+        </div>
+      </div>
     </div>
 
     <!-- RIGHT 컬럼 (80%) — 전략 인스턴스 (좌측 3패널 합친 높이만큼 자연스럽게 늘어남) -->
@@ -832,21 +855,8 @@
     </div>
   </div>
 
-  <!-- ⭐ 즐겨찾기 템플릿 — 2026-06-09 사장님 요구 (= 1 클릭 신 전략) [모바일 숨김] -->
-  <div class="card rounded-xl p-4 mb-3" data-mobile-hide="true">
-    <div class="flex justify-between items-center mb-2 flex-wrap gap-2">
-      <h3 class="text-sm sm:text-base font-bold">⭐ 즐겨찾기 템플릿
-        <span class="text-xs font-normal text-slate-400" title="사장님 자주 쓰는 템플릿 (최대 5개). 카드 클릭 = 1 클릭 신 전략 시작 (시작가 = 현재가 자동).">(1 클릭 신 전략 — 최대 5개)</span>
-      </h3>
-      <div class="flex gap-2">
-        <button onclick="refreshFavoriteTemplates()" class="btn-ghost btn text-xs" style="padding:3px 8px;font-size:11px" title="즐겨찾기 목록 새로고침">🔄</button>
-        <button onclick="openTemplateFavoritePicker()" class="btn-ghost btn text-xs" style="padding:3px 8px;font-size:11px" title="템플릿 ⭐ 즐겨찾기 관리 (= 모든 template 중 5개 선택)">+ 즐겨찾기 관리</button>
-      </div>
-    </div>
-    <div id="favorite-templates-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
-      <div class="col-span-full text-center text-slate-500 text-xs py-4">로딩 중... (또는 = 즐겨찾기 미설정 → 「+ 즐겨찾기 관리」 클릭)</div>
-    </div>
-  </div>
+  <!-- 🌟 v12-5 사장님 「즐겨찾기 = 사이드바 안으로」 = 메인 영역 카드 제거됨 (사이드바 안으로 이동) -->
+  <!-- 옛 위치 = 메인 영역 → 신 위치 = 좌측 사이드바 (운영 통계 아래) -->
 
   <!-- 📊 외부 포지션 (도구 밖 수동 진입) — 2026-05-21 사장님 요구 [모바일 숨김] -->
   <div class="card rounded-xl p-4 mb-3" data-mobile-hide="true">
@@ -1663,40 +1673,40 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260609v12-5"></script>
-<script src="/static/js/api.js?v=20260609v12-5"></script>
-<script src="/static/js/helpers.js?v=20260609v12-5"></script>
-<script src="/static/js/stats-modals.js?v=20260609v12-5"></script>
-<script src="/static/js/health-page.js?v=20260609v12-5"></script>
-<script src="/static/js/ranking-page.js?v=20260609v12-5"></script>
-<script src="/static/js/ranking-modal.js?v=20260609v12-5"></script>
-<script src="/static/js/trade-history-modal.js?v=20260609v12-5"></script>
-<script src="/static/js/system-banner.js?v=20260609v12-5"></script>
-<script src="/static/js/cm-collectors.js?v=20260609v12-5"></script>
-<script src="/static/js/cm-loaders.js?v=20260609v12-5"></script>
-<script src="/static/js/cm-market-info.js?v=20260609v12-5"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260609v12-5"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260609v12-5"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260609v12-5"></script>
-<script src="/static/js/cm-preview.js?v=20260609v12-5"></script>
-<script src="/static/js/cm-open-modal.js?v=20260609v12-5"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260609v12-5"></script>
-<script src="/static/js/templates-panel.js?v=20260609v12-5"></script>
-<script src="/static/js/indicators.js?v=20260609v12-5"></script>
-<script src="/static/js/strategies-list.js?v=20260609v12-5"></script>
-<script src="/static/js/external-positions.js?v=20260609v12-5"></script>
-<script src="/static/js/multi-symbol.js?v=20260609v12-5"></script>
-<script src="/static/js/template-save.js?v=20260609v12-5"></script>
-<script src="/static/js/cm-submit.js?v=20260609v12-5"></script>
-<script src="/static/js/strategy-detail.js?v=20260609v12-5"></script>
-<script src="/static/js/chart-detail.js?v=20260609v12-5"></script>
-<script src="/static/js/accounts-modal.js?v=20260609v12-5"></script>
-<script src="/static/js/add-position-modal.js?v=20260609v12-5"></script>
+<script src="/static/js/constants.js?v=20260609v12-6"></script>
+<script src="/static/js/api.js?v=20260609v12-6"></script>
+<script src="/static/js/helpers.js?v=20260609v12-6"></script>
+<script src="/static/js/stats-modals.js?v=20260609v12-6"></script>
+<script src="/static/js/health-page.js?v=20260609v12-6"></script>
+<script src="/static/js/ranking-page.js?v=20260609v12-6"></script>
+<script src="/static/js/ranking-modal.js?v=20260609v12-6"></script>
+<script src="/static/js/trade-history-modal.js?v=20260609v12-6"></script>
+<script src="/static/js/system-banner.js?v=20260609v12-6"></script>
+<script src="/static/js/cm-collectors.js?v=20260609v12-6"></script>
+<script src="/static/js/cm-loaders.js?v=20260609v12-6"></script>
+<script src="/static/js/cm-market-info.js?v=20260609v12-6"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260609v12-6"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260609v12-6"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260609v12-6"></script>
+<script src="/static/js/cm-preview.js?v=20260609v12-6"></script>
+<script src="/static/js/cm-open-modal.js?v=20260609v12-6"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260609v12-6"></script>
+<script src="/static/js/templates-panel.js?v=20260609v12-6"></script>
+<script src="/static/js/indicators.js?v=20260609v12-6"></script>
+<script src="/static/js/strategies-list.js?v=20260609v12-6"></script>
+<script src="/static/js/external-positions.js?v=20260609v12-6"></script>
+<script src="/static/js/multi-symbol.js?v=20260609v12-6"></script>
+<script src="/static/js/template-save.js?v=20260609v12-6"></script>
+<script src="/static/js/cm-submit.js?v=20260609v12-6"></script>
+<script src="/static/js/strategy-detail.js?v=20260609v12-6"></script>
+<script src="/static/js/chart-detail.js?v=20260609v12-6"></script>
+<script src="/static/js/accounts-modal.js?v=20260609v12-6"></script>
+<script src="/static/js/add-position-modal.js?v=20260609v12-6"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260609v12-5"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260609v12-5"></script>
-<script src="/static/js/page-router.js?v=20260609v12-5"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260609v12-5"></script>
+<script src="/static/js/strategy-actions.js?v=20260609v12-6"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260609v12-6"></script>
+<script src="/static/js/page-router.js?v=20260609v12-6"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260609v12-6"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
