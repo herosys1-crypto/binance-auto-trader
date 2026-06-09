@@ -501,8 +501,13 @@ def get_balance(
     )
     our_available_balance = total_wallet - reserved_for_strategies
     active_strategy_count = len(active_strategies)
-    # 🌟 2026-06-09 사장님 130% 정책 신 필드:
-    wallet_limit_130 = total_wallet * Decimal("1.30")
+    # 🌟 2026-06-09 v17 사장님 「130% 옵션화」 = env 변수 사용 (default 130)
+    import os as _os
+    try:
+        _user_limit_pct = Decimal(_os.environ.get("WALLET_LIMIT_PCT", "130"))
+    except Exception:
+        _user_limit_pct = Decimal("130")
+    wallet_limit_130 = total_wallet * (_user_limit_pct / Decimal("100"))  # 130 → 1.30, 300 → 3.00
     new_strategy_available = wallet_limit_130 - reserved_for_strategies
     if new_strategy_available < 0:
         new_strategy_available = Decimal("0")

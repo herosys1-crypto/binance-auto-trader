@@ -372,11 +372,15 @@ class StrategyService:
         new_capital_notional = D(str(template_model.total_capital or 0))
         new_margin = (new_capital_notional / D(str(effective_lev or 1))).quantize(D("0.01"))
         projected_capital_total = (existing_capital_reserved + new_margin).quantize(D("0.01"))
-        # 🌟 2026-06-09 사장님 신 정책: 130% 한도 (= wallet × 1.30)
-        # 사장님 명시: "wallet 130% 까지 = 신 전략 세팅 가능. 부족한 30% = 사장님 책임."
-        # 예: wallet 5925 × 1.30 = 7702.5 USDT 마진 한도
-        # 모든 strategy 진입 완료 시 = 자본 부족 = 사장님 = 「💉 포지션 추가」 차단 또는 = 다른 strategy 청산
-        wallet_limit_130 = (total_wallet * D("1.30")).quantize(D("0.01"))
+        # 🌟 2026-06-09 v17 사장님 「130% 옵션화」: env WALLET_LIMIT_PCT 사용
+        # 사장님 = .env 에 WALLET_LIMIT_PCT=300 추가 = 300% 한도 (= 더 많은 strategy 운영)
+        # default = 130 (= 옛 정책 유지)
+        import os as _os
+        try:
+            _user_limit_pct = D(_os.environ.get("WALLET_LIMIT_PCT", "130"))
+        except Exception:
+            _user_limit_pct = D("130")
+        wallet_limit_130 = (total_wallet * (_user_limit_pct / D("100"))).quantize(D("0.01"))
         if total_wallet > 0 and projected_capital_total > wallet_limit_130:
             raise ValueError(
                 f"💰 마진 예약 130% 초과 — 사장님 안전 사상.\n\n"
