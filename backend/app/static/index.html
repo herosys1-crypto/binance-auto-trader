@@ -102,11 +102,12 @@
     box-shadow: 0 4px 12px rgba(59,130,246,0.25);
   }
 
-  /* 🌟 2026-06-09 사장님 5-card metrics v3 전문가 디자인 */
+  /* 🌟 2026-06-09 사장님 5-card metrics v3 전문가 디자인
+     2026-06-09 v8: 사장님 「상단 반으로 더 줄이기」 = 추가 절반 축소 */
   /* 공통 메트릭 카드 스타일 */
-  .card-metric { position: relative; overflow: hidden; min-height: 96px; }
+  .card-metric { position: relative; overflow: hidden; min-height: 0; padding: 4px 8px !important; max-height: 80px; }
   .card-metric::before {
-    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
     background: #475569;  /* default gray */
   }
   /* 카드별 의미 색상 (= 사장님 즉시 식별) */
@@ -117,19 +118,19 @@
   .card-pnl-neutral::before { background: linear-gradient(180deg, #64748b 0%, #475569 100%); }
   .card-pnl-pos::before { background: linear-gradient(180deg, #34d399 0%, #059669 100%); }
   .card-pnl-neg::before { background: linear-gradient(180deg, #f87171 0%, #b91c1c 100%); }
-  /* 카드 label / value / detail */
-  .card-metric-label { font-size: 11px; color: #94a3b8; margin-bottom: 4px; line-height: 1.2; }
-  .card-metric-value { font-size: 1.4rem; font-weight: 700; line-height: 1.15; color: #e2e8f0; }
-  .card-metric-value-lg { font-size: 1.6rem; color: #fbbf24; }  /* 잔액 = amber */
-  .card-metric-value-xl { font-size: 1.7rem; }  /* PNL = 가장 강조 */
-  .card-metric-detail { font-size: 11px; color: #64748b; margin-top: 4px; line-height: 1.3; }
+  /* 카드 label / value / detail — v8 (한번 더 절반) */
+  .card-metric-label { font-size: 9px; color: #94a3b8; margin-bottom: 0; line-height: 1.0; }
+  .card-metric-value { font-size: 1rem; font-weight: 700; line-height: 1.05; color: #e2e8f0; }
+  .card-metric-value-lg { font-size: 1.1rem; color: #fbbf24; }  /* 잔액 = amber */
+  .card-metric-value-xl { font-size: 1.15rem; }  /* PNL = 가장 강조 */
+  .card-metric-detail { font-size: 9px; color: #64748b; margin-top: 0; line-height: 1.1; }
   /* PNL 색상 동적 */
   #card-pnl.card-pnl-pos #metric-pnl { color: #34d399; }
   #card-pnl.card-pnl-neg #metric-pnl { color: #f87171; }
-  /* 거래소 잔액 — 130% 진행바 */
-  .balance-progress-wrap { margin-top: 6px; }
+  /* 거래소 잔액 — 130% 진행바 — v8 더 컴팩트 */
+  .balance-progress-wrap { margin-top: 2px; }
   .balance-progress-track {
-    background: #1e293b; height: 6px; border-radius: 3px; overflow: hidden;
+    background: #1e293b; height: 4px; border-radius: 2px; overflow: hidden;
     border: 1px solid #334155;
   }
   .balance-progress-fill {
@@ -154,23 +155,23 @@
   .balance-progress-pct.warn-yellow { background: rgba(234, 179, 8, 0.15); color: #facc15; }
   .balance-progress-pct.warn-orange { background: rgba(249, 115, 22, 0.15); color: #fb923c; }
   .balance-progress-pct.warn-red    { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
-  /* 거래소 잔액 — 3-grid mini (실/예약/여유) */
+  /* 거래소 잔액 — 3-grid mini (실/예약/여유) — v6 컴팩트 (한 줄, 가로 정렬) */
   .balance-mini-grid {
     display: grid; grid-template-columns: 1fr 1fr 1fr;
-    gap: 4px; margin-top: 6px;
-    border-top: 1px dashed #334155; padding-top: 5px;
+    gap: 3px; margin-top: 3px;
+    border-top: 1px dashed #334155; padding-top: 3px;
   }
   .balance-mini-cell {
-    display: flex; flex-direction: column; align-items: center;
-    background: rgba(15, 23, 42, 0.5); border-radius: 4px; padding: 3px 2px;
+    display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 3px;
+    background: rgba(15, 23, 42, 0.5); border-radius: 3px; padding: 2px 3px;
   }
-  .balance-mini-icon { font-size: 11px; line-height: 1; }
-  .balance-mini-label { font-size: 9px; color: #64748b; margin-top: 1px; }
-  .balance-mini-num { font-size: 11px; font-weight: 700; color: #e2e8f0; font-family: monospace; }
-  /* 신 전략 가용 */
+  .balance-mini-icon { font-size: 10px; line-height: 1; }
+  .balance-mini-label { font-size: 9px; color: #64748b; }
+  .balance-mini-num { font-size: 10px; font-weight: 700; color: #e2e8f0; font-family: monospace; }
+  /* 신 전략 가용 — v6 컴팩트 */
   .balance-new-strategy {
-    font-size: 10px; color: #86efac; margin-top: 4px; text-align: center;
-    background: rgba(16, 185, 129, 0.08); border-radius: 3px; padding: 2px 4px;
+    font-size: 9px; color: #86efac; margin-top: 2px; text-align: center;
+    background: rgba(16, 185, 129, 0.08); border-radius: 3px; padding: 1px 4px;
     border: 1px solid rgba(16, 185, 129, 0.2);
   }
   .balance-new-strategy.warn-red {
@@ -277,14 +278,65 @@
     #section-strategies { padding-left: 4px !important; padding-right: 4px !important; }
   }
 
-  /* 🌟 2026-06-09 사장님 새 전략 모달 compact — 한 화면 표시 */
-  #create-modal .mb-4 { margin-bottom: 0.5rem !important; }
-  #create-modal .mb-3 { margin-bottom: 0.3rem !important; }
-  #create-modal .mb-2 { margin-bottom: 0.2rem !important; }
-  #create-modal label.block { margin-bottom: 0.2rem !important; }
-  #create-modal input[type="text"], #create-modal input[type="number"] { padding-top: 0.3rem !important; padding-bottom: 0.3rem !important; }
-  #create-modal .py-2 { padding-top: 0.3rem !important; padding-bottom: 0.3rem !important; }
-  #create-modal h2 { line-height: 1.2; }
+  /* 🌟 2026-06-09 v8 사장님 「상단 더 축소 + 인스턴스 더 확장」 */
+  @media (min-width: 769px) {
+    /* 전략 인스턴스 = 화면 끝까지 (v8: 상단 더 축소되어 인스턴스 더 늘릴 수 있음) */
+    #section-strategies .strategies-table-wrap { max-height: calc(100vh - 160px) !important; }
+    /* 전략 행 = 위아래 padding 최소 (= 행간 공간 최소) */
+    .strategies-table-wrap tbody tr td { padding-top: 3px !important; padding-bottom: 3px !important; }
+    /* Binance 비교 행 = 더 컴팩트 */
+    .strategies-table-wrap tbody tr.binance-compare-row td,
+    .strategies-table-wrap tbody tr td[colspan] { padding-top: 1px !important; padding-bottom: 1px !important; font-size: 11px !important; }
+
+    /* 좌측 sidebar (시스템 상태 + 빠른작업 + 운영통계) = 절반 이상 축소 */
+    #section-syshealth .card-header { padding: 4px 8px !important; font-size: 11px !important; }
+    #section-syshealth .p-2 { padding: 4px !important; gap: 3px !important; }
+    #syshealth-grid { gap: 3px !important; padding: 4px !important; }
+    #syshealth-grid > div { padding: 3px 6px !important; font-size: 10px !important; line-height: 1.2 !important; }
+    #syshealth-grid > div p, #syshealth-grid > div span { font-size: 10px !important; line-height: 1.2 !important; }
+    /* 빠른 작업 버튼 = 작게 */
+    .card-header + .flex.gap-2 button, [class*="빠른"] ~ button,
+    div[class*="card"][class*="flex gap-2"] button.btn { padding: 4px 8px !important; min-height: 24px !important; font-size: 10px !important; }
+    /* 빠른 작업 카드 자체 padding 축소 */
+    .card.rounded-lg.flex.gap-2 { padding: 4px 6px !important; }
+    /* 운영 통계 = 항목 padding 축소 */
+    #section-stats { padding: 0 !important; }
+    #section-stats .card-header { padding: 4px 8px !important; font-size: 11px !important; }
+    #section-stats > .grid > div { padding: 3px 6px !important; }
+    #section-stats > .grid > div > p { font-size: 10px !important; line-height: 1.2 !important; margin: 0 !important; }
+    #section-stats > .grid > div > p:nth-child(2) { font-size: 14px !important; }
+  }
+
+  /* 🌟 2026-06-09 사장님 새 전략 모달 compact v6 — 1/3 축소 + 한 화면 표시 */
+  #create-modal .mb-4 { margin-bottom: 0.3rem !important; }
+  #create-modal .mb-3 { margin-bottom: 0.2rem !important; }
+  #create-modal .mb-2 { margin-bottom: 0.15rem !important; }
+  #create-modal label.block { margin-bottom: 0.15rem !important; }
+  #create-modal input[type="text"], #create-modal input[type="number"] { padding-top: 0.2rem !important; padding-bottom: 0.2rem !important; font-size: 12px !important; }
+  #create-modal .py-2 { padding-top: 0.2rem !important; padding-bottom: 0.2rem !important; }
+  #create-modal h2 { line-height: 1.2; font-size: 1rem !important; }
+  /* v6 신: 단계 행 = 더 컴팩트 */
+  #cm-capitals-grid > div { margin-bottom: 1px !important; }
+  #cm-capitals-grid > div > div { padding: 1px 2px !important; }
+  #cm-capitals-grid input { padding: 1px 4px !important; font-size: 11px !important; height: 22px !important; }
+  #cm-capitals-grid > div > div:first-child { font-size: 11px !important; padding: 1px 4px !important; }
+  /* 헤더 행 (단계/자본/트리%/증거금/...) */
+  #cm-capitals-grid > div:first-child > div { font-size: 10px !important; padding: 1px 2px !important; }
+  /* 모달 내 모든 텍스트 약간 축소 */
+  #create-modal .text-sm { font-size: 11px !important; }
+  #create-modal .text-xs { font-size: 10px !important; }
+  /* 버튼 컴팩트 (직접 입력, 템플릿 선택 등 mode 버튼) */
+  #create-modal button.text-xs, #create-modal button[class*="text-sm"] { padding: 4px 8px !important; min-height: 28px !important; }
+  /* 거래 계정 / 심볼 / 방향 / 레버리지 행 = 더 컴팩트 */
+  #create-modal .border-b { padding-top: 4px !important; padding-bottom: 4px !important; }
+  #create-modal .border-t { padding-top: 4px !important; padding-bottom: 4px !important; }
+  /* SHORT / LONG 큰 버튼 = 작게 */
+  #create-modal button[onclick*="setCmSide"] { padding: 6px 12px !important; min-height: 32px !important; font-size: 13px !important; }
+  /* 시작가 입력 + 미리보기 영역 */
+  #cm-start-price { padding: 4px 8px !important; font-size: 12px !important; }
+  /* TP/SL 설정 (아코디언 안) */
+  #cm-tp-grid > div > div { padding: 1px 2px !important; }
+  #cm-tp-grid input { padding: 1px 4px !important; font-size: 11px !important; height: 22px !important; }
   /* 🌟 2026-06-09 사장님 v2: 단계 행 = 한 줄 강제 (= 2줄 X) */
   #cm-capitals-grid > div > div { white-space: nowrap !important; overflow: hidden; text-overflow: ellipsis; }
   #cm-capitals-grid input { min-width: 0; }
@@ -556,7 +608,7 @@
       </div>
 
       <!-- 운영 통계 (전체 누적) — 빠른작업 아래 -->
-      <div class="card rounded-lg">
+      <div id="section-stats" class="card rounded-lg">
         <div class="card-header text-xs" style="padding:6px 12px">📊 운영 통계 (전체 누적)</div>
         <div class="p-2 grid grid-cols-3 sm:grid-cols-3 gap-2 text-center">
           <div class="row-clickable" onclick="openStatsBreakdownModal('strategies')" title="클릭: 모든 strategy 별 분류 + 손익 상세">
@@ -903,10 +955,9 @@
 
   <div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
        style="background:rgba(0,0,0,0.7); padding:10px;">
-    <!-- 2026-06-09 사장님 v5: 99vw → 1280px (이전 사이즈 + 가로 아주 조금만 확대 = 사장님 명시) -->
-    <!-- 옛 max-width 760 → v2 95vw → v3 99vw 풀화면 (= 사장님 너무 큼 평가)
-         = 원복 후 미세 확대 (1280px = 옛 760 의 1.7배, 적정 크기) -->
-    <div class="card rounded-xl p-3" style="max-width:1280px; width:96vw; max-height:95vh; overflow-y:auto;">
+    <!-- 2026-06-09 사장님 v7: 853px → 720px (추가 ~15% 축소) + width 70vw → 60vw
+         사장님 명시 「줄려줘」 (= v6 853px 도 큼 평가) -->
+    <div class="card rounded-xl p-2" style="max-width:720px; width:60vw; max-height:92vh; overflow-y:auto;">
       <div class="flex justify-between items-center mb-2">
         <h2 id="cm-title" class="text-lg font-bold">➕ 새 전략 시작</h2>
         <button onclick="closeCreateModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
