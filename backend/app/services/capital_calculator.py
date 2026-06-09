@@ -109,12 +109,13 @@ def calc_reserved_for_account(db: Session, account_id: int) -> Decimal:
 
     화면 (exchange_accounts.py) + worker (stage_trigger_worker.py) = 모두 이 함수만 사용!
     """
-    from app.core.constants import ACTIVE_STAGE_STATUSES
+    # 🚨 2026-06-10 v24 critical fix: app.core.constants 모듈 없음 (= 정확 = strategy_status)
+    from app.core.strategy_status import STAGES_WITH_NEXT
     strategies = db.execute(
         select(StrategyInstance)
         .where(StrategyInstance.exchange_account_id == account_id)
         .where(StrategyInstance.is_archived.is_(False))
-        .where(StrategyInstance.status.in_(ACTIVE_STAGE_STATUSES))
+        .where(StrategyInstance.status.in_(STAGES_WITH_NEXT))
     ).scalars().all()
     return sum(
         (calc_reserved_for_strategy(db, s) for s in strategies),
