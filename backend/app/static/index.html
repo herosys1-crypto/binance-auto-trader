@@ -96,10 +96,137 @@
   .alert-bar { background: linear-gradient(90deg, rgba(239,68,68,0.15), rgba(239,68,68,0.05)); border: 1px solid rgba(239,68,68,0.4); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; display: flex; gap: 12px; align-items: center; }
 
   /* 메트릭 카드 — 클릭 가능 표시 + hover 효과 */
-  #card-system, #card-active, #card-pnl, #card-templates { cursor: pointer; transition: transform 0.1s, box-shadow 0.15s; }
-  #card-system:hover, #card-active:hover, #card-pnl:hover, #card-templates:hover {
+  #card-system, #card-active, #card-pnl, #card-templates, #card-balance { cursor: pointer; transition: transform 0.1s, box-shadow 0.15s; }
+  #card-system:hover, #card-active:hover, #card-pnl:hover, #card-templates:hover, #card-balance:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(59,130,246,0.25);
+  }
+
+  /* 🌟 2026-06-09 사장님 5-card metrics v3 전문가 디자인 */
+  /* 공통 메트릭 카드 스타일 */
+  .card-metric { position: relative; overflow: hidden; min-height: 96px; }
+  .card-metric::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+    background: #475569;  /* default gray */
+  }
+  /* 카드별 의미 색상 (= 사장님 즉시 식별) */
+  .card-gray::before    { background: linear-gradient(180deg, #94a3b8 0%, #475569 100%); }
+  .card-amber::before   { background: linear-gradient(180deg, #fbbf24 0%, #d97706 100%); }
+  .card-blue::before    { background: linear-gradient(180deg, #60a5fa 0%, #2563eb 100%); }
+  .card-purple::before  { background: linear-gradient(180deg, #c084fc 0%, #7c3aed 100%); }
+  .card-pnl-neutral::before { background: linear-gradient(180deg, #64748b 0%, #475569 100%); }
+  .card-pnl-pos::before { background: linear-gradient(180deg, #34d399 0%, #059669 100%); }
+  .card-pnl-neg::before { background: linear-gradient(180deg, #f87171 0%, #b91c1c 100%); }
+  /* 카드 label / value / detail */
+  .card-metric-label { font-size: 11px; color: #94a3b8; margin-bottom: 4px; line-height: 1.2; }
+  .card-metric-value { font-size: 1.4rem; font-weight: 700; line-height: 1.15; color: #e2e8f0; }
+  .card-metric-value-lg { font-size: 1.6rem; color: #fbbf24; }  /* 잔액 = amber */
+  .card-metric-value-xl { font-size: 1.7rem; }  /* PNL = 가장 강조 */
+  .card-metric-detail { font-size: 11px; color: #64748b; margin-top: 4px; line-height: 1.3; }
+  /* PNL 색상 동적 */
+  #card-pnl.card-pnl-pos #metric-pnl { color: #34d399; }
+  #card-pnl.card-pnl-neg #metric-pnl { color: #f87171; }
+  /* 거래소 잔액 — 130% 진행바 */
+  .balance-progress-wrap { margin-top: 6px; }
+  .balance-progress-track {
+    background: #1e293b; height: 6px; border-radius: 3px; overflow: hidden;
+    border: 1px solid #334155;
+  }
+  .balance-progress-fill {
+    height: 100%; transition: width 0.6s ease-out, background-color 0.3s;
+    background: #10b981;  /* default green */
+  }
+  .balance-progress-fill.warn-yellow { background: #eab308; }
+  .balance-progress-fill.warn-orange { background: #f97316; }
+  .balance-progress-fill.warn-red    { background: #ef4444; animation: pulse-red 1.5s ease-in-out infinite; }
+  @keyframes pulse-red {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+    50%      { opacity: 0.85; box-shadow: 0 0 8px 1px rgba(239, 68, 68, 0.6); }
+  }
+  .balance-progress-text {
+    font-size: 10px; font-family: monospace; color: #cbd5e1;
+    margin-top: 3px; display: flex; align-items: center; gap: 3px; flex-wrap: wrap;
+  }
+  .balance-progress-pct {
+    margin-left: auto; font-weight: 700; padding: 1px 5px; border-radius: 3px;
+    background: rgba(16, 185, 129, 0.15); color: #34d399;
+  }
+  .balance-progress-pct.warn-yellow { background: rgba(234, 179, 8, 0.15); color: #facc15; }
+  .balance-progress-pct.warn-orange { background: rgba(249, 115, 22, 0.15); color: #fb923c; }
+  .balance-progress-pct.warn-red    { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+  /* 거래소 잔액 — 3-grid mini (실/예약/여유) */
+  .balance-mini-grid {
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 4px; margin-top: 6px;
+    border-top: 1px dashed #334155; padding-top: 5px;
+  }
+  .balance-mini-cell {
+    display: flex; flex-direction: column; align-items: center;
+    background: rgba(15, 23, 42, 0.5); border-radius: 4px; padding: 3px 2px;
+  }
+  .balance-mini-icon { font-size: 11px; line-height: 1; }
+  .balance-mini-label { font-size: 9px; color: #64748b; margin-top: 1px; }
+  .balance-mini-num { font-size: 11px; font-weight: 700; color: #e2e8f0; font-family: monospace; }
+  /* 신 전략 가용 */
+  .balance-new-strategy {
+    font-size: 10px; color: #86efac; margin-top: 4px; text-align: center;
+    background: rgba(16, 185, 129, 0.08); border-radius: 3px; padding: 2px 4px;
+    border: 1px solid rgba(16, 185, 129, 0.2);
+  }
+  .balance-new-strategy.warn-red {
+    color: #fca5a5; background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3);
+  }
+  /* 🌟 2026-06-09 v4 거래소 잔액 카드 = 2 col 사용 = 좌우 분할 layout (사장님 「2칸 차지 + 빈공간 없게」) */
+  @media (min-width: 768px) {
+    .balance-card-wide {
+      display: grid;
+      grid-template-columns: 1fr 1fr;  /* 좌우 50/50 */
+      gap: 14px;
+      align-items: stretch;
+    }
+    .balance-card-wide .balance-left,
+    .balance-card-wide .balance-right {
+      display: flex; flex-direction: column; justify-content: center;
+    }
+    .balance-card-wide .balance-right {
+      border-left: 1px dashed #334155; padding-left: 12px;
+    }
+    .balance-card-wide .balance-mini-grid {
+      border-top: 1px dashed #334155; padding-top: 6px; margin-top: 8px;
+    }
+    .balance-card-wide .balance-progress-wrap {
+      margin-top: 0;
+    }
+    .balance-card-wide .card-metric-value-lg {
+      font-size: 1.8rem !important;  /* 2 col = 더 큰 폰트 가능 */
+    }
+  }
+  .balance-progress-title {
+    font-size: 10px; color: #94a3b8; margin-bottom: 4px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  /* 🌟 2026-06-09 v4 나머지 4개 카드 (시스템/진행/PNL/템플릿) = 빈공간 채움 + 폰트 강조 */
+  #card-system .card-metric-value,
+  #card-active .card-metric-value,
+  #card-templates .card-metric-value {
+    font-size: 1.5rem;  /* 1.4 → 1.5 = 살짝 키움 (= 빈공간 채움) */
+  }
+  #card-active .card-metric-value { color: #60a5fa; }  /* blue */
+  #card-templates .card-metric-value { color: #c084fc; }  /* purple */
+  /* 🌟 2026-06-09 v5 — 다른 4개 카드 = min-height 제거 + 컴팩트 padding (= 세로 좁게) */
+  @media (min-width: 768px) {
+    #card-system, #card-active, #card-pnl, #card-templates {
+      min-height: 0 !important;       /* 자기 콘텐츠 높이만 (= 세로 컴팩트) */
+      padding: 10px 12px !important;  /* 패딩 줄임 = 더 컴팩트 */
+    }
+    #card-system .card-metric-detail,
+    #card-active .card-metric-detail,
+    #card-pnl .card-metric-detail,
+    #card-templates .card-metric-detail {
+      margin-top: 2px;  /* detail 라인 간격 축소 */
+    }
+    /* 거래소 잔액만 = min-height 유지 (= 정보 가득 채움) */
+    #card-balance.balance-card-wide { min-height: 96px; }
   }
   /* 클릭 시 대상 섹션 하이라이트 */
   @keyframes section-flash {
@@ -135,6 +262,20 @@
   @media (max-width: 768px) {
     .strategies-table-wrap { overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
   }
+  /* 🌟 2026-06-09 v5 사장님 「전략 인스턴스 최대한 많이」 — 데스크탑 cell 가로 여백 축소 */
+  @media (min-width: 769px) {
+    .strategies-table-wrap td, .strategies-table-wrap th {
+      padding-left: 5px !important;
+      padding-right: 5px !important;
+    }
+    /* 테이블 좌우 자체 padding 줄임 */
+    #section-strategies .strategies-table-wrap {
+      padding-left: 0 !important;
+      padding-right: 0 !important;
+    }
+    /* 카드 내부 = 우측까지 꽉 차게 */
+    #section-strategies { padding-left: 4px !important; padding-right: 4px !important; }
+  }
 
   /* 🌟 2026-06-09 사장님 새 전략 모달 compact — 한 화면 표시 */
   #create-modal .mb-4 { margin-bottom: 0.5rem !important; }
@@ -167,7 +308,11 @@
 
     /* 🎨 모바일 5-card metrics → 전문가 디자인
        거래소 잔액 = 전체폭 (가장 중요!) + 큰 숫자 + 시각적 계층 */
-    .grid.grid-cols-2.md\:grid-cols-5 { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
+    .grid.grid-cols-2.md\:grid-cols-5,
+    .grid.grid-cols-2.md\:grid-cols-6 { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
+    /* 모바일 = 잔액 카드 = 전체폭 (= col-span 2 무시, 단독 row) + 좌우 분할 X (= 세로 stack) */
+    #card-balance.balance-card-wide { display: block !important; }
+    #card-balance .balance-right { border-left: 0 !important; padding-left: 0 !important; }
     #card-balance {
       grid-column: 1 / -1 !important;
       background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
@@ -189,9 +334,13 @@
       color: #cbd5e1;
       white-space: normal;
     }
+    /* 모바일 = 진행바 + mini-grid 도 유지 (전문가 디자인 일관) */
+    #card-balance .balance-mini-grid { gap: 3px; padding-top: 4px; }
+    #card-balance .balance-mini-icon { font-size: 10px; }
+    #card-balance .balance-mini-num { font-size: 10px; }
     #card-active, #card-pnl { padding: 10px !important; }
-    #card-pnl #metric-pnl { font-size: 1.3rem !important; font-weight: 700; }
-    #card-active #metric-active { font-size: 1.4rem !important; font-weight: 700; color: #10b981; }
+    #card-pnl .card-metric-value-xl { font-size: 1.4rem !important; }
+    #card-active .card-metric-value { font-size: 1.3rem !important; }
 
     /* 정렬/계정 dropdown = 모바일 = 작게 */
     #strategies-sort-by, #strategies-account-filter {
@@ -302,39 +451,85 @@
     ➕
   </button>
 
-  <!-- 5-card metrics — 모바일 2단 / 데스크톱 5단. 거래소 잔액 카드 추가 (2026-05-03) -->
-  <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-2">
-    <div id="card-system" class="card rounded-lg p-2 signal-gray" onclick="scrollToSection('section-syshealth')" title="클릭하면 시스템 상태로 이동" data-mobile-hide="true">
-      <p class="text-xs text-slate-400">시스템 상태 ▾</p>
-      <p id="metric-system" class="text-base sm:text-lg font-bold leading-tight">-</p>
-      <p id="metric-system-detail" class="text-xs text-slate-500">-</p>
+  <!-- 🌟 2026-06-09 사장님 5-card metrics v5 — 6 col + 잔액 2 col + items-start (= 다른 카드 세로 자기 콘텐츠만큼만)
+       데스크탑 = 6 col (잔액 2 + 시스템 1 + 진행 1 + PNL 1 + 템플릿 1)
+       items-start = 거래소 잔액이 늘어나도 다른 카드는 자기 콘텐츠 높이만 = 세로 컴팩트 (사장님 「가로만 줄이고 세로 좁게」)
+       모바일 = 2 col (잔액 = 전체폭, 나머지 = 각 1 col) -->
+  <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-2 items-start" id="metrics-row">
+    <!-- 1. 시스템 상태 (gray accent) -->
+    <div id="card-system" class="card-metric card-gray rounded-lg p-3 signal-gray" onclick="scrollToSection('section-syshealth')" title="클릭하면 시스템 상태로 이동" data-mobile-hide="true">
+      <p class="card-metric-label">⚙️ 시스템 상태 ▾</p>
+      <p id="metric-system" class="card-metric-value">-</p>
+      <p id="metric-system-detail" class="card-metric-detail">-</p>
     </div>
-    <div id="card-balance" class="card rounded-lg p-2 signal-gray" onclick="loadBalance()" title="클릭하면 잔액 새로고침">
-      <p class="text-xs text-slate-400">💰 거래소 잔액</p>
-      <p id="metric-balance" class="text-base sm:text-lg font-bold leading-tight">-</p>
-      <p id="metric-balance-detail" class="text-sm text-slate-400">가용 / 마진비율</p>
+
+    <!-- 2. 💰 거래소 잔액 (amber accent) — 사장님 자본 = 가장 중요! = 2 col 차지 (= 좌측 큰 숫자 / 우측 진행바+mini) -->
+    <div id="card-balance" class="card-metric card-amber rounded-lg p-3 signal-gray md:col-span-2 balance-card-wide" onclick="loadBalance()" title="클릭하면 잔액 새로고침">
+      <!-- 좌측: 큰 숫자 + label -->
+      <div class="balance-left">
+        <p class="card-metric-label">💰 거래소 잔액</p>
+        <p id="metric-balance" class="card-metric-value card-metric-value-lg">-</p>
+        <!-- 3-grid mini (실/예약/여유) — 좌측 하단 -->
+        <div class="balance-mini-grid">
+          <div class="balance-mini-cell"><span class="balance-mini-icon">🔒</span><span class="balance-mini-label">실</span><span id="balance-mini-real" class="balance-mini-num">-</span></div>
+          <div class="balance-mini-cell"><span class="balance-mini-icon">📦</span><span class="balance-mini-label">예약</span><span id="balance-mini-reserved" class="balance-mini-num">-</span></div>
+          <div class="balance-mini-cell"><span class="balance-mini-icon">💵</span><span class="balance-mini-label">여유</span><span id="balance-mini-free" class="balance-mini-num">-</span></div>
+        </div>
+      </div>
+      <!-- 우측: 130% 진행바 + 신 전략 가용 -->
+      <div class="balance-right">
+        <div class="balance-progress-wrap" title="130% 한도 사용률 (예약 + 실)">
+          <p class="balance-progress-title">⚡ 130% 한도 사용률</p>
+          <div class="balance-progress-track">
+            <div id="balance-progress-bar" class="balance-progress-fill" style="width:0%"></div>
+          </div>
+          <p class="balance-progress-text">
+            <span id="balance-progress-used">-</span>
+            <span class="text-slate-500"> / </span>
+            <span id="balance-progress-limit">-</span>
+            <span id="balance-progress-pct" class="balance-progress-pct">-</span>
+          </p>
+        </div>
+        <!-- 신 전략 가용 (= 130% 한도 - 사용) -->
+        <p id="balance-new-strategy" class="balance-new-strategy">🆕 신 전략 가용: -</p>
+      </div>
+      <!-- legacy detail (= 외부 코드 호환) -->
+      <p id="metric-balance-detail" class="hidden">-</p>
     </div>
-    <div id="card-active" class="card rounded-lg p-2 signal-gray" onclick="scrollToSection('section-strategies')" title="클릭하면 전략 인스턴스로 이동">
-      <p class="text-xs text-slate-400">진행 중인 전략 ▾</p>
-      <p id="metric-active" class="text-base sm:text-lg font-bold leading-tight">-</p>
-      <p id="metric-active-detail" class="text-xs text-slate-500">-</p>
+
+    <!-- 3. 📊 진행 중인 전략 (blue accent) -->
+    <div id="card-active" class="card-metric card-blue rounded-lg p-3 signal-gray" onclick="scrollToSection('section-strategies')" title="클릭하면 전략 인스턴스로 이동">
+      <p class="card-metric-label">📊 진행 중인 전략 ▾</p>
+      <p id="metric-active" class="card-metric-value">-</p>
+      <!-- 활성/전체 진행바 -->
+      <div class="balance-progress-wrap mt-1">
+        <div class="balance-progress-track">
+          <div id="active-progress-bar" class="balance-progress-fill" style="width:0%;background:#3b82f6"></div>
+        </div>
+      </div>
+      <p id="metric-active-detail" class="card-metric-detail">-</p>
     </div>
-    <div id="card-pnl" class="card rounded-lg p-2 signal-gray" onclick="openTradeHistoryModal()" title="클릭하면 거래 실적 상세">
-      <p class="text-xs text-slate-400">미실현 손익 📊</p>
-      <p id="metric-pnl" class="text-base sm:text-lg font-bold leading-tight">-</p>
-      <p id="metric-pnl-detail" class="text-xs text-slate-500">실시간 (클릭: 실적)</p>
+
+    <!-- 4. 📈 미실현 손익 (green/red accent — 동적) -->
+    <div id="card-pnl" class="card-metric card-pnl-neutral rounded-lg p-3 signal-gray" onclick="openTradeHistoryModal()" title="클릭하면 거래 실적 상세">
+      <p class="card-metric-label">📈 미실현 손익</p>
+      <p id="metric-pnl" class="card-metric-value card-metric-value-xl">-</p>
+      <p id="metric-pnl-detail" class="card-metric-detail">실시간 (클릭: 실적 보기)</p>
     </div>
-    <div id="card-templates" class="card rounded-lg p-2 signal-gray" onclick="scrollToSection('section-templates')" title="클릭하면 전략 템플릿으로 이동" data-mobile-hide="true">
-      <p class="text-xs text-slate-400">전략 템플릿 ▾</p>
-      <p id="metric-templates" class="text-base sm:text-lg font-bold leading-tight">-</p>
-      <p id="metric-templates-detail" class="text-xs text-slate-500">-</p>
+
+    <!-- 5. ⭐ 전략 템플릿 (purple accent) -->
+    <div id="card-templates" class="card-metric card-purple rounded-lg p-3 signal-gray" onclick="scrollToSection('section-templates')" title="클릭하면 전략 템플릿으로 이동" data-mobile-hide="true">
+      <p class="card-metric-label">⭐ 전략 템플릿 ▾</p>
+      <p id="metric-templates" class="card-metric-value">-</p>
+      <p id="metric-templates-detail" class="card-metric-detail">-</p>
     </div>
   </div>
 
-  <!-- Row: [시스템상태 + 빠른작업 + 운영통계 좌측 25%] | [전략 인스턴스 우측 75%] -->
-  <!-- 비율 1:3 (좌측 좁게, 전략인스턴스 넓게) -->
-  <div class="grid grid-cols-1 md:grid-cols-4 gap-2 mb-2">
-    <!-- LEFT 컬럼 (25%) — 3 패널 stacked. h-full + 시스템상태 flex-grow 로 우측 전략인스턴스 높이에 정확히 매치 -->
+  <!-- 🌟 2026-06-09 v5 사장님 「전략 인스턴스 최대한 많이」 요청: 좌측 25% → 20% 축소, 우측 75% → 80% 확장 -->
+  <!-- Row: [시스템상태 + 빠른작업 + 운영통계 좌측 20%] | [전략 인스턴스 우측 80%] -->
+  <!-- 비율 1:4 (좌측 더 좁게, 전략인스턴스 더 넓게) -->
+  <div class="grid grid-cols-1 md:grid-cols-5 gap-2 mb-2">
+    <!-- LEFT 컬럼 (20%) — 3 패널 stacked. h-full + 시스템상태 flex-grow 로 우측 전략인스턴스 높이에 정확히 매치 -->
     <div class="md:col-span-1 flex flex-col gap-2 h-full" data-mobile-hide="true">
       <!-- 시스템 상태 — flex-1 로 빈 공간 자동 채움 (모바일 숨김) -->
       <div id="section-syshealth" class="card rounded-lg flex-1 flex flex-col">
@@ -411,8 +606,8 @@
       </div>
     </div>
 
-    <!-- RIGHT 컬럼 (75%) — 전략 인스턴스 (좌측 3패널 합친 높이만큼 자연스럽게 늘어남) -->
-    <div id="section-strategies" class="card rounded-lg md:col-span-3">
+    <!-- RIGHT 컬럼 (80%) — 전략 인스턴스 (좌측 3패널 합친 높이만큼 자연스럽게 늘어남) -->
+    <div id="section-strategies" class="card rounded-lg md:col-span-4">
       <div class="card-header text-xs flex justify-between items-center flex-wrap gap-2" style="padding:8px 12px">
         <span>🎯 전략 인스턴스 <span id="strategies-active-count" class="text-emerald-400 font-bold">(0)</span></span>
         <div class="flex gap-3 items-center flex-wrap">
@@ -708,8 +903,10 @@
 
   <div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
        style="background:rgba(0,0,0,0.7); padding:10px;">
-    <!-- 2026-06-09 사장님 v2: max-width 760 → 95vw (가로 확장 = 행 2줄 X) -->
-    <div class="card rounded-xl p-3" style="max-width:95vw; width:100%; max-height:95vh; overflow-y:auto;">
+    <!-- 2026-06-09 사장님 v5: 99vw → 1280px (이전 사이즈 + 가로 아주 조금만 확대 = 사장님 명시) -->
+    <!-- 옛 max-width 760 → v2 95vw → v3 99vw 풀화면 (= 사장님 너무 큼 평가)
+         = 원복 후 미세 확대 (1280px = 옛 760 의 1.7배, 적정 크기) -->
+    <div class="card rounded-xl p-3" style="max-width:1280px; width:96vw; max-height:95vh; overflow-y:auto;">
       <div class="flex justify-between items-center mb-2">
         <h2 id="cm-title" class="text-lg font-bold">➕ 새 전략 시작</h2>
         <button onclick="closeCreateModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
