@@ -454,11 +454,17 @@ async function refreshStrategies() {
       // tooltip = 자세 설명 (사장님이 필요 시 hover 로 확인)
       const planTooltip = `💼 사장님 자본: ${plannedMargin.toFixed(2)} USDT (= 마진 lock 목표, SL 기준)\n📊 거래 규모: ${plannedNotional.toFixed(2)} USDT (= 자본 × ${sLev}x)\n🔒 현재 마진: ${positionMargin.toFixed(2)} USDT (Binance lock)\n📈 진입률: ${entryPct.toFixed(1)}% (모든 단계 진입까지 ${(100-entryPct).toFixed(1)}% 남음)`;
       // 2026-06-08 사장님 v4 요구: qty/마진 stack 2줄 → 1줄 압축 (가로 줄수 축소).
-      // 옛 2줄: 수량 X / 마진 Y / Z USDT P%
-      // 신 1줄: X (Y/Z 마진 P%) + 버튼 별도 줄
+      // 2026-06-09 사장님 v5 요구: 수량 = 큰 폰트 (눈에 들어오게) + 음수 부호 제거 (= 절대값 + side 아이콘)
+      // Binance positionAmt: SHORT=음수, LONG=양수 → 사장님 SHORT 운영 시 모든 수량이 음수 표시 = 시각 부담
+      //   → 절대값 + ⬇/⬆ 아이콘 + 빨강/초록 색 = 직관 (= 손실 오인 차단)
+      const qtySideIcon = s.side === 'SHORT' ? '⬇' : '⬆';
+      const qtyColor = s.side === 'SHORT' ? 'text-red-400' : 'text-green-400';
+      const qtyTooltip = `포지션 수량 = ${sQtyAbs.toLocaleString('en-US', {maximumFractionDigits: 8})} (${s.side})\n\n` +
+        `참고: Binance API positionAmt 는 SHORT 일 때 음수 (-${sQtyAbs}), LONG 일 때 양수 입니다.\n` +
+        `여기서는 직관 위해 절대값 + 방향 아이콘 (${qtySideIcon}) 표시합니다.`;
       const qtyStack = hasPosition
         ? `<div class="text-sm leading-none">
-            <span class="${sQtyNum<0?'neg':'pos'} font-semibold" title="포지션 수량">${fmtQty(sQtyNum)}</span>
+            <span class="${qtyColor} font-bold" style="font-size:1.05rem" title="${qtyTooltip}">${qtySideIcon} ${fmtQty(sQtyAbs)}</span>
             <span class="text-slate-300" title="${planTooltip}" style="font-size:12px"> ${positionMargin.toFixed(0)}/${plannedMargin.toFixed(0)} <span class="${entryColor}">${entryPct.toFixed(0)}%</span></span>
             <div class="mt-0.5">${addMarginBtnInQty}${addPositionBtn}${manualTpBtn}</div>
           </div>`
