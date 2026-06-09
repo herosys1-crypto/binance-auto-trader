@@ -188,42 +188,25 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 # = 사장님 운영 유연성 우선 (약간 음수 허용 = 단기 손실 진입 시 자동 진입 계속)
                 # = 130% 초과 시만 차단 (= 위험 임계 — 사장님 자본 보호 최종 안전망)
                 # = UI 예약률 표시 = 그대로 유지 (사장님 요구)
-                # 🌟 2026-06-09 v17 사장님 「130% 옵션화」: env 변수로 동적 조정
-                # 옛: 1.30 하드코드 (= 사장님 = 17 strategy 모두 차단 = 답답!)
-                # 신: WALLET_LIMIT_PCT env (= default 130, 사장님 = 200/300/500 등 자유 선택)
-                # 사장님 .env 에 = WALLET_LIMIT_PCT=300 추가 + 재시작 = 즉시 300% 한도
-                try:
-                    _user_limit_pct = Decimal(os.environ.get("WALLET_LIMIT_PCT", "130"))
-                except Exception:
-                    _user_limit_pct = Decimal("130")
-                _MAX_COMMITTED_RATIO = _user_limit_pct / Decimal("100")  # 130 → 1.30, 300 → 3.00
+                # 🌟 2026-06-09 v17 Phase 3: 단일 진실 모듈 사용 (= 사장님 헌법 6번)
+                # capital_calculator.calc_reserved_for_account() = 화면과 100% 동일 함수!
+                # = silent bug 영구 차단 (= 같은 데이터 = 단 하나 함수)
+                from app.services.capital_calculator import (
+                    calc_reserved_for_account,
+                    calc_wallet_limit,
+                    get_wallet_limit_pct,
+                )
                 try:
                     _bal_info = exec_service.client.get_account()
                     _wallet_total = Decimal(str(_bal_info.get('totalWalletBalance', '0')))
-                    _real_margin = Decimal(str(_bal_info.get('totalPositionInitialMargin', '0')))  # Binance 실 lock
-                    # 🌟 2026-06-09 v17-critical silent bug fix (사장님 SLXUSDT #82 발견):
-                    # 옛 계산 (잘못!): sum(s.total_capital) = 모든 단계 자본 합 (= 사장님 화면과 다름!)
-                    # 신 계산 (= 화면과 동일, fix v5 사상):
-                    #   _total_reserved = sum(미진입 단계 자본 합)  ← 사장님 진짜 사상!
-                    # = 사장님 = 화면 90.5% 인데 worker = 212.7% 차단 silent bug 해소!
-                    from app.models.strategy_stage_plan import StrategyStagePlan
-                    _all_active = db.execute(
-                        select(StrategyInstance)
-                        .where(StrategyInstance.exchange_account_id == account.id)
-                        .where(StrategyInstance.is_archived.is_(False))
-                        .where(StrategyInstance.status.in_(ACTIVE_STAGE_STATUSES))
-                    ).scalars().all()
-                    # 미진입 단계 자본 합 (= 사장님 화면과 동일 = 진짜 사상)
-                    _total_reserved = Decimal('0')
-                    for _s in _all_active:
-                        _unentered = db.execute(
-                            select(StrategyStagePlan)
-                            .where(StrategyStagePlan.strategy_instance_id == _s.id)
-                            .where(StrategyStagePlan.is_triggered.is_(False))
-                        ).scalars().all()
-                        _total_reserved += sum((Decimal(str(p.planned_capital or 0)) for p in _unentered), Decimal('0'))
-                    _total_committed = _real_margin + _total_reserved  # 실 + 예약 합
-                    _max_allowed = _wallet_total * _MAX_COMMITTED_RATIO  # 사장님 정책: wallet × 1.30
+                    _real_margin = Decimal(str(_bal_info.get('totalPositionInitialMargin', '0')))
+                    # 단일 진실 함수 호출 (= 화면과 동일!)
+                    _total_reserved = calc_reserved_for_account(db, account.id)
+                    _max_allowed = calc_wallet_limit(_wallet_total)
+                    _user_limit_pct = get_wallet_limit_pct()
+                    # 단일 진실: 예약 (= calc_reserved_for_account) = 실 + 미진입 자본 합
+                    # → 별도 + _real_margin 더하지 않음 (= reserved 안에 이미 포함!)
+                    _total_committed = _total_reserved  # capital_calculator 가 모든 것 포함
                     if _total_committed > _max_allowed and _wallet_total > 0:
                         # 🚨 wallet 130% 초과 — 자동 진입 차단 + cooldown + Telegram (dedup)
                         _first = _set_margin_cooldown(_redis, strategy.id, next_stage_no)
