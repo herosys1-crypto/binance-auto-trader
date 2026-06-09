@@ -1157,3 +1157,135 @@ def diagnose_today_trades(
         ],
         "note": "오늘 KST 자정 기준 사장님 모든 거래 + risk events. spec 기획 분석용.",
     }
+
+
+# ============================================================
+# 🚨 2026-06-09 사장님 critical 신 endpoint = 자동 진입 진단
+# 사장님 요청: '모든 전략에 대해서 다시 설정에 대해서 조사해서 문제가 있으면 수정'
+# = 모든 활성 strategy = 자동 진입 차단 상태 한 번에 진단
+# ============================================================
+@router.get("/diagnostic/auto-entry-status")
+def get_auto_entry_diagnostic(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """모든 활성 strategy 의 자동 진입 상태 진단.
+    
+    각 strategy 에 대해:
+    - 현재 단계 + 다음 단계 trigger_price + 현재가
+    - 자동 진입 차단 여부 + 차단 이유 (130% 한도 / cooldown / 거래소 ban)
+    
+    사장님이 = 한 번에 보고 = 문제 strategy 즉시 식별 가능.
+    """
+    from app.core.constants import ACTIVE_STAGE_STATUSES
+    from app.models.strategy_instance import StrategyInstance
+    from app.models.strategy_stage_plan import StrategyStagePlan
+    from app.core.redis_client import get_redis_client
+    from app.services.capital_calculator import (
+        calc_reserved_for_account, calc_wallet_limit, get_wallet_limit_pct,
+    )
+    from decimal import Decimal
+    
+    redis = None
+    try:
+        redis = get_redis_client()
+    except Exception:
+        pass
+    
+    strats = db.execute(
+        select(StrategyInstance)
+        .where(StrategyInstance.is_archived.is_(False))
+        .where(StrategyInstance.status.in_(ACTIVE_STAGE_STATUSES))
+        .order_by(StrategyInstance.id.desc())
+    ).scalars().all()
+    
+    results = []
+    blocked_count = 0
+    pending_count = 0
+    
+    for s in strats:
+        current_stage = s.current_stage or 0
+        next_stage_no = current_stage + 1
+        
+        # 다음 단계 정보
+        next_plan = db.execute(
+            select(StrategyStagePlan)
+            .where(StrategyStagePlan.strategy_instance_id == s.id)
+            .where(StrategyStagePlan.stage_no == next_stage_no)
+        ).scalar_one_or_none()
+        
+        # 현재가 (= avg + pnl/qty 추정)
+        current_price = None
+        if s.avg_entry_price and s.current_position_qty and s.unrealized_pnl is not None:
+            try:
+                avg = float(s.avg_entry_price)
+                qty = abs(float(s.current_position_qty))
+                pnl = float(s.unrealized_pnl)
+                if qty > 0:
+                    if s.side == "LONG":
+                        current_price = avg + (pnl / qty)
+                    else:
+                        current_price = avg - (pnl / qty)
+            except Exception:
+                pass
+        
+        # 차단 이유 확인
+        block_reasons = []
+        if next_plan:
+            trg_price = float(next_plan.trigger_price or 0)
+            trigger_reached = False
+            if trg_price > 0 and current_price:
+                if s.side == "SHORT":
+                    trigger_reached = current_price >= trg_price
+                else:
+                    trigger_reached = current_price <= trg_price
+            
+            # Redis cooldown 확인
+            in_cooldown = False
+            if redis:
+                try:
+                    cooldown_key = f"stage_margin_cooldown:strategy:{s.id}:stage:{next_stage_no}"
+                    in_cooldown = bool(redis.get(cooldown_key))
+                except Exception:
+                    pass
+            
+            if next_plan.is_triggered:
+                status_label = "✅ 진입 완료"
+            elif not trigger_reached:
+                status_label = "⏳ 트리거 대기"
+            else:
+                # 트리거 도달했는데 = 진입 안 됨!
+                blocked_count += 1
+                pending_count += 1
+                status_label = "🚨 자동 진입 차단!"
+                if in_cooldown:
+                    block_reasons.append("Redis cooldown (30분 대기)")
+                # 130% 한도 확인 (= 비싼 호출 = skip, 별도 endpoint)
+                block_reasons.append("130% 한도 초과 가능성 (= /diagnostic/reserved 확인)")
+        else:
+            status_label = "📦 단계 완료 (= 다음 단계 plan 없음)"
+        
+        results.append({
+            "strategy_id": s.id,
+            "symbol": s.symbol,
+            "side": s.side,
+            "current_stage": current_stage,
+            "next_stage_no": next_stage_no if next_plan else None,
+            "next_trigger_price": float(next_plan.trigger_price) if next_plan and next_plan.trigger_price else None,
+            "current_price": current_price,
+            "status_label": status_label,
+            "block_reasons": block_reasons,
+            "avg_entry": float(s.avg_entry_price or 0),
+            "current_qty": float(s.current_position_qty or 0),
+        })
+    
+    return {
+        "summary": {
+            "total_active": len(strats),
+            "blocked": blocked_count,
+            "pending_entry": pending_count,
+            "wallet_limit_pct": float(get_wallet_limit_pct()),
+        },
+        "strategies": results,
+        "note": "🚨 = 자동 진입 차단 중 (사장님 즉시 조치 필요!). PR 머지 + 배포 + Redis cooldown 삭제로 해결.",
+    }
