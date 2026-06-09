@@ -216,8 +216,31 @@ class TPSLOrchestratorService:
                 else Decimal("0")
             )
 
-            # 효과 마진 = max(DB 자본, Binance 실 마진) — 사장님 어디서 추가하든 보호
-            effective_margin = max(sCap, binance_isolated)
+            # 🚨 2026-06-10 v19 사장님 critical silent bug fix (VELVETUSDT 사례!):
+            # 옛 옵션 B v2 (2026-06-05): effective_margin = max(DB total_capital, Binance isolated)
+            # = silent bug 원인! 사장님 사상 + 단계 미진입 strategy = 전량 청산!
+            #
+            # 사장님 VELVETUSDT (= 발견 사례):
+            #   1단계만 진입 (current_qty=245), total_capital=1300 (= 4단계 전체!)
+            #   capital_based = (1300 × 0.25 × 2) / 0.41 = 1576
+            #   raw_qty = max(61.25, 1576) = 1576 → min(245) = 245 = 전량!
+            #   = 사장님 TP1 25% 의도 위배 = silent bug!
+            #
+            # 신 fix v19 (사장님 사상 진짜 정확):
+            # effective_margin = binance_isolated 만 사용 (= 실 사용 마진)
+            # = 미진입 단계 자본 영향 X
+            # = 사장님 수동 증거금 추가 = isolated_margin 즉시 반영 = 옛 의도 보호
+            # = TP1 25% = 진짜 25% (= 사장님 의도 정확)
+            if binance_isolated > 0:
+                # 사장님 실 사용 마진 (= 정확!) — 진입 + 수동 추가 모두 포함
+                effective_margin = binance_isolated
+            else:
+                # binance_isolated 없으면 = 옛 fallback (= total_capital, 단 1단계만 진입한 비율로)
+                # = current_qty × avg_entry / leverage = 실 사용 추정
+                if avg_entry > 0 and sLev > 0:
+                    effective_margin = (current_qty * avg_entry) / sLev
+                else:
+                    effective_margin = sCap  # 최종 fallback
 
             if manual_tp_protect_active:
                 # 사장님 수동 청산 후 1h 보호 모드 — qty_based 만 사용 (잔여 유지)
