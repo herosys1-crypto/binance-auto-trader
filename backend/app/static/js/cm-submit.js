@@ -107,7 +107,29 @@ async function submitCreate() {
       await api('/strategies/' + created.id + '/start', { method: 'POST' });
       toast('🚀 전략 #' + created.id + ' 시작 완료. 1단계 주문 발송됨.', 'success');
     } catch (startErr) {
-      toast('전략 생성됐지만 시작 실패: ' + startErr.message + ' (수동으로 다시 시도하세요)', 'warning');
+      // 🌟 2026-06-09 사장님 -4412 친절화: Binance 에러 코드별 명확 안내
+      const errMsg = String(startErr.message || startErr);
+      let friendlyMsg = '';
+      if (errMsg.includes('-4412')) {
+        friendlyMsg = `🌍 Binance 지역 제한 (= 사장님 행동 X 가능)\n\n` +
+          `심볼: ${symbol} | ${cmState.side}\n\n` +
+          `이유 (3가지 중 1):\n` +
+          `  ① 이 심볼이 사장님 지역에서 거래 차단\n` +
+          `  ② VPS IP (159.65.137.250) 가 제한 지역 인식\n` +
+          `  ③ API 키 futures 권한 갱신 필요\n\n` +
+          `해결책:\n` +
+          `  ✅ 다른 메인 심볼 시도 (BTCUSDT, ETHUSDT, SOLUSDT)\n` +
+          `  ✅ Binance 웹사이트에서 = 이 심볼 거래 가능 확인\n` +
+          `  ✅ 전략 #${created.id} 는 보관 처리 권장 (=⛔ 진입 실패)`;
+      } else if (errMsg.includes('-2010') || errMsg.includes('-2019')) {
+        friendlyMsg = `💰 잔액/마진 부족\n전략 #${created.id} = 진입 실패. 잔액 확인 후 재시도.`;
+      } else if (errMsg.includes('-4061')) {
+        friendlyMsg = `🔄 Position mode 불일치 (Hedge vs One-way)\n전략 #${created.id} = 진입 실패. 계정 설정 확인.`;
+      } else {
+        friendlyMsg = `전략 #${created.id} 생성됐지만 시작 실패\n에러: ${errMsg}\n수동으로 다시 시도하거나 보관 처리하세요.`;
+      }
+      toast(friendlyMsg, 'warning');
+      console.error('[strategy start failed]', startErr);
     }
     closeCreateModal();
     refreshStrategies();
