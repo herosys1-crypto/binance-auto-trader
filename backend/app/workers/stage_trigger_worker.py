@@ -204,6 +204,18 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     _total_reserved = calc_reserved_for_account(db, account.id)
                     _max_allowed = calc_wallet_limit(_wallet_total)
                     _user_limit_pct = get_wallet_limit_pct()
+                    # 🚨 2026-06-09 v17 silent bug fix (사장님 검증 발견!):
+                    # 옛 _all_active 변수 = 단일 진실 모듈 통합 시 제거됨
+                    # → L228 에서 len(_all_active) NameError = 알림 메시지 silent crash
+                    # → wallet 검증 자체 실패 = 사장님 자동 진입 차단 silent bug
+                    # fix: alert 메시지용 활성 strategy 카운트 = 단순 query 로 별도 조회
+                    from app.core.constants import ACTIVE_STAGE_STATUSES
+                    _all_active = db.execute(
+                        select(StrategyInstance)
+                        .where(StrategyInstance.exchange_account_id == account.id)
+                        .where(StrategyInstance.is_archived.is_(False))
+                        .where(StrategyInstance.status.in_(ACTIVE_STAGE_STATUSES))
+                    ).scalars().all()
                     # 단일 진실: 예약 (= calc_reserved_for_account) = 실 + 미진입 자본 합
                     # → 별도 + _real_margin 더하지 않음 (= reserved 안에 이미 포함!)
                     _total_committed = _total_reserved  # capital_calculator 가 모든 것 포함
