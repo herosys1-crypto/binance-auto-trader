@@ -396,7 +396,8 @@ async function refreshStrategies() {
             <option value="25" ${_tp1Pct===25 ? 'selected':''}>TP1 +25%</option>
           </select>`
         : '';
-      const stage = `<div class="text-xs leading-none"><span class="text-slate-400" style="font-size:12px">진입</span> ${stageBar}<br><span class="text-slate-400" style="font-size:12px">익절</span> ${tpBar}${tp1ThresholdSelect}</div>`;
+      // 🌟 2026-06-09 사장님 신 기능: 단계 클릭 = 단계별 상세 popup (진입예정가 + 자본)
+      const stage = `<div class="text-xs leading-none" onclick="event.stopPropagation(); openStageDetailModal(${s.id}, '${s.symbol}', '${s.side}')" style="cursor:pointer" title="클릭 = 단계별 진입예정가 + 자본 확인"><span class="text-slate-400" style="font-size:12px">진입</span> ${stageBar} <span class="text-blue-300" style="font-size:10px">📋</span><br><span class="text-slate-400" style="font-size:12px">익절</span> ${tpBar}${tp1ThresholdSelect}</div>`;
       const pnlNum = Number(s.unrealized_pnl || 0);
       const sCap = Number(s.total_capital || 0);
       const sLev = Number(s.leverage || 1) || 1;
@@ -827,6 +828,121 @@ async function updateTp1Threshold(strategyId, pctStr) {
     refreshStrategies();
   } catch (e) {
     toast(`❌ 변경 실패: ${e.message || e}`, 'error');
+  }
+}
+
+// 🌟 2026-06-09 사장님 신 기능: 단계별 진입예정가 + 자본 popup
+// 호출: 「단계」 컬럼 클릭 = 진입한 단계 + 미진입 단계 + 진입예정가 + 자본 + 청산가 모두 표시
+async function openStageDetailModal(strategyId, symbol, side) {
+  const existing = document.getElementById('stage-detail-modal');
+  if (existing) existing.remove();
+
+  const sideIcon = side === 'SHORT' ? '📉' : '📈';
+  const sideColor = side === 'SHORT' ? 'text-red-400' : 'text-green-400';
+
+  const modal = document.createElement('div');
+  modal.id = 'stage-detail-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.innerHTML = `
+    <div class="card rounded-xl p-4" style="max-width:900px;width:90vw;max-height:90vh;overflow-y:auto;background:#0f172a;border:1px solid #475569">
+      <div class="flex justify-between items-center mb-3">
+        <h2 class="text-lg font-bold">📋 전략 #${strategyId} ${sideIcon} ${symbol} <span class="${sideColor}">${side}</span> — 단계별 상세</h2>
+        <button onclick="document.getElementById('stage-detail-modal').remove()" class="text-slate-400 hover:text-white text-xl">✕</button>
+      </div>
+      <div id="stage-detail-content" class="text-center text-slate-500 py-8">로딩 중...</div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+
+  try {
+    const [stagePlans, strategy] = await Promise.all([
+      api(`/strategies/${strategyId}/stage-plans`),
+      api(`/strategies/${strategyId}`),
+    ]);
+    const sLev = Number(strategy.leverage || 1) || 1;
+    const sAvg = Number(strategy.avg_entry_price || 0);
+    const startPrice = Number(strategy.start_price || 0);
+    const MMR = 0.005;
+    let cumQty = 0, cumNotional = 0;
+    if (sAvg > 0 && strategy.current_position_qty) {
+      cumQty = Math.abs(Number(strategy.current_position_qty));
+      cumNotional = cumQty * sAvg;
+    }
+    const rows = stagePlans.map(p => {
+      const stageNo = p.stage_no;
+      const cap = Number(p.planned_capital || 0);
+      const triggerPrice = Number(p.trigger_price || 0);
+      const triggered = p.is_triggered;
+      const triggerPct = p.trigger_percent ? Number(p.trigger_percent).toFixed(1) + '%' : '-';
+      const expectedQty = (cap > 0 && triggerPrice > 0 && sLev > 0) ? (cap * sLev / triggerPrice) : 0;
+      let avgPriceForStage = 0;
+      let liqPriceForStage = 0;
+      if (triggered) {
+        avgPriceForStage = sAvg;
+      } else if (triggerPrice > 0 && expectedQty > 0) {
+        const newCumQty = cumQty + expectedQty;
+        const newCumNotional = cumNotional + (expectedQty * triggerPrice);
+        avgPriceForStage = newCumQty > 0 ? newCumNotional / newCumQty : 0;
+      }
+      if (avgPriceForStage > 0 && sLev > 0) {
+        liqPriceForStage = side === 'SHORT'
+          ? avgPriceForStage * (1 + 1/sLev - MMR)
+          : avgPriceForStage * (1 - 1/sLev + MMR);
+      }
+      const status = triggered
+        ? '<span class="text-emerald-400">✅ 진입</span>'
+        : '<span class="text-slate-500">⏳ 대기</span>';
+      const stageColor = triggered ? 'text-emerald-300' : 'text-slate-300';
+      return `<tr class="border-b border-slate-700">
+        <td class="py-2 px-2 text-center ${stageColor} font-semibold">${stageNo}단계</td>
+        <td class="py-2 px-2 text-center">${status}</td>
+        <td class="py-2 px-2 text-right font-mono">${cap.toFixed(0)} USDT</td>
+        <td class="py-2 px-2 text-center font-mono text-slate-400">${triggerPct}</td>
+        <td class="py-2 px-2 text-right font-mono text-amber-300">${triggerPrice > 0 ? triggerPrice.toFixed(8).replace(/\\.?0+$/, '') : '-'}</td>
+        <td class="py-2 px-2 text-right font-mono text-blue-300">${avgPriceForStage > 0 ? avgPriceForStage.toFixed(8).replace(/\\.?0+$/, '') : '-'}</td>
+        <td class="py-2 px-2 text-right font-mono text-red-300">${liqPriceForStage > 0 ? liqPriceForStage.toFixed(8).replace(/\\.?0+$/, '') : '-'}</td>
+        <td class="py-2 px-2 text-right font-mono text-slate-300">${expectedQty > 0 ? expectedQty.toFixed(4) : '-'}</td>
+      </tr>`;
+    }).join('');
+    const totalCap = stagePlans.reduce((sum, p) => sum + Number(p.planned_capital || 0), 0);
+    const triggeredCap = stagePlans.filter(p => p.is_triggered).reduce((sum, p) => sum + Number(p.planned_capital || 0), 0);
+    const remainingCap = totalCap - triggeredCap;
+    document.getElementById('stage-detail-content').innerHTML = `
+      <div class="mb-3 text-xs text-slate-400">
+        💰 시작가: <b class="text-amber-300">${startPrice > 0 ? startPrice : '-'}</b> ·
+        💼 자본 총합: <b class="text-amber-300">${totalCap.toFixed(0)} USDT</b> ·
+        ✅ 진입 완료: <b class="text-emerald-400">${triggeredCap.toFixed(0)} USDT</b> ·
+        ⏳ 미진입 예약: <b class="text-blue-300">${remainingCap.toFixed(0)} USDT</b> ·
+        ⚡ 레버리지: <b>${sLev}x</b>
+      </div>
+      <table class="w-full text-sm" style="border-collapse:collapse">
+        <thead>
+          <tr class="border-b border-slate-600 text-slate-400 text-xs">
+            <th class="py-2 px-2 text-center">단계</th>
+            <th class="py-2 px-2 text-center">상태</th>
+            <th class="py-2 px-2 text-right">자본 (USDT)</th>
+            <th class="py-2 px-2 text-center">트리거 %</th>
+            <th class="py-2 px-2 text-right">진입예정가 🎯</th>
+            <th class="py-2 px-2 text-right">누적 평단 📊</th>
+            <th class="py-2 px-2 text-right">청산가 ⚠️</th>
+            <th class="py-2 px-2 text-right">예상 수량</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="mt-3 text-xs text-slate-500 text-center">
+        🎯 진입예정가 = backend 계산 (시작가 + 누적 trigger %) ·
+        📊 누적 평단 = 진입한 단계 후 미진입 진입 시 가상 평단 ·
+        ⚠️ 청산가 = isolated 마진 기준
+      </div>
+      <div class="mt-3 flex justify-center gap-2">
+        <button onclick="editStrategy(${strategyId}); document.getElementById('stage-detail-modal').remove();" class="btn-warning btn text-sm" style="padding:6px 12px">✏️ 수정 모드로 이동</button>
+        <button onclick="document.getElementById('stage-detail-modal').remove()" class="btn-ghost btn text-sm" style="padding:6px 12px">닫기</button>
+      </div>
+    `;
+  } catch (e) {
+    document.getElementById('stage-detail-content').innerHTML = `<p class="text-red-400 py-4">❌ 로드 실패: ${e.message || e}</p>`;
   }
 }
 
