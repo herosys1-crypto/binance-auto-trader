@@ -178,9 +178,11 @@
   .balance-new-strategy.warn-red {
     color: #fca5a5; background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3);
   }
-  /* 🌟 2026-06-09 v11 사장님 「가로로 펼치고 세로 줄임」 = 거래소 잔액 = 진짜 한 줄 layout (50px) */
+  /* 🌟 2026-06-09 v11 사장님 「가로로 펼치고 세로 줄임」 = 거래소 잔액 = 진짜 한 줄 layout (52px)
+     v11 fix: legacy detail = 신 HTML 에서 항상 hidden (= 중복 표시 차단) */
+  #card-balance #metric-balance-detail { display: none !important; }
   @media (min-width: 768px) {
-    /* 거래소 잔액 = 2 col 차지 + 내부 = 가로 펼침 (= 세로 1 row 만, 50px) */
+    /* 거래소 잔액 = 2 col 차지 + 내부 = 가로 펼침 (= 세로 1 row 만, 52px) */
     #card-balance.balance-card-wide {
       display: grid !important;
       grid-template-columns: minmax(120px, auto) 1fr auto auto;  /* 잔액 | 진행바 | mini-grid | 신 전략 */
@@ -189,6 +191,7 @@
       padding: 3px 8px !important;
       max-height: 52px !important;
       min-height: 0 !important;
+      overflow: hidden !important;  /* 카드 밖 텍스트 흘러나옴 차단 */
     }
     /* 좌측 = 잔액 큰 글자 (= 카드 label + value) */
     #card-balance .balance-left {
