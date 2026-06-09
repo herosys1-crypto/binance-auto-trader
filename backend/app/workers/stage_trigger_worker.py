@@ -65,6 +65,76 @@ def _count_total_stages_from_template(tpl) -> int:
 _MARGIN_COOLDOWN_TTL = 1800  # 30분
 _MARGIN_COOLDOWN_KEY = "stage_margin_cooldown:strategy:{sid}:stage:{n}"
 
+# 🌟 2026-06-10 v18 사장님 critical (= 자동 진입 silent 차단 영구 차단):
+# 사장님 우려: "2단계도 문제인데 3단계로 문제가 되면 큰 자금을 잃게 되는데 확실하게 답을 찾아 수정해줘"
+# = 모든 silent 차단 = Redis 기록 + 화면 즉시 표시 + Telegram (1시간 dedup)
+# = 사장님 즉시 인지 + 수동 조치 가능 + silent 위험 영구 차단
+_BLOCK_REASON_KEY = "stage_trigger_block:strategy:{sid}"
+_BLOCK_REASON_TTL = 600  # 10분 (= 다음 cycle 까지 표시)
+_BLOCK_ALERT_DEDUP_KEY = "stage_trigger_block_alert:strategy:{sid}:reason:{r}"
+_BLOCK_ALERT_DEDUP_TTL = 3600  # 1시간 (= 알림 spam 차단)
+
+
+def _record_block_reason(redis_client, sid: int, reason: str, stage_no: int = 0) -> None:
+    """차단 이유 Redis 기록 (= 진단 endpoint + 화면 표시).
+
+    사장님 헌법 8번 (= silent 차단 금지): 모든 차단 = 사장님이 즉시 알 수 있어야 함.
+    """
+    if redis_client is None:
+        return
+    try:
+        import json
+        from datetime import datetime, timezone
+        payload = json.dumps({
+            "reason": reason,
+            "stage_no": stage_no,
+            "blocked_at": datetime.now(timezone.utc).isoformat(),
+        })
+        redis_client.setex(_BLOCK_REASON_KEY.format(sid=sid), _BLOCK_REASON_TTL, payload)
+    except Exception:
+        pass
+
+
+def _clear_block_reason(redis_client, sid: int) -> None:
+    """차단 해소 (= 정상 진입 시 호출)."""
+    if redis_client is None:
+        return
+    try:
+        redis_client.delete(_BLOCK_REASON_KEY.format(sid=sid))
+    except Exception:
+        pass
+
+
+def _alert_silent_block_once(redis_client, db, strategy, reason: str, stage_no: int) -> None:
+    """silent 차단 = 1시간 dedup Telegram 알림 (= spam 방지 + 사장님 인지).
+
+    이미 1시간 내에 같은 이유로 알림 보냈으면 = skip (dedup).
+    """
+    if redis_client is None:
+        return
+    try:
+        dedup_key = _BLOCK_ALERT_DEDUP_KEY.format(sid=strategy.id, r=reason[:30])
+        if redis_client.get(dedup_key):
+            return  # 1시간 내 이미 알림 = skip
+        redis_client.setex(dedup_key, _BLOCK_ALERT_DEDUP_TTL, "1")
+        NotificationService(db).send_system_alert(
+            title=f"⚠️ [자동 진입 차단] #{strategy.id} {strategy.symbol} 단계{stage_no}",
+            body=(
+                f"🚨 자동 진입 차단 중 — 사장님 자본 보호 안전망 발동.\n\n"
+                f"📌 차단 이유: {reason}\n"
+                f"📌 strategy_id: #{strategy.id}\n"
+                f"📌 심볼: {strategy.symbol} ({strategy.side})\n"
+                f"📌 차단 단계: {stage_no}\n\n"
+                f"💡 사장님 조치:\n"
+                f"  • 화면 진단: /api/v1/admin/diagnostic/auto-entry-status\n"
+                f"  • 수동 진입: 「▶ 다음 단계」 버튼\n"
+                f"  • 1시간 후 = 자동 재시도 (또는 cycle 재개 시)\n\n"
+                f"⚠️ 이 알림 = 1시간 dedup (= spam 차단)"
+            ),
+        )
+    except Exception:
+        pass
+
 
 def _margin_cooldown_active(redis_client, sid: int, stage_no: int) -> bool:
     if redis_client is None:
@@ -138,10 +208,15 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 if strategy.status and strategy.status.endswith("_OPEN_PENDING"):
                     cur_qty = strategy.current_position_qty
                     if cur_qty is None or abs(float(cur_qty)) < 1e-12:
+                        # 🌟 v18 fix: 1단계 미체결 = silent 차단 → 사장님 인지!
+                        _record_block_reason(_redis, strategy.id, "1단계 LIMIT 미체결 (qty=0)", (strategy.current_stage or 0) + 1)
+                        _alert_silent_block_once(_redis, db, strategy, "1단계 LIMIT 미체결", (strategy.current_stage or 0) + 1)
                         continue  # 1단계 LIMIT 미체결 — 다음 stage 검사 의미 X
                 next_stage_no = (strategy.current_stage or 0) + 1
                 total_stages = _count_total_stages_from_template(templates.get(strategy.strategy_template_id))
                 if next_stage_no > total_stages:
+                    # 모든 단계 완료 = 정상 = block_reason 정리
+                    _clear_block_reason(_redis, strategy.id)
                     continue  # 모든 단계 진입 완료
                 # Stage plans 조회 (lazy load 회피 위해 새 쿼리)
                 from app.models.strategy_stage_plan import StrategyStagePlan
@@ -151,19 +226,29 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     .where(StrategyStagePlan.stage_no == next_stage_no)
                 ).scalar_one_or_none()
                 if not next_plan:
+                    # 🌟 v18 fix: stage_plans 손상 = 사장님 critical!
+                    _record_block_reason(_redis, strategy.id, f"단계{next_stage_no} plan 없음 (DB 손상?)", next_stage_no)
+                    _alert_silent_block_once(_redis, db, strategy, f"단계{next_stage_no} stage_plan 없음 (DB 손상 가능)", next_stage_no)
                     continue
                 if next_plan.is_triggered:
-                    continue  # 이미 진입됨
+                    continue  # 이미 진입됨 (= 정상, 차단 X)
                 # 2026-05-19: 마진부족(-2019) 쿨다운 중인 단계는 skip (재시도 spam 차단)
                 if _margin_cooldown_active(_redis, strategy.id, next_stage_no):
+                    # 🌟 v18 fix: cooldown 차단 = 사장님 즉시 인지!
+                    _record_block_reason(_redis, strategy.id, "Redis margin cooldown (30분 대기)", next_stage_no)
                     continue
                 if not next_plan.trigger_price:
                     # LIQUIDATION_BUFFER 모드 (마지막 단계) — trigger_price 가 None.
                     # 실시간으로 청산가 -5% 기반 산출 필요. 일단 skip (후속 작업으로 분리).
+                    _record_block_reason(_redis, strategy.id, f"단계{next_stage_no} trigger_price=None (LIQUIDATION_BUFFER 미구현)", next_stage_no)
+                    _alert_silent_block_once(_redis, db, strategy, f"단계{next_stage_no} trigger_price 미설정", next_stage_no)
                     continue
                 # 현재 mark price 조회 (last position snapshot)
                 latest_pos = PositionRepository(db).latest_by_strategy(strategy.id)
                 if not latest_pos or not latest_pos.mark_price:
+                    # 🌟 v18 fix: position snapshot 없음 = stream 끊김 가능성!
+                    _record_block_reason(_redis, strategy.id, "mark_price 없음 (position snapshot 누락)", next_stage_no)
+                    _alert_silent_block_once(_redis, db, strategy, "mark_price 없음 (mark-price-stream 점검 필요)", next_stage_no)
                     continue
                 mark = Decimal(str(latest_pos.mark_price))
                 trigger = Decimal(str(next_plan.trigger_price))
@@ -221,8 +306,14 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     _total_committed = _total_reserved  # capital_calculator 가 모든 것 포함
                     if _total_committed > _max_allowed and _wallet_total > 0:
                         # 🚨 wallet 130% 초과 — 자동 진입 차단 + cooldown + Telegram (dedup)
-                        _first = _set_margin_cooldown(_redis, strategy.id, next_stage_no)
                         _committed_ratio = (_total_committed / _wallet_total * 100) if _wallet_total > 0 else 0
+                        # 🌟 v18 fix: 130% 차단 = Redis block_reason 기록!
+                        _record_block_reason(
+                            _redis, strategy.id,
+                            f"130% 한도 초과 ({_committed_ratio:.1f}% / 130%)",
+                            next_stage_no,
+                        )
+                        _first = _set_margin_cooldown(_redis, strategy.id, next_stage_no)
                         logger.warning(
                             "[stage-trigger] 130%% 초과 차단 strategy=%s stage=%s — "
                             "실=%s + 예약=%s = %s (%.1f%%) > 허용=%s (130%%) wallet=%s (alert=%s)",
@@ -262,6 +353,8 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     f"{strategy.symbol} {strategy.side} (mark={mark} {'>=' if strategy.side == 'SHORT' else '<='} trig={trigger})"
                 )
                 exec_service.trigger_next_stage(strategy.id, next_stage_no)
+                # 🌟 v18 fix: 정상 진입 = block_reason 정리 (= 화면 알림 해소)
+                _clear_block_reason(_redis, strategy.id)
 
                 # 2026-05-11 (사용자 요청): 단계 진입 시 추가 증거금 자동 투입.
                 # next_plan.additional_margin_usdt > 0 이면 add_position_margin API 호출.

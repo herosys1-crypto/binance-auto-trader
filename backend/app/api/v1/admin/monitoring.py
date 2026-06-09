@@ -1231,6 +1231,19 @@ def get_auto_entry_diagnostic(
         
         # 차단 이유 확인
         block_reasons = []
+        cooldown_remaining_sec = None
+        worker_block_info = None  # v18: stage_trigger_worker 가 기록한 정확한 차단 이유
+
+        # 🌟 v18 NEW: Redis 에서 worker 가 기록한 정확한 차단 이유 조회
+        if redis:
+            try:
+                import json
+                _block_raw = redis.get(f"stage_trigger_block:strategy:{s.id}")
+                if _block_raw:
+                    worker_block_info = json.loads(_block_raw)
+            except Exception:
+                pass
+
         if next_plan:
             trg_price = float(next_plan.trigger_price or 0)
             trigger_reached = False
@@ -1239,32 +1252,46 @@ def get_auto_entry_diagnostic(
                     trigger_reached = current_price >= trg_price
                 else:
                     trigger_reached = current_price <= trg_price
-            
-            # Redis cooldown 확인
+
+            # Redis cooldown 확인 + 남은 시간 (v18: TTL 추가)
             in_cooldown = False
             if redis:
                 try:
                     cooldown_key = f"stage_margin_cooldown:strategy:{s.id}:stage:{next_stage_no}"
-                    in_cooldown = bool(redis.get(cooldown_key))
+                    if redis.get(cooldown_key):
+                        in_cooldown = True
+                        try:
+                            cooldown_remaining_sec = redis.ttl(cooldown_key)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
-            
+
             if next_plan.is_triggered:
                 status_label = "✅ 진입 완료"
             elif not trigger_reached:
                 status_label = "⏳ 트리거 대기"
+                # v18: 트리거 미도달이지만 worker silent 차단 있으면 알림
+                if worker_block_info:
+                    block_reasons.append(f"⚠️ Worker 차단 (재시작 안전망): {worker_block_info.get('reason', '?')}")
             else:
                 # 트리거 도달했는데 = 진입 안 됨!
                 blocked_count += 1
                 pending_count += 1
                 status_label = "🚨 자동 진입 차단!"
+                if worker_block_info:
+                    block_reasons.append(f"📌 정확한 이유: {worker_block_info.get('reason', '?')}")
                 if in_cooldown:
-                    block_reasons.append("Redis cooldown (30분 대기)")
-                # 130% 한도 확인 (= 비싼 호출 = skip, 별도 endpoint)
-                block_reasons.append("130% 한도 초과 가능성 (= /diagnostic/reserved 확인)")
+                    cd_min = (cooldown_remaining_sec or 0) // 60
+                    cd_sec = (cooldown_remaining_sec or 0) % 60
+                    block_reasons.append(f"⏳ Redis cooldown 남은 시간: {cd_min}분 {cd_sec}초")
+                if not worker_block_info and not in_cooldown:
+                    block_reasons.append("⚠️ 원인 불명 (= 다음 cycle 에서 worker 가 기록 예정)")
         else:
             status_label = "📦 단계 완료 (= 다음 단계 plan 없음)"
-        
+            if worker_block_info:
+                block_reasons.append(f"⚠️ Worker 차단: {worker_block_info.get('reason', '?')}")
+
         results.append({
             "strategy_id": s.id,
             "symbol": s.symbol,
@@ -1275,6 +1302,8 @@ def get_auto_entry_diagnostic(
             "current_price": current_price,
             "status_label": status_label,
             "block_reasons": block_reasons,
+            "cooldown_remaining_sec": cooldown_remaining_sec,  # v18 신
+            "worker_block_info": worker_block_info,  # v18 신 (= 정확한 이유 + 시각)
             "avg_entry": float(s.avg_entry_price or 0),
             "current_qty": float(s.current_position_qty or 0),
         })
