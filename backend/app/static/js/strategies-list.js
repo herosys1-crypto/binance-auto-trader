@@ -421,7 +421,14 @@ async function refreshStrategies() {
       const sMark = hasPosition ? (s.side === 'LONG' ? sAvg + pnlNum/sQtyAbs : sAvg - pnlNum/sQtyAbs) : 0;
       // 청산예정가 = isolated 계산 (체결 평단 기반)
       const MMR = 0.005;
-      const sLiq = hasPosition && sLev > 0 ? (s.side === 'SHORT' ? sAvg * (1 + 1/sLev - MMR) : sAvg * (1 - 1/sLev + MMR)) : 0;
+      // 🚨 2026-06-11 v37 사장님 critical fix: 청산가 = backend liquidation_price 우선 사용!
+      // 옛 silent bug: sAvg x (1 + 1/sLev - MMR) = 증거금 추가 무시!
+      // 사장님 BEATUSDT: DB liquidation_price = 11.24 (= 정확) 인데 = 화면 = 8.98 (= 옛 공식!)
+      // 신 v37: backend liquidation_price (= 정확) 우선 → 없으면 fallback
+      const sLiqDb = Number(s.liquidation_price || 0);
+      const sLiq = sLiqDb > 0
+        ? sLiqDb
+        : (hasPosition && sLev > 0 ? (s.side === 'SHORT' ? sAvg * (1 + 1/sLev - MMR) : sAvg * (1 - 1/sLev + MMR)) : 0);
 
       // 2026-05-04 v3 (Binance ROI 일치): 두 가지 ROI 분리.
       //   포지션 ROI = pnl / 현재_사용_마진 x 100  ← Binance UI 와 일치 (실제 진입한 부분만).
