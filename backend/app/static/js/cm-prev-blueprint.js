@@ -121,6 +121,10 @@ async function loadPrevBlueprint(strategyId, silent) {
     //   = 자율 운영 + 사상 보존!
     const oldStartPrice = bp.start_price ? bp.start_price.toString() : '';
     document.getElementById('cm-start-price').value = oldStartPrice;
+    // 🌟 v39 사장님 사상: editingStrategyBp 보존 = 「현재가」 클릭 시 = 1단계 평단 보존 logic 사용!
+    if (cmState && cmState.editingStrategyId) {
+      cmState.editingStrategyBp = bp;
+    }
     if (typeof _cmCurrentPrice !== 'undefined') {
       _cmCurrentPrice = null;  // ⭐ 시세 cache 만 무효화 (= 「현재가」 버튼 클릭 시 신 가격)
     }

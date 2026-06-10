@@ -159,6 +159,24 @@ function fillStartPrice(mode) {
   const inp = document.getElementById('cm-start-price');
   inp.step = stepAttr;
   inp.value = formatted;
+  // 🌟 2026-06-11 v39 사장님 critical 사상 (= BEATUSDT 사례!):
+  // 사장님 명시: "두번째는 현재가 기준으로 새롭게 세팅으로 하면
+  //              2단계부터 진행할 수 있는 세팅이 되어야해"
+  // = 「수정 모드」 + 「현재가」 클릭 시:
+  //   1단계 = 사장님 옛 평단 (= 옛 진입 보존!)
+  //   2단계 부터 = 현재가 기준 재계산
+  try {
+    if (cmState && cmState.editingStrategyId && cmState.editingStrategyBp) {
+      const oldAvg = Number(cmState.editingStrategyBp.avg_entry_price || cmState.editingStrategyBp.start_price || 0);
+      if (oldAvg > 0) {
+        // 신 hidden 필드 또는 = stage_no=1 의 진입가 표시 = 옛 평단 (= 보존!)
+        // 사장님 자율: 1단계 자본 변경 = 옛 진입 보존, 2단계+ 자본 = 신 진입
+        toast(`✅ 신 시작가 = ${formatted}\\n🛡 1단계 = 옛 평단 ${oldAvg} 보존 (= 사장님 사상 v39)\\n📌 2단계+ = 현재가 기준 재계산!`, 'success');
+      }
+    }
+  } catch (e) {
+    console.warn('[v39] 수정모드 현재가 보존 logic 실패:', e);
+  }
   // 입력값이 바뀌었으니 미리보기 청산 위험 재계산용 trigger
   if (typeof _refreshLiveCalc === 'function') _refreshLiveCalc();
   document.getElementById('cm-start-price').focus();
