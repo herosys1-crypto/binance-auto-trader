@@ -542,7 +542,7 @@ async function refreshStrategies() {
       const pnl = hasPosition
         ? `<div class="text-sm leading-none">
             <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span>
-            <span class="text-slate-300" style="font-size:15px" title="${posTooltip}">(${posSign}${positionRoi.toFixed(2)}%)</span><br>
+            <span class="text-slate-300 font-semibold" style="font-size:15px" title="${posTooltip}">(${posSign}${positionRoi.toFixed(2)}%)</span><br>
             <span class="text-slate-300" style="font-size:13px; opacity:0.85" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slInline}${trailingRetraceSelect}
           </div>`
         : '<span class="text-slate-500">-</span>';
