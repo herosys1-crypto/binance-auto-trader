@@ -323,7 +323,9 @@ async function refreshStrategies() {
     // 🌟 2026-06-09 v12-7 사장님 「마진율순 + 실투입 합계 정렬」 신 옵션
     const _positionMargin = (s) => {
       const qty = Math.abs(Number(s.current_position_qty || 0));
-      const avg = Number(s.last_avg_entry_price || 0);
+      // 🚨 2026-06-10 v35 critical fix: last_avg_entry_price NULL = avg_entry_price fallback!
+      // 옛 silent bug: backend last_avg_entry_price NULL = _positionMargin=0 = _positionRoi=0 = 정렬 X!
+      const avg = Number(s.last_avg_entry_price || s.avg_entry_price || 0);
       const lev = Number(s.leverage || 1);
       return (qty > 0 && avg > 0 && lev > 0) ? (qty * avg / lev) : 0;
     };
