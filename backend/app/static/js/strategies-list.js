@@ -342,8 +342,12 @@ async function refreshStrategies() {
       // 사장님 선택 정렬
       switch (sortBy) {
         case 'sl_progress_desc': return _slProgress(b) - _slProgress(a);  // 🚨 SL 임박
-        case 'pnl_asc': return Number(a.unrealized_pnl || 0) - Number(b.unrealized_pnl || 0);  // 📉 손실 큰 순
-        case 'pnl_desc': return Number(b.unrealized_pnl || 0) - Number(a.unrealized_pnl || 0);  // 📈 이익 큰 순
+        case 'pnl_asc': return Number(a.unrealized_pnl || 0) - Number(b.unrealized_pnl || 0);  // 📉 손실 큰 순 (USDT)
+        case 'pnl_desc': return Number(b.unrealized_pnl || 0) - Number(a.unrealized_pnl || 0);  // 📈 이익 큰 순 (USDT)
+        // 🎨 2026-06-10 v31 사장님 요구: 손실율 (= ROI %) 정렬 추가!
+        // roi_pct (= 포지션 ROI = pnl/현재마진×100) 사용. NULL = 0 fallback.
+        case 'roi_asc': return Number(a.roi_pct || 0) - Number(b.roi_pct || 0);  // 📉 손실율 큰 순 (%)
+        case 'roi_desc': return Number(b.roi_pct || 0) - Number(a.roi_pct || 0);  // 📈 이익율 큰 순 (%)
         case 'margin_ratio_desc': return _marginRatio(b) - _marginRatio(a);  // 💯 마진율 (= 진입률 %) 큰 순
         case 'position_margin_desc': return _positionMargin(b) - _positionMargin(a);  // 🔒 실 투입 USDT 큰 순
         case 'stage_desc': return (b.current_stage || 0) - (a.current_stage || 0);  // 📊 단계 많은 순
