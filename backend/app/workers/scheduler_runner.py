@@ -21,6 +21,7 @@ from app.workers.run_workers import run_symbol_sync_once, run_tp_sl_once
 from app.workers.stage_trigger_worker import run_stage_trigger_once
 from app.workers.self_check_worker import run_self_check_once  # 🌟 v17: silent bug 자동 차단
 from app.workers.trade_anomaly_monitor import run_trade_anomaly_monitor_once  # 🌟 v20: TP 청산 silent bug 자동 차단
+from app.workers.stage_calc_audit_worker import run_stage_calc_audit_once  # 🌟 v44: 단계 계산 사상 자동 검증 (= Phase 3 작은 시작!)
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,12 @@ def start_scheduler() -> None:
     # = 이 worker = 매 5분 분석 + CRITICAL = 즉시 Telegram (1h dedup)
     # = 사장님 자본 보호 = silent bug 즉시 감지
     scheduler.add_job(guarded_job("trade_anomaly_monitor", 60, run_trade_anomaly_monitor_once), trigger=IntervalTrigger(minutes=5), id="trade_anomaly_monitor", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-06-11 v44 Phase 3 작은 시작: 단계 계산 사상 자동 검증 (= 사장님 추천!)
+    # 사장님 spec: docs/spec/stage_calculation_spec_2026-06-11.md
+    # = 매 5분 = 모든 활성 strategy 단계 계산 = 사장님 사상 검증
+    # = SHORT 오름차순 / LONG 내림차순 검증
+    # = 위배 시 = RiskEvent CRITICAL + Telegram 즉시!
+    scheduler.add_job(guarded_job("stage_calc_audit", 60, run_stage_calc_audit_once), trigger=IntervalTrigger(minutes=5), id="stage_calc_audit", replace_existing=True, max_instances=1, coalesce=True)
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.
