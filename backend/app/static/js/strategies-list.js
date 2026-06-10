@@ -535,13 +535,14 @@ async function refreshStrategies() {
             <option value="20" ${_trailingRetracePct===20 ? 'selected':''}>-20%</option>
           </select>`
         : '';
-      // 🎨 2026-06-10 사장님 요구 v25→v26: ROI = 흰색 + 13px (조금더 크게!)
-      // PnL 만 = 색깔 + 큰 폰트 (= 손익 즉시 인지)
-      // ROI = 흰색 + 13px (= 마진 표시 스타일 일치, 가독성 약간 강화)
+      // 🎨 2026-06-10 사장님 요구 v27: 포지션 ROI = 15px (= 더 크게, 가독성 강조)
+      // PnL = 색깔 + font-semibold (= 손익 즉시 인지)
+      // 포지션 ROI = 15px (= PnL 옆 = 큰 가독성!)
+      // 전략 ROI = 13px (= 보조 정보 = 그대로)
       const pnl = hasPosition
         ? `<div class="text-sm leading-none">
             <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span>
-            <span class="text-slate-300" style="font-size:13px" title="${posTooltip}">(${posSign}${positionRoi.toFixed(2)}%)</span><br>
+            <span class="text-slate-300" style="font-size:15px" title="${posTooltip}">(${posSign}${positionRoi.toFixed(2)}%)</span><br>
             <span class="text-slate-300" style="font-size:13px; opacity:0.85" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slInline}${trailingRetraceSelect}
           </div>`
         : '<span class="text-slate-500">-</span>';
