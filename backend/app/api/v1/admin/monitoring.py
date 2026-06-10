@@ -1177,7 +1177,7 @@ def get_auto_entry_diagnostic(
     
     사장님이 = 한 번에 보고 = 문제 strategy 즉시 식별 가능.
     """
-    from app.core.constants import ACTIVE_STAGE_STATUSES
+    from app.core.strategy_status import STAGES_WITH_NEXT as ACTIVE_STAGE_STATUSES  # v24 fix
     from app.models.strategy_instance import StrategyInstance
     from app.models.strategy_stage_plan import StrategyStagePlan
     from app.core.redis_client import get_redis_client

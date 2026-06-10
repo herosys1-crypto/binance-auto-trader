@@ -32,6 +32,69 @@ async function submitCreate() {
   }
   const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
   const startPrice = document.getElementById('cm-start-price').value;
+
+  // 🌟 2026-06-10 v21 사장님 critical (= VELVETUSDT 시작가 silent bug 영구 차단):
+  // 사장님 사례: 시작가 0.078745 (옛 strategy 데이터) vs 현재가 0.39131 = 5배 차이!
+  // = 옛 시작가 silent bug = 사장님 자본 위험!
+  // = 시작가 vs 현재가 차이 > 50% = confirm 강제 (= 사장님 명시 의도 확인)
+  try {
+    const currentPriceEl = document.getElementById('cm-mkt-price');
+    const currentPriceText = currentPriceEl ? currentPriceEl.textContent : '';
+    const currentPrice = parseFloat(currentPriceText.replace(/[^0-9.]/g, ''));
+    const startPriceNum = parseFloat(startPrice);
+    if (currentPrice > 0 && startPriceNum > 0) {
+      const ratio = Math.max(currentPrice, startPriceNum) / Math.min(currentPrice, startPriceNum);
+      // 🌟 2026-06-10 v22 사장님 critical = BTWUSDT 75만 배 차이 사례!
+      // 차이 > 10배 = 무조건 강제 차단 (= confirm 무시 = 사장님 자본 보호 우선)
+      if (ratio > 10) {
+        alert(
+          `🚨🚨🚨 시작가 자동 차단! (silent bug 100%!)\n\n` +
+          `📌 시작가 (입력): ${startPriceNum}\n` +
+          `📌 현재가 (Binance): ${currentPrice}\n` +
+          `📌 차이: ${ratio.toFixed(0)}배!\n\n` +
+          `🚨 시작가 vs 현재가 = 10배 이상 차이 = 100% silent bug!\n` +
+          `= 사장님 자본 보호 = 무조건 차단!\n\n` +
+          `💡 해결:\n` +
+          `  • 시작가 옆 「💲 현재가」 버튼 클릭\n` +
+          `  • 또는 = 직접 ${currentPrice} 입력`
+        );
+        document.getElementById('cm-submit').disabled = false;
+        document.getElementById('cm-submit').textContent = editingId ? '🔄 종료 후 새로 시작' : '🚀 전략 시작';
+        return;  // 강제 차단! (= confirm 무시)
+      }
+      if (ratio > 1.5) {
+        const pctDiff = ((ratio - 1) * 100).toFixed(1);
+        const sideLabel = cmState.side === 'SHORT' ? '📉 SHORT' : '📈 LONG';
+        const directionHint = cmState.side === 'SHORT'
+          ? (startPriceNum < currentPrice ? '⚠️ SHORT + 시작가 < 현재가 = 즉시 손실 진입!' : '⚠️ SHORT + 시작가 >> 현재가 = LIMIT 미체결!')
+          : (startPriceNum > currentPrice ? '⚠️ LONG + 시작가 > 현재가 = 즉시 손실 진입!' : '⚠️ LONG + 시작가 << 현재가 = LIMIT 미체결!');
+        const proceed = confirm(
+          `🚨 시작가 vs 현재가 큰 차이 감지! (silent bug 가능성!)\n\n` +
+          `📌 심볼: ${symbol} ${sideLabel}\n` +
+          `📌 시작가 (입력): ${startPriceNum}\n` +
+          `📌 현재가 (Binance): ${currentPrice}\n` +
+          `📌 차이: ${pctDiff}% (= ${ratio.toFixed(2)}배 차이!)\n\n` +
+          `${directionHint}\n\n` +
+          `🚨 위험:\n` +
+          `  • 옛 strategy 시작가 silent 재사용 가능성\n` +
+          `  • 트리거 절대 도달 X = 자동 진입 X\n` +
+          `  • LIMIT 주문 미체결 위험\n` +
+          `  • 사장님 자본 위험!\n\n` +
+          `💡 사장님 선택:\n` +
+          `  • 「취소」 (추천!) = 시작가 수정 + 「현재가」 버튼 클릭\n` +
+          `  • 「확인」 = 의도적 진행 (= 사장님 의도 = 옛 가격 사용)`
+        );
+        if (!proceed) {
+          document.getElementById('cm-submit').disabled = false;
+          document.getElementById('cm-submit').textContent = editingId ? '🔄 종료 후 새로 시작' : '🚀 전략 시작';
+          return;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[v21] 시작가 검증 실패 (= 진행):', e);
+  }
+
   const confirmMsg = editingId
     ? `🔄 전략 #${editingId} 수정\n\n1. 기존 미체결 주문 자동 취소\n2. 새 설정으로 ${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략 시작\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요?`
     : `${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략을 시작합니다.\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요? (testnet 거래소면 실거래 발생)`;

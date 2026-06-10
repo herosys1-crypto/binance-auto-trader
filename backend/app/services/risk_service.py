@@ -175,25 +175,25 @@ class RiskService:
         # 크라이시스: TP1/2/3/4 = 5/10/15/20% (= 옛 그대로, 사장님 옵션 무시)
         # TP5 는 크라이시스 모드에서 사용 안 함 (4단계 TP 까지만)
         #
-        # 🌟 2026-06-08 사장님 TP1 옵션 정책 (alembic 0018):
-        # 정상 모드 = 사장님 선택 TP1 임계 적용 (10/15/20/25)
-        # Crisis 모드 = 사장님 옵션 무시 = TP1 +5% 고정 (= 빠른 회복 익절, 사장님 자본 보호)
-        # spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md
-        if strategy.crisis_mode_triggered_at:
-            CRISIS_OVERRIDE = {
-                "TP1": Decimal("5"), "TP2": Decimal("10"),
-                "TP3": Decimal("15"), "TP4": Decimal("20"),
-            }
-            tp_levels = [(label, CRISIS_OVERRIDE[label]) for label, _ in tp_levels if label in CRISIS_OVERRIDE]
-            tp_levels.sort(key=lambda x: x[1], reverse=True)  # 내림차순 (TP4 부터 검사)
-        else:
-            # 정상 모드: 사장님 TP1 옵션 override (= template tp1_percent 덮어씀)
-            if strategy.tp1_pct_override is not None:
-                _override = Decimal(str(strategy.tp1_pct_override))
-                tp_levels = [
-                    (label, _override if label == "TP1" else val)
-                    for label, val in tp_levels
-                ]
+        # 🌟 2026-06-10 v30 사장님 critical 결정 (= Crisis 모드 영구 비활성!):
+        # > '크라이스에서 계속 오류가 나는것 같은데 이기능을 취소하고 세팅된 율로 적용해줘'
+        # = Crisis 옵션 무시 = 사장님 설정 TP1~TP4 항상 우선!
+        # = 옛 Crisis = 사장님이 임의 조정 자율
+        #
+        # 신 정책:
+        # - crisis_mode_triggered_at 있는 strategy (= 옛 진입) = TP override 안 함
+        # - 사장님 TP1 옵션 = 항상 우선 적용
+        # 사장님 TP1 옵션 override (= template tp1_percent 덮어씀)
+        if strategy.tp1_pct_override is not None:
+            _override = Decimal(str(strategy.tp1_pct_override))
+            tp_levels = [
+                (label, _override if label == "TP1" else val)
+                for label, val in tp_levels
+            ]
+            logger.info(
+                "[risk] 사장님 TP1 옵션 우선 적용 (v30 - Crisis 영구 비활성): strategy=%s TP1=%s",
+                strategy.id, _override,
+            )
 
         # 2026-05-04 critical fix (사용자 #98 LABUSDT 사례):
         # 트레일링 체크가 TP threshold loop 보다 우선해야 함.
@@ -324,16 +324,40 @@ class RiskService:
     def _should_trigger_crisis_mode(self, strategy, current_pnl_pct: Decimal) -> bool:
         """크라이시스 모드 진입 조건.
 
-        사용자 기획 v2 (2026-05-07): 모든 stage 진입 완료 + max_loss ≤ -50% 도달.
-        사용자 기획 v3 (2026-05-14, alembic 0015): 임계 사용자 정의 가능 (-50~-100, -100=비활성).
-        사용자 기획 v4 (2026-05-14, ad-hoc 안전망):
-          「💉 포지션 추가」 (ad-hoc, stage_no=NULL ENTRY) 사용한 strategy 는
-          stage 조건 완화 — 사용자가 임의로 큰 자본 투입했으니 「충분한 진입」 으로 간주.
-          ad-hoc + max_loss 임계 도달 → Crisis 발동 (모든 단계 진입 안 해도).
-          이유: ad-hoc 사용 = 큰 노출 = Crisis 보호 더 필요.
+        🌟 2026-06-10 v30 사장님 critical 결정 (= 영구 비활성화!):
+        > '크라이스에서 계속 오류가 나는것 같은데 이기능을 취소하고
+        >  세팅된 율로 적용해줘 이건 사용자가 임의 세팅하면 될것 같아'
+        = 사장님 결정: Crisis 모드 = 영구 비활성!
+        = TP1~TP4 + Trailing = 사장님 설정 그대로 사용
+        = 사장님 운영자 = 임의 조정 자율
+        = silent bug 원천 차단!
+
+        옛 기획 (= 사장님 결정으로 폐기):
+        - v2: 모든 stage 진입 완료 + max_loss ≤ -50% 도달
+        - v3: 임계 사용자 정의 가능
+        - v4: ad-hoc 안전망
+
+        신 v30: 무조건 False (= Crisis 자동 진입 영원히 X)
         """
+        # 🌟 v30 사장님 결정: Crisis 모드 영구 비활성화!
+        return False
+        # 옛 코드 (= 사장님 결정으로 비활성):
         if strategy.crisis_mode_triggered_at:
             return False
+        # 🌟 2026-06-10 v23 사장님 신 critical 사상 (= 운영자 우선!):
+        # 사장님이 옵션 변경 (tp1, trailing 등) = Redis flag 설정 = 24시간 Crisis 재진입 차단
+        # = "운영자가 크라이시스를 해제하고 다른 선택을 했어 = 그러면 그렇게 되어야 해"
+        try:
+            from app.core.redis_client import get_redis_client
+            _redis = get_redis_client()
+            if _redis.get(f"crisis_user_override:strategy:{strategy.id}"):
+                logger.info(
+                    "[risk] Crisis 자동 진입 차단 (사장님 v23 override 활성): strategy=%s",
+                    strategy.id,
+                )
+                return False
+        except Exception:
+            pass
         # Template 별 크라이시스 임계 결정
         from app.models.strategy_template import StrategyTemplate
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id) if strategy.strategy_template_id else None

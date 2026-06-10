@@ -294,7 +294,13 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     # → L228 에서 len(_all_active) NameError = 알림 메시지 silent crash
                     # → wallet 검증 자체 실패 = 사장님 자동 진입 차단 silent bug
                     # fix: alert 메시지용 활성 strategy 카운트 = 단순 query 로 별도 조회
-                    from app.core.constants import ACTIVE_STAGE_STATUSES
+                    # 🚨 2026-06-10 v24 critical fix (사장님 SENTUSDT silent bug 발견!):
+                    # 옛 코드: from app.core.constants import ACTIVE_STAGE_STATUSES
+                    # = app.core.constants 모듈 = 존재 X = ImportError raise
+                    # = Python scope rule = local def 시도 = UnboundLocalError L183!
+                    # = stage_trigger_worker = 17 strategy 모두 = 처음부터 fail!
+                    # = 사장님 모든 자동 진입 silent X!
+                    # fix: 옛 module-level ACTIVE_STAGE_STATUSES 그대로 사용 (= L37 정의)
                     _all_active = db.execute(
                         select(StrategyInstance)
                         .where(StrategyInstance.exchange_account_id == account.id)

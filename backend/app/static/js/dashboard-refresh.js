@@ -251,6 +251,9 @@ function _updateBalanceCardV3({used, limit, pct, real, reserved, free, newStratA
   // 🌟 v11 fix: 신 DOM 있으면 = 신 DOM 만 채움 (legacy 는 hidden 유지!)
   //              신 DOM 없으면 = legacy 채움 (fallback)
   // = 사장님 「중복 표시 + layout 깨짐」 silent bug 차단
+  // 🚨 2026-06-10 v34 사장님 critical fix: fmt 함수 = local def (= ReferenceError 차단!)
+  // 옛 silent bug: fmt 가 loadBalance() 안에만 def = _updateBalanceCardV3 = scope 다름 = ReferenceError!
+  const fmt = (n) => Number(n).toLocaleString('en-US', {maximumFractionDigits: 2});
   // 안전 값 (= NaN 방지)
   used = Number(used || 0); limit = Number(limit || 0); pct = Number(pct || 0);
   real = Number(real || 0); reserved = Number(reserved || 0); free = Number(free || 0);

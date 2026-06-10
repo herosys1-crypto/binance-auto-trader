@@ -861,21 +861,36 @@ def update_tp1_threshold(
     old_pct = strategy.tp1_pct_override
     strategy.tp1_pct_override = payload.pct
 
+    # 🌟 2026-06-10 v23 사장님 신 critical 사상 (= SENTUSDT 사례!):
+    # 사장님 명시: "운영자가 크라이시스를 해제하고 다른 선택을 했어 그러면 그렇게 되어야해"
+    # = 사장님이 옵션 변경 = "운영자 관여" = Crisis 자동 해제 + 재진입 차단
+    _crisis_was_active = strategy.crisis_mode_triggered_at is not None
+    if _crisis_was_active:
+        strategy.crisis_mode_triggered_at = None  # Crisis 즉시 해제!
+        # Redis flag = 24시간 = 자동 Crisis 재진입 차단
+        try:
+            from app.core.redis_client import get_redis_client
+            r = get_redis_client()
+            r.setex(f"crisis_user_override:strategy:{strategy.id}", 86400, "1")
+        except Exception:
+            pass
+
     db.add(RiskEvent(
         strategy_instance_id=strategy.id,
         event_type="TP1_THRESHOLD_UPDATED",
         severity="INFO",
         title=f"📍 TP1 임계 변경 — {strategy.symbol} {strategy.side}",
         message=(
-            f"사장님 TP1 임계 옵션 변경: "
-            f"{old_pct or '10 (default)'} → {payload.pct}%. "
-            f"정상 모드 = +{payload.pct}% 도달 시 TP1 발동. "
-            f"Crisis 모드 = +5% 고정 (사장님 옵션 무시, 빠른 회복 익절). "
-            f"다음 risk evaluation cycle 부터 즉시 적용."
+            f"🌟 사장님 TP1 임계 옵션 변경 (v30 - Crisis 영구 비활성):\n"
+            f"{old_pct or '10 (default)'}% → {payload.pct}%\n"
+            f"= +{payload.pct}% 도달 시 TP1 발동 (= 사장님 자율 설정).\n"
+            f"= 다음 risk cycle (= 최대 10초) 즉시 적용!\n"
+            f"{'🚨 기존 Crisis 모드 자동 해제!' if _crisis_was_active else ''}"
         ),
         event_payload={
             "old_pct": str(old_pct) if old_pct is not None else None,
             "new_pct": str(payload.pct),
+            "crisis_was_active": _crisis_was_active,
         },
     ))
     db.commit()

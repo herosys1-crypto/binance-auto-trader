@@ -20,6 +20,14 @@ from app.workers.reconcile_worker import run_position_reconcile_once
 from app.workers.run_workers import run_symbol_sync_once, run_tp_sl_once
 from app.workers.stage_trigger_worker import run_stage_trigger_once
 from app.workers.self_check_worker import run_self_check_once  # 🌟 v17: silent bug 자동 차단
+from app.workers.trade_anomaly_monitor import run_trade_anomaly_monitor_once  # 🌟 v20: TP 청산 silent bug 자동 차단
+from app.workers.stage_calc_audit_worker import run_stage_calc_audit_once  # 🌟 v44: 단계 계산 사상 자동 검증 (= Phase 3 작은 시작!)
+from app.workers.silent_bug_detector import run_silent_bug_detector_once  # 🌟 v45: 잠재 silent bug 자동 감지 (= Phase 3 worker 2!)
+from app.workers.user_intent_validator import run_user_intent_validator_once  # 🌟 v46: 사장님 의도 vs 실제 검증 (= Phase 3 worker 3!)
+from app.workers.edit_mode_validator import run_edit_mode_validator_once  # 🌟 v47: 「수정 모드」 결과 자동 검증 (= Phase 3 worker 4!)
+from app.workers.spec_audit_worker import run_spec_audit_once  # 🌟 v48: 코드 ↔ spec 동기 검증 (= Phase 3 worker 5!)
+from app.workers.auto_fix_proposer import run_auto_fix_proposer_once  # 🌟 v49: 자동 fix 제안 (= Phase 3 worker 6!)
+from app.workers.memory_consolidator import run_memory_consolidator_once  # 🌟 v50: 매일 학습 + 메모리 갱신 (= Phase 3 100% 완성!)
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +97,32 @@ def start_scheduler() -> None:
     # = silent bug 자동 차단 (= reserved 계산 일치, stage_plans 무결성, DB ↔ 거래소)
     # = 사장님 자본 보호 자동화 (= 사람 의존 X)
     scheduler.add_job(guarded_job("self_check", 300, run_self_check_once), trigger=IntervalTrigger(hours=1), id="self_check", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-06-10 v20 사장님 critical (= TP 청산 silent bug 영구 차단):
+    # 사장님 사상: "왜 이런 일이 일어나면 안 되는 부분이잖아" (VELVETUSDT TP1 전량 청산)
+    # = TP 청산 직후 = tp_sl_orchestrator 가 TP_EXECUTION_AUDIT RiskEvent 자동 기록
+    # = 이 worker = 매 5분 분석 + CRITICAL = 즉시 Telegram (1h dedup)
+    # = 사장님 자본 보호 = silent bug 즉시 감지
+    scheduler.add_job(guarded_job("trade_anomaly_monitor", 60, run_trade_anomaly_monitor_once), trigger=IntervalTrigger(minutes=5), id="trade_anomaly_monitor", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-06-11 v44 Phase 3 작은 시작: 단계 계산 사상 자동 검증 (= 사장님 추천!)
+    # 사장님 spec: docs/spec/stage_calculation_spec_2026-06-11.md
+    # = 매 5분 = 모든 활성 strategy 단계 계산 = 사장님 사상 검증
+    # = SHORT 오름차순 / LONG 내림차순 검증
+    # = 위배 시 = RiskEvent CRITICAL + Telegram 즉시!
+    scheduler.add_job(guarded_job("stage_calc_audit", 60, run_stage_calc_audit_once), trigger=IntervalTrigger(minutes=5), id="stage_calc_audit", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-06-11 v45 Phase 3 worker 2: silent_bug_detector (= 사장님 추천!)
+    # = 매 1분 = NULL field + Position 불일치 등 = 자동 감지!
+    # = 30분 dedup + Telegram 즉시 알림!
+    scheduler.add_job(guarded_job("silent_bug_detector", 50, run_silent_bug_detector_once), trigger=IntervalTrigger(minutes=1), id="silent_bug_detector", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-06-11 v46 Phase 3 worker 3: user_intent_validator (= 사장님 옵션 vs 실제 적용 검증!)
+    scheduler.add_job(guarded_job("user_intent_validator", 60, run_user_intent_validator_once), trigger=IntervalTrigger(minutes=5), id="user_intent_validator", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-06-11 v47 Phase 3 worker 4: edit_mode_validator (= 「수정 모드」 누적 사상 자동 검증!)
+    scheduler.add_job(guarded_job("edit_mode_validator", 60, run_edit_mode_validator_once), trigger=IntervalTrigger(minutes=5), id="edit_mode_validator", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-06-11 v48 Phase 3 worker 5: spec_audit_worker (= 코드 ↔ spec 정적 분석!)
+    scheduler.add_job(guarded_job("spec_audit", 300, run_spec_audit_once), trigger=IntervalTrigger(hours=1), id="spec_audit", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-06-11 v49 Phase 3 worker 6: auto_fix_proposer (= 자동 fix 제안!)
+    scheduler.add_job(guarded_job("auto_fix_proposer", 60, run_auto_fix_proposer_once), trigger=IntervalTrigger(minutes=5), id="auto_fix_proposer", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-06-11 v50 Phase 3 worker 7 (= 100% 완성!): memory_consolidator (매일 KST 03:00!)
+    scheduler.add_job(guarded_job("memory_consolidator", 600, run_memory_consolidator_once), trigger=CronTrigger(hour=18, minute=0), id="memory_consolidator", replace_existing=True, max_instances=1, coalesce=True)
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.

@@ -205,7 +205,7 @@ async function refreshStrategies() {
       totalUnrealized += pnl;
       if (cap > 0 && lev > 0) totalMarginUsed += cap / lev;
     });
-    // 전체 ROI % = 총 USD 손익 / 총 마진 × 100 (사용자 실제 자본 대비 수익률)
+    // 전체 ROI % = 총 USD 손익 / 총 마진 x 100 (사용자 실제 자본 대비 수익률)
     const overallRoiPct = totalMarginUsed > 0 ? (totalUnrealized / totalMarginUsed * 100) : 0;
 
     setMetric('active', active.length + '건',
@@ -323,7 +323,9 @@ async function refreshStrategies() {
     // 🌟 2026-06-09 v12-7 사장님 「마진율순 + 실투입 합계 정렬」 신 옵션
     const _positionMargin = (s) => {
       const qty = Math.abs(Number(s.current_position_qty || 0));
-      const avg = Number(s.last_avg_entry_price || 0);
+      // 🚨 2026-06-10 v35 critical fix: last_avg_entry_price NULL = avg_entry_price fallback!
+      // 옛 silent bug: backend last_avg_entry_price NULL = _positionMargin=0 = _positionRoi=0 = 정렬 X!
+      const avg = Number(s.last_avg_entry_price || s.avg_entry_price || 0);
       const lev = Number(s.leverage || 1);
       return (qty > 0 && avg > 0 && lev > 0) ? (qty * avg / lev) : 0;
     };
@@ -334,6 +336,15 @@ async function refreshStrategies() {
       const position = _positionMargin(s);
       return planned > 0 ? (position / planned * 100) : 0;
     };
+    // 🎨 2026-06-10 v32 사장님 critical fix: ROI 정렬 client-side 직접 계산
+    // 옛 v31 silent bug: backend roi_pct NULL = 모두 0 정렬 = ID 순서 = 이상!
+    // 신 v32: positionRoi = pnl / positionMargin x 100 (= 사장님 사진 ROI 와 동일!)
+    const _positionRoi = (s) => {
+      const pnl = Number(s.unrealized_pnl || 0);
+      const pmargin = _positionMargin(s);
+      // position 없으면 = 0 (= 정렬 가장 아래로)
+      return pmargin > 0 ? (pnl / pmargin * 100) : 0;
+    };
     const sorted = [...visible].sort((a, b) => {
       const aTerm = TERMINAL_STATUSES.includes((a.status || '').toUpperCase()) ? 1 : 0;
       const bTerm = TERMINAL_STATUSES.includes((b.status || '').toUpperCase()) ? 1 : 0;
@@ -342,8 +353,11 @@ async function refreshStrategies() {
       // 사장님 선택 정렬
       switch (sortBy) {
         case 'sl_progress_desc': return _slProgress(b) - _slProgress(a);  // 🚨 SL 임박
-        case 'pnl_asc': return Number(a.unrealized_pnl || 0) - Number(b.unrealized_pnl || 0);  // 📉 손실 큰 순
-        case 'pnl_desc': return Number(b.unrealized_pnl || 0) - Number(a.unrealized_pnl || 0);  // 📈 이익 큰 순
+        case 'pnl_asc': return Number(a.unrealized_pnl || 0) - Number(b.unrealized_pnl || 0);  // 📉 손실 큰 순 (USDT)
+        case 'pnl_desc': return Number(b.unrealized_pnl || 0) - Number(a.unrealized_pnl || 0);  // 📈 이익 큰 순 (USDT)
+        // 🎨 2026-06-10 v32 fix: ROI 정렬 = client-side _positionRoi 사용 (= 사장님 사진과 동일!)
+        case 'roi_asc': return _positionRoi(a) - _positionRoi(b);  // 📉 손실율 큰 순 (%)
+        case 'roi_desc': return _positionRoi(b) - _positionRoi(a);  // 📈 이익율 큰 순 (%)
         case 'margin_ratio_desc': return _marginRatio(b) - _marginRatio(a);  // 💯 마진율 (= 진입률 %) 큰 순
         case 'position_margin_desc': return _positionMargin(b) - _positionMargin(a);  // 🔒 실 투입 USDT 큰 순
         case 'stage_desc': return (b.current_stage || 0) - (a.current_stage || 0);  // 📊 단계 많은 순
@@ -375,12 +389,10 @@ async function refreshStrategies() {
       const closeReason = s.last_close_reason || 'NONE';
       const stageBar = s.current_stage > 0 ? renderStageBar(s.current_stage, totalStages) : '<span class="text-slate-500">대기</span>';
       const tpBar = renderTpBar(tpCount, totalTps, closeReason);
-      // 🌟 2026-06-08 사장님 TP1 임계 옵션 드롭다운 (Phase 3 — spec).
-      // 위치: 「익절」 라벨 옆 (= 사장님 캡쳐 의도, 단계 컬럼 영역).
-      // 활성 strategy 만 노출 (= TERMINAL X). 변경 즉시 PATCH = 다음 risk cycle 적용.
-      // 정상 모드: TP1 = 사장님 옵션 (10/15/20/25)
-      // Crisis 모드: 사장님 옵션 무시 = TP1 +5% 고정 (옛 CRISIS_OVERRIDE 그대로)
-      // 🚨 event 3개 stopPropagation 필수 (parent <tr onclick> 차단)
+      // 🌟 2026-06-10 v30 사장님 TP1 임계 옵션 드롭다운 (Crisis 폐기 후!)
+      // 사장님 결정: Crisis = 영구 비활성, 사장님 옵션 = 항상 우선!
+      // 사장님 = 상황에 따라 = 즉시 선택 = 즉시 적용!
+      // 활성 strategy 만 노출 (= TERMINAL X)
       const _tp1Pct = (s.tp1_pct_override != null) ? Number(s.tp1_pct_override) : 10;
       const _isActiveForTp1 = !TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
       const tp1ThresholdSelect = _isActiveForTp1
@@ -389,7 +401,7 @@ async function refreshStrategies() {
                   onchange="event.stopPropagation(); updateTp1Threshold(${s.id}, this.value)"
                   class="bg-slate-800 border border-slate-600 rounded text-slate-300"
                   style="font-size:10px;padding:0 2px;margin-left:4px;cursor:pointer"
-                  title="TP1 임계 옵션 — 정상 모드: 사장님 옵션 (10/15/20/25) 적용. Crisis 모드: 옵션 무시 = TP1 +5% 고정 (빠른 회복 익절). 운영 중 변경 즉시 적용. spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md">
+                  title="🌟 TP1 임계 옵션 (사장님 자율) — 10/15/20/25 즉시 선택 + 즉시 적용! Crisis 모드 = 영구 비활성 (v30). 사장님 상황 인지 = 임의 조정.">
             <option value="10" ${_tp1Pct===10 ? 'selected':''}>TP1 +10%</option>
             <option value="15" ${_tp1Pct===15 ? 'selected':''}>TP1 +15%</option>
             <option value="20" ${_tp1Pct===20 ? 'selected':''}>TP1 +20%</option>
@@ -409,11 +421,18 @@ async function refreshStrategies() {
       const sMark = hasPosition ? (s.side === 'LONG' ? sAvg + pnlNum/sQtyAbs : sAvg - pnlNum/sQtyAbs) : 0;
       // 청산예정가 = isolated 계산 (체결 평단 기반)
       const MMR = 0.005;
-      const sLiq = hasPosition && sLev > 0 ? (s.side === 'SHORT' ? sAvg * (1 + 1/sLev - MMR) : sAvg * (1 - 1/sLev + MMR)) : 0;
+      // 🚨 2026-06-11 v37 사장님 critical fix: 청산가 = backend liquidation_price 우선 사용!
+      // 옛 silent bug: sAvg x (1 + 1/sLev - MMR) = 증거금 추가 무시!
+      // 사장님 BEATUSDT: DB liquidation_price = 11.24 (= 정확) 인데 = 화면 = 8.98 (= 옛 공식!)
+      // 신 v37: backend liquidation_price (= 정확) 우선 → 없으면 fallback
+      const sLiqDb = Number(s.liquidation_price || 0);
+      const sLiq = sLiqDb > 0
+        ? sLiqDb
+        : (hasPosition && sLev > 0 ? (s.side === 'SHORT' ? sAvg * (1 + 1/sLev - MMR) : sAvg * (1 - 1/sLev + MMR)) : 0);
 
       // 2026-05-04 v3 (Binance ROI 일치): 두 가지 ROI 분리.
-      //   포지션 ROI = pnl / 현재_사용_마진 × 100  ← Binance UI 와 일치 (실제 진입한 부분만).
-      //   전략 ROI   = pnl × leverage / total_capital × 100  ← 전체 전략 자본 대비.
+      //   포지션 ROI = pnl / 현재_사용_마진 x 100  ← Binance UI 와 일치 (실제 진입한 부분만).
+      //   전략 ROI   = pnl x leverage / total_capital x 100  ← 전체 전략 자본 대비.
       const positionNotional = hasPosition ? sQtyAbs * sAvg : 0;
       const positionMargin = positionNotional > 0 && sLev > 0 ? positionNotional / sLev : 0;
       const positionRoi = positionMargin > 0 ? (pnlNum / positionMargin * 100) : 0;
@@ -421,9 +440,9 @@ async function refreshStrategies() {
       // 2026-06-05 옵션 A (사장님 사상 정확 반영):
       // total_capital = 사장님 입력 「자본」 = 마진 단위 (PR #57 SL 계산식 확정)
       //   = "투자금 대비 손실 %" 의 기준 (index.html L826 사장님 사상 명시)
-      //   예: 자본 200 + 증거금 50 + 포지션 100 → total_capital = 350 → SL = 350×80% = -280 USDT
+      //   예: 자본 200 + 증거금 50 + 포지션 100 → total_capital = 350 → SL = 350x80% = -280 USDT
       // 「계획 마진」 = total_capital (그대로) — 사장님이 입력한 자본 = 거래소 lock 목표
-      // 「거래 규모 (notional)」 = total_capital × leverage — 사장님 강조 "자본 2000 + 2x = 4000"
+      // 「거래 규모 (notional)」 = total_capital x leverage — 사장님 강조 "자본 2000 + 2x = 4000"
       // 이전: plannedMargin = sCap / sLev (잘못 — ÷ leverage 가 사장님 사상 위반)
       const plannedMargin = sCap > 0 ? sCap : 0;
       const plannedNotional = sCap > 0 && sLev > 0 ? sCap * sLev : 0;
@@ -469,7 +488,7 @@ async function refreshStrategies() {
       const entryPct = plannedMargin > 0 ? (positionMargin / plannedMargin * 100) : 0;
       const entryColor = entryPct >= 95 ? 'text-green-400' : entryPct >= 50 ? 'text-yellow-400' : 'text-slate-300';
       // tooltip = 자세 설명 (사장님이 필요 시 hover 로 확인)
-      const planTooltip = `💼 사장님 자본: ${plannedMargin.toFixed(2)} USDT (= 마진 lock 목표, SL 기준)\n📊 거래 규모: ${plannedNotional.toFixed(2)} USDT (= 자본 × ${sLev}x)\n🔒 현재 마진: ${positionMargin.toFixed(2)} USDT (Binance lock)\n📈 진입률: ${entryPct.toFixed(1)}% (모든 단계 진입까지 ${(100-entryPct).toFixed(1)}% 남음)`;
+      const planTooltip = `💼 사장님 자본: ${plannedMargin.toFixed(2)} USDT (= 마진 lock 목표, SL 기준)\n📊 거래 규모: ${plannedNotional.toFixed(2)} USDT (= 자본 x ${sLev}x)\n🔒 현재 마진: ${positionMargin.toFixed(2)} USDT (Binance lock)\n📈 진입률: ${entryPct.toFixed(1)}% (모든 단계 진입까지 ${(100-entryPct).toFixed(1)}% 남음)`;
       // 2026-06-08 사장님 v4 요구: qty/마진 stack 2줄 → 1줄 압축 (가로 줄수 축소).
       // 2026-06-09 사장님 v5 요구: 수량 = 큰 폰트 (눈에 들어오게) + 음수 부호 제거 (= 절대값 + side 아이콘)
       // Binance positionAmt: SHORT=음수, LONG=양수 → 사장님 SHORT 운영 시 모든 수량이 음수 표시 = 시각 부담
@@ -493,9 +512,9 @@ async function refreshStrategies() {
       // PnL/ROI — 4 줄 stack: PnL + 포지션 ROI + 전략 ROI + 🆕 SL 한도 시각 (2026-06-03)
       const posSign = positionRoi > 0 ? '+' : '';
       const stratSign = strategyRoi > 0 ? '+' : '';
-      const posTooltip = `포지션 ROI = pnl ÷ 현재 사용 마진 × 100 (Binance UI 와 일치). 마진=${positionMargin.toFixed(2)} USDT`;
-      const stratTooltip = `전략 ROI = pnl × 레버리지 ÷ 전체 전략 자본 × 100 (전체 단계 모두 진입 시 = 포지션 ROI). 자본=${sCap.toFixed(2)} USDT, lev=${sLev}x`;
-      // 2026-06-03 SL 한도 시각화 (사장님 사상 PR #57: 레버리지 무관, 투자금 × sl_pct / 100)
+      const posTooltip = `포지션 ROI = pnl ÷ 현재 사용 마진 x 100 (Binance UI 와 일치). 마진=${positionMargin.toFixed(2)} USDT`;
+      const stratTooltip = `전략 ROI = pnl x 레버리지 ÷ 전체 전략 자본 x 100 (전체 단계 모두 진입 시 = 포지션 ROI). 자본=${sCap.toFixed(2)} USDT, lev=${sLev}x`;
+      // 2026-06-03 SL 한도 시각화 (사장님 사상 PR #57: 레버리지 무관, 투자금 x sl_pct / 100)
       // 사장님이 SL 발동까지 얼마나 남았는지 즉시 인지 — 운영 안전 핵심.
       const slPctNum = Number(s.stop_loss_percent_of_capital || 0);
       const slThreshold = (sCap > 0 && slPctNum > 0) ? sCap * slPctNum / 100 : 0;
@@ -509,7 +528,7 @@ async function refreshStrategies() {
       else if (slProgressPct >= 30) { slClass = 'text-yellow-400'; }
       else if (slProgressPct > 0) { slClass = 'text-slate-400'; }
       const slTooltip = slThreshold > 0
-        ? `SL 한도: -${slThreshold.toFixed(2)} USDT (투자금 ${sCap.toFixed(2)} × ${slPctNum}%, 레버리지 무관 — 사장님 사상 PR #57). 진행률 ${slProgressPct.toFixed(1)}% (남은 ${slRemainingUsd.toFixed(2)} USDT). 모든 단계 진입 후 발동.`
+        ? `SL 한도: -${slThreshold.toFixed(2)} USDT (투자금 ${sCap.toFixed(2)} x ${slPctNum}%, 레버리지 무관 — 사장님 사상 PR #57). 진행률 ${slProgressPct.toFixed(1)}% (남은 ${slRemainingUsd.toFixed(2)} USDT). 모든 단계 진입 후 발동.`
         : 'SL 정보 없음';
       // 2026-06-08 사장님 v4 요구: PnL stack 4줄 → 2줄 압축 (가로 줄수 최대 축소).
       // 1줄: PnL +0.68 (+1.37%)   ← 메인 (font-semibold)
@@ -519,7 +538,8 @@ async function refreshStrategies() {
         : '';
       // 🌟 2026-06-08 사장님 trailing retrace 옵션 드롭다운 (Phase 3 — spec).
       // 활성 strategy 만 노출 (= TERMINAL X). 변경 즉시 PATCH = 다음 risk cycle 적용.
-      const _trailingRetracePct = (s.trailing_retrace_pct != null) ? Number(s.trailing_retrace_pct) : 5;
+      // 🌟 2026-06-10 v36 사장님 결정: default 5 → 10 (사장님 큰 익절 잠재력!)
+      const _trailingRetracePct = (s.trailing_retrace_pct != null) ? Number(s.trailing_retrace_pct) : 10;
       // 🚨 2026-06-08 fix: 드롭다운 클릭 시 = parent <tr onclick="selectStrategy()"> bubble → 다른 페이지 이동
       // = onclick + onmousedown + onchange 모두 = event.stopPropagation() 필수
       const trailingRetraceSelect = (!TERMINAL_STATUSES.includes((s.status || '').toUpperCase()) && hasPosition)
@@ -535,11 +555,15 @@ async function refreshStrategies() {
             <option value="20" ${_trailingRetracePct===20 ? 'selected':''}>-20%</option>
           </select>`
         : '';
+      // 🎨 2026-06-10 사장님 요구 v27: 포지션 ROI = 15px (= 더 크게, 가독성 강조)
+      // PnL = 색깔 + font-semibold (= 손익 즉시 인지)
+      // 포지션 ROI = 15px (= PnL 옆 = 큰 가독성!)
+      // 전략 ROI = 13px (= 보조 정보 = 그대로)
       const pnl = hasPosition
         ? `<div class="text-sm leading-none">
             <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span>
-            <span class="${positionRoi>0?'pos':positionRoi<0?'neg':'text-slate-400'}" title="${posTooltip}">(${posSign}${positionRoi.toFixed(2)}%)</span><br>
-            <span class="${strategyRoi>0?'pos':strategyRoi<0?'neg':'text-slate-500'}" style="font-size:12px; opacity:0.8" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slInline}${trailingRetraceSelect}
+            <span class="text-slate-300 font-semibold" style="font-size:15px" title="${posTooltip}">(${posSign}${positionRoi.toFixed(2)}%)</span><br>
+            <span class="text-slate-300" style="font-size:13px; opacity:0.85" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slInline}${trailingRetraceSelect}
           </div>`
         : '<span class="text-slate-500">-</span>';
 
@@ -717,7 +741,7 @@ function openManualTPModal(strategyId, symbol, side, currentQty, avgEntry, lever
       <div id="manual-tp-preview" style="background:#0f172a; padding:12px; border-radius:4px; margin-bottom:16px; border-left:3px solid #16a34a">
         <div style="color:#86efac; font-size:13px; margin-bottom:4px">📊 청산 미리보기:</div>
         <div id="manual-tp-preview-content" style="color:#fbbf24; font-family:monospace; font-size:14px">
-          ${(currentQty * 0.25).toFixed(4)} qty (= ${currentQty.toFixed(4)} × 25%)
+          ${(currentQty * 0.25).toFixed(4)} qty (= ${currentQty.toFixed(4)} x 25%)
         </div>
         <div id="manual-tp-preview-remaining" style="color:#94a3b8; font-family:monospace; font-size:12px; margin-top:4px">
           남은 수량: ${(currentQty * 0.75).toFixed(4)} qty
@@ -749,7 +773,7 @@ function _updateManualTPPreview(currentQty) {
   const target = currentQty * percent / 100;
   const remaining = currentQty - target;
   document.getElementById('manual-tp-preview-content').textContent =
-    `${target.toFixed(4)} qty (= ${currentQty.toFixed(4)} × ${percent}%)`;
+    `${target.toFixed(4)} qty (= ${currentQty.toFixed(4)} x ${percent}%)`;
   document.getElementById('manual-tp-preview-remaining').textContent =
     `남은 수량: ${remaining.toFixed(4)} qty`;
 }
@@ -810,9 +834,9 @@ async function updateTrailingRetrace(strategyId, pctStr) {
 }
 
 // 🌟 2026-06-08 사장님 TP1 임계 옵션 (Phase 3)
-// spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md
-// 정상 모드: TP1 = 사장님 옵션 (10/15/20/25)
-// Crisis 모드: 사장님 옵션 무시 = TP1 +5% 고정 (옛 CRISIS_OVERRIDE 그대로)
+// 🌟 2026-06-10 v30 사장님 결정: Crisis 폐기 + 사장님 옵션 = 항상 우선!
+// 사장님 명시: "TP1 단계 시작을 전략에 세팅을 상황에 따라 선택하면 바로 적용되어야 해"
+// = 사장님 선택 = 즉시 PATCH + 즉시 적용 (= 다음 10초 risk cycle)
 async function updateTp1Threshold(strategyId, pctStr) {
   const pct = Number(pctStr);
   if (![10, 15, 20, 25].includes(pct)) {
@@ -824,7 +848,7 @@ async function updateTp1Threshold(strategyId, pctStr) {
       method: 'PATCH',
       body: { pct: pct },
     });
-    toast(`✅ TP1 +${pct}% 적용 (Crisis 시 +5% 고정)`, 'success');
+    toast(`✅ TP1 +${pct}% 즉시 적용 (사장님 자율)`, 'success');
     refreshStrategies();
   } catch (e) {
     toast(`❌ 변경 실패: ${e.message || e}`, 'error');

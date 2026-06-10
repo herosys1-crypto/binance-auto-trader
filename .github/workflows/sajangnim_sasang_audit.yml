@@ -1,0 +1,66 @@
+name: 사장님 사상 자동 검증
+
+# 사장님 critical 사상: silent bug 영원히 X!
+# = PR 머지 전 = 사장님 사상 자동 검증!
+
+on:
+  pull_request:
+    branches: [main, "feat/**"]
+  push:
+    branches: [main]
+
+jobs:
+  sajangnim_unit_tests:
+    name: 사장님 사상 단위 테스트
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          cd backend
+          pip install pytest pydantic sqlalchemy fastapi
+      - name: 사장님 단위 테스트
+        run: |
+          cd backend
+          python -m pytest tests/unit/test_sajangnim_stage_calculation.py tests/unit/test_current_price_action.py -v
+
+  sajangnim_e2e_tests:
+    name: 사장님 E2E 시나리오 테스트
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          cd backend
+          pip install pytest pydantic sqlalchemy fastapi
+      - name: 사장님 E2E 시나리오
+        run: |
+          cd backend
+          python -m pytest tests/e2e/test_sajangnim_scenarios.py -v
+
+  sajangnim_spec_audit:
+    name: 코드 ↔ spec 동기 검증
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 금지 패턴 grep (= 옛 silent bug!)
+        run: |
+          # v24 silent bug = app.core.constants import 금지
+          if grep -rE "from\s+app\.core\.constants\s+import" backend/app/ --include="*.py" --exclude="*spec_audit*"; then
+            echo "🚨 v24 silent bug 재발!"
+            exit 1
+          fi
+          # v38 사상 = fillStartPrice('current') 자동 호출 금지
+          if grep -rE "fillStartPrice\(['\"]current['\"]\)" backend/app/static/js/cm-prev-blueprint.js; then
+            echo "🚨 v38 사상 위배!"
+            exit 1
+          fi
+          echo "✅ 코드 ↔ spec 100% 동기!"
