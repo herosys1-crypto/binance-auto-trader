@@ -102,17 +102,27 @@ async function loadPrevBlueprint(strategyId, silent) {
     document.getElementById('cm-sl-pct').value = bp.stop_loss_percent_of_capital;
     // 2026-05-14: 크라이시스 dropdown 제거됨 (사용자 결정 「손절만 사용」).
     // 새 strategy 는 자동으로 -100 (비활성) 적용 — _collectTpSl 참조.
-    // 5) 시작가 — 2026-06-03 사장님 사상 변경:
-    // 이전: 수정 모드면 옛 bp.start_price 채움 → 사장님이 옛 가격 기준 미리보기 보고
-    //       「🔄 종료 후 새로 시작」 시 옛 LIMIT 가격으로 진입 위험.
-    // 변경: 수정 모드든 일반 불러오기든 시작가는 항상 빈값 → loadCmMarketInfo 가
-    //       자동으로 현재가 채움 → 트리거가 + 평단 + 청산가 모두 현재가 기준 재계산.
-    // 🌟 2026-06-09 v16 사장님 critical fix (SLXUSDT 가 63100 BTC 가격 표시 버그):
-    // _cmCurrentPrice 옛 cache (= 마지막 조회한 BTC 등 다른 심볼 가격) 강제 초기화
-    // → loadCmMarketInfo 완료 후 = 신 symbol 의 실제 현재가만 사용
-    document.getElementById('cm-start-price').value = '';
+    // 🌟 2026-06-11 v38 사장님 신 critical 사상 (= BEATUSDT 수정 사례!)
+    // 사장님 명시:
+    //   "처음에 전략을 진행할때 내용을 그대로 이여서 세팅을 할수 있어야 해
+    //    내가 현재가를 실행하지 않는한 처음에 세팅할때 잡혀있는 단가로 세팅을 할수 있어야 해"
+    //
+    // = 사장님 사상 = 「수정 모드」 = 옛 strategy 의 모든 세팅 그대로 보존!
+    // = 시작가 = 옛 bp.start_price (= 옛 strategy 시작가 그대로!)
+    // = 사장님이 「현재가」 버튼 직접 클릭 시만 = 현재가 적용!
+    //
+    // 옛 v29 silent bug (= 사장님 사상 위배!):
+    //   loadCmMarketInfo() 후 = 무조건 fillStartPrice('current') 호출
+    //   = 옛 시작가 = silent 덮어쓰기 = 사장님 의도 X!
+    //
+    // 신 v38 (= 사장님 사상 진짜 적용!):
+    //   옛 bp.start_price 그대로 채움!
+    //   = 사장님이 직접 「현재가」 클릭 시 = 신 현재가 적용
+    //   = 자율 운영 + 사상 보존!
+    const oldStartPrice = bp.start_price ? bp.start_price.toString() : '';
+    document.getElementById('cm-start-price').value = oldStartPrice;
     if (typeof _cmCurrentPrice !== 'undefined') {
-      _cmCurrentPrice = null;  // ⭐ critical: 옛 BTC/다른 심볼 캐시 무효화
+      _cmCurrentPrice = null;  // ⭐ 시세 cache 만 무효화 (= 「현재가」 버튼 클릭 시 신 가격)
     }
     // 시세 자리도 임시 "-" 표시 (= loadCmMarketInfo 완료까지)
     const _mktEl = document.getElementById('cm-mkt-price');
@@ -120,43 +130,17 @@ async function loadPrevBlueprint(strategyId, silent) {
     onCapitalsChange();
     if (!silent) {
       const editNote = cmState.editingStrategyId
-        ? ` (수정 모드 — 시작가는 현재가로 자동 갱신됨, 옛 시작가 ${bp.start_price || '?'} 참고용)`
+        ? ` (수정 모드 — 옛 시작가 ${oldStartPrice || '?'} 그대로! 사장님 자율 = 「현재가」 클릭 시 변경)`
         : '';
-      toast(`전략 #${bp.source_strategy_id} 설정을 불러왔습니다. 종목/시작가 확인 후 진행${editNote}`, 'success');
+      toast(`전략 #${bp.source_strategy_id} 옛 설정 그대로 불러옴${editNote}`, 'success');
     }
-    // 시세 다시 로드 → 자동으로 현재가가 cm-start-price 에 채워짐 → _refreshLiveCalc 트리거
+    // 시세 다시 로드 (= 표시만 갱신, 시작가는 = 옛 값 보존!)
     await loadCmMarketInfo();
-    // 🌟 2026-06-10 v29 사장님 신 critical 사상 (= STGUSDT 사례!):
-    // 사장님 명시: "현재가를 실행하면 정상적으로 나오는데 이럴경우 수정을 클릭하면
-    //              각각 심볼의 현재가를 불러오면 되는것 같은데"
-    // = 사장님 의도 = 「불러오기」 클릭 시 = 무조건 현재가로 = 자동 덮어쓰기!
-    // = silent bug 원천 차단!
-    //
-    // 옛 v21 (= toast 알림 만):
-    //   loadCmMarketInfo() → cm-market-info L60 = 빈값일 때만 자동 → 옛 값 보존 = silent bug!
-    //
-    // 신 v29 (= 사장님 사상 강제 적용):
-    //   loadCmMarketInfo() 완료 후 = 무조건 fillStartPrice('current') 호출
-    //   = 옛 strategy 의 옛 시작가 = 무조건 신 현재가로 덮어쓰기!
     try {
-      if (typeof fillStartPrice === 'function' && _cmCurrentPrice && !isNaN(_cmCurrentPrice)) {
-        fillStartPrice('current');  // 🌟 사장님 사상: 무조건 현재가 강제!
-        toast('✅ 시작가 = 현재가 자동 적용 (사장님 사상 v29)', 'success');
-      } else {
-        // 현재가 조회 실패 = 사장님 즉시 알림 + 빨간 테두리
-        const startPriceEl = document.getElementById('cm-start-price');
-        toast('⚠️ 현재가 조회 실패! 「현재가」 버튼 수동 클릭', 'warning');
-        if (startPriceEl) {
-          startPriceEl.style.border = '2px solid #f00';
-          startPriceEl.style.backgroundColor = '#fee';
-          setTimeout(() => {
-            startPriceEl.style.border = '';
-            startPriceEl.style.backgroundColor = '';
-          }, 8000);
-        }
-      }
+      // v38 사장님 사상: 시작가 = 옛 값 그대로 유지! (= fillStartPrice 호출 X)
+      // 사장님이 = 「현재가」 버튼 직접 클릭 시 = 현재가 적용!
     } catch (e) {
-      console.warn('[v29] 시작가 자동 적용 실패:', e);
+      console.warn('[v38] 시작가 처리 실패:', e);
     }
   } catch (e) { toast('불러오기 실패: '+e.message, 'error'); }
 }
