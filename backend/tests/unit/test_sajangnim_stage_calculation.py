@@ -2,6 +2,8 @@
 
 spec: docs/spec/stage_calculation_spec_2026-06-11.md
 
+= Phase 2 = 신 모듈 stage_calculator 사용!
+
 테스트 사항:
 1. 신 strategy = startPrice 기반 누적
 2. 「수정 모드」 + 「현재가」 = 1단계 oldAvg + 2단계+ 누적
@@ -12,63 +14,11 @@ spec: docs/spec/stage_calculation_spec_2026-06-11.md
 """
 import pytest
 from decimal import Decimal
-
-
-def calculate_stages_new_strategy(start_price, triggers, side="SHORT"):
-    """신 strategy = 단계 계산.
-
-    1단계 = start_price
-    N단계 = (N-1)단계 × (1 ± trigger_N%)
-    """
-    if not start_price or len(triggers) == 0:
-        return []
-
-    prices = []
-    prev = Decimal(str(start_price))
-
-    for i, trg in enumerate(triggers):
-        if i == 0:
-            # 1단계 = 시작가
-            prices.append(prev)
-            continue
-        trg_pct = Decimal(str(trg or 0))
-        if side == "SHORT":
-            curr = prev * (Decimal("1") + trg_pct / Decimal("100"))
-        else:
-            curr = prev * (Decimal("1") - trg_pct / Decimal("100"))
-        prices.append(curr)
-        prev = curr
-
-    return prices
-
-
-def calculate_stages_edit_mode(start_price, old_avg, triggers, side="SHORT"):
-    """수정 모드 + 「현재가」 클릭 = 사장님 사상!
-
-    1단계 = old_avg (옛 평단 보존!)
-    2단계 = start_price × (1 ± trigger_2%) (= 신 startPrice 기준!)
-    N단계 = (N-1)단계 × (1 ± trigger_N%)
-    """
-    if not start_price or len(triggers) == 0:
-        return []
-
-    prices = []
-    prev = Decimal(str(start_price))  # 2단계 기준!
-
-    for i, trg in enumerate(triggers):
-        if i == 0:
-            # 1단계 = 옛 평단!
-            prices.append(Decimal(str(old_avg)))
-            continue
-        trg_pct = Decimal(str(trg or 0))
-        if side == "SHORT":
-            curr = prev * (Decimal("1") + trg_pct / Decimal("100"))
-        else:
-            curr = prev * (Decimal("1") - trg_pct / Decimal("100"))
-        prices.append(curr)
-        prev = curr
-
-    return prices
+from app.services.stage_calculator import (
+    calculate_stages_new as calculate_stages_new_strategy,
+    calculate_stages_edit_mode,
+    validate_stage_order,
+)
 
 
 # ===== 사장님 사상 단위 테스트 =====
