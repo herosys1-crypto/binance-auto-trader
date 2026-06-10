@@ -198,18 +198,13 @@ function _refreshLiveCalc() {
           entryPrice = startPrice;  // 신 strategy = 시작가 그대로
         }
         pendingTriggerPct = 0;  // 첫 단계 누적 무시
-      } else if (cmState.editingStrategyId && _editCurrentStage > 0 && i === _editCurrentStage + 1) {
-        // 🌟 사장님 「수정 모드」: 첫 미진입 단계 = 시작가 기준 (= 현재가 × (1 + trigger%))
-        // 진입 단계 (1~current_stage) 의 옛 진입가 = 무시 + 신 미진입 단계 = 현재가 새로 시작
-        let trgPct = tNum;
-        if (i === lastStageNo && trgPct === 0) trgPct = DEFAULT_LAST_TRIGGER_PCT;
-        const effectiveTrgPct = trgPct + pendingTriggerPct;
-        pendingTriggerPct = 0;
-        if (side === 'SHORT') {
-          entryPrice = startPrice * (1 + effectiveTrgPct / 100);
-        } else {
-          entryPrice = startPrice * (1 - effectiveTrgPct / 100);
-        }
+      // 🚨 2026-06-11 v43 사장님 critical fix: 옛 v100 분기 폐기!
+      // 옛 silent bug: 첫 미진입 단계 = startPrice × (1 + trigger%)
+      // = 사장님 사진 6단계 = 9.52 (= 사장님 누적 사상 위배!)
+      //
+      // 신 v43 사상 (= v40 완성):
+      // 모든 단계 (1단계 제외) = 이전 단계 진입가 기준 누적!
+      // = 옛 v100 분기 제거 → 정상 누적 logic 사용
       } else {
         // 사용자 #5-07 fix: 마지막 단계 trigger 비어있으면 backend 기본 20%
         let trgPct = tNum;
