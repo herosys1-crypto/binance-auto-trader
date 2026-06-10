@@ -178,8 +178,25 @@ function _refreshLiveCalc() {
       // 1) 이 단계 진입가 (raw, leverage 무관) — 사장님 사상: 빈 단계 trigger 누적
       let entryPrice;
       if (compressedStageNo === 1) {
-        // 첫 채워진 단계 = 새 1단계 (IMMEDIATE) — 압축 후 idx 무관 시작가 사용
-        entryPrice = startPrice;
+        // 🌟 2026-06-11 v40 사장님 critical 사상 (= BEATUSDT 수정 사례!):
+        // 사장님 명시: "현재가를 실행하지 않는한 처음에 세팅할때 잡혀있는 단가로 세팅
+        //              두번째는 현재가 기준으로 새롭게 세팅으로 하면 2단계부터 진행할수 있는 세팅"
+        // = 수정 모드 + 시작가 변경 (= 사장님 「현재가」 클릭) 시:
+        //   1단계 = 옛 평단 (= 사장님 진입 보존!)
+        //   2단계+ = 신 시작가 기준 재계산
+        if (cmState.editingStrategyId && cmState.editingStrategyBp) {
+          const oldAvg = Number(cmState.editingStrategyBp.avg_entry_price || 0);
+          const oldStart = Number(cmState.editingStrategyBp.start_price || 0);
+          const startChanged = oldStart > 0 && startPrice > 0 && Math.abs(startPrice - oldStart) / oldStart > 0.001;
+          if (oldAvg > 0 && startChanged) {
+            entryPrice = oldAvg;  // 1단계 = 옛 평단 보존!
+            // 2단계+ = startPrice 기준 (= prevPrice 별도 처리!)
+          } else {
+            entryPrice = startPrice;  // 시작가 변경 X = 옛 값
+          }
+        } else {
+          entryPrice = startPrice;  // 신 strategy = 시작가 그대로
+        }
         pendingTriggerPct = 0;  // 첫 단계 누적 무시
       } else if (cmState.editingStrategyId && _editCurrentStage > 0 && i === _editCurrentStage + 1) {
         // 🌟 사장님 「수정 모드」: 첫 미진입 단계 = 시작가 기준 (= 현재가 × (1 + trigger%))
@@ -290,7 +307,20 @@ function _refreshLiveCalc() {
         lossUsdEl.textContent = usdText;
         lossUsdEl.className = 'col-span-2 text-xs text-right ' + usdColor;
       }
-      prevPrice = entryPrice;
+      // 🌟 v40 사장님 사상: 1단계 = 옛 평단 보존 시 = 2단계 기준 = startPrice (= entryPrice 아님!)
+      // = 사장님 사상: '2단계부터 진행할 수 있는 세팅' = 신 시작가 기준!
+      if (compressedStageNo === 1 && cmState.editingStrategyId && cmState.editingStrategyBp) {
+        const oldAvg = Number(cmState.editingStrategyBp.avg_entry_price || 0);
+        const oldStart = Number(cmState.editingStrategyBp.start_price || 0);
+        const startChanged = oldStart > 0 && startPrice > 0 && Math.abs(startPrice - oldStart) / oldStart > 0.001;
+        if (oldAvg > 0 && startChanged) {
+          prevPrice = startPrice;  // 2단계 = startPrice × (1 + trigger%) = 신 시작!
+        } else {
+          prevPrice = entryPrice;  // 옛 동작
+        }
+      } else {
+        prevPrice = entryPrice;
+      }
       prevLiq = liq;
     }
     // 2026-06-03 사장님 사상: 빈 단계 자동 압축 + trigger 누적 안내 (silent drop 경고 제거)
