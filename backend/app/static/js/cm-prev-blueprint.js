@@ -119,7 +119,10 @@ async function loadPrevBlueprint(strategyId, silent) {
     //   옛 bp.start_price 그대로 채움!
     //   = 사장님이 직접 「현재가」 클릭 시 = 신 현재가 적용
     //   = 자율 운영 + 사상 보존!
-    const oldStartPrice = bp.start_price ? bp.start_price.toString() : '';
+    // 🌟 v41 사장님 critical fix: bp.start_price NULL 시 = avg_entry_price fallback!
+    // 사장님: "수정모드를 실행하면 세팅값이 비여있어 처음 세팅 데이트를 가져와야 해"
+    // = 옛 strategy.start_price NULL = 사장님 4단계 진입 평단 사용!
+    const oldStartPrice = (bp.start_price || bp.avg_entry_price || '').toString();
     document.getElementById('cm-start-price').value = oldStartPrice;
     // 🌟 v39 사장님 사상: editingStrategyBp 보존 = 「현재가」 클릭 시 = 1단계 평단 보존 logic 사용!
     if (cmState && cmState.editingStrategyId) {

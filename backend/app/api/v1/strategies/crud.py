@@ -267,6 +267,10 @@ def get_strategy_blueprint(
         "leverage": tpl.leverage,
         "exchange_account_id": strategy.exchange_account_id,
         "start_price": str(strategy.start_price) if strategy.start_price else None,
+        # 🌟 2026-06-11 v41 사장님 critical fix: avg_entry_price 추가 (= 평단 보존 logic)
+        # 사장님: "수정모드를 실행하면 세팅값이 비여있어 처음 세팅 데이트를 가져와야 해"
+        # = 옛 strategy.start_price = NULL 시 = frontend = avg_entry_price 또는 = 1단계 trigger_price fallback
+        "avg_entry_price": str(strategy.avg_entry_price) if strategy.avg_entry_price else None,
         "capitals": sc.get("capitals") or [],
         "trigger_percents": sc.get("trigger_percents") or [],
         # 2026-05-11 (사용자 요청): 단계별 추가 증거금 (이전 전략 불러오기에 자동 채움)
