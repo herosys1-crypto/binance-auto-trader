@@ -205,7 +205,7 @@ async function refreshStrategies() {
       totalUnrealized += pnl;
       if (cap > 0 && lev > 0) totalMarginUsed += cap / lev;
     });
-    // 전체 ROI % = 총 USD 손익 / 총 마진 × 100 (사용자 실제 자본 대비 수익률)
+    // 전체 ROI % = 총 USD 손익 / 총 마진 x 100 (사용자 실제 자본 대비 수익률)
     const overallRoiPct = totalMarginUsed > 0 ? (totalUnrealized / totalMarginUsed * 100) : 0;
 
     setMetric('active', active.length + '건',
@@ -336,7 +336,7 @@ async function refreshStrategies() {
     };
     // 🎨 2026-06-10 v32 사장님 critical fix: ROI 정렬 client-side 직접 계산
     // 옛 v31 silent bug: backend roi_pct NULL = 모두 0 정렬 = ID 순서 = 이상!
-    // 신 v32: positionRoi = pnl / positionMargin × 100 (= 사장님 사진 ROI 와 동일!)
+    // 신 v32: positionRoi = pnl / positionMargin x 100 (= 사장님 사진 ROI 와 동일!)
     const _positionRoi = (s) => {
       const pnl = Number(s.unrealized_pnl || 0);
       const pmargin = _positionMargin(s);
@@ -422,8 +422,8 @@ async function refreshStrategies() {
       const sLiq = hasPosition && sLev > 0 ? (s.side === 'SHORT' ? sAvg * (1 + 1/sLev - MMR) : sAvg * (1 - 1/sLev + MMR)) : 0;
 
       // 2026-05-04 v3 (Binance ROI 일치): 두 가지 ROI 분리.
-      //   포지션 ROI = pnl / 현재_사용_마진 × 100  ← Binance UI 와 일치 (실제 진입한 부분만).
-      //   전략 ROI   = pnl × leverage / total_capital × 100  ← 전체 전략 자본 대비.
+      //   포지션 ROI = pnl / 현재_사용_마진 x 100  ← Binance UI 와 일치 (실제 진입한 부분만).
+      //   전략 ROI   = pnl x leverage / total_capital x 100  ← 전체 전략 자본 대비.
       const positionNotional = hasPosition ? sQtyAbs * sAvg : 0;
       const positionMargin = positionNotional > 0 && sLev > 0 ? positionNotional / sLev : 0;
       const positionRoi = positionMargin > 0 ? (pnlNum / positionMargin * 100) : 0;
@@ -431,9 +431,9 @@ async function refreshStrategies() {
       // 2026-06-05 옵션 A (사장님 사상 정확 반영):
       // total_capital = 사장님 입력 「자본」 = 마진 단위 (PR #57 SL 계산식 확정)
       //   = "투자금 대비 손실 %" 의 기준 (index.html L826 사장님 사상 명시)
-      //   예: 자본 200 + 증거금 50 + 포지션 100 → total_capital = 350 → SL = 350×80% = -280 USDT
+      //   예: 자본 200 + 증거금 50 + 포지션 100 → total_capital = 350 → SL = 350x80% = -280 USDT
       // 「계획 마진」 = total_capital (그대로) — 사장님이 입력한 자본 = 거래소 lock 목표
-      // 「거래 규모 (notional)」 = total_capital × leverage — 사장님 강조 "자본 2000 + 2x = 4000"
+      // 「거래 규모 (notional)」 = total_capital x leverage — 사장님 강조 "자본 2000 + 2x = 4000"
       // 이전: plannedMargin = sCap / sLev (잘못 — ÷ leverage 가 사장님 사상 위반)
       const plannedMargin = sCap > 0 ? sCap : 0;
       const plannedNotional = sCap > 0 && sLev > 0 ? sCap * sLev : 0;
@@ -479,7 +479,7 @@ async function refreshStrategies() {
       const entryPct = plannedMargin > 0 ? (positionMargin / plannedMargin * 100) : 0;
       const entryColor = entryPct >= 95 ? 'text-green-400' : entryPct >= 50 ? 'text-yellow-400' : 'text-slate-300';
       // tooltip = 자세 설명 (사장님이 필요 시 hover 로 확인)
-      const planTooltip = `💼 사장님 자본: ${plannedMargin.toFixed(2)} USDT (= 마진 lock 목표, SL 기준)\n📊 거래 규모: ${plannedNotional.toFixed(2)} USDT (= 자본 × ${sLev}x)\n🔒 현재 마진: ${positionMargin.toFixed(2)} USDT (Binance lock)\n📈 진입률: ${entryPct.toFixed(1)}% (모든 단계 진입까지 ${(100-entryPct).toFixed(1)}% 남음)`;
+      const planTooltip = `💼 사장님 자본: ${plannedMargin.toFixed(2)} USDT (= 마진 lock 목표, SL 기준)\n📊 거래 규모: ${plannedNotional.toFixed(2)} USDT (= 자본 x ${sLev}x)\n🔒 현재 마진: ${positionMargin.toFixed(2)} USDT (Binance lock)\n📈 진입률: ${entryPct.toFixed(1)}% (모든 단계 진입까지 ${(100-entryPct).toFixed(1)}% 남음)`;
       // 2026-06-08 사장님 v4 요구: qty/마진 stack 2줄 → 1줄 압축 (가로 줄수 축소).
       // 2026-06-09 사장님 v5 요구: 수량 = 큰 폰트 (눈에 들어오게) + 음수 부호 제거 (= 절대값 + side 아이콘)
       // Binance positionAmt: SHORT=음수, LONG=양수 → 사장님 SHORT 운영 시 모든 수량이 음수 표시 = 시각 부담
@@ -503,9 +503,9 @@ async function refreshStrategies() {
       // PnL/ROI — 4 줄 stack: PnL + 포지션 ROI + 전략 ROI + 🆕 SL 한도 시각 (2026-06-03)
       const posSign = positionRoi > 0 ? '+' : '';
       const stratSign = strategyRoi > 0 ? '+' : '';
-      const posTooltip = `포지션 ROI = pnl ÷ 현재 사용 마진 × 100 (Binance UI 와 일치). 마진=${positionMargin.toFixed(2)} USDT`;
-      const stratTooltip = `전략 ROI = pnl × 레버리지 ÷ 전체 전략 자본 × 100 (전체 단계 모두 진입 시 = 포지션 ROI). 자본=${sCap.toFixed(2)} USDT, lev=${sLev}x`;
-      // 2026-06-03 SL 한도 시각화 (사장님 사상 PR #57: 레버리지 무관, 투자금 × sl_pct / 100)
+      const posTooltip = `포지션 ROI = pnl ÷ 현재 사용 마진 x 100 (Binance UI 와 일치). 마진=${positionMargin.toFixed(2)} USDT`;
+      const stratTooltip = `전략 ROI = pnl x 레버리지 ÷ 전체 전략 자본 x 100 (전체 단계 모두 진입 시 = 포지션 ROI). 자본=${sCap.toFixed(2)} USDT, lev=${sLev}x`;
+      // 2026-06-03 SL 한도 시각화 (사장님 사상 PR #57: 레버리지 무관, 투자금 x sl_pct / 100)
       // 사장님이 SL 발동까지 얼마나 남았는지 즉시 인지 — 운영 안전 핵심.
       const slPctNum = Number(s.stop_loss_percent_of_capital || 0);
       const slThreshold = (sCap > 0 && slPctNum > 0) ? sCap * slPctNum / 100 : 0;
@@ -519,7 +519,7 @@ async function refreshStrategies() {
       else if (slProgressPct >= 30) { slClass = 'text-yellow-400'; }
       else if (slProgressPct > 0) { slClass = 'text-slate-400'; }
       const slTooltip = slThreshold > 0
-        ? `SL 한도: -${slThreshold.toFixed(2)} USDT (투자금 ${sCap.toFixed(2)} × ${slPctNum}%, 레버리지 무관 — 사장님 사상 PR #57). 진행률 ${slProgressPct.toFixed(1)}% (남은 ${slRemainingUsd.toFixed(2)} USDT). 모든 단계 진입 후 발동.`
+        ? `SL 한도: -${slThreshold.toFixed(2)} USDT (투자금 ${sCap.toFixed(2)} x ${slPctNum}%, 레버리지 무관 — 사장님 사상 PR #57). 진행률 ${slProgressPct.toFixed(1)}% (남은 ${slRemainingUsd.toFixed(2)} USDT). 모든 단계 진입 후 발동.`
         : 'SL 정보 없음';
       // 2026-06-08 사장님 v4 요구: PnL stack 4줄 → 2줄 압축 (가로 줄수 최대 축소).
       // 1줄: PnL +0.68 (+1.37%)   ← 메인 (font-semibold)
@@ -731,7 +731,7 @@ function openManualTPModal(strategyId, symbol, side, currentQty, avgEntry, lever
       <div id="manual-tp-preview" style="background:#0f172a; padding:12px; border-radius:4px; margin-bottom:16px; border-left:3px solid #16a34a">
         <div style="color:#86efac; font-size:13px; margin-bottom:4px">📊 청산 미리보기:</div>
         <div id="manual-tp-preview-content" style="color:#fbbf24; font-family:monospace; font-size:14px">
-          ${(currentQty * 0.25).toFixed(4)} qty (= ${currentQty.toFixed(4)} × 25%)
+          ${(currentQty * 0.25).toFixed(4)} qty (= ${currentQty.toFixed(4)} x 25%)
         </div>
         <div id="manual-tp-preview-remaining" style="color:#94a3b8; font-family:monospace; font-size:12px; margin-top:4px">
           남은 수량: ${(currentQty * 0.75).toFixed(4)} qty
@@ -763,7 +763,7 @@ function _updateManualTPPreview(currentQty) {
   const target = currentQty * percent / 100;
   const remaining = currentQty - target;
   document.getElementById('manual-tp-preview-content').textContent =
-    `${target.toFixed(4)} qty (= ${currentQty.toFixed(4)} × ${percent}%)`;
+    `${target.toFixed(4)} qty (= ${currentQty.toFixed(4)} x ${percent}%)`;
   document.getElementById('manual-tp-preview-remaining').textContent =
     `남은 수량: ${remaining.toFixed(4)} qty`;
 }
