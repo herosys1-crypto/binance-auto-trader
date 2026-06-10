@@ -126,15 +126,26 @@ async function loadPrevBlueprint(strategyId, silent) {
     }
     // 시세 다시 로드 → 자동으로 현재가가 cm-start-price 에 채워짐 → _refreshLiveCalc 트리거
     await loadCmMarketInfo();
-    // 🌟 2026-06-10 v21 사장님 critical (= VELVETUSDT 시작가 silent bug 영구 차단):
-    // loadCmMarketInfo() 완료 후 = cm-start-price 가 신 현재가로 채워졌는지 강제 검증
-    // = 만약 빈값이면 = 사장님께 명시적 알림 + 「현재가」 버튼 강조
+    // 🌟 2026-06-10 v29 사장님 신 critical 사상 (= STGUSDT 사례!):
+    // 사장님 명시: "현재가를 실행하면 정상적으로 나오는데 이럴경우 수정을 클릭하면
+    //              각각 심볼의 현재가를 불러오면 되는것 같은데"
+    // = 사장님 의도 = 「불러오기」 클릭 시 = 무조건 현재가로 = 자동 덮어쓰기!
+    // = silent bug 원천 차단!
+    //
+    // 옛 v21 (= toast 알림 만):
+    //   loadCmMarketInfo() → cm-market-info L60 = 빈값일 때만 자동 → 옛 값 보존 = silent bug!
+    //
+    // 신 v29 (= 사장님 사상 강제 적용):
+    //   loadCmMarketInfo() 완료 후 = 무조건 fillStartPrice('current') 호출
+    //   = 옛 strategy 의 옛 시작가 = 무조건 신 현재가로 덮어쓰기!
     try {
-      const startPriceEl = document.getElementById('cm-start-price');
-      const currentVal = startPriceEl ? startPriceEl.value : '';
-      if (!currentVal || parseFloat(currentVal) <= 0) {
-        // 현재가 자동 채움 실패 = 사장님 즉시 알림!
-        toast('⚠️ 시작가 자동 채움 실패! 「현재가」 버튼 클릭하세요 (= silent bug 차단!)', 'warning');
+      if (typeof fillStartPrice === 'function' && _cmCurrentPrice && !isNaN(_cmCurrentPrice)) {
+        fillStartPrice('current');  // 🌟 사장님 사상: 무조건 현재가 강제!
+        toast('✅ 시작가 = 현재가 자동 적용 (사장님 사상 v29)', 'success');
+      } else {
+        // 현재가 조회 실패 = 사장님 즉시 알림 + 빨간 테두리
+        const startPriceEl = document.getElementById('cm-start-price');
+        toast('⚠️ 현재가 조회 실패! 「현재가」 버튼 수동 클릭', 'warning');
         if (startPriceEl) {
           startPriceEl.style.border = '2px solid #f00';
           startPriceEl.style.backgroundColor = '#fee';
@@ -143,12 +154,9 @@ async function loadPrevBlueprint(strategyId, silent) {
             startPriceEl.style.backgroundColor = '';
           }, 8000);
         }
-      } else if (typeof _cmCurrentPrice !== 'undefined' && _cmCurrentPrice && Math.abs(parseFloat(currentVal) - _cmCurrentPrice) / _cmCurrentPrice > 0.1) {
-        // 채워진 값 vs _cmCurrentPrice 차이 > 10% = silent bug 가능성!
-        toast(`⚠️ 시작가 ${currentVal} vs 현재가 ${_cmCurrentPrice} = 큰 차이! 확인하세요!`, 'warning');
       }
     } catch (e) {
-      console.warn('[v21] 시작가 자동 검증 실패:', e);
+      console.warn('[v29] 시작가 자동 적용 실패:', e);
     }
   } catch (e) { toast('불러오기 실패: '+e.message, 'error'); }
 }
