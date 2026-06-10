@@ -375,12 +375,10 @@ async function refreshStrategies() {
       const closeReason = s.last_close_reason || 'NONE';
       const stageBar = s.current_stage > 0 ? renderStageBar(s.current_stage, totalStages) : '<span class="text-slate-500">대기</span>';
       const tpBar = renderTpBar(tpCount, totalTps, closeReason);
-      // 🌟 2026-06-08 사장님 TP1 임계 옵션 드롭다운 (Phase 3 — spec).
-      // 위치: 「익절」 라벨 옆 (= 사장님 캡쳐 의도, 단계 컬럼 영역).
-      // 활성 strategy 만 노출 (= TERMINAL X). 변경 즉시 PATCH = 다음 risk cycle 적용.
-      // 정상 모드: TP1 = 사장님 옵션 (10/15/20/25)
-      // Crisis 모드: 사장님 옵션 무시 = TP1 +5% 고정 (옛 CRISIS_OVERRIDE 그대로)
-      // 🚨 event 3개 stopPropagation 필수 (parent <tr onclick> 차단)
+      // 🌟 2026-06-10 v30 사장님 TP1 임계 옵션 드롭다운 (Crisis 폐기 후!)
+      // 사장님 결정: Crisis = 영구 비활성, 사장님 옵션 = 항상 우선!
+      // 사장님 = 상황에 따라 = 즉시 선택 = 즉시 적용!
+      // 활성 strategy 만 노출 (= TERMINAL X)
       const _tp1Pct = (s.tp1_pct_override != null) ? Number(s.tp1_pct_override) : 10;
       const _isActiveForTp1 = !TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
       const tp1ThresholdSelect = _isActiveForTp1
@@ -389,7 +387,7 @@ async function refreshStrategies() {
                   onchange="event.stopPropagation(); updateTp1Threshold(${s.id}, this.value)"
                   class="bg-slate-800 border border-slate-600 rounded text-slate-300"
                   style="font-size:10px;padding:0 2px;margin-left:4px;cursor:pointer"
-                  title="TP1 임계 옵션 — 정상 모드: 사장님 옵션 (10/15/20/25) 적용. Crisis 모드: 옵션 무시 = TP1 +5% 고정 (빠른 회복 익절). 운영 중 변경 즉시 적용. spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md">
+                  title="🌟 TP1 임계 옵션 (사장님 자율) — 10/15/20/25 즉시 선택 + 즉시 적용! Crisis 모드 = 영구 비활성 (v30). 사장님 상황 인지 = 임의 조정.">
             <option value="10" ${_tp1Pct===10 ? 'selected':''}>TP1 +10%</option>
             <option value="15" ${_tp1Pct===15 ? 'selected':''}>TP1 +15%</option>
             <option value="20" ${_tp1Pct===20 ? 'selected':''}>TP1 +20%</option>
@@ -814,9 +812,9 @@ async function updateTrailingRetrace(strategyId, pctStr) {
 }
 
 // 🌟 2026-06-08 사장님 TP1 임계 옵션 (Phase 3)
-// spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md
-// 정상 모드: TP1 = 사장님 옵션 (10/15/20/25)
-// Crisis 모드: 사장님 옵션 무시 = TP1 +5% 고정 (옛 CRISIS_OVERRIDE 그대로)
+// 🌟 2026-06-10 v30 사장님 결정: Crisis 폐기 + 사장님 옵션 = 항상 우선!
+// 사장님 명시: "TP1 단계 시작을 전략에 세팅을 상황에 따라 선택하면 바로 적용되어야 해"
+// = 사장님 선택 = 즉시 PATCH + 즉시 적용 (= 다음 10초 risk cycle)
 async function updateTp1Threshold(strategyId, pctStr) {
   const pct = Number(pctStr);
   if (![10, 15, 20, 25].includes(pct)) {
@@ -828,7 +826,7 @@ async function updateTp1Threshold(strategyId, pctStr) {
       method: 'PATCH',
       body: { pct: pct },
     });
-    toast(`✅ TP1 +${pct}% 적용 (Crisis 시 +5% 고정)`, 'success');
+    toast(`✅ TP1 +${pct}% 즉시 적용 (사장님 자율)`, 'success');
     refreshStrategies();
   } catch (e) {
     toast(`❌ 변경 실패: ${e.message || e}`, 'error');

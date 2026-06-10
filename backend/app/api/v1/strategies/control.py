@@ -881,12 +881,11 @@ def update_tp1_threshold(
         severity="INFO",
         title=f"📍 TP1 임계 변경 — {strategy.symbol} {strategy.side}",
         message=(
-            f"사장님 TP1 임계 옵션 변경: "
-            f"{old_pct or '10 (default)'} → {payload.pct}%. "
-            f"정상 모드 = +{payload.pct}% 도달 시 TP1 발동. "
-            f"🌟 v23 신 사상 (2026-06-10): Crisis 모드 = 사장님 옵션 우선 적용 (옛 +5% 강제 X).\n"
-            f"{'🚨 기존 Crisis 모드 = 사장님 변경으로 자동 해제 + 24시간 재진입 차단!' if _crisis_was_active else ''}\n"
-            f"다음 risk evaluation cycle 부터 즉시 적용."
+            f"🌟 사장님 TP1 임계 옵션 변경 (v30 - Crisis 영구 비활성):\n"
+            f"{old_pct or '10 (default)'}% → {payload.pct}%\n"
+            f"= +{payload.pct}% 도달 시 TP1 발동 (= 사장님 자율 설정).\n"
+            f"= 다음 risk cycle (= 최대 10초) 즉시 적용!\n"
+            f"{'🚨 기존 Crisis 모드 자동 해제!' if _crisis_was_active else ''}"
         ),
         event_payload={
             "old_pct": str(old_pct) if old_pct is not None else None,
