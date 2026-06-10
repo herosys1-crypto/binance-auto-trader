@@ -334,6 +334,15 @@ async function refreshStrategies() {
       const position = _positionMargin(s);
       return planned > 0 ? (position / planned * 100) : 0;
     };
+    // 🎨 2026-06-10 v32 사장님 critical fix: ROI 정렬 client-side 직접 계산
+    // 옛 v31 silent bug: backend roi_pct NULL = 모두 0 정렬 = ID 순서 = 이상!
+    // 신 v32: positionRoi = pnl / positionMargin × 100 (= 사장님 사진 ROI 와 동일!)
+    const _positionRoi = (s) => {
+      const pnl = Number(s.unrealized_pnl || 0);
+      const pmargin = _positionMargin(s);
+      // position 없으면 = 0 (= 정렬 가장 아래로)
+      return pmargin > 0 ? (pnl / pmargin * 100) : 0;
+    };
     const sorted = [...visible].sort((a, b) => {
       const aTerm = TERMINAL_STATUSES.includes((a.status || '').toUpperCase()) ? 1 : 0;
       const bTerm = TERMINAL_STATUSES.includes((b.status || '').toUpperCase()) ? 1 : 0;
@@ -344,10 +353,9 @@ async function refreshStrategies() {
         case 'sl_progress_desc': return _slProgress(b) - _slProgress(a);  // 🚨 SL 임박
         case 'pnl_asc': return Number(a.unrealized_pnl || 0) - Number(b.unrealized_pnl || 0);  // 📉 손실 큰 순 (USDT)
         case 'pnl_desc': return Number(b.unrealized_pnl || 0) - Number(a.unrealized_pnl || 0);  // 📈 이익 큰 순 (USDT)
-        // 🎨 2026-06-10 v31 사장님 요구: 손실율 (= ROI %) 정렬 추가!
-        // roi_pct (= 포지션 ROI = pnl/현재마진×100) 사용. NULL = 0 fallback.
-        case 'roi_asc': return Number(a.roi_pct || 0) - Number(b.roi_pct || 0);  // 📉 손실율 큰 순 (%)
-        case 'roi_desc': return Number(b.roi_pct || 0) - Number(a.roi_pct || 0);  // 📈 이익율 큰 순 (%)
+        // 🎨 2026-06-10 v32 fix: ROI 정렬 = client-side _positionRoi 사용 (= 사장님 사진과 동일!)
+        case 'roi_asc': return _positionRoi(a) - _positionRoi(b);  // 📉 손실율 큰 순 (%)
+        case 'roi_desc': return _positionRoi(b) - _positionRoi(a);  // 📈 이익율 큰 순 (%)
         case 'margin_ratio_desc': return _marginRatio(b) - _marginRatio(a);  // 💯 마진율 (= 진입률 %) 큰 순
         case 'position_margin_desc': return _positionMargin(b) - _positionMargin(a);  // 🔒 실 투입 USDT 큰 순
         case 'stage_desc': return (b.current_stage || 0) - (a.current_stage || 0);  // 📊 단계 많은 순
