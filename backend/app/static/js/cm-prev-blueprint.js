@@ -143,6 +143,17 @@ async function loadPrevBlueprint(strategyId, silent) {
     }
     // 시세 다시 로드 (= 표시만 갱신, 시작가는 = 옛 값 보존!)
     await loadCmMarketInfo();
+    // 🚨 2026-06-11 v42 사장님 critical fix: 첫 화면 = _refreshLiveCalc 강제 호출!
+    // 사장님 사진 1: 시작가 = 4.0995 (= 옛!) 인데 = 단계별 진입가 = 빈값!
+    // 원인: loadPrevBlueprint 후 = onCapitalsChange() 호출은 했지만 = _refreshLiveCalc 호출 X
+    // fix: _refreshLiveCalc() 강제 호출 = 단계별 진입가 자동 계산 + 표시!
+    try {
+      if (typeof _refreshLiveCalc === 'function') {
+        _refreshLiveCalc();
+      }
+    } catch (e) {
+      console.warn('[v42] _refreshLiveCalc 호출 실패:', e);
+    }
     try {
       // v38 사장님 사상: 시작가 = 옛 값 그대로 유지! (= fillStartPrice 호출 X)
       // 사장님이 = 「현재가」 버튼 직접 클릭 시 = 현재가 적용!
