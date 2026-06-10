@@ -63,7 +63,11 @@ TP_FINAL_QTY_RATIO_PCT: Final[Decimal] = Decimal("100")  # TP10 default
 # 피크가 이 % 이상 도달했어야 trailing armed.
 TRAILING_PEAK_THRESHOLD_PCT: Final[Decimal] = Decimal("5")
 # 피크 대비 이 % 회귀 시 전량 청산.
-TRAILING_RETRACE_PCT: Final[Decimal] = Decimal("5")
+# 🌟 2026-06-10 v36 사장님 결정: default 5 → 10 (더 큰 익절 잠재력!)
+# 사장님: "tp3단계 익절후 최고가 대비 -5% 하락하면 청산을 하는데
+#          기본을 10%으로 해주고 상황에 따라 설정할수 있게"
+# = default 10% 변경 + 옵션 5/10/15/20 그대로 (= 사장님 자율)
+TRAILING_RETRACE_PCT: Final[Decimal] = Decimal("10")
 # Trailing 발동 최소 TP index (TP3 이상부터 활성).
 TRAILING_MIN_TP_INDEX: Final[int] = 3
 # 🌟 2026-06-09 v8 사장님 BEATUSDT 사례로 완화 (= 1단계만 진입해도 트레일링 발동):

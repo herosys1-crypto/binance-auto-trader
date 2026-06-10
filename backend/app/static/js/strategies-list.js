@@ -531,7 +531,8 @@ async function refreshStrategies() {
         : '';
       // 🌟 2026-06-08 사장님 trailing retrace 옵션 드롭다운 (Phase 3 — spec).
       // 활성 strategy 만 노출 (= TERMINAL X). 변경 즉시 PATCH = 다음 risk cycle 적용.
-      const _trailingRetracePct = (s.trailing_retrace_pct != null) ? Number(s.trailing_retrace_pct) : 5;
+      // 🌟 2026-06-10 v36 사장님 결정: default 5 → 10 (사장님 큰 익절 잠재력!)
+      const _trailingRetracePct = (s.trailing_retrace_pct != null) ? Number(s.trailing_retrace_pct) : 10;
       // 🚨 2026-06-08 fix: 드롭다운 클릭 시 = parent <tr onclick="selectStrategy()"> bubble → 다른 페이지 이동
       // = onclick + onmousedown + onchange 모두 = event.stopPropagation() 필수
       const trailingRetraceSelect = (!TERMINAL_STATUSES.includes((s.status || '').toUpperCase()) && hasPosition)
