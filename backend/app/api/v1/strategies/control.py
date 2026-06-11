@@ -362,56 +362,32 @@ def update_strategy_settings_in_place(
             old_cfg["last_stage_trigger_percent"] = str(payload.last_stage_trigger_percent)
         new_tpl.stages_config = old_cfg
 
-        # 🚨🚨🚨 2026-06-11 사장님 critical 영구 fix (BEATUSDT #110 강제 청산 silent bug!):
-        # 사장님 BEATUSDT #110 = 6단계 취소 → total_capital 6100 → 2700 (-3400!) → SL 한도 축소 → 청산!
-        # 옛 silent bug: total_capital = sum(new_capitals) = 단계별 capital 합만!
-        # → 사장님 추가 증거금 (PR #56) + 포지션 추가 (PR #56) = **모두 silent 삭제!**
-        # → 사장님 자본 보호 노력 = 무시 = 청산!
+        # 🚨🚨🚨 2026-06-11 사장님 critical 영구 fix v2 (BEATUSDT #110 강제 청산 사건!):
         #
-        # 🛡 신 fix = diff 방식 (= 사장님 추가 자본 영구 보호!):
-        # old_capital_sum = 옛 단계별 합
-        # new_capital_sum = 새 단계별 합
-        # diff = new - old (= 사장님 의도 = 단계 capital 변경 분만!)
-        # total_capital += diff (= 옛 누적 + 차이 = 추가 자본 100% 보호!)
+        # ⛔ 옛 PR #56 / PR #57 = silent bug!
+        # 옛: total_capital = sum(new_capitals)  → 단계 변경 시 SL 한도 갑자기 변경!
+        # 옛: total_capital = 옛 + diff           → 여전히 미진입 단계 SL 포함!
         #
-        # 사장님 BEATUSDT #110 예시:
-        # 옛 capitals = [1200, ...] 합 = X
-        # 새 capitals = [...] 합 = Y
-        # diff = Y - X (= 사장님 의도!)
-        # total_capital = 6100 + diff (= 추가 증거금 + 포지션 추가 보호!)
-        try:
-            _old_capital_sum = sum(
-                (Decimal(str(c)) for c in old_capitals if c is not None),
-                Decimal("0"),
-            )
-            _new_capital_sum = sum(
-                (Decimal(str(c)) for c in new_capitals if c is not None),
-                Decimal("0"),
-            )
-            _capital_diff = _new_capital_sum - _old_capital_sum
-            _old_total = Decimal(str(strategy.total_capital or 0))
-            _new_total = _old_total + _capital_diff
-            # = 추가 자본 보호 + 단계 변경 반영!
-            if _new_total > 0:
-                strategy.total_capital = _new_total
-                logger.info(
-                    "[update-settings] 🛡 total_capital diff 방식 (사장님 추가 자본 보호!) "
-                    "strategy_id=%s old_capitals_sum=%s new_capitals_sum=%s diff=%s "
-                    "old_total=%s new_total=%s",
-                    strategy.id, _old_capital_sum, _new_capital_sum, _capital_diff,
-                    _old_total, _new_total,
-                )
-            else:
-                logger.warning(
-                    "[update-settings] 🚨 diff 적용 시 total_capital <= 0! "
-                    "strategy_id=%s old=%s diff=%s new=%s — 옛 total 유지!",
-                    strategy.id, _old_total, _capital_diff, _new_total,
-                )
-        except Exception as _e:
-            logger.warning(
-                "[update-settings] total_capital 동기화 실패 strategy_id=%s err=%s",
-                strategy.id, _e,
-            )
+        # 🛡 사장님 진짜 critical 사상 (2026-06-11 영구!):
+        #   "총 투입된 자금에서 -80% 일 때 강제 종료!"
+        #   = 이미 투입된 자본만 SL 계산!
+        #   = 미진입 단계 = SL 계산 제외!
+        #   = 단계 capital 변경 = SL 한도 영향 X!
+        #
+        # 🛡 신 fix v2:
+        #   total_capital = 실제 투입 자본만! (= 진입 단계 진입 시 += , 증거금/포지션 추가 시 += )
+        #   단계 capital 변경 = total_capital 영향 X! (= 미진입 단계는 계획만!)
+        #
+        # 사장님 BEATUSDT #110:
+        # - 14:52: total_capital = 6100 (= 사장님 실제 투입 자본!)
+        # - 6단계 취소 = 미진입 단계만 변경 = total_capital 변경 X!
+        # - 15:07: total_capital = 6100 그대로! (= SL 한도 보존!)
+        # - 사장님 자본 = 영구 보호!
+        logger.info(
+            "[update-settings] 🛡 단계 capital 변경 = total_capital 영향 X (사장님 critical 사상!) "
+            "strategy_id=%s old_total=%s — 옛 logic 보존 (실제 투입 자본만 SL 계산!)",
+            strategy.id, strategy.total_capital,
+        )
 
     db.add(new_tpl)
     db.flush()
