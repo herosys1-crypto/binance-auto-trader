@@ -362,30 +362,88 @@ def update_strategy_settings_in_place(
             old_cfg["last_stage_trigger_percent"] = str(payload.last_stage_trigger_percent)
         new_tpl.stages_config = old_cfg
 
-        # 🚨🚨🚨 2026-06-11 사장님 critical 영구 fix v2 (BEATUSDT #110 강제 청산 사건!):
+        # 🚨🚨🚨 2026-06-11 사장님 critical 영구 fix v3 (BEATUSDT #110 강제 청산 + 사전 차단!):
         #
-        # ⛔ 옛 PR #56 / PR #57 = silent bug!
-        # 옛: total_capital = sum(new_capitals)  → 단계 변경 시 SL 한도 갑자기 변경!
-        # 옛: total_capital = 옛 + diff           → 여전히 미진입 단계 SL 포함!
-        #
-        # 🛡 사장님 진짜 critical 사상 (2026-06-11 영구!):
+        # 🛡 사장님 사상 (2026-06-11 영구!):
         #   "총 투입된 자금에서 -80% 일 때 강제 종료!"
         #   = 이미 투입된 자본만 SL 계산!
         #   = 미진입 단계 = SL 계산 제외!
         #   = 단계 capital 변경 = SL 한도 영향 X!
+        #   "미진입 단계 삭제 시 = 청산 위험 = 사전 차단!" ⭐ 신!
         #
-        # 🛡 신 fix v2:
-        #   total_capital = 실제 투입 자본만! (= 진입 단계 진입 시 += , 증거금/포지션 추가 시 += )
-        #   단계 capital 변경 = total_capital 영향 X! (= 미진입 단계는 계획만!)
+        # 🛡 신 fix v3 (다층 안전망!):
+        #   1. total_capital = 변경 X (= 사장님 사상!)
+        #   2. 추가 안전망: 단계 capital 감소 시 = SL 위험 시뮬레이션 = 차단!
         #
-        # 사장님 BEATUSDT #110:
-        # - 14:52: total_capital = 6100 (= 사장님 실제 투입 자본!)
-        # - 6단계 취소 = 미진입 단계만 변경 = total_capital 변경 X!
-        # - 15:07: total_capital = 6100 그대로! (= SL 한도 보존!)
-        # - 사장님 자본 = 영구 보호!
+        # 시뮬레이션 logic:
+        # - 옛 logic (만약 적용 시) total_capital = sum(new_capitals)
+        # - SL 한도 = (신 total_capital / lev) × sl_pct
+        # - 현재 손실 (realized + unrealized) > SL 한도 → ⛔ 차단!
+        # - 사장님 = "단계 삭제로 인한 청산 위험!" 사전 인지!
+
+        # 🚨 사전 안전 검증 = 단계 capital 변경 시!
+        try:
+            from decimal import Decimal as _D
+            _new_capital_sum = sum(
+                (_D(str(c)) for c in new_capitals if c is not None),
+                _D("0"),
+            )
+            _old_capital_sum = sum(
+                (_D(str(c)) for c in old_capitals if c is not None),
+                _D("0"),
+            )
+            # capital 감소 시만 검증! (증가 시 = 안전!)
+            if _new_capital_sum < _old_capital_sum and _new_capital_sum > 0:
+                # 현재 손실 계산
+                _current_loss = _D(str(strategy.realized_pnl or 0)) + _D(str(strategy.unrealized_pnl or 0))
+                # SL 한도 시뮬레이션 = 옛 logic 인 경우!
+                _sim_total = _new_capital_sum  # = 옛 PR #56 logic 시뮬!
+                _lev = _D(str(strategy.leverage or 1))
+                _sim_margin = _sim_total / _lev if _lev > 0 else _sim_total
+                # sl_pct 조회
+                from app.models.strategy_template import StrategyTemplate as _ST
+                _tpl = db.get(_ST, strategy.strategy_template_id) if strategy.strategy_template_id else None
+                _sl_pct = (
+                    _D(str(_tpl.stop_loss_percent_of_capital))
+                    if _tpl and _tpl.stop_loss_percent_of_capital and _D(str(_tpl.stop_loss_percent_of_capital)) > 0
+                    else _D("80")
+                )
+                _sim_threshold = _sim_margin * (_sl_pct / _D("100"))
+                # 위험 검증!
+                if _current_loss <= -_sim_threshold:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=(
+                            f"⛔ [사전 차단] 미진입 단계 삭제 / 축소 시 = 청산 위험!\n\n"
+                            f"📊 현재 손실: {_current_loss:.2f} USDT\n"
+                            f"📉 신 SL 한도 (시뮬레이션): {-_sim_threshold:.2f} USDT\n"
+                            f"⚠️ 현재 손실 > 신 한도 = 즉시 청산 위험!\n\n"
+                            f"옛 단계 capital 합: {_old_capital_sum} USDT\n"
+                            f"신 단계 capital 합: {_new_capital_sum} USDT (= -{_old_capital_sum - _new_capital_sum})\n\n"
+                            f"🛡 사장님 자본 보호 = 단계 축소 차단!\n"
+                            f"💡 권장: 증거금 추가 / 포지션 추가 / 손실 회복 후 재시도!"
+                        ),
+                    )
+                # 위험 X = 정보 로그
+                logger.info(
+                    "[update-settings] 🛡 단계 capital 감소 안전 검증 통과 strategy_id=%s "
+                    "old_sum=%s new_sum=%s current_loss=%s sim_threshold=%s",
+                    strategy.id, _old_capital_sum, _new_capital_sum,
+                    _current_loss, -_sim_threshold,
+                )
+        except HTTPException:
+            raise
+        except Exception as _e:
+            logger.warning(
+                "[update-settings] 사전 안전 검증 실패 strategy_id=%s err=%s — 계속 진행",
+                strategy.id, _e,
+            )
+
+        # 🛡 단계 capital 변경 = total_capital 영향 X (= 사장님 critical 사상!)
+        # = 실제 투입 자본 (total_capital) = 진입 / 증거금 / 포지션 추가 시만 변경!
         logger.info(
-            "[update-settings] 🛡 단계 capital 변경 = total_capital 영향 X (사장님 critical 사상!) "
-            "strategy_id=%s old_total=%s — 옛 logic 보존 (실제 투입 자본만 SL 계산!)",
+            "[update-settings] 🛡 단계 capital 변경 = total_capital 영향 X (= 사장님 사상!) "
+            "strategy_id=%s old_total=%s",
             strategy.id, strategy.total_capital,
         )
 
