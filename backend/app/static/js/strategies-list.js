@@ -685,7 +685,10 @@ async function refreshStrategies() {
             <a href="https://www.binance.com/en/futures/${s.symbol}" target="_blank" rel="noopener"
                onclick="event.stopPropagation()"
                class="text-blue-300 hover:text-blue-100 hover:underline"
-               title="🔗 ${s.symbol} — 바이낸스 선물 차트 새 탭 열기">${s.symbol}</a>${renderWhitelistBadge(s.symbol)}<br>
+               title="🔗 ${s.symbol} — 바이낸스 선물 차트 새 탭 열기">${s.symbol}</a>${renderWhitelistBadge(s.symbol)}
+            <button onclick="event.stopPropagation(); if(window.openSymbolTradingModal) window.openSymbolTradingModal('${s.symbol}');"
+                    title="📊 ${s.symbol} 차트 + Order Book (내장 모달)"
+                    style="background:#1e3a5f;color:#7dd3fc;border:0;border-radius:3px;padding:1px 5px;font-size:10px;cursor:pointer;margin-left:3px;">📊</button><br>
             <span class="text-slate-500" style="font-size:12px" title="전략 생성 일시">${createdShort}</span>
           </div>
         </td>
