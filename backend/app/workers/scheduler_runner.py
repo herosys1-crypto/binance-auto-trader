@@ -29,6 +29,7 @@ from app.workers.spec_audit_worker import run_spec_audit_once  # 🌟 v48: 코�
 from app.workers.auto_fix_proposer import run_auto_fix_proposer_once  # 🌟 v49: 자동 fix 제안 (= Phase 3 worker 6!)
 from app.workers.memory_consolidator import run_memory_consolidator_once  # 🌟 v50: 매일 학습 + 메모리 갱신 (= Phase 3 100% 완성!)
 from app.workers.mainnet_safety_worker import run_mainnet_safety_check_once  # 🌟 v51: mainnet 안전 점검 (= #23 옛 미해결!)
+from app.workers.settings_sync_worker import run_settings_sync_once  # 🌟 v52: settings 일관성 (= #125 옛 미해결!)
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,8 @@ def start_scheduler() -> None:
     scheduler.add_job(guarded_job("memory_consolidator", 600, run_memory_consolidator_once), trigger=CronTrigger(hour=18, minute=0), id="memory_consolidator", replace_existing=True, max_instances=1, coalesce=True)
     # 🌟 2026-06-11 v51 신: mainnet_safety_worker (= #23 옛 미해결 = mainnet 진입 직전 점검!)
     scheduler.add_job(guarded_job("mainnet_safety", 300, run_mainnet_safety_check_once), trigger=IntervalTrigger(hours=1), id="mainnet_safety", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-06-11 v52 신: settings_sync_worker (= #125 옛 미해결!)
+    scheduler.add_job(guarded_job("settings_sync", 300, run_settings_sync_once), trigger=IntervalTrigger(hours=1), id="settings_sync", replace_existing=True, max_instances=1, coalesce=True)
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.

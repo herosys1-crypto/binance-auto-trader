@@ -1318,3 +1318,39 @@ def get_auto_entry_diagnostic(
         "strategies": results,
         "note": "🚨 = 자동 진입 차단 중 (사장님 즉시 조치 필요!). PR 머지 + 배포 + Redis cooldown 삭제로 해결.",
     }
+
+
+# ============================================================
+# 🌟 2026-06-11 #21 옛 미해결: 메인 계정 「읽기 전용 모드」
+# 사장님 운영 모니터링 = sub-account + main 통합!
+# ============================================================
+@router.get("/diagnostic/main-account-readonly")
+def get_main_account_readonly_view(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """메인 계정 = 「읽기 전용 모드」 통합 모니터링.
+    
+    사장님 = sub-account 거래 + main 잔액 모니터링!
+    """
+    from app.models.exchange_account import ExchangeAccount
+    
+    # 모든 active 계정
+    accs = db.execute(
+        select(ExchangeAccount).where(ExchangeAccount.is_active.is_(True))
+    ).scalars().all()
+    
+    result = {
+        "total_accounts": len(accs),
+        "accounts": [],
+        "note": "사장님 통합 모니터링 = main + sub-account!",
+    }
+    for a in accs:
+        result["accounts"].append({
+            "id": a.id,
+            "name": a.name,
+            "is_testnet": a.is_testnet,
+            "exchange": a.exchange,
+            "type": "MAIN" if "main" in (a.name or "").lower() else "SUB",
+        })
+    return result
