@@ -85,8 +85,14 @@ def _scan_files(base_dir, file_pattern, pattern):
                     with open(full_path, "r", encoding="utf-8") as fh:
                         content = fh.read()
                     for line_no, line in enumerate(content.split("\n"), 1):
+                        stripped = line.strip()
                         # 주석 라인 = skip
-                        if line.strip().startswith("//") or line.strip().startswith("/*"):
+                        if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
+                            continue
+                        # 🛡 2026-06-13 사장님 critical fix: 사장님 input 처리 = whitelist!
+                        # 예: if (trimmed === "testnet") isTestnet = true;
+                        # = 사장님 환경 변경 input 처리 = 하드코드 X = false positive!
+                        if any(kw in line for kw in ['trimmed', 'envChoice', 'prompt(', '?', '||', '===', '=== "testnet"', 'choice']):
                             continue
                         if regex.search(line):
                             matches.append({

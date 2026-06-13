@@ -99,7 +99,11 @@ async function loadPrevBlueprint(strategyId, silent) {
       if (pctEl) pctEl.value = bp[`tp${n}_percent`] || '';
       if (qtyEl) qtyEl.value = bp[`tp${n}_qty_ratio`] || '';
     }
-    document.getElementById('cm-sl-pct').value = bp.stop_loss_percent_of_capital;
+    // 🌟 2026-06-13 사장님 critical: 옛 strategy 로드 시 = sl_pct 100 강제!
+    // 사장님 명시: "100% 손실까지 운영한다고 했는데 일단 100%로 설정해둬"
+    // = 옛 strategy = 80 등 = 신 사상 = 100 강제 적용!
+    const _loadedSl = Number(bp.stop_loss_percent_of_capital || 0);
+    document.getElementById('cm-sl-pct').value = (_loadedSl >= 100) ? _loadedSl : 100;
     // 2026-05-14: 크라이시스 dropdown 제거됨 (사용자 결정 「손절만 사용」).
     // 새 strategy 는 자동으로 -100 (비활성) 적용 — _collectTpSl 참조.
     // 🌟 2026-06-11 v38 사장님 신 critical 사상 (= BEATUSDT 수정 사례!)

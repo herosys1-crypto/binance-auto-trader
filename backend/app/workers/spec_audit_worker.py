@@ -96,7 +96,7 @@ def _mark_dedup(redis, name):
 
 
 def _scan_files(base_dir, file_pattern, pattern):
-    """디렉토리 = 패턴 일치 파일 검색."""
+    """디렉토리 = 패턴 일치 파일 검색. 주석 라인 = skip!"""
     matches = []
     if not os.path.exists(base_dir):
         return matches
@@ -112,6 +112,11 @@ def _scan_files(base_dir, file_pattern, pattern):
                     with open(full_path, "r", encoding="utf-8") as fh:
                         content = fh.read()
                     for line_no, line in enumerate(content.split("\n"), 1):
+                        # 🛡 2026-06-13 사장님 critical fix: 주석 라인 skip = false positive 차단!
+                        # 옛 silent bug: 옛 패턴 = 주석 안에 있어도 = 매칭 = 사장님 시끄러움!
+                        stripped = line.strip()
+                        if stripped.startswith("#") or stripped.startswith("//") or stripped.startswith("*") or stripped.startswith("/*"):
+                            continue
                         if regex.search(line):
                             matches.append({"file": full_path, "line": line_no, "code": line.strip()[:120]})
                             break  # 파일당 1건만
