@@ -279,16 +279,23 @@ function _refreshLiveCalc() {
       if (entryEl) entryEl.textContent = entryPrice.toFixed(decimals);
       if (avgEl) avgEl.textContent = avg.toFixed(decimals);
       if (liqEl) {
-        // 🌟 2026-06-13 사장님 critical fix: 청산가 = 증거금 포함! + col-span-1 (= 헤더 일치!)
-        // 옛 silent bug: col-span-2 = grid overflow = 청산가 화면 X!
-        // 신 fix: liqWithMargin (= 증거금 추가 후 청산가!) + col-span-1
-        if (addMargin > 0) {
-          liqEl.innerHTML = `<div class="leading-none">${liqWithMargin.toFixed(decimals)}</div>` +
-                            `<div class="leading-none text-[9px] text-yellow-300" title="옛 청산가: ${liq.toFixed(decimals)}">+${addMargin}$</div>`;
-        } else {
-          liqEl.textContent = liq.toFixed(decimals);
+        // 🌟 2026-06-13 사장님 critical fix v2: 청산가 = 강력 방어 + 절대 빈칸 X!
+        try {
+          if (addMargin > 0 && Number.isFinite(liqWithMargin)) {
+            liqEl.innerHTML = `<div class="leading-none">${liqWithMargin.toFixed(decimals)}</div>` +
+                              `<div class="leading-none text-[9px] text-yellow-300" title="옛 청산가: ${Number.isFinite(liq) ? liq.toFixed(decimals) : '?'}">+${addMargin}$</div>`;
+          } else if (Number.isFinite(liq)) {
+            liqEl.textContent = liq.toFixed(decimals);
+          } else {
+            // 디버그: liq 가 NaN/undefined = 절대 안 일어나야!
+            liqEl.textContent = '⚠️NaN';
+            console.warn('[liq] 단계 ' + i + ' = liq NaN!', { side, avg, lev, liq, liqWithMargin });
+          }
+          liqEl.className = 'col-span-1 text-xs text-right ' + liqColor;
+        } catch (_liqErr) {
+          liqEl.textContent = '⚠️Err';
+          console.error('[liq] 단계 ' + i + ' 표시 실패!', _liqErr);
         }
-        liqEl.className = 'col-span-1 text-xs text-right ' + liqColor;
       }
       if (lossEl) {
         // 🌟 2026-06-13 사장님 critical: 진입 전 + 진입 후 ROI = 줄바꿈 = 모두 명확 표시!
@@ -405,7 +412,8 @@ function _refreshLiveCalc() {
       infoBox.style.display = 'none';
     }
   } catch (e) {
-    // silent — 입력 중 일시적 NaN 등 무시
+    // 🚨 2026-06-13 사장님 critical: silent fail 차단 = 사장님 = F12 console 즉시 확인!
+    console.error('[_refreshLiveCalc] 사장님 silent bug 감지!', e);
   }
 }
 
