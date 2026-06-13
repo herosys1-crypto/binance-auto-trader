@@ -124,6 +124,8 @@ function _refreshLiveCalc() {
     let prevPrice = startPrice;
     let cumQty = 0, cumNotional = 0, cumMargin = 0;
     let prevLiq = null;
+    // 🌟 2026-06-13 사장님 critical: 단계별 청산 분석 데이터 (= 신 박스용!)
+    const stageAnalysis = [];
     // 2026-06-03 사장님 사상: 빈 단계 자동 압축 + trigger 누적 (_collectDirectInputs 와 일치).
     // 빈 자본 단계 = '-' 표시 + 그 단계 trigger 는 다음 채워진 단계에 누적.
     let pendingTriggerPct = 0;
@@ -241,6 +243,23 @@ function _refreshLiveCalc() {
       const avg = cumNotional / cumQty;
       // 3) 청산가 (누적 평균 기준)
       const liq = _estimateLiquidationPrice(side, avg, lev);
+      // 🌟 2026-06-13 사장님 critical: 증거금 추가 후 청산가 효과!
+      // 증거금 = 추가 margin (위치 유지, qty 변경 X)
+      // 청산가 변화 = margin 늘어남 = 가격 변동 견디는 한도 증가!
+      const addMarginEl = document.getElementById('cm-add-margin-' + i);
+      const addMargin = Number(addMarginEl ? addMarginEl.value : 0) || 0;
+      let liqWithMargin = liq;
+      if (addMargin > 0 && cumQty > 0) {
+        // 신 청산가 = avg ± (cumMargin + addMargin) / cumQty (= margin per qty)
+        // SHORT: 가격 상승 시 손실, 청산가 = avg + (margin / qty)
+        // LONG: 청산가 = avg - (margin / qty)
+        const marginPerQty = (cumMargin + addMargin) / cumQty;
+        if (side === 'SHORT') {
+          liqWithMargin = avg + marginPerQty;
+        } else {
+          liqWithMargin = Math.max(0, avg - marginPerQty);
+        }
+      }
       // 4) 이 단계 진입 시점 손실율 (누적 ROI, margin 대비, leverage 적용)
       //    SHORT: ROI = (avg - entry) / avg × leverage × 100  (entry > avg 면 손실 음수)
       //    LONG:  ROI = (entry - avg) / avg × leverage × 100
@@ -306,6 +325,29 @@ function _refreshLiveCalc() {
         lossUsdEl.textContent = usdText;
         lossUsdEl.className = 'col-span-2 text-xs text-right ' + usdColor;
       }
+      // 🌟 2026-06-13 사장님 critical: 단계별 청산 분석 데이터 모음!
+      // 사장님 자율 청산 회피 전략 = "최대한 청산가 전 다음 단계 진입!"
+      stageAnalysis.push({
+        stageNo: compressedStageNo,
+        origStageNo: i,
+        entryPrice: entryPrice,
+        avg: avg,
+        liq: liq,
+        liqWithMargin: liqWithMargin,
+        addMargin: addMargin,
+        cap: cap,
+        cumMargin: cumMargin,
+        preRoi: preRoi,
+        postRoi: roi,
+        prevLiq: prevLiq,
+        // 도달 가능성: 이 단계 trigger 가 이전 단계 청산가 (증거금 포함!) 보다 안전한지!
+        reachable: prevLiq === null ? true : (side === 'SHORT' ? entryPrice < prevLiq : entryPrice > prevLiq),
+        // 안전 마진 % (현재 청산가까지 가격이 얼마나 멀리?)
+        safetyMarginPct: side === 'SHORT'
+          ? ((liqWithMargin - entryPrice) / entryPrice * 100)
+          : ((entryPrice - liqWithMargin) / entryPrice * 100),
+      });
+
       // 🌟 v40 사장님 사상: 1단계 = 옛 평단 보존 시 = 2단계 기준 = startPrice (= entryPrice 아님!)
       // = 사장님 사상: '2단계부터 진행할 수 있는 세팅' = 신 시작가 기준!
       if (compressedStageNo === 1 && cmState.editingStrategyId && cmState.editingStrategyBp) {
@@ -320,8 +362,12 @@ function _refreshLiveCalc() {
       } else {
         prevPrice = entryPrice;
       }
-      prevLiq = liq;
+      // 🌟 2026-06-13 사장님 critical: 다음 단계 도달 가능성 검증 = 증거금 추가 후 청산가 기준!
+      prevLiq = liqWithMargin;
     }
+
+    // 🌟 2026-06-13 사장님 critical: 신 「단계별 청산 분석 박스」 표시!
+    _renderStageAnalysisBox(stageAnalysis, side, lev);
     // 2026-06-03 사장님 사상: 빈 단계 자동 압축 + trigger 누적 안내 (silent drop 경고 제거)
     let infoBox = document.getElementById('cm-capitals-compression-info');
     const compressedCount = Object.keys(compressionMap).length;
@@ -353,6 +399,94 @@ function _refreshLiveCalc() {
   } catch (e) {
     // silent — 입력 중 일시적 NaN 등 무시
   }
+}
+
+// 🌟 2026-06-13 사장님 critical: 신 「단계별 청산 분석 박스」
+// 사장님 자율 청산 회피 전략 = "1단계 진입 후 청산가 직전까지 다음 단계 진입!" 100% 시각화!
+function _renderStageAnalysisBox(stages, side, lev) {
+  let box = document.getElementById('cm-stage-analysis-box');
+  const gridEl = document.getElementById('cm-capitals-grid');
+  if (!stages || stages.length === 0) {
+    if (box) box.style.display = 'none';
+    return;
+  }
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'cm-stage-analysis-box';
+    box.className = 'mt-3 p-3 rounded bg-slate-900/60 border border-cyan-700';
+    if (gridEl && gridEl.parentNode) {
+      gridEl.parentNode.insertBefore(box, gridEl.nextSibling);
+    }
+  }
+  box.style.display = 'block';
+
+  const decimals = stages[0] ? _decimalsForPrice(stages[0].avg || 1) : 4;
+  let unreachableCount = 0;
+  let rowsHtml = '';
+  stages.forEach((s, idx) => {
+    const isFirst = idx === 0;
+    const reachableIcon = isFirst ? '✅' : (s.reachable ? '✅' : '❌');
+    const reachableTxt = isFirst ? '즉시 진입' : (s.reachable ? '도달 가능' : '도달 불가!');
+    const reachableColor = isFirst ? 'text-emerald-300' : (s.reachable ? 'text-emerald-300' : 'text-red-400 font-bold');
+    if (!isFirst && !s.reachable) unreachableCount++;
+
+    const marginEffectTxt = s.addMargin > 0
+      ? `<span class="text-yellow-300">💰 증거금 +${s.addMargin}: 청산가 ${s.liq.toFixed(decimals)} → ${s.liqWithMargin.toFixed(decimals)}</span>`
+      : `<span class="text-slate-500">증거금 X</span>`;
+
+    const safetyColor = s.safetyMarginPct > 30 ? 'text-emerald-300' : (s.safetyMarginPct > 10 ? 'text-yellow-300' : 'text-red-400');
+    const preRoiTxt = s.preRoi !== null ? `${s.preRoi >= 0 ? '+' : ''}${s.preRoi.toFixed(2)}%` : '-';
+    const postRoiTxt = `${s.postRoi >= 0 ? '+' : ''}${s.postRoi.toFixed(2)}%`;
+
+    rowsHtml += `
+      <div class="border-t border-slate-700 py-1.5 text-xs">
+        <div class="flex justify-between items-center mb-0.5">
+          <span class="font-semibold text-cyan-300">📍 ${s.stageNo}단계 ${reachableIcon} <span class="${reachableColor}">${reachableTxt}</span></span>
+          <span class="text-slate-400">진입가 <b class="text-purple-300">${s.entryPrice.toFixed(decimals)}</b></span>
+        </div>
+        <div class="grid grid-cols-2 gap-1 text-[11px]">
+          <div>📊 진입 전 ROI: <b class="text-red-300">${preRoiTxt}</b></div>
+          <div>📈 진입 후 ROI: <b class="text-red-300">${postRoiTxt}</b></div>
+          <div>📐 평단: <b class="text-cyan-300">${s.avg.toFixed(decimals)}</b></div>
+          <div>🛑 청산가: <b class="text-orange-300">${s.liqWithMargin.toFixed(decimals)}</b></div>
+          <div class="col-span-2">${marginEffectTxt}</div>
+          <div class="col-span-2">🛡 안전 마진: <b class="${safetyColor}">${s.safetyMarginPct >= 0 ? '+' : ''}${s.safetyMarginPct.toFixed(2)}%</b> <span class="text-slate-500">(= 청산가까지 가격 거리)</span></div>
+        </div>
+      </div>
+    `;
+  });
+
+  let warningHtml = '';
+  if (unreachableCount > 0) {
+    warningHtml = `
+      <div class="mt-2 p-2 rounded bg-red-900/40 border border-red-500">
+        <p class="text-sm font-bold text-red-400">⚠️ ${unreachableCount}개 단계 도달 불가 = 청산 위험!</p>
+        <p class="text-xs text-red-300 mt-1">트리거가 이전 단계 청산가보다 멀어서 = 가격 도달 전 강제 청산!</p>
+        <p class="text-xs text-yellow-300 mt-1">💡 권장 (= 사장님 자율 결정!):
+          (1) 증거금 추가 = 청산가 멀어짐 + 안전 마진 ↑
+          (2) 트리거 % 줄이기 = 진입가 더 가까이
+          (3) 후반 단계 자본 줄이기 = 평단 영향 ↓
+          (4) 레버리지 줄이기 (예: 1x) = 청산가 멀리
+        </p>
+      </div>
+    `;
+  } else {
+    warningHtml = `
+      <div class="mt-2 p-2 rounded bg-emerald-900/30 border border-emerald-600">
+        <p class="text-xs text-emerald-300">✅ <b>모든 단계 도달 가능!</b> = 사장님 자율 청산 회피 전략 정확! 🛡</p>
+      </div>
+    `;
+  }
+
+  box.innerHTML = `
+    <div class="flex items-center justify-between mb-2">
+      <h4 class="text-sm font-bold text-cyan-300">🛡 단계별 청산 분석 (= 사장님 자율 전략!)</h4>
+      <span class="text-[10px] text-slate-500">SHORT/LONG × ${lev}x 레버리지</span>
+    </div>
+    <p class="text-[11px] text-slate-400 mb-1">사장님 사상: "1단계 진입 후 → 청산가 직전 → 다음 단계 진입 → 청산가 멀어짐 → 반복!" 손실 -100% 까지 자율 운영!</p>
+    ${rowsHtml}
+    ${warningHtml}
+  `;
 }
 
 function onCapitalsChange() {
