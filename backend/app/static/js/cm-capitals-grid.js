@@ -45,7 +45,7 @@ function buildCapitalsGrid() {
     <div class="col-span-2 text-right text-purple-400" title="이 단계의 LIMIT 진입 가격 (이전 단계 × (1±trigger%))">단계 진입가</div>
     <div class="col-span-1 text-right text-cyan-400" title="이 단계까지 누적 가중평균 진입가">평균진입</div>
     <div class="col-span-1 text-right text-orange-400" title="누적 평균 기준 예상 청산가 (Isolated 보수적)">청산가</div>
-    <div class="col-span-1 text-right text-red-400" title="이 단계 진입 직전→직후 누적 ROI %">손실율</div>
+    <div class="col-span-1 text-right text-red-400" title="이 단계 = 진입 전 (위) + 진입 후 (아래) 누적 ROI %">손실율<br><span class="text-[9px] text-slate-500">전/후</span></div>
     <div class="col-span-2 text-right text-red-300" title="이 단계 진입 시점의 누적 손실 USDT">손실$</div>
   </div>`;
   for (let i = 1; i <= 10; i++) {
@@ -264,14 +264,15 @@ function _refreshLiveCalc() {
         liqEl.className = 'col-span-2 text-xs text-right ' + liqColor;
       }
       if (lossEl) {
-        // 직전 → 직후 ROI 표시 (1단계는 직전 없음)
+        // 🌟 2026-06-13 사장님 critical: 진입 전 + 진입 후 ROI = 줄바꿈 = 모두 명확 표시!
+        // 옛: "X% → Y%" 한 줄 = "→" 뒤 잘림 silent bug!
+        // 신: 두 줄 = 진입전 (큰) / 진입후 (작은) 모두 명확!
         const postTxt = (roi >= 0 ? '+' : '') + roi.toFixed(2) + '%';
-        const postColor = roi < -50 ? 'text-red-400 font-semibold' : (roi < 0 ? 'text-red-300' : 'text-emerald-300');
+        const postColor = roi < -85 ? 'text-red-500 font-bold' : (roi < -50 ? 'text-red-400 font-semibold' : (roi < 0 ? 'text-red-300' : 'text-emerald-300'));
         let html;
         let dangerWarn = '';
         if (preRoi !== null) {
           const preTxt = (preRoi >= 0 ? '+' : '') + preRoi.toFixed(2) + '%';
-          // 직전 ROI < -85% 면 청산 임박 ⚠️
           let preColor;
           if (preRoi < -85) {
             preColor = 'text-red-500 font-bold';
@@ -281,9 +282,12 @@ function _refreshLiveCalc() {
           } else {
             preColor = 'text-red-300';
           }
-          html = `<span class="${preColor}">${preTxt}</span><span class="text-slate-500"> → </span><span class="${postColor}">${postTxt}</span>${dangerWarn}`;
+          // 🌟 신: 줄바꿈 = 진입 전 (위) + 진입 후 (아래, 작게)
+          html = `<div class="${preColor} leading-none" title="진입 직전 누적 ROI">${preTxt}${dangerWarn}</div>` +
+                 `<div class="${postColor} leading-none text-[10px] mt-0.5" title="진입 직후 누적 ROI (= 평단 변경 후)">→ ${postTxt}</div>`;
         } else {
-          html = `<span class="${postColor}">${postTxt}</span>`;
+          // 1단계 = 진입 전 없음 = 단일 표시
+          html = `<div class="${postColor}" title="1단계 진입 후 ROI">${postTxt}</div>`;
         }
         lossEl.innerHTML = html;
         lossEl.className = 'col-span-1 text-xs text-right';

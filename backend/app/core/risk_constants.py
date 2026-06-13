@@ -44,9 +44,10 @@ DEFAULT_STEP_SIZE_FALLBACK: Final[Decimal] = Decimal("0.001")
 
 # ===== Stop Loss (SL) =====
 # template.stop_loss_percent_of_capital 가 NULL/0 일 때 default.
-# 의미: 총 자본 × 50% / leverage = 손실 한도 USD.
-# 5-14 fix 이전엔 이 값이 hardcoded 됐었음 → template 사용자 입력 무시 버그.
-DEFAULT_SL_PCT_OF_CAPITAL: Final[Decimal] = Decimal("50")
+# 🌟 2026-06-13 사장님 사상 변경: 100% default (= 사장님 명시 = "전체 포지션 손실 시 강제청산"!)
+# 신 v4 ROI 기반: 평단 vs 현재가 = price_change × lev = ROI <= -100% = SL!
+# = 사장님 자율 = 사장님 결정 = 100% 가 default!
+DEFAULT_SL_PCT_OF_CAPITAL: Final[Decimal] = Decimal("100")
 
 # 강제 청산 알림 임계 — max_loss_pct 가 처음 이 값 이하로 내려가는 사이클에 1회 알림.
 LOSS_ALERT_THRESHOLD_PCT: Final[Decimal] = Decimal("-50")
