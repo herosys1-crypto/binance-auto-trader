@@ -147,7 +147,7 @@ function _refreshLiveCalc() {
         if (i > 1 && tNum > 0) pendingTriggerPct += tNum;
         if (entryEl) { entryEl.textContent = '-'; entryEl.className = 'col-span-2 text-xs text-purple-300 text-right'; }
         if (avgEl) { avgEl.textContent = '-'; avgEl.className = 'col-span-1 text-xs text-cyan-300 text-right'; }
-        if (liqEl) { liqEl.textContent = '-'; liqEl.className = 'col-span-1 text-xs text-orange-300 text-right'; }
+        if (liqEl) { liqEl.textContent = '-'; liqEl.innerHTML = '-'; liqEl.className = 'col-span-1 text-xs text-orange-300 text-right'; }
         if (lossEl) {
           const note = tNum > 0
             ? `<span class="text-yellow-300" title="자본 없음 — 다음 채워진 단계에 trigger +${tNum}% 누적">↳ +${tNum}% 누적</span>`
@@ -279,8 +279,16 @@ function _refreshLiveCalc() {
       if (entryEl) entryEl.textContent = entryPrice.toFixed(decimals);
       if (avgEl) avgEl.textContent = avg.toFixed(decimals);
       if (liqEl) {
-        liqEl.textContent = liq.toFixed(decimals);
-        liqEl.className = 'col-span-2 text-xs text-right ' + liqColor;
+        // 🌟 2026-06-13 사장님 critical fix: 청산가 = 증거금 포함! + col-span-1 (= 헤더 일치!)
+        // 옛 silent bug: col-span-2 = grid overflow = 청산가 화면 X!
+        // 신 fix: liqWithMargin (= 증거금 추가 후 청산가!) + col-span-1
+        if (addMargin > 0) {
+          liqEl.innerHTML = `<div class="leading-none">${liqWithMargin.toFixed(decimals)}</div>` +
+                            `<div class="leading-none text-[9px] text-yellow-300" title="옛 청산가: ${liq.toFixed(decimals)}">+${addMargin}$</div>`;
+        } else {
+          liqEl.textContent = liq.toFixed(decimals);
+        }
+        liqEl.className = 'col-span-1 text-xs text-right ' + liqColor;
       }
       if (lossEl) {
         // 🌟 2026-06-13 사장님 critical: 진입 전 + 진입 후 ROI = 줄바꿈 = 모두 명확 표시!
