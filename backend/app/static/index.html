@@ -1128,7 +1128,7 @@
                 <p class="text-xs text-blue-300">
                   💡 <strong>ROI 기준</strong> — 모든 % 는 <em>레버리지 적용 ROI</em> (가격변동률 × 레버리지).
                   <br>예: TP1 10% + 2x 레버리지 = 실제 가격 5% 변동 시 발동.
-                  손절 80% + 2x + 자본 100 USDT = 손실 40 USDT 도달 시 강제 청산.
+                  손절 100% + 2x = 평단 기준 ROI -100% 도달 시 강제 청산 (= 사장님 사상 2026-06-13).
                 </p>
               </div>
               <div class="grid grid-cols-12 gap-2 text-xs text-slate-500 pb-1 border-b border-slate-700">
@@ -1249,7 +1249,7 @@
               </div>
               <div class="pt-2 border-t border-slate-700">
                 <label class="text-slate-400 text-xs" title="투자금 대비 손실 % (레버리지 무관). 예: 80 = 투자금의 80% 손실 도달 시 발동. 자본 200+증거금 50+포지션 100 = total 350 → -280 USDT 도달 시 청산. 2x/5x/10x 모두 동일. (2026-06-03 사장님 사상)">🛑 손절 — 투자금 대비 손실 % (레버리지 무관)</label>
-                <input id="cm-sl-pct" type="number" step="1" value="80" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
+                <input id="cm-sl-pct" type="number" step="1" value="100" class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 <p class="text-xs text-slate-500 mt-1">⚠️ 손실 한도 도달 시 잔량 100% <strong>강제 청산 (포지션 종료)</strong>. 사용자 정의 % 가 정확히 적용됨 (2026-05-14 fix).</p>
                 <!-- 2026-06-02 (#35): 실 USDT 손실 동적 계산 — 사장님이 자본/레버리지/sl 입력 시 즉시 표시 -->
                 <p id="cm-sl-loss-preview" class="text-xs text-yellow-300 mt-1 font-mono"></p>
@@ -1601,40 +1601,41 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/api.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/helpers.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/stats-modals.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/health-page.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/ranking-page.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/ranking-modal.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/trade-history-modal.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/system-banner.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/cm-collectors.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/cm-loaders.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/cm-market-info.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/cm-preview.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/cm-open-modal.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/templates-panel.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/indicators.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/strategies-list.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/external-positions.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/multi-symbol.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/template-save.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/cm-submit.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/strategy-detail.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/chart-detail.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/accounts-modal.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/add-position-modal.js?v=20260611v43-stage-cumul"></script>
+<script src="/static/js/constants.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/api.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/helpers.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/stats-modals.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/health-page.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/ranking-page.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/ranking-modal.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/trade-history-modal.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/system-banner.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/cm-collectors.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/cm-loaders.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/cm-market-info.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/cm-preview.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/cm-open-modal.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/templates-panel.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/indicators.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/strategies-list.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/external-positions.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/multi-symbol.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/template-save.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/cm-submit.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/strategy-detail.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/chart-detail.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
+<script src="/static/js/accounts-modal.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/add-position-modal.js?v=20260613v53-stage-analysis"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/page-router.js?v=20260611v43-stage-cumul"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260611v43-stage-cumul"></script>
+<script src="/static/js/strategy-actions.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/page-router.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260613v53-stage-analysis"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES

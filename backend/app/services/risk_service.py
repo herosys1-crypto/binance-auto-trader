@@ -61,22 +61,28 @@ class RiskService:
         total_stages = self._get_total_stages(strategy)
         if (strategy.current_stage or 0) < total_stages:
             return False
-        current_loss_amount = Decimal(str(strategy.realized_pnl)) + Decimal(str(strategy.unrealized_pnl))
-        # 🌟 2026-06-09 사장님 사상 정확화 v3 — SL = 마진 (= 사장님 자금) × sl_pct
-        # 사장님 명시 (2026-06-09):
-        # "1000 입력 = 마진 500 = 사장님 자금. 2x 레버리지 = 40% 하락 = -80% 손실 = 강제청산"
-        # = SL 발동 시점 = ROI -80% = 마진 × 80% 손실 시
-        # = Binance 마진콜 (= -100%) 직전 = 사장님 자본 보호!
+
+        # 🌟🌟🌟 2026-06-11 사장님 critical 영구 fix v4 (BEATUSDT #110 청산 사건!):
         #
-        # 옛 (잘못, PR #57): threshold = total_capital × sl_pct  (= notional × 80%)
-        # = 자본 3000, lev 2x → SL 2400 USDT 손실 = 마진 1500 다 잃고도 청산 X
-        # = Binance 자동 청산 (= 마진 -100%) 이 먼저 = 사장님 자본 보호 X!
+        # 사장님 명시 (= 2026-06-11):
+        # "6단계를 뺀다고 포지션 진입가에서 손실 -80% 는 아니잖아!"
+        # = SL = **포지션 진입가 (평단) 기준 ROI -80%!**
+        # = 가격 변동만 봐야!
+        # = 자본 (total_capital) 변경 = SL 영향 X!
         #
-        # 신 (정확): threshold = (total_capital / leverage) × sl_pct  (= margin × 80%)
-        # = 자본 3000, lev 2x → 마진 1500 → SL 1200 USDT 손실 = ROI -80%
-        # = 사장님 자본 보호 = Binance 마진콜 전 = 안전!
+        # ⛔ 옛 silent bug (PR #57, 2026-06-09):
+        # threshold = (total_capital / lev) × 80% = USDT 절대 한도
+        # = 자본 변경 시 = 한도 변경 = silent bug!
+        # = 사장님 6단계 취소 → total_capital 6100 → 2700 → 한도 -2440 → -1080 → 청산!
+        #
+        # 🛡 신 fix v4 (사장님 사상 100% 정확!):
+        # 1. 평단 vs 현재가 = 가격 변동 % 계산
+        # 2. × leverage = ROI %
+        # 3. ROI <= -80% = SL 발동!
+        # = total_capital 완전 무관 = 사장님 자본 100% 영구 보호!
         from app.core.risk_constants import (
             DEFAULT_SL_PCT_OF_CAPITAL,
+            LEVERAGE_FALLBACK,
             PERCENT_DENOMINATOR,
         )
         from app.models.strategy_template import StrategyTemplate
@@ -86,30 +92,54 @@ class RiskService:
             if tpl and tpl.stop_loss_percent_of_capital and Decimal(str(tpl.stop_loss_percent_of_capital)) > 0
             else DEFAULT_SL_PCT_OF_CAPITAL  # template 미설정 시 default 80%
         )
-        total_capital = Decimal(str(strategy.total_capital))
-        leverage = Decimal(str(strategy.leverage or 1))
-        # 🌟 사장님 신 사상 (2026-06-09): SL = 마진 × 80% (= ROI -80% 청산)
-        margin = total_capital / leverage if leverage > 0 else total_capital
-        threshold = margin * (sl_pct / PERCENT_DENOMINATOR)
-        is_stop = current_loss_amount <= (-threshold)
+        leverage = Decimal(str(strategy.leverage)) if strategy.leverage else LEVERAGE_FALLBACK
+
+        # 🛡 평단 (= 포지션 진입가) 조회!
+        avg_entry = Decimal(str(strategy.avg_entry_price)) if strategy.avg_entry_price else None
+        # 현재가 = position.mark_price 조회
+        latest_position = self.position_repo.latest_by_strategy(strategy_id)
+        mark_price = (
+            Decimal(str(latest_position.mark_price))
+            if latest_position and latest_position.mark_price else None
+        )
+
+        # 평단/현재가 미존재 시 = SL 검증 불가 = False
+        if not avg_entry or not mark_price or avg_entry <= 0:
+            return False
+
+        # 🌟 사장님 사상 v4: ROI = (평단 vs 현재가) × leverage!
+        # SHORT: 가격 하락 = 이익, 가격 상승 = 손실
+        # LONG: 가격 상승 = 이익, 가격 하락 = 손실
+        if strategy.side == "LONG":
+            price_change_pct = ((mark_price - avg_entry) / avg_entry) * PERCENT_DENOMINATOR
+        else:  # SHORT
+            price_change_pct = ((avg_entry - mark_price) / avg_entry) * PERCENT_DENOMINATOR
+        # ROI = 가격 변동 × leverage
+        unrealized_roi = price_change_pct * leverage
+        # SL 발동: ROI <= -80%
+        is_stop = unrealized_roi <= -sl_pct
+
         if is_stop:
-            actual_loss_pct = (-current_loss_amount / total_capital * 100) if total_capital > 0 else Decimal("0")
+            current_loss_amount = Decimal(str(strategy.realized_pnl or 0)) + Decimal(str(strategy.unrealized_pnl or 0))
             self.db.add(RiskEvent(
                 strategy_instance_id=strategy.id,
                 event_type="STOP_LOSS_TRIGGERED",
                 severity="CRITICAL",
                 title="🛑 손절 발동 (Stop Loss)",
                 message=(
-                    f"투자금 {total_capital} USDT 대비 손실 {actual_loss_pct:.2f}% "
-                    f"({current_loss_amount} USDT) → 한도 {sl_pct}% ({-threshold} USDT) 초과 → 강제 전량 청산. "
-                    f"(레버리지 무관 — 사장님 사상 2026-06-03 적용)"
+                    f"평단 {avg_entry} → 현재가 {mark_price} = 가격 변동 {price_change_pct:.2f}% "
+                    f"× lev {leverage}x = ROI {unrealized_roi:.2f}% (= 한도 -{sl_pct}% 도달) → 강제 전량 청산. "
+                    f"(= 사장님 사상 2026-06-11 v4 — 포지션 진입가 기준 ROI -{sl_pct}%, 자본 무관!)"
                 ),
                 event_payload={
-                    "current_loss_amount": str(current_loss_amount),
-                    "threshold": str(-threshold),
-                    "total_capital": str(total_capital),
+                    "avg_entry_price": str(avg_entry),
+                    "mark_price": str(mark_price),
+                    "price_change_pct": str(price_change_pct),
+                    "leverage": str(leverage),
+                    "unrealized_roi": str(unrealized_roi),
                     "sl_pct": str(sl_pct),
-                    "actual_loss_pct": str(actual_loss_pct),
+                    "current_loss_amount": str(current_loss_amount),
+                    "side": strategy.side,
                 },
             ))
             strategy_stop_loss_total.labels(symbol=strategy.symbol, side=strategy.side).inc()

@@ -117,11 +117,16 @@ def run_self_check_once() -> dict:
                         f"🚨 stage_plans 무결성: {len(bad_plans)} 개 row = triggered=True 인데 trigger_price=NULL"
                     )
 
-                # 3. 활성 strategy 의 DB 일관성
+                # 🚨 2026-06-13 사장님 critical fix — false positive 차단!
+                # 옛 silent bug: STOPPED/COMPLETED/STOPPING 도 검사 = 옛 종료된 strategy false positive!
+                # 사장님 알림 = 매 시간 = 같은 4건 = 시끄러움!
+                # 신 fix: ACTIVE strategy 만 검사 (= STAGES_WITH_NEXT)
+                from app.core.strategy_status import STAGES_WITH_NEXT as _ACTIVE
                 strats = db.execute(
                     select(StrategyInstance)
                     .where(StrategyInstance.exchange_account_id == account.id)
                     .where(StrategyInstance.is_archived.is_(False))
+                    .where(StrategyInstance.status.in_(_ACTIVE))  # 🛡 신: 활성만!
                 ).scalars().all()
                 for s in strats:
                     # current_stage 와 stage_plans triggered 일치 확인
@@ -139,20 +144,35 @@ def run_self_check_once() -> dict:
             except Exception as e:
                 logger.warning("[self-check] account %s 검증 실패: %s", account.id, e)
 
-        # 알림 전송
+        # 알림 전송 (🛡 2026-06-13 사장님 critical: 24h dedup = 시끄러운 반복 차단!)
         alerts_sent = 0
         if issues:
             logger.warning("[self-check] 🚨 %s 건 silent bug 발견!", len(issues))
+            # 🛡 dedup = 같은 issues 집합 = 24시간 = 1회만!
+            import hashlib as _h
+            _key = "self_check:alert:" + _h.md5(("\n".join(sorted(issues))).encode("utf-8")).hexdigest()[:16]
+            _send = True
             try:
-                NotificationService(db).send_system_alert(
-                    title=f"🚨 [Self-Check] {len(issues)} 건 silent bug 발견!",
-                    body="\n\n".join(issues[:10]) + (
-                        f"\n\n... 그 외 {len(issues) - 10} 건" if len(issues) > 10 else ""
-                    ),
-                )
-                alerts_sent = 1
-            except Exception as e:
-                logger.error("[self-check] Telegram 알림 실패: %s", e)
+                from app.core.redis_client import get_redis_client as _grc
+                _r = _grc()
+                if _r and _r.get(_key):
+                    _send = False
+                    logger.info("[self-check] 🛡 24h dedup = 신 알림 X (= 사장님 반복 차단!)")
+                elif _r:
+                    _r.setex(_key, 86400, "1")  # 24h
+            except Exception:
+                pass
+            if _send:
+                try:
+                    NotificationService(db).send_system_alert(
+                        title=f"🚨 [Self-Check] {len(issues)} 건 silent bug 발견!",
+                        body="\n\n".join(issues[:10]) + (
+                            f"\n\n... 그 외 {len(issues) - 10} 건" if len(issues) > 10 else ""
+                        ) + "\n\n🛡 이 알림 = 24h dedup (= 같은 issues 시 X)",
+                    )
+                    alerts_sent = 1
+                except Exception as e:
+                    logger.error("[self-check] Telegram 알림 실패: %s", e)
             # DB 에도 기록 (= 사장님 화면 「최근 활동」 표시)
             try:
                 db.add(RiskEvent(

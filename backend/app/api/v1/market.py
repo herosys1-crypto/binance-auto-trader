@@ -68,7 +68,7 @@ def ticker_24hr(
 def klines(
     symbol: str = Query(..., min_length=1, max_length=30),
     interval: str = Query(default="1h", description="1m/5m/15m/1h/4h/1d 등"),
-    limit: int = Query(default=24, ge=1, le=500),
+    limit: int = Query(default=200, ge=1, le=1500),  # 🌟 2026-06-11 #22: 차트용 200 default + max 1500
     testnet: bool = Query(default=False),  # 2026-06-01 fix: testnet deprecated — mainnet default
 ) -> list[list[Any]]:
     """캔들(OHLCV) 데이터.
@@ -88,4 +88,34 @@ def klines(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Binance klines API error: {e}",
+        ) from e
+
+
+# 🌟 2026-06-11 #22: Order Book = 사장님 시장 깊이!
+@router.get("/depth")
+def depth(
+    symbol: str = Query(..., min_length=1, max_length=30),
+    limit: int = Query(default=20, description="5/10/20/50/100/500/1000"),
+    testnet: bool = Query(default=False),
+) -> dict[str, Any]:
+    """Order Book (= 매수/매도 호가) = 사장님 시장 깊이!
+
+    응답: {"bids": [["7.93", "2000"], ...], "asks": [["7.95", "1000"], ...]}
+    bids = 매수 (= 녹색) / asks = 매도 (= 적색)
+    초기 fetch 후 = frontend = WebSocket wss://fstream.binance.com/ws/{symbol}@depth20 직접 연결!
+    """
+    if limit not in (5, 10, 20, 50, 100, 500, 1000):
+        raise HTTPException(status_code=400, detail="limit must be 5/10/20/50/100/500/1000")
+    try:
+        r = requests.get(
+            f"{_base_url(testnet)}/fapi/v1/depth",
+            params={"symbol": symbol.upper(), "limit": limit},
+            timeout=5,
+        )
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException as e:  # pragma: no cover
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Binance depth API error: {e}",
         ) from e
