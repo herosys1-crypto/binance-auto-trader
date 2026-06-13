@@ -1255,22 +1255,22 @@
                 <p id="cm-sl-loss-preview" class="text-xs text-yellow-300 mt-1 font-mono"></p>
                 <!-- 2026-06-03 신규: 사장님 사상 핵심 정책 — SL = 투자금 대비 손실 (레버리지 무관) -->
                 <div class="mt-2 p-2 rounded bg-green-900/20 border border-green-700/40">
-                  <p class="text-xs text-green-300 font-semibold">✅ SL 정책 (사장님 사상 2026-06-03)</p>
+                  <p class="text-xs text-green-300 font-semibold">✅ SL 정책 v4 (사장님 사상 2026-06-13)</p>
                   <p class="text-xs text-slate-300 mt-1">
-                    <strong>투자금 대비 손실 %</strong> 기준 — <strong class="text-yellow-300">레버리지 무관!</strong> 2x/5x/10x 모두 동일 한도.
-                    <br>리스크 = 투자금액의 sl_pct% 가 없어지는 것.
+                    <strong class="text-yellow-300">평단 (진입가) 기준 ROI -100% 도달 시 강제 청산!</strong>
+                    <br>= 자본 무관 = 가격 변동만 = 사장님 자율 청산 회피 전략!
                   </p>
                   <p class="text-xs text-slate-400 mt-1">
-                    📊 예시: 자본 200 + 증거금 50 + 포지션 100 → total_capital = 350
-                    <br>→ SL 한도 = 350 × 80% = <strong class="text-yellow-300">-280 USDT</strong> 도달 시 청산
-                    <br>→ 2x/5x/10x 무관 동일 (이전 ROI 기준 / leverage 정책 폐기)
+                    📊 예시: 평단 7.58, lev 2x, SHORT
+                    <br>→ 가격 +50% 상승 (= 11.37) = ROI -50% × 2x = <strong class="text-yellow-300">-100% 도달 시 강제 청산!</strong>
+                    <br>→ 단계 capital 변경 = SL 영향 X (= 사장님 자본 영구 보호!)
                   </p>
                   <p class="text-xs text-slate-300 mt-1">
-                    🔧 자본 추가 자동 합산 (PR #56): 「💰 증거금 추가」 / 「💉 포지션 추가」 시
-                    <code class="text-green-300">total_capital += amount</code> 자동 적용 → SL 한도도 자동 갱신.
+                    🛡 사장님 자율 (= 100% 까지 운영!): 「💰 증거금 추가」 / 「💉 포지션 추가」 시
+                    <br>= 청산가 멀어짐 = ROI 회복 = 자율 청산 회피 = 100%까지!
                   </p>
                   <p class="text-xs text-blue-300 mt-1">
-                    💡 영향 안전망 (자동 정확): SL 임계 / reserved (5단계 풀 예약) / 잔액 표시 / 통계
+                    💡 영향 안전망 (= 다층!): SL = ROI 기반 / 단계 capital 감소 시 사전 차단 / 사장님 자본 영구 보호!
                   </p>
                 </div>
               </div>
@@ -1601,41 +1601,41 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/api.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/helpers.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/stats-modals.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/health-page.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/ranking-page.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/ranking-modal.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/trade-history-modal.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/system-banner.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/cm-collectors.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/cm-loaders.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/cm-market-info.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/cm-preview.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/cm-open-modal.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/templates-panel.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/indicators.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/strategies-list.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/external-positions.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/multi-symbol.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/template-save.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/cm-submit.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/strategy-detail.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/chart-detail.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/constants.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/api.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/helpers.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/stats-modals.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/health-page.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/ranking-page.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/ranking-modal.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/trade-history-modal.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/system-banner.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/cm-collectors.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/cm-loaders.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/cm-market-info.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/cm-preview.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/cm-open-modal.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/templates-panel.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/indicators.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/strategies-list.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/external-positions.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/multi-symbol.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/template-save.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/cm-submit.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/strategy-detail.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/chart-detail.js?v=20260613v54-sl-100"></script>
 <script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
-<script src="/static/js/accounts-modal.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/add-position-modal.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/accounts-modal.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/add-position-modal.js?v=20260613v54-sl-100"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/page-router.js?v=20260613v53-stage-analysis"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260613v53-stage-analysis"></script>
+<script src="/static/js/strategy-actions.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/page-router.js?v=20260613v54-sl-100"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260613v54-sl-100"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
