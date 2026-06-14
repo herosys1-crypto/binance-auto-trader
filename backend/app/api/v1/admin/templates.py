@@ -276,43 +276,46 @@ def cleanup_quick_templates(
     force_close_errors: list[str] = []
 
     # UX #19: force 모드 — 활성 전략을 먼저 모두 종료시킴
+    # 🚨 2026-06-15 사장님 critical fix: exception 시도 = 무조건 STOPPED 처리!
+    # 옛 silent bug: try/except 안에 r.status = "STOPPED" = exception 시 = 안 실행
+    # = cascade X = 삭제 안 됨 = 사장님 "완전 정리" 의도 위배!
+    # 신: 거래소 호출 실패해도 = DB 상 STOPPED 강제 + force_closed 카운트!
     if force:
         for tpl in candidates:
             refs = db.query(StrategyInstance).filter(StrategyInstance.strategy_template_id == tpl.id).all()
             for r in refs:
                 if (r.status or "").upper() in terminal_statuses:
                     continue
-                # 거래소 시장가 청산 + 미체결 취소
+                # 거래소 시장가 청산 + 미체결 취소 (실패해도 = STOPPED 처리!)
                 try:
                     account = ExchangeAccountRepository(db).get(r.exchange_account_id)
-                    if not account:
-                        force_close_errors.append(f"#{r.id}: 거래소 계정 없음")
-                        continue
-                    exec_svc = ExecutionService(
-                        db,
-                        api_key=decrypt_text(account.api_key_enc),
-                        api_secret=decrypt_text(account.api_secret_enc),
-                        is_testnet=account.is_testnet,
-                    )
-                    try:
-                        exec_svc.client.cancel_all_orders(symbol=r.symbol)
-                    except Exception:
-                        pass  # 미체결 없을 수 있음
-                    qty = Decimal(str(r.current_position_qty or 0)).copy_abs()
-                    if qty > 0:
+                    if account:
+                        exec_svc = ExecutionService(
+                            db,
+                            api_key=decrypt_text(account.api_key_enc),
+                            api_secret=decrypt_text(account.api_secret_enc),
+                            is_testnet=account.is_testnet,
+                        )
                         try:
-                            exec_svc.emergency_close_position(r.id, quantity=qty)
-                        except ValueError:
-                            # Bug #8 fix: 거래소 포지션 0 일 때 ValueError. 정상 정리됨.
-                            pass
-                        except EmergencyCloseInProgress:
-                            # 2026-05-08 #120 fix: 다른 caller 가 청산 중 — 정상 진행
-                            pass
-                    r.status = "STOPPED"
-                    r.current_position_qty = Decimal("0")
-                    force_closed += 1
+                            exec_svc.client.cancel_all_orders(symbol=r.symbol)
+                        except Exception:
+                            pass  # 미체결 없을 수 있음
+                        qty = Decimal(str(r.current_position_qty or 0)).copy_abs()
+                        if qty > 0:
+                            try:
+                                exec_svc.emergency_close_position(r.id, quantity=qty)
+                            except ValueError:
+                                pass  # Bug #8: 거래소 포지션 0 시 ValueError
+                            except EmergencyCloseInProgress:
+                                pass  # #120: 다른 caller 청산 중
+                    else:
+                        force_close_errors.append(f"#{r.id}: 거래소 계정 없음 — DB만 STOPPED 처리")
                 except Exception as e:
-                    force_close_errors.append(f"#{r.id}: {e!s}")
+                    force_close_errors.append(f"#{r.id}: 거래소 호출 실패 ({e!s}) — DB만 STOPPED 처리")
+                # 🛡 사장님 critical: 거래소 호출 실패해도 = 무조건 STOPPED!
+                r.status = "STOPPED"
+                r.current_position_qty = Decimal("0")
+                force_closed += 1
         db.commit()
         # force 모드는 자동으로 cascade=True 로 처리 (모든 전략이 terminal 이 됐으니)
         cascade = True
