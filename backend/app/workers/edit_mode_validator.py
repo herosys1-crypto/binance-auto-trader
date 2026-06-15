@@ -72,6 +72,11 @@ def _validate_cumulative_logic(db, strategy):
 
     sc = tpl.stages_config or {}
     triggers = sc.get("trigger_percents") or []
+    # 🌟 2026-06-15 사장님 critical fix: last_stage_trigger_percent fallback!
+    # 옛 silent bug: triggers[i] = None → Decimal(0) → expected = prev (변경 X!) → false 44.99% violation!
+    # 사장님 신 strategy = trigger_percents = [None, None], last_stage_trigger_percent = 45
+    # 신 fix: triggers[i] = None 시 = last_stage_trigger_percent fallback (= 마지막 단계)!
+    last_trg = sc.get("last_stage_trigger_percent")
 
     violations = []
     for i in range(1, len(plans)):
@@ -84,7 +89,18 @@ def _validate_cumulative_logic(db, strategy):
 
         prev_val = Decimal(str(prev.trigger_price))
         curr_val = Decimal(str(curr.trigger_price))
-        trg_pct = Decimal(str(triggers[i] or 0))
+        # 🛡 신 fix v2: None 시 = last_stage_trigger_percent fallback!
+        raw_trg = triggers[i]
+        if raw_trg is None or raw_trg == "" or (isinstance(raw_trg, (int, float)) and raw_trg == 0):
+            # 마지막 단계 (= last_stage) 인 경우 = last_stage_trigger_percent
+            if i == len(plans) - 1 and last_trg:
+                raw_trg = last_trg
+            else:
+                # 사장님 사상 = trigger 미지정 = validator skip!
+                continue
+        trg_pct = Decimal(str(raw_trg or 0))
+        if trg_pct == 0:
+            continue  # 0 trigger = validation skip (= false positive 차단!)
 
         # 사장님 누적 사상 = 예상 가격
         if strategy.side == "SHORT":

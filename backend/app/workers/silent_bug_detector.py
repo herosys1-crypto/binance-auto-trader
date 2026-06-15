@@ -55,8 +55,25 @@ def _mark_dedup(redis, sid, bug_type):
 
 
 def _detect_null_field_bugs(db, strategy):
-    """NULL field silent bug 감지."""
+    """NULL field silent bug 감지. 🛡 진입 후 grace period (= 5분) skip!"""
     bugs = []
+    # 🌟 2026-06-15 사장님 critical fix: 진입 후 5분 = grace period (= false positive 차단!)
+    # 옛 silent bug: 진입 직후 cycle = liquidation_price NULL → 1분 후 계산 완료
+    # = detector 너무 빠르게 검사 = false positive!
+    # 신 fix: started_at 또는 updated_at 기준 5분 이내 = skip!
+    try:
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        ref_time = strategy.started_at or strategy.updated_at or strategy.created_at
+        if ref_time:
+            # tz-aware 처리
+            if ref_time.tzinfo is None:
+                ref_time = ref_time.replace(tzinfo=timezone.utc)
+            if (now - ref_time) < timedelta(minutes=5):
+                return bugs  # = grace period = 검사 skip!
+    except Exception:
+        pass
+
     if strategy.current_position_qty and abs(float(strategy.current_position_qty)) > 0:
         if not strategy.avg_entry_price or float(strategy.avg_entry_price) <= 0:
             bugs.append({
