@@ -78,11 +78,11 @@ async function openCreateModal(editStrategyId) {
   if (editStrategyId) {
     banner.classList.remove('hidden');
     document.getElementById('cm-edit-banner-detail').textContent =
-      `「↻ 설정만 수정」 — 포지션/단계 유지, TP/SL만 즉시 갱신 (거래소 호출 없음). 시작가 무시.\n` +
-      `「🔄 종료 후 새로 시작」 — 미체결 주문 취소 + 1단계부터 새 전략 시작.\n` +
-      `🆕 2026-06-03: 시작가 자동으로 현재가 적용 (옛 가격 미사용) → 트리거가 + 평단 + 청산가 모두 현재가 기준 재계산.`;
+      `🛡 「↻ 설정만 수정 (시작가 유지)」 — 옛 시작가 + 옛 진입 단계 유지! 신 capital/trigger/TP/SL 만 즉시 갱신. 「💲 현재가」 클릭 무시! (= 진행 중 strategy 수정 용도!)\n` +
+      `🌟 「🔄 종료 후 새로 시작 (신 시작가)」 — 옛 strategy 종료 + 미체결 취소 + 1단계부터 신 시작! 「💲 현재가」 클릭 시 = 신 시작가 적용! 1단계 = 옛 평단 보존 (v40 사상!)\n` +
+      `💡 사장님 critical: 「💲 현재가」 클릭 = 「🔄 종료 후 새로 시작」 클릭 시만 적용!`;
     title.textContent = `✏️ 전략 #${editStrategyId} 수정`;
-    submit.textContent = '🔄 종료 후 새로 시작';
+    submit.textContent = '🔄 종료 후 새로 시작 (신 시작가)';
     if (inplaceBtn) inplaceBtn.classList.remove('hidden');  // in-place 버튼 노출
     await loadPrevBlueprint(editStrategyId, /*silent=*/true);
   } else {
