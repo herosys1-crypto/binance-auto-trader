@@ -53,13 +53,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: 금지 패턴 grep (= 옛 silent bug!)
         run: |
-          # v24 silent bug = app.core.constants import 금지
-          if grep -rE "from\s+app\.core\.constants\s+import" backend/app/ --include="*.py" --exclude="*spec_audit*"; then
+          # 🌟 2026-06-16 사장님 critical fix: 주석 라인 skip = false positive 차단!
+          # 옛 silent bug: grep = 주석 안의 옛 silent bug 패턴도 매칭 = CI false positive!
+          # 신 fix: 코드 라인만 매칭 (= 주석 X!)
+
+          # v24 silent bug = app.core.constants import 금지 (= 코드 라인만!)
+          # ^[[:space:]]*from = 라인 시작 + 공백 + from (= '#' 주석 시작 X!)
+          if grep -rE "^[[:space:]]*from\s+app\.core\.constants\s+import" backend/app/ --include="*.py" --exclude="*spec_audit*"; then
             echo "🚨 v24 silent bug 재발!"
             exit 1
           fi
-          # v38 사상 = fillStartPrice('current') 자동 호출 금지
-          if grep -rE "fillStartPrice\(['\"]current['\"]\)" backend/app/static/js/cm-prev-blueprint.js; then
+          # v38 사상 = fillStartPrice('current') 자동 호출 금지 (= 코드 라인만!)
+          # 주석 라인 (= '//' 시작) 제외 후 grep
+          if grep -vE "^[[:space:]]*//" backend/app/static/js/cm-prev-blueprint.js | grep -E "fillStartPrice\(['\"]current['\"]\)"; then
             echo "🚨 v38 사상 위배!"
             exit 1
           fi
