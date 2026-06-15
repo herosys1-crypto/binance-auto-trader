@@ -127,8 +127,11 @@ def _fetch_tp_counts_batch(db: Session, strategy_ids: set[int]) -> dict[int, dic
     from sqlalchemy import case, func, or_, select as sa_select
     from app.models.notification import Notification
 
-    # TP1~5 익절 (TRAILING 제외) — OR 로 묶음
-    tp_like = or_(*[Notification.title.like(f"%[TP{n} 익절%") for n in range(1, 6)])
+    # 🌟 2026-06-15 사장님 critical fix v2: TP1~10 모두 + "체결" anchor!
+    # 옛 silent bug: `[TP{n} 익절%` (n=1~5) → TP6~10 누락 + 다른 알림 우연 매칭!
+    # 사장님 OPGUSDT #140 = 실제 TP1/TP2/TP3 = 3건 But backend = 5 반환!
+    # 신: "체결" 단어 anchor 추가 → 정확 매칭 (= 진입 알림 등 우연 매칭 차단!)
+    tp_like = or_(*[Notification.title.like(f"%[TP{n} 익절 체결%") for n in range(1, 11)])
     not_trailing = ~Notification.title.like("%TRAILING%")
     is_trailing = Notification.title.like("%TRAILING_TP%")
 

@@ -129,6 +129,36 @@ if roi <= -sl_pct: SL!
 - [ ] MEMORY 갱신
 - [ ] 헌법 추가 (= 영구 보존!)
 
+### **E. 신 critical 헌법 29~33 (= OPGUSDT #140 사건 영구!):**
+
+#### **헌법 29: TP 알림 = 시간 + ROI + 가격 명시!**
+> 사장님 명시: "왜 뒤늦게 tp1 부터 실행되었는지"
+= TP 발동 시 = 알림에 = 발동 시간 + ROI % + 도달 가격 = 명시!
+= 사장님 = 사후 분석 = 즉시 가능!
+
+#### **헌법 30: UI 자동 새로고침 + 캐시 차단!**
+> 사장님 critical: "익절 0/10" silent bug
+= 사장님 화면 = 옛 캐시!
+= 신 변경 시 = JS version 강제 갱신!
+= polling 강화!
+
+#### **헌법 31: backend count = SQL 정확화!**
+> `_fetch_tp_counts_batch` = 실제 3 = 5 반환 silent bug!
+= notification title 패턴 매칭 = 더 정교!
+= TP6~10 도 포함!
+
+#### **헌법 32: 사장님 가격 급락 시 = TP 다중 발동 = 정상!**
+> ascending logic = 1 cycle 1개
+= 사장님 = 시각화 필요!
+= "TP1 → TP2 → TP3 = 연속 발동!" 알림 = 친절!
+
+#### **헌법 33: 사장님 모달 ↔ DB 자동 동기 검증!**
+> 신 자율 worker 추가 가능!
+= 매 시간 = UI 표시 vs DB tp_count = 비교!
+= 불일치 시 = Telegram!
+
+= **OPGUSDT #140 사건 = 영구 기록 + 헌법 5개 추가!** 🛡
+
 ---
 
 ## 🚨 절대 금지 사항 (= 사장님 critical 위험!)
