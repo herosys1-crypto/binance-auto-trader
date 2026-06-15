@@ -397,10 +397,13 @@ async function submitInPlaceSettings() {
   const stageCountNote = inp && inp.capitals.length > 0
     ? `\n  단계 수: ${inp.capitals.length}`
     : '';
+  // 🚨 2026-06-16 사장님 critical fix: 위험 사전 알림! (EVAAUSDT #149 사건!)
+  // 사장님 = 신 자본 적용 = 가격 trigger 도달 시 = 즉시 자동 진입 = 너무 큰 포지션!
+  // = 사장님 = 수동 강제 청산 = 위험 회피 = But 손실 잠재!
+  // = 신 fix: 사장님 = 사전 위험 인지 + 명확 확인!
   const confirmMsg =
-    `↻ 전략 #${editingId} 설정만 수정\n\n` +
-    `포지션/단계/평균 진입가 모두 유지됩니다.\n` +
-    `다음 사이클부터 새 설정 적용 (거래소 호출 없음):\n\n` +
+    `⚠️ ↻ 전략 #${editingId} 설정만 수정 — 위험 사전 알림!\n\n` +
+    `📋 신 세팅 (= 미발동 stage 만!):\n` +
     `  TP1=${tpsl.tp1_percent}% (${tpsl.tp1_qty_ratio}%)\n` +
     `  TP2=${tpsl.tp2_percent}% (${tpsl.tp2_qty_ratio}%)\n` +
     `  TP3=${tpsl.tp3_percent}% (${tpsl.tp3_qty_ratio}%)\n` +
@@ -410,9 +413,15 @@ async function submitInPlaceSettings() {
     triggerSummary +
     capitalsSummary +
     stageCountNote +
-    `\n\n※ 미발동 stage 만 trigger% / capital 변경 가능 (이미 진입한 단계는 보존).` +
-    `\n※ 단계 수 변경: 줄이면 미발동 stage 삭제, 늘리면 신규 stage_plan 생성. current_stage 미만 X.` +
-    `\n\n진행할까요?`;
+    `\n\n🚨 critical 위험 (사장님 EVAAUSDT #149 사건!):\n` +
+    `   = 신 trigger 적용 시 = 신 stage_plans 즉시 재계산!\n` +
+    `   = 현재가가 이미 신 trigger 위 = 다음 cycle (10초) = 자동 진입!\n` +
+    `   = 신 자본 = 즉시 대거 진입 = 사장님 의도보다 큰 포지션 가능!\n\n` +
+    `💡 사장님 권장 (= 자본 보호!):\n` +
+    `   1. 신 trigger 가 현재가보다 멀리 있는지 확인!\n` +
+    `   2. 신 자본 = 사장님 의도와 일치?\n` +
+    `   3. 「💉 포지션 추가」 = 수동 진입 가능!\n\n` +
+    `✅ 진행할까요? = 즉시 신 설정 적용!`;
   if (!confirm(confirmMsg)) return;
   const inplaceBtn = document.getElementById('cm-submit-inplace');
   const submit = document.getElementById('cm-submit');
