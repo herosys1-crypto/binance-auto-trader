@@ -135,6 +135,11 @@ def _fetch_tp_counts_batch(db: Session, strategy_ids: set[int]) -> dict[int, dic
     not_trailing = ~Notification.title.like("%TRAILING%")
     is_trailing = Notification.title.like("%TRAILING_TP%")
 
+    # 🌟 2026-06-16 사장님 critical fix v3: FAILED 도 포함! (사장님 #162 龙虾USDT 사례!)
+    # 옛 silent bug: send_status in ['SENT', 'PENDING'] = Telegram FAILED 알림 = 카운트 X!
+    # 사장님 #162 = TP1, TP2 발동 + Telegram 일시 끊김 → 알림 FAILED!
+    # = tp_count = 0 (= 실제 = 2!) silent bug!
+    # 신: Telegram status 무관 = TP 발동 자체 = 카운트!
     rows = db.execute(
         sa_select(
             Notification.strategy_instance_id,
@@ -142,7 +147,7 @@ def _fetch_tp_counts_batch(db: Session, strategy_ids: set[int]) -> dict[int, dic
             func.max(case((is_trailing, 1), else_=0)).label("has_trailing"),
         )
         .where(Notification.strategy_instance_id.in_(strategy_ids))
-        .where(Notification.send_status.in_(["SENT", "PENDING"]))
+        .where(Notification.send_status.in_(["SENT", "PENDING", "FAILED"]))  # 🛡 FAILED 도 카운트!
         .group_by(Notification.strategy_instance_id)
     ).all()
     return {
