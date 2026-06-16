@@ -114,17 +114,32 @@ class NotificationService:
         )
         self.db.add(notification)
         self.db.flush()
-        try:
-            if channel == "TELEGRAM":
-                external_id = self._send_telegram(title=title, body=body)
-            else:
-                external_id = "local-only"
+        # 🌟 2026-06-16 사장님 critical fix: Telegram 자동 재시도 (3회 + exponential backoff!)
+        # 옛 silent bug: HTTPSConnectionPool 일시 끊김 시 = 사장님 알림 X = silent!
+        # 신 fix: 3회 재시도 (0.5s, 1s, 2s 지연) = Telegram 일시 끊김 자동 복구!
+        last_exception = None
+        external_id = None
+        if channel == "TELEGRAM":
+            import time as _time
+            for attempt in range(3):
+                try:
+                    external_id = self._send_telegram(title=title, body=body)
+                    last_exception = None
+                    break
+                except Exception as e:
+                    last_exception = e
+                    if attempt < 2:
+                        _time.sleep(0.5 * (2 ** attempt))  # 0.5s, 1s, 2s
+        else:
+            external_id = "local-only"
+
+        if last_exception is not None:
+            notification.send_status = "FAILED"
+            notification.body = f"{body}\n\n[send_error after 3 retries] {last_exception}"
+        else:
             notification.send_status = "SENT"
             notification.external_message_id = external_id
             notification.sent_at = datetime.now(timezone.utc)
-        except Exception as e:
-            notification.send_status = "FAILED"
-            notification.body = f"{body}\n\n[send_error] {e}"
         self.db.commit()
         self.db.refresh(notification)
         return notification
