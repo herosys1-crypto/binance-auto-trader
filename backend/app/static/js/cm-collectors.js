@@ -88,7 +88,7 @@ function _collectTpSl() {
     1: ['10', '25'], 2: ['15', '25'], 3: ['20', '25'],
   };
   const out = {
-    stop_loss_percent_of_capital: v(get('cm-sl-pct'), '100'),  // 🌟 2026-06-13 사장님: 100 default
+    stop_loss_percent_of_capital: v(get('cm-sl-pct'), '90'),  // 🚨 2026-06-19 사장님 SYNUSDT Liquidation 사건: 100 → 90
   };
   for (let n = 1; n <= 10; n++) {
     const pct = get(`cm-tp${n}-pct`);
