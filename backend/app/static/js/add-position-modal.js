@@ -89,6 +89,27 @@ async function submitAddPosition() {
     toast('지정가 가격을 입력하세요 (양수)', 'warning');
     return;
   }
+  // 🚨 2026-06-19 사장님 critical fix: SYNUSDT 사건 영구 인지!
+  // 사장님: "수동으로 설정한 3단계 4단계가 실행되지 않은거야"
+  // 사장님 = 「💉 포지션 추가」 = 단계 진행 의도 = But 시스템 = qty 추가만!
+  // = 사장님 사상 ↔ 시스템 = 불일치 = SYNUSDT Liquidation -585 USDT 손실!
+  // = 신 fix: 사장님 사전 인지 명확 안내!
+  const confirmMsg =
+    `💉 포지션 추가 = ${amount} USDT 시장가 진입!\n\n` +
+    `🚨 critical 사전 인지 (= 사장님 SYNUSDT 사건!):\n` +
+    `   = 즉시 qty 추가 + 평단 개선!\n` +
+    `   = But 단계 진행 X = 자동 진입 trigger 영향 X!\n` +
+    `   = current_stage 변경 X = stage_plans 추가 X!\n\n` +
+    `💡 사장님 = 단계 추가 의도 시 = 다른 옵션!\n` +
+    `   → 「✏️ 수정」 → 신 4단계, 5단계 capital + trigger 입력 →\n` +
+    `   → 「↻ 설정만 수정 (시작가 유지)」 클릭!\n` +
+    `   = 신 stage_plans 추가 + 자동 진입 작동!\n\n` +
+    `📊 사장님 SYNUSDT 사건:\n` +
+    `   - strategy = 2단계만 (capitals = [200, 600])\n` +
+    `   - 사장님 = 「💉 포지션 추가」 × 2 = 단계 X = trigger 미도달!\n` +
+    `   - 결과 = Liquidation = -585 USDT 손실! 🚨\n\n` +
+    `✅ 진행하시겠습니까? (= 즉시 시장가 진입!)`;
+  if (!confirm(confirmMsg)) return;
   const body = {
     amount_usdt: amount,
     order_type: isLimit ? 'LIMIT' : 'MARKET',
