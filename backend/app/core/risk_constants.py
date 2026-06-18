@@ -44,10 +44,10 @@ DEFAULT_STEP_SIZE_FALLBACK: Final[Decimal] = Decimal("0.001")
 
 # ===== Stop Loss (SL) =====
 # template.stop_loss_percent_of_capital 가 NULL/0 일 때 default.
-# 🌟 2026-06-13 사장님 사상 변경: 100% default (= 사장님 명시 = "전체 포지션 손실 시 강제청산"!)
-# 신 v4 ROI 기반: 평단 vs 현재가 = price_change × lev = ROI <= -100% = SL!
-# = 사장님 자율 = 사장님 결정 = 100% 가 default!
-DEFAULT_SL_PCT_OF_CAPITAL: Final[Decimal] = Decimal("100")
+# 🚨 2026-06-19 사장님 critical 변경: 100% → 90% (= 사장님 SYNUSDT Liquidation 사건!)
+# SYNUSDT = 가격 +49% 상승 → Liquidation 먼저! SL -100% = 발동 X = 사장님 -585 USDT 손실!
+# 신 v5 = SL 90% = Liquidation 안전 마진 + 사장님 자본 보호!
+DEFAULT_SL_PCT_OF_CAPITAL: Final[Decimal] = Decimal("90")
 
 # 강제 청산 알림 임계 — max_loss_pct 가 처음 이 값 이하로 내려가는 사이클에 1회 알림.
 LOSS_ALERT_THRESHOLD_PCT: Final[Decimal] = Decimal("-50")

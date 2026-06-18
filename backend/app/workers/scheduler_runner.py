@@ -33,6 +33,7 @@ from app.workers.settings_sync_worker import run_settings_sync_once  # 🌟 v52:
 from app.workers.setting_preservation_agent import run_setting_preservation_once  # 🌟 v54: 사장님 처음 세팅 영구 유지 (= EVAAUSDT #149 사건!)
 from app.workers.telegram_retry_worker import run_telegram_retry_once  # 🌟 v56: 사장님 Telegram 실패 알림 자동 재시도!
 from app.workers.tp_miss_detector_worker import run_tp_miss_detector_once  # 🌟 v57: TP 단계 도달 + 자동 진입 X = critical 감지! (사장님 ESPORTSUSDT #182!)
+from app.workers.liquidation_risk_worker import run_liquidation_risk_once  # 🚨 v58: Liquidation 사전 알림! (사장님 SYNUSDT -585 USDT 손실!)
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +142,10 @@ def start_scheduler() -> None:
     # 🌟 2026-06-18 v57 신: tp_miss_detector_worker (= 사장님 ESPORTSUSDT #182 TP2/TP3 누락 사건!)
     # 사장님: '결과 좋은 게 문제가 아니야! 실제 수익은 더 많았어야!'
     scheduler.add_job(guarded_job("tp_miss_detector", 90, run_tp_miss_detector_once), trigger=IntervalTrigger(minutes=2), id="tp_miss_detector", replace_existing=True, max_instances=1, coalesce=True)
+    # 🚨 2026-06-19 v58 신: liquidation_risk_worker (= 사장님 SYNUSDT Liquidation -585 USDT 손실!)
+    # 사장님: SL -100% = Liquidation 보다 먼저 발동 X = 사장님 자본 손실!
+    # 신: ROI -70% 도달 시 = 즉시 critical 알림!
+    scheduler.add_job(guarded_job("liquidation_risk", 50, run_liquidation_risk_once), trigger=IntervalTrigger(minutes=1), id="liquidation_risk", replace_existing=True, max_instances=1, coalesce=True)
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.

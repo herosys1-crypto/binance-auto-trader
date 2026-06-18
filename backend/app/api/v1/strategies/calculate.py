@@ -45,7 +45,7 @@ class PreviewInlineRequest(BaseModel):
     tp8_percent: Decimal | None = Field(default=None)
     tp9_percent: Decimal | None = Field(default=None)
     tp10_percent: Decimal | None = Field(default=None)
-    stop_loss_percent_of_capital: Decimal = Field(default=Decimal("100"))  # 🌟 2026-06-13 사장님: 100 default
+    stop_loss_percent_of_capital: Decimal = Field(default=Decimal("90"))  # 🚨 2026-06-19 사장님 SYNUSDT Liquidation: 100 → 90
     last_stage_trigger_mode: str | None = None
     last_stage_trigger_percent: Decimal | None = None
 
