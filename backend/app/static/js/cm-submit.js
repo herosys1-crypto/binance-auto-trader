@@ -30,6 +30,51 @@ async function submitCreate() {
   if (isMulti && !editingId) {
     return submitCreateMulti();  // 신규 batch 함수 호출
   }
+  // 🚨 2026-06-19 사장님 critical fix: 트리거 % 검증! (= SYNUSDT -585 USDT 손실!)
+  // 사장님: '전략설정은 완벽해야 해!'
+  // 사장님 SYNUSDT = 트리거 +45% = 너무 멀음 = 자동 진입 X = 사장님 자본 손실!
+  // = 신 fix: 트리거 > 30% 단계 발견 시 = 사전 위험 알림!
+  try {
+    const _maxSafeTrigger = 30;
+    const _warnTriggers = [];
+    for (let i = 2; i <= 10; i++) {
+      const trgEl = document.getElementById('cm-trg-' + i);
+      const capEl = document.getElementById('cm-cap-' + i);
+      if (!trgEl || !capEl) continue;
+      const trg = Number(trgEl.value);
+      const cap = Number(capEl.value);
+      if (cap > 0 && trg > _maxSafeTrigger) {
+        _warnTriggers.push(`${i}단계: 트리거 ${trg}%`);
+      }
+    }
+    // 마지막 단계 trigger 도 검증!
+    const lastTrgEl = document.getElementById('cm-last-stage-trigger-pct');
+    if (lastTrgEl) {
+      const lastTrg = Number(lastTrgEl.value);
+      if (lastTrg > _maxSafeTrigger) {
+        _warnTriggers.push(`마지막 단계: 트리거 ${lastTrg}%`);
+      }
+    }
+    if (_warnTriggers.length > 0) {
+      const proceed = confirm(
+        `⚠️ 트리거 % 위험 사전 알림! (= 사장님 SYNUSDT 사건!)\n\n` +
+        `🚨 다음 단계 = 트리거 ${_maxSafeTrigger}% 초과:\n` +
+        _warnTriggers.map(t => `  • ${t}`).join('\n') + `\n\n` +
+        `📊 사장님 SYNUSDT 사건:\n` +
+        `  - 트리거 +45% = 너무 멀음!\n` +
+        `  - 가격 +14% 도달 = But 자동 진입 X!\n` +
+        `  - 사장님 = 「포지션 추가」 수동!\n` +
+        `  - 결과 = Liquidation = -585 USDT 손실! 🚨\n\n` +
+        `💡 사장님 권장 (= 자율 청산 회피 전략!):\n` +
+        `  • 트리거 = 10~20% (= 자동 진입 보장!)\n` +
+        `  • 청산가 안 분포 = 모든 단계 도달!\n\n` +
+        `✅ 진행할까요? (= 트리거 ${_maxSafeTrigger}% 초과 = 자동 진입 어려움!)`
+      );
+      if (!proceed) return;
+    }
+  } catch (e) {
+    console.warn('[trigger-check] 검증 실패 (= 무시):', e);
+  }
   const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
   const startPrice = document.getElementById('cm-start-price').value;
 
