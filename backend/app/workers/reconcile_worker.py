@@ -208,13 +208,21 @@ def _do_reconcile(decrypt_func) -> None:
                     # *_OPEN orphan 자동 정리 — 1~10단계 + TP 1~10 PARTIAL.
                     # 2026-05-14 Phase 1 centralize: OPEN_LIKE_FOR_ORPHAN_CHECK 사용.
                     if strategy.status in OPEN_LIKE_FOR_ORPHAN_CHECK:
+                        # 🌟 2026-06-18 사장님 critical: realized_pnl_sync_worker 가 매 1분 = Binance trades 동기화 = OK!
+                        # 사장님 ESPORTSUSDT #182 = Binance +30.26 USDT (= But DB = +15.21 = silent bug 발견!)
+                        # = 신 fix: STOPPED 마킹 시 = Telegram 사장님 안내 (= "Binance 실제 손익 확인!")
                         db.add(RiskEvent(
                             strategy_instance_id=strategy.id,
                             event_type="RECONCILE_AUTO_STOP_ORPHAN",
                             severity="WARN",
                             title="🧹 외부 청산된 전략 자동 정리 (STOPPED)",
-                            message=f"{strategy.symbol} {strategy.side} — 거래소에서 외부 청산되어 시스템에만 잔재. STOPPED 마킹",
-                            event_payload={"strategy_id": strategy.id, "old_status": strategy.status},
+                            message=(
+                                f"{strategy.symbol} {strategy.side} — 거래소에서 외부 청산되어 시스템에만 잔재. STOPPED 마킹.\n"
+                                f"⚠️ DB realized_pnl = {strategy.realized_pnl or 0} USDT (= 시스템 청산만 반영!)\n"
+                                f"💡 사장님 Binance 앱 = ESPORTSUSDT Position History = 실제 손익 확인 필수!\n"
+                                f"= 사장님 자율 청산 또는 = liquidation = realized_pnl_sync_worker 다음 cycle 자동 동기화!"
+                            ),
+                            event_payload={"strategy_id": strategy.id, "old_status": strategy.status, "db_realized_pnl": str(strategy.realized_pnl or 0)},
                         ))
                         strategy.status = "STOPPED"
                         strategy.current_position_qty = Decimal("0")
