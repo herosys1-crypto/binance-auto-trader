@@ -578,13 +578,46 @@
     /* 사장님 「모바일 = data-mobile-hide 카드는 숨김」 = 깔끔! */
     [data-mobile-hide="true"] { display: none !important; }
 
+    /* 🌟 2026-06-19 사장님 critical: 빠른 작업 + 즐겨찾기 = 모바일 노출!
+       사장님: "모바일에서 빠른 작업과 즐겨찾기 템플릿이 없어 확인해서 넣어줘"
+       = 사이드바 컨테이너 자체는 노출 (data-mobile-hide 무시!) +
+       = 그 안의 운영 통계 카드는 = 옵션 (= 사장님 결정!)
+    */
+    /* 사이드바 강제 노출 */
+    div.md\:col-span-1[data-mobile-hide="true"] {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 8px !important;
+    }
+    /* 운영 통계 = 모바일에서 숨김 (= 정보 너무 많음!) */
+    div.md\:col-span-1[data-mobile-hide="true"] > div.card-glass {
+      display: none !important;
+    }
+    /* 빠른 작업 영역 = 노출! */
+    div.md\:col-span-1[data-mobile-hide="true"] > .card:not(.card-glass) {
+      display: block !important;
+    }
+    /* 즐겨찾기 = 강제 노출! */
+    #section-favorites-sidebar[data-mobile-hide="true"] {
+      display: block !important;
+      max-height: 280px !important;
+      overflow-y: auto !important;
+    }
+    /* 빠른 작업 버튼 = 가로 wrap = 큰 터치! */
+    div.md\:col-span-1[data-mobile-hide="true"] .card .flex.flex-wrap {
+      gap: 6px !important;
+    }
+    div.md\:col-span-1[data-mobile-hide="true"] .card button {
+      min-height: 36px !important;
+      padding: 8px 12px !important;
+    }
+
     /* ===== 3. 메인 grid = 세로 1 col (= 좌사이드+우전략 → 위아래 stack) ===== */
     .grid.grid-cols-1.md\:grid-cols-5 {
       display: flex !important;
       flex-direction: column !important;
       gap: 8px !important;
     }
-    /* 좌측 사이드바 = 모바일 숨김 (운영 통계 / 빠른작업 / 즐겨찾기 = data-mobile-hide) */
 
     /* ===== 4. 전략 인스턴스 = 카드 list (= 세로 스크롤, 가로 X!) ===== */
     /* 사장님 사상: 「세로 스크롤 위에서 아래로!」 */
@@ -1890,41 +1923,41 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/api.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/helpers.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/stats-modals.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/health-page.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/ranking-page.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/ranking-modal.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/trade-history-modal.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/system-banner.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/cm-collectors.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/cm-loaders.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/cm-market-info.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/cm-preview.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/cm-open-modal.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/templates-panel.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/indicators.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/strategies-list.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/external-positions.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/multi-symbol.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/template-save.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/cm-submit.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/strategy-detail.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/chart-detail.js?v=20260619v65-prev-blueprint"></script>
+<script src="/static/js/constants.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/api.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/helpers.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/stats-modals.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/health-page.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/ranking-page.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/ranking-modal.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/trade-history-modal.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/system-banner.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/cm-collectors.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/cm-loaders.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/cm-market-info.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/cm-preview.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/cm-open-modal.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/templates-panel.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/indicators.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/strategies-list.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/external-positions.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/multi-symbol.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/template-save.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/cm-submit.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/strategy-detail.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/chart-detail.js?v=20260619v66-mobile-sidebar"></script>
 <script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
-<script src="/static/js/accounts-modal.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/add-position-modal.js?v=20260619v65-prev-blueprint"></script>
+<script src="/static/js/accounts-modal.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/add-position-modal.js?v=20260619v66-mobile-sidebar"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/page-router.js?v=20260619v65-prev-blueprint"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260619v65-prev-blueprint"></script>
+<script src="/static/js/strategy-actions.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/page-router.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260619v66-mobile-sidebar"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
