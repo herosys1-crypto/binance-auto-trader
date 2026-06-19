@@ -90,47 +90,43 @@ async function openCreateModal(editStrategyId) {
     title.textContent = '➕ 새 전략 시작';
     submit.textContent = '🚀 전략 시작';
     if (inplaceBtn) inplaceBtn.classList.add('hidden');  // 신규 모드엔 숨김
-    // 🌟 2026-06-19 사장님 critical: 심볼 비우기 + 신 strategy = 깨끗 시작!
-    const _symEl = document.getElementById('cm-symbol');
-    if (_symEl) _symEl.value = '';
-    // 🌟 2026-06-19 사장님 critical: 옛 strategy 의 capitals/trigger = 자동 채움 (사장님 편의!)
-    // = 사장님 = 이전 strategy = 기준 + 심볼만 변경 = 빠른 신 strategy!
+    // 🌟 2026-06-19 사장님 critical v2: loadPrevBlueprint 활용 (= 옛 stages_config 정확!)
+    // 옛 silent bug: template_capitals 필드 X = 자동 채움 작동 X!
+    // 신 fix: loadPrevBlueprint(id, silent=true) = stages_config + tp/sl 모두 채움!
+    //         + 그 후 = symbol + start_price = 비우기 (사장님 깨끗 입력!)
     try {
-      const _prev = await api('/strategies?include_archived=false&limit=1');
+      const _prev = await api('/strategies?include_archived=false');
       if (_prev && _prev.length > 0) {
         const _last = _prev.sort((a, b) => b.id - a.id)[0];
-        // capitals 자동 채움
-        if (_last.template_capitals && Array.isArray(_last.template_capitals)) {
-          for (let i = 0; i < _last.template_capitals.length && i < 10; i++) {
-            const _c = document.getElementById('cm-cap-' + (i + 1));
-            const _v = _last.template_capitals[i];
-            if (_c && _v !== null && _v !== undefined && Number(_v) > 0) {
-              _c.value = String(_v);
-            }
+        // loadPrevBlueprint = stages_config + capitals + triggers + tp/sl + leverage + side 모두 자동!
+        if (typeof loadPrevBlueprint === 'function' && _last.id) {
+          await loadPrevBlueprint(_last.id, /*silent=*/true);
+          // 🛡 그 후 = 사장님 critical: 심볼 + 시작가 = 빈칸! (사장님 신 strategy = 깨끗 시작!)
+          const _symEl = document.getElementById('cm-symbol');
+          if (_symEl) _symEl.value = '';
+          const _startEl = document.getElementById('cm-start-price');
+          if (_startEl) _startEl.value = '';
+          // cmState 도 리셋 (= 신 strategy 모드!)
+          if (cmState) {
+            cmState.editingStrategyId = null;
+            cmState.editingStrategyBp = null;
+            cmState.mode = 'direct';
           }
+        } else {
+          // fallback: 심볼만 비우기
+          const _symEl = document.getElementById('cm-symbol');
+          if (_symEl) _symEl.value = '';
         }
-        // trigger_percents 자동 채움
-        if (_last.template_trigger_percents && Array.isArray(_last.template_trigger_percents)) {
-          for (let i = 0; i < _last.template_trigger_percents.length && i < 10; i++) {
-            const _t = document.getElementById('cm-trg-' + (i + 1));
-            const _v = _last.template_trigger_percents[i];
-            if (_t && _v !== null && _v !== undefined && Number(_v) > 0) {
-              _t.value = String(_v);
-            }
-          }
-        }
-        // leverage 자동
-        if (_last.leverage) {
-          const _lv = document.getElementById('cm-leverage');
-          if (_lv) _lv.value = String(_last.leverage);
-        }
-        // side 자동
-        if (_last.side) setCmSide(_last.side);
-        // capital 합 갱신
-        if (typeof onCapitalsChange === 'function') onCapitalsChange();
+      } else {
+        // 옛 strategy 없음 = 그냥 심볼만 비움
+        const _symEl = document.getElementById('cm-symbol');
+        if (_symEl) _symEl.value = '';
       }
     } catch (_e) {
       console.warn('[new-strategy] 이전 설정 자동 채움 실패 (= 사장님 빈 모달로 시작):', _e);
+      // 실패 시도 = 심볼 비움!
+      const _symEl = document.getElementById('cm-symbol');
+      if (_symEl) _symEl.value = '';
     }
   }
   // 2026-06-03 (사장님 사상 정확 적용): SL = 투자금 대비 손실 % (레버리지 무관)
