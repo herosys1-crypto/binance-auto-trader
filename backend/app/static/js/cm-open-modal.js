@@ -90,6 +90,48 @@ async function openCreateModal(editStrategyId) {
     title.textContent = '➕ 새 전략 시작';
     submit.textContent = '🚀 전략 시작';
     if (inplaceBtn) inplaceBtn.classList.add('hidden');  // 신규 모드엔 숨김
+    // 🌟 2026-06-19 사장님 critical: 심볼 비우기 + 신 strategy = 깨끗 시작!
+    const _symEl = document.getElementById('cm-symbol');
+    if (_symEl) _symEl.value = '';
+    // 🌟 2026-06-19 사장님 critical: 옛 strategy 의 capitals/trigger = 자동 채움 (사장님 편의!)
+    // = 사장님 = 이전 strategy = 기준 + 심볼만 변경 = 빠른 신 strategy!
+    try {
+      const _prev = await api('/strategies?include_archived=false&limit=1');
+      if (_prev && _prev.length > 0) {
+        const _last = _prev.sort((a, b) => b.id - a.id)[0];
+        // capitals 자동 채움
+        if (_last.template_capitals && Array.isArray(_last.template_capitals)) {
+          for (let i = 0; i < _last.template_capitals.length && i < 10; i++) {
+            const _c = document.getElementById('cm-cap-' + (i + 1));
+            const _v = _last.template_capitals[i];
+            if (_c && _v !== null && _v !== undefined && Number(_v) > 0) {
+              _c.value = String(_v);
+            }
+          }
+        }
+        // trigger_percents 자동 채움
+        if (_last.template_trigger_percents && Array.isArray(_last.template_trigger_percents)) {
+          for (let i = 0; i < _last.template_trigger_percents.length && i < 10; i++) {
+            const _t = document.getElementById('cm-trg-' + (i + 1));
+            const _v = _last.template_trigger_percents[i];
+            if (_t && _v !== null && _v !== undefined && Number(_v) > 0) {
+              _t.value = String(_v);
+            }
+          }
+        }
+        // leverage 자동
+        if (_last.leverage) {
+          const _lv = document.getElementById('cm-leverage');
+          if (_lv) _lv.value = String(_last.leverage);
+        }
+        // side 자동
+        if (_last.side) setCmSide(_last.side);
+        // capital 합 갱신
+        if (typeof onCapitalsChange === 'function') onCapitalsChange();
+      }
+    } catch (_e) {
+      console.warn('[new-strategy] 이전 설정 자동 채움 실패 (= 사장님 빈 모달로 시작):', _e);
+    }
   }
   // 2026-06-03 (사장님 사상 정확 적용): SL = 투자금 대비 손실 % (레버리지 무관)
   _attachSlLossPreview();
@@ -111,7 +153,7 @@ async function loadRecentStrategiesQuick() {
       container.innerHTML = '<span class="text-slate-500">최근 전략 없음</span>';
       return;
     }
-    // 최근 ID 내림차순 + symbol+side 중복 제거 = 3개만
+    // 🌟 2026-06-19 사장님 요청: 6개 (= 2줄!) + symbol+side 중복 제거
     const sorted = all.sort((a, b) => b.id - a.id);
     const seen = new Set();
     const unique = [];
@@ -120,13 +162,15 @@ async function loadRecentStrategiesQuick() {
       if (seen.has(key)) continue;
       seen.add(key);
       unique.push(s);
-      if (unique.length >= 3) break;
+      if (unique.length >= 6) break;  // 🌟 신: 3 → 6 (= 2줄!)
     }
+    // grid-cols-3 으로 = 자동 2줄!
+    container.className = 'grid grid-cols-3 gap-1';
     container.innerHTML = unique.map(s => {
       const sideColor = s.side === 'SHORT' ? 'text-red-400' : 'text-green-400';
       const sideIcon = s.side === 'SHORT' ? '📉' : '📈';
       return `<button onclick="loadPrevBlueprint(${s.id})"
-        class="px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-xs flex-1"
+        class="px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-xs"
         style="min-width:0"
         title="#${s.id} ${s.symbol} ${s.side} ${s.leverage}x — 클릭 = 자동 로드">
         <span class="${sideColor}">${sideIcon}</span>
