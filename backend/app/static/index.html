@@ -466,11 +466,291 @@
   #cm-recent-strategies-list { display: flex !important; flex-wrap: nowrap !important; gap: 4px; }
   #cm-recent-strategies-list button { flex: 1 1 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 
-  /* 🌟 2026-06-09 사장님 「모바일 취소 + 데스크탑 단일」
-     = data-mobile-hide 무력화 (= 모바일에서도 데스크탑 layout 그대로)
-     = 모바일 전용 CSS 모두 제거 = 작은 화면 = 데스크탑 layout 그대로 (가로 스크롤 가능)
-     = 사장님 = 모바일 사용 안 함, 데스크탑 단일 디자인 */
+  /* 🌟 2026-06-09 사장님 「모바일 취소 + 데스크탑 단일」 (= 옛 정책, 신 v2 로 대체!) */
   [data-mobile-hide="true"] { display: revert !important; }
+
+  /* ============================================================================
+     🌟 2026-06-20 사장님 모바일 UI v2 — 세로 모드 기본 + UI 전문가 디자인
+     ============================================================================
+     사장님 critical 사상:
+       1) 세로 모드 = 기본 (= 모바일 portrait!)
+       2) 가로 모드 = 옵션 (= landscape 정보 더!)
+       3) 깔끔 + 큰 글씨 + 큰 버튼 + 안전 강조
+
+     영향 범위:
+       - @media (max-width: 767px) = 모바일 전반 (세로 + 가로)
+       - @media (max-width: 640px) and (orientation: portrait) = 세로 전용
+       - @media (max-width: 1024px) and (orientation: landscape) and (max-height: 600px) = 가로 전용
+       - 데스크탑 (≥ 768px) = 영향 X (= 사장님 데스크탑 운영 영향 X!)
+     ============================================================================ */
+
+  /* ===== 1. 모바일 공통 (max-width: 767px) ===== */
+  @media (max-width: 767px) {
+    /* 페이지 padding = 좌우 컴팩트 (가로 폭 최대 활용) */
+    #dashboard-screen { padding: 6px !important; }
+    body main, body #page-dashboard { padding: 0 !important; }
+
+    /* 헤더 — 자동 줄바꿈 + 컴팩트 */
+    #dashboard-screen > .flex.justify-between { gap: 6px !important; }
+    #dashboard-screen h1 { font-size: 16px !important; }
+    #dashboard-screen nav { margin-left: 0 !important; gap: 4px !important; }
+    #dashboard-screen nav .btn { padding: 6px 10px !important; min-height: 36px !important; font-size: 12px !important; }
+    #last-updated { font-size: 10px !important; margin-left: 0 !important; }
+
+    /* 카드 = 100% 폭 + 세로 stack + 큰 터치 영역 */
+    .card { border-radius: 10px !important; }
+    .card-header { padding: 10px 12px !important; font-size: 13px !important; }
+
+    /* 버튼 = 최소 44x44 터치 영역 (Apple HIG) */
+    .btn { min-height: 44px !important; padding: 10px 14px !important; font-size: 13px !important; }
+    .btn.text-xs, button.text-xs { font-size: 12px !important; min-height: 40px !important; }
+
+    /* 가독성 폰트 */
+    body { font-size: 14px !important; }
+    th { padding: 8px 6px !important; font-size: 11px !important; }
+    td { padding: 8px 6px !important; font-size: 13px !important; line-height: 1.35 !important; }
+
+    /* ===== 2. 메트릭 카드 = 2x2 grid (= 세로!) ===== */
+    /* 옛 grid-cols-2 md:grid-cols-6 → 모바일 = 2 col grid + 잔액 = 전체폭 */
+    #metrics-row {
+      display: grid !important;
+      grid-template-columns: 1fr 1fr !important;
+      gap: 6px !important;
+      margin-bottom: 8px !important;
+    }
+    /* 거래소 잔액 = 가장 중요 = 모바일 전체폭 1줄 차지 */
+    #card-balance {
+      grid-column: 1 / -1 !important;
+      display: flex !important;
+      flex-direction: column !important;
+      padding: 10px 12px !important;
+      max-height: none !important;
+      min-height: 0 !important;
+    }
+    #card-balance .balance-left {
+      border-right: 0 !important;
+      padding-right: 0 !important;
+      border-bottom: 1px dashed #334155;
+      padding-bottom: 6px;
+      margin-bottom: 6px;
+    }
+    #card-balance .card-metric-value-lg { font-size: 1.8rem !important; line-height: 1.15 !important; }
+    #card-balance .card-metric-label { font-size: 11px !important; }
+    #card-balance .balance-right {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 6px !important;
+      border-left: 0 !important;
+      padding-left: 0 !important;
+    }
+    #card-balance .balance-info-row {
+      display: flex !important;
+      flex-direction: row !important;
+      flex-wrap: wrap !important;
+      gap: 8px 12px !important;
+      font-size: 12px !important;
+      line-height: 1.4 !important;
+      margin: 0 !important;
+    }
+    #card-balance .balance-info-cell { white-space: nowrap; color: #94a3b8; }
+    #card-balance .balance-info-cell b { color: #fbbf24; font-weight: 700; font-size: 13px; }
+    #card-balance .balance-info-icon { font-size: 13px; }
+    #card-balance .balance-progress-track {
+      display: block !important; height: 6px !important; border-radius: 3px;
+    }
+    #card-balance .balance-progress-fill { display: block !important; }
+    #card-balance .balance-progress-title { display: none !important; }
+
+    /* 시스템 / 진행중 / PNL / 템플릿 = 1 col 각 (2x2) */
+    #card-system, #card-active, #card-pnl, #card-templates {
+      padding: 10px 12px !important;
+      max-height: none !important;
+      min-height: 60px !important;
+      display: flex !important;
+      flex-direction: column !important;
+      justify-content: center !important;
+    }
+    .card-metric-label { font-size: 11px !important; line-height: 1.2 !important; margin-bottom: 4px !important; }
+    .card-metric-value { font-size: 1.1rem !important; line-height: 1.2 !important; }
+    .card-metric-value-xl { font-size: 1.2rem !important; }
+    .card-metric-detail { font-size: 10px !important; margin-top: 3px !important; }
+
+    /* 사장님 「모바일 = data-mobile-hide 카드는 숨김」 = 깔끔! */
+    [data-mobile-hide="true"] { display: none !important; }
+
+    /* ===== 3. 메인 grid = 세로 1 col (= 좌사이드+우전략 → 위아래 stack) ===== */
+    .grid.grid-cols-1.md\:grid-cols-5 {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 8px !important;
+    }
+    /* 좌측 사이드바 = 모바일 숨김 (운영 통계 / 빠른작업 / 즐겨찾기 = data-mobile-hide) */
+
+    /* ===== 4. 전략 인스턴스 = 카드 list (= 세로 스크롤, 가로 X!) ===== */
+    /* 사장님 사상: 「세로 스크롤 위에서 아래로!」 */
+    #section-strategies {
+      grid-column: 1 / -1 !important;
+      padding: 0 !important;
+    }
+    #section-strategies .card-header {
+      flex-direction: column !important;
+      align-items: stretch !important;
+      gap: 6px !important;
+    }
+    #section-strategies .card-header > div.flex {
+      flex-wrap: wrap !important;
+      gap: 6px !important;
+    }
+    #section-strategies label { font-size: 12px !important; }
+    #section-strategies select {
+      font-size: 13px !important; padding: 6px 8px !important;
+      min-height: 36px !important;
+    }
+    /* 표 = 가로 스크롤 유지 (사장님 시각 = 컬럼 안 잘림, 옛 task #116) */
+    .strategies-table-wrap {
+      max-height: calc(100vh - 220px) !important;
+      overflow-x: auto !important; overflow-y: auto !important;
+      -webkit-overflow-scrolling: touch;
+    }
+    .strategies-table-wrap table { min-width: 720px !important; }
+    .strategies-table-wrap th {
+      position: sticky; top: 0; z-index: 2;
+      background: #0f172a !important;
+    }
+    /* 액션 버튼 = 큰 터치 영역 */
+    .strategies-table-wrap td button {
+      min-height: 36px !important;
+      padding: 6px 10px !important;
+      font-size: 12px !important;
+    }
+
+    /* ===== 5. 위험 알림 / Zombie 배너 = 큰 폰트 + 안전 강조 ===== */
+    #zg-banner { padding: 12px !important; font-size: 13px !important; }
+    #zg-banner-title { font-size: 14px !important; }
+    .alert-bar { padding: 10px 12px !important; font-size: 13px !important; }
+    .alert-bar .text-xl { font-size: 22px !important; }
+
+    /* ===== 6. 모달 = 풀스크린 + sticky header/footer ===== */
+    #create-modal { padding: 0 !important; align-items: stretch !important; }
+    #create-modal > div {
+      width: 100% !important;
+      max-width: 100% !important;
+      max-height: 100vh !important;
+      height: 100vh !important;
+      border-radius: 0 !important;
+      padding: 0 !important;
+      display: flex !important;
+      flex-direction: column !important;
+      overflow: hidden !important;
+    }
+    /* 모달 header = sticky 상단 */
+    #create-modal > div > .flex.justify-between:first-of-type {
+      position: sticky; top: 0; z-index: 10;
+      background: #1e293b; padding: 12px 16px !important;
+      border-bottom: 1px solid #334155;
+      margin: 0 !important;
+    }
+    /* 모달 본문 = 스크롤 영역 */
+    #create-modal > div > *:not(.flex.justify-between):not(.flex.justify-end) {
+      padding: 0 12px !important;
+    }
+    /* 모달 footer = sticky 하단 (취소 / 전략 시작 등 액션 버튼) */
+    #create-modal .flex.justify-end {
+      position: sticky; bottom: 0; z-index: 10;
+      background: #1e293b; padding: 12px !important;
+      border-top: 1px solid #334155;
+      gap: 8px !important;
+      flex-wrap: wrap;
+    }
+    #create-modal .flex.justify-end button {
+      flex: 1 1 auto;
+      min-height: 44px !important;
+      font-size: 13px !important;
+    }
+    /* 모달 내부 입력 = 큰 터치 영역 + 자동 zoom 방지 (16px) */
+    #create-modal input[type="text"],
+    #create-modal input[type="number"],
+    #create-modal select,
+    #create-modal textarea {
+      font-size: 16px !important; padding: 10px 12px !important; height: auto !important;
+      min-height: 44px !important;
+    }
+    /* 모달 작은 버튼 (% 단축, 모드 토글) = 모바일 = 36px 충분 */
+    #create-modal button[onclick*="setCmMode"],
+    #create-modal button[onclick*="setCmSide"],
+    #create-modal #cm-recent-strategies-list button {
+      min-height: 40px !important; font-size: 13px !important; padding: 8px 12px !important;
+    }
+    /* 단계별 입력 grid = 가로 스크롤 (= 컬럼 너무 많아 사장님 옆으로 swipe) */
+    #cm-capitals-grid {
+      overflow-x: auto !important;
+      -webkit-overflow-scrolling: touch;
+    }
+    #cm-capitals-grid > div { min-width: 600px; }
+
+    /* ===== 7. 최근 활동 / 템플릿 카드 = stack ===== */
+    #section-templates { grid-column: 1 / -1 !important; }
+    #section-templates .grid { grid-template-columns: 1fr !important; gap: 6px !important; }
+  }
+
+  /* ===== 8. 세로 모드 전용 (portrait < 640px) ===== */
+  /* 사장님 「세로 모드 = 기본!」 */
+  @media (max-width: 640px) and (orientation: portrait) {
+    /* 메트릭 = 2x2 + 잔액 = 전체폭 (위에서 정의) */
+    /* 운영 통계 카드는 사이드바 안 → 모바일 숨김 */
+    /* 모든 카드 = 100% 폭 + 위에서 아래로 스크롤 */
+    .grid.grid-cols-2.md\:grid-cols-6 { grid-template-columns: 1fr 1fr !important; }
+  }
+
+  /* ===== 9. 가로 모드 전용 (landscape, max-width: 1024, max-height: 600) ===== */
+  /* 사장님 「가로 모드 = 옵션 = 정보 더 보기」 */
+  @media (max-width: 1024px) and (orientation: landscape) and (max-height: 600px) {
+    /* 메트릭 = 4 col (= 4개 균등) + 잔액 = 2 col (가장 중요) */
+    #metrics-row {
+      display: grid !important;
+      grid-template-columns: 2fr 1fr 1fr 1fr 1fr !important;
+      gap: 6px !important;
+      margin-bottom: 6px !important;
+    }
+    #card-balance {
+      grid-column: 1 / span 1 !important;
+      flex-direction: row !important;
+      gap: 10px !important;
+      padding: 8px 10px !important;
+    }
+    #card-balance .balance-left {
+      border-right: 1px dashed #334155 !important;
+      border-bottom: 0 !important;
+      padding-right: 10px;
+      padding-bottom: 0;
+      margin-bottom: 0;
+    }
+    #card-balance .card-metric-value-lg { font-size: 1.3rem !important; }
+    #card-balance .balance-info-row { font-size: 11px !important; gap: 6px 10px !important; }
+
+    /* 전략 인스턴스 = 가로 스크롤 (그대로) + max-height = 화면 더 활용 */
+    .strategies-table-wrap { max-height: calc(100vh - 160px) !important; }
+
+    /* 헤더 = 컴팩트 */
+    #dashboard-screen h1 { font-size: 14px !important; }
+    #dashboard-screen nav .btn { min-height: 32px !important; padding: 4px 8px !important; font-size: 11px !important; }
+
+    /* 모달 = 더 큰 영역 활용 */
+    #create-modal > div { padding: 0 !important; }
+    #create-modal > div > .flex.justify-between:first-of-type { padding: 8px 12px !important; }
+  }
+
+  /* ===== 10. 모바일 = 외부 포지션 / 시장 순위 / 점검 페이지 padding 정리 ===== */
+  @media (max-width: 767px) {
+    #page-ranking, #page-health { padding: 6px !important; }
+    /* 모달 (= edit / accounts / ranking 등) 도 풀스크린 */
+    .fixed.inset-0.z-50 > div.card {
+      max-height: 100vh !important;
+      max-width: 100% !important;
+      width: 100% !important;
+      border-radius: 0 !important;
+    }
+  }
 </style>
 </head>
 <body class="min-h-screen">
