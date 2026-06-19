@@ -1357,11 +1357,19 @@
           <rect x="0" y="0" width="400" height="80" fill="transparent" />
           <text x="200" y="44" text-anchor="middle" class="text-xs" fill="#64748b">차트 로딩 중...</text>
         </svg>
-        <div class="flex gap-2 mt-2 items-center text-xs flex-wrap">
+        <div class="flex gap-1 mt-2 items-center text-xs flex-wrap">
           <span class="text-slate-400">시작가 자동:</span>
-          <button onclick="fillStartPrice('current')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">현재가</button>
-          <button onclick="fillStartPrice('-0.1')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">-0.1%</button>
-          <button onclick="fillStartPrice('+0.1')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px">+0.1%</button>
+          <button onclick="fillStartPrice('current')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px" title="현재가 그대로!">💲 현재가</button>
+          <span class="text-slate-700">|</span>
+          <!-- 🌟 2026-06-19 사장님 요청: -% 3개 (= SHORT 진입 후보!) -->
+          <button onclick="fillStartPrice('-0.1')" class="btn-ghost btn" style="padding:3px 6px; font-size:11px; background:#7f1d1d40" title="현재가 -0.1%">-0.1%</button>
+          <button onclick="fillStartPrice('-5')" class="btn-ghost btn" style="padding:3px 6px; font-size:11px; background:#7f1d1d40" title="현재가 -5%">-5%</button>
+          <button onclick="fillStartPrice('-10')" class="btn-ghost btn" style="padding:3px 6px; font-size:11px; background:#7f1d1d40" title="현재가 -10%">-10%</button>
+          <span class="text-slate-700">|</span>
+          <!-- 🌟 2026-06-19 사장님 요청: +% 3개 (= LONG 진입 후보!) -->
+          <button onclick="fillStartPrice('+0.1')" class="btn-ghost btn" style="padding:3px 6px; font-size:11px; background:#14532d40" title="현재가 +0.1%">+0.1%</button>
+          <button onclick="fillStartPrice('+5')" class="btn-ghost btn" style="padding:3px 6px; font-size:11px; background:#14532d40" title="현재가 +5%">+5%</button>
+          <button onclick="fillStartPrice('+10')" class="btn-ghost btn" style="padding:3px 6px; font-size:11px; background:#14532d40" title="현재가 +10%">+10%</button>
           <span class="text-slate-700">|</span>
           <button onclick="openSymbolRankingModal('losers')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px" title="하락 top — SHORT 진입 후보">📉 하락 top</button>
           <button onclick="openSymbolRankingModal('gainers')" class="btn-ghost btn" style="padding:3px 8px; font-size:11px" title="상승 top — LONG 진입 후보">📈 상승 top</button>
@@ -1602,41 +1610,41 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/api.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/helpers.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/stats-modals.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/health-page.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/ranking-page.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/ranking-modal.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/trade-history-modal.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/system-banner.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/cm-collectors.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/cm-loaders.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/cm-market-info.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/cm-preview.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/cm-open-modal.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/templates-panel.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/indicators.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/strategies-list.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/external-positions.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/multi-symbol.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/template-save.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/cm-submit.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/strategy-detail.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/chart-detail.js?v=20260619v62-new-strategy-ux"></script>
+<script src="/static/js/constants.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/api.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/helpers.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/stats-modals.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/health-page.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/ranking-page.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/ranking-modal.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/trade-history-modal.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/system-banner.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/cm-collectors.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/cm-loaders.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/cm-market-info.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/cm-preview.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/cm-open-modal.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/templates-panel.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/indicators.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/strategies-list.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/external-positions.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/multi-symbol.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/template-save.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/cm-submit.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/strategy-detail.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/chart-detail.js?v=20260619v63-start-price-6btns"></script>
 <script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
-<script src="/static/js/accounts-modal.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/add-position-modal.js?v=20260619v62-new-strategy-ux"></script>
+<script src="/static/js/accounts-modal.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/add-position-modal.js?v=20260619v63-start-price-6btns"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/page-router.js?v=20260619v62-new-strategy-ux"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260619v62-new-strategy-ux"></script>
+<script src="/static/js/strategy-actions.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/page-router.js?v=20260619v63-start-price-6btns"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260619v63-start-price-6btns"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
