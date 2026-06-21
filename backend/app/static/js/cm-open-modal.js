@@ -35,19 +35,35 @@ let cmState = {
 };
 
 async function openCreateModal(editStrategyId) {
-  document.getElementById('create-modal').classList.remove('hidden');
+  const _modalEl = document.getElementById('create-modal');
+  _modalEl.classList.remove('hidden');
   document.getElementById('cm-preview').classList.add('hidden');
   document.getElementById('cm-submit').disabled = true;
-  // 🚨 2026-06-22 사장님 critical: 모달 = scrollTop 0 (= 위에서 시작!)
-  // 사장님 보고: "위로 올라가지 않아" = 옛 scrollTop 유지 = 사장님 위 영역 못 봄!
-  setTimeout(() => {
-    const _modalEl = document.getElementById('create-modal');
-    if (_modalEl) {
-      const _inner = _modalEl.querySelector(':scope > div');
-      if (_inner) _inner.scrollTop = 0;
-      _modalEl.scrollTop = 0;
-    }
-  }, 50);
+  // 🚨 2026-06-22 사장님 critical v3: 시간 의존 silent bug 영구 fix!
+  // 사장님 보고: "처음에는 괜찮은데 시간이 지나면 = silent bug!"
+  // 원인 v3: 옛 setTimeout 50ms = 옛 scrollTop 누적 + render 안 끝남 + body overflow 누적!
+  // fix v3: requestAnimationFrame x 3 (= 정확 render 후!) + body overflow 복원 + window.scrollTo!
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (_modalEl) {
+          const _inner = _modalEl.querySelector(':scope > div');
+          if (_inner) {
+            _inner.scrollTop = 0;
+            _inner.scrollTo({top: 0, left: 0, behavior: 'instant'});
+          }
+          _modalEl.scrollTop = 0;
+          _modalEl.scrollTo({top: 0, left: 0, behavior: 'instant'});
+        }
+        // body 도 = 위에서!
+        window.scrollTo({top: 0, left: 0, behavior: 'instant'});
+        // body overflow = 정상 복원 (= 옛 hidden 누적 차단!)
+        if (document.body.style.overflow === 'hidden') {
+          document.body.style.overflow = '';
+        }
+      });
+    });
+  });
   cmState = { accountId: null, side: 'SHORT', templateId: null, mode: 'direct',
               capitals: ['', '', '', '', '', '', '', '', '', ''], preview: null,
               editingStrategyId: editStrategyId || null };

@@ -42,7 +42,24 @@ function setCmMode(mode) {
 }
 
 function closeCreateModal() {
-  document.getElementById('create-modal').classList.add('hidden');
+  const _modalEl = document.getElementById('create-modal');
+  _modalEl.classList.add('hidden');
+  // 🚨 2026-06-22 사장님 critical v3: 시간 의존 silent bug 영구 fix!
+  // 사장님 보고: "처음에는 OK = 시간 지나면 = 모달 위로 스크롤 안 됨!"
+  // 원인: 옛 scrollTop 누적 + body overflow 누적 = 신 모달 open 시 = 옛 위치 유지!
+  // fix: close 시 = scrollTop 초기화 + body overflow 복원!
+  try {
+    const _inner = _modalEl.querySelector(':scope > div');
+    if (_inner) _inner.scrollTop = 0;
+    _modalEl.scrollTop = 0;
+  } catch (_e) {}
+  // body overflow = 정상 복원!
+  if (document.body.style.overflow === 'hidden') {
+    document.body.style.overflow = '';
+  }
+  if (document.documentElement.style.overflow === 'hidden') {
+    document.documentElement.style.overflow = '';
+  }
   // 2026-05-12: 다중 심볼 토글 + chips 초기화 (다음 진입 시 단일 모드로 시작)
   const multiToggle = document.getElementById('cm-multi-symbol-toggle');
   if (multiToggle && multiToggle.checked) {
