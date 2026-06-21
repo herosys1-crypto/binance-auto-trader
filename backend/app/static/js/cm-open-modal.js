@@ -38,6 +38,16 @@ async function openCreateModal(editStrategyId) {
   document.getElementById('create-modal').classList.remove('hidden');
   document.getElementById('cm-preview').classList.add('hidden');
   document.getElementById('cm-submit').disabled = true;
+  // 🚨 2026-06-22 사장님 critical: 모달 = scrollTop 0 (= 위에서 시작!)
+  // 사장님 보고: "위로 올라가지 않아" = 옛 scrollTop 유지 = 사장님 위 영역 못 봄!
+  setTimeout(() => {
+    const _modalEl = document.getElementById('create-modal');
+    if (_modalEl) {
+      const _inner = _modalEl.querySelector(':scope > div');
+      if (_inner) _inner.scrollTop = 0;
+      _modalEl.scrollTop = 0;
+    }
+  }, 50);
   cmState = { accountId: null, side: 'SHORT', templateId: null, mode: 'direct',
               capitals: ['', '', '', '', '', '', '', '', '', ''], preview: null,
               editingStrategyId: editStrategyId || null };
