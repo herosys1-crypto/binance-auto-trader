@@ -179,5 +179,13 @@ function fillStartPrice(mode) {
   }
   // 입력값이 바뀌었으니 미리보기 청산 위험 재계산용 trigger
   if (typeof _refreshLiveCalc === 'function') _refreshLiveCalc();
-  document.getElementById('cm-start-price').focus();
+  // 🚨 2026-06-22 사장님 critical v5: focus() = 자동 scrollIntoView silent bug!
+  // 사장님 보고: '바로 아래로 내려가는 문제' = focus() = 「시작가」 = 모달 하단 = 자동 스크롤!
+  // fix: preventScroll: true = focus + 스크롤 X = 사장님 = 위에서 시작!
+  try {
+    document.getElementById('cm-start-price').focus({ preventScroll: true });
+  } catch (_e) {
+    // 옛 브라우저 = preventScroll 미지원 시 = focus 자체 skip!
+    console.warn('[focus] preventScroll 미지원 = focus 호출 skip (= 자동 스크롤 silent bug 차단!)');
+  }
 }
