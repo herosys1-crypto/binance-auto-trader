@@ -39,25 +39,43 @@ async function openCreateModal(editStrategyId) {
   _modalEl.classList.remove('hidden');
   document.getElementById('cm-preview').classList.add('hidden');
   document.getElementById('cm-submit').disabled = true;
-  // 🚨 2026-06-22 사장님 critical v3: 시간 의존 silent bug 영구 fix!
-  // 사장님 보고: "처음에는 괜찮은데 시간이 지나면 = silent bug!"
-  // 원인 v3: 옛 setTimeout 50ms = 옛 scrollTop 누적 + render 안 끝남 + body overflow 누적!
-  // fix v3: requestAnimationFrame x 3 (= 정확 render 후!) + body overflow 복원 + window.scrollTo!
+  // 🚨 2026-06-22 사장님 critical v6: scroll guard 강력 모니터링!
+  // 사장님 보고: v1~v5 모두 부족 = 「바로 아래로 내려감」!
+  // 진짜 원인: 모달 open 후 = await 비동기 (loadCmAccounts, loadPrevBlueprint, _refreshLiveCalc)
+  //            = 새 layout = scrollTop 변경 = 옛 requestAnimationFrame 보다 늦음!
+  // fix v6: 모달 open 후 = 2초 동안 = scrollTop = 0 강제 모니터링!
+  //         + 매 scroll 이벤트 = 0 으로 복원!
+  const _inner = _modalEl.querySelector(':scope > div');
+  let _scrollGuardActive = true;
+  let _scrollGuardTimer = null;
+  const _scrollGuardHandler = (e) => {
+    if (_scrollGuardActive) {
+      if (_inner && _inner.scrollTop !== 0) _inner.scrollTop = 0;
+      if (_modalEl.scrollTop !== 0) _modalEl.scrollTop = 0;
+    }
+  };
+  // 옛 listener 제거 (= 누적 방지!)
+  if (_modalEl._scrollGuardHandler) {
+    _modalEl.removeEventListener('scroll', _modalEl._scrollGuardHandler);
+    if (_inner) _inner.removeEventListener('scroll', _modalEl._scrollGuardHandler);
+  }
+  _modalEl._scrollGuardHandler = _scrollGuardHandler;
+  _modalEl.addEventListener('scroll', _scrollGuardHandler, { passive: true });
+  if (_inner) _inner.addEventListener('scroll', _scrollGuardHandler, { passive: true });
+  // 2초 후 = 사장님 자유 스크롤!
+  if (_modalEl._scrollGuardTimer) clearTimeout(_modalEl._scrollGuardTimer);
+  _modalEl._scrollGuardTimer = setTimeout(() => {
+    _scrollGuardActive = false;
+  }, 2000);
+  // 즉시 + requestAnimationFrame x 3 = scrollTop 0 (= 첫 frame 부터!)
+  if (_inner) _inner.scrollTop = 0;
+  _modalEl.scrollTop = 0;
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        if (_modalEl) {
-          const _inner = _modalEl.querySelector(':scope > div');
-          if (_inner) {
-            _inner.scrollTop = 0;
-            _inner.scrollTo({top: 0, left: 0, behavior: 'instant'});
-          }
-          _modalEl.scrollTop = 0;
-          _modalEl.scrollTo({top: 0, left: 0, behavior: 'instant'});
-        }
-        // body 도 = 위에서!
+        if (_inner) _inner.scrollTop = 0;
+        _modalEl.scrollTop = 0;
         window.scrollTo({top: 0, left: 0, behavior: 'instant'});
-        // body overflow = 정상 복원 (= 옛 hidden 누적 차단!)
         if (document.body.style.overflow === 'hidden') {
           document.body.style.overflow = '';
         }
