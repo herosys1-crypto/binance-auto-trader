@@ -336,8 +336,42 @@
     td { padding: 8px; font-size: 12px; }
     .btn { min-height: 38px; }  /* iOS Apple Human Interface Guidelines: 최소 44pt 권장 */
     .card-header { padding: 8px 10px; font-size: 12px; }
-    /* 모달 모바일 풀스크린 */
-    #create-modal > div { max-width: 100% !important; max-height: 100vh !important; border-radius: 0 !important; }
+    /* 모달 모바일 풀스크린 + 🚨 2026-06-22 사장님 critical: 스크롤 영구 fix!
+       사장님 보고: '위로 올라가지 않아 가끔씩 이렇게 되네'
+       원인: iOS Safari momentum scroll = -webkit-overflow-scrolling: touch 누락 + height 100vh 동적 viewport!
+       fix: overflow-y: auto + touch scroll + 100dvh (= 동적 viewport!) */
+    #create-modal {
+      overflow: hidden !important;
+      -webkit-overflow-scrolling: touch !important;
+    }
+    #create-modal > div {
+      max-width: 100% !important;
+      max-height: 100vh !important;
+      max-height: 100dvh !important;  /* iOS = 동적 viewport! */
+      height: 100vh !important;
+      height: 100dvh !important;
+      border-radius: 0 !important;
+      overflow-y: auto !important;
+      -webkit-overflow-scrolling: touch !important;
+      overscroll-behavior: contain !important;  /* = body 스크롤 방지 = 모달 내부만! */
+      touch-action: pan-y !important;  /* = 세로 스크롤 강제! */
+    }
+    /* 모달 내부 모든 영역 = touch scroll! */
+    #create-modal > div * {
+      -webkit-overflow-scrolling: touch !important;
+    }
+    /* 신 「수정 모드」 모달 / 「💉 포지션 추가」 모달 = 동일! */
+    .modal-overlay, [id$="-modal"]:not(#create-modal) {
+      -webkit-overflow-scrolling: touch !important;
+    }
+    .modal-overlay > div, [id$="-modal"]:not(#create-modal) > div {
+      max-height: 100vh !important;
+      max-height: 100dvh !important;
+      overflow-y: auto !important;
+      -webkit-overflow-scrolling: touch !important;
+      overscroll-behavior: contain !important;
+      touch-action: pan-y !important;
+    }
   }
 
   /* 입력 필드 — 모바일 자동 zoom 방지 (font-size 16px 이상) */
@@ -1923,41 +1957,41 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/api.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/helpers.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/stats-modals.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/health-page.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/ranking-page.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/ranking-modal.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/trade-history-modal.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/system-banner.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/cm-collectors.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/cm-loaders.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/cm-market-info.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/cm-preview.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/cm-open-modal.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/templates-panel.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/indicators.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/strategies-list.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/external-positions.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/multi-symbol.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/template-save.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/cm-submit.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/strategy-detail.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/chart-detail.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/constants.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/api.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/helpers.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/stats-modals.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/health-page.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/ranking-page.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/ranking-modal.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/trade-history-modal.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/system-banner.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/cm-collectors.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/cm-loaders.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/cm-market-info.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/cm-preview.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/cm-open-modal.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/templates-panel.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/indicators.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/strategies-list.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/external-positions.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/multi-symbol.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/template-save.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/cm-submit.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/strategy-detail.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/chart-detail.js?v=20260622v67-mobile-scroll"></script>
 <script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
-<script src="/static/js/accounts-modal.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/add-position-modal.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/accounts-modal.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/add-position-modal.js?v=20260622v67-mobile-scroll"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/page-router.js?v=20260619v66-mobile-sidebar"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260619v66-mobile-sidebar"></script>
+<script src="/static/js/strategy-actions.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/page-router.js?v=20260622v67-mobile-scroll"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260622v67-mobile-scroll"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
