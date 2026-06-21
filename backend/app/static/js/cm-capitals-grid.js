@@ -74,9 +74,10 @@ function buildCapitalsGrid() {
           class="w-full px-1 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm" />
       </div>
       <div class="col-span-1">
-        <input type="number" min="0" step="1" id="cm-trg-${i}" placeholder="${triggerPlaceholder}" value="${triggerValue}" ${triggerDisabled}
+        <input type="number" min="0" step="1" maxlength="4" id="cm-trg-${i}" placeholder="${triggerPlaceholder}" value="${triggerValue}" ${triggerDisabled}
           title="${triggerTitle}"
           oninput="onCapitalsChange(); _refreshLiveCalc()"
+          style="min-width:46px"
           class="w-full px-1 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm ${triggerDisabled?'opacity-50 cursor-not-allowed':''}" />
       </div>
       <div class="col-span-1">
