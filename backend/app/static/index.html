@@ -508,6 +508,36 @@
     min-width: 46px !important;
     text-align: center !important;
   }
+
+  /* 🚨 2026-06-22 사장님 critical v4: cm-inner = inline style 제거 + CSS class 만!
+     옛: inline style="max-width:720px; width:60vw; max-height:92vh; overflow-y:auto;"
+     = inline = mobile CSS override = silent fail!
+     신: data desktop 기본 + mobile 명확 override! */
+  .cm-inner-default {
+    max-width: 720px;
+    width: 60vw;
+    max-height: 92vh;
+    overflow-y: auto;
+  }
+  @media (max-width: 767px) {
+    .cm-inner-default {
+      max-width: 100% !important;
+      width: 100% !important;
+      max-height: none !important;
+      min-height: 100dvh !important;
+      height: auto !important;
+      overflow-y: visible !important;
+      margin: 0 !important;
+    }
+    /* outer = OUTER 스크롤 강제! */
+    #create-modal {
+      overflow-y: auto !important;
+      align-items: flex-start !important;
+      -webkit-overflow-scrolling: touch !important;
+      overscroll-behavior: contain !important;
+      touch-action: pan-y !important;
+    }
+  }
   /* 최근 전략 = 3개 가로 = 한 줄 강제 */
   #cm-recent-strategies-list { display: flex !important; flex-wrap: nowrap !important; gap: 4px; }
   #cm-recent-strategies-list button { flex: 1 1 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -1366,8 +1396,10 @@
   <div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
        style="background:rgba(0,0,0,0.7); padding:10px;">
     <!-- 2026-06-09 사장님 v7: 853px → 720px (추가 ~15% 축소) + width 70vw → 60vw
-         사장님 명시 「줄려줘」 (= v6 853px 도 큼 평가) -->
-    <div class="card rounded-xl p-2" style="max-width:720px; width:60vw; max-height:92vh; overflow-y:auto;">
+         사장님 명시 「줄려줘」 (= v6 853px 도 큼 평가)
+         🚨 2026-06-22 사장님 critical v4: inline style 제거 = CSS class 만 사용!
+         (옛 inline = mobile CSS override = silent fail!) -->
+    <div id="cm-inner" class="card rounded-xl p-2 cm-inner-default">
       <div class="flex justify-between items-center mb-2">
         <h2 id="cm-title" class="text-lg font-bold">➕ 새 전략 시작</h2>
         <button onclick="closeCreateModal()" class="text-slate-400 hover:text-white text-xl">✕</button>
@@ -1969,41 +2001,41 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/api.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/helpers.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/stats-modals.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/health-page.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/ranking-page.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/ranking-modal.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/trade-history-modal.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/system-banner.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/cm-collectors.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/cm-loaders.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/cm-market-info.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/cm-preview.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/cm-open-modal.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/templates-panel.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/indicators.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/strategies-list.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/external-positions.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/multi-symbol.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/template-save.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/cm-submit.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/strategy-detail.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/chart-detail.js?v=20260622v69-scroll-v3-trg4"></script>
+<script src="/static/js/constants.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/api.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/helpers.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/stats-modals.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/health-page.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/ranking-page.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/ranking-modal.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/trade-history-modal.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/system-banner.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/cm-collectors.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/cm-loaders.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/cm-market-info.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/cm-preview.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/cm-open-modal.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/templates-panel.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/indicators.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/strategies-list.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/external-positions.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/multi-symbol.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/template-save.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/cm-submit.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/strategy-detail.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/chart-detail.js?v=20260622v70-inline-removed"></script>
 <script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
-<script src="/static/js/accounts-modal.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/add-position-modal.js?v=20260622v69-scroll-v3-trg4"></script>
+<script src="/static/js/accounts-modal.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/add-position-modal.js?v=20260622v70-inline-removed"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/page-router.js?v=20260622v69-scroll-v3-trg4"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260622v69-scroll-v3-trg4"></script>
+<script src="/static/js/strategy-actions.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/page-router.js?v=20260622v70-inline-removed"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260622v70-inline-removed"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
