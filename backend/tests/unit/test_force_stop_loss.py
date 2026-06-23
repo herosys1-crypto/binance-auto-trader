@@ -5,7 +5,7 @@ FORCE_SL_LOSS_LIMIT_SPEC 2026-06-24 의 검증 시나리오 1:1 매칭.
 """
 from decimal import Decimal
 
-from app.services.risk_service import force_sl_should_trigger
+from app.services.risk_service import force_sl_should_trigger, resolve_force_sl
 
 
 def test_force_sl_long_default_on_triggers_at_minus10():
@@ -71,3 +71,53 @@ def test_force_sl_long_profit_never_triggers():
         side="LONG", avg_entry=100, mark_price=110, leverage=2,
         enabled=True, threshold=10,
     ) is False
+
+
+# ───────────── 전략별 override → 전역 우선순위 (2026-06-24) ─────────────
+
+def test_resolve_inherits_global_when_override_none():
+    """override 둘 다 None → 전역 그대로 상속."""
+    enabled, thr = resolve_force_sl(
+        override_enabled=None, override_roi=None,
+        global_enabled=True, global_roi=Decimal("10"),
+    )
+    assert enabled is True and thr == Decimal("10")
+
+
+def test_resolve_strategy_off_overrides_global_on():
+    """전역 ON 이어도 전략 override=False 면 → 꺼짐 (전략 우선)."""
+    enabled, thr = resolve_force_sl(
+        override_enabled=False, override_roi=None,
+        global_enabled=True, global_roi=Decimal("10"),
+    )
+    assert enabled is False
+
+
+def test_resolve_strategy_on_overrides_global_off():
+    """전역 OFF(숏 기본) 여도 전략 override=True+roi 면 → 켜짐 (전략 우선)."""
+    enabled, thr = resolve_force_sl(
+        override_enabled=True, override_roi=15,
+        global_enabled=False, global_roi=Decimal("10"),
+    )
+    assert enabled is True and thr == Decimal("15")
+
+
+def test_resolve_strategy_roi_overrides_global_roi():
+    """전략 roi override 가 전역 roi 보다 우선."""
+    _, thr = resolve_force_sl(
+        override_enabled=None, override_roi=20,
+        global_enabled=True, global_roi=Decimal("10"),
+    )
+    assert thr == Decimal("20")
+
+
+def test_resolve_then_trigger_short_strategy_on_global_off():
+    """통합: 숏 전역 OFF + 전략 ON -15% → ROI -15% 도달 시 발동."""
+    enabled, thr = resolve_force_sl(
+        override_enabled=True, override_roi=15,
+        global_enabled=False, global_roi=Decimal("10"),
+    )
+    assert force_sl_should_trigger(
+        side="SHORT", avg_entry=Decimal("0.50"), mark_price=Decimal("0.5375"),
+        leverage=2, enabled=enabled, threshold=thr,
+    ) is True

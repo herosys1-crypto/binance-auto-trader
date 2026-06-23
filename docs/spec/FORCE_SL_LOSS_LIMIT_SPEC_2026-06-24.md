@@ -19,6 +19,27 @@
 ### 한 줄 정의
 **열려 있는 포지션의 ROI 손실이 사장님이 정한 한도(-5/-10/-15/-20%)에 도달하면, 자동으로 전량 시장가 청산하고 그 전략을 종료한다. 롱/숏 각각 전역 on/off + 임계값을 가진다.**
 
+### 🌟 1-A. 전역 + 전략별 override (2026-06-24 추가)
+> **사장님 명시 (2026-06-24)**:
+> > "각각 전략에 따라 다르게 하고 싶은데 가능할까? 모두에게 같은 적용을 하는데 각각의 전략에 우선하는 방식으로 만들어줘."
+
+**= 전역 설정이 모든 전략의 기본값 + 전략별 override 가 있으면 그게 우선 (NULL = 전역 상속).**
+
+| 우선순위 | 출처 | 의미 |
+|---------|------|------|
+| 1 (높음) | 전략별 override (`strategy_instances.force_sl_*_override`) | 값이 있으면 무조건 이게 적용 |
+| 2 (낮음) | 전역 설정 (`system_settings.force_sl_*`) | 전략 override 가 NULL 일 때 fallback |
+
+해석 (side 별 전역 기준):
+```
+g_enabled, g_roi = 전역(side)
+enabled   = override_enabled if override_enabled is not None else g_enabled
+threshold = override_roi     if override_roi     is not None else g_roi
+```
+- 전략 드롭다운 3택: **전역**(override 해제=NULL,NULL) / **끔**(enabled=False) / **-5~-20%**(enabled=True+roi).
+- 예: 숏 전역 OFF 인데 특정 숏 전략만 「-15%」 선택 → 그 전략만 강제 청산 ON.
+- 예: 롱 전역 ON -10% 인데 특정 롱만 「끔」 → 그 전략만 비활성.
+
 ### 기존 SL(-80~90%)과의 관계 = "더 빡빡한 추가 안전망"
 | 구분 | 기존 SL (template) | 신 손실 한도 강제 청산 (이 spec) |
 |------|------|------|
