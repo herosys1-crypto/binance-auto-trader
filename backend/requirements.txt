@@ -1,4 +1,11 @@
-fastapi
+# 🚨 2026-06-24 핀 고정 (사장님 mainnet 500 사고 root cause):
+# fastapi 가 핀 없어 재빌드 시 신버전 드리프트 → include_router 가 app.routes 에
+# .path 없는 _IncludedRouter (라우트 중첩) 추가 → prometheus-fastapi-instrumentator
+# 7.1.0 (<8 핀) 이 route.path 접근 시 전 요청 500 (대시보드 전체 다운).
+# 0.135.3 = _IncludedRouter 없음 + 전 코드/테스트(385) 검증 통과 = 알려진 호환 버전.
+# starlette 도 같이 핀 (fastapi 0.135.3 의 검증된 조합) → 드리프트 영구 차단.
+fastapi==0.135.3
+starlette==0.52.1
 uvicorn[standard]
 python-multipart
 sqlalchemy>=2.0
