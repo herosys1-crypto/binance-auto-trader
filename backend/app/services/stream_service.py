@@ -9,6 +9,7 @@ from app.models.risk_event import RiskEvent
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_stage_plan import StrategyStagePlan
 from app.observability.metrics import user_stream_events_total
+from app.services.mark_price_cache import get_mark_price
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +258,17 @@ class StreamService:
             )
             if not strategy:
                 continue
-            self.db.add(Position(strategy_instance_id=strategy.id, symbol=symbol, side=strategy.side, position_side=position_side, entry_price=Decimal(str(pos.get("ep"))) if pos.get("ep") else None, break_even_price=Decimal(str(pos.get("bep"))) if pos.get("bep") else None, mark_price=None, liquidation_price=strategy.liquidation_price, position_amt=Decimal(str(pos.get("pa"))) if pos.get("pa") else None, isolated_margin=Decimal(str(pos.get("iw"))) if pos.get("iw") else None, unrealized_pnl=Decimal(str(pos.get("up"))) if pos.get("up") else None, margin_type=pos.get("mt"), leverage=strategy.leverage, source="ACCOUNT_UPDATE"))
+            # 🚨 2026-06-22 사장님 critical fix (v51 ROOT CAUSE — "또 2단계가 진행되지 않았어"):
+            # ACCOUNT_UPDATE payload 엔 markPrice 가 없어 옛 코드는 mark_price=None 으로 스냅샷 생성.
+            # 그런데 ACCOUNT_UPDATE 는 포지션 변동 시마다 발생 → 이 None 스냅샷이 "latest" 가 되어
+            # reconcile(2분 주기) 가 채운 mark_price 를 곧바로 덮어버림 (= 1시간+ None 지속 원인).
+            # → latest snapshot.mark_price 를 읽는 4개 worker 가 동시에 silent skip:
+            #   stage_trigger(2단계 자동 진입 차단) / liquidation_risk(청산 감시 꺼짐) /
+            #   tp_miss_detector / setting_preservation. = 사장님 헌법 "silent bug 금지" 위반.
+            # fix: 스냅샷 생성 시점의 Redis 실시간 캐시(markPrice@1s) 로 채움 → latest 가 더 이상
+            #   None 으로 오염 X (= 4개 reader 동시 치유, 헌법 6번 단일 진실). 캐시 miss 시만 None.
+            _cached_mark = get_mark_price(symbol)
+            self.db.add(Position(strategy_instance_id=strategy.id, symbol=symbol, side=strategy.side, position_side=position_side, entry_price=Decimal(str(pos.get("ep"))) if pos.get("ep") else None, break_even_price=Decimal(str(pos.get("bep"))) if pos.get("bep") else None, mark_price=_cached_mark, liquidation_price=strategy.liquidation_price, position_amt=Decimal(str(pos.get("pa"))) if pos.get("pa") else None, isolated_margin=Decimal(str(pos.get("iw"))) if pos.get("iw") else None, unrealized_pnl=Decimal(str(pos.get("up"))) if pos.get("up") else None, margin_type=pos.get("mt"), leverage=strategy.leverage, source="ACCOUNT_UPDATE"))
             strategy.avg_entry_price = Decimal(str(pos.get("ep"))) if pos.get("ep") else strategy.avg_entry_price
             strategy.current_position_qty = Decimal(str(pos.get("pa"))) if pos.get("pa") else Decimal("0")
             strategy.unrealized_pnl = Decimal(str(pos.get("up"))) if pos.get("up") else Decimal("0")
