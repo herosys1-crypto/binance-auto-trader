@@ -243,14 +243,33 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     _record_block_reason(_redis, strategy.id, f"단계{next_stage_no} trigger_price=None (LIQUIDATION_BUFFER 미구현)", next_stage_no)
                     _alert_silent_block_once(_redis, db, strategy, f"단계{next_stage_no} trigger_price 미설정", next_stage_no)
                     continue
-                # 현재 mark price 조회 (last position snapshot)
-                latest_pos = PositionRepository(db).latest_by_strategy(strategy.id)
-                if not latest_pos or not latest_pos.mark_price:
-                    # 🌟 v18 fix: position snapshot 없음 = stream 끊김 가능성!
-                    _record_block_reason(_redis, strategy.id, "mark_price 없음 (position snapshot 누락)", next_stage_no)
+                # 현재 mark price 조회.
+                # 🚨 2026-06-22 사장님 critical fix (v51 — "또 2단계가 진행되지 않았어"):
+                # 옛 버그: DB Position snapshot 의 mark_price 만 사용 → stage 1 진입 직후엔
+                #   snapshot 에 markPrice 가 아직 안 채워져 None → "mark_price 없음" silent 차단.
+                #   reconcile_worker(2분 주기) 가 채우기 전까지 stage 2 자동 진입 영구 보류.
+                #   = 사장님 화면엔 live 현재가가 멀쩡히 보이는데도 자동 진입만 막힘
+                #     (#221 IDUSDT / #220 AINUSDT / #215 / #217 / #218 / #219 전부 동일 차단).
+                # 진짜 원인: 자동 진입(가장 critical 경로)만 가장 stale 한 소스(DB snapshot)를
+                #   사용. UI/PNL(helpers.py) 과 수동 진입(control.py L1043/L1363) 은 이미 Redis
+                #   실시간 캐시(get_mark_price = markPrice@1s) 를 "현재가" 단일 진실로 사용 중.
+                #   → 알림이 "mark-price-stream 점검 필요" 라 stream 을 의심하게 만들지만 실제로
+                #     stream(Redis) 은 정상 작동 — 자동 진입 코드가 그걸 안 읽을 뿐이었음.
+                # fix (헌법 6번 단일 진실): 자동 진입도 Redis 캐시 우선, miss 시 DB snapshot fallback.
+                #   = 화면 현재가 == 자동 진입 트리거 가격 (= 같은 소스 = silent bug 영구 차단).
+                from app.services.mark_price_cache import get_mark_price
+                mark = get_mark_price(strategy.symbol)  # Redis 실시간 (1s) 우선
+                if mark is None or mark <= 0:
+                    # 캐시 miss → DB Position snapshot fallback (reconcile 가 채운 값)
+                    latest_pos = PositionRepository(db).latest_by_strategy(strategy.id)
+                    if latest_pos and latest_pos.mark_price:
+                        mark = Decimal(str(latest_pos.mark_price))
+                if mark is None or mark <= 0:
+                    # Redis 캐시 + DB snapshot 둘 다 없음 = 진짜로 mark-price-stream 점검 필요
+                    _record_block_reason(_redis, strategy.id, "mark_price 없음 (Redis 캐시 + DB snapshot 모두 누락)", next_stage_no)
                     _alert_silent_block_once(_redis, db, strategy, "mark_price 없음 (mark-price-stream 점검 필요)", next_stage_no)
                     continue
-                mark = Decimal(str(latest_pos.mark_price))
+                mark = Decimal(str(mark))
                 trigger = Decimal(str(next_plan.trigger_price))
                 # SHORT: 가격 위로 더 갔으면 추가 SHORT 진입 (mark >= trigger)
                 # LONG: 가격 아래로 더 갔으면 추가 LONG 진입 (mark <= trigger)
