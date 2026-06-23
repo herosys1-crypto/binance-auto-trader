@@ -72,6 +72,23 @@ def force_sl_should_trigger(
     return roi <= -thr
 
 
+def resolve_force_sl(
+    *,
+    override_enabled: bool | None,
+    override_roi: Decimal | float | str | None,
+    global_enabled: bool,
+    global_roi: Decimal,
+) -> tuple[bool, Decimal]:
+    """전략별 override → 전역 우선순위 해석 (순수 함수, 테스트 가능).
+
+    사장님 2026-06-24: "모두에게 같은 적용 + 각 전략에 우선하는 방식".
+    override 값이 None 이면 전역 상속, 아니면 전략 우선.
+    """
+    enabled = override_enabled if override_enabled is not None else global_enabled
+    threshold = Decimal(str(override_roi)) if override_roi is not None else global_roi
+    return enabled, threshold
+
+
 class RiskService:
     def __init__(self, db) -> None:
         self.db = db
@@ -200,8 +217,16 @@ class RiskService:
         if not strategy:
             return False
         side = (strategy.side or "").upper()
+        # 전역 설정(모든 전략 기본) + 전략별 override 우선 (NULL = 전역 상속).
+        # 사장님 2026-06-24: "모두에게 같은 적용 + 각 전략에 우선하는 방식".
         from app.services.system_settings_service import SystemSettingsService
-        enabled, threshold = SystemSettingsService(self.db).get_force_sl(side)
+        g_enabled, g_threshold = SystemSettingsService(self.db).get_force_sl(side)
+        enabled, threshold = resolve_force_sl(
+            override_enabled=strategy.force_sl_enabled_override,
+            override_roi=strategy.force_sl_roi_override,
+            global_enabled=g_enabled,
+            global_roi=g_threshold,
+        )
         if not enabled or threshold <= 0:
             return False
         avg_entry = Decimal(str(strategy.avg_entry_price)) if strategy.avg_entry_price else None

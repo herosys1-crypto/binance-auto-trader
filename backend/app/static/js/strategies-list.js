@@ -408,8 +408,29 @@ async function refreshStrategies() {
             <option value="25" ${_tp1Pct===25 ? 'selected':''}>TP1 +25%</option>
           </select>`
         : '';
+      // 🌟 2026-06-24 사장님: 손실 한도 강제 청산 전략별 override 드롭다운.
+      // 전역 설정(「💼 계정」) 이 모든 전략 기본 + 전략별 선택 우선 (= 전역/끔/-5~-20%).
+      // NULL,NULL=전역 상속 / enabled=false=끔 / enabled=true=이 전략 우선(-roi%).
+      let _fslSel = 'inherit';
+      if (s.force_sl_enabled_override === false) _fslSel = 'off';
+      else if (s.force_sl_enabled_override === true) _fslSel = 'on:' + (s.force_sl_roi_override != null ? Number(s.force_sl_roi_override) : 10);
+      const forceSlSelect = _isActiveForTp1
+        ? `<select onclick="event.stopPropagation()"
+                  onmousedown="event.stopPropagation()"
+                  onchange="event.stopPropagation(); updateForceSl(${s.id}, this.value)"
+                  class="bg-slate-800 border border-slate-600 rounded text-slate-300"
+                  style="font-size:10px;padding:0 2px;margin-left:4px;cursor:pointer"
+                  title="🛑 손실 한도 강제 청산 (전략별 우선) — 전역=「💼 계정」 설정 따름 / 끔 / -5~-20% 이 전략만. ROI 도달 시 전량 청산 + 종료.">
+            <option value="inherit" ${_fslSel==='inherit'?'selected':''}>강제:전역</option>
+            <option value="off"     ${_fslSel==='off'?'selected':''}>강제:끔</option>
+            <option value="on:5"    ${_fslSel==='on:5'?'selected':''}>강제 -5%</option>
+            <option value="on:10"   ${_fslSel==='on:10'?'selected':''}>강제 -10%</option>
+            <option value="on:15"   ${_fslSel==='on:15'?'selected':''}>강제 -15%</option>
+            <option value="on:20"   ${_fslSel==='on:20'?'selected':''}>강제 -20%</option>
+          </select>`
+        : '';
       // 🌟 2026-06-09 사장님 신 기능: 단계 클릭 = 단계별 상세 popup (진입예정가 + 자본)
-      const stage = `<div class="text-xs leading-none" onclick="event.stopPropagation(); openStageDetailModal(${s.id}, '${s.symbol}', '${s.side}')" style="cursor:pointer" title="클릭 = 단계별 진입예정가 + 자본 확인"><span class="text-slate-400" style="font-size:12px">진입</span> ${stageBar} <span class="text-blue-300" style="font-size:10px">📋</span><br><span class="text-slate-400" style="font-size:12px">익절</span> ${tpBar}${tp1ThresholdSelect}</div>`;
+      const stage = `<div class="text-xs leading-none" onclick="event.stopPropagation(); openStageDetailModal(${s.id}, '${s.symbol}', '${s.side}')" style="cursor:pointer" title="클릭 = 단계별 진입예정가 + 자본 확인"><span class="text-slate-400" style="font-size:12px">진입</span> ${stageBar} <span class="text-blue-300" style="font-size:10px">📋</span><br><span class="text-slate-400" style="font-size:12px">익절</span> ${tpBar}${tp1ThresholdSelect}${forceSlSelect}</div>`;
       const pnlNum = Number(s.unrealized_pnl || 0);
       const sCap = Number(s.total_capital || 0);
       const sLev = Number(s.leverage || 1) || 1;
@@ -852,6 +873,31 @@ async function updateTp1Threshold(strategyId, pctStr) {
       body: { pct: pct },
     });
     toast(`✅ TP1 +${pct}% 즉시 적용 (사장님 자율)`, 'success');
+    refreshStrategies();
+  } catch (e) {
+    toast(`❌ 변경 실패: ${e.message || e}`, 'error');
+  }
+}
+
+// 🛑 2026-06-24 사장님: 손실 한도 강제 청산 전략별 override (전역 우선).
+// value = "inherit" | "off" | "on:5|10|15|20". 즉시 PATCH = 다음 risk cycle 적용.
+// spec: FORCE_SL_LOSS_LIMIT_SPEC_2026-06-24.md
+async function updateForceSl(strategyId, value) {
+  let body, label;
+  if (value === 'inherit') {
+    body = { mode: 'inherit' }; label = '전역 설정 따름';
+  } else if (value === 'off') {
+    body = { mode: 'off' }; label = '이 전략 끔';
+  } else if (value.startsWith('on:')) {
+    const roi = Number(value.slice(3));
+    if (![5, 10, 15, 20].includes(roi)) { toast(`❌ 옵션 오류: ${value}`, 'error'); return; }
+    body = { mode: 'on', roi }; label = `이 전략 -${roi}%`;
+  } else {
+    toast(`❌ 옵션 오류: ${value}`, 'error'); return;
+  }
+  try {
+    await api(`/strategies/${strategyId}/force-sl`, { method: 'PATCH', body });
+    toast(`✅ 강제 청산 ${label} (다음 cycle 부터)`, 'success');
     refreshStrategies();
   } catch (e) {
     toast(`❌ 변경 실패: ${e.message || e}`, 'error');

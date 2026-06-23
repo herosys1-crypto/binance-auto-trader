@@ -966,6 +966,110 @@ def update_tp1_threshold(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 🌟 사장님 신 기능 (2026-06-24): 손실 한도 강제 청산 전략별 override
+#
+# 사장님 명시: "모두에게 같은 적용을 하는데 각각의 전략에 우선하는 방식으로 만들어줘"
+# = 전역 설정(system_settings.force_sl_*) 이 모든 전략 기본 + 전략별 override 우선.
+# spec: FORCE_SL_LOSS_LIMIT_SPEC_2026-06-24.md
+# ─────────────────────────────────────────────────────────────────────────────
+class ForceSlStrategyRequest(BaseModel):
+    mode: str  # "inherit"(전역 상속) | "off"(이 전략만 끔) | "on"(이 전략만 켬)
+    roi: int | None = Field(None, description="mode=on 일 때 5/10/15/20")
+
+
+@router.patch("/{strategy_id}/force-sl", response_model=StrategyDetailResponse)
+def update_force_sl_override(
+    strategy_id: int,
+    payload: ForceSlStrategyRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyDetailResponse:
+    """전략별 손실 한도 강제 청산 override 실시간 변경.
+
+    - mode=inherit → 전역 설정 따름 (override 해제, 두 컬럼 NULL)
+    - mode=off     → 이 전략만 강제 청산 비활성 (전역 ON 이어도)
+    - mode=on      → 이 전략만 강제 청산 활성 + roi 한도 (전역 OFF 여도)
+    즉시 적용 (다음 risk cycle ≤10s). spec: FORCE_SL_LOSS_LIMIT_SPEC_2026-06-24.md
+    """
+    import logging
+    from decimal import Decimal as _Decimal
+    from app.core.risk_constants import FORCE_SL_ALLOWED_ROI
+    from app.models.risk_event import RiskEvent
+    from app.models.strategy_template import StrategyTemplate
+    logger = logging.getLogger(__name__)
+
+    mode = (payload.mode or "").lower()
+    if mode not in ("inherit", "off", "on"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="⚠️ mode 는 inherit / off / on 중 하나여야 합니다.",
+        )
+    allowed = {int(v) for v in FORCE_SL_ALLOWED_ROI}
+    if mode == "on" and payload.roi not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"⚠️ mode=on 일 때 roi 는 {sorted(allowed)} 중 하나여야 합니다 "
+                f"(입력: {payload.roi}). spec: FORCE_SL_LOSS_LIMIT_SPEC_2026-06-24.md"
+            ),
+        )
+
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if not strategy or strategy.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.",
+        )
+    if strategy.status in TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"⚠️ 이미 종료된 전략 (상태: {strategy.status}) 은 변경이 불가합니다.",
+        )
+
+    old = (strategy.force_sl_enabled_override, strategy.force_sl_roi_override)
+    if mode == "inherit":
+        strategy.force_sl_enabled_override = None
+        strategy.force_sl_roi_override = None
+        desc = "전역 설정 상속"
+    elif mode == "off":
+        strategy.force_sl_enabled_override = False
+        strategy.force_sl_roi_override = None
+        desc = "이 전략만 강제 청산 끔"
+    else:  # on
+        strategy.force_sl_enabled_override = True
+        strategy.force_sl_roi_override = _Decimal(str(payload.roi))
+        desc = f"이 전략만 강제 청산 켬 (-{payload.roi}%)"
+
+    db.add(RiskEvent(
+        strategy_instance_id=strategy.id,
+        event_type="FORCE_SL_OVERRIDE_UPDATED",
+        severity="INFO",
+        title=f"🛑 강제 청산 전략별 설정 변경 — {strategy.symbol} {strategy.side}",
+        message=(
+            f"전략 #{strategy.id} 강제 청산 override: {desc}. "
+            f"(이전 enabled={old[0]} roi={old[1]}) "
+            f"= 전역 우선 X, 이 전략 우선 적용. 다음 risk cycle (≤10s) 즉시 적용."
+        ),
+        event_payload={
+            "mode": mode,
+            "roi": payload.roi,
+            "old_enabled": old[0],
+            "old_roi": str(old[1]) if old[1] is not None else None,
+        },
+    ))
+    db.commit()
+    db.refresh(strategy)
+    logger.info(
+        "[force-sl-override] strategy_id=%s mode=%s roi=%s", strategy_id, mode, payload.roi,
+    )
+    tpl = (
+        db.get(StrategyTemplate, strategy.strategy_template_id)
+        if strategy.strategy_template_id else None
+    )
+    return _enrich_response(StrategyDetailResponse.model_validate(strategy), tpl)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 🌟 사장님 신 기능 (2026-06-08): 미진입 단계 trigger_price = 현재가 기준 재계산
 #
 # 사장님 명시:

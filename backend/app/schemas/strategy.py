@@ -91,6 +91,11 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # Crisis 모드 = 옵션 무시 = 옛 CRISIS_OVERRIDE 그대로 (TP1=5)
     # NULL = template default. 운영 중 PATCH 실시간 변경.
     tp1_pct_override: Decimal | None = None
+    # ─── 손실 한도 강제 청산 전략별 override (alembic 0020, 2026-06-24) ───
+    # NULL = 전역 설정 상속. enabled True/False + roi 5/10/15/20 = 전략 우선.
+    # spec: FORCE_SL_LOSS_LIMIT_SPEC_2026-06-24.md
+    force_sl_enabled_override: bool | None = None
+    force_sl_roi_override: Decimal | None = None
     # ─── 진입 일시 (대시보드 표시용) ───
     created_at: datetime | None = None       # strategy 생성 시점
     # 2026-05-21 STOPPING 갇힘 감지용 — frontend 가 updated_at 기준 5분 초과 시

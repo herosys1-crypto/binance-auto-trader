@@ -56,6 +56,16 @@ class StrategyInstance(Base):
     # spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md
     tp1_pct_override: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
 
+    # ─────────── 손실 한도 강제 청산 전략별 override (alembic 0020, 2026-06-24) ───────────
+    # 전역 설정(system_settings.force_sl_*) = 모든 전략 기본 + 전략별 override 우선 (NULL=전역 상속).
+    # 사장님 명시: "모두에게 같은 적용을 하는데 각각의 전략에 우선하는 방식으로 만들어줘"
+    # enabled_override: NULL=전역 따름, True/False=전략 강제 on/off
+    # roi_override:     NULL=전역 따름, 5/10/15/20=전략 한도(%) (ROI <= -값 시 발동)
+    # 운영 중 PATCH /strategies/{id}/force-sl = 실시간 변경
+    # spec: FORCE_SL_LOSS_LIMIT_SPEC_2026-06-24.md
+    force_sl_enabled_override: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    force_sl_roi_override: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+
     # ─────────── Soft delete (alembic 0011, 2026-05-06) ───────────
     # DELETE endpoint 와 cleanup 스크립트가 row 자체를 삭제하면 realized_pnl 이
     # 통계 합계에서 영구 누락 (#96 +867 USDT 사례). 삭제 대신 archived 마킹.
