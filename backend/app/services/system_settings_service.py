@@ -15,6 +15,7 @@ UI 체크박스로 변경. row 없으면 코드의 default 사용 (backward-comp
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import select
@@ -43,6 +44,16 @@ class SystemSettingsService:
         if raw is None:
             return default
         return raw.strip().lower() in ("true", "1", "yes", "on")
+
+    def get_decimal(self, key: str, default: Decimal) -> Decimal:
+        """key 의 Decimal 값 반환. 없거나 파싱 실패 시 default (안전 fallback)."""
+        raw = self.get(key)
+        if raw is None:
+            return default
+        try:
+            return Decimal(str(raw).strip())
+        except (InvalidOperation, ValueError, TypeError):
+            return default
 
     def set(
         self,
@@ -83,3 +94,26 @@ class SystemSettingsService:
         default_from_env: settings.allowed_symbols_set is not None (env 에 값 있으면 True)
         """
         return self.get_bool("whitelist_enabled", default=default_from_env)
+
+    def get_force_sl(self, side: str) -> tuple[bool, Decimal]:
+        """손실 한도 강제 청산 전역 설정 (side별) — (enabled, roi_한도_양수).
+
+        FORCE_SL_LOSS_LIMIT_SPEC 2026-06-24. 롱/숏 독립. row 없으면 코드 default
+        (롱 ON -10% / 숏 OFF -10%). roi 는 양수 (호출자가 ROI <= -roi 로 비교).
+        """
+        from app.core.risk_constants import (
+            FORCE_SL_LONG_ENABLED_DEFAULT,
+            FORCE_SL_LONG_ENABLED_KEY,
+            FORCE_SL_LONG_ROI_KEY,
+            FORCE_SL_ROI_DEFAULT,
+            FORCE_SL_SHORT_ENABLED_DEFAULT,
+            FORCE_SL_SHORT_ENABLED_KEY,
+            FORCE_SL_SHORT_ROI_KEY,
+        )
+        if (side or "").upper() == "LONG":
+            enabled = self.get_bool(FORCE_SL_LONG_ENABLED_KEY, default=FORCE_SL_LONG_ENABLED_DEFAULT)
+            roi = self.get_decimal(FORCE_SL_LONG_ROI_KEY, default=FORCE_SL_ROI_DEFAULT)
+        else:
+            enabled = self.get_bool(FORCE_SL_SHORT_ENABLED_KEY, default=FORCE_SL_SHORT_ENABLED_DEFAULT)
+            roi = self.get_decimal(FORCE_SL_SHORT_ROI_KEY, default=FORCE_SL_ROI_DEFAULT)
+        return enabled, roi

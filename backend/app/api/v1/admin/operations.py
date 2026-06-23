@@ -159,6 +159,99 @@ def update_whitelist_setting(
 
 
 # =====================================================================
+# 손실 한도 강제 청산 (Force Stop-Loss) — 전역 설정 (롱/숏 독립)
+# FORCE_SL_LOSS_LIMIT_SPEC 2026-06-24. ROI 기준. 롱 기본 ON -10% / 숏 기본 OFF.
+# =====================================================================
+class ForceSlSideConfig(BaseModel):
+    enabled: bool
+    roi: int  # 양수 (5/10/15/20). ROI <= -roi 시 강제 청산.
+
+
+class ForceSlSettingResponse(BaseModel):
+    long: ForceSlSideConfig
+    short: ForceSlSideConfig
+    allowed_roi: list[int]
+
+
+class ForceSlSettingUpdate(BaseModel):
+    side: str        # "LONG" | "SHORT"
+    enabled: bool
+    roi: int         # 5/10/15/20 중 하나
+
+
+def _force_sl_state(db: Session) -> ForceSlSettingResponse:
+    from app.core.risk_constants import FORCE_SL_ALLOWED_ROI
+    from app.services.system_settings_service import SystemSettingsService
+    svc = SystemSettingsService(db)
+    long_enabled, long_roi = svc.get_force_sl("LONG")
+    short_enabled, short_roi = svc.get_force_sl("SHORT")
+    return ForceSlSettingResponse(
+        long=ForceSlSideConfig(enabled=long_enabled, roi=int(long_roi)),
+        short=ForceSlSideConfig(enabled=short_enabled, roi=int(short_roi)),
+        allowed_roi=[int(v) for v in FORCE_SL_ALLOWED_ROI],
+    )
+
+
+@router.get("/settings/force-sl", response_model=ForceSlSettingResponse)
+def get_force_sl_setting(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> ForceSlSettingResponse:
+    """손실 한도 강제 청산 전역 설정 조회 (롱/숏 + 허용 ROI 목록)."""
+    return _force_sl_state(db)
+
+
+@router.patch("/settings/force-sl", response_model=ForceSlSettingResponse)
+def update_force_sl_setting(
+    payload: ForceSlSettingUpdate,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> ForceSlSettingResponse:
+    """손실 한도 강제 청산 설정 변경 (DB 영속, 즉시 적용 — 다음 cycle ≤10s).
+
+    side별 독립. roi 는 허용값 {5,10,15,20} 만. RiskEvent audit 기록.
+    """
+    from decimal import Decimal
+    from app.core.risk_constants import (
+        FORCE_SL_ALLOWED_ROI,
+        FORCE_SL_LONG_ENABLED_KEY,
+        FORCE_SL_LONG_ROI_KEY,
+        FORCE_SL_SHORT_ENABLED_KEY,
+        FORCE_SL_SHORT_ROI_KEY,
+    )
+    from app.models.risk_event import RiskEvent
+    from app.services.system_settings_service import SystemSettingsService
+
+    side = (payload.side or "").upper()
+    if side not in ("LONG", "SHORT"):
+        raise HTTPException(status_code=400, detail="⚠️ side 는 LONG 또는 SHORT 만 가능합니다.")
+    allowed = {int(v) for v in FORCE_SL_ALLOWED_ROI}
+    if payload.roi not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"⚠️ roi 는 {sorted(allowed)} 중 하나여야 합니다 (FORCE_SL_LOSS_LIMIT_SPEC).",
+        )
+    svc = SystemSettingsService(db)
+    enabled_key = FORCE_SL_LONG_ENABLED_KEY if side == "LONG" else FORCE_SL_SHORT_ENABLED_KEY
+    roi_key = FORCE_SL_LONG_ROI_KEY if side == "LONG" else FORCE_SL_SHORT_ROI_KEY
+    svc.set(enabled_key, payload.enabled, updated_by=user_id, description=f"손실 한도 강제 청산 {side} 활성")
+    svc.set(roi_key, payload.roi, updated_by=user_id, description=f"손실 한도 강제 청산 {side} ROI 한도(%)")
+    db.add(RiskEvent(
+        strategy_instance_id=None,
+        event_type="FORCE_SL_SETTING_CHANGED",
+        severity="INFO",
+        title=f"⚙️ 손실 한도 강제 청산 설정 변경 — {side}",
+        message=(
+            f"운영자(user #{user_id}) 변경: {side} 강제 청산 "
+            f"{'ON' if payload.enabled else 'OFF'}, 한도 -{payload.roi}% (ROI). "
+            f"즉시 적용 (다음 cycle ≤10s)."
+        ),
+    ))
+    db.commit()
+    return _force_sl_state(db)
+
+
+# =====================================================================
 # Kill-Switch — 수동 enable / disable
 # =====================================================================
 @router.post("/kill-switch/{exchange_account_id}/enable", response_model=MessageResponse)
