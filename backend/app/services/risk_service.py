@@ -32,6 +32,46 @@ from app.core.risk_constants import (
     TRAILING_RETRACE_PCT as TRAILING_TP_RETRACE_AMOUNT,
 )
 
+def force_sl_should_trigger(
+    *,
+    side: str,
+    avg_entry: Decimal | float | str | None,
+    mark_price: Decimal | float | str | None,
+    leverage: Decimal | float | str | None,
+    enabled: bool,
+    threshold: Decimal | float | str | None,
+) -> bool:
+    """손실 한도 강제 청산 ROI 판정 (순수 함수 — DB 무관, 테스트 가능).
+
+    FORCE_SL_LOSS_LIMIT_SPEC 2026-06-24. 기존 SL 과 ROI 계산 동일:
+      LONG:  (mark - avg) / avg × 100 × lev
+      SHORT: (avg - mark) / avg × 100 × lev
+    `enabled` False 거나 threshold<=0 거나 가격 없음 → False (= 청산 금지, 안전 최우선).
+    threshold 는 양수 (예: 10). ROI <= -threshold 이면 True.
+    """
+    from app.core.risk_constants import LEVERAGE_FALLBACK, PERCENT_DENOMINATOR
+    if not enabled:
+        return False
+    if threshold is None:
+        return False
+    thr = Decimal(str(threshold))
+    if thr <= 0:
+        return False
+    if avg_entry is None or mark_price is None:
+        return False
+    avg = Decimal(str(avg_entry))
+    mark = Decimal(str(mark_price))
+    if avg <= 0 or mark <= 0:
+        return False
+    lev = Decimal(str(leverage)) if leverage else LEVERAGE_FALLBACK
+    if (side or "").upper() == "LONG":
+        price_change_pct = ((mark - avg) / avg) * PERCENT_DENOMINATOR
+    else:  # SHORT
+        price_change_pct = ((avg - mark) / avg) * PERCENT_DENOMINATOR
+    roi = price_change_pct * lev
+    return roi <= -thr
+
+
 class RiskService:
     def __init__(self, db) -> None:
         self.db = db
@@ -145,6 +185,72 @@ class RiskService:
             strategy_stop_loss_total.labels(symbol=strategy.symbol, side=strategy.side).inc()
             self.db.flush()
         return is_stop
+
+    def evaluate_force_stop_loss(self, strategy_id: int) -> bool:
+        """손실 한도 강제 청산 평가 (FORCE_SL_LOSS_LIMIT_SPEC 2026-06-24).
+
+        기존 evaluate_stop_loss 와 ROI 계산 동일, 단 차이:
+          - 단계 게이트 없음 (= 아무 단계에서나 발동 — 물타기 전에 손절).
+          - 전역 system_settings 의 force_sl_{long|short}_* 사용 (side별 독립).
+          - mark_price = Redis 실시간 우선 (v51 단일 진실), miss 시 DB snapshot fallback.
+            둘 다 없으면 False (= 가격 모르면 절대 청산 X — 안전 최우선).
+        발동 시 RiskEvent(CRITICAL) 기록 후 True 반환 (실제 청산은 orchestrator).
+        """
+        strategy = self.strategy_repo.get_strategy(strategy_id)
+        if not strategy:
+            return False
+        side = (strategy.side or "").upper()
+        from app.services.system_settings_service import SystemSettingsService
+        enabled, threshold = SystemSettingsService(self.db).get_force_sl(side)
+        if not enabled or threshold <= 0:
+            return False
+        avg_entry = Decimal(str(strategy.avg_entry_price)) if strategy.avg_entry_price else None
+        # mark_price: Redis 실시간 캐시 우선 (= 화면 현재가와 동일 소스, v51), miss 시 DB snapshot.
+        from app.services.mark_price_cache import get_mark_price
+        mark_price = get_mark_price(strategy.symbol)
+        if mark_price is None or mark_price <= 0:
+            latest_position = self.position_repo.latest_by_strategy(strategy_id)
+            if latest_position and latest_position.mark_price:
+                mark_price = Decimal(str(latest_position.mark_price))
+        # 가격 정보 없으면 절대 청산 X (= 잘못된 데이터로 실자금 청산 금지)
+        if avg_entry is None or mark_price is None or avg_entry <= 0 or mark_price <= 0:
+            return False
+        leverage = Decimal(str(strategy.leverage)) if strategy.leverage else Decimal("1")
+        is_force = force_sl_should_trigger(
+            side=side, avg_entry=avg_entry, mark_price=mark_price,
+            leverage=leverage, enabled=enabled, threshold=threshold,
+        )
+        if is_force:
+            from app.core.risk_constants import PERCENT_DENOMINATOR
+            if side == "LONG":
+                price_change_pct = ((mark_price - avg_entry) / avg_entry) * PERCENT_DENOMINATOR
+            else:
+                price_change_pct = ((avg_entry - mark_price) / avg_entry) * PERCENT_DENOMINATOR
+            roi = price_change_pct * leverage
+            self.db.add(RiskEvent(
+                strategy_instance_id=strategy.id,
+                event_type="FORCE_STOP_LOSS_TRIGGERED",
+                severity="CRITICAL",
+                title=f"🛑 손실 한도 강제 청산 — #{strategy.id} {strategy.symbol} {side}",
+                message=(
+                    f"평단 {avg_entry} → 현재가 {mark_price} = 가격 변동 {price_change_pct:.2f}% "
+                    f"× lev {leverage}x = ROI {roi:.2f}% (= 사장님 한도 -{threshold}% 도달) "
+                    f"→ 전량 강제 청산 + 전략 종료 (재진입 X). "
+                    f"(= FORCE_SL 2026-06-24, 아무 단계에서나 발동)"
+                ),
+                event_payload={
+                    "avg_entry_price": str(avg_entry),
+                    "mark_price": str(mark_price),
+                    "price_change_pct": str(price_change_pct),
+                    "leverage": str(leverage),
+                    "unrealized_roi": str(roi),
+                    "threshold": str(threshold),
+                    "side": side,
+                    "current_stage": strategy.current_stage,
+                },
+            ))
+            self.db.flush()
+        return is_force
 
     def evaluate_take_profit_level(self, strategy_id: int) -> str | None:
         """현재 PnL 기준 다음 익절 액션을 결정한다.

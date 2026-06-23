@@ -80,7 +80,13 @@ class TPSLOrchestratorService:
                 if strategy.current_position_qty is None or abs(Decimal(str(strategy.current_position_qty))) == 0:
                     return
                 strategy_runs_total.labels(side=strategy.side, status=strategy.status).inc()
-                # 정상 모드 -50% 손절 검사 (크라이시스 Stage 2 의 -1% 손절은 evaluate_take_profit_level 가 처리)
+                # 🚨 2026-06-24 손실 한도 강제 청산 (FORCE_SL_LOSS_LIMIT_SPEC) — 기존 SL 보다 먼저!
+                # 사장님 전역 옵션 (롱 기본 ON -10% / 숏 기본 OFF). 기존 SL(-80~90%)보다 빡빡하므로
+                # 켜져 있으면 먼저 발동. 아무 단계에서나 발동 (물타기 전 손절). 가격 없으면 청산 X.
+                if self.risk_service.evaluate_force_stop_loss(strategy.id):
+                    self._execute_force_stop_loss(strategy)
+                    return
+                # 정상 모드 -80~90% 손절 검사 (모든 단계 진입 후에만 발동)
                 if self.risk_service.evaluate_stop_loss(strategy.id):
                     self._execute_stop_loss(strategy)
                     return
@@ -461,6 +467,51 @@ class TPSLOrchestratorService:
             realized_pnl=realized_pnl, avg_exit_price=avg_exit_price, pnl_pct=pnl_pct,
             closed_qty=close_qty, remaining_qty=remaining_qty,
         )
+
+    def _execute_force_stop_loss(self, strategy) -> None:
+        """손실 한도 강제 청산 실행 (FORCE_SL_LOSS_LIMIT_SPEC 2026-06-24).
+
+        수동 stop_strategy 와 동일 종료 패턴: 미체결 주문 취소 + 전량 시장가 청산 + STOPPING.
+        기존 _execute_stop_loss 와 핵심 차이: **재진입 X** (mark_reentry_ready 호출 안 함).
+        = 사장님 손절 의사 = 그 전략 종료. 자동 재진입 시 사장님 의도 위반.
+        """
+        current_qty = abs(Decimal(str(strategy.current_position_qty)))
+        # 1) 미진입/미체결 LIMIT 주문 취소 (청산 후 자동 진입 worker 가 다시 포지션 만드는 것 차단).
+        try:
+            self.execution_service.client.cancel_all_orders(symbol=strategy.symbol)
+        except Exception as _e:
+            logger.warning("[force-sl] cancel_all_orders 실패 strategy=%s: %s", strategy.id, _e)
+        # 2) 전량 시장가 청산.
+        if current_qty > 0:
+            try:
+                self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
+            except EmergencyCloseInProgress:
+                return  # 다른 caller 가 청산 중 — 다음 cycle 재시도
+            except ValueError:
+                # 거래소 포지션 0 — emergency_close 가 이미 미체결 취소 + STOPPED 마킹함.
+                pass
+        # 3) 종료 마킹 (STOPPING → reconcile 가 flat 확인 시 STOPPED). 재진입 X.
+        strategy.status = "STOPPING"
+        self.db.commit()
+
+        # 손실률(%) — 사용자 마진 대비 leveraged ROI (기존 SL 알림과 동일 계산).
+        loss_amount = Decimal(str(strategy.realized_pnl or 0)) + Decimal(str(strategy.unrealized_pnl or 0))
+        pnl_pct = None
+        try:
+            capital = Decimal(str(strategy.total_capital or 0))
+            leverage = Decimal(str(strategy.leverage)) if strategy.leverage else LEVERAGE_FALLBACK
+            if capital > 0:
+                pnl_pct = (loss_amount * leverage / capital * PERCENT_DENOMINATOR).quantize(USDT_PRICE_PRECISION)
+        except Exception as _e:
+            logger.warning("[force-sl] pnl_pct 계산 실패 strategy=%s: %s", strategy.id, _e)
+
+        self.notification_service.send_stop_loss_alert(
+            strategy_instance_id=strategy.id, symbol=strategy.symbol, side=strategy.side,
+            total_capital=str(strategy.total_capital),
+            current_loss_amount=str(loss_amount.quantize(USDT_PRICE_PRECISION)),
+            pnl_pct=pnl_pct,
+        )
+        # 🚫 mark_reentry_ready 호출 안 함 = 재진입 X (= 사장님 손절 의사 존중).
 
     def _execute_stop_loss(self, strategy) -> None:
         # SHORT 포지션은 음수 qty 로 저장됨 — abs() 로 양수화 후 청산.

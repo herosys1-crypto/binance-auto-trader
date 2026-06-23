@@ -53,6 +53,26 @@ DEFAULT_SL_PCT_OF_CAPITAL: Final[Decimal] = Decimal("90")
 LOSS_ALERT_THRESHOLD_PCT: Final[Decimal] = Decimal("-50")
 
 
+# ===== 손실 한도 강제 청산 (Force Stop-Loss / Loss-Limit Close) =====
+# 2026-06-24 사장님 사상 — docs/spec/FORCE_SL_LOSS_LIMIT_SPEC_2026-06-24.md.
+# ROI 기준 전역 강제 손절. 기존 SL(-80~90%)보다 빡빡한 추가 안전망 (공존).
+# 롱 기본 ON(-10%), 숏 기본 OFF. 아무 단계에서나 발동. 가격 없으면 청산 금지.
+# 전역 설정 키 (system_settings 테이블, side별 독립):
+FORCE_SL_LONG_ENABLED_KEY: Final[str] = "force_sl_long_enabled"
+FORCE_SL_LONG_ROI_KEY: Final[str] = "force_sl_long_roi"
+FORCE_SL_SHORT_ENABLED_KEY: Final[str] = "force_sl_short_enabled"
+FORCE_SL_SHORT_ROI_KEY: Final[str] = "force_sl_short_roi"
+# 기본값 (사장님 확정 2026-06-24): 롱 ON / 숏 OFF, 둘 다 -10%.
+FORCE_SL_LONG_ENABLED_DEFAULT: Final[bool] = True
+FORCE_SL_SHORT_ENABLED_DEFAULT: Final[bool] = False
+# 양수로 저장 (예: 10 = ROI <= -10% 시 발동).
+FORCE_SL_ROI_DEFAULT: Final[Decimal] = Decimal("10")
+# 허용 ROI 한도 (사장님 선택지). 그 외 값은 API 400.
+FORCE_SL_ALLOWED_ROI: Final[tuple[Decimal, ...]] = (
+    Decimal("5"), Decimal("10"), Decimal("15"), Decimal("20"),
+)
+
+
 # ===== Take Profit (TP) — 정상 모드 =====
 # TP1~9 default qty ratio (잔량의 %). v6 정책 (2026-05-12): 균일 25%.
 # TP10 만 100% (마지막 안전망 — trailing 미발동 + 가격 계속 상승 케이스).
@@ -121,6 +141,15 @@ __all__ = [
     # SL
     "DEFAULT_SL_PCT_OF_CAPITAL",
     "LOSS_ALERT_THRESHOLD_PCT",
+    # 손실 한도 강제 청산 (Force SL)
+    "FORCE_SL_LONG_ENABLED_KEY",
+    "FORCE_SL_LONG_ROI_KEY",
+    "FORCE_SL_SHORT_ENABLED_KEY",
+    "FORCE_SL_SHORT_ROI_KEY",
+    "FORCE_SL_LONG_ENABLED_DEFAULT",
+    "FORCE_SL_SHORT_ENABLED_DEFAULT",
+    "FORCE_SL_ROI_DEFAULT",
+    "FORCE_SL_ALLOWED_ROI",
     # TP
     "DEFAULT_TP_QTY_RATIO_PCT",
     "TP_FINAL_QTY_RATIO_PCT",

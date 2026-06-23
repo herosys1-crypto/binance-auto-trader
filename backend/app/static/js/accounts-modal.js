@@ -132,6 +132,37 @@ async function renderAccountsModalBody() {
     whitelistHtml = `<div class="mb-4 text-xs text-red-400">화이트리스트 상태 조회 실패: ${e.message}</div>`;
   }
 
+  // 2026-06-24 사장님: 손실 한도 강제 청산 (FORCE_SL) — ROI 한도 도달 시 전량 청산 + 종료.
+  // 전역 (롱/숏 독립). 롱 기본 ON -10% / 숏 기본 OFF. 기존 SL(-80~90%)과 별개 추가 안전망.
+  try {
+    const fsl = await api('/admin/settings/force-sl');
+    const allowed = fsl.allowed_roi || [5, 10, 15, 20];
+    const roiOpts = (cur) => allowed.map(v =>
+      `<option value="${v}" ${Number(cur) === Number(v) ? 'selected' : ''}>-${v}%</option>`).join('');
+    const sideRow = (side, cfg, emoji, label) => `
+      <div class="flex items-center gap-2 mb-1">
+        <input type="checkbox" id="fsl-${side}-enabled" ${cfg.enabled ? 'checked' : ''}
+               onchange="saveForceSl('${side.toUpperCase()}')" class="w-4 h-4 cursor-pointer" />
+        <span class="text-xs w-10">${emoji} ${label}</span>
+        <select id="fsl-${side}-roi" onchange="saveForceSl('${side.toUpperCase()}')"
+                class="text-xs bg-slate-900 border border-slate-600 rounded px-1 py-0.5">
+          ${roiOpts(cfg.roi)}
+        </select>
+        <span class="text-xs text-slate-400">손실 ROI 도달 시 청산</span>
+      </div>`;
+    whitelistHtml += `
+      <div class="mb-4 p-3 rounded border border-slate-700 bg-slate-800/40">
+        <div class="text-sm font-semibold mb-2">🛑 손실 한도 강제 청산
+          <span class="text-xs text-slate-400">— ROI 한도 도달 시 전량 자동 청산 + 전략 종료 (재진입 X)</span>
+        </div>
+        ${sideRow('long', fsl.long, '📈', '롱')}
+        ${sideRow('short', fsl.short, '📉', '숏')}
+        <div class="text-xs mt-1 text-slate-500">💡 기존 SL(-80~90%)과 별개 추가 안전망 · 아무 단계에서나 발동 · 가격 정보 없으면 청산 안 함.</div>
+      </div>`;
+  } catch (e) {
+    whitelistHtml += `<div class="mb-4 text-xs text-red-400">강제 청산 설정 조회 실패: ${e.message}</div>`;
+  }
+
   try {
     const accounts = await api('/exchange-accounts');
     if (!accounts.length) {
@@ -265,6 +296,27 @@ async function toggleWhitelist(enabled) {
     toast(`토글 실패: ${e.message}`, 'error');
     // 체크박스 상태 되돌리기 — 다시 렌더
     await renderAccountsModalBody();
+  }
+}
+
+// 2026-06-24: 손실 한도 강제 청산 설정 저장 (DB 영속, 즉시 적용). side = 'LONG' | 'SHORT'.
+async function saveForceSl(side) {
+  const key = side.toLowerCase();
+  const enabledEl = document.getElementById(`fsl-${key}-enabled`);
+  const roiEl = document.getElementById(`fsl-${key}-roi`);
+  if (!enabledEl || !roiEl) return;
+  const enabled = !!enabledEl.checked;
+  const roi = Number(roiEl.value);
+  try {
+    await api('/admin/settings/force-sl', {
+      method: 'PATCH',
+      body: { side, enabled, roi },
+    });
+    const label = side === 'LONG' ? '📈 롱' : '📉 숏';
+    toast(`${label} 강제 청산 ${enabled ? `✅ ON (-${roi}%)` : '⛔ OFF'} (즉시 반영)`, 'success');
+  } catch (e) {
+    toast(`강제 청산 설정 실패: ${e.message}`, 'error');
+    await renderAccountsModalBody();  // 상태 되돌리기
   }
 }
 
