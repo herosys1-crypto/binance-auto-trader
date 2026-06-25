@@ -32,17 +32,24 @@ _DEDUP_TTL = 86400  # 24시간
 _STATIC_JS_DIR = "/app/app/static/js"
 
 # 위험 패턴 = Frontend hardcode!
+# 🚨 2026-06-25 사장님 critical fix: word boundary 추가!
+# 옛 silent bug: r"testnet\s*[=:]\s*true" = `hasTestnet = true` 도 매칭!
+#               = `is_testnet` 도 매칭! (= 변수 읽기 = 하드코드 X!)
+#               = false positive = 사장님 시끄러운 alert!
+# 신: (?<![\w]) = 앞에 단어 문자 X (= hasTestnet 같은 변수 일부 X!)
+#     (?![\w]) = 뒤에 단어 문자 X
+#     = 정확 `testnet = true` 또는 `testnet:true` 단독 매칭!
 DANGEROUS_PATTERNS = [
     {
         "name": "frontend_testnet_hardcode_true",
-        "pattern": r"testnet\s*[=:]\s*true",
+        "pattern": r"(?<![\w])testnet\s*[=:]\s*true(?![\w])",
         "file_pattern": "*.js",
         "severity": "CRITICAL",
         "msg": "Frontend testnet=true 하드코드! = 사장님 mainnet 사고 위험!",
     },
     {
         "name": "frontend_isTestnet_hardcode_true",
-        "pattern": r"isTestnet\s*[=:]\s*true",
+        "pattern": r"(?<![\w])isTestnet\s*[=:]\s*true(?![\w])",
         "file_pattern": "*.js",
         "severity": "WARN",
         "msg": "Frontend isTestnet=true 하드코드 가능성!",
