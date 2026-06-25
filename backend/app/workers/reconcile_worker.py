@@ -230,7 +230,27 @@ def _do_reconcile(decrypt_func) -> None:
                         position_reconcile_total.labels(status="orphan_stopped").inc()
                         _stuck_clear(strategy.id)
                     else:
-                        # PENDING 등 — limit 미체결일 가능성. 카운터 증가, 임계 초과 시 escalate.
+                        # 🚨 2026-06-25 사장님 critical fix (#232 SYNUSDT):
+                        # 사장님 보고: "내가 0.43에 1단계 포지션 진입을 했어야 해!"
+                        # = 사장님 의도: LIMIT 가격 도달 = 영구 대기!
+                        # = 옛 silent bug: STAGE_PENDING (= LIMIT 미체결) + 5 cycle (2.5분) = 강제 종료!
+                        # = 사장님 = #232 SYNUSDT 시작가 0.43 = LIMIT @ 0.43 발송!
+                        # = 2.5분 후 = STOPPING + STOPPED = silent 종료!
+                        # = 사장님 자율 운영 위반!
+                        #
+                        # fix: STAGE_n_OPEN_PENDING (= LIMIT 미체결!) = stuck counter 제외!
+                        # = LIMIT 활성 시 = 영구 대기 (= 사장님 의도!)
+                        # = 진짜 stuck (STAGE_n_OPEN + 거래소 X) 만 counter!
+                        #
+                        # 진짜 정리 필요 시 = 사장님 = 직접 「⛔ 종료」 버튼 클릭!
+                        if strategy.status and strategy.status.endswith("_OPEN_PENDING"):
+                            # LIMIT 활성 = 사장님 가격 대기 = stuck X = continue!
+                            logger.info(
+                                "[reconcile] #%s %s status=%s = LIMIT 가격 대기 = stuck 제외 (사장님 의도!)",
+                                strategy.id, strategy.symbol, strategy.status,
+                            )
+                            continue
+                        # 그 외 = stuck counter (= 정상 동작!)
                         n_stuck = _stuck_inc(strategy.id)
                         db.add(RiskEvent(
                             strategy_instance_id=strategy.id,
