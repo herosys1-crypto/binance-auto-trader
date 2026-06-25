@@ -272,32 +272,25 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     # = Redis 캐시 X + DB snapshot X = silent false-positive 차단!
                     # = #231 SYNUSDT 06.24 14:50:32 진입 + 14:50:33 차단 = 12초 race!
                     #
-                    # fix v52: 1단계 진입 후 3분 grace = 첫 mark-price-stream update 대기!
-                    # = grace period 동안 = continue 만 (= 차단 알림 X = 다음 cycle 재시도!)
-                    # = 3분 후 = 정상 차단 알림!
-                    from app.models.position import Position
-                    latest_pos_for_grace = db.execute(
-                        select(Position)
-                        .where(Position.strategy_instance_id == strategy.id)
-                        .order_by(Position.id.desc())
-                        .limit(1)
-                    ).scalar_one_or_none()
+                    # fix v52a (2026-06-25 hot-fix): Position.entered_at = X! → strategy.started_at!
+                    # = 사장님 #234 ACUUSDT / #237 SLXUSDT = silent bug = Position 속성 잘못!
+                    # = strategy.started_at = 전략 시작 시각 = grace period 기준 정확!
                     GRACE_PERIOD_SEC = 180  # 3분 = mark-price-stream SUBSCRIBE + 첫 update 충분!
-                    if latest_pos_for_grace and latest_pos_for_grace.entered_at:
+                    if strategy.started_at:
                         from datetime import datetime, timezone
                         now_utc = datetime.now(timezone.utc)
-                        entered_utc = latest_pos_for_grace.entered_at
-                        if entered_utc.tzinfo is None:
-                            entered_utc = entered_utc.replace(tzinfo=timezone.utc)
-                        elapsed = (now_utc - entered_utc).total_seconds()
+                        started_utc = strategy.started_at
+                        if started_utc.tzinfo is None:
+                            started_utc = started_utc.replace(tzinfo=timezone.utc)
+                        elapsed = (now_utc - started_utc).total_seconds()
                         if elapsed < GRACE_PERIOD_SEC:
                             # grace 기간 = 차단 알림 X = 다음 cycle 재시도!
                             logger.info(
-                                "[stage-trigger v52 grace] #%s %s 1단계 진입 %.0fs 전 = mark_price 대기 중 (grace=%ds)",
+                                "[stage-trigger v52a grace] #%s %s 전략 시작 %.0fs 전 = mark_price 대기 중 (grace=%ds)",
                                 strategy.id, strategy.symbol, elapsed, GRACE_PERIOD_SEC,
                             )
                             continue
-                    # grace 후 또는 entered_at 없음 = 정상 차단 알림!
+                    # grace 후 또는 started_at 없음 = 정상 차단 알림!
                     _record_block_reason(_redis, strategy.id, "mark_price 없음 (Redis 캐시 + DB snapshot 모두 누락)", next_stage_no)
                     _alert_silent_block_once(_redis, db, strategy, "mark_price 없음 (mark-price-stream 점검 필요)", next_stage_no)
                     continue
