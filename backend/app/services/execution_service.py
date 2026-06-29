@@ -71,29 +71,60 @@ class ExecutionService:
     def ensure_isolated_margin(self, strategy) -> None:
         """심볼의 마진 모드를 ISOLATED 로 강제 설정 (사용자 결정 2026-05-06).
 
-        모든 신규 strategy 가 ISOLATED 로 진입해야 「💰 증거금 추가」 사용 가능.
-        Binance 정책: 빈 포지션일 때만 변경 가능. 포지션 보유 중 호출 시 -4048 거부.
-        이미 ISOLATED 면 -4046 ("No need to change margin type") 응답 — 무시 (idempotent).
+        🚨 2026-06-29 v53 사장님 critical fix (#237 SLXUSDT 1539 USDT 손실!):
+        옛 silent bug:
+          - change_margin_type 실패 시 = warning 만 + continue!
+          - 사장님 = 신 strategy = ISOLATED 의도!
+          - = But = 포지션 = CROSS 그대로!
+          - = 사장님 「증거금 추가」 = -4050 영구 실패!
+          - = Liquidation 위험!
 
-        호출 위치: 진입 직전 (start_stage1 / enter_stage_at_market / add_position_now).
-        실패 시: warning 로그만 (본 진입 흐름은 진행). CROSS 로 진입되더라도 거래는
-        가능하지만 「증거금 추가」 만 못 함.
-
-        2026-05-17 (rate limit ban 사후 — Fix 3): 한 번 ISOLATED 확정되면 Redis 에
-        1h 캐시 → 이후 진입 시 change_margin_type 호출 자체를 skip (weight 절감).
-        Redis 장애 시 fail-open (기존처럼 매번 호출 — 동작 변화 없음).
+        신 v53:
+          1. Redis 캐시 hit 시 = 실 거래소 검증 (= 캐시 신뢰성 X)!
+          2. change_margin_type 실패 = critical 차단 (= silent X)!
+          3. CROSS 발견 = 즉시 사장님 안내!
         """
-        # Redis 캐시 hit 시 거래소 호출 skip (fail-open)
+        # Redis 캐시 hit 시 = 실 거래소 검증!
         _redis = None
+        cache_hit = False
         try:
             from app.core.redis_client import get_redis_client
             _redis = get_redis_client()
             if _redis is not None and _redis.get(self._margin_cache_key(strategy)):
-                logger.debug("ensure_isolated_margin cache hit — skip API strategy=%s symbol=%s",
-                             strategy.id, strategy.symbol)
-                return
+                cache_hit = True
         except Exception:
             _redis = None  # fail-open
+
+        # 🚨 v53: 캐시 hit 시도 실 거래소 검증!
+        if cache_hit:
+            try:
+                positions = self.client.get_position_info(symbol=strategy.symbol)
+                # = 사장님 = 거래소 = 수동 CROSS 가능!
+                # = positions = list, 각각 = {marginType: ...}
+                for p in (positions if isinstance(positions, list) else [positions]):
+                    margin_type = (p.get('marginType') or '').upper()
+                    if margin_type == 'CROSS':
+                        logger.warning(
+                            "[v53] ensure_isolated_margin: 캐시 hit = But 실제 = CROSS! 강제 재변경 시도!"
+                            " strategy=%s symbol=%s",
+                            strategy.id, strategy.symbol,
+                        )
+                        # 캐시 삭제 + 강제 fallthrough!
+                        try:
+                            _redis.delete(self._margin_cache_key(strategy))
+                        except Exception:
+                            pass
+                        cache_hit = False
+                        break
+                if cache_hit:
+                    logger.debug("ensure_isolated_margin v53 cache hit + ISOLATED 검증 OK strategy=%s",
+                                 strategy.id)
+                    return
+            except Exception as e:
+                # 검증 실패 시 = 강제 fallthrough (= 안전!)
+                logger.warning("[v53] 실 거래소 검증 실패 = 강제 재변경 시도! strategy=%s error=%s",
+                               strategy.id, e)
+                cache_hit = False
 
         def _mark_cached():
             if _redis is None:
@@ -109,17 +140,28 @@ class ExecutionService:
             _mark_cached()
         except Exception as e:
             err_msg = str(e)
-            # -4046: 이미 같은 마진 모드 (idempotent OK) — 캐시 마킹 (다음부터 skip)
+            # -4046: 이미 같은 마진 모드 (idempotent OK) — 캐시 마킹!
             if "-4046" in err_msg or "no need" in err_msg.lower():
                 logger.info("ensure_isolated_margin already ISOLATED (idempotent) strategy=%s symbol=%s",
                             strategy.id, strategy.symbol)
                 _mark_cached()
                 return
-            # -4048: 포지션 보유 중 변경 불가 — warning 만 (강제 진행, 캐시 안 함)
-            # 다른 에러 — warning 만 (본 진입 흐름 막지 않음, 캐시 안 함)
-            logger.warning(
-                "ensure_isolated_margin failed (continuing anyway): strategy=%s symbol=%s error=%s",
-                strategy.id, strategy.symbol, e,
+            # 🚨 v53: -4048 (= 포지션 보유 중!) = critical!
+            # = 옛 silent fail = 사장님 #237 SLXUSDT 손실!
+            if "-4048" in err_msg:
+                raise ValueError(
+                    f"🚨 ISOLATED 변경 불가 (포지션 보유 중!) — strategy={strategy.id} symbol={strategy.symbol}!\n"
+                    f"💡 사장님 즉시 조치:\n"
+                    f"   1. Binance 앱 = {strategy.symbol} 옛 포지션 = 청산!\n"
+                    f"   2. = 그 후 = 신 strategy 시작!\n"
+                    f"   = silent bug 영구 차단 (사장님 #237 SLXUSDT 1539 USDT 손실 사건!)\n"
+                    f"   error: {err_msg}"
+                )
+            # 🚨 v53: 다른 에러 = critical!
+            raise ValueError(
+                f"🚨 ISOLATED 변경 실패 = critical! strategy={strategy.id} symbol={strategy.symbol}!\n"
+                f"💡 사장님 즉시 조치 = Binance 앱 = 포지션 마진 모드 확인!\n"
+                f"   error: {err_msg}"
             )
 
     def start_stage1(self, strategy_id: int) -> Order:
@@ -822,6 +864,29 @@ class ExecutionService:
                 f"포지션 없음 (qty=0) — 증거금 추가 불가. "
                 f"strategy={strategy.id} status={strategy.status}"
             )
+        # 🚨 2026-06-29 v53 사장님 critical fix (#237 SLXUSDT 1539 USDT 손실!):
+        # 사전 ISOLATED 검증 = CROSS 시 = 즉시 명확 안내!
+        # = 옛 silent bug = 사장님 = 같은 -4050 에러 15회 반복!
+        try:
+            positions = self.client.get_position_info(symbol=strategy.symbol)
+            for p in (positions if isinstance(positions, list) else [positions]):
+                margin_type = (p.get('marginType') or '').upper()
+                if margin_type == 'CROSS':
+                    raise ValueError(
+                        f"❌ {strategy.symbol} 포지션 = CROSS 모드 = 증거금 추가 불가!\n"
+                        f"💡 사장님 즉시 조치:\n"
+                        f"   1. Binance 앱 = {strategy.symbol} 포지션!\n"
+                        f"   2. = 마진 모드 = ISOLATED 변경!\n"
+                        f"   3. = 다시 증거금 추가!\n"
+                        f"   = 사장님 #237 SLXUSDT 1539 USDT 손실 영구 차단! (v53)"
+                    )
+                break  # 첫 포지션만 검증 (= 충분!)
+        except ValueError:
+            raise  # ISOLATED 검증 실패 = 사장님 안내!
+        except Exception as e:
+            # 검증 자체 실패 = warning 만 + 계속! (= 거래소 API 일시 장애 가능!)
+            logger.warning("[v53] add_position_margin ISOLATED 검증 실패 (계속!): strategy=%s error=%s",
+                           strategy.id, e)
         try:
             response = self.client.add_position_margin(
                 symbol=strategy.symbol,
