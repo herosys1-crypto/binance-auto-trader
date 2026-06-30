@@ -1082,6 +1082,7 @@ class ExecutionService:
         amount_usdt: Decimal,
         order_type: str,
         limit_price: Decimal | None = None,
+        mode: str = "reset",
     ) -> Order:
         """사용자 지정 USDT 금액으로 즉시 포지션 추가.
 
@@ -1089,12 +1090,17 @@ class ExecutionService:
             amount_usdt: 추가 자본 (margin, USDT). 양수.
             order_type: "MARKET" 또는 "LIMIT".
             limit_price: order_type=LIMIT 일 때 지정가. MARKET 이면 무시.
+            mode: 🌟 2026-07-01 사장님 헌법 51 (옵션 A!):
+                - "preserve" = 청산 방지 모드 (평단 + qty + total_capital 갱신, TP/SL 유지!)
+                - "reset" = 신 진입 모드 (= default!) (TP/SL 초기화 = TP1 부터 다시!)
 
         효과:
             - qty = amount_usdt × leverage / price (MARKET 은 현재가, LIMIT 은 지정가)
             - 주문 발송 (MARKET 또는 LIMIT GTC)
             - stage_no=NULL (ad-hoc 표시), purpose='ENTRY'
             - 체결 시 stream_service 가 strategy.current_position_qty/avg_entry_price 자동 갱신
+            - mode='reset' 시: status = STAGE{n}_OPEN + max_profit_pct = None
+            - mode='preserve' 시: 옛 TP/SL 그대로 유지
         """
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
@@ -1148,6 +1154,77 @@ class ExecutionService:
                 limit_price=ref_price,
                 suffix="ADHOC_L",
             )
+        # 🌟 2026-07-01 사장님 critical 헌법 51 영구 (옵션 A — 2 모드!):
+        # 사장님 사상: 「💉 포지션 추가」 = 2가지 의도 = 사장님 자율 선택!
+        #   - mode='preserve' (청산 방지): 평단 + qty + total_capital 갱신, TP/SL 유지!
+        #   - mode='reset'    (신 진입,default): TP/SL 초기화 = TP1 부터 다시 시작!
+        # 사장님 명시: "익절중 이든지 손실중에 포지션이 추가되면 익절과 강제청산이 초기화 되어야 할것 같아.
+        #              새로 포지션이 진입한것 처럼 TP1 단계부터 다시 시작해야 할것 같아"
+        mode_normalized = (mode or "reset").lower()
+        if mode_normalized not in ("preserve", "reset"):
+            mode_normalized = "reset"  # 알 수 없는 값 = default!
+        if mode_normalized == "reset":
+            try:
+                cur_stage = strategy.current_stage or 1
+                old_status = strategy.status
+                new_status = f"STAGE{cur_stage}_OPEN"  # TP1 부터 다시 시작 가능!
+                strategy.status = new_status
+                old_max_profit = strategy.max_profit_pct
+                strategy.max_profit_pct = None  # TRAILING peak 초기화!
+                old_crisis_done = strategy.crisis_first_tp_done_at
+                strategy.crisis_first_tp_done_at = None
+                from app.models.risk_event import RiskEvent
+                self.db.add(RiskEvent(
+                    strategy_instance_id=strategy.id,
+                    event_type="ADD_POSITION_TP_RESET",
+                    severity="INFO",
+                    title="🚀 「💉 포지션 추가」 = 신 진입 모드 = TP/SL 초기화 (TP1 부터!)",
+                    message=(
+                        f"사장님 헌법 51 (mode=reset): 「💉 포지션 추가」 = 신 진입처럼!\n"
+                        f"• 옛 status: {old_status} → 신: {new_status}\n"
+                        f"• 옛 max_profit_pct: {old_max_profit} → 신: None\n"
+                        f"• 옛 crisis_done: {old_crisis_done} → 신: None\n"
+                        f"• 추가 자본: {amount_usdt} USDT, 추가 qty: {qty}\n"
+                        f"💡 다음 TP1 가격 도달 = 자동 청산 = 사장님 단계별 익절 영구!"
+                    ),
+                    event_payload={
+                        "strategy_id": strategy.id, "mode": "reset",
+                        "old_status": old_status, "new_status": new_status,
+                        "add_amount_usdt": str(amount_usdt), "add_qty": str(qty),
+                    },
+                ))
+                logger.info(
+                    "[add_position v53 mode=reset] #%s %s status %s→%s, TP reset!",
+                    strategy.id, strategy.symbol, old_status, new_status,
+                )
+            except Exception as e:
+                logger.error("[add_position v53 TP-RESET] FAILED for #%s: %s", strategy.id, e)
+        else:  # mode='preserve'
+            try:
+                from app.models.risk_event import RiskEvent
+                self.db.add(RiskEvent(
+                    strategy_instance_id=strategy.id,
+                    event_type="ADD_POSITION_PRESERVE",
+                    severity="INFO",
+                    title="🛡 「💉 포지션 추가」 = 청산 방지 모드 = TP/SL 유지!",
+                    message=(
+                        f"사장님 헌법 51 (mode=preserve): 평단만 개선 + TP/SL 유지!\n"
+                        f"• status 유지: {strategy.status}\n"
+                        f"• max_profit_pct 유지: {strategy.max_profit_pct}\n"
+                        f"• 추가 자본: {amount_usdt} USDT, 추가 qty: {qty}\n"
+                        f"💡 옛 TP 계속 진행 = 사장님 청산 방지 + 큰 qty 유지!"
+                    ),
+                    event_payload={
+                        "strategy_id": strategy.id, "mode": "preserve",
+                        "add_amount_usdt": str(amount_usdt), "add_qty": str(qty),
+                    },
+                ))
+                logger.info(
+                    "[add_position v53 mode=preserve] #%s %s status 유지, TP 유지!",
+                    strategy.id, strategy.symbol,
+                )
+            except Exception as e:
+                logger.error("[add_position v53 PRESERVE] FAILED for #%s: %s", strategy.id, e)
         self.db.commit()
         self.db.refresh(order)
         return order
