@@ -89,10 +89,20 @@ def add_margin_to_strategy(
 
 
 # 2026-05-04 (사용자 요청): 「💉 포지션 추가」 — 자유 금액 즉시 진입 (시장가 또는 지정가).
+# 🌟 2026-07-01 사장님 헌법 51 (옵션 A!): mode 파라미터 추가!
+# - "preserve" = 청산 방지 모드: 평단 + qty + total_capital 갱신, TP/SL 유지!
+# - "reset" = 신 진입 모드: 평단 + qty + total_capital 갱신 + TP/SL 초기화 (TP1 부터!)
 class AddPositionRequest(BaseModel):
     amount_usdt: Decimal = Field(..., gt=0, description="추가할 자본 (USDT, margin). qty = amount × leverage / price.")
     order_type: str = Field(..., description="MARKET 또는 LIMIT")
     limit_price: Decimal | None = Field(None, gt=0, description="LIMIT 주문일 때 지정가 (양수). MARKET 이면 무시.")
+    mode: str = Field(
+        default="reset",
+        description=(
+            "'preserve' = 청산 방지 (평단만 개선, TP/SL 유지). "
+            "'reset' = 신 진입 (TP1 부터 다시!) — 사장님 사상 default!"
+        ),
+    )
 
 
 @router.post("/{strategy_id}/add-position", response_model=StrategyActionResponse)
@@ -131,6 +141,7 @@ def add_position_to_strategy(
             amount_usdt=payload.amount_usdt,
             order_type=payload.order_type,
             limit_price=payload.limit_price,
+            mode=payload.mode,  # 🌟 헌법 51: preserve / reset
         )
     except PreflightCheckFailed as e:
         # Phase 3: 사전 마진 검증 실패 — 거래소 호출 0, 친절 400 에러.

@@ -30,6 +30,11 @@ function openAddPositionModal(id, symbol, side, leverage) {
   // 시장가 default
   document.getElementById('ap-type-market').checked = true;
   toggleAddPositionLimitPrice();
+  // 🌟 헌법 51: 신 진입 모드 default (= 사장님 사상!)
+  const _resetEl = document.getElementById('ap-mode-reset');
+  const _preserveEl = document.getElementById('ap-mode-preserve');
+  if (_resetEl) _resetEl.checked = true;
+  if (_preserveEl) _preserveEl.checked = false;
   // 현재가 표시 + 미리보기 갱신
   loadAddPositionMarkPrice(symbol);
   document.getElementById('ap-modal').classList.remove('hidden');
@@ -89,30 +94,32 @@ async function submitAddPosition() {
     toast('지정가 가격을 입력하세요 (양수)', 'warning');
     return;
   }
-  // 🚨 2026-06-19 사장님 critical fix: SYNUSDT 사건 영구 인지!
-  // 사장님: "수동으로 설정한 3단계 4단계가 실행되지 않은거야"
-  // 사장님 = 「💉 포지션 추가」 = 단계 진행 의도 = But 시스템 = qty 추가만!
-  // = 사장님 사상 ↔ 시스템 = 불일치 = SYNUSDT Liquidation -585 USDT 손실!
-  // = 신 fix: 사장님 사전 인지 명확 안내!
+  // 🌟 2026-07-01 사장님 헌법 51 (옵션 A!): mode 라디오 선택 읽기!
+  const modeReset = document.getElementById('ap-mode-reset');
+  const mode = (modeReset && modeReset.checked) ? 'reset' : 'preserve';
+  const modeLabel = (mode === 'reset')
+    ? '🚀 신 진입 모드 (TP1 부터 다시!)'
+    : '🛡 청산 방지 모드 (TP/SL 유지!)';
+  const modeDescription = (mode === 'reset')
+    ? '   = TP/SL 초기화 = TP1, TP2, ... 다시 자동!\n   = 신 평단 기준 단계별 익절!\n   = 사장님 가격 더 갈 거 예상 시 추천!'
+    : '   = TP/SL 유지 = 옛 진행 계속!\n   = 평단만 개선 + 큰 qty 유지!\n   = 사장님 청산 위험 + 큰 qty 의도 시 추천!';
   const confirmMsg =
-    `💉 포지션 추가 = ${amount} USDT 시장가 진입!\n\n` +
-    `🚨 critical 사전 인지 (= 사장님 SYNUSDT 사건!):\n` +
-    `   = 즉시 qty 추가 + 평단 개선!\n` +
-    `   = But 단계 진행 X = 자동 진입 trigger 영향 X!\n` +
-    `   = current_stage 변경 X = stage_plans 추가 X!\n\n` +
+    `💉 포지션 추가 = ${amount} USDT ${isLimit ? '지정가' : '시장가'}!\n\n` +
+    `🌟 선택 모드: ${modeLabel}\n${modeDescription}\n\n` +
+    `📌 공통 동작:\n` +
+    `   - qty 추가 + 평단 개선!\n` +
+    `   - total_capital 증가!\n` +
+    `   - SL 한도 자동 갱신!\n` +
+    `   - current_stage 변경 X (= 단계 진행 X!)\n\n` +
     `💡 사장님 = 단계 추가 의도 시 = 다른 옵션!\n` +
-    `   → 「✏️ 수정」 → 신 4단계, 5단계 capital + trigger 입력 →\n` +
-    `   → 「↻ 설정만 수정 (시작가 유지)」 클릭!\n` +
-    `   = 신 stage_plans 추가 + 자동 진입 작동!\n\n` +
-    `📊 사장님 SYNUSDT 사건:\n` +
-    `   - strategy = 2단계만 (capitals = [200, 600])\n` +
-    `   - 사장님 = 「💉 포지션 추가」 × 2 = 단계 X = trigger 미도달!\n` +
-    `   - 결과 = Liquidation = -585 USDT 손실! 🚨\n\n` +
-    `✅ 진행하시겠습니까? (= 즉시 시장가 진입!)`;
+    `   → 「✏️ 수정」 → 신 단계 capital + trigger 입력 →\n` +
+    `   → 「↻ 설정만 수정」 = 신 stage_plans + 자동 진입!\n\n` +
+    `✅ 진행하시겠습니까?`;
   if (!confirm(confirmMsg)) return;
   const body = {
     amount_usdt: amount,
     order_type: isLimit ? 'LIMIT' : 'MARKET',
+    mode: mode,  // 🌟 헌법 51!
   };
   if (isLimit) body.limit_price = limitPrice;
   try {
