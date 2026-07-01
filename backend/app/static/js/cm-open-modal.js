@@ -205,17 +205,29 @@ async function loadRecentStrategiesQuick() {
     }
     // grid-cols-3 = 자동 2줄!
     container.className = 'grid grid-cols-3 gap-1';
+    // 🚨 2026-07-01 사장님 critical fix (label vs 실제 값 silent bug!):
+    // 옛 silent bug: label = t.name (= 사장님 옛 별명, 실제 값과 불일치!)
+    // = 사장님 = "10 300_45" 별명 → 실제 값 = [400, 800] = 헷갈림!
+    // fix: label = 실제 capitals + triggers 자동 생성 (= 정확!)
+    //      + template name = title tooltip 에 보존!
     container.innerHTML = userTpls.map(t => {
       const sideColor = t.side === 'SHORT' ? 'text-red-400' : 'text-green-400';
       const sideIcon = t.side === 'SHORT' ? '📉' : '📈';
-      const name = (t.name || '').substring(0, 18);
-      const stagesCount = (t.stages_config?.capitals || []).filter(c => c && Number(c) > 0).length || 0;
+      // 실제 값 기반 label 생성:
+      const caps = (t.stages_config?.capitals || []).filter(c => c && Number(c) > 0);
+      const trigs = t.stages_config?.trigger_percents || [];
+      // "cap1 cap2_trig2 cap3_trig3" 형식 (= 사장님 옛 표기법!)
+      const label = caps.map((c, i) => {
+        const trg = trigs[i];
+        return (trg && Number(trg) > 0) ? `${c}_${trg}` : String(c);
+      }).join(' ').substring(0, 22);
+      const stagesCount = caps.length || 0;
       return `<button onclick="if(typeof startStrategyFromTemplate==='function') startStrategyFromTemplate(${t.id})"
         class="px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded text-xs"
         style="min-width:0"
-        title="📋 ${t.name} (${t.side} ${t.leverage}x, ${stagesCount}단계) — 클릭 = 1 클릭 신 전략 시작!">
+        title="📋 별명: ${t.name} | 실제: ${caps.join(', ')} USDT (트리거: ${trigs.filter(x=>x).join(', ') || 'default'}) | ${t.side} ${t.leverage}x, ${stagesCount}단계 — 클릭 = 신 strategy!">
         <span class="${sideColor}">${sideIcon}</span>
-        <span class="font-semibold text-blue-300">${name}</span>
+        <span class="font-semibold text-blue-300">${label}</span>
         <span class="text-slate-400">${t.leverage}x</span>
       </button>`;
     }).join('');
