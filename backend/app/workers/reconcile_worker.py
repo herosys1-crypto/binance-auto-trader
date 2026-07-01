@@ -191,13 +191,34 @@ def _do_reconcile(decrypt_func) -> None:
                 if not matched:
                     # STOPPING 좀비 자동 정리
                     if strategy.status == "STOPPING":
+                        # 🚨 2026-07-02 사장님 critical v55: STOPPED 마킹 전 = cancel_all_orders!
+                        # 옛 silent bug: STOPPING → STOPPED 마킹 시 = LIMIT 취소 X!
+                        # = 사장님 자본 lock = orphan orders (VELVETUSDT 5건 사건!)
+                        # 신 fix: STOPPED 마킹 전 = 즉시 cancel = 근본 원인 즉시 fix!
+                        _cancel_result = "SKIP"
+                        try:
+                            from app.repositories.exchange_account_repository import ExchangeAccountRepository
+                            from app.integrations.binance.client import BinanceClient
+                            _acc = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
+                            if _acc and decrypt_func:
+                                _client = BinanceClient(
+                                    api_key=decrypt_func(_acc.api_key_enc),
+                                    api_secret=decrypt_func(_acc.api_secret_enc),
+                                    is_testnet=_acc.is_testnet,
+                                )
+                                _client.cancel_all_orders(symbol=strategy.symbol)
+                                _cancel_result = "SUCCESS"
+                                logger.info("[v55] STOPPING → STOPPED = cancel_all_orders(%s) 성공!", strategy.symbol)
+                        except Exception as _ce:
+                            _cancel_result = f"FAIL: {_ce}"
+                            logger.error("[v55] cancel_all_orders 실패 #%s: %s", strategy.id, _ce)
                         db.add(RiskEvent(
                             strategy_instance_id=strategy.id,
                             event_type="RECONCILE_STOPPING_ZOMBIE_CLEANUP",
                             severity="INFO",
-                            title="✅ 좀비 STOPPING 자동 정리 (STOPPED 전환)",
-                            message=f"{strategy.symbol} {strategy.side} — 거래소 포지션 0 확인됨, STOPPING → STOPPED 자동 승격",
-                            event_payload={"strategy_id": strategy.id},
+                            title="✅ 좀비 STOPPING 자동 정리 (STOPPED 전환 + LIMIT 취소!)",
+                            message=f"{strategy.symbol} {strategy.side} — STOPPING → STOPPED. LIMIT 취소 결과: {_cancel_result} (v55 자본 회수 보장!)",
+                            event_payload={"strategy_id": strategy.id, "cancel_result": _cancel_result},
                         ))
                         strategy.status = "STOPPED"
                         strategy.current_position_qty = Decimal("0")
