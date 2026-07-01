@@ -25,13 +25,18 @@ function statusInfo(status) {
 }
 
 function sideBadge(side, leverage) {
-  // 2026-05-15 사용자 요청: 방향 옆에 leverage 같이 표시 (전략 인스턴스 컬럼 한눈에 파악).
-  // leverage 인자 생략 시 배지만 (templates-panel 처럼 별도 컬럼 있는 곳은 그대로 호환).
+  // 🌟 2026-07-01 사장님 요구: 아이콘 완전히 다른 것 + 색상 쉬운 구분!
+  //   LONG = 🐂 (황소, 상승!) + 진한 초록 + 강력 시각!
+  //   SHORT = 🐻 (곰, 하락!) + 진한 빨강 + 강력 시각!
   const lev = (leverage !== undefined && leverage !== null && Number(leverage) > 0)
     ? ` <span class="text-xs text-slate-300 ml-1">${leverage}x</span>`
     : '';
-  if (side === 'SHORT') return '<span class="badge badge-red">📉 숏</span>' + lev;
-  if (side === 'LONG')  return '<span class="badge badge-green">📈 롱</span>' + lev;
+  if (side === 'SHORT') {
+    return `<span style="display:inline-block;background:#dc2626;color:#fff;padding:3px 10px;border-radius:6px;font-weight:bold;font-size:13px;box-shadow:0 0 6px rgba(239,68,68,0.6);">🐻 SHORT</span>${lev}`;
+  }
+  if (side === 'LONG') {
+    return `<span style="display:inline-block;background:#16a34a;color:#fff;padding:3px 10px;border-radius:6px;font-weight:bold;font-size:13px;box-shadow:0 0 6px rgba(34,197,94,0.6);">🐂 LONG</span>${lev}`;
+  }
   return '<span class="badge badge-gray">' + side + '</span>' + lev;
 }
 
