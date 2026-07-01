@@ -283,7 +283,7 @@ def get_operation_stats(
     🌟 2026-07-01 사장님 요구: date 파라미터 = "YYYY-MM-DD" 형식 = 특정 날짜 익절 카운트!
     + today_pnl 필드 = 오늘 (KST 자정~) 실현 손익!
     """
-    from sqlalchemy import func, select as sa_select
+    from sqlalchemy import func, select as sa_select, or_ as sa_or_
     from app.models.strategy_instance import StrategyInstance
 
     # 전체/활성/완료/손절 분포
@@ -339,12 +339,35 @@ def get_operation_stats(
         today_kst = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
         day_start = today_kst.astimezone(timezone.utc)
         day_end = (today_kst + timedelta(days=1)).astimezone(timezone.utc)
-    # 해당 날짜에 종료된 strategy 의 realized_pnl 합계 = 확정 손익!
-    today_pnl_val = db.execute(
-        sa_select(func.coalesce(func.sum(StrategyInstance.realized_pnl), 0))
-        .where(StrategyInstance.stopped_at >= day_start)
-        .where(StrategyInstance.stopped_at < day_end)
-    ).scalar_one() or Decimal("0")
+    # 🚨 2026-07-01 사장님 critical fix (v2!):
+    # 옛 silent bug: strategy.stopped_at 기준 = 종료된 strategy 만!
+    # = 진행 중 strategy 의 TP 익절 = 누락!
+    # 사장님 요구 = "오늘 실현 손익" = TP 청산 + SL + 종료 모두 포함!
+    # fix: notifications 익절/손절 body 에서 "손익 금액 : +X.XX USDT" regex 파싱!
+    import re
+    from app.models.notification import Notification as _NotifBody
+    pnl_notifs = db.execute(
+        sa_select(_NotifBody.body)
+        .where(sa_or_(
+            _NotifBody.title.like("%익절 체결%"),
+            _NotifBody.title.like("%[손절%"),
+        ))
+        .where(_NotifBody.created_at >= day_start)
+        .where(_NotifBody.created_at < day_end)
+    ).scalars().all()
+    _pnl_regex = re.compile(r"손[익실]\s*금액\s*[:：]\s*([+-]?\d+(?:\.\d+)?)\s*USDT")
+    today_pnl_val = Decimal("0")
+    _count = 0
+    for _body in pnl_notifs:
+        if not _body:
+            continue
+        _m = _pnl_regex.search(_body)
+        if _m:
+            try:
+                today_pnl_val += Decimal(_m.group(1))
+                _count += 1
+            except Exception:
+                pass
 
     # 2026-05-06 fix (사용자 보고): strategy 단위 손익 분류 — 알림 기반 승률은 부정확.
     # 손실 strategy 가 「[손절 발동]」 알림 없이 STOPPED 되면 (수동 정리 또는 -50% 임계

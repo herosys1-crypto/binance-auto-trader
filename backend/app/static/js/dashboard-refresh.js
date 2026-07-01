@@ -222,12 +222,20 @@ async function refreshStats() {
     const realizedEl = document.getElementById('stats-realized');
     realizedEl.textContent = (realizedNum >= 0 ? '+' : '') + fmtNum(realizedNum) + ' USDT';
     realizedEl.className = 'text-base font-bold ' + (realizedNum > 0 ? 'pos' : realizedNum < 0 ? 'neg' : '');
-    // 🌟 2026-07-01 사장님 요구: 당일 손익 필드!
+    // 🌟 2026-07-01 사장님 요구 v2: 당일 손익 + 실시간 갱신 표시!
     const todayEl = document.getElementById('stats-today-pnl');
     if (todayEl) {
       const todayNum = Number(s.today_pnl || 0);
-      todayEl.textContent = (todayNum >= 0 ? '+' : '') + fmtNum(todayNum) + ' USDT';
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, '0');
+      const mm = String(now.getMinutes()).padStart(2, '0');
+      const ss = String(now.getSeconds()).padStart(2, '0');
+      const dateFilterEl = document.getElementById('stats-date-filter');
+      const dateLabel = (dateFilterEl && dateFilterEl.value) ? dateFilterEl.value : '오늘';
+      todayEl.innerHTML = (todayNum >= 0 ? '+' : '') + fmtNum(todayNum) + ' USDT'
+        + `<span class="text-slate-500 ml-1" style="font-size:9px">${hh}:${mm}:${ss}</span>`;
       todayEl.className = 'text-base font-bold ' + (todayNum > 0 ? 'pos' : todayNum < 0 ? 'neg' : 'text-cyan-300');
+      todayEl.title = `${dateLabel} 실현 손익 = ${todayNum >= 0 ? '+' : ''}${fmtNum(todayNum)} USDT (마지막 갱신: ${hh}:${mm}:${ss}, 5초 자동 갱신)`;
     }
     const crisisEl = document.getElementById('stats-crisis');
     crisisEl.textContent = s.crisis_total + (s.crisis_active > 0 ? ` (현재 ${s.crisis_active})` : '');
