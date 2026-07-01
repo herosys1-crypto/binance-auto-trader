@@ -501,12 +501,16 @@ def _do_reconcile(decrypt_func) -> None:
                 tags={"event_type": "ORPHAN_DETECTION_LOOP_FAILED"},
             )
 
-        # ===== Phase 3 안전망 — 거래소 orphan open order 감지 (사용자 #VICUSDT 보고 2026-05-15) =====
-        # LIMIT 미체결 주문이 archive/stop 시 cancel_all_orders 누락으로 거래소에 잔존
-        # 하는 케이스. WARN RiskEvent 기록 — 운영자가 거래소에서 직접 취소 권장.
+        # ===== Phase 3 안전망 — 거래소 orphan open order 자동 취소 (사장님 자본 자동 회수!) =====
+        # 🚨 2026-07-02 사장님 critical fix (v54!):
+        # 옛 silent bug: auto_cancel=False = 감지만 + warning!
+        # = 사장님 = 수동 취소 필요 = 자본 lock!
+        # = VELVETUSDT/DYDXUSDT = 18~30시간 lock = 2400 USDT 손실!
+        # 신 fix: auto_cancel=True = 자동 취소 = 사장님 자본 자동 회수!
+        # = 매칭 없음 = 사장님 종료 strategy 의 잔재 = 안전 자동 취소!
         try:
             n_orphan_oo = detect_orphan_exchange_open_orders(
-                db, decrypt_func=decrypt_func, auto_cancel=False,
+                db, decrypt_func=decrypt_func, auto_cancel=True,  # 🚨 신 v54: 자동 취소!
             )
             if n_orphan_oo:
                 logger.warning(
