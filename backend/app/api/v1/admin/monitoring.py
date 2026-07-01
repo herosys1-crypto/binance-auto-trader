@@ -274,12 +274,14 @@ def get_recent_activity(
 
 @router.get("/stats")
 def get_operation_stats(
+    date: str | None = None,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> dict:
     """운영 통계 — 전체 전략 분포 + 누적 손익 + 승률 + 크라이시스 발동 횟수.
 
-    대시보드 상단 패널에 표시. 시계열 차트는 다음 phase 에서 추가.
+    🌟 2026-07-01 사장님 요구: date 파라미터 = "YYYY-MM-DD" 형식 = 특정 날짜 익절 카운트!
+    + today_pnl 필드 = 오늘 (KST 자정~) 실현 손익!
     """
     from sqlalchemy import func, select as sa_select
     from app.models.strategy_instance import StrategyInstance
@@ -316,6 +318,32 @@ def get_operation_stats(
     # 누적 실현 손익 합계
     realized_total = db.execute(
         sa_select(func.coalesce(func.sum(StrategyInstance.realized_pnl), 0))
+    ).scalar_one() or Decimal("0")
+
+    # 🌟 2026-07-01 사장님 요구: 당일 손익 (KST 자정 기준!) + 특정 날짜 조회!
+    # 계산 방식: 해당 날짜에 종료된 (stopped_at) strategy 의 realized_pnl 합계!
+    from datetime import datetime, timezone, timedelta
+    KST = timezone(timedelta(hours=9))
+    now_kst = datetime.now(KST)
+    if date:
+        # 사장님 특정 날짜 (= "YYYY-MM-DD" KST 자정~다음 자정!)
+        try:
+            target_kst = datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=KST)
+            day_start = target_kst.astimezone(timezone.utc)
+            day_end = (target_kst + timedelta(days=1)).astimezone(timezone.utc)
+        except Exception:
+            today_kst = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_start = today_kst.astimezone(timezone.utc)
+            day_end = (today_kst + timedelta(days=1)).astimezone(timezone.utc)
+    else:
+        today_kst = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_start = today_kst.astimezone(timezone.utc)
+        day_end = (today_kst + timedelta(days=1)).astimezone(timezone.utc)
+    # 해당 날짜에 종료된 strategy 의 realized_pnl 합계 = 확정 손익!
+    today_pnl_val = db.execute(
+        sa_select(func.coalesce(func.sum(StrategyInstance.realized_pnl), 0))
+        .where(StrategyInstance.stopped_at >= day_start)
+        .where(StrategyInstance.stopped_at < day_end)
     ).scalar_one() or Decimal("0")
 
     # 2026-05-06 fix (사용자 보고): strategy 단위 손익 분류 — 알림 기반 승률은 부정확.
@@ -391,6 +419,8 @@ def get_operation_stats(
         "loss_strategy_count": loss_strategy_count,
         "decided_strategy_count": decided_strategy_count,
         "realized_pnl_total": str(realized_total),
+        "today_pnl": str(today_pnl_val),  # 🌟 2026-07-01 사장님: 당일/특정날짜 실현 손익!
+        "date_filter": date or now_kst.strftime("%Y-%m-%d"),  # 선택 날짜 (없으면 오늘!)
         "crisis_total": crisis_total,
         "crisis_active": crisis_active,
         "avg_max_loss_pct": str(round(Decimal(str(avg_max_loss)), 2)),
