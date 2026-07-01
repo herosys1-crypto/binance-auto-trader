@@ -195,23 +195,28 @@ def _do_reconcile(decrypt_func) -> None:
                         # 옛 silent bug: STOPPING → STOPPED 마킹 시 = LIMIT 취소 X!
                         # = 사장님 자본 lock = orphan orders (VELVETUSDT 5건 사건!)
                         # 신 fix: STOPPED 마킹 전 = 즉시 cancel = 근본 원인 즉시 fix!
+                        # 🚨 v55a hot-fix (2026-07-02): Python scoping bug fix!
+                        # 옛 v55 silent bug: try 안 `from ... import BinanceClient`
+                        # = 함수 내 다른 곳 (line 152, bulk_client_cache) 도 BinanceClient 사용!
+                        # = Python = 함수 시작 시 BinanceClient = local 결정!
+                        # = try 실행 전 line 152 = 'free variable' 오류 = reconcile 전체 cycle skip!
+                        # 신 v55a: 함수 시작 (line 30) 모듈 level BinanceClient 사용!
                         _cancel_result = "SKIP"
                         try:
                             from app.repositories.exchange_account_repository import ExchangeAccountRepository
-                            from app.integrations.binance.client import BinanceClient
                             _acc = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
                             if _acc and decrypt_func:
-                                _client = BinanceClient(
+                                _client = BinanceClient(  # 모듈 level 사용 (import X!)
                                     api_key=decrypt_func(_acc.api_key_enc),
                                     api_secret=decrypt_func(_acc.api_secret_enc),
                                     is_testnet=_acc.is_testnet,
                                 )
                                 _client.cancel_all_orders(symbol=strategy.symbol)
                                 _cancel_result = "SUCCESS"
-                                logger.info("[v55] STOPPING → STOPPED = cancel_all_orders(%s) 성공!", strategy.symbol)
+                                logger.info("[v55a] STOPPING → STOPPED = cancel_all_orders(%s) 성공!", strategy.symbol)
                         except Exception as _ce:
                             _cancel_result = f"FAIL: {_ce}"
-                            logger.error("[v55] cancel_all_orders 실패 #%s: %s", strategy.id, _ce)
+                            logger.error("[v55a] cancel_all_orders 실패 #%s: %s", strategy.id, _ce)
                         db.add(RiskEvent(
                             strategy_instance_id=strategy.id,
                             event_type="RECONCILE_STOPPING_ZOMBIE_CLEANUP",
