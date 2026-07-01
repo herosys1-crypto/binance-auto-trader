@@ -198,7 +198,11 @@ async function refreshSysHealth() {
 
 async function refreshStats() {
   try {
-    const s = await api('/admin/stats');
+    // 🌟 2026-07-01 사장님 요구: 날짜별 조회 + 당일 손익!
+    const dateEl = document.getElementById('stats-date-filter');
+    const dateVal = dateEl ? dateEl.value : '';
+    const qs = dateVal ? `?date=${encodeURIComponent(dateVal)}` : '';
+    const s = await api('/admin/stats' + qs);
     document.getElementById('stats-total').textContent = s.total;
     document.getElementById('stats-completed').textContent = s.completed;
     document.getElementById('stats-sl').textContent = s.stop_loss;
@@ -217,7 +221,14 @@ async function refreshStats() {
     const realizedNum = Number(s.realized_pnl_total || 0);
     const realizedEl = document.getElementById('stats-realized');
     realizedEl.textContent = (realizedNum >= 0 ? '+' : '') + fmtNum(realizedNum) + ' USDT';
-    realizedEl.className = 'text-xl font-bold ' + (realizedNum > 0 ? 'pos' : realizedNum < 0 ? 'neg' : '');
+    realizedEl.className = 'text-base font-bold ' + (realizedNum > 0 ? 'pos' : realizedNum < 0 ? 'neg' : '');
+    // 🌟 2026-07-01 사장님 요구: 당일 손익 필드!
+    const todayEl = document.getElementById('stats-today-pnl');
+    if (todayEl) {
+      const todayNum = Number(s.today_pnl || 0);
+      todayEl.textContent = (todayNum >= 0 ? '+' : '') + fmtNum(todayNum) + ' USDT';
+      todayEl.className = 'text-base font-bold ' + (todayNum > 0 ? 'pos' : todayNum < 0 ? 'neg' : 'text-cyan-300');
+    }
     const crisisEl = document.getElementById('stats-crisis');
     crisisEl.textContent = s.crisis_total + (s.crisis_active > 0 ? ` (현재 ${s.crisis_active})` : '');
     crisisEl.className = 'text-xl font-bold ' + (s.crisis_active > 0 ? 'text-red-400' : 'text-yellow-400');

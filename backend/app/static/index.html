@@ -64,18 +64,19 @@
   td { padding: 1px 10px; border-top: 1px solid #334155; font-size: 13px; line-height: 1.1; }  /* 2026-06-08 v3 사장님: 행 공백 거의 완전 0 (3px → 1px) + line-height 1.1 (행 내부 컨텐츠 압축) */
   tr.row-clickable { cursor: pointer; transition: background 0.1s; }
   tr.row-clickable:hover { background: rgba(59,130,246,0.05); }
-  /* 🌟 2026-07-01 사장님 요구 v3: LONG/SHORT = 강력 배경 + 두꺼운 border!
-     v1 v2 부족 → 더 진한 색 + 두꺼운 border = 즉시 구분! */
+  /* 🌟 2026-07-01 사장님 v4: LONG = 흰색 계열 (사장님 요구!)
+     사장님 명시: "롱은 바탕색을 흰색 계열로 해주고"
+     = 다크 테마에 = 옅은 흰색 = 시원 + 구분 명확! */
   tr.strategy-row-long,
   tr.strategy-row-long > td {
-    background-color: rgba(22, 163, 74, 0.18) !important;
+    background-color: rgba(255, 255, 255, 0.09) !important;  /* 옅은 흰색! */
   }
   tr.strategy-row-long > td:first-child {
-    border-left: 6px solid #16a34a !important;
+    border-left: 6px solid #ffffff !important;               /* 흰색 border! */
   }
   tr.strategy-row-long:hover,
   tr.strategy-row-long:hover > td {
-    background-color: rgba(22, 163, 74, 0.32) !important;
+    background-color: rgba(255, 255, 255, 0.18) !important;
   }
   tr.strategy-row-short,
   tr.strategy-row-short > td {
@@ -1067,8 +1068,21 @@
       </div>
 
       <!-- 운영 통계 (전체 누적) — 빠른작업 아래 -->
+      <!-- 🌟 2026-07-01 사장님 요구: 확정 손익 + 당일 손익 + 날짜별 조회! -->
       <div id="section-stats" class="card rounded-lg">
-        <div class="card-header text-xs" style="padding:6px 12px">📊 운영 통계 (전체 누적)</div>
+        <div class="card-header text-xs flex justify-between items-center" style="padding:6px 12px">
+          <span>📊 운영 통계</span>
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-slate-400">📅 날짜:</label>
+            <input type="date" id="stats-date-filter"
+                   class="bg-slate-800 border border-slate-600 rounded text-xs text-white px-1 py-0.5"
+                   style="font-size:11px; min-width:0;"
+                   onchange="if(typeof refreshStats==='function') refreshStats();" />
+            <button onclick="document.getElementById('stats-date-filter').value=''; if(typeof refreshStats==='function') refreshStats();"
+                    class="text-xs text-slate-400 hover:text-white px-1"
+                    title="날짜 초기화 = 전체 누적">✕</button>
+          </div>
+        </div>
         <div class="p-2 grid grid-cols-3 sm:grid-cols-3 gap-2 text-center">
           <div class="row-clickable" onclick="openStatsBreakdownModal('strategies')" title="클릭: 모든 strategy 별 분류 + 손익 상세">
             <p class="text-xs text-slate-400">전략 수 🔍</p>
@@ -1092,13 +1106,19 @@
             <p id="stats-winrate-detail" class="text-xs text-slate-500" style="font-size:9px">-</p>
           </div>
           <div class="row-clickable" onclick="openStatsBreakdownModal('realized')" title="클릭: realized PnL 발생 strategy 별 손익 상세 (산출 근거)">
-            <p class="text-xs text-slate-400">확정 손익 <span class="text-slate-500" style="font-size:9px">(Realized)</span> 🔍</p>
+            <p class="text-xs text-slate-400">💰 확정 손익 <span class="text-slate-500" style="font-size:9px">(누적)</span> 🔍</p>
             <p id="stats-realized" class="text-base font-bold">-</p>
           </div>
-          <div class="row-clickable" onclick="openStatsBreakdownModal('losses')" title="크라이시스 모드 진입 strategy 수. 클릭: 손실/위험 strategy 상세">
-            <p class="text-xs text-slate-400">크라이시스 🔍</p>
-            <p id="stats-crisis" class="text-base font-bold text-yellow-400">-</p>
+          <div class="row-clickable" title="당일 확정 손익 (오늘 KST 자정 이후 실현)">
+            <p class="text-xs text-slate-400">🌟 당일 손익 <span class="text-slate-500" style="font-size:9px">(오늘)</span></p>
+            <p id="stats-today-pnl" class="text-base font-bold text-cyan-300">-</p>
           </div>
+        </div>
+        <div class="p-1 text-center border-t border-slate-700">
+          <p class="text-xs text-slate-500">
+            <span class="text-yellow-400">⚠ 크라이시스:</span>
+            <span id="stats-crisis" class="text-yellow-400 font-semibold">-</span>
+          </p>
         </div>
         <!-- TP 단계별 카운트 (notification title 기준) — 2026-05-12: TP1~10 확장 + TRAILING + 클릭 가능 -->
         <div class="p-2 grid grid-cols-5 md:grid-cols-11 gap-1 text-center border-t border-slate-700" style="padding-top:6px">
@@ -2053,41 +2073,41 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/api.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/helpers.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/stats-modals.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/health-page.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/ranking-page.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/ranking-modal.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/trade-history-modal.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/system-banner.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/cm-collectors.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/cm-loaders.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/cm-market-info.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/cm-preview.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/cm-open-modal.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/templates-panel.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/indicators.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/strategies-list.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/external-positions.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/multi-symbol.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/template-save.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/cm-submit.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/strategy-detail.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/chart-detail.js?v=20260701v77-icon-strong"></script>
+<script src="/static/js/constants.js?v=20260701v78-white-today"></script>
+<script src="/static/js/api.js?v=20260701v78-white-today"></script>
+<script src="/static/js/helpers.js?v=20260701v78-white-today"></script>
+<script src="/static/js/stats-modals.js?v=20260701v78-white-today"></script>
+<script src="/static/js/health-page.js?v=20260701v78-white-today"></script>
+<script src="/static/js/ranking-page.js?v=20260701v78-white-today"></script>
+<script src="/static/js/ranking-modal.js?v=20260701v78-white-today"></script>
+<script src="/static/js/trade-history-modal.js?v=20260701v78-white-today"></script>
+<script src="/static/js/system-banner.js?v=20260701v78-white-today"></script>
+<script src="/static/js/cm-collectors.js?v=20260701v78-white-today"></script>
+<script src="/static/js/cm-loaders.js?v=20260701v78-white-today"></script>
+<script src="/static/js/cm-market-info.js?v=20260701v78-white-today"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260701v78-white-today"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260701v78-white-today"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260701v78-white-today"></script>
+<script src="/static/js/cm-preview.js?v=20260701v78-white-today"></script>
+<script src="/static/js/cm-open-modal.js?v=20260701v78-white-today"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260701v78-white-today"></script>
+<script src="/static/js/templates-panel.js?v=20260701v78-white-today"></script>
+<script src="/static/js/indicators.js?v=20260701v78-white-today"></script>
+<script src="/static/js/strategies-list.js?v=20260701v78-white-today"></script>
+<script src="/static/js/external-positions.js?v=20260701v78-white-today"></script>
+<script src="/static/js/multi-symbol.js?v=20260701v78-white-today"></script>
+<script src="/static/js/template-save.js?v=20260701v78-white-today"></script>
+<script src="/static/js/cm-submit.js?v=20260701v78-white-today"></script>
+<script src="/static/js/strategy-detail.js?v=20260701v78-white-today"></script>
+<script src="/static/js/chart-detail.js?v=20260701v78-white-today"></script>
 <script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
-<script src="/static/js/accounts-modal.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/add-position-modal.js?v=20260701v77-icon-strong"></script>
+<script src="/static/js/accounts-modal.js?v=20260701v78-white-today"></script>
+<script src="/static/js/add-position-modal.js?v=20260701v78-white-today"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/page-router.js?v=20260701v77-icon-strong"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260701v77-icon-strong"></script>
+<script src="/static/js/strategy-actions.js?v=20260701v78-white-today"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260701v78-white-today"></script>
+<script src="/static/js/page-router.js?v=20260701v78-white-today"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260701v78-white-today"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
