@@ -524,10 +524,27 @@ def force_stop_strategy(
     - 테스트/실험용 미사용 strategy 정리
 
     포지션이 거래소에 남아있을 수 있으니 운영자가 직접 확인 후 사용 권장.
+
+    🚨 2026-07-02 사장님 v55: STOPPED 마킹 전 = cancel_all_orders 시도!
+    = orphan LIMIT 잔재 = 자본 lock 영구 차단!
     """
     strategy = StrategyRepository(db).get_strategy(strategy_id)
     if not strategy or strategy.user_id != user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략을 찾을 수 없거나 본인 소유가 아닙니다.")
+    # 🚨 v55: force_stop 이라도 = cancel_all_orders 시도 (best-effort!)
+    try:
+        account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
+        if account:
+            execution_service = ExecutionService(
+                db,
+                api_key=decrypt_text(account.api_key_enc),
+                api_secret=decrypt_text(account.api_secret_enc),
+                is_testnet=account.is_testnet,
+            )
+            execution_service.client.cancel_all_orders(symbol=strategy.symbol)
+    except Exception:
+        # force_stop 특성상 = 실패해도 계속 (= 사장님 명시 = 거래소 X 시도)
+        pass
     strategy.status = "STOPPED"
     strategy.reentry_ready = False
     # 좀비 방지 (2026-05-03): force-stop 시에도 qty=0 보장 — UI/통계 잔재 방지.
