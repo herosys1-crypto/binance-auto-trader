@@ -699,7 +699,13 @@ async function refreshStrategies() {
       })() : '-';
       // 2026-06-01 (사장님 요구): 활성 전략만 Binance 비교 행 표시 (종료된 전략 비교 무의미).
       const showBinanceCompare = !isTerminal && s.exchange_account_id;
-      return `<tr class="row-clickable" onclick="selectStrategy(${s.id})">
+      // 🌟 2026-07-01 사장님 요구: LONG = 다른 바탕색 (한눈 구분!)
+      // = LONG = 초록 계열 배경 + border-left 초록!
+      // = SHORT = 옛 배경 그대로 (= border-left 빨강!)
+      const sideRowClass = (s.side === 'LONG')
+        ? 'strategy-row-long'
+        : 'strategy-row-short';
+      return `<tr class="row-clickable ${sideRowClass}" onclick="selectStrategy(${s.id})">
         <td>#${s.id}</td>
         <td class="font-mono">
           <div class="text-xs leading-none">
