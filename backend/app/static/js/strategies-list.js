@@ -873,6 +873,24 @@ async function updateTp1Threshold(strategyId, pctStr) {
     toast(`❌ 옵션 오류: ${pctStr}`, 'error');
     return;
   }
+  // 🌟 2026-07-02 사장님 옵션 A (헌법 갱신!): TP1 dropdown 변경 시 = confirm 모달!
+  // 옛 옵션 A (task #89) = "confirm 모달 X" = 취소!
+  // 신 사상: silent 실수 방지 = 사장님 명확 인지!
+  const confirmMsg =
+    `🚨 TP1 옵션 변경 = TP1 +${pct}%!\n\n` +
+    `📌 사장님 선택:\n` +
+    `   전략 #${strategyId} = TP1 = +${pct}% ROI 도달 시 익절!\n\n` +
+    `⚠️ 인지 필요:\n` +
+    `   • 10% = 빠른 익절 (default)\n` +
+    `   • 15% = 표준\n` +
+    `   • 20% = 큰 익절 (더 오래 기다림!)\n` +
+    `   • 25% = 매우 큰 익절!\n\n` +
+    `✅ 진행하시겠습니까?`;
+  if (!confirm(confirmMsg)) {
+    // 사장님 취소 = dropdown 원위치 복원!
+    refreshStrategies();
+    return;
+  }
   try {
     await api(`/strategies/${strategyId}/tp1-threshold`, {
       method: 'PATCH',
