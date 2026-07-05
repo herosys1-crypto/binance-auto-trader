@@ -256,6 +256,20 @@ def cleanup_quick_templates(
         strategy + template 모두 일괄 삭제. testnet 검증 종료 후 한 번에 깨끗이 정리하는 용도.
         주의: mainnet 에서 사용 시 실제 포지션이 시장가 청산되어 손실 확정될 수 있음.
     """
+    # 🚨 2026-07-06 사장님 critical fix (12건 강제 청산 사건 영구 차단!):
+    # 사장님 명시: "이 메뉴는 현재 진행중인 전략에 영향을 주지 않고
+    #             임시 저장과 종료된 전략을 삭제하는 메뉴가 되어야 해!"
+    # = force=True = 활성 strategy 시장가 청산 = 사장님 사상 100% 위반!
+    # = 영구 차단 (백엔드 2중 방어!)
+    if force:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "🛡 force=True (완전 정리) = 사장님 요청 = 영구 제거! "
+                "활성 strategy = 절대 영향 X! "
+                "= cascade=True 만 사용 가능 (= 종료된 strategy 만 삭제!)"
+            ),
+        )
     from app.models.strategy_instance import StrategyInstance
     from app.services.execution_service import EmergencyCloseInProgress, ExecutionService
 

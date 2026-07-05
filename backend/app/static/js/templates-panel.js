@@ -67,29 +67,36 @@ async function refreshTemplates() {
 
 // UX #19 (2026-04-29): 3-way 선택 (안전 / 강제 / 완전(force))
 async function cleanupQuickTemplates() {
-  // prompt 로 모드 선택 (1/2/3)
+  // 🚨 2026-07-06 사장님 critical fix (사장님 12건 강제 청산 사건!):
+  // 옛 옵션 3 (force) = 활성 strategy 시장가 청산!
+  // 사장님 명시: "이 메뉴는 현재 진행중인 전략에 영향을 주지 않고
+  //             임시 저장과 종료된 전략을 삭제하는 메뉴가 되어야 해!"
+  // fix: 옵션 3 (force) = 완전 제거!
+  //      옵션 1 (안전 정리) + 옵션 2 (강제 정리 = cascade only!) 만!
+  //      = 활성 strategy = 절대 영향 X (= 사장님 사상 100%!)
   const choice = prompt(
     '_quick_* 템플릿 정리 — 모드 선택\n\n' +
+    '🛡 사장님 사상: 활성 strategy = 절대 영향 X!\n\n' +
     '1 = 🟢 안전 정리\n' +
-    '    미사용만 삭제, 사용 중은 비활성화만\n\n' +
+    '    미사용 template 만 삭제!\n' +
+    '    사용 중 = 비활성화만!\n' +
+    '    활성 strategy = 영향 X!\n\n' +
     '2 = 🟡 강제 정리 (cascade)\n' +
-    '    종료된 strategy 까지 삭제, active 는 비활성화만\n\n' +
-    '3 = 🔴 완전 정리 (force)\n' +
-    '    활성 전략 시장가 청산 + 미체결 취소 → strategy + template 모두 삭제\n' +
-    '    ⚠️ 실제 포지션이 청산되어 손실 확정될 수 있음\n\n' +
-    '번호 입력 (1 / 2 / 3, 빈값=취소):',
+    '    종료된 strategy 까지 삭제!\n' +
+    '    활성 strategy = 절대 영향 X (= 비활성화만!)\n' +
+    '    template = 안전 정리!\n\n' +
+    '⚠️ 옛 옵션 3 (완전 정리) = 사장님 요청 = 영구 제거!\n\n' +
+    '번호 입력 (1 / 2, 빈값=취소):',
     '1'
   );
   if (!choice) return;
   let cascade = false, force = false, label = '';
   if (choice.trim() === '1') { label = '안전 정리'; }
-  else if (choice.trim() === '2') { cascade = true; label = '강제 정리 (cascade)'; }
+  else if (choice.trim() === '2') { cascade = true; label = '강제 정리 (cascade, 활성 안전!)'; }
   else if (choice.trim() === '3') {
-    force = true;
-    label = '완전 정리 (force)';
-    if (!confirm('🔴 완전 정리 — 최종 확인\n\n_quick_* 템플릿을 사용하는 활성 전략을 모두 시장가 청산하고\n strategy + template 을 모두 삭제합니다.\n\n실제 포지션이 시장가에 청산되어 손실이 확정될 수 있습니다.\n\n정말 진행할까요?')) return;
+    return toast('⚠️ 옵션 3 (완전 정리) = 사장님 요청 = 영구 제거! 활성 strategy 안전!', 'warning');
   } else {
-    return toast('잘못된 입력. 1/2/3 중 선택해주세요.', 'warning');
+    return toast('잘못된 입력. 1 or 2 중 선택해주세요.', 'warning');
   }
   try {
     const params = new URLSearchParams();
