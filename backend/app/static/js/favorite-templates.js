@@ -55,29 +55,62 @@ function _renderFavoriteCard(t) {
 }
 
 async function startStrategyFromTemplate(templateId) {
-  // openCreateModal 호출 후 = template radio 자동 선택
+  // 🚨 2026-07-06 사장님 critical fix v2: template 자동 반영 강화!
+  // 옛 silent bug: setTimeout 500ms = template 로드 안 끝남 = radio 못 찾음!
+  // 신 fix: template mode 강제 + 값 직접 채우기 (= radio 실패해도 반영!)
   try {
     if (typeof openCreateModal !== 'function') {
       toast('「새 전략」 모달 함수 X — 페이지 새로고침', 'error');
       return;
     }
+    // 1️⃣ template 데이터 = 사전 조회 (= 확실 반영!)
+    let tplData = null;
+    try {
+      tplData = await api(`/admin/strategy-templates/${templateId}`);
+    } catch (e) {
+      console.warn('[startStrategy] template 사전 조회 실패:', e);
+    }
     openCreateModal(null);
-    // 모달 열린 후 = template 자동 선택 (= 약간 대기 = template 로드 완료)
-    setTimeout(() => {
+    // 2️⃣ 모달 열림 대기 (= 1초 = 확실!)
+    setTimeout(async () => {
       try {
+        // template mode 강제 전환!
         if (typeof setCmMode === 'function') setCmMode('template');
+        // radio 선택 시도!
         const radio = document.querySelector(`input[name="cm-template"][value="${templateId}"]`);
         if (radio) {
           radio.checked = true;
           radio.dispatchEvent(new Event('change'));
-          toast(`✅ 템플릿 #${templateId} 자동 선택 — 시작가/심볼 확인 후 「시작」 클릭`, 'success');
+        }
+        // 3️⃣ 값 직접 채우기 (= template 사전 조회 성공 시!)
+        if (tplData && tplData.stages_config) {
+          // Side + leverage!
+          if (tplData.side && typeof setCmSide === 'function') setCmSide(tplData.side);
+          const lvEl = document.getElementById('cm-leverage');
+          if (lvEl && tplData.leverage) lvEl.value = tplData.leverage;
+          // Capitals + triggers!
+          const caps = tplData.stages_config.capitals || [];
+          const trigs = tplData.stages_config.trigger_percents || [];
+          for (let i = 1; i <= 10; i++) {
+            const cap = caps[i-1];
+            const trg = trigs[i-1];
+            const capEl = document.getElementById('cm-cap-' + i);
+            const trgEl = document.getElementById('cm-trg-' + i);
+            if (capEl) capEl.value = (cap && Number(cap) > 0) ? cap : '';
+            if (trgEl) trgEl.value = (trg && Number(trg) > 0) ? trg : '';
+          }
+          // 미리보기 갱신!
+          if (typeof onCapitalsChange === 'function') onCapitalsChange();
+          if (typeof _refreshLiveCalc === 'function') _refreshLiveCalc();
+          toast(`✅ 템플릿 #${templateId} 값 반영 완료 (자본: ${caps.join(', ')})`, 'success');
         } else {
-          toast('템플릿 자동 선택 X — 「템플릿 선택」 탭에서 수동 선택', 'warning');
+          toast(`⚠️ 템플릿 조회 실패 — 「템플릿 선택」 탭에서 수동 선택`, 'warning');
         }
       } catch (e) {
         console.warn('template auto-select fail:', e);
+        toast(`⚠️ 자동 반영 실패: ${e.message}`, 'warning');
       }
-    }, 500);
+    }, 1000);  // 옛 500ms → 신 1000ms 확실!
   } catch (err) {
     toast(`신 전략 시작 실패: ${err.message}`, 'error');
   }
