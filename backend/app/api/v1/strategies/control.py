@@ -1369,8 +1369,11 @@ def cancel_open_order(
 
     # 거래소 호출 (= lifecycle.py manual-tp 패턴)
     try:
+        # 🚨 2026-07-06 사장님 critical fix: decrypt_text = app.core.crypto 에 있음!
+        # 옛 silent bug: from app.core.security import decrypt_text = ImportError!
+        # 사장님 = 개별 취소 = 502 error!
         from app.repositories.exchange_account_repository import ExchangeAccountRepository
-        from app.core.security import decrypt_text
+        from app.core.crypto import decrypt_text
         account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
         if not account:
             raise HTTPException(400, f"거래소 계정 없음 (id={strategy.exchange_account_id})")
