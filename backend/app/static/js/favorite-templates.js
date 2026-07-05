@@ -82,14 +82,10 @@ async function startStrategyFromTemplate(templateId) {
     // 2️⃣ 모달 열림 대기 (= 1초 = 확실!)
     setTimeout(async () => {
       try {
-        // template mode 강제 전환!
-        if (typeof setCmMode === 'function') setCmMode('template');
-        // radio 선택 시도!
-        const radio = document.querySelector(`input[name="cm-template"][value="${templateId}"]`);
-        if (radio) {
-          radio.checked = true;
-          radio.dispatchEvent(new Event('change'));
-        }
+        // 🚨 2026-07-06 v86 fix (사장님!): 「직접 입력」 tab 으로 자동!
+        // 옛 v85: 'template' mode = 사장님 = radio 리스트 = 값 확인 안 됨!
+        // 신 v86: 'direct' mode = 「직접 입력」 tab = 자본/트리거 값 표시 = 사장님 확인 후 시작!
+        if (typeof setCmMode === 'function') setCmMode('direct');
         // 3️⃣ 값 직접 채우기 (= template 사전 조회 성공 시!)
         if (tplData && tplData.stages_config) {
           // Side + leverage!
