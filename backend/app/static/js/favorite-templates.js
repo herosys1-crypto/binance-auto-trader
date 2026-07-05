@@ -63,10 +63,18 @@ async function startStrategyFromTemplate(templateId) {
       toast('「새 전략」 모달 함수 X — 페이지 새로고침', 'error');
       return;
     }
-    // 1️⃣ template 데이터 = 사전 조회 (= 확실 반영!)
+    // 1️⃣ template 데이터 = 사전 조회!
+    // 🚨 2026-07-06 v85 fix: GET /{template_id} = endpoint 없음!
+    // = 전체 조회 후 filter = 확실!
     let tplData = null;
     try {
-      tplData = await api(`/admin/strategy-templates/${templateId}`);
+      const all = await api('/admin/strategy-templates');
+      if (Array.isArray(all)) {
+        tplData = all.find(t => Number(t.id) === Number(templateId));
+      }
+      if (!tplData) {
+        console.warn(`[startStrategy] template #${templateId} 조회 X (전체 ${all?.length || 0}건 중 없음)`);
+      }
     } catch (e) {
       console.warn('[startStrategy] template 사전 조회 실패:', e);
     }
