@@ -44,6 +44,11 @@ function setCmMode(mode) {
 function closeCreateModal() {
   const _modalEl = document.getElementById('create-modal');
   _modalEl.classList.add('hidden');
+  /* 🚨 v92: 「⬆ 심볼로」 fixed 버튼 = 모달 닫힘 시 = 숨김! */
+  try {
+    const _scrollBtn = document.getElementById('cm-scroll-to-symbol-btn');
+    if (_scrollBtn) _scrollBtn.style.display = 'none';
+  } catch (_e) {}
   // 🚨 2026-06-22 사장님 critical v3: 시간 의존 silent bug 영구 fix!
   // 사장님 보고: "처음에는 OK = 시간 지나면 = 모달 위로 스크롤 안 됨!"
   // 원인: 옛 scrollTop 누적 + body overflow 누적 = 신 모달 open 시 = 옛 위치 유지!
