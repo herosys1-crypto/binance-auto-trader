@@ -530,10 +530,9 @@
   }
 
   /* 🚨 2026-06-22 사장님 critical v4: cm-inner = inline style 제거 + CSS class 만!
-     🌟 2026-07-16 사장님 v93 궁극: 모바일 = 완전 전체 화면 + sticky top 심볼!
-     v83~v92 (10개 fix) = 근본 해결!
-     = 모달 = 창 안 창 = X!
-     = 완전 전체 화면 = 하나의 스크롤 = 문제 없음! */
+     🌟 2026-07-16 v94 revert: v93 완전 전체 화면 취소! (사장님 = 데스크탑처럼 원함!)
+     = 모바일 = 데스크탑 rounded card 스타일 유지!
+     = 심볼 sticky top = 유지 (도움됨!) */
   .cm-inner-default {
     max-width: 720px;
     width: 60vw;
@@ -541,29 +540,24 @@
     overflow-y: auto;
   }
   @media (max-width: 767px) {
-    /* 🌟 v93: 완전 전체 화면 = padding 완전 제거! */
-    #create-modal {
-      padding: 0 !important;
-      overflow-y: auto !important;
-      align-items: flex-start !important;
-      justify-content: flex-start !important;
-      -webkit-overflow-scrolling: touch !important;
-      overscroll-behavior: contain !important;
-      touch-action: pan-y !important;
-    }
-    /* 🌟 v93: inner = 100% 전체 화면 + rounded 제거 (앱 스타일!) */
     .cm-inner-default {
       max-width: 100% !important;
-      width: 100vw !important;
+      width: 100% !important;
       max-height: none !important;
       min-height: 100dvh !important;
       height: auto !important;
       overflow-y: visible !important;
       margin: 0 !important;
-      border-radius: 0 !important;
-      padding: 8px !important;
     }
-    /* 🌟 v93: 심볼 container = sticky top = 항상 상단 고정! */
+    /* outer = OUTER 스크롤 강제! */
+    #create-modal {
+      overflow-y: auto !important;
+      align-items: flex-start !important;
+      -webkit-overflow-scrolling: touch !important;
+      overscroll-behavior: contain !important;
+      touch-action: pan-y !important;
+    }
+    /* 🌟 v94: 심볼 container = sticky top = 항상 상단 고정! (v93에서 유지!) */
     #cm-symbol-sticky-wrap {
       position: sticky !important;
       top: 0 !important;
@@ -574,7 +568,6 @@
       border-bottom: 2px solid rgba(59, 130, 246, 0.3) !important;
       box-shadow: 0 4px 8px rgba(0,0,0,0.3) !important;
     }
-    /* body 배경 스크롤 = 차단 (모달 열림 시 X, 신 v93 = body에 handled) */
   }
   /* 최근 전략 = 3개 가로 = 한 줄 강제 */
   #cm-recent-strategies-list { display: flex !important; flex-wrap: nowrap !important; gap: 4px; }
@@ -1529,7 +1522,6 @@
           <input id="cm-symbol" list="cm-symbol-list" value="BTCUSDT" placeholder="예: BTCUSDT"
             autocomplete="off" autocapitalize="characters" inputmode="text"
             onchange="_cmSymbolFullBlur(this);"
-            oninput="_cmSymbolFullBlur(this);"
             onblur="if(typeof loadCmMarketInfo === 'function') loadCmMarketInfo();"
             class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
           <script>
@@ -2150,41 +2142,41 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/api.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/helpers.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/stats-modals.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/health-page.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/ranking-page.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/ranking-modal.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/trade-history-modal.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/system-banner.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/cm-collectors.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/cm-loaders.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/cm-market-info.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/cm-preview.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/cm-open-modal.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/templates-panel.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/indicators.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/strategies-list.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/external-positions.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/multi-symbol.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/template-save.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/cm-submit.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/strategy-detail.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/chart-detail.js?v=20260716v93-fullscreen"></script>
+<script src="/static/js/constants.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/api.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/helpers.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/stats-modals.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/health-page.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/ranking-page.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/ranking-modal.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/trade-history-modal.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/system-banner.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/cm-collectors.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/cm-loaders.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/cm-market-info.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/cm-preview.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/cm-open-modal.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/templates-panel.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/indicators.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/strategies-list.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/external-positions.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/multi-symbol.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/template-save.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/cm-submit.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/strategy-detail.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/chart-detail.js?v=20260716v94-critical-fix"></script>
 <script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
-<script src="/static/js/accounts-modal.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/add-position-modal.js?v=20260716v93-fullscreen"></script>
+<script src="/static/js/accounts-modal.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/add-position-modal.js?v=20260716v94-critical-fix"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/page-router.js?v=20260716v93-fullscreen"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260716v93-fullscreen"></script>
+<script src="/static/js/strategy-actions.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/page-router.js?v=20260716v94-critical-fix"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260716v94-critical-fix"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
