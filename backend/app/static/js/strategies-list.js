@@ -633,11 +633,11 @@ async function refreshStrategies() {
             </div>`;
       } else {
         // 🌟 2026-06-08 사장님 신 기능: 미체결 LIMIT 주문 시각 + 개별 취소
-        // 옛: 사장님 = 「💉 포지션 추가」 지정가 진입예정 = 관리 위치 X (= silent bug)
-        // 신: 📋 버튼 = 미체결 주문 모달 (= 사장님 자본 보호 + 시각)
-        const openOrdersBtn = canTriggerNext
-          ? `<button onclick="event.stopPropagation(); openOpenOrdersModal(${s.id}, '${s.symbol}', '${s.side}')" class="btn-ghost btn text-xs" style="${btnStyle}" title="미체결 주문 보기 (= 자동 단계 LIMIT + 💉 포지션 추가 LIMIT). 개별 취소 가능.">📋</button>`
-          : '';
+        // 🚨 2026-07-16 사장님 v89 critical fix (사장님 AKEUSDT 사건!):
+        // 옛 silent bug: canTriggerNext = false (= 마지막 단계 완료!) → 📋 아이콘 X!
+        // = But = 사장님 = 「💉 포지션 추가」 LIMIT 미체결 = 관리 불가!
+        // 신: 항상 표시 = 활성 strategy = 「💉 포지션 추가」 LIMIT 확인 가능!
+        const openOrdersBtn = `<button onclick="event.stopPropagation(); openOpenOrdersModal(${s.id}, '${s.symbol}', '${s.side}')" class="btn-ghost btn text-xs" style="${btnStyle}" title="미체결 주문 보기 (= 자동 단계 LIMIT + 💉 포지션 추가 LIMIT). 개별 취소 가능.">📋</button>`;
         stopBtn = `<div class="flex flex-wrap gap-1" style="max-width:180px">
             <button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="설정 수정 (in-place 또는 종료+재시작) — 미진입 단계 재계산은 「수정 모드」 모달 → 「현재가」 버튼 사용">✏️</button>
             ${triggerNextBtn}
