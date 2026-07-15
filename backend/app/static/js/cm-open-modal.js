@@ -37,6 +37,11 @@ let cmState = {
 async function openCreateModal(editStrategyId) {
   const _modalEl = document.getElementById('create-modal');
   _modalEl.classList.remove('hidden');
+  /* 🚨 v92: 「⬆ 심볼로」 fixed 버튼 = 모달 열림 시 = 표시! */
+  try {
+    const _scrollBtn = document.getElementById('cm-scroll-to-symbol-btn');
+    if (_scrollBtn) _scrollBtn.style.display = 'block';
+  } catch (_e) {}
   document.getElementById('cm-preview').classList.add('hidden');
   document.getElementById('cm-submit').disabled = true;
   // 🚨 2026-06-22 사장님 critical v6: scroll guard 강력 모니터링!

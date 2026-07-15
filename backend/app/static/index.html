@@ -1460,6 +1460,14 @@
     </div>
   </div>
 
+  <!-- 🚨 v92 신: 「⬆ 심볼로」 fixed 버튼 (create-modal 열려 있을 때만!) -->
+  <button id="cm-scroll-to-symbol-btn" onclick="_cmScrollToSymbol()"
+    style="display:none; position:fixed; bottom:80px; right:16px; z-index:100;
+           background:#3b82f6; color:white; padding:12px 16px; border-radius:24px;
+           font-size:14px; font-weight:bold; box-shadow:0 4px 12px rgba(0,0,0,0.5);
+           border:2px solid white; cursor:pointer;"
+    title="심볼 선택 화면으로 이동!">⬆ 심볼로</button>
+
   <div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
        style="background:rgba(0,0,0,0.7); padding:10px;">
     <!-- 2026-06-09 사장님 v7: 853px → 720px (추가 ~15% 축소) + width 70vw → 60vw
@@ -1502,13 +1510,19 @@
           <input id="cm-symbol" list="cm-symbol-list" value="BTCUSDT" placeholder="예: BTCUSDT"
             autocomplete="off" autocapitalize="characters" inputmode="text"
             onchange="_cmSymbolFullBlur(this);"
+            oninput="_cmSymbolFullBlur(this);"
             onblur="if(typeof loadCmMarketInfo === 'function') loadCmMarketInfo();"
             class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
           <script>
-            /* 🚨 2026-07-16 사장님 v91 최강 fix: scrollIntoView 사용!
-               v88 v90 도 부족 = iOS Safari = scrollTop 반응 X!
-               v91 신: 심볼 선택 → 심볼 element = scrollIntoView (= 브라우저 자체!)
-               = iOS Safari + Android Chrome = 확실 위!
+            /* 🚨 2026-07-16 사장님 v92 궁극 fix: 「⬆ 심볼로」 fixed 버튼!
+               v88 v89 v90 v91 = 모두 부족!
+               = iOS Safari + datalist = onchange 발동 자체 불안정!
+               v92 궁극:
+               (1) oninput 병행 = onchange 안 발동해도 = 확실 발동!
+               (2) 「⬆ 심볼로」 fixed 버튼 = viewport 우하단!
+                   = 사장님 = 언제든 = 클릭 = 심볼로!
+                   = 100% 확실 (position: fixed = viewport 기준!)
+               (3) 다중 리스너 = 3중 안전!
             */
             window._cmSymbolFullBlur = function(el) {
               if (!el) return;
@@ -1518,21 +1532,33 @@
                   document.activeElement.blur();
                 }
                 document.body.focus();
-                /* 🚨 v91: 심볼 자체를 화면 상단으로! = 브라우저 강제 스크롤! */
+                /* v91 유지: scrollIntoView (혹시 발동하면 도움!) */
                 setTimeout(() => {
                   try {
                     el.scrollIntoView({behavior: 'auto', block: 'start', inline: 'nearest'});
                   } catch (_e) {
-                    /* fallback = 옛 방식! */
                     const modal = document.getElementById('create-modal');
                     if (modal) modal.scrollTop = 0;
                   }
                 }, 100);
-                /* 300ms 후 = 다시 = 확실! (iOS 키보드 닫힘 대응!) */
                 setTimeout(() => {
                   try {
                     el.scrollIntoView({behavior: 'smooth', block: 'start'});
                   } catch (_e) {}
+                }, 400);
+              } catch (_e) { /* silent */ }
+            };
+            /* 🚨 v92 신: 「⬆ 심볼로」 fixed 버튼 = 100% 확실! */
+            window._cmScrollToSymbol = function() {
+              try {
+                const symbol = document.getElementById('cm-symbol');
+                if (!symbol) return;
+                const modal = document.getElementById('create-modal');
+                if (modal) modal.scrollTop = 0;
+                window.scrollTo(0, 0);
+                symbol.scrollIntoView({behavior: 'smooth', block: 'start'});
+                setTimeout(() => {
+                  try { symbol.focus(); symbol.select(); } catch (_e) {}
                 }, 400);
               } catch (_e) { /* silent */ }
             };
@@ -2104,41 +2130,41 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/api.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/helpers.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/stats-modals.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/health-page.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/ranking-page.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/ranking-modal.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/trade-history-modal.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/system-banner.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/cm-collectors.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/cm-loaders.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/cm-market-info.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/cm-preview.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/cm-open-modal.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/templates-panel.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/indicators.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/strategies-list.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/external-positions.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/multi-symbol.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/template-save.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/cm-submit.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/strategy-detail.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/chart-detail.js?v=20260716v91-scrollintoview"></script>
+<script src="/static/js/constants.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/api.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/helpers.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/stats-modals.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/health-page.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/ranking-page.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/ranking-modal.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/trade-history-modal.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/system-banner.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/cm-collectors.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/cm-loaders.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/cm-market-info.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/cm-preview.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/cm-open-modal.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/templates-panel.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/indicators.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/strategies-list.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/external-positions.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/multi-symbol.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/template-save.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/cm-submit.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/strategy-detail.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/chart-detail.js?v=20260716v92-scroll-btn"></script>
 <script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
-<script src="/static/js/accounts-modal.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/add-position-modal.js?v=20260716v91-scrollintoview"></script>
+<script src="/static/js/accounts-modal.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/add-position-modal.js?v=20260716v92-scroll-btn"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/page-router.js?v=20260716v91-scrollintoview"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260716v91-scrollintoview"></script>
+<script src="/static/js/strategy-actions.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/page-router.js?v=20260716v92-scroll-btn"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260716v92-scroll-btn"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
