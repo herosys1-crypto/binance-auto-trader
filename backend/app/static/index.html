@@ -1505,29 +1505,26 @@
             onblur="if(typeof loadCmMarketInfo === 'function') loadCmMarketInfo();"
             class="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white" />
           <script>
-            /* 🚨 2026-07-06 사장님 강력 fix v2: iOS/Android 심볼 선택 후 스크롤 lock 영구 차단!
-               v82 (onchange blur만) = iOS Safari 부족!
-               v83 (신): blur + 강제 focus 제거 + viewport 복원 + 스크롤 원위치! */
+            /* 🚨 2026-07-16 사장님 v88 fix: 심볼 재선택 가능!
+               옛 v83 = readonly 300ms 유지 = 사장님 즉시 재클릭 = 편집 불가!
+               신 v88 = readonly = 즉시 제거! 사장님 = 항상 심볼 자유 편집!
+               스크롤 lock = 다른 방법으로 해결 (activeElement blur + viewport 복원!) */
             window._cmSymbolFullBlur = function(el) {
               if (!el) return;
               try {
-                el.setAttribute('readonly', 'readonly');  /* iOS 키보드 강제 닫기! */
                 el.blur();
                 if (document.activeElement && document.activeElement !== document.body) {
                   document.activeElement.blur();
                 }
-                /* 강제 focus 제거 = 다른 곳으로! */
+                /* 강제 focus 제거 = body 로! */
                 document.body.focus();
-                /* viewport 복원! */
-                setTimeout(() => {
-                  el.removeAttribute('readonly');  /* 다시 편집 가능! */
-                  /* 모달 inner 스크롤 = 사장님 현재 위치 유지! */
-                  const modal = document.getElementById('create-modal');
-                  if (modal) {
-                    const inner = modal.querySelector(':scope > div');
-                    if (inner) inner.style.overflowY = 'auto';
-                  }
-                }, 300);
+                /* modal inner scroll 복원 = 사장님 자유 위/아래! */
+                const modal = document.getElementById('create-modal');
+                if (modal) {
+                  const inner = modal.querySelector(':scope > div');
+                  if (inner) inner.style.overflowY = 'auto';
+                }
+                /* iOS = 키보드 = blur 만으로 자동 닫힘 (= readonly X!) */
               } catch (_e) { /* silent */ }
             };
           </script>
@@ -2098,41 +2095,41 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260706v87-force-block"></script>
-<script src="/static/js/api.js?v=20260706v87-force-block"></script>
-<script src="/static/js/helpers.js?v=20260706v87-force-block"></script>
-<script src="/static/js/stats-modals.js?v=20260706v87-force-block"></script>
-<script src="/static/js/health-page.js?v=20260706v87-force-block"></script>
-<script src="/static/js/ranking-page.js?v=20260706v87-force-block"></script>
-<script src="/static/js/ranking-modal.js?v=20260706v87-force-block"></script>
-<script src="/static/js/trade-history-modal.js?v=20260706v87-force-block"></script>
-<script src="/static/js/system-banner.js?v=20260706v87-force-block"></script>
-<script src="/static/js/cm-collectors.js?v=20260706v87-force-block"></script>
-<script src="/static/js/cm-loaders.js?v=20260706v87-force-block"></script>
-<script src="/static/js/cm-market-info.js?v=20260706v87-force-block"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260706v87-force-block"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260706v87-force-block"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260706v87-force-block"></script>
-<script src="/static/js/cm-preview.js?v=20260706v87-force-block"></script>
-<script src="/static/js/cm-open-modal.js?v=20260706v87-force-block"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260706v87-force-block"></script>
-<script src="/static/js/templates-panel.js?v=20260706v87-force-block"></script>
-<script src="/static/js/indicators.js?v=20260706v87-force-block"></script>
-<script src="/static/js/strategies-list.js?v=20260706v87-force-block"></script>
-<script src="/static/js/external-positions.js?v=20260706v87-force-block"></script>
-<script src="/static/js/multi-symbol.js?v=20260706v87-force-block"></script>
-<script src="/static/js/template-save.js?v=20260706v87-force-block"></script>
-<script src="/static/js/cm-submit.js?v=20260706v87-force-block"></script>
-<script src="/static/js/strategy-detail.js?v=20260706v87-force-block"></script>
-<script src="/static/js/chart-detail.js?v=20260706v87-force-block"></script>
+<script src="/static/js/constants.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/api.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/helpers.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/stats-modals.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/health-page.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/ranking-page.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/ranking-modal.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/trade-history-modal.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/system-banner.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/cm-collectors.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/cm-loaders.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/cm-market-info.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/cm-preview.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/cm-open-modal.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/templates-panel.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/indicators.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/strategies-list.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/external-positions.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/multi-symbol.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/template-save.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/cm-submit.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/strategy-detail.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/chart-detail.js?v=20260716v88-symbol-reselect"></script>
 <script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
-<script src="/static/js/accounts-modal.js?v=20260706v87-force-block"></script>
-<script src="/static/js/add-position-modal.js?v=20260706v87-force-block"></script>
+<script src="/static/js/accounts-modal.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/add-position-modal.js?v=20260716v88-symbol-reselect"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260706v87-force-block"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260706v87-force-block"></script>
-<script src="/static/js/page-router.js?v=20260706v87-force-block"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260706v87-force-block"></script>
+<script src="/static/js/strategy-actions.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/page-router.js?v=20260716v88-symbol-reselect"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260716v88-symbol-reselect"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
