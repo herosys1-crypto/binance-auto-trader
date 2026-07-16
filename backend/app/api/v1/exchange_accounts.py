@@ -581,6 +581,21 @@ def get_balance(
         (_reserved_one(s) for s in active_strategies), Decimal("0")
     )
     our_available_balance = total_wallet - reserved_for_strategies
+
+    # 🚨 v100 사장님 CRITICAL fix: total_init_margin = binance_margin_by_symbol 합 override!
+    # 사장님 report: v99 fix 후에도 실 6767 여전히 잘못!
+    # 원인: total_init_margin = info["totalPositionInitialMargin"] = /fapi/v2/account 원시 값!
+    #       = initial margin only! (사장님 「증거금 추가」 반영 X!)
+    # fix: binance_margin_by_symbol (v99 positionRisk 값!) 합 = 정확!
+    #      = 사장님 「증거금 추가」 100% 반영!
+    _new_total_init = sum(binance_margin_by_symbol.values(), Decimal("0"))
+    if _new_total_init > 0:
+        _old_total_init = total_init_margin
+        total_init_margin = _new_total_init
+        logger.warning(
+            "v100 total_init_margin override: %s → %s (사장님 「증거금 추가」 반영!)",
+            _old_total_init, _new_total_init
+        )
     active_strategy_count = len(active_strategies)
     # 🌟 2026-06-09 v17 Phase 3: 단일 진실 모듈 사용 (= 사장님 헌법 6번)
     from app.services.capital_calculator import calc_wallet_limit, calc_new_strategy_available
