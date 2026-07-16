@@ -321,10 +321,15 @@ async function refreshStrategies() {
       return (slThr > 0 && pnl < 0) ? (Math.abs(pnl) / slThr * 100) : 0;
     };
     // 🌟 2026-06-09 v12-7 사장님 「마진율순 + 실투입 합계 정렬」 신 옵션
+    // 🚨 2026-07-17 v96 사장님 critical fix: Binance 실 margin 우선!
+    // 옛 silent bug: 계산 (qty × avg / lev) = initial margin = 「증거금 추가」 반영 X!
+    // 신 v96: Binance API isolatedMargin 우선 = 사장님 「증거금 추가」 자동 반영!
     const _positionMargin = (s) => {
+      const _bnPos = (_binancePositionsCache[s.exchange_account_id]?.positions || {})[s.symbol];
+      const _bnMargin = _bnPos ? Number(_bnPos.margin || 0) : 0;
+      if (_bnMargin > 0) return _bnMargin;  // Binance 실 = 우선!
+      // fallback = initial margin (Binance 데이터 없을 때!)
       const qty = Math.abs(Number(s.current_position_qty || 0));
-      // 🚨 2026-06-10 v35 critical fix: last_avg_entry_price NULL = avg_entry_price fallback!
-      // 옛 silent bug: backend last_avg_entry_price NULL = _positionMargin=0 = _positionRoi=0 = 정렬 X!
       const avg = Number(s.last_avg_entry_price || s.avg_entry_price || 0);
       const lev = Number(s.leverage || 1);
       return (qty > 0 && avg > 0 && lev > 0) ? (qty * avg / lev) : 0;
@@ -454,8 +459,18 @@ async function refreshStrategies() {
       // 2026-05-04 v3 (Binance ROI 일치): 두 가지 ROI 분리.
       //   포지션 ROI = pnl / 현재_사용_마진 x 100  ← Binance UI 와 일치 (실제 진입한 부분만).
       //   전략 ROI   = pnl x leverage / total_capital x 100  ← 전체 전략 자본 대비.
+      // 🚨 2026-07-17 v96 사장님 critical fix: Binance 실 margin 우선!
+      // 사장님 report: 대시보드 마진 5547 vs Binance 실 10673 = 5126 차이!
+      // 원인: 옛 positionMargin = notional / leverage = initial margin!
+      //       사장님 「증거금 추가」 5500 USDT = 반영 X!
+      // fix: bp.margin (Binance API isolatedMargin) 우선 = 사장님 「증거금 추가」 자동 반영!
+      const _bnPos = (_binancePositionsCache[s.exchange_account_id]?.positions || {})[s.symbol];
+      const _bnMargin = _bnPos ? Number(_bnPos.margin || 0) : 0;
       const positionNotional = hasPosition ? sQtyAbs * sAvg : 0;
-      const positionMargin = positionNotional > 0 && sLev > 0 ? positionNotional / sLev : 0;
+      const _initialMargin = positionNotional > 0 && sLev > 0 ? positionNotional / sLev : 0;
+      // Binance 실 margin > 0 이면 우선 (= 사장님 「증거금 추가」 반영!)
+      // fallback = initial margin (Binance 데이터 없을 때!)
+      const positionMargin = _bnMargin > 0 ? _bnMargin : _initialMargin;
       const positionRoi = positionMargin > 0 ? (pnlNum / positionMargin * 100) : 0;
       const strategyRoi = sCap > 0 ? (pnlNum * sLev / sCap * 100) : 0;
       // 2026-06-05 옵션 A (사장님 사상 정확 반영):
@@ -509,7 +524,8 @@ async function refreshStrategies() {
       const entryPct = plannedMargin > 0 ? (positionMargin / plannedMargin * 100) : 0;
       const entryColor = entryPct >= 95 ? 'text-green-400' : entryPct >= 50 ? 'text-yellow-400' : 'text-slate-300';
       // tooltip = 자세 설명 (사장님이 필요 시 hover 로 확인)
-      const planTooltip = `💼 사장님 자본: ${plannedMargin.toFixed(2)} USDT (= 마진 lock 목표, SL 기준)\n📊 거래 규모: ${plannedNotional.toFixed(2)} USDT (= 자본 x ${sLev}x)\n🔒 현재 마진: ${positionMargin.toFixed(2)} USDT (Binance lock)\n📈 진입률: ${entryPct.toFixed(1)}% (모든 단계 진입까지 ${(100-entryPct).toFixed(1)}% 남음)`;
+      const _bnMarginLabel = _bnMargin > 0 ? '✅ Binance 실 lock (「증거금 추가」 반영!)' : '⚠ Binance 데이터 X = 계산 fallback';
+      const planTooltip = `💼 사장님 자본: ${plannedMargin.toFixed(2)} USDT (= 마진 lock 목표, SL 기준)\n📊 거래 규모: ${plannedNotional.toFixed(2)} USDT (= 자본 x ${sLev}x)\n🔒 현재 마진: ${positionMargin.toFixed(2)} USDT (${_bnMarginLabel})\n📈 진입률: ${entryPct.toFixed(1)}% (모든 단계 진입까지 ${(100-entryPct).toFixed(1)}% 남음)`;
       // 2026-06-08 사장님 v4 요구: qty/마진 stack 2줄 → 1줄 압축 (가로 줄수 축소).
       // 2026-06-09 사장님 v5 요구: 수량 = 큰 폰트 (눈에 들어오게) + 음수 부호 제거 (= 절대값 + side 아이콘)
       // Binance positionAmt: SHORT=음수, LONG=양수 → 사장님 SHORT 운영 시 모든 수량이 음수 표시 = 시각 부담
