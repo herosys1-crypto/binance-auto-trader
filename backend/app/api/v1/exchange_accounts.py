@@ -425,25 +425,30 @@ def get_balance(
         prev = binance_margin_by_symbol.get(sym_upper, Decimal("0"))
         binance_margin_by_symbol[sym_upper] = prev + actual_margin
 
-    # 🌟 v98 신: /fapi/v2/positionRisk 별도 호출 = 정확 isolatedMargin!
-    # Redis 캐시 15초 (성능 부담 X)
+    # 🌟 v99 사장님 CRITICAL fix: /fapi/v2/positionRisk = REPLACE (max 아니라!)
+    # v98 실패 = max 사용해서 = 옛 fallback 값 우선 = silent bug!
+    # v99 = REPLACE + 강력 진단 로그 = 확실 override!
+    # Redis 캐시 5초 (v98 15초에서 단축 = 빠른 갱신)
+    _pr_debug_info = "positionRisk 호출 시도 X"
     try:
         _pr_cache_key = f"binance:position_risk:{exchange_account_id}"
         _pr_data = None
+        _pr_from_cache = False
         if _redis is not None:
             _pr_cached = _redis.get(_pr_cache_key)
             if _pr_cached:
                 _pr_data = _json.loads(_pr_cached)
+                _pr_from_cache = True
         if _pr_data is None:
             import hashlib as _hashlib
             import hmac as _hmac
-            import time as _time_v98
+            import time as _time_v99
             import requests as _requests
             _ak = decrypt_text(account.api_key_enc)
             _sk = decrypt_text(account.api_secret_enc)
             _base = "https://testnet.binancefuture.com" if account.is_testnet else "https://fapi.binance.com"
-            _ts_v98 = int(_time_v98.time() * 1000)
-            _qs = f"timestamp={_ts_v98}&recvWindow=5000"
+            _ts_v99 = int(_time_v99.time() * 1000)
+            _qs = f"timestamp={_ts_v99}&recvWindow=5000"
             _sig = _hmac.new(_sk.encode(), _qs.encode(), _hashlib.sha256).hexdigest()
             _resp = _requests.get(
                 f"{_base}/fapi/v2/positionRisk?{_qs}&signature={_sig}",
@@ -454,11 +459,12 @@ def get_balance(
             _pr_data = _resp.json()
             if _redis is not None:
                 try:
-                    _redis.setex(_pr_cache_key, 15, _json.dumps(_pr_data, default=str))
+                    _redis.setex(_pr_cache_key, 5, _json.dumps(_pr_data, default=str))
                 except Exception:
                     pass
         # positionRisk의 isolatedMargin = ISOLATED wallet + upnl (사장님 「증거금 추가」 반영!)
         _pr_by_symbol: dict[str, Decimal] = {}
+        _pr_debug_rows = []
         for _pr in (_pr_data or []):
             _pr_sym = (_pr.get("symbol") or "").upper()
             if not _pr_sym or _pr_sym not in active_symbols_upper:
@@ -467,16 +473,34 @@ def get_balance(
                 _pr_iso = Decimal(str(_pr.get("isolatedMargin") or "0"))
             except Exception:
                 _pr_iso = Decimal("0")
+            _pr_amt = _pr.get("positionAmt", "0")
+            _pr_side = _pr.get("positionSide", "BOTH")
+            _pr_debug_rows.append(f"{_pr_sym}:{_pr_side} amt={_pr_amt} iso={_pr_iso}")
             if _pr_iso > 0:
                 _pr_by_symbol[_pr_sym] = _pr_by_symbol.get(_pr_sym, Decimal("0")) + _pr_iso
-        # 2) override binance_margin_by_symbol with positionRisk (정확!)
+        # 🚨 v99 CRITICAL: REPLACE (max 아니라!) - 사장님 「증거금 추가」 100% 반영 보장!
+        # 옛 v98 = max(_prev_val, _iso_val) = 만약 옛 fallback 값이 더 크면 = 잘못 override!
+        # 신 v99 = 완전 REPLACE = positionRisk 값 = 절대 진실!
         for _sym, _iso_val in _pr_by_symbol.items():
-            # 안전: 큰 값 사용 (positionRisk vs account 계산 = 큰 것!)
-            _prev_val = binance_margin_by_symbol.get(_sym, Decimal("0"))
-            binance_margin_by_symbol[_sym] = max(_prev_val, _iso_val)
+            _old_val = binance_margin_by_symbol.get(_sym, Decimal("0"))
+            binance_margin_by_symbol[_sym] = _iso_val  # REPLACE!
+            logger.warning(
+                "v99 REPLACE margin: %s: fallback=%s → positionRisk=%s (사장님 「증거금 추가」 반영!)",
+                _sym, _old_val, _iso_val
+            )
+        _pr_debug_info = (
+            f"positionRisk 성공: cache={_pr_from_cache}, "
+            f"rows={len(_pr_data or [])}, "
+            f"active_symbols={len(active_symbols_upper)}, "
+            f"matched_positions={len(_pr_by_symbol)}, "
+            f"details={_pr_debug_rows[:5]}"
+        )
+        logger.warning("v99 positionRisk 진단: %s", _pr_debug_info)
     except Exception as _pr_err:
-        logger.warning(
-            "v98 positionRisk 호출 실패 (fallback to account.positions): %s", _pr_err
+        _pr_debug_info = f"positionRisk 호출 실패: {_pr_err}"
+        logger.error(
+            "v99 positionRisk 호출 실패 (fallback to account.positions): %s", _pr_err,
+            exc_info=True
         )
 
     # 🚨 2026-06-08 사장님 critical 진짜 사상 fix v5 (= fix v3+v4 진단 후 발견):
