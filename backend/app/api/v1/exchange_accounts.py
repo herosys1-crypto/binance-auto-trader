@@ -548,15 +548,18 @@ def get_balance(
 
     def _reserved_one(s) -> Decimal:
         actual = binance_margin_by_symbol.get((s.symbol or "").upper(), Decimal("0"))
-        # 🌟 2026-06-09 사장님 신 정책 v6: actual + 미진입 단계 마진 (= 자본 / leverage)
-        # 사장님 명시: "실 사용 = 마진 단위 + 예약 = 마진 단위 + wallet 비교 = 모두 마진 일치"
-        # = 예약 (= 미진입 단계) = 사장님 입력 자본 / leverage = 마진!
+        # 🚨 v101 사장님 CRITICAL fix: capital = 마진 (같은 단위, 나눗셈 X!)
+        # 사장님 report: 수정 모드에서 3단계 1000 + 4단계 1000 = 총 2000 입력
+        #                But 대시보드 예약 = 1000 만 표시 (2000 / 2)!
+        # 옛 v6 (2026-06-09) 코멘트: "예약 = 자본 / leverage = 마진"
+        #   = 옛 개발자 오해! 사장님 「자본」 입력 = 이미 마진!
+        # v101 fix: untriggered_capital 그대로 사용 (사장님 표시 = 사장님 입력값!)
+        # PR #57 헌법: SL = total_capital × sl_pct = 자본 (= 마진!) 기준
         lev = Decimal(str(s.leverage or 1))
         if has_plans_by_strategy.get(s.id):
             untriggered_capital = untriggered_sum_by_strategy.get(s.id, Decimal("0"))
-            # 마진 단위 변환 (= 사장님 사상)
-            untriggered_margin = (untriggered_capital / lev) if lev > 0 else untriggered_capital
-            return actual + untriggered_margin
+            # 🚨 v101: 자본 = 마진 (사장님 사상!) = 나눗셈 X!
+            return actual + untriggered_capital
         # fallback 1: template stages_config (= 옛 PR #131 안전망, 마진 변환)
         tpl = templates_map.get(s.strategy_template_id)
         stages_sum = Decimal("0")
