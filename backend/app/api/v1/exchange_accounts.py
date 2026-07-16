@@ -406,29 +406,78 @@ def get_balance(
     ).scalars().all()
 
     # Binance positions 중 active strategy 의 symbol 매칭 → 실 init_margin 추출.
-    # 🚨 2026-07-17 v97 사장님 critical fix: isolatedMargin → isolatedWallet!
-    # 사장님 report: 대시보드 「실」 6,713 vs Binance UI 10,673 = 3,960 차이!
-    # 원인: p.get("isolatedMargin") = initial margin 만! (사장님 「증거금 추가」 반영 X!)
-    #       옛 코멘트 "직접 마진 추가분 포함" = 옛 개발자 오해!
-    # fix: isolatedWallet = ISOLATED wallet 이체 총합 (사장님 「증거금 추가」 100% 반영!)
-    #      Binance API /fapi/v2/account positions[].isolatedWallet 필드!
-    # ISOLATED: isolatedWallet (사장님 「증거금 추가」 반영!)
-    # CROSS: positionInitialMargin (initial margin only)
+    # 🚨 2026-07-17 v98 사장님 CRITICAL fix: /fapi/v2/positionRisk 별도 호출!
+    # 사장님 report: v97 후에도 실 6,768 (Binance UI 10,673 = 여전히 잘못!)
+    # 원인: /fapi/v2/account (get_account) = isolatedWallet 필드 = 없거나 다른 값!
+    # 진짜 fix: /fapi/v2/positionRisk API = isolatedMargin = 정확 (사장님 「증거금 추가」 반영!)
+    #          = 「전략 인스턴스」 아래 Binance 비교 행에서 사용 = 10,673 확인!
     active_symbols_upper = {(s.symbol or "").upper() for s in active_strategies}
     binance_margin_by_symbol: dict[str, Decimal] = {}
+    # 1) fallback = 옛 계산 (account.positions)
     for p in positions:
         sym_upper = (p.get("symbol") or "").upper()
         if not sym_upper or sym_upper not in active_symbols_upper:
             continue
-        iso_wallet = _d(p.get("isolatedWallet"))  # 🌟 v97: ISOLATED wallet 이체 총합!
-        iso_margin = _d(p.get("isolatedMargin"))  # fallback (구 로직)
+        iso_wallet = _d(p.get("isolatedWallet"))
+        iso_margin = _d(p.get("isolatedMargin"))
         init = _d(p.get("positionInitialMargin"))
-        # ISOLATED 면 isolatedWallet (사장님 「증거금 추가」 반영!), CROSS 면 init
-        # 3개 값 중 최대 = 안전 (사장님 자본 초과 보호!)
         actual_margin = max(iso_wallet, iso_margin, init)
-        # 한 symbol 에 multiple positions (예: LONG+SHORT hedge mode) 합산
         prev = binance_margin_by_symbol.get(sym_upper, Decimal("0"))
         binance_margin_by_symbol[sym_upper] = prev + actual_margin
+
+    # 🌟 v98 신: /fapi/v2/positionRisk 별도 호출 = 정확 isolatedMargin!
+    # Redis 캐시 15초 (성능 부담 X)
+    try:
+        _pr_cache_key = f"binance:position_risk:{exchange_account_id}"
+        _pr_data = None
+        if _redis is not None:
+            _pr_cached = _redis.get(_pr_cache_key)
+            if _pr_cached:
+                _pr_data = _json.loads(_pr_cached)
+        if _pr_data is None:
+            import hashlib as _hashlib
+            import hmac as _hmac
+            import time as _time_v98
+            import requests as _requests
+            _ak = decrypt_text(account.api_key_enc)
+            _sk = decrypt_text(account.api_secret_enc)
+            _base = "https://testnet.binancefuture.com" if account.is_testnet else "https://fapi.binance.com"
+            _ts_v98 = int(_time_v98.time() * 1000)
+            _qs = f"timestamp={_ts_v98}&recvWindow=5000"
+            _sig = _hmac.new(_sk.encode(), _qs.encode(), _hashlib.sha256).hexdigest()
+            _resp = _requests.get(
+                f"{_base}/fapi/v2/positionRisk?{_qs}&signature={_sig}",
+                headers={"X-MBX-APIKEY": _ak},
+                timeout=10,
+            )
+            _resp.raise_for_status()
+            _pr_data = _resp.json()
+            if _redis is not None:
+                try:
+                    _redis.setex(_pr_cache_key, 15, _json.dumps(_pr_data, default=str))
+                except Exception:
+                    pass
+        # positionRisk의 isolatedMargin = ISOLATED wallet + upnl (사장님 「증거금 추가」 반영!)
+        _pr_by_symbol: dict[str, Decimal] = {}
+        for _pr in (_pr_data or []):
+            _pr_sym = (_pr.get("symbol") or "").upper()
+            if not _pr_sym or _pr_sym not in active_symbols_upper:
+                continue
+            try:
+                _pr_iso = Decimal(str(_pr.get("isolatedMargin") or "0"))
+            except Exception:
+                _pr_iso = Decimal("0")
+            if _pr_iso > 0:
+                _pr_by_symbol[_pr_sym] = _pr_by_symbol.get(_pr_sym, Decimal("0")) + _pr_iso
+        # 2) override binance_margin_by_symbol with positionRisk (정확!)
+        for _sym, _iso_val in _pr_by_symbol.items():
+            # 안전: 큰 값 사용 (positionRisk vs account 계산 = 큰 것!)
+            _prev_val = binance_margin_by_symbol.get(_sym, Decimal("0"))
+            binance_margin_by_symbol[_sym] = max(_prev_val, _iso_val)
+    except Exception as _pr_err:
+        logger.warning(
+            "v98 positionRisk 호출 실패 (fallback to account.positions): %s", _pr_err
+        )
 
     # 🚨 2026-06-08 사장님 critical 진짜 사상 fix v5 (= fix v3+v4 진단 후 발견):
     #
