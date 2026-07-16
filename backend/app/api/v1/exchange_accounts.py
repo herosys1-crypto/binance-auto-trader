@@ -406,7 +406,13 @@ def get_balance(
     ).scalars().all()
 
     # Binance positions 중 active strategy 의 symbol 매칭 → 실 init_margin 추출.
-    # ISOLATED: isolatedMargin (직접 마진 추가분 포함)
+    # 🚨 2026-07-17 v97 사장님 critical fix: isolatedMargin → isolatedWallet!
+    # 사장님 report: 대시보드 「실」 6,713 vs Binance UI 10,673 = 3,960 차이!
+    # 원인: p.get("isolatedMargin") = initial margin 만! (사장님 「증거금 추가」 반영 X!)
+    #       옛 코멘트 "직접 마진 추가분 포함" = 옛 개발자 오해!
+    # fix: isolatedWallet = ISOLATED wallet 이체 총합 (사장님 「증거금 추가」 100% 반영!)
+    #      Binance API /fapi/v2/account positions[].isolatedWallet 필드!
+    # ISOLATED: isolatedWallet (사장님 「증거금 추가」 반영!)
     # CROSS: positionInitialMargin (initial margin only)
     active_symbols_upper = {(s.symbol or "").upper() for s in active_strategies}
     binance_margin_by_symbol: dict[str, Decimal] = {}
@@ -414,10 +420,12 @@ def get_balance(
         sym_upper = (p.get("symbol") or "").upper()
         if not sym_upper or sym_upper not in active_symbols_upper:
             continue
-        iso = _d(p.get("isolatedMargin"))
+        iso_wallet = _d(p.get("isolatedWallet"))  # 🌟 v97: ISOLATED wallet 이체 총합!
+        iso_margin = _d(p.get("isolatedMargin"))  # fallback (구 로직)
         init = _d(p.get("positionInitialMargin"))
-        # ISOLATED 면 iso, CROSS 면 init. 보수적으로 더 큰 값 (대개 같음).
-        actual_margin = max(iso, init)
+        # ISOLATED 면 isolatedWallet (사장님 「증거금 추가」 반영!), CROSS 면 init
+        # 3개 값 중 최대 = 안전 (사장님 자본 초과 보호!)
+        actual_margin = max(iso_wallet, iso_margin, init)
         # 한 symbol 에 multiple positions (예: LONG+SHORT hedge mode) 합산
         prev = binance_margin_by_symbol.get(sym_upper, Decimal("0"))
         binance_margin_by_symbol[sym_upper] = prev + actual_margin
