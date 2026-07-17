@@ -462,7 +462,13 @@ def get_balance(
                     _redis.setex(_pr_cache_key, 5, _json.dumps(_pr_data, default=str))
                 except Exception:
                     pass
-        # positionRisk의 isolatedMargin = ISOLATED wallet + upnl (사장님 「증거금 추가」 반영!)
+        # 🚨 v102 사장님 CRITICAL fix: isolatedWallet 사용 (upnl 무관!)
+        # 사장님 report: '실투자금이 손실관련이 없어야 하는데 손실에 따라 변동'
+        # 옛 v99: isolatedMargin = isolatedWallet + upnl (손실 시 감소!)
+        # 신 v102: isolatedWallet = 사장님 이체 원 자본 (upnl 무관 = 고정!)
+        # positionRisk 응답 필드:
+        #   - isolatedMargin: wallet + upnl (변동!) ❌ 사장님 사상 X
+        #   - isolatedWallet: 이체 원 자본 (고정!) ✅ 사장님 사상 O
         _pr_by_symbol: dict[str, Decimal] = {}
         _pr_debug_rows = []
         for _pr in (_pr_data or []):
@@ -470,12 +476,21 @@ def get_balance(
             if not _pr_sym or _pr_sym not in active_symbols_upper:
                 continue
             try:
-                _pr_iso = Decimal(str(_pr.get("isolatedMargin") or "0"))
+                _pr_iso_wallet = Decimal(str(_pr.get("isolatedWallet") or "0"))
             except Exception:
-                _pr_iso = Decimal("0")
+                _pr_iso_wallet = Decimal("0")
+            try:
+                _pr_iso_margin = Decimal(str(_pr.get("isolatedMargin") or "0"))
+            except Exception:
+                _pr_iso_margin = Decimal("0")
             _pr_amt = _pr.get("positionAmt", "0")
             _pr_side = _pr.get("positionSide", "BOTH")
-            _pr_debug_rows.append(f"{_pr_sym}:{_pr_side} amt={_pr_amt} iso={_pr_iso}")
+            _pr_debug_rows.append(
+                f"{_pr_sym}:{_pr_side} amt={_pr_amt} wallet={_pr_iso_wallet} margin={_pr_iso_margin}"
+            )
+            # 🚨 v102: isolatedWallet 우선 (사장님 사상 = 원 자본!)
+            # fallback = isolatedMargin (옛 로직)
+            _pr_iso = _pr_iso_wallet if _pr_iso_wallet > 0 else _pr_iso_margin
             if _pr_iso > 0:
                 _pr_by_symbol[_pr_sym] = _pr_by_symbol.get(_pr_sym, Decimal("0")) + _pr_iso
         # 🚨 v99 CRITICAL: REPLACE (max 아니라!) - 사장님 「증거금 추가」 100% 반영 보장!
