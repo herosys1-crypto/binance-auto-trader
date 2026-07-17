@@ -654,12 +654,23 @@ async function refreshStrategies() {
         // = But = 사장님 = 「💉 포지션 추가」 LIMIT 미체결 = 관리 불가!
         // 신: 항상 표시 = 활성 strategy = 「💉 포지션 추가」 LIMIT 확인 가능!
         const openOrdersBtn = `<button onclick="event.stopPropagation(); openOpenOrdersModal(${s.id}, '${s.symbol}', '${s.side}')" class="btn-ghost btn text-xs" style="${btnStyle}" title="미체결 주문 보기 (= 자동 단계 LIMIT + 💉 포지션 추가 LIMIT). 개별 취소 가능.">📋</button>`;
-        stopBtn = `<div class="flex flex-wrap gap-1" style="max-width:180px">
+        // 🚨 v103 사장님 CRITICAL fix: STOPPING 갈힘 → 「⚡ 강제 정리」 버튼!
+        // 사장님 AKEUSDT #468 case: 65분 STOPPING = MANUAL_CLEANUP_REQUIRED 전환도 안 됨!
+        // → force-stop endpoint 원클릭 = DB 강제 STOPPED!
+        let forceStopBtn = '';
+        if ((s.status || '').toUpperCase() === 'STOPPING' && s.updated_at) {
+          const ageMs = Date.now() - new Date(s.updated_at).getTime();
+          if (ageMs >= STOPPING_STUCK_THRESHOLD_MS) {
+            forceStopBtn = `<button onclick="event.stopPropagation(); forceStopStrategy(${s.id}, '${s.symbol}')" class="btn-danger btn text-xs" style="${btnStyle};background:#dc2626;color:white" title="⚡ 강제 정리 = DB 강제 STOPPED 마킹 (거래소 호출 X!). 사장님이 이미 Binance UI 에서 청산 완료 시 원클릭!">⚡ 강제</button>`;
+          }
+        }
+        stopBtn = `<div class="flex flex-wrap gap-1" style="max-width:200px">
             <button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="설정 수정 (in-place 또는 종료+재시작) — 미진입 단계 재계산은 「수정 모드」 모달 → 「현재가」 버튼 사용">✏️</button>
             ${triggerNextBtn}
             ${openOrdersBtn}
             <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="${btnStyle}" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
             <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="긴급 종료 (포지션 시장가 청산)">🛑</button>
+            ${forceStopBtn}
           </div>`;
       }
       const startPx = s.start_price && Number(s.start_price) > 0

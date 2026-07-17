@@ -662,8 +662,10 @@ def _detect_stopping_stuck(db, *, notif_svc, redis) -> None:
                 already_alerted = bool(redis.get(cooldown_key))
             except Exception as e:
                 logger.debug("STOPPING cooldown 조회 실패 (alert 계속): %s", e)
-        if already_alerted:
-            continue
+        # 🚨 v103 사장님 CRITICAL fix: cooldown = 알림만 억제, status 전환은 항상!
+        # 옛 silent bug: already_alerted = True → continue → status 전환 skip!
+        # 사장님 AKEUSDT #468 case: 65분 STOPPING 갈힘 = cooldown이 status 전환도 막음!
+        # 신 v103: cooldown = 알림 skip, status 전환 = 항상 실행!
 
         title = f"🔴 [긴급] 전략 종료 갇힘 — #{s.id} {s.symbol} {s.side}"
         body = (
@@ -683,30 +685,32 @@ def _detect_stopping_stuck(db, *, notif_svc, redis) -> None:
             f"  2) 실패 시 Binance 거래소 UI 에서 직접 포지션 청산\n"
             f"  3) 완료 후 대시보드에서 「✅ 수동 청산 처리 완료」 클릭"
         )
-        # MANUAL_CLEANUP_REQUIRED 전환 + 알림 + RiskEvent.
+        # 🚨 v103: MANUAL_CLEANUP_REQUIRED 전환 = 항상! (cooldown 무관!)
         s.status = MANUAL_CLEANUP_REQUIRED
-        notif_svc.send_system_alert(title=title, body=body)
-        db.add(RiskEvent(
-            strategy_instance_id=s.id,
-            event_type="STOPPING_STUCK_DETECTED",
-            severity="CRITICAL",
-            title=title,
-            message=body,
-            event_payload={
-                "strategy_id": s.id,
-                "age_seconds": age_seconds,
-                "updated_at": updated_at.isoformat(),
-                "previous_status": "STOPPING",
-                "new_status": MANUAL_CLEANUP_REQUIRED,
-            },
-        ))
         logger.critical(
-            "STOPPING stuck → MANUAL_CLEANUP_REQUIRED: strategy_id=%s symbol=%s side=%s age=%dmin",
+            "v103 STOPPING stuck → MANUAL_CLEANUP_REQUIRED: strategy_id=%s symbol=%s side=%s age=%dmin",
             s.id, s.symbol, s.side, age_min,
         )
 
-        if redis is not None:
-            try:
-                redis.setex(cooldown_key, STOPPING_STUCK_ALERT_COOLDOWN_SECONDS, "1")
-            except Exception as e:
-                logger.debug("STOPPING cooldown 저장 실패 (다음 사이클 재알림 가능): %s", e)
+        # 🚨 v103: 알림 + RiskEvent = cooldown 검사!
+        if not already_alerted:
+            notif_svc.send_system_alert(title=title, body=body)
+            db.add(RiskEvent(
+                strategy_instance_id=s.id,
+                event_type="STOPPING_STUCK_DETECTED",
+                severity="CRITICAL",
+                title=title,
+                message=body,
+                event_payload={
+                    "strategy_id": s.id,
+                    "age_seconds": age_seconds,
+                    "updated_at": updated_at.isoformat(),
+                    "previous_status": "STOPPING",
+                    "new_status": MANUAL_CLEANUP_REQUIRED,
+                },
+            ))
+            if redis is not None:
+                try:
+                    redis.setex(cooldown_key, STOPPING_STUCK_ALERT_COOLDOWN_SECONDS, "1")
+                except Exception as e:
+                    logger.debug("STOPPING cooldown 저장 실패 (다음 사이클 재알림 가능): %s", e)

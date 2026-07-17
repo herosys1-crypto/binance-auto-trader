@@ -21,6 +21,26 @@ async function emergencyStop(id) {
   } catch (err) { toast('긴급 종료 실패: ' + err.message, 'error'); }
 }
 
+// 🚨 v103 사장님 신 기능: 「⚡ 강제 정리」 (force-stop endpoint 호출)
+// 사장님 AKEUSDT #468 case: 65분 STOPPING 갈힘 = 사장님이 이미 Binance UI 청산 완료
+// = DB 강제 STOPPED 마킹 = 예약 자본 자동 해제!
+async function forceStopStrategy(id, symbol) {
+  const msg = `⚡ 강제 정리 (STOPPING 갈힘 해제)\n\n` +
+    `전략 #${id} ${symbol} — DB 상태 강제 STOPPED 마킹\n\n` +
+    `⚠️ 주의:\n` +
+    `- 거래소 API 호출 X (best-effort cancel_all_orders 만 시도)\n` +
+    `- 거래소 포지션 잔재 시 = 사장님 직접 청산 필요!\n` +
+    `- 사장님이 이미 Binance UI 에서 청산 완료 시 원클릭!\n\n` +
+    `진행할까요?`;
+  if (!confirm(msg)) return;
+  try {
+    const r = await api(`/strategies/${id}/force-stop`, {method: 'POST'});
+    toast(r.message || `⚡ 전략 #${id} 강제 정리 완료`, 'success');
+    refreshStrategies();
+    if (typeof loadBalance === 'function') loadBalance();  // 예약 자본 즉시 해제!
+  } catch (err) { toast('강제 정리 실패: ' + err.message, 'error'); }
+}
+
 // UX #17 (2026-04-29): 대기 상태 (한번도 체결 안 된) 종료 전략 영구 삭제
 async function deleteStrategy(id) {
   // 2026-05-06 fix (#96 사례): hard delete → soft delete (archive).
