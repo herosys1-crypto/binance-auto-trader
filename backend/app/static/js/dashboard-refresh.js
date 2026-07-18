@@ -489,6 +489,32 @@ async function loadBalance() {
         _ns.style.color = newStratAvailSum <= 0 ? '#fca5a5' : '#86efac';
       }
     } catch (e) { console.error('[balance v12-3 force fill]', e); }
+
+    // 🚨 v110 사장님 CRITICAL: Binance 실시간 미체결 요약 (진입 + 청산 + 지정가!)
+    try {
+      let bnEntrySum = 0, bnExitSum = 0, bnAdhocSum = 0, bnTotalSum = 0;
+      let bnEntryN = 0, bnExitN = 0, bnAdhocN = 0;
+      await Promise.all(activeAccounts.map(async (acc) => {
+        try {
+          const bn = await api(`/exchange-accounts/${acc.id}/binance-open-orders-summary`);
+          bnEntrySum += Number(bn.entry_notional || 0);
+          bnExitSum += Number(bn.exit_notional || 0);
+          bnAdhocSum += Number(bn.adhoc_notional || 0);
+          bnTotalSum += Number(bn.total_notional || 0);
+          bnEntryN += Number(bn.entry_count || 0);
+          bnExitN += Number(bn.exit_count || 0);
+          bnAdhocN += Number(bn.adhoc_count || 0);
+        } catch (e) { /* 계정 실패 = skip */ }
+      }));
+      const _be = document.getElementById('balance-bn-entry');
+      const _bx = document.getElementById('balance-bn-exit');
+      const _ba = document.getElementById('balance-bn-adhoc');
+      const _bt = document.getElementById('balance-bn-total');
+      if (_be) _be.textContent = bnEntryN > 0 ? `${bnEntryN}건 ${fmt(bnEntrySum)}` : '없음';
+      if (_bx) _bx.textContent = bnExitN > 0 ? `${bnExitN}건 ${fmt(bnExitSum)}` : '없음';
+      if (_ba) _ba.textContent = bnAdhocN > 0 ? `${bnAdhocN}건 ${fmt(bnAdhocSum)}` : '없음';
+      if (_bt) _bt.textContent = bnTotalSum > 0 ? `${fmt(bnTotalSum)}` : '0';
+    } catch (e) { console.warn('[balance v110 binance summary]', e); }
     // tooltip — 마진율 + 계정별 detail + 단위 차이 + 「예약」 의미 설명
     const balCard = document.getElementById('card-balance') || document.querySelector('[data-metric="balance"]');
     if (balCard) {
