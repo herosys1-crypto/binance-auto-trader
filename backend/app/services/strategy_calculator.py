@@ -244,7 +244,7 @@ class StrategyCalculator:
 
             if is_first:
                 price = prev_anchor_price
-                qty = self.compute_qty_from_capital(capital=capital, price=price)
+                qty = self.compute_qty_from_capital(capital=capital, price=price, leverage=leverage)
                 stages.append(
                     StagePlan(
                         stage_no=stage_no,
@@ -278,7 +278,7 @@ class StrategyCalculator:
                 else:
                     multiplier = self._multiplier(side, pct)
                     price = self._quantize_price(prev_anchor_price * multiplier)
-                    qty = self.compute_qty_from_capital(capital=capital, price=price)
+                    qty = self.compute_qty_from_capital(capital=capital, price=price, leverage=leverage)
                     stages.append(
                         StagePlan(
                             stage_no=stage_no,
@@ -351,12 +351,37 @@ class StrategyCalculator:
             "tp3": self._quantize_price(vals[2]),
         }
 
-    def compute_qty_from_capital(self, *, capital: Decimal, price: Decimal) -> Decimal:
-        qty = self._quantize_qty(capital / price)
+    def compute_qty_from_capital(
+        self,
+        *,
+        capital: Decimal,
+        price: Decimal,
+        leverage: Decimal | int | None = None,
+    ) -> Decimal:
+        """qty = notional / price = (capital × leverage) / price.
+
+        🚨 2026-07-18 v107 사장님 CRITICAL fix!
+        옛 silent bug: qty = capital / price (leverage 미적용!)
+        = capital 150 → qty 81,788 (사장님 예상 245,365의 1/3!)
+        = capital = notional으로 오해!
+
+        신 v107: qty = capital × leverage / price
+        = 사장님 사상: capital = margin (지갑 lock 원 금액!)
+        = notional = capital × leverage
+        = qty = notional / price
+        = capital 150 × 3x / 0.001834 = 245,365 ✅
+
+        leverage=None 시 = 1 (backward compat, 옛 caller = 계산 옛 그대로).
+        """
+        _lev = Decimal(str(leverage)) if leverage is not None else Decimal("1")
+        if _lev <= 0:
+            _lev = Decimal("1")
+        notional = capital * _lev
+        qty = self._quantize_qty(notional / price)
         if qty < self.symbol_rule.min_qty:
             raise ValueError(
                 f"calculated quantity {qty} below min_qty {self.symbol_rule.min_qty} "
-                f"(capital={capital}, price={price})"
+                f"(capital={capital}, price={price}, leverage={_lev})"
             )
         return qty
 
