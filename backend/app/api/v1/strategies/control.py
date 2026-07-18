@@ -1289,7 +1289,9 @@ def list_open_orders(
 ) -> dict:
     """미체결 주문 조회 (LIMIT 등 status=NEW + PARTIALLY_FILLED).
 
-    사장님 사상: 「💉 포지션 추가」 지정가 + 자동 단계 LIMIT 모두 추적.
+    🚨 2026-07-18 v109 사장님 CRITICAL: Binance 실시간 조회 추가!
+    사장님 report: '우리 시스템만 아니라 Binance 실 미체결 표시!'
+    fix: Binance /fapi/v1/openOrders 별도 호출 + 우리 DB 비교!
     """
     from sqlalchemy import select as sa_select
     from app.models.order import Order
@@ -1304,6 +1306,40 @@ def list_open_orders(
         .where(Order.status.in_(["NEW", "PARTIALLY_FILLED"]))
         .order_by(Order.created_at.desc())
     ).scalars().all()
+
+    # 🚨 v109: Binance 실시간 미체결 조회!
+    binance_orders = []
+    binance_error = None
+    try:
+        from app.repositories.exchange_account_repository import ExchangeAccountRepository
+        from app.services.binance_client import BinanceClient
+        account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
+        if account:
+            client = BinanceClient(
+                api_key=decrypt_text(account.api_key_enc),
+                api_secret=decrypt_text(account.api_secret_enc),
+                is_testnet=account.is_testnet,
+            )
+            raw_orders = client.get_open_orders(symbol=strategy.symbol)
+            binance_orders = [
+                {
+                    "orderId": str(o.get("orderId", "")),
+                    "clientOrderId": o.get("clientOrderId"),
+                    "side": o.get("side"),
+                    "type": o.get("type"),
+                    "price": str(o.get("price", "0")),
+                    "origQty": str(o.get("origQty", "0")),
+                    "executedQty": str(o.get("executedQty", "0")),
+                    "status": o.get("status"),
+                    "reduceOnly": o.get("reduceOnly", False),
+                    "positionSide": o.get("positionSide"),
+                    "time": o.get("time"),
+                }
+                for o in (raw_orders or [])
+            ]
+    except Exception as e:
+        binance_error = f"Binance 실시간 조회 실패: {e}"
+        logger.warning("v109 binance open orders 실패 strategy=%s: %s", strategy_id, e)
 
     return {
         "strategy_id": strategy_id,
@@ -1329,6 +1365,10 @@ def list_open_orders(
             }
             for o in orders
         ],
+        # 🚨 v109: Binance 실시간 미체결!
+        "binance_open_orders": binance_orders,
+        "binance_count": len(binance_orders),
+        "binance_error": binance_error,
     }
 
 

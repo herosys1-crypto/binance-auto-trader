@@ -193,13 +193,56 @@ async function openOpenOrdersModal(id, symbol, side) {
         </tr>
       `).join('');
 
+  // 🚨 v109 사장님: Binance 실시간 미체결 표시!
+  const binanceOrders = data.binance_open_orders || [];
+  const binanceErr = data.binance_error;
+  const bnRowsHtml = binanceErr
+    ? `<tr><td colspan="6" class="text-center py-4 text-red-400">⚠️ Binance 조회 실패: ${binanceErr}</td></tr>`
+    : binanceOrders.length === 0
+    ? `<tr><td colspan="6" class="text-center py-4 text-slate-400">Binance 미체결 주문 없음 ✅</td></tr>`
+    : binanceOrders.map(o => {
+        const notional = (Number(o.origQty) * Number(o.price)).toFixed(2);
+        const reduceOnly = o.reduceOnly ? '<span class="text-orange-400" title="청산 예약">🔒 청산</span>' : '<span class="text-blue-400" title="진입 예약">📈 진입</span>';
+        return `
+        <tr style="border-bottom:1px solid #334155;background:rgba(59,130,246,0.05)">
+          <td style="padding:6px;text-align:center;font-family:monospace;font-size:10px">${o.orderId}</td>
+          <td style="padding:6px;text-align:center">${reduceOnly}</td>
+          <td style="padding:6px;text-align:center"><span class="${o.side === 'SELL' ? 'text-red-400' : 'text-green-400'}">${o.side}</span></td>
+          <td style="padding:6px;text-align:center">${o.type}</td>
+          <td style="padding:6px;text-align:right;font-family:monospace">${fmt(o.price)}</td>
+          <td style="padding:6px;text-align:right;font-family:monospace">${fmt(o.origQty)}<br><span class="text-slate-500" style="font-size:10px">≈ ${notional} USDT</span></td>
+        </tr>
+      `}).join('');
+  const bnTotalNotional = binanceOrders.reduce((sum, o) => sum + (Number(o.origQty) * Number(o.price)), 0);
+
   const modalHtml = `
     <div id="open-orders-modal-backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center" onclick="if(event.target.id==='open-orders-modal-backdrop')closeOpenOrdersModal()">
-      <div style="background:#1e293b;border-radius:8px;padding:20px;max-width:640px;width:90%;max-height:80vh;overflow-y:auto">
+      <div style="background:#1e293b;border-radius:8px;padding:20px;max-width:720px;width:90%;max-height:85vh;overflow-y:auto">
         <h3 style="font-size:16px;font-weight:bold;margin-bottom:8px;color:#3b82f6">📋 미체결 주문 — #${id} ${symbol} ${side}</h3>
-        <p style="font-size:12px;color:#94a3b8;margin-bottom:12px">
-          총 ${orders.length}건 (= 자동 단계 LIMIT + 「💉 포지션 추가」 LIMIT). 개별 취소 가능.
-        </p>
+
+        <!-- 🚨 v109 신: Binance 실시간 미체결! -->
+        <div style="margin-bottom:16px;padding:8px;background:rgba(59,130,246,0.1);border-left:4px solid #3b82f6;border-radius:4px">
+          <h4 style="font-size:14px;font-weight:bold;color:#60a5fa;margin-bottom:4px">
+            🔗 Binance 실시간 (진짜 lock!) — ${binanceOrders.length}건, 총 명목 ${bnTotalNotional.toFixed(2)} USDT
+          </h4>
+          <p style="font-size:11px;color:#94a3b8;margin-bottom:8px">= Binance /fapi/v1/openOrders API 실시간 조회 (진입 + 청산 예약 모두!)</p>
+          <table style="width:100%;border-collapse:collapse">
+            <thead>
+              <tr style="border-bottom:1px solid #475569;font-size:11px;color:#94a3b8">
+                <th style="text-align:center;padding:4px">주문 ID</th>
+                <th style="text-align:center;padding:4px">종류</th>
+                <th style="text-align:center;padding:4px">방향</th>
+                <th style="text-align:center;padding:4px">유형</th>
+                <th style="text-align:right;padding:4px">가격</th>
+                <th style="text-align:right;padding:4px">수량 (명목)</th>
+              </tr>
+            </thead>
+            <tbody>${bnRowsHtml}</tbody>
+          </table>
+        </div>
+
+        <h4 style="font-size:14px;font-weight:bold;color:#a78bfa;margin-bottom:4px">📌 우리 DB (자동 관리 대상) — ${orders.length}건</h4>
+        <p style="font-size:11px;color:#94a3b8;margin-bottom:8px">= 자동 단계 LIMIT + 「💉 포지션 추가」 LIMIT. 개별 취소 가능.</p>
         <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
           <thead>
             <tr style="border-bottom:1px solid #475569;font-size:12px;color:#94a3b8">
