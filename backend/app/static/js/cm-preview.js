@@ -302,12 +302,20 @@ function _renderPreview(data) {
     const trigPriceCell = s.trigger_price
       ? fmtNum(s.trigger_price)
       : (s.trigger_mode === 'LIQUIDATION_BUFFER' ? '<span class="text-slate-500" title="청산가 도달 시점에 산정">청산가 산정</span>' : '-');
+    // 🚨 v104 사장님 신 요구: 자본 = 두 값 표시! (마진 + notional 레버리지 미적용!)
+    // 사장님 사상: "자본을 레버리지 미적용한 금액으로 = 두 값 함께 표시!"
+    // = 마진 (실 lock) + notional (거래 규모 = 마진 × 레버리지)
+    const _capMargin = Number(s.planned_capital || 0);
+    const _capNotional = _capMargin * lev;
+    const capitalCell = _capMargin > 0
+      ? `${fmtNum(_capMargin)}<br><span class="text-slate-500" style="font-size:10px" title="자본 (레버리지 미적용) = ${fmtNum(_capMargin)} × ${lev}x = ${fmtNum(_capNotional)}">📊 ${fmtNum(_capNotional)} (${lev}x)</span>`
+      : '-';
     return `
     <tr${rowClass ? ` class="${rowClass}"` : ''}>
       <td>${stageLabel}</td>
       <td>${triggerKo(s.trigger_mode, s.trigger_percent, s.stage_no)}</td>
       <td class="num">${trigPriceCell}</td>
-      <td class="num">${fmtNum(s.planned_capital)}</td>
+      <td class="num">${capitalCell}</td>
       <td class="num text-yellow-300">${s.additional_margin_usdt && Number(s.additional_margin_usdt) > 0 ? '+' + fmtNum(s.additional_margin_usdt) : '<span class="text-slate-600">-</span>'}</td>
       <td class="num">${s.planned_qty ? fmtQty(s.planned_qty) : '-'}</td>
       <td class="num text-cyan-300">${s._avgEntry > 0 ? fmtNum(s._avgEntry) : '-'}</td>
