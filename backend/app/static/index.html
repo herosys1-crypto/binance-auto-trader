@@ -968,13 +968,21 @@
           <div class="balance-progress-track">
             <div id="balance-progress-bar" class="balance-progress-fill" style="width:0%"></div>
           </div>
-          <!-- 진행바 아래 = 4가지 정보 한 줄 (실 + 예약 + 여유 + 투자율) -->
+          <!-- 🚨 v110 사장님 대시보드 재설계: 2줄 표시! -->
+          <!-- Line 1: 우리 계산 (실 + 예약 + 여유 + 투자율 + 신 전략) -->
           <p class="balance-info-row">
             <span class="balance-info-cell"><span class="balance-info-icon">🔒</span>실 <b id="balance-mini-real">-</b></span>
             <span class="balance-info-cell"><span class="balance-info-icon">📦</span>예약 <b id="balance-mini-reserved">-</b></span>
             <span class="balance-info-cell"><span class="balance-info-icon">💵</span>여유 <b id="balance-mini-free">-</b></span>
             <span class="balance-info-cell"><span class="balance-info-icon">⚡</span>투자율 <b id="balance-progress-pct" class="balance-progress-pct">-</b></span>
             <span class="balance-info-cell"><span class="balance-info-icon">🆕</span>신 전략 <b id="balance-new-strategy">-</b></span>
+          </p>
+          <!-- Line 2: Binance 실시간 (진입 + 청산 + 지정가 + 총!) -->
+          <p class="balance-info-row" style="margin-top:4px;padding-top:4px;border-top:1px dashed #334155">
+            <span class="balance-info-cell" title="Binance 진입 예약 (자동 단계 LIMIT)"><span class="balance-info-icon">🔗</span>진입 <b id="balance-bn-entry" class="text-blue-300">-</b></span>
+            <span class="balance-info-cell" title="Binance 청산 예약 (TP/SL LIMIT)"><span class="balance-info-icon">🔒</span>청산 <b id="balance-bn-exit" class="text-orange-300">-</b></span>
+            <span class="balance-info-cell" title="사장님 「💉 포지션 추가」 지정가 LIMIT"><span class="balance-info-icon">💉</span>지정가 <b id="balance-bn-adhoc" class="text-purple-300">-</b></span>
+            <span class="balance-info-cell" title="Binance 실 미체결 총 명목 (진입+청산+지정가)"><span class="balance-info-icon">💰</span>총 <b id="balance-bn-total" class="text-yellow-300">-</b></span>
           </p>
           <!-- hidden = legacy JS 호환 (= used / limit 보존) -->
           <span id="balance-progress-used" class="hidden">-</span>
@@ -2115,41 +2123,41 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/api.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/helpers.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/stats-modals.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/health-page.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/ranking-page.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/ranking-modal.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/trade-history-modal.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/system-banner.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/cm-collectors.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/cm-loaders.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/cm-market-info.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/cm-preview.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/cm-open-modal.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/templates-panel.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/indicators.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/strategies-list.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/external-positions.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/multi-symbol.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/template-save.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/cm-submit.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/strategy-detail.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/chart-detail.js?v=20260718v109-binance-realtime"></script>
+<script src="/static/js/constants.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/api.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/helpers.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/stats-modals.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/health-page.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/ranking-page.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/ranking-modal.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/trade-history-modal.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/system-banner.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/cm-collectors.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/cm-loaders.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/cm-market-info.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/cm-preview.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/cm-open-modal.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/templates-panel.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/indicators.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/strategies-list.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/external-positions.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/multi-symbol.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/template-save.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/cm-submit.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/strategy-detail.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/chart-detail.js?v=20260718v110-dashboard-redesign"></script>
 <script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
-<script src="/static/js/accounts-modal.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/add-position-modal.js?v=20260718v109-binance-realtime"></script>
+<script src="/static/js/accounts-modal.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/add-position-modal.js?v=20260718v110-dashboard-redesign"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/page-router.js?v=20260718v109-binance-realtime"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260718v109-binance-realtime"></script>
+<script src="/static/js/strategy-actions.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/page-router.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260718v110-dashboard-redesign"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES

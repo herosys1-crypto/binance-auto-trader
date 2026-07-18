@@ -772,3 +772,130 @@ def get_binance_positions(
         except Exception:
             pass
     return response
+
+
+# 🚨 v110 사장님 CRITICAL: 대시보드 재설계 = 계정 전체 Binance 미체결 요약!
+@router.get("/{account_id}/binance-open-orders-summary")
+def get_binance_open_orders_summary(
+    account_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """Binance 실시간 미체결 주문 요약 (계정 전체, 진입 vs 청산 vs 지정가 분류).
+
+    사장님 대시보드 재설계 = 잔액 카드에 = 다음 4가지 표시!
+      🔗 Binance 진입 예약 (reduceOnly=False, 자동 단계 LIMIT 등)
+      🔒 Binance 청산 예약 (reduceOnly=True, TP/SL LIMIT 등)
+      💉 사장님 지정가 (ad-hoc = strategy DB에 stage_no NULL 매칭)
+      💰 총 명목 (모두 합!)
+    """
+    import hashlib
+    import hmac
+    import json as _json
+    import time as _time
+    import requests as _requests
+    from app.core.redis_client import get_redis_client
+
+    account = db.get(ExchangeAccount, account_id)
+    if not account or account.user_id != user_id:
+        raise HTTPException(404, "Exchange account not found")
+
+    # Redis 캐시 15초
+    redis = None
+    cache_key = f"binance:open_orders_summary:{account_id}"
+    try:
+        redis = get_redis_client()
+        cached = redis.get(cache_key)
+        if cached:
+            return _json.loads(cached)
+    except Exception:
+        pass
+
+    # Binance /fapi/v1/openOrders (계정 전체!)
+    try:
+        ak = decrypt_text(account.api_key_enc)
+        sk = decrypt_text(account.api_secret_enc)
+        base = "https://testnet.binancefuture.com" if account.is_testnet else "https://fapi.binance.com"
+        ts = int(_time.time() * 1000)
+        qs = f"timestamp={ts}&recvWindow=5000"
+        sig = hmac.new(sk.encode(), qs.encode(), hashlib.sha256).hexdigest()
+        r = _requests.get(
+            f"{base}/fapi/v1/openOrders?{qs}&signature={sig}",
+            headers={"X-MBX-APIKEY": ak},
+            timeout=10,
+        )
+        r.raise_for_status()
+        raw_orders = r.json() or []
+    except Exception as e:
+        logger.warning("v110 binance open orders summary 실패 account=%s: %s", account_id, e)
+        return {
+            "account_id": account_id,
+            "error": str(e),
+            "entry_count": 0, "entry_notional": "0",
+            "exit_count": 0, "exit_notional": "0",
+            "adhoc_count": 0, "adhoc_notional": "0",
+            "total_count": 0, "total_notional": "0",
+        }
+
+    # Order DB 조회 (adhoc 판단!)
+    from app.models.order import Order
+    from app.models.strategy_instance import StrategyInstance
+    active_ids = db.execute(
+        select(StrategyInstance.id).where(StrategyInstance.exchange_account_id == account_id)
+    ).scalars().all()
+    adhoc_client_ids = set()
+    if active_ids:
+        adhoc_orders_db = db.execute(
+            select(Order.client_order_id).where(
+                Order.strategy_instance_id.in_(active_ids),
+                Order.stage_no.is_(None),
+                Order.status.in_(["NEW", "PARTIALLY_FILLED"]),
+            )
+        ).scalars().all()
+        adhoc_client_ids = {c for c in adhoc_orders_db if c}
+
+    # 분류!
+    entry_count = exit_count = adhoc_count = 0
+    entry_notional = exit_notional = adhoc_notional = Decimal("0")
+    for o in raw_orders:
+        try:
+            price = Decimal(str(o.get("price") or "0"))
+            qty = Decimal(str(o.get("origQty") or "0"))
+        except Exception:
+            price = qty = Decimal("0")
+        notional = price * qty
+        reduce_only = o.get("reduceOnly") or False
+        client_id = o.get("clientOrderId") or ""
+        # 사장님 「💉 포지션 추가」 지정가 = adhoc 매칭!
+        if client_id in adhoc_client_ids:
+            adhoc_count += 1
+            adhoc_notional += notional
+        elif reduce_only:
+            exit_count += 1
+            exit_notional += notional
+        else:
+            entry_count += 1
+            entry_notional += notional
+
+    total_count = entry_count + exit_count + adhoc_count
+    total_notional = entry_notional + exit_notional + adhoc_notional
+
+    resp = {
+        "account_id": account_id,
+        "fetched_at": _time.time(),
+        "entry_count": entry_count,
+        "entry_notional": str(entry_notional.quantize(Decimal("0.01"))),
+        "exit_count": exit_count,
+        "exit_notional": str(exit_notional.quantize(Decimal("0.01"))),
+        "adhoc_count": adhoc_count,
+        "adhoc_notional": str(adhoc_notional.quantize(Decimal("0.01"))),
+        "total_count": total_count,
+        "total_notional": str(total_notional.quantize(Decimal("0.01"))),
+    }
+
+    if redis:
+        try:
+            redis.setex(cache_key, 15, _json.dumps(resp))
+        except Exception:
+            pass
+    return resp
