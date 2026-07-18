@@ -1320,7 +1320,7 @@ def list_open_orders(
                 api_secret=decrypt_text(account.api_secret_enc),
                 is_testnet=account.is_testnet,
             )
-            raw_orders = client.get_open_orders(symbol=strategy.symbol)
+            raw_orders = client.list_open_orders(symbol=strategy.symbol)  # ✅ v114!
             binance_orders = [
                 {
                     "orderId": str(o.get("orderId", "")),
