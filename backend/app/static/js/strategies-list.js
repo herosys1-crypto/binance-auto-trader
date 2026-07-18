@@ -535,15 +535,20 @@ async function refreshStrategies() {
       const qtyTooltip = `포지션 수량 = ${sQtyAbs.toLocaleString('en-US', {maximumFractionDigits: 8})} (${s.side})\n\n` +
         `참고: Binance API positionAmt 는 SHORT 일 때 음수 (-${sQtyAbs}), LONG 일 때 양수 입니다.\n` +
         `여기서는 직관 위해 절대값 + 방향 아이콘 (${qtySideIcon}) 표시합니다.`;
+      // 🚨 v105 사장님 신 요구: notional (레버리지 미적용) 자본 두 값 표시!
+      const positionNotionalDisp = positionMargin * sLev;
+      const plannedNotionalDisp = plannedMargin * sLev;
       const qtyStack = hasPosition
         ? `<div class="text-sm leading-none">
             <span class="${qtyColor}" style="font-size:10px" title="${qtyTooltip}">${qtySideIcon} ${fmtQty(sQtyAbs)}</span>
             <span class="text-slate-100 font-bold" title="${planTooltip}" style="font-size:16px"> ${positionMargin.toFixed(0)}/${plannedMargin.toFixed(0)} <span class="${entryColor}">${entryPct.toFixed(0)}%</span></span>
+            <span class="text-slate-500" style="font-size:10px" title="notional (레버리지 미적용) = 마진 × ${sLev}x">📊 ${positionNotionalDisp.toFixed(0)}/${plannedNotionalDisp.toFixed(0)} (${sLev}x)</span>
             <div class="mt-0.5">${addMarginBtnInQty}${addPositionBtn}${manualTpBtn}</div>
           </div>`
         : `<div class="text-sm leading-none">
             <span class="text-slate-500">- (미진입)</span>
             <span class="text-slate-400" style="font-size:12px" title="${planTooltip}"> 자본 ${plannedMargin > 0 ? plannedMargin.toFixed(0)+' USDT' : '-'}</span>
+            <span class="text-slate-500" style="font-size:10px" title="notional = 마진 × ${sLev}x"> 📊 ${plannedNotionalDisp > 0 ? plannedNotionalDisp.toFixed(0)+' (${sLev}x)' : '-'}</span>
             ${addPositionBtn ? '<div class="mt-0.5">'+addPositionBtn+'</div>' : ''}
           </div>`;
       // PnL/ROI — 4 줄 stack: PnL + 포지션 ROI + 전략 ROI + 🆕 SL 한도 시각 (2026-06-03)
