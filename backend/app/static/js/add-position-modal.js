@@ -38,6 +38,30 @@ function openAddPositionModal(id, symbol, side, leverage) {
   // 현재가 표시 + 미리보기 갱신
   loadAddPositionMarkPrice(symbol);
   document.getElementById('ap-modal').classList.remove('hidden');
+  // 🚨 v108 사장님 신 요구: 여유 자금 표시!
+  _loadAddPositionAvailableFunds();
+}
+
+// 🚨 v108: 여유 자금 표시 (사장님 사상 = 「포지션 추가」 최대치 안내!)
+async function _loadAddPositionAvailableFunds() {
+  const el = document.getElementById('ap-available-funds');
+  if (!el) return;
+  el.textContent = '로딩...';
+  try {
+    // 대시보드 잔액 카드 값 그대로 사용 (localStorage 캐시)
+    const _re = document.getElementById('balance-mini-real');
+    const _fr = document.getElementById('balance-mini-free');
+    if (_re && _fr) {
+      const real = _re.textContent;
+      const free = _fr.textContent;
+      el.innerHTML = `💰 여유 <strong class="text-green-400">${free} USDT</strong> ` +
+        `(실 ${real} USDT lock) — 이 금액까지 = 사장님 최대 추가 가능!`;
+    } else {
+      el.textContent = '대시보드 재로드 후 확인';
+    }
+  } catch (e) {
+    el.textContent = '조회 실패';
+  }
 }
 
 function closeAddPositionModal() {
