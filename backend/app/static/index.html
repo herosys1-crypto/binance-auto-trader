@@ -945,16 +945,17 @@
        데스크탑 = 6 col (잔액 2 + 시스템 1 + 진행 1 + PNL 1 + 템플릿 1)
        items-start = 거래소 잔액이 늘어나도 다른 카드는 자기 콘텐츠 높이만 = 세로 컴팩트 (사장님 「가로만 줄이고 세로 좁게」)
        모바일 = 2 col (잔액 = 전체폭, 나머지 = 각 1 col) -->
-  <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-2 items-start" id="metrics-row">
-    <!-- 1. 시스템 상태 (gray accent) -->
-    <div id="card-system" class="card-metric card-gray rounded-lg p-3 signal-gray" onclick="scrollToSection('section-syshealth')" title="클릭하면 시스템 상태로 이동" data-mobile-hide="true">
-      <p class="card-metric-label">⚙️ 시스템 상태 ▾</p>
-      <p id="metric-system" class="card-metric-value">-</p>
-      <p id="metric-system-detail" class="card-metric-detail">-</p>
+  <!-- 🚨 v111 사장님 CRITICAL: 12 col grid = 컴팩트! (잔액 5 col + 나머지 각 1.75 col) -->
+  <div class="grid grid-cols-2 md:grid-cols-12 gap-2 mb-2 items-start" id="metrics-row">
+    <!-- 1. 시스템 상태 (gray accent) - 1.75 col = compact -->
+    <div id="card-system" class="card-metric card-gray rounded-lg p-2 signal-gray md:col-span-2" onclick="scrollToSection('section-syshealth')" title="클릭하면 시스템 상태로 이동" data-mobile-hide="true" style="min-width:0">
+      <p class="card-metric-label" style="font-size:10px">⚙️ 시스템 ▾</p>
+      <p id="metric-system" class="card-metric-value" style="font-size:14px">-</p>
+      <p id="metric-system-detail" class="card-metric-detail" style="font-size:9px">-</p>
     </div>
 
-    <!-- 2. 💰 거래소 잔액 (amber accent) — 사장님 자본 = 가장 중요! = 2 col 차지 (= 좌측 큰 숫자 / 우측 진행바+mini) -->
-    <div id="card-balance" class="card-metric card-amber rounded-lg p-3 signal-gray md:col-span-2 balance-card-wide" onclick="loadBalance()" title="클릭하면 잔액 새로고침">
+    <!-- 2. 💰 거래소 잔액 = 6 col (넓게!) -->
+    <div id="card-balance" class="card-metric card-amber rounded-lg p-3 signal-gray md:col-span-6 balance-card-wide" onclick="loadBalance()" title="클릭하면 잔액 새로고침">
       <!-- 좌측: 큰 숫자 + label -->
       <!-- 좌측 = 큰 잔액 -->
       <div class="balance-left">
@@ -992,31 +993,25 @@
       <!-- 🌟 v11 critical fix: legacy detail HTML 자체에서 영구 제거 (= 다시는 중복 표시 X) -->
     </div>
 
-    <!-- 3. 📊 진행 중인 전략 (blue accent) -->
-    <div id="card-active" class="card-metric card-blue rounded-lg p-3 signal-gray" onclick="scrollToSection('section-strategies')" title="클릭하면 전략 인스턴스로 이동">
-      <p class="card-metric-label">📊 진행 중인 전략 ▾</p>
-      <p id="metric-active" class="card-metric-value">-</p>
-      <!-- 활성/전체 진행바 -->
-      <div class="balance-progress-wrap mt-1">
-        <div class="balance-progress-track">
-          <div id="active-progress-bar" class="balance-progress-fill" style="width:0%;background:#3b82f6"></div>
-        </div>
-      </div>
-      <p id="metric-active-detail" class="card-metric-detail">-</p>
+    <!-- 3. 📊 진행 중인 전략 (blue) - 1.33 col = compact -->
+    <div id="card-active" class="card-metric card-blue rounded-lg p-2 signal-gray md:col-span-1" onclick="scrollToSection('section-strategies')" title="클릭하면 전략 인스턴스로 이동" style="min-width:0">
+      <p class="card-metric-label" style="font-size:10px">📊 진행 ▾</p>
+      <p id="metric-active" class="card-metric-value" style="font-size:14px">-</p>
+      <p id="metric-active-detail" class="card-metric-detail" style="font-size:9px">-</p>
     </div>
 
-    <!-- 4. 📈 미실현 손익 (green/red accent — 동적) -->
-    <div id="card-pnl" class="card-metric card-pnl-neutral rounded-lg p-3 signal-gray" onclick="openTradeHistoryModal()" title="클릭하면 거래 실적 상세">
-      <p class="card-metric-label">📈 미실현 손익</p>
-      <p id="metric-pnl" class="card-metric-value card-metric-value-xl">-</p>
-      <p id="metric-pnl-detail" class="card-metric-detail">실시간 (클릭: 실적 보기)</p>
+    <!-- 4. 📈 미실현 손익 (green/red) - 2 col -->
+    <div id="card-pnl" class="card-metric card-pnl-neutral rounded-lg p-2 signal-gray md:col-span-2" onclick="openTradeHistoryModal()" title="클릭하면 거래 실적 상세" style="min-width:0">
+      <p class="card-metric-label" style="font-size:10px">📈 미실현</p>
+      <p id="metric-pnl" class="card-metric-value" style="font-size:14px">-</p>
+      <p id="metric-pnl-detail" class="card-metric-detail" style="font-size:9px">실시간</p>
     </div>
 
-    <!-- 5. ⭐ 전략 템플릿 (purple accent) -->
-    <div id="card-templates" class="card-metric card-purple rounded-lg p-3 signal-gray" onclick="scrollToSection('section-templates')" title="클릭하면 전략 템플릿으로 이동" data-mobile-hide="true">
-      <p class="card-metric-label">⭐ 전략 템플릿 ▾</p>
-      <p id="metric-templates" class="card-metric-value">-</p>
-      <p id="metric-templates-detail" class="card-metric-detail">-</p>
+    <!-- 5. ⭐ 전략 템플릿 (purple) - 1 col = compact -->
+    <div id="card-templates" class="card-metric card-purple rounded-lg p-2 signal-gray md:col-span-1" onclick="scrollToSection('section-templates')" title="클릭하면 전략 템플릿으로 이동" data-mobile-hide="true" style="min-width:0">
+      <p class="card-metric-label" style="font-size:10px">⭐ 템플릿 ▾</p>
+      <p id="metric-templates" class="card-metric-value" style="font-size:14px">-</p>
+      <p id="metric-templates-detail" class="card-metric-detail" style="font-size:9px">-</p>
     </div>
   </div>
 
@@ -2123,41 +2118,41 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/api.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/helpers.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/stats-modals.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/health-page.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/ranking-page.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/ranking-modal.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/trade-history-modal.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/system-banner.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/cm-collectors.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/cm-loaders.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/cm-market-info.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/cm-preview.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/cm-open-modal.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/templates-panel.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/indicators.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/strategies-list.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/external-positions.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/multi-symbol.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/template-save.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/cm-submit.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/strategy-detail.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/chart-detail.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/constants.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/api.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/helpers.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/stats-modals.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/health-page.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/ranking-page.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/ranking-modal.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/trade-history-modal.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/system-banner.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/cm-collectors.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/cm-loaders.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/cm-market-info.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/cm-preview.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/cm-open-modal.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/templates-panel.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/indicators.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/strategies-list.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/external-positions.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/multi-symbol.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/template-save.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/cm-submit.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/strategy-detail.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/chart-detail.js?v=20260718v111-compact-layout"></script>
 <script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
-<script src="/static/js/accounts-modal.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/add-position-modal.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/accounts-modal.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/add-position-modal.js?v=20260718v111-compact-layout"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/page-router.js?v=20260718v110-dashboard-redesign"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260718v110-dashboard-redesign"></script>
+<script src="/static/js/strategy-actions.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/page-router.js?v=20260718v111-compact-layout"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260718v111-compact-layout"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
