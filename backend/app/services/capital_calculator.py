@@ -68,25 +68,27 @@ def calc_actual_margin_for_strategy(strategy: StrategyInstance) -> Decimal:
 
 
 def calc_untriggered_margin_for_strategy(db: Session, strategy: StrategyInstance) -> Decimal:
-    """strategy 의 미진입 단계 자본 합 (= 마진 단위, 자본 / leverage).
+    """strategy 의 미진입 단계 자본 합.
 
-    사장님 사상 v6: '예약 = 미진입 단계 자본 / leverage = 마진 단위'.
+    🚨 v112 (2026-07-18) 사장님 CRITICAL fix:
+    옛 v6 (2026-06-09): '예약 = 자본 / leverage = 마진 단위'
+      → 사장님 사상 위반! capital = margin (같은 단위!)
+    신 v112 (사장님 헌법!): 'capital = margin = 지갑 lock 원 금액!'
+      → 나눗셈 X! capital 그대로!
+      → exchange_accounts.py:_reserved_one v101 fix와 통일!
     """
     try:
-        lev = Decimal(str(strategy.leverage or 1))
         untriggered_plans = db.execute(
             select(StrategyStagePlan)
             .where(StrategyStagePlan.strategy_instance_id == strategy.id)
             .where(StrategyStagePlan.is_triggered.is_(False))
         ).scalars().all()
-        # 미진입 단계 capital 합 (= 자본 단위)
+        # 미진입 단계 capital 합 (= 마진 단위 = 사장님 사상!)
         untriggered_capital = sum(
             (Decimal(str(p.planned_capital or 0)) for p in untriggered_plans),
             Decimal("0")
         )
-        # 마진 단위 변환 (= 사장님 사상 v6)
-        if lev > 0:
-            return untriggered_capital / lev
+        # 🚨 v112: capital = margin = 나눗셈 X! (사장님 헌법!)
         return untriggered_capital
     except Exception as e:
         logger.warning("[capital] untriggered_margin 실패 strategy=%s: %s", strategy.id, e)

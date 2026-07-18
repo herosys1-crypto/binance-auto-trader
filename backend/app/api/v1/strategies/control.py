@@ -1308,11 +1308,11 @@ def list_open_orders(
     ).scalars().all()
 
     # 🚨 v109: Binance 실시간 미체결 조회!
+    # 🚨 v113 fix: import path 정정! (v109 = app.services.binance_client = 잘못!)
     binance_orders = []
     binance_error = None
     try:
-        from app.repositories.exchange_account_repository import ExchangeAccountRepository
-        from app.services.binance_client import BinanceClient
+        from app.integrations.binance.client import BinanceClient  # ✅ 정확 path!
         account = ExchangeAccountRepository(db).get(strategy.exchange_account_id)
         if account:
             client = BinanceClient(
