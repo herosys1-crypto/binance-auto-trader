@@ -407,10 +407,19 @@ async function refreshStrategies() {
                   class="bg-slate-800 border border-slate-600 rounded text-slate-300"
                   style="font-size:10px;padding:0 2px;margin-left:4px;cursor:pointer"
                   title="🌟 TP1 임계 옵션 (사장님 자율) — 10/15/20/25 즉시 선택 + 즉시 적용! Crisis 모드 = 영구 비활성 (v30). 사장님 상황 인지 = 임의 조정.">
+            <option value="0" ${_tp1Pct===0 ? 'selected':''}>🚫 TP 끔 (수동!)</option>
             <option value="10" ${_tp1Pct===10 ? 'selected':''}>TP1 +10%</option>
             <option value="15" ${_tp1Pct===15 ? 'selected':''}>TP1 +15%</option>
             <option value="20" ${_tp1Pct===20 ? 'selected':''}>TP1 +20%</option>
             <option value="25" ${_tp1Pct===25 ? 'selected':''}>TP1 +25%</option>
+            <option value="30" ${_tp1Pct===30 ? 'selected':''}>TP1 +30%</option>
+            <option value="35" ${_tp1Pct===35 ? 'selected':''}>TP1 +35%</option>
+            <option value="40" ${_tp1Pct===40 ? 'selected':''}>TP1 +40%</option>
+            <option value="45" ${_tp1Pct===45 ? 'selected':''}>TP1 +45%</option>
+            <option value="50" ${_tp1Pct===50 ? 'selected':''}>TP1 +50%</option>
+            <option value="100" ${_tp1Pct===100 ? 'selected':''}>TP1 +100%</option>
+            <option value="200" ${_tp1Pct===200 ? 'selected':''}>TP1 +200%</option>
+            <option value="300" ${_tp1Pct===300 ? 'selected':''}>TP1 +300%</option>
           </select>`
         : '';
       // 🌟 2026-06-24 사장님: 손실 한도 강제 청산 전략별 override 드롭다운.
