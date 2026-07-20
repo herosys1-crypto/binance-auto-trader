@@ -344,21 +344,28 @@ class RiskService:
         # 신 정책:
         # - crisis_mode_triggered_at 있는 strategy (= 옛 진입) = TP override 안 함
         # - 사장님 TP1 옵션 = 항상 우선 적용
-        # 🚨 2026-07-18 v105 사장님 CRITICAL fix: TP1 옵션 = 모든 TP 상향!
-        # 사장님 report: TP1 = 25% 설정, But TP2 = ROI 14.61%에서 발동!
-        # 옛 로직: TP1만 override, TP2/TP3 = template 값 유지 (silent bug!)
-        # 사장님 사상: "TP1 25% 부터 = 모든 TP = 25% 이상만 발동!"
-        # v105 fix: max(override, val) = TP1 이상만 발동 보장!
+        # 🚨 2026-07-18 v105+v115 사장님 CRITICAL fix: TP1 옵션 = 모든 TP 상향 + 끔!
+        # v105: TP1 옵션 = max(override, val) (모든 TP 이상만!)
+        # v115 (사장님 신 요구!): tp1_pct_override = 0 = 「TP 완전 끔!」
+        #   = TP 자동 발동 X = 사장님 수동 관리!
         if strategy.tp1_pct_override is not None:
             _override = Decimal(str(strategy.tp1_pct_override))
-            tp_levels = [
-                (label, max(_override, val) if val is not None else val)
-                for label, val in tp_levels
-            ]
-            logger.info(
-                "[risk] v105 사장님 TP1 옵션 = 모든 TP 상향! strategy=%s TP1_override=%s → tp_levels=%s",
-                strategy.id, _override, tp_levels
-            )
+            # 🚨 v115: 0 = 「TP 끔」 = tp_levels 전체 비움!
+            if _override == 0:
+                logger.info(
+                    "[risk] v115 사장님 TP 완전 끔! strategy=%s (TP 자동 발동 X = 수동!)",
+                    strategy.id,
+                )
+                tp_levels = []  # 전체 TP 비활성!
+            else:
+                tp_levels = [
+                    (label, max(_override, val) if val is not None else val)
+                    for label, val in tp_levels
+                ]
+                logger.info(
+                    "[risk] v105 사장님 TP1 옵션 = 모든 TP 상향! strategy=%s TP1_override=%s → tp_levels=%s",
+                    strategy.id, _override, tp_levels
+                )
 
         # 2026-05-04 critical fix (사용자 #98 LABUSDT 사례):
         # 트레일링 체크가 TP threshold loop 보다 우선해야 함.

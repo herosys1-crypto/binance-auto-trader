@@ -857,7 +857,12 @@ def update_trailing_retrace(
 #   = 큰 손실 후 빠른 회복 익절 (= 사장님 자본 보호)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_ALLOWED_TP1_PCT = {Decimal("10"), Decimal("15"), Decimal("20"), Decimal("25")}
+_ALLOWED_TP1_PCT = {
+    Decimal("0"),   # 🚫 v115 사장님: TP 끔! (완전 수동 관리!)
+    Decimal("10"), Decimal("15"), Decimal("20"), Decimal("25"),
+    Decimal("30"), Decimal("35"), Decimal("40"), Decimal("45"), Decimal("50"),
+    Decimal("100"), Decimal("200"), Decimal("300"),  # 사장님 v115 확장 옵션!
+}
 
 
 class Tp1ThresholdRequest(BaseModel):
@@ -896,8 +901,8 @@ def update_tp1_threshold(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"⚠️ TP1 임계 % 는 10/15/20/25 중 하나여야 합니다 "
-                f"(입력: {payload.pct}). spec: TP1_THRESHOLD_OPTION_SPEC_2026-06-08.md"
+                f"⚠️ TP1 임계 % 는 0(끔)/10/15/20/25/30/35/40/45/50/100/200/300 중 하나여야 합니다 "
+                f"(입력: {payload.pct}). spec: v115 사장님 확장!"
             ),
         )
 
