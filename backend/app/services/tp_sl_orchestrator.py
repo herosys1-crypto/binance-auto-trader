@@ -126,14 +126,11 @@ class TPSLOrchestratorService:
         current_qty = abs(Decimal(str(strategy.current_position_qty)))
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
         # 템플릿의 qty_ratio 우선 사용. 없으면 기본값 폴백.
-        ratio_attr = {f"TP{n}": f"tp{n}_qty_ratio" for n in range(1, 11)}
-        # 사용자 기획 v6 (2026-05-12 밤): TP1~9 모두 「잔량의 25%」 균일.
-        # "익절시작은 +10%에서 25%씩 시작하고 +15% 일때 잔량에 25% 이렇게 tp10단계까지".
-        # TP10 만 100% (절대 마지막 안전망 — trailing 미발동 + 가격 계속 상승 케이스).
-        # 이전 default (TP2=50, TP3~5=100) 는 사용자 「TP3 후 trailing」 의도 위배 — TP3
-        # 가 100% 면 trailing 영영 발동 못함. 균일 25% 로 변경 → 잔량 보유 → trailing 기회.
-        default_ratio = {f"TP{n}": DEFAULT_TP_QTY_RATIO_PCT for n in range(1, 10)}
-        default_ratio["TP10"] = TP_FINAL_QTY_RATIO_PCT
+        ratio_attr = {f"TP{n}": f"tp{n}_qty_ratio" for n in range(1, 21)}  # 🚀 v118: TP20 확장!
+        # 🚀 v118 (2026-07-22): TP20 확장 + 균일 25% (사장님 자율!)
+        # v117: TP10 = 100% 제거!
+        # v118: 20단계 확장 = TP1~20 모두 균일 25%!
+        default_ratio = {f"TP{n}": DEFAULT_TP_QTY_RATIO_PCT for n in range(1, 21)}
         # 크라이시스 모드 qty ratio (사용자 기획 default):
         # TP1=25%, TP2=25%, TP3=50% of remaining, TP4=100% of remaining
         # 2026-05-04 (alembic 0009): template.crisis_qty_ratios JSONB override 가능.
