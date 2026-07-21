@@ -910,23 +910,29 @@ async function updateTrailingRetrace(strategyId, pctStr) {
 // = 사장님 선택 = 즉시 PATCH + 즉시 적용 (= 다음 10초 risk cycle)
 async function updateTp1Threshold(strategyId, pctStr) {
   const pct = Number(pctStr);
-  if (![10, 15, 20, 25].includes(pct)) {
+  // 🚨 v116 fix: 신 옵션 (0=끔, 30~300) 추가!
+  if (![0, 10, 15, 20, 25, 30, 35, 40, 45, 50, 100, 200, 300].includes(pct)) {
     toast(`❌ 옵션 오류: ${pctStr}`, 'error');
     return;
   }
   // 🌟 2026-07-02 사장님 옵션 A (헌법 갱신!): TP1 dropdown 변경 시 = confirm 모달!
-  // 옛 옵션 A (task #89) = "confirm 모달 X" = 취소!
-  // 신 사상: silent 실수 방지 = 사장님 명확 인지!
-  const confirmMsg =
-    `🚨 TP1 옵션 변경 = TP1 +${pct}%!\n\n` +
-    `📌 사장님 선택:\n` +
-    `   전략 #${strategyId} = TP1 = +${pct}% ROI 도달 시 익절!\n\n` +
-    `⚠️ 인지 필요:\n` +
-    `   • 10% = 빠른 익절 (default)\n` +
-    `   • 15% = 표준\n` +
-    `   • 20% = 큰 익절 (더 오래 기다림!)\n` +
-    `   • 25% = 매우 큰 익절!\n\n` +
-    `✅ 진행하시겠습니까?`;
+  // 🚨 v116: 「끔」(0) 선택 시 = 신 메시지!
+  const confirmMsg = pct === 0
+    ? `🚫 TP 완전 끔!\n\n` +
+      `📌 전략 #${strategyId} = TP 자동 발동 X!\n\n` +
+      `⚠️ 사장님 100% 수동 관리:\n` +
+      `   • 자동 TP 청산 = 안 됨!\n` +
+      `   • 사장님 = 「💰 수동 익절」 직접!\n` +
+      `   • SL = 여전히 작동 (별도)!\n\n` +
+      `✅ 진행하시겠습니까?`
+    : `🚨 TP1 옵션 변경 = TP1 +${pct}%!\n\n` +
+      `📌 사장님 선택:\n` +
+      `   전략 #${strategyId} = TP1 = +${pct}% ROI 도달 시 익절!\n\n` +
+      `⚠️ 인지 필요:\n` +
+      `   • 10~25% = 빠른/표준/큰 익절\n` +
+      `   • 30~50% = 큰 익절 목표!\n` +
+      `   • 100~300% = 매우 큰 익절! (사장님 자율!)\n\n` +
+      `✅ 진행하시겠습니까?`;
   if (!confirm(confirmMsg)) {
     // 사장님 취소 = dropdown 원위치 복원!
     refreshStrategies();
