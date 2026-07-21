@@ -325,7 +325,7 @@ class RiskService:
         # NULL 인 단계는 미사용 — 활성 단계만 평가.
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
         tp_levels: list[tuple[str, Decimal]] = []
-        for n in range(10, 0, -1):  # TP10..TP1
+        for n in range(20, 0, -1):  # 🚀 v118: TP20..TP1 (사장님 확장!)
             attr = f"tp{n}_percent"
             val = getattr(tpl, attr, None) if tpl else None
             if val is not None:

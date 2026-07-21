@@ -126,13 +126,11 @@ class TPSLOrchestratorService:
         current_qty = abs(Decimal(str(strategy.current_position_qty)))
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
         # 템플릿의 qty_ratio 우선 사용. 없으면 기본값 폴백.
-        ratio_attr = {f"TP{n}": f"tp{n}_qty_ratio" for n in range(1, 11)}
-        # 🚨 v117 사장님 CRITICAL fix (2026-07-21): TP10 = 100% 자동 청산 제거!
-        # 사장님 BANKUSDT #494 사고: 사장님 = 「자율 관리」 원함, But TP10 = 자동 전량!
-        # 옛 (silent bug!): default_ratio["TP10"] = 100% ← 사장님 사상 위반!
-        # 신 v117: TP1~10 = 모두 균일 25% (사장님 자율 = 잔량 유지!)
-        # = 사장님 = 「🚫 TP 끔」 (v115) or template 명시 = 완전 제어!
-        default_ratio = {f"TP{n}": DEFAULT_TP_QTY_RATIO_PCT for n in range(1, 11)}
+        ratio_attr = {f"TP{n}": f"tp{n}_qty_ratio" for n in range(1, 21)}  # 🚀 v118: TP20 확장!
+        # 🚀 v118 (2026-07-22): TP20 확장 + 균일 25% (사장님 자율!)
+        # v117: TP10 = 100% 제거!
+        # v118: 20단계 확장 = TP1~20 모두 균일 25%!
+        default_ratio = {f"TP{n}": DEFAULT_TP_QTY_RATIO_PCT for n in range(1, 21)}
         # 크라이시스 모드 qty ratio (사용자 기획 default):
         # TP1=25%, TP2=25%, TP3=50% of remaining, TP4=100% of remaining
         # 2026-05-04 (alembic 0009): template.crisis_qty_ratios JSONB override 가능.
