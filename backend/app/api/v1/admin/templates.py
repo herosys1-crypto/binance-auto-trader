@@ -59,6 +59,17 @@ class StrategyTemplateCreate(BaseModel):
     tp8_percent: Decimal | None = Field(default=None, gt=0)
     tp9_percent: Decimal | None = Field(default=None, gt=0)
     tp10_percent: Decimal | None = Field(default=None, gt=0)
+    # 🚀 v118 (2026-07-22): TP11~TP20 확장!
+    tp11_percent: Decimal | None = Field(default=None, gt=0)
+    tp12_percent: Decimal | None = Field(default=None, gt=0)
+    tp13_percent: Decimal | None = Field(default=None, gt=0)
+    tp14_percent: Decimal | None = Field(default=None, gt=0)
+    tp15_percent: Decimal | None = Field(default=None, gt=0)
+    tp16_percent: Decimal | None = Field(default=None, gt=0)
+    tp17_percent: Decimal | None = Field(default=None, gt=0)
+    tp18_percent: Decimal | None = Field(default=None, gt=0)
+    tp19_percent: Decimal | None = Field(default=None, gt=0)
+    tp20_percent: Decimal | None = Field(default=None, gt=0)
     tp1_qty_ratio: Decimal = Field(..., gt=0, le=100)
     tp2_qty_ratio: Decimal = Field(..., gt=0, le=100)
     tp3_qty_ratio: Decimal = Field(..., gt=0, le=100)
@@ -69,6 +80,17 @@ class StrategyTemplateCreate(BaseModel):
     tp8_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     tp9_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     tp10_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    # 🚀 v118: TP11~TP20 qty_ratio!
+    tp11_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp12_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp13_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp14_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp15_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp16_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp17_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp18_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp19_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
+    tp20_qty_ratio: Decimal | None = Field(default=None, gt=0, le=100)
     stop_loss_percent_of_capital: Decimal = Field(..., gt=0, le=100)
     reentry_policy: Literal["manual_ready", "auto"] = "manual_ready"
     reentry_delay_seconds: int = Field(default=600, ge=10, le=86400)
@@ -157,6 +179,17 @@ def create_strategy_template(
         tp8_percent=payload.tp8_percent,
         tp9_percent=payload.tp9_percent,
         tp10_percent=payload.tp10_percent,
+        # 🚀 v118: TP11~TP20 확장!
+        tp11_percent=payload.tp11_percent,
+        tp12_percent=payload.tp12_percent,
+        tp13_percent=payload.tp13_percent,
+        tp14_percent=payload.tp14_percent,
+        tp15_percent=payload.tp15_percent,
+        tp16_percent=payload.tp16_percent,
+        tp17_percent=payload.tp17_percent,
+        tp18_percent=payload.tp18_percent,
+        tp19_percent=payload.tp19_percent,
+        tp20_percent=payload.tp20_percent,
         tp1_qty_ratio=payload.tp1_qty_ratio,
         tp2_qty_ratio=payload.tp2_qty_ratio,
         tp3_qty_ratio=payload.tp3_qty_ratio,
@@ -167,6 +200,17 @@ def create_strategy_template(
         tp8_qty_ratio=payload.tp8_qty_ratio,
         tp9_qty_ratio=payload.tp9_qty_ratio,
         tp10_qty_ratio=payload.tp10_qty_ratio,
+        # 🚀 v118: TP11~TP20 qty_ratio!
+        tp11_qty_ratio=payload.tp11_qty_ratio,
+        tp12_qty_ratio=payload.tp12_qty_ratio,
+        tp13_qty_ratio=payload.tp13_qty_ratio,
+        tp14_qty_ratio=payload.tp14_qty_ratio,
+        tp15_qty_ratio=payload.tp15_qty_ratio,
+        tp16_qty_ratio=payload.tp16_qty_ratio,
+        tp17_qty_ratio=payload.tp17_qty_ratio,
+        tp18_qty_ratio=payload.tp18_qty_ratio,
+        tp19_qty_ratio=payload.tp19_qty_ratio,
+        tp20_qty_ratio=payload.tp20_qty_ratio,
         stop_loss_percent_of_capital=payload.stop_loss_percent_of_capital,
         reentry_policy=payload.reentry_policy,
         reentry_delay_seconds=payload.reentry_delay_seconds,
