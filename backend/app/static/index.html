@@ -1098,7 +1098,7 @@
             <span id="stats-crisis" class="text-yellow-400 font-semibold">-</span>
           </p>
         </div>
-        <!-- TP 단계별 카운트 (notification title 기준) — 2026-05-12: TP1~10 확장 + TRAILING + 클릭 가능 -->
+        <!-- TP 단계별 카운트 (notification title 기준) — 🚀 v118: TP20 확장! -->
         <div class="p-2 grid grid-cols-5 md:grid-cols-11 gap-1 text-center border-t border-slate-700" style="padding-top:6px">
           <div class="row-clickable" onclick="openTpNotificationsModal('TP1', '1차 익절')" title="클릭: TP1 익절 알림 목록"><p class="text-xs text-slate-500">TP1 🔍</p><p id="stats-tp1" class="text-sm font-semibold pos">-</p></div>
           <div class="row-clickable" onclick="openTpNotificationsModal('TP2', '2차 익절')" title="클릭: TP2 익절 알림 목록"><p class="text-xs text-slate-500">TP2 🔍</p><p id="stats-tp2" class="text-sm font-semibold pos">-</p></div>
@@ -1110,6 +1110,17 @@
           <div class="row-clickable" onclick="openTpNotificationsModal('TP8', '8차 익절')" title="클릭: TP8 익절 알림 목록"><p class="text-xs text-slate-500">TP8 🔍</p><p id="stats-tp8" class="text-sm font-semibold pos">-</p></div>
           <div class="row-clickable" onclick="openTpNotificationsModal('TP9', '9차 익절')" title="클릭: TP9 익절 알림 목록"><p class="text-xs text-slate-500">TP9 🔍</p><p id="stats-tp9" class="text-sm font-semibold pos">-</p></div>
           <div class="row-clickable" onclick="openTpNotificationsModal('TP10', '10차 익절')" title="클릭: TP10 익절 알림 목록"><p class="text-xs text-slate-500">TP10 🔍</p><p id="stats-tp10" class="text-sm font-semibold pos">-</p></div>
+          <!-- 🚀 v118: TP11~TP20 신 확장! -->
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP11', '11차 익절')" title="클릭: TP11 알림"><p class="text-xs text-slate-500">TP11</p><p id="stats-tp11" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP12', '12차 익절')" title="클릭: TP12 알림"><p class="text-xs text-slate-500">TP12</p><p id="stats-tp12" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP13', '13차 익절')" title="클릭: TP13 알림"><p class="text-xs text-slate-500">TP13</p><p id="stats-tp13" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP14', '14차 익절')" title="클릭: TP14 알림"><p class="text-xs text-slate-500">TP14</p><p id="stats-tp14" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP15', '15차 익절')" title="클릭: TP15 알림"><p class="text-xs text-slate-500">TP15</p><p id="stats-tp15" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP16', '16차 익절')" title="클릭: TP16 알림"><p class="text-xs text-slate-500">TP16</p><p id="stats-tp16" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP17', '17차 익절')" title="클릭: TP17 알림"><p class="text-xs text-slate-500">TP17</p><p id="stats-tp17" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP18', '18차 익절')" title="클릭: TP18 알림"><p class="text-xs text-slate-500">TP18</p><p id="stats-tp18" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP19', '19차 익절')" title="클릭: TP19 알림"><p class="text-xs text-slate-500">TP19</p><p id="stats-tp19" class="text-sm font-semibold pos">-</p></div>
+          <div class="row-clickable" onclick="openTpNotificationsModal('TP20', '20차 익절')" title="클릭: TP20 알림"><p class="text-xs text-slate-500">TP20</p><p id="stats-tp20" class="text-sm font-semibold pos">-</p></div>
           <div class="row-clickable" onclick="openTpNotificationsModal('TRAILING_TP', '트레일링 청산')" title="클릭: TRAILING_TP 청산 알림 목록 — 피크 -5% 회귀 시 발동"><p class="text-xs text-yellow-400">🌀TRAIL 🔍</p><p id="stats-trailing" class="text-sm font-semibold text-yellow-300">-</p></div>
         </div>
       </div>
@@ -2118,41 +2129,41 @@
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
-<script src="/static/js/constants.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/api.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/helpers.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/stats-modals.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/health-page.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/ranking-page.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/ranking-modal.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/trade-history-modal.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/system-banner.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/cm-collectors.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/cm-loaders.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/cm-market-info.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/cm-capitals-grid.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/cm-prev-blueprint.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/cm-state-helpers.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/cm-preview.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/cm-open-modal.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/dashboard-refresh.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/templates-panel.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/indicators.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/strategies-list.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/external-positions.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/multi-symbol.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/template-save.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/cm-submit.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/strategy-detail.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/chart-detail.js?v=20260721v116-tp-validation"></script>
+<script src="/static/js/constants.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/api.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/helpers.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/stats-modals.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/health-page.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/ranking-page.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/ranking-modal.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/trade-history-modal.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/system-banner.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/cm-collectors.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/cm-loaders.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/cm-market-info.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/cm-capitals-grid.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/cm-prev-blueprint.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/cm-state-helpers.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/cm-preview.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/cm-open-modal.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/dashboard-refresh.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/templates-panel.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/indicators.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/strategies-list.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/external-positions.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/multi-symbol.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/template-save.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/cm-submit.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/strategy-detail.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/chart-detail.js?v=20260722v118-tp20-frontend"></script>
 <script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
-<script src="/static/js/accounts-modal.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/add-position-modal.js?v=20260721v116-tp-validation"></script>
+<script src="/static/js/accounts-modal.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/add-position-modal.js?v=20260722v118-tp20-frontend"></script>
 <script src="/static/js/favorite-templates.js?v=20260609"></script>
-<script src="/static/js/strategy-actions.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/admin-shortcuts.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/page-router.js?v=20260721v116-tp-validation"></script>
-<script src="/static/js/auth-bootstrap.js?v=20260721v116-tp-validation"></script>
+<script src="/static/js/strategy-actions.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/admin-shortcuts.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/page-router.js?v=20260722v118-tp20-frontend"></script>
+<script src="/static/js/auth-bootstrap.js?v=20260722v118-tp20-frontend"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES

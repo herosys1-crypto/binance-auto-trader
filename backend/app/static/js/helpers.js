@@ -51,16 +51,19 @@ function renderStageBar(current, total) {
   return `<span class="stage-bar">${dots} <span class="text-xs text-slate-400 ml-1">${current}/${total}</span></span>`;
 }
 
-// status 에서 TP 카운트 산출. totalTps 는 template 의 활성 TP 수 (분모, 1~5).
+// status 에서 TP 카운트 산출. totalTps 는 template 의 활성 TP 수.
+// 🚀 v118 (2026-07-22): TP20 확장 → totalTps 최대 20!
 // COMPLETED/REENTRY_READY w/ realized>0 → totalTps (= "모든 활성 TP 발동 완료")
 function _tpCountFromStatus(strat, totalTps) {
   const st = (strat.status || '').toUpperCase();
-  const total = Math.max(1, Math.min(totalTps || 4, 5));
-  const m = { 'TP1_DONE_PARTIAL':1, 'TP2_DONE_PARTIAL':2, 'TP3_DONE_PARTIAL':3, 'TP4_DONE_PARTIAL':4, 'TP5_DONE_PARTIAL':5 };
-  if (st in m) return Math.min(m[st], total);  // 안전 clamp
-  if (st === 'COMPLETED') return total;          // ← 이전 하드코딩 4 였던 부분, 이제 동적
+  const total = Math.max(1, Math.min(totalTps || 10, 20));  // v118: max 20
+  // TP1_DONE_PARTIAL ~ TP20_DONE_PARTIAL 매핑!
+  const m = {};
+  for (let i = 1; i <= 20; i++) m[`TP${i}_DONE_PARTIAL`] = i;
+  if (st in m) return Math.min(m[st], total);
+  if (st === 'COMPLETED') return total;
   if (st === 'REENTRY_READY' && Number(strat.realized_pnl || 0) > 0) return total;
-  return 0;  // 진행 중 / SL / 대기
+  return 0;
 }
 
 // TP 진행도 바 — 색상 다르게 (시안 계열, 단계 바와 구분)
