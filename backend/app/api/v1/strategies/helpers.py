@@ -33,11 +33,12 @@ def _count_active_tps(tpl) -> int:
 
     2026-05-06: 1~10 동적 (사용자 요청 10단계 익절 확장). fallback 4 (backward-compat).
     2026-07-22 v120 CRITICAL: TP20 확장! 사장님 진짜 root cause fix!
+    2026-07-22 v121 사장님 최종 요구: **무조건 20 반환**!
+      - 모든 카드 = 20 슬롯 표시!
+      - 옛 template (TP1~TP10만) = "X/20" 표시 (TP11~TP20 = 발동 X = 회색)
+      - 신 template (TP1~TP20) = "X/20" 완전 반영!
     """
-    if not tpl:
-        return 4
-    n = sum(1 for i in range(1, 21) if getattr(tpl, f"tp{i}_percent", None) is not None)
-    return n if n > 0 else 4
+    return 20
 
 
 def _enrich_response(resp: StrategyDetailResponse, tpl) -> StrategyDetailResponse:
