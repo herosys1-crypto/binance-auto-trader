@@ -135,10 +135,32 @@ def run_self_check_once() -> dict:
                         .where(StrategyStagePlan.strategy_instance_id == s.id)
                         .where(StrategyStagePlan.is_triggered.is_(True))
                     ).scalars().all()
+                    # 🚨 2026-07-22 사장님 critical fix: false positive 차단!
+                    # 사장님 #504 ESPORTSUSDT = current_stage=1, triggered=0 = 15시간 반복!
+                    # = 실제로는 「1단계 시작가 진입」 or 「💉 포지션 추가」 mode = stage_plan 없거나 미갱신!
+                    # = 알림 시끄러움 = false positive!
+                    # ↓ 신 로직: stage_plan 자체 없으면 skip + Notification 진입 체결 카운트로 실제 검증!
+                    all_stage_plans = db.execute(
+                        select(StrategyStagePlan)
+                        .where(StrategyStagePlan.strategy_instance_id == s.id)
+                    ).scalars().all()
+                    if not all_stage_plans:
+                        continue  # stage_plan 없음 = 검증 skip!
+                    # 실제 「포지션 진입 체결」 알림 카운트로 대체 검증 (진짜 silent bug만!)
+                    from app.models.notification import Notification
+                    entry_notif_count = db.execute(
+                        select(Notification)
+                        .where(Notification.strategy_instance_id == s.id)
+                        .where(Notification.title.like("%포지션 진입 체결%"))
+                    ).scalars().all()
+                    # current_stage 이상의 진입 알림 있으면 = 정상!
+                    if s.current_stage and len(entry_notif_count) >= s.current_stage:
+                        continue  # 실제 진입 알림 충분 = 정상!
                     if s.current_stage and len(triggered_count) != s.current_stage:
                         issues.append(
                             f"🚨 strategy #{s.id} {s.symbol}: "
-                            f"current_stage={s.current_stage} ≠ triggered count={len(triggered_count)}"
+                            f"current_stage={s.current_stage} ≠ triggered count={len(triggered_count)}, "
+                            f"entry_notif={len(entry_notif_count)}"
                         )
 
             except Exception as e:
