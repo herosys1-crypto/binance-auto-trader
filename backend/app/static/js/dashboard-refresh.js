@@ -377,6 +377,12 @@ async function loadBalance() {
     let actualMarginSum = 0;  // 2026-06-05: 실제 lock 마진 합 (total_position_initial_margin)
     // 🌟 2026-06-09 사장님 신 130% 정책 필드
     let wallet130Sum = 0, newStratAvailSum = 0;
+    // 🚨 v125 사장님 critical fix (07-22): Binance availableBalance + 미체결 LIMIT 마진!
+    //   사장님 report: 「여유 8802」 표시 → 800 「💉 포지션 추가」 시도 → -2019 Margin insufficient!
+    //   원인: 옛 「여유」 = wallet - actualMargin = **미체결 LIMIT 마진 안 뺌!**
+    //   fix: available_balance (Binance 정확값) + total_open_order_initial_margin 별도 표시!
+    let availableBalanceSum = 0;  // Binance availableBalance (= 진짜 여유!)
+    let openOrderMarginSum = 0;  // 미체결 LIMIT 마진 (지정가 예약)
     let hasTestnet = false;
     for (const b of valid) {
       walletSum += Number(b.total_wallet_balance || 0);
@@ -388,6 +394,8 @@ async function loadBalance() {
       actualMarginSum += Number(b.total_position_initial_margin || 0);
       wallet130Sum += Number(b.wallet_limit_130 || 0);
       newStratAvailSum += Number(b.new_strategy_available || 0);
+      availableBalanceSum += Number(b.available_balance || 0);  // v125 Binance 정확!
+      openOrderMarginSum += Number(b.total_open_order_initial_margin || 0);  // v125 LIMIT 예약!
       if (b.is_testnet) hasTestnet = true;
     }
     // 합산 마진 비율 = total maint / total margin balance
@@ -442,7 +450,11 @@ async function loadBalance() {
     // 사장님 명시: "실 사용 + 예약 합 + 130% 한도 + 신 전략 가용 = 한눈 파악"
     // 예: 실 3500 + 예약 1500 = 사용 5000, 한도 7702 (= wallet 5925 × 1.30), 신 전략 가용 +2702
     const usedTotal = actualMarginSum + reservedRemainingSum;  // 실 + 예약 = 사용 중
-    const realFreedom = walletSum - actualMarginSum;  // 실 자본 여유 (= wallet - 진입 마진)
+    // 🚨 v125 사장님 CRITICAL fix: 「여유」 = Binance availableBalance (진짜!)
+    //   옛: realFreedom = walletSum - actualMarginSum → 미체결 LIMIT 마진 안 뺌!
+    //   신: availableBalanceSum = Binance API (실 마진 + LIMIT 예약 모두 뺀 진짜 여유!)
+    //   = 사장님 「800 포지션 추가」 -2019 사고 = 이제 발생 X!
+    const realFreedom = availableBalanceSum;  // v125: Binance 정확!
     const newStrategyRatio = wallet130Sum > 0 ? (usedTotal / wallet130Sum * 100) : 0;
     let newSig;
     if (newStratAvailSum <= 0) newSig = 'red';
@@ -450,9 +462,10 @@ async function loadBalance() {
     else if (newStrategyRatio < 95) newSig = 'yellow';
     else newSig = 'red';
     // 🌟 2026-06-09 사장님 「모바일 취소」 = 데스크탑 풀 detail 만 사용
+    // v125: LIMIT 예약 별도 표시! (지정가 미체결 마진 = 이미 Binance lock!)
     const detailMain =
-      `🔒 실 ${fmt(actualMarginSum)} + 📦 예약 ${fmt(reservedRemainingSum)} = 사용 ${fmt(usedTotal)} | ` +
-      `💵 실 여유 ${fmt(realFreedom)}\n` +
+      `🔒 실 ${fmt(actualMarginSum)} + 📦 예약 ${fmt(reservedRemainingSum)} + 📋 LIMIT ${fmt(openOrderMarginSum)} = 사용 ${fmt(usedTotal + openOrderMarginSum)} | ` +
+      `💵 여유 ${fmt(realFreedom)} ✅Binance\n` +
       `⚡ 130% 한도 ${fmt(wallet130Sum)} | 신 전략 가용 +${fmt(newStratAvailSum)} (${newStrategyRatio.toFixed(1)}%)` +
       `${hasTestnet ? ' · testnet 포함' : ''}`;
     const accountInfo = valid.length > 1 ? ` · ${valid.length}계정 합산` : '';
