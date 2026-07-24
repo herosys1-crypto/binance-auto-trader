@@ -386,6 +386,12 @@ async function loadBalance() {
     let availableBalanceSum = 0;  // Binance availableBalance (= 진짜 여유!)
     let openOrderMarginSum = 0;  // 미체결 LIMIT 마진 (지정가 예약)
     let hasTestnet = false;
+    // 🚨 2026-07-24 v128 사장님 CRITICAL fix: 다중 계정 = 계정별 여유 breakdown!
+    //   사장님 report: 「여유 1621」 표시 → BANKUSDT #524에 500 추가 실패!
+    //   원인: 「여유 1621」 = 전체 계정 합산! But BANKUSDT #524의 계정 여유 = 500 미만!
+    //   fix: 최대 단일 계정 여유 표시 + 계정별 breakdown 툴팁!
+    let maxSingleAccountAvail = 0;
+    const perAccountAvail = [];
     for (const b of valid) {
       walletSum += Number(b.total_wallet_balance || 0);
       reservedSum += Number(b.reserved_for_strategies || 0);
@@ -396,8 +402,12 @@ async function loadBalance() {
       actualMarginSum += Number(b.total_position_initial_margin || 0);
       wallet130Sum += Number(b.wallet_limit_130 || 0);
       newStratAvailSum += Number(b.new_strategy_available || 0);
-      availableBalanceSum += Number(b.available_balance || 0);  // v125 Binance 정확!
+      const _acctAvail = Number(b.available_balance || 0);
+      availableBalanceSum += _acctAvail;  // v125 Binance 정확!
       openOrderMarginSum += Number(b.total_open_order_initial_margin || 0);  // v125 LIMIT 예약!
+      // v128: 계정별 여유 추적
+      if (_acctAvail > maxSingleAccountAvail) maxSingleAccountAvail = _acctAvail;
+      perAccountAvail.push({acctId: b.exchange_account_id, avail: _acctAvail});
       if (b.is_testnet) hasTestnet = true;
     }
     // 합산 마진 비율 = total maint / total margin balance
@@ -465,9 +475,15 @@ async function loadBalance() {
     else newSig = 'red';
     // 🌟 2026-06-09 사장님 「모바일 취소」 = 데스크탑 풀 detail 만 사용
     // v125: LIMIT 예약 별도 표시! (지정가 미체결 마진 = 이미 Binance lock!)
+    // 🚨 v128 (2026-07-24): 다중 계정 시 = 최대 단일 계정 여유 표시!
+    //   사장님 report: 「여유 1621」 → BANKUSDT #524 500 실패 = 그 계정 여유 500 미만!
+    //   fix: 최대 단일 계정 여유 = 「이 금액까지 = 어느 strategy에도 안전!」
+    const multiAcctInfo = valid.length > 1
+      ? ` | 🎯 단일 계정 최대 ${fmt(maxSingleAccountAvail)} (실제 진입 가능!)`
+      : '';
     const detailMain =
       `🔒 실 ${fmt(actualMarginSum)} + 📦 예약 ${fmt(reservedRemainingSum)} + 📋 LIMIT ${fmt(openOrderMarginSum)} = 사용 ${fmt(usedTotal + openOrderMarginSum)} | ` +
-      `💵 여유 ${fmt(realFreedom)} ✅Binance\n` +
+      `💵 여유 ${fmt(realFreedom)} ✅Binance${multiAcctInfo}\n` +
       `⚡ 130% 한도 ${fmt(wallet130Sum)} | 신 전략 가용 +${fmt(newStratAvailSum)} (${newStrategyRatio.toFixed(1)}%)` +
       `${hasTestnet ? ' · testnet 포함' : ''}`;
     const accountInfo = valid.length > 1 ? ` · ${valid.length}계정 합산` : '';
