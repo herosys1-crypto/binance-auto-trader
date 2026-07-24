@@ -321,15 +321,32 @@ class RiskService:
         # 2026-05-06 fix (#103): Redis key 휘발 시 DB historical peak 으로 fallback.
         peak = self._update_peak_pnl(strategy_id, pnl_ratio, strategy.max_profit_pct)
 
-        # 템플릿에서 모든 TP 임계치 가져오기 (TP1~TP10, 2026-05-06 사용자 요청).
-        # NULL 인 단계는 미사용 — 활성 단계만 평가.
+        # 템플릿에서 모든 TP 임계치 가져오기 (TP1~TP20, 2026-05-06 사용자 요청).
+        # 🚨 2026-07-24 v126 CRITICAL: 사장님 #505 DEXEUSDT 사고!
+        #   옛 template = TP1~TP10만 = TP10에서 100% 청산 = 사장님 원한 TP20까지 X!
+        # 신 로직: TP11~TP20 NULL 이면 = auto-extend (이전 값 + 5%씩 증가)!
+        #   = 사장님 = template 편집 안 해도 = TP20까지 사용 가능!
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
         tp_levels: list[tuple[str, Decimal]] = []
-        for n in range(20, 0, -1):  # 🚀 v118: TP20..TP1 (사장님 확장!)
+        # 1) 먼저 = template의 명시된 TP1~TP20 수집 (오름차순!)
+        _tpl_vals: dict[int, Decimal] = {}
+        for n in range(1, 21):
             attr = f"tp{n}_percent"
             val = getattr(tpl, attr, None) if tpl else None
             if val is not None:
-                tp_levels.append((f"TP{n}", Decimal(str(val))))
+                _tpl_vals[n] = Decimal(str(val))
+        # 2) auto-extend: 마지막 명시된 TP 이후 = 5%씩 자동 증가!
+        _all_tps: dict[int, Decimal] = dict(_tpl_vals)
+        if _tpl_vals:
+            _last_n = max(_tpl_vals.keys())
+            _last_v = _tpl_vals[_last_n]
+            for n in range(_last_n + 1, 21):
+                _last_v = _last_v + Decimal("5")
+                _all_tps[n] = _last_v
+        # 3) TP20..TP1 순 (내림차순) — 옛 로직과 동일하게 tp_levels 채움
+        for n in range(20, 0, -1):
+            if n in _all_tps:
+                tp_levels.append((f"TP{n}", _all_tps[n]))
 
         # ─────────── 크라이시스 모드 — TP 임계치 override (사용자 기획) ───────────
         # 정상 모드: TP1 = 사장님 옵션 (10/15/20/25) 또는 template default, TP2-4 = template

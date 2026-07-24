@@ -157,9 +157,25 @@ class TPSLOrchestratorService:
         elif strategy.crisis_mode_triggered_at and level in crisis_qty_ratio:
             close_ratio = crisis_qty_ratio[level] / PERCENT_DENOMINATOR
         else:
-            attr = ratio_attr.get(level)
-            tpl_val = getattr(tpl, attr, None) if tpl and attr else None
-            ratio_pct = Decimal(str(tpl_val)) if tpl_val is not None else default_ratio.get(level, DEFAULT_TP_QTY_RATIO_PCT)
+            # 🚨 v126 사장님 CRITICAL fix: auto-extended TP → default 강제!
+            # 사장님 #505 DEXEUSDT: TP10 = template 100% 청산 → 종료 (원한 TP20까지 X!)
+            # 이제: template.tpN_percent = null 이면 = TP도 auto-extended = qty_ratio도 default!
+            level_n_str = level.replace("TP", "") if level.startswith("TP") else ""
+            level_n = int(level_n_str) if level_n_str.isdigit() else None
+            pct_attr = f"tp{level_n}_percent" if level_n else None
+            is_auto_extended = (
+                level_n is not None
+                and tpl is not None
+                and pct_attr is not None
+                and getattr(tpl, pct_attr, None) is None
+            )
+            if is_auto_extended:
+                # auto-extended = template 값 무시 + default (25%) 사용!
+                ratio_pct = default_ratio.get(level, DEFAULT_TP_QTY_RATIO_PCT)
+            else:
+                attr = ratio_attr.get(level)
+                tpl_val = getattr(tpl, attr, None) if tpl and attr else None
+                ratio_pct = Decimal(str(tpl_val)) if tpl_val is not None else default_ratio.get(level, DEFAULT_TP_QTY_RATIO_PCT)
             close_ratio = ratio_pct / PERCENT_DENOMINATOR
         if close_ratio >= FULL_CLOSE_RATIO:
             close_qty = current_qty
