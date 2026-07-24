@@ -200,14 +200,20 @@ def run_setting_preservation_once() -> dict:
         result["total_checked"] = len(strats)
 
         for s in strats:
-            # latest mark_price 조회
-            p = db.execute(
-                select(Position)
-                .where(Position.strategy_instance_id == s.id)
-                .order_by(desc(Position.id))
-                .limit(1)
-            ).scalar_one_or_none()
-            mark = p.mark_price if p else None
+            # 🚨 2026-07-24 v127 HIGH fix: Redis 우선 (헌법 6 단일 진실!)
+            # 옛 silent bug: Position snapshot (2분 stale) → AUTO_ENTRY_MISSED false positive!
+            from app.services.mark_price_cache import get_mark_price
+            _r_mark = get_mark_price(s.symbol)
+            if _r_mark is not None:
+                mark = _r_mark
+            else:
+                p = db.execute(
+                    select(Position)
+                    .where(Position.strategy_instance_id == s.id)
+                    .order_by(desc(Position.id))
+                    .limit(1)
+                ).scalar_one_or_none()
+                mark = p.mark_price if p else None
 
             all_bugs = []
             all_bugs.extend(_check_auto_entry_silent_bug(db, s, mark))

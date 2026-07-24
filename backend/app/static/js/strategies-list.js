@@ -452,8 +452,22 @@ async function refreshStrategies() {
       const sQtyAbs = Math.abs(sQtyNum);
       const sAvg = Number(s.avg_entry_price || 0);
       const hasPosition = sQtyAbs > 0 && sAvg > 0;
-      // 마크 가격 = avg + pnl/qty (LONG) | avg - pnl/qty (SHORT)
-      const sMark = hasPosition ? (s.side === 'LONG' ? sAvg + pnlNum/sQtyAbs : sAvg - pnlNum/sQtyAbs) : 0;
+      // 🚨 2026-07-24 v127 HIGH fix: Binance 실시간 mark_price 우선!
+      //   옛 silent bug: DB unrealized_pnl 로 역산 → stream 지연 시 stale = 사장님 「청산 임박」 인지 지연!
+      //   fix: _binancePositionsCache 의 실시간 mark_price 우선, fallback = 계산!
+      let sMark = 0;
+      if (hasPosition) {
+        // v127: Binance 실시간 우선 (bp.markPrice)
+        const _bpKey = (s.exchange_account_id || '?') + ':' + (s.symbol || '').toUpperCase();
+        const _bp = (window._binancePositionsCache || {})[_bpKey];
+        const _bpMark = _bp && Number(_bp.markPrice || 0) > 0 ? Number(_bp.markPrice) : 0;
+        if (_bpMark > 0) {
+          sMark = _bpMark;
+        } else {
+          // fallback = 옛 공식 (avg + pnl/qty)
+          sMark = s.side === 'LONG' ? sAvg + pnlNum/sQtyAbs : sAvg - pnlNum/sQtyAbs;
+        }
+      }
       // 청산예정가 = isolated 계산 (체결 평단 기반)
       const MMR = 0.005;
       // 🚨 2026-06-11 v37 사장님 critical fix: 청산가 = backend liquidation_price 우선 사용!

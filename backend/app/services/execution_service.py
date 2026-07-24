@@ -1216,6 +1216,18 @@ class ExecutionService:
         mode_normalized = (mode or "reset").lower()
         if mode_normalized not in ("preserve", "reset"):
             mode_normalized = "reset"  # 알 수 없는 값 = default!
+        # 🚨 2026-07-24 v127 HIGH fix: LIMIT + reset = 즉시 리셋 X (체결 시 이연)!
+        #   옛 silent bug: LIMIT 발송 즉시 max_profit_pct/peak 리셋 → LIMIT 미체결/취소 시 리셋 낭비!
+        #   = TRAILING 옛 peak 소실 = 사장님 자율 운영 진행 백지화 = 실 손실!
+        #   fix: MARKET 만 즉시 리셋 (=체결 확정). LIMIT 은 체결 시점 이연 처리.
+        #   현재 이연 처리 = 미구현 → 안전 옵션: LIMIT+reset 은 preserve 강제!
+        if mode_normalized == "reset" and order_type_u == "LIMIT":
+            logger.warning(
+                "[add_position v127] LIMIT + reset = 즉시 리셋 위험 → preserve 강제! "
+                "strategy=%s (사장님 opinion: LIMIT 체결 후 「↻ 설정만 수정」 사용 권장)",
+                strategy.id,
+            )
+            mode_normalized = "preserve"
         if mode_normalized == "reset":
             try:
                 cur_stage = strategy.current_stage or 1
