@@ -510,8 +510,9 @@ async function refreshStrategies() {
       // 2026-05-04 (사용자 요청): 「💉 포지션 추가」 — ad-hoc 자유 금액 시장가/지정가 진입.
       // isTerminal 이 아직 정의 전이라 (line 1581) inline 으로 status 체크.
       const _activeForAddPos = !TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
+      // 🚨 v127 (2026-07-24): exchangeAccountId 전달 = 계정별 여유 정확 표시 (-2019 재발 방지)!
       const addPositionBtn = _activeForAddPos
-        ? `<button onclick="event.stopPropagation(); openAddPositionModal(${s.id}, '${s.symbol}', '${s.side}', ${s.leverage || 1})"
+        ? `<button onclick="event.stopPropagation(); openAddPositionModal(${s.id}, '${s.symbol}', '${s.side}', ${s.leverage || 1}, ${s.exchange_account_id || 'null'})"
                   class="btn-primary btn text-xs mt-1 ml-1"
                   style="padding:2px 6px;font-size:12px;line-height:1.2"
                   title="포지션 추가 (ad-hoc) — 자유 금액 시장가/지정가 즉시 진입. qty + 평단 갱신, stage 진행 X. v4 안전망: 사용 시 max_loss 임계 도달하면 Crisis 발동 (stage 미완료라도)">💉 포지션 추가</button>`

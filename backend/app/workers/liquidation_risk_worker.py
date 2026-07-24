@@ -77,14 +77,20 @@ def run_liquidation_risk_once() -> dict:
                 continue
             if abs(float(s.current_position_qty)) == 0:
                 continue
-            # 마지막 mark_price
-            p = db.execute(
-                select(Position)
-                .where(Position.strategy_instance_id == s.id)
-                .order_by(desc(Position.id))
-                .limit(1)
-            ).scalar_one_or_none()
-            mark = p.mark_price if p else None
+            # 🚨 2026-07-24 v127 CRITICAL fix: Redis 우선 (헌법 6 단일 진실!)
+            #   옛 silent bug: Position snapshot (2분 stale) = SYNUSDT -585 재발 위험!
+            from app.services.mark_price_cache import get_mark_price
+            _r_mark = get_mark_price(s.symbol)
+            if _r_mark is not None:
+                mark = _r_mark
+            else:
+                p = db.execute(
+                    select(Position)
+                    .where(Position.strategy_instance_id == s.id)
+                    .order_by(desc(Position.id))
+                    .limit(1)
+                ).scalar_one_or_none()
+                mark = p.mark_price if p else None
             if not mark:
                 continue
 

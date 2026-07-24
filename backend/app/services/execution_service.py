@@ -1014,6 +1014,18 @@ class ExecutionService:
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
             raise ValueError("Strategy not found")
+        # 🚨 2026-07-24 v127 CRITICAL fix: STOPPING/TERMINAL race 방지!
+        #   옛 silent bug: 자동 진입 중 사장님이 「⛔ 긴급 종료」 → STOPPING 마킹 →
+        #   → 하지만 이미 발송된 LIMIT 응답 도착 시 status = STAGE_N_OPEN_PENDING 로 overwrite!
+        #   = 사장님 종료 명령이 조용히 무시됨! (사장님 화면 = 진입중 표시)
+        #   fix: fresh reload + terminal/stopping 검증!
+        _status_upper = (strategy.status or "").upper()
+        from app.core.strategy_status import TERMINAL_STATUSES as _TERM
+        if _status_upper in set(_TERM) | {"STOPPING", "MANUAL_CLEANUP_REQUIRED"}:
+            raise ValueError(
+                f"Strategy #{strategy_id} status={strategy.status} (종료 요청 감지) — stage {stage_no} 진입 차단! "
+                f"사장님 종료 명령 우선 (v127 race 방지)."
+            )
         if AccountKillSwitchService(self.db).is_enabled(strategy.exchange_account_id):
             raise ValueError(
                 f"Account kill-switch is enabled; stage {stage_no} entry blocked. "
@@ -1163,6 +1175,12 @@ class ExecutionService:
                 suffix="ADHOC_M",
             )
         else:
+            # 🚨 2026-07-24 v127 CRITICAL fix: LIMIT 도 preflight 검증!
+            #   옛 silent bug: LIMIT 경로는 preflight 없음 → Binance -2019 → 502 에러 (친절 X)
+            #   fix: LIMIT 도 ISOLATED 모드 = 즉시 initial_margin lock → 사전 검증 필수!
+            self._preflight_entry_market_check(
+                strategy, qty=qty, current_price=ref_price, purpose="add_position_limit",
+            )
             order = self._place_limit_entry(
                 strategy,
                 stage_no=None,  # ad-hoc

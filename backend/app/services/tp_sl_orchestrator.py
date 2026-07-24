@@ -176,6 +176,25 @@ class TPSLOrchestratorService:
                 attr = ratio_attr.get(level)
                 tpl_val = getattr(tpl, attr, None) if tpl and attr else None
                 ratio_pct = Decimal(str(tpl_val)) if tpl_val is not None else default_ratio.get(level, DEFAULT_TP_QTY_RATIO_PCT)
+            # 🚨 2026-07-24 v127 CRITICAL safety net: 옛 template의 tp{n}_qty_ratio=100 잔재!
+            #   사장님 #505 DEXEUSDT 사고: 옛 template = TP10 qty_ratio=100 = 전량 청산!
+            #   v126 auto-extend가 TP20까지 확장하지만, tp{n}이 template의 마지막 명시된 TP인 경우
+            #   = 사장님이 옛 "마지막 100% 세팅" 그대로 유지 → TP20 도달 전에 조기 종료!
+            #   fix: 최종 명시 TP (level_n) 이 20 아니고 (auto-extend로 뒤에 더 있음) + qty_ratio 100%면
+            #        = 옛 잔재로 판단 → default (25%) override!
+            if level_n is not None and level_n < 20 and ratio_pct >= Decimal("100") and tpl is not None:
+                # 이 TP 이후 auto-extended TP 있는지 확인 (다음 TP가 tp{n+1}_percent = NULL 인지)
+                has_extended_after = any(
+                    getattr(tpl, f"tp{nn}_percent", None) is None
+                    for nn in range(level_n + 1, 21)
+                )
+                if has_extended_after:
+                    logger.warning(
+                        "[tp_sl v127 safety] 옛 template qty_ratio=100 잔재 감지 = default (25) override! "
+                        "strategy=%s level=%s tpl_val=%s → 25 (사장님 #505 재발 방지!)",
+                        strategy.id, level, ratio_pct,
+                    )
+                    ratio_pct = default_ratio.get(level, DEFAULT_TP_QTY_RATIO_PCT)
             close_ratio = ratio_pct / PERCENT_DENOMINATOR
         if close_ratio >= FULL_CLOSE_RATIO:
             close_qty = current_qty

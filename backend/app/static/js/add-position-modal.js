@@ -18,7 +18,7 @@
 
 // 2026-05-04 (사용자 요청): 「💉 포지션 추가」 — ad-hoc 자유 금액 시장가/지정가 진입.
 // 증거금 추가와 다름: qty 늘림 + 평단 갱신. 모달로 amount + order_type + (지정가) 입력.
-function openAddPositionModal(id, symbol, side, leverage) {
+function openAddPositionModal(id, symbol, side, leverage, exchangeAccountId) {
   // mark price 가져오기 (api 호출) — 미리보기용
   document.getElementById('ap-strategy-id').value = id;
   document.getElementById('ap-symbol-display').textContent = symbol;
@@ -38,24 +38,42 @@ function openAddPositionModal(id, symbol, side, leverage) {
   // 현재가 표시 + 미리보기 갱신
   loadAddPositionMarkPrice(symbol);
   document.getElementById('ap-modal').classList.remove('hidden');
-  // 🚨 v108 사장님 신 요구: 여유 자금 표시!
-  _loadAddPositionAvailableFunds();
+  // 🚨 v108 + v127 사장님: 계정별 여유 자금 표시!
+  _loadAddPositionAvailableFunds(exchangeAccountId);
 }
 
-// 🚨 v108: 여유 자금 표시 (사장님 사상 = 「포지션 추가」 최대치 안내!)
-async function _loadAddPositionAvailableFunds() {
+// 🚨 v127 (2026-07-24): 계정별 여유 자금 표시 (사장님 Sub-Account -2019 재발 방지!)
+//   옛 silent bug (v108): 대시보드 balance-mini-free = 전체 계정 합산 = Sub-Account B (200) 전략에서 5200 표시 → -2019!
+//   신: exchangeAccountId 전달 시 = 해당 계정의 available_balance (Binance) 직접 조회!
+async function _loadAddPositionAvailableFunds(exchangeAccountId) {
   const el = document.getElementById('ap-available-funds');
   if (!el) return;
   el.textContent = '로딩...';
   try {
-    // 대시보드 잔액 카드 값 그대로 사용 (localStorage 캐시)
+    // 신 로직: 계정별 조회 (exchangeAccountId 있으면)!
+    if (exchangeAccountId && typeof api === 'function') {
+      try {
+        const bal = await api(`/api/v1/exchange-accounts/${exchangeAccountId}/balance`, 'GET');
+        const avail = Number(bal?.available_balance || 0);
+        const walletTotal = Number(bal?.total_wallet_balance || 0);
+        const fmt = (n) => Number(n).toLocaleString('en-US', {maximumFractionDigits: 2});
+        el.innerHTML =
+          `💰 <strong class="text-green-400">${fmt(avail)} USDT</strong> ` +
+          `여유 (계정 #${exchangeAccountId}, 총 ${fmt(walletTotal)}) — Binance availableBalance = 이 금액까지 진입 가능! ✅`;
+        return;
+      } catch (_e) {
+        // fallback = 대시보드 합산 값
+      }
+    }
+    // fallback: 대시보드 (전체 계정 합산) — 정확도 낮음 (Sub-Account 오해 위험!)
     const _re = document.getElementById('balance-mini-real');
     const _fr = document.getElementById('balance-mini-free');
     if (_re && _fr) {
       const real = _re.textContent;
       const free = _fr.textContent;
-      el.innerHTML = `💰 여유 <strong class="text-green-400">${free} USDT</strong> ` +
-        `(실 ${real} USDT lock) — 이 금액까지 = 사장님 최대 추가 가능!`;
+      el.innerHTML =
+        `💰 여유 <strong class="text-yellow-400">${free} USDT</strong> ` +
+        `(⚠ 전체 계정 합산 — Sub-Account 여유는 다를 수 있음!)`;
     } else {
       el.textContent = '대시보드 재로드 후 확인';
     }

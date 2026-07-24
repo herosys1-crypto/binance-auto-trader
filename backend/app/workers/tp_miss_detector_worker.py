@@ -93,14 +93,20 @@ def run_tp_miss_detector_once() -> dict:
             if current_tp_level <= 0:
                 continue
 
-            # 마지막 mark_price 조회
-            p = db.execute(
-                select(Position)
-                .where(Position.strategy_instance_id == s.id)
-                .order_by(desc(Position.id))
-                .limit(1)
-            ).scalar_one_or_none()
-            mark = p.mark_price if p else None
+            # 🚨 2026-07-24 v127 CRITICAL fix: Redis 우선 (헌법 6 단일 진실!)
+            #   옛 silent bug: Position snapshot (2분 stale) = TP 발동 감지 지연!
+            from app.services.mark_price_cache import get_mark_price
+            _r_mark = get_mark_price(s.symbol)
+            if _r_mark is not None:
+                mark = _r_mark
+            else:
+                p = db.execute(
+                    select(Position)
+                    .where(Position.strategy_instance_id == s.id)
+                    .order_by(desc(Position.id))
+                    .limit(1)
+                ).scalar_one_or_none()
+                mark = p.mark_price if p else None
             if not mark or not s.avg_entry_price or not s.leverage:
                 continue
 
