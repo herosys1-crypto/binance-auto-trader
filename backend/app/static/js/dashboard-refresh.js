@@ -240,9 +240,11 @@ async function refreshStats() {
     const crisisEl = document.getElementById('stats-crisis');
     crisisEl.textContent = s.crisis_total + (s.crisis_active > 0 ? ` (현재 ${s.crisis_active})` : '');
     crisisEl.className = 'text-xl font-bold ' + (s.crisis_active > 0 ? 'text-red-400' : 'text-yellow-400');
-    // TP 단계별 카운트 (notification 기준) — 2026-05-12: TP1~10 + TRAILING
+    // TP 단계별 카운트 (notification 기준)
+    // 🚨 2026-07-24 v127 CRITICAL: TP1~20 확장! (v118 실제 확장 반영)
+    // 옛 silent bug: n=1..10 = TP11~TP20 통계 표시 X (HTML DOM 있지만!)
     const tpb = s.tp_breakdown || {};
-    for (let n = 1; n <= 10; n++) {
+    for (let n = 1; n <= 20; n++) {
       const el = document.getElementById(`stats-tp${n}`);
       if (el) el.textContent = tpb[`TP${n}`] || 0;
     }

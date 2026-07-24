@@ -418,7 +418,9 @@ def get_operation_stats(
     # TP6~10 발동분 누락. TRAILING_TP 도 별도 카운트해서 trailing 빈도 파악 가능).
     from app.models.notification import Notification
     tp_breakdown = {}
-    for n in range(1, 11):
+    # 🚨 2026-07-24 v127 CRITICAL: TP1~20 확장! (v118 실제 확장 반영)
+    # 옛 silent bug: range(1, 11) = TP6~TP20 발동 카운트 X = 대시보드 통계 0!
+    for n in range(1, 21):
         level = f"TP{n}"
         tp_breakdown[level] = db.execute(
             sa_select(func.count(Notification.id))

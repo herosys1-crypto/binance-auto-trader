@@ -153,12 +153,19 @@ class RiskService:
 
         # 🛡 평단 (= 포지션 진입가) 조회!
         avg_entry = Decimal(str(strategy.avg_entry_price)) if strategy.avg_entry_price else None
-        # 현재가 = position.mark_price 조회
+        # 🚨 2026-07-24 v127 CRITICAL fix: mark_price = Redis 우선 (헌법 6 단일 진실!)
+        #   옛 silent bug: DB snapshot만 사용 = 최대 2분 stale!
+        #   = SL 발동 2분 지연 = 사장님 자본 추가 손실!
+        #   force_sl / stage_trigger 는 이미 Redis 우선. 여기만 옛 로직 = 대칭성 위반!
+        from app.services.mark_price_cache import get_mark_price
         latest_position = self.position_repo.latest_by_strategy(strategy_id)
-        mark_price = (
-            Decimal(str(latest_position.mark_price))
-            if latest_position and latest_position.mark_price else None
-        )
+        _redis_mark = get_mark_price(strategy.symbol)
+        if _redis_mark is not None:
+            mark_price = Decimal(str(_redis_mark))
+        elif latest_position and latest_position.mark_price:
+            mark_price = Decimal(str(latest_position.mark_price))
+        else:
+            mark_price = None
 
         # 평단/현재가 미존재 시 = SL 검증 불가 = False
         if not avg_entry or not mark_price or avg_entry <= 0:
@@ -292,10 +299,19 @@ class RiskService:
 
         strategy = self.strategy_repo.get_strategy(strategy_id)
         latest_position = self.position_repo.latest_by_strategy(strategy_id)
-        if not strategy or not latest_position or latest_position.mark_price is None or strategy.avg_entry_price is None:
+        if not strategy or strategy.avg_entry_price is None:
             return None
         avg_entry = Decimal(str(strategy.avg_entry_price))
-        mark_price = Decimal(str(latest_position.mark_price))
+        # 🚨 2026-07-24 v127 CRITICAL fix: mark_price = Redis 우선 (헌법 6 단일 진실!)
+        #   옛 silent bug: DB snapshot only = 2분 stale = TP 발동 지연 + trailing peak 손실!
+        from app.services.mark_price_cache import get_mark_price
+        _redis_mark = get_mark_price(strategy.symbol)
+        if _redis_mark is not None:
+            mark_price = Decimal(str(_redis_mark))
+        elif latest_position and latest_position.mark_price is not None:
+            mark_price = Decimal(str(latest_position.mark_price))
+        else:
+            return None
         # raw 가격 변동률에 레버리지 곱해서 사용자 실제 ROI 로 변환.
         # 이 한 곳에서 변환하면 TP1~5, 트레일링, 크라이시스, peak 추적, max_loss/profit 모두
         # 자동으로 leveraged ROI 기준으로 동작.

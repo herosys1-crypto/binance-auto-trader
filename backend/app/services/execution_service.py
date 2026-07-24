@@ -303,6 +303,22 @@ class ExecutionService:
         # = 사장님 의도 X! (사장님 = 25% 만 청산 + strategy 유지 의도)
         # 진짜 fix: is_full_close 검증 = 부분 청산 시 = 옛 status 유지.
         is_full_close = (req_qty <= 0 or req_qty >= actual_position)
+        # 🚨 2026-07-24 v127 CRITICAL fix: 전량 청산 시 = 미체결 LIMIT 자동 취소!
+        #   옛 silent bug: MARKET close만 발송 + 미체결 LIMIT 방치 =
+        #   긴급 종료 후 = LIMIT 도달 시 = 좀비 신 포지션 생성!
+        #   부분 청산 (TP) = 정상 유지 필요 = 취소 X.
+        if is_full_close:
+            try:
+                self.client.cancel_all_orders(symbol=strategy.symbol)
+                logger.info(
+                    "[emergency_close v127] cancel_all_orders 완료 (좀비 방지): strategy=%s symbol=%s",
+                    strategy.id, strategy.symbol,
+                )
+            except Exception as _ce:
+                logger.warning(
+                    "[emergency_close v127] cancel_all_orders 실패 (계속!): strategy=%s error=%s",
+                    strategy.id, _ce,
+                )
         side = "SELL" if strategy.side == "LONG" else "BUY"
         position_side = strategy.side
         client_order_id = self._new_client_order_id(strategy.symbol, "EXIT")
@@ -1171,6 +1187,20 @@ class ExecutionService:
                 strategy.status = new_status
                 old_max_profit = strategy.max_profit_pct
                 strategy.max_profit_pct = None  # TRAILING peak 초기화!
+                # 🚨 2026-07-24 v127 CRITICAL fix: Redis peak도 리셋!
+                #   옛 silent bug: max_profit_pct만 리셋 → Redis stored는 옛 peak 유지!
+                #   = TP3 재도달 시 = 옛 peak 기준 trailing 즉시 발동 = 전량 청산!
+                #   = 사장님 「TP1부터 다시」 사상 완전 위반!
+                try:
+                    from app.core.redis_client import get_redis_client
+                    _r = get_redis_client()
+                    if _r:
+                        _r.delete(f"strategy:{strategy.id}:peak_pnl_pct")
+                except Exception as _re:
+                    logger.warning(
+                        "[add_position v127 reset] Redis peak 리셋 실패 (계속!): strategy=%s error=%s",
+                        strategy.id, _re,
+                    )
                 old_crisis_done = strategy.crisis_first_tp_done_at
                 strategy.crisis_first_tp_done_at = None
                 from app.models.risk_event import RiskEvent
