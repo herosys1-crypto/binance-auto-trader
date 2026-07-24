@@ -1150,12 +1150,14 @@ class ExecutionService:
             if limit_price is None or Decimal(str(limit_price)) <= 0:
                 raise ValueError("LIMIT 주문에는 limit_price (양수) 가 필요합니다")
             ref_price = Decimal(str(limit_price))
-            # 🚨 2026-07-24 v127 HIGH fix: pending ad-hoc LIMIT 중복 방지!
-            # 옛 silent bug: 사장님 실수로 「💉 포지션 추가 LIMIT」 5번 연속 → 5개 orphan → 자본 blow-out!
-            # fix: 기존 pending ad-hoc LIMIT 있으면 = 400 에러 (사장님 예방 안내)
+            # 🌟 2026-07-24 v128 사장님 결정: 미체결 LIMIT 제한 완전 제거!
+            #   v127 = 「1개만 허용」 = 사장님 반대 = 「여러 미체결 = 정상 운영!」
+            #   사장님 사상: 여러 가격에 미리 예약 → 어떤 가격 도달해도 자동 진입!
+            #   = 유연한 운영 = 자본 blow-out 걱정 → preflight 검증 (availableBalance) 로 방지!
+            #   기존 미체결 = 로그만 남기고 진행!
             from app.models.order import Order as _OrdM
             from sqlalchemy import and_ as _andM
-            _pending = self.db.query(_OrdM).filter(
+            _pending_count = self.db.query(_OrdM).filter(
                 _andM(
                     _OrdM.strategy_instance_id == strategy.id,
                     _OrdM.stage_no.is_(None),
@@ -1163,11 +1165,11 @@ class ExecutionService:
                     _OrdM.order_type == "LIMIT",
                     _OrdM.status.in_(["NEW", "PARTIALLY_FILLED"]),
                 )
-            ).first()
-            if _pending:
-                raise ValueError(
-                    f"⚠️ 이미 미체결 ad-hoc LIMIT 존재 (order_id={_pending.id}, qty={_pending.orig_qty} @{_pending.price}). "
-                    f"「📋 미체결」 화면에서 취소 후 재시도하세요. (중복 진입 방지 v127)"
+            ).count()
+            if _pending_count > 0:
+                logger.info(
+                    "[add_position v128 사장님 자율] 기존 미체결 ad-hoc LIMIT %s개 존재 = 신 추가 허용 (사장님 사상)!",
+                    _pending_count,
                 )
         else:
             ref_price = self._fetch_current_mark_price(strategy.symbol)
