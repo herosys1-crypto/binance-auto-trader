@@ -68,7 +68,24 @@ def run_tp_sl_once() -> None:
                     _banned_accounts.add(account.id)
                     logger.warning("[tp_sl] rate limit detected account=%s — skip rest of cycle", account.id)
                     continue
-                NotificationService(db).send_system_alert(title="[시스템 오류] TP/SL orchestration 실패", body=f"strategy_id={strategy.id}, error={e}")
+                # 🚨 2026-07-24 v127 HIGH fix: Redis dedup (30분) = Telegram spam 방지!
+                # 옛 silent bug: 10초마다 예외 = 6시간 = 2160건 spam! → rate limit ban 스파이럴!
+                _spam_key = None
+                _should_send = True
+                try:
+                    import hashlib as _h
+                    from app.core.redis_client import get_redis_client as _grc
+                    _r = _grc()
+                    _spam_key = "tpsl:err:" + _h.md5(f"{strategy.id}:{str(e)[:100]}".encode()).hexdigest()[:16]
+                    if _r and _r.get(_spam_key):
+                        _should_send = False
+                        logger.info("[tp_sl v127] 🛡 dedup = TPSL 예외 알림 skip (30분)")
+                    elif _r:
+                        _r.setex(_spam_key, 1800, "1")  # 30분
+                except Exception:
+                    pass
+                if _should_send:
+                    NotificationService(db).send_system_alert(title="[시스템 오류] TP/SL orchestration 실패", body=f"strategy_id={strategy.id}, error={e}")
     finally:
         db.close()
 

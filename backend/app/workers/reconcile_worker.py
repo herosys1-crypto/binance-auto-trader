@@ -276,6 +276,16 @@ def _do_reconcile(decrypt_func) -> None:
                                 strategy.id, strategy.symbol, strategy.status,
                             )
                             continue
+                        # 🚨 2026-07-24 v127 HIGH fix: MANUAL_CLEANUP_REQUIRED = stuck 제외!
+                        # 옛 silent bug: MCR도 stuck 카운트 증가 → escalate_stuck_strategy → **Kill-Switch 발동!**
+                        # = 사장님이 「✅ 처리 완료」 클릭 못 한 사이 = 계정 전체 마비!
+                        # fix: MCR = 사장님 ack 대기 = stuck 카운트 제외!
+                        if strategy.status == MANUAL_CLEANUP_REQUIRED:
+                            logger.info(
+                                "[reconcile v127] #%s %s status=MCR = 사장님 ack 대기 = stuck 제외 (Kill-Switch 방지!)",
+                                strategy.id, strategy.symbol,
+                            )
+                            continue
                         # 그 외 = stuck counter (= 정상 동작!)
                         n_stuck = _stuck_inc(strategy.id)
                         db.add(RiskEvent(

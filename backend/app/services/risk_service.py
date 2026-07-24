@@ -422,7 +422,14 @@ class RiskService:
             if strategy.trailing_retrace_pct is not None
             else TRAILING_TP_RETRACE_AMOUNT  # global default = 5
         )
-        if (
+        # 🚨 2026-07-24 v127 HIGH fix: TP1_override=0 (「TP 완전 끔」) = TRAILING도 차단!
+        # 옛 silent bug: v115 tp_levels=[] 만 비웠고 = 아래 trailing 분기 = 여전히 발동!
+        # = 사장님 「TP 끔」 후 자동 청산 발생 = 「수동 관리」 의도 정면 위반!
+        _tp1_override = strategy.tp1_pct_override
+        if _tp1_override is not None and Decimal(str(_tp1_override)) == 0:
+            # TP 완전 끔 = trailing도 차단!
+            pass  # TP + TRAILING 모두 발동 X (수동 관리 모드!)
+        elif (
             (strategy.status or "").upper() in TRAILING_ARMED_STATUSES
             and (strategy.current_stage or 0) >= TRAILING_MIN_STAGE
             and peak >= TRAILING_TP_PEAK_THRESHOLD

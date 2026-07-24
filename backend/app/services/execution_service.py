@@ -1150,6 +1150,25 @@ class ExecutionService:
             if limit_price is None or Decimal(str(limit_price)) <= 0:
                 raise ValueError("LIMIT 주문에는 limit_price (양수) 가 필요합니다")
             ref_price = Decimal(str(limit_price))
+            # 🚨 2026-07-24 v127 HIGH fix: pending ad-hoc LIMIT 중복 방지!
+            # 옛 silent bug: 사장님 실수로 「💉 포지션 추가 LIMIT」 5번 연속 → 5개 orphan → 자본 blow-out!
+            # fix: 기존 pending ad-hoc LIMIT 있으면 = 400 에러 (사장님 예방 안내)
+            from app.models.order import Order as _OrdM
+            from sqlalchemy import and_ as _andM
+            _pending = self.db.query(_OrdM).filter(
+                _andM(
+                    _OrdM.strategy_instance_id == strategy.id,
+                    _OrdM.stage_no.is_(None),
+                    _OrdM.purpose == "ENTRY",
+                    _OrdM.order_type == "LIMIT",
+                    _OrdM.status.in_(["NEW", "PARTIALLY_FILLED"]),
+                )
+            ).first()
+            if _pending:
+                raise ValueError(
+                    f"⚠️ 이미 미체결 ad-hoc LIMIT 존재 (order_id={_pending.id}, qty={_pending.orig_qty} @{_pending.price}). "
+                    f"「📋 미체결」 화면에서 취소 후 재시도하세요. (중복 진입 방지 v127)"
+                )
         else:
             ref_price = self._fetch_current_mark_price(strategy.symbol)
         # 수량 계산
