@@ -278,15 +278,16 @@ def get_strategy_blueprint(
         "last_stage_trigger_mode": sc.get("last_stage_trigger_mode"),
         "last_stage_trigger_percent": sc.get("last_stage_trigger_percent"),
         # 2026-05-06: TP1~10 동적 (10단계 익절 확장).
+        # 2026-07-22 v120: TP20 확장!
         **{
             f"tp{n}_percent": (
                 str(getattr(tpl, f"tp{n}_percent")) if getattr(tpl, f"tp{n}_percent", None) is not None else None
-            ) for n in range(1, 11)
+            ) for n in range(1, 21)
         },
         **{
             f"tp{n}_qty_ratio": (
                 str(getattr(tpl, f"tp{n}_qty_ratio")) if getattr(tpl, f"tp{n}_qty_ratio", None) is not None else None
-            ) for n in range(1, 11)
+            ) for n in range(1, 21)
         },
         "stop_loss_percent_of_capital": str(tpl.stop_loss_percent_of_capital),
         # 2026-05-14 (사용자 요청, alembic 0015): 크라이시스 임계 사용자 정의 자동 채움.

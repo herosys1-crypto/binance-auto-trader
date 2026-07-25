@@ -61,6 +61,18 @@ class StreamService:
             # 회복도 STAGE5+ 미지원이라 stuck 가중. f-string 으로 N단계 모두 처리.
             if order.stage_no and 1 <= order.stage_no <= 10:
                 strategy.status = f"STAGE{order.stage_no}_OPEN"
+            # 🚨 2026-07-24 v127 HIGH fix: ENTRY FILLED 시 qty 즉시 sync!
+            #   옛 silent bug: ACCOUNT_UPDATE 유실 시 qty stale (30초~2분) → TP1 계획보다 작은 청산량!
+            #   fix: EXIT partial (line 182) 패턴 재사용 = _fetch_actual_position_qty 호출!
+            try:
+                actual_qty = self._fetch_actual_position_qty(strategy)
+                if actual_qty is not None:
+                    strategy.current_position_qty = actual_qty
+            except Exception as _e:
+                logger.warning(
+                    "[stream v127] ENTRY FILLED qty sync 실패 (계속!): strategy=%s error=%s",
+                    strategy.id, _e,
+                )
             # 단계별 계획 row 갱신 + 첫 진입 시점 추적 (알림 중복 방지).
             # Bug fix (2026-04-30): race condition 해결을 위해 atomic UPDATE WHERE 로 변경.
             # 이전엔 SELECT 후 in-memory mark + commit 이라 동시 처리되는 두 ORDER_TRADE_UPDATE

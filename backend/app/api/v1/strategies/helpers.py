@@ -29,14 +29,16 @@ def _count_active_stages(tpl) -> int:
 
 
 def _count_active_tps(tpl) -> int:
-    """Template 의 활성 TP 수 — tp1~10_percent 중 NOT NULL 카운트.
+    """Template 의 활성 TP 수 — tp1~20_percent 중 NOT NULL 카운트.
 
     2026-05-06: 1~10 동적 (사용자 요청 10단계 익절 확장). fallback 4 (backward-compat).
+    2026-07-22 v120 CRITICAL: TP20 확장! 사장님 진짜 root cause fix!
+    2026-07-22 v121 사장님 최종 요구: **무조건 20 반환**!
+      - 모든 카드 = 20 슬롯 표시!
+      - 옛 template (TP1~TP10만) = "X/20" 표시 (TP11~TP20 = 발동 X = 회색)
+      - 신 template (TP1~TP20) = "X/20" 완전 반영!
     """
-    if not tpl:
-        return 4
-    n = sum(1 for i in range(1, 11) if getattr(tpl, f"tp{i}_percent", None) is not None)
-    return n if n > 0 else 4
+    return 20
 
 
 def _enrich_response(resp: StrategyDetailResponse, tpl) -> StrategyDetailResponse:
@@ -127,11 +129,12 @@ def _fetch_tp_counts_batch(db: Session, strategy_ids: set[int]) -> dict[int, dic
     from sqlalchemy import case, func, or_, select as sa_select
     from app.models.notification import Notification
 
-    # 🌟 2026-06-15 사장님 critical fix v2: TP1~10 모두 + "체결" anchor!
+    # 🌟 2026-06-15 사장님 critical fix v2: TP1~20 모두 + "체결" anchor!
     # 옛 silent bug: `[TP{n} 익절%` (n=1~5) → TP6~10 누락 + 다른 알림 우연 매칭!
     # 사장님 OPGUSDT #140 = 실제 TP1/TP2/TP3 = 3건 But backend = 5 반환!
     # 신: "체결" 단어 anchor 추가 → 정확 매칭 (= 진입 알림 등 우연 매칭 차단!)
-    tp_like = or_(*[Notification.title.like(f"%[TP{n} 익절 체결%") for n in range(1, 11)])
+    # 2026-07-22 v120: TP20 확장!
+    tp_like = or_(*[Notification.title.like(f"%[TP{n} 익절 체결%") for n in range(1, 21)])
     not_trailing = ~Notification.title.like("%TRAILING%")
     is_trailing = Notification.title.like("%TRAILING_TP%")
 

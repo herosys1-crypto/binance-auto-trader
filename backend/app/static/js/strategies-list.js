@@ -452,8 +452,22 @@ async function refreshStrategies() {
       const sQtyAbs = Math.abs(sQtyNum);
       const sAvg = Number(s.avg_entry_price || 0);
       const hasPosition = sQtyAbs > 0 && sAvg > 0;
-      // 마크 가격 = avg + pnl/qty (LONG) | avg - pnl/qty (SHORT)
-      const sMark = hasPosition ? (s.side === 'LONG' ? sAvg + pnlNum/sQtyAbs : sAvg - pnlNum/sQtyAbs) : 0;
+      // 🚨 2026-07-24 v127 HIGH fix: Binance 실시간 mark_price 우선!
+      //   옛 silent bug: DB unrealized_pnl 로 역산 → stream 지연 시 stale = 사장님 「청산 임박」 인지 지연!
+      //   fix: _binancePositionsCache 의 실시간 mark_price 우선, fallback = 계산!
+      let sMark = 0;
+      if (hasPosition) {
+        // v127: Binance 실시간 우선 (bp.markPrice)
+        const _bpKey = (s.exchange_account_id || '?') + ':' + (s.symbol || '').toUpperCase();
+        const _bp = (window._binancePositionsCache || {})[_bpKey];
+        const _bpMark = _bp && Number(_bp.markPrice || 0) > 0 ? Number(_bp.markPrice) : 0;
+        if (_bpMark > 0) {
+          sMark = _bpMark;
+        } else {
+          // fallback = 옛 공식 (avg + pnl/qty)
+          sMark = s.side === 'LONG' ? sAvg + pnlNum/sQtyAbs : sAvg - pnlNum/sQtyAbs;
+        }
+      }
       // 청산예정가 = isolated 계산 (체결 평단 기반)
       const MMR = 0.005;
       // 🚨 2026-06-11 v37 사장님 critical fix: 청산가 = backend liquidation_price 우선 사용!
@@ -510,8 +524,9 @@ async function refreshStrategies() {
       // 2026-05-04 (사용자 요청): 「💉 포지션 추가」 — ad-hoc 자유 금액 시장가/지정가 진입.
       // isTerminal 이 아직 정의 전이라 (line 1581) inline 으로 status 체크.
       const _activeForAddPos = !TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
+      // 🚨 v127 (2026-07-24): exchangeAccountId 전달 = 계정별 여유 정확 표시 (-2019 재발 방지)!
       const addPositionBtn = _activeForAddPos
-        ? `<button onclick="event.stopPropagation(); openAddPositionModal(${s.id}, '${s.symbol}', '${s.side}', ${s.leverage || 1})"
+        ? `<button onclick="event.stopPropagation(); openAddPositionModal(${s.id}, '${s.symbol}', '${s.side}', ${s.leverage || 1}, ${s.exchange_account_id || 'null'})"
                   class="btn-primary btn text-xs mt-1 ml-1"
                   style="padding:2px 6px;font-size:12px;line-height:1.2"
                   title="포지션 추가 (ad-hoc) — 자유 금액 시장가/지정가 즉시 진입. qty + 평단 갱신, stage 진행 X. v4 안전망: 사용 시 max_loss 임계 도달하면 Crisis 발동 (stage 미완료라도)">💉 포지션 추가</button>`
@@ -678,13 +693,20 @@ async function refreshStrategies() {
             forceStopBtn = `<button onclick="event.stopPropagation(); forceStopStrategy(${s.id}, '${s.symbol}')" class="btn-danger btn text-xs" style="${btnStyle};background:#dc2626;color:white" title="⚡ 강제 정리 = DB 강제 STOPPED 마킹 (거래소 호출 X!). 사장님이 이미 Binance UI 에서 청산 완료 시 원클릭!">⚡ 강제</button>`;
           }
         }
-        stopBtn = `<div class="flex flex-wrap gap-1" style="max-width:200px">
-            <button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="설정 수정 (in-place 또는 종료+재시작) — 미진입 단계 재계산은 「수정 모드」 모달 → 「현재가」 버튼 사용">✏️</button>
-            ${triggerNextBtn}
-            ${openOrdersBtn}
-            <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="${btnStyle}" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
-            <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="긴급 종료 (포지션 시장가 청산)">🛑</button>
-            ${forceStopBtn}
+        // 🌟 v124 사장님 요구: ⏸ + 🛑 = ✏️ 수정 버튼 아래 2번째 줄로!
+        //   1줄: ✏️ 수정 + triggerNext + 📋 미체결 조회
+        //   2줄: ⏸ 미체결 취소 + 🛑 긴급 + ⚡ 강제
+        stopBtn = `<div style="display:flex;flex-direction:column;gap:2px;max-width:130px">
+            <div class="flex gap-1">
+              <button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="설정 수정 (in-place 또는 종료+재시작) — 미진입 단계 재계산은 「수정 모드」 모달 → 「현재가」 버튼 사용">✏️</button>
+              ${triggerNextBtn}
+              ${openOrdersBtn}
+            </div>
+            <div class="flex gap-1">
+              <button onclick="event.stopPropagation(); stopStrategy(${s.id})" class="btn-warning btn text-xs" style="${btnStyle}" title="미체결 주문만 취소 (포지션 유지)">⏸</button>
+              <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="긴급 종료 (포지션 시장가 청산)">🛑</button>
+              ${forceStopBtn}
+            </div>
           </div>`;
       }
       const startPx = s.start_price && Number(s.start_price) > 0

@@ -75,10 +75,13 @@ function _tpCountFromStatus(strat, totalTps) {
 function renderTpBar(current, total, closeReason) {
   const safeC = Math.max(0, Math.min(current, total));
   let dots = '';
+  // v122 (2026-07-22): 사장님 요구 = 가로 30% 축소!
+  //   기존: 8px + mr-1 (4px) = 12px × 20 = 240px
+  //   신: 5px + mr 2px = 7px × 20 = 140px (약 40% 축소, 사장님 요구 30% 이상!)
   for (let i = 1; i <= total; i++) {
     const filled = i <= safeC;
     const color = filled ? '#06b6d4' : '#475569';
-    dots += `<span class="inline-block rounded-full mr-1" style="width:8px;height:8px;background:${color}"></span>`;
+    dots += `<span class="inline-block rounded-full" style="width:5px;height:5px;margin-right:2px;background:${color}"></span>`;
   }
   // 종료 사유 마크 (COMPLETED / REENTRY_READY / STOPPED 일 때만 의미 있음)
   let reasonBadge = '';

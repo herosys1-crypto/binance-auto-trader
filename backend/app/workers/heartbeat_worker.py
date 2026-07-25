@@ -58,10 +58,13 @@ def run_heartbeat_once() -> None:
         ).scalar() or 0
 
         # 3) 최근 1시간 CRITICAL RiskEvent
+        # 🚨 2026-07-24 v127 HIGH fix: severity 필드로 검색 (event_type 아님!)
+        # 옛 silent bug: event_type LIKE '%CRITICAL%' → 대부분 event_type = ZOMBIE_GUARDIAN, LIQUIDATION_RISK_ALERT 등
+        # = CRITICAL 단어 미포함 → 항상 recent_critical=0 → 「💚 정상」 → 실제 사고도 초록! silent 신뢰 유도!
         recent_critical = db.execute(
             select(func.count())
             .select_from(RiskEvent)
-            .where(RiskEvent.event_type.like("%CRITICAL%"))
+            .where(RiskEvent.severity == "CRITICAL")
             .where(RiskEvent.created_at >= cutoff_1h)
         ).scalar() or 0
 

@@ -99,7 +99,18 @@ def _scan_files(base_dir, file_pattern, pattern):
                         # 🛡 2026-06-13 사장님 critical fix: 사장님 input 처리 = whitelist!
                         # 예: if (trimmed === "testnet") isTestnet = true;
                         # = 사장님 환경 변경 input 처리 = 하드코드 X = false positive!
-                        if any(kw in line for kw in ['trimmed', 'envChoice', 'prompt(', '?', '||', '===', '=== "testnet"', 'choice']):
+                        # 🚨 2026-07-24 v127 CRITICAL fix: whitelist 축소!
+                        #   옛: ?, ||, === 흔한 JS 문법 = 대부분 라인 skip → false negative!
+                        #   신: 사장님 input 처리 관련 word boundary 매칭만!
+                        import re as _re_wl
+                        _WL_PATTERNS = [
+                            r'\btrimmed\b',
+                            r'\benvChoice\b',
+                            r'\bprompt\s*\(',
+                            r'\bchoice\b',
+                            r'confirm\s*\(',  # 사장님 confirm 모달
+                        ]
+                        if any(_re_wl.search(p, line) for p in _WL_PATTERNS):
                             continue
                         if regex.search(line):
                             matches.append({

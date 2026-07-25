@@ -395,8 +395,17 @@ def run_stage_trigger_once(decrypt_text) -> None:
                                 pass
                         continue  # 다음 cycle
                 except Exception as _e:
-                    # wallet 검증 자체 실패 — 진입 진행 (preflight 가 백업 차단)
-                    logger.warning("[stage-trigger] Phase B wallet 검증 실패 (preflight 가 백업): %s", _e)
+                    # 🚨 2026-07-24 v127 HIGH fix: wallet 검증 실패 = conservative skip!
+                    # 옛 silent bug: fail-open → preflight 백업 신뢰 = 130% 초과 자본 진입!
+                    # 신: default deny + block_reason 기록 = 사장님 자본 보호!
+                    logger.warning(
+                        "[stage-trigger v127] wallet 검증 실패 = conservative skip (default deny): %s", _e
+                    )
+                    _set_block_reason(
+                        _redis, strategy.id,
+                        f"⛔ wallet 검증 오류 = 자동 진입 차단! 잠시 후 재시도. err={_e}",
+                    )
+                    continue  # 다음 cycle에서 재시도
 
                 logger.info(
                     f"[stage-trigger] firing stage{next_stage_no} for #{strategy.id} "

@@ -240,9 +240,11 @@ async function refreshStats() {
     const crisisEl = document.getElementById('stats-crisis');
     crisisEl.textContent = s.crisis_total + (s.crisis_active > 0 ? ` (현재 ${s.crisis_active})` : '');
     crisisEl.className = 'text-xl font-bold ' + (s.crisis_active > 0 ? 'text-red-400' : 'text-yellow-400');
-    // TP 단계별 카운트 (notification 기준) — 2026-05-12: TP1~10 + TRAILING
+    // TP 단계별 카운트 (notification 기준)
+    // 🚨 2026-07-24 v127 CRITICAL: TP1~20 확장! (v118 실제 확장 반영)
+    // 옛 silent bug: n=1..10 = TP11~TP20 통계 표시 X (HTML DOM 있지만!)
     const tpb = s.tp_breakdown || {};
-    for (let n = 1; n <= 10; n++) {
+    for (let n = 1; n <= 20; n++) {
       const el = document.getElementById(`stats-tp${n}`);
       if (el) el.textContent = tpb[`TP${n}`] || 0;
     }
@@ -377,7 +379,19 @@ async function loadBalance() {
     let actualMarginSum = 0;  // 2026-06-05: 실제 lock 마진 합 (total_position_initial_margin)
     // 🌟 2026-06-09 사장님 신 130% 정책 필드
     let wallet130Sum = 0, newStratAvailSum = 0;
+    // 🚨 v125 사장님 critical fix (07-22): Binance availableBalance + 미체결 LIMIT 마진!
+    //   사장님 report: 「여유 8802」 표시 → 800 「💉 포지션 추가」 시도 → -2019 Margin insufficient!
+    //   원인: 옛 「여유」 = wallet - actualMargin = **미체결 LIMIT 마진 안 뺌!**
+    //   fix: available_balance (Binance 정확값) + total_open_order_initial_margin 별도 표시!
+    let availableBalanceSum = 0;  // Binance availableBalance (= 진짜 여유!)
+    let openOrderMarginSum = 0;  // 미체결 LIMIT 마진 (지정가 예약)
     let hasTestnet = false;
+    // 🚨 2026-07-24 v128 사장님 CRITICAL fix: 다중 계정 = 계정별 여유 breakdown!
+    //   사장님 report: 「여유 1621」 표시 → BANKUSDT #524에 500 추가 실패!
+    //   원인: 「여유 1621」 = 전체 계정 합산! But BANKUSDT #524의 계정 여유 = 500 미만!
+    //   fix: 최대 단일 계정 여유 표시 + 계정별 breakdown 툴팁!
+    let maxSingleAccountAvail = 0;
+    const perAccountAvail = [];
     for (const b of valid) {
       walletSum += Number(b.total_wallet_balance || 0);
       reservedSum += Number(b.reserved_for_strategies || 0);
@@ -388,6 +402,12 @@ async function loadBalance() {
       actualMarginSum += Number(b.total_position_initial_margin || 0);
       wallet130Sum += Number(b.wallet_limit_130 || 0);
       newStratAvailSum += Number(b.new_strategy_available || 0);
+      const _acctAvail = Number(b.available_balance || 0);
+      availableBalanceSum += _acctAvail;  // v125 Binance 정확!
+      openOrderMarginSum += Number(b.total_open_order_initial_margin || 0);  // v125 LIMIT 예약!
+      // v128: 계정별 여유 추적
+      if (_acctAvail > maxSingleAccountAvail) maxSingleAccountAvail = _acctAvail;
+      perAccountAvail.push({acctId: b.exchange_account_id, avail: _acctAvail});
       if (b.is_testnet) hasTestnet = true;
     }
     // 합산 마진 비율 = total maint / total margin balance
@@ -442,7 +462,11 @@ async function loadBalance() {
     // 사장님 명시: "실 사용 + 예약 합 + 130% 한도 + 신 전략 가용 = 한눈 파악"
     // 예: 실 3500 + 예약 1500 = 사용 5000, 한도 7702 (= wallet 5925 × 1.30), 신 전략 가용 +2702
     const usedTotal = actualMarginSum + reservedRemainingSum;  // 실 + 예약 = 사용 중
-    const realFreedom = walletSum - actualMarginSum;  // 실 자본 여유 (= wallet - 진입 마진)
+    // 🚨 v125 사장님 CRITICAL fix: 「여유」 = Binance availableBalance (진짜!)
+    //   옛: realFreedom = walletSum - actualMarginSum → 미체결 LIMIT 마진 안 뺌!
+    //   신: availableBalanceSum = Binance API (실 마진 + LIMIT 예약 모두 뺀 진짜 여유!)
+    //   = 사장님 「800 포지션 추가」 -2019 사고 = 이제 발생 X!
+    const realFreedom = availableBalanceSum;  // v125: Binance 정확!
     const newStrategyRatio = wallet130Sum > 0 ? (usedTotal / wallet130Sum * 100) : 0;
     let newSig;
     if (newStratAvailSum <= 0) newSig = 'red';
@@ -450,9 +474,16 @@ async function loadBalance() {
     else if (newStrategyRatio < 95) newSig = 'yellow';
     else newSig = 'red';
     // 🌟 2026-06-09 사장님 「모바일 취소」 = 데스크탑 풀 detail 만 사용
+    // v125: LIMIT 예약 별도 표시! (지정가 미체결 마진 = 이미 Binance lock!)
+    // 🚨 v128 (2026-07-24): 다중 계정 시 = 최대 단일 계정 여유 표시!
+    //   사장님 report: 「여유 1621」 → BANKUSDT #524 500 실패 = 그 계정 여유 500 미만!
+    //   fix: 최대 단일 계정 여유 = 「이 금액까지 = 어느 strategy에도 안전!」
+    const multiAcctInfo = valid.length > 1
+      ? ` | 🎯 단일 계정 최대 ${fmt(maxSingleAccountAvail)} (실제 진입 가능!)`
+      : '';
     const detailMain =
-      `🔒 실 ${fmt(actualMarginSum)} + 📦 예약 ${fmt(reservedRemainingSum)} = 사용 ${fmt(usedTotal)} | ` +
-      `💵 실 여유 ${fmt(realFreedom)}\n` +
+      `🔒 실 ${fmt(actualMarginSum)} + 📦 예약 ${fmt(reservedRemainingSum)} + 📋 LIMIT ${fmt(openOrderMarginSum)} = 사용 ${fmt(usedTotal + openOrderMarginSum)} | ` +
+      `💵 여유 ${fmt(realFreedom)} ✅Binance${multiAcctInfo}\n` +
       `⚡ 130% 한도 ${fmt(wallet130Sum)} | 신 전략 가용 +${fmt(newStratAvailSum)} (${newStrategyRatio.toFixed(1)}%)` +
       `${hasTestnet ? ' · testnet 포함' : ''}`;
     const accountInfo = valid.length > 1 ? ` · ${valid.length}계정 합산` : '';

@@ -303,6 +303,22 @@ class ExecutionService:
         # = 사장님 의도 X! (사장님 = 25% 만 청산 + strategy 유지 의도)
         # 진짜 fix: is_full_close 검증 = 부분 청산 시 = 옛 status 유지.
         is_full_close = (req_qty <= 0 or req_qty >= actual_position)
+        # 🚨 2026-07-24 v127 CRITICAL fix: 전량 청산 시 = 미체결 LIMIT 자동 취소!
+        #   옛 silent bug: MARKET close만 발송 + 미체결 LIMIT 방치 =
+        #   긴급 종료 후 = LIMIT 도달 시 = 좀비 신 포지션 생성!
+        #   부분 청산 (TP) = 정상 유지 필요 = 취소 X.
+        if is_full_close:
+            try:
+                self.client.cancel_all_orders(symbol=strategy.symbol)
+                logger.info(
+                    "[emergency_close v127] cancel_all_orders 완료 (좀비 방지): strategy=%s symbol=%s",
+                    strategy.id, strategy.symbol,
+                )
+            except Exception as _ce:
+                logger.warning(
+                    "[emergency_close v127] cancel_all_orders 실패 (계속!): strategy=%s error=%s",
+                    strategy.id, _ce,
+                )
         side = "SELL" if strategy.side == "LONG" else "BUY"
         position_side = strategy.side
         client_order_id = self._new_client_order_id(strategy.symbol, "EXIT")
@@ -998,6 +1014,18 @@ class ExecutionService:
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
             raise ValueError("Strategy not found")
+        # 🚨 2026-07-24 v127 CRITICAL fix: STOPPING/TERMINAL race 방지!
+        #   옛 silent bug: 자동 진입 중 사장님이 「⛔ 긴급 종료」 → STOPPING 마킹 →
+        #   → 하지만 이미 발송된 LIMIT 응답 도착 시 status = STAGE_N_OPEN_PENDING 로 overwrite!
+        #   = 사장님 종료 명령이 조용히 무시됨! (사장님 화면 = 진입중 표시)
+        #   fix: fresh reload + terminal/stopping 검증!
+        _status_upper = (strategy.status or "").upper()
+        from app.core.strategy_status import TERMINAL_STATUSES as _TERM
+        if _status_upper in set(_TERM) | {"STOPPING", "MANUAL_CLEANUP_REQUIRED"}:
+            raise ValueError(
+                f"Strategy #{strategy_id} status={strategy.status} (종료 요청 감지) — stage {stage_no} 진입 차단! "
+                f"사장님 종료 명령 우선 (v127 race 방지)."
+            )
         if AccountKillSwitchService(self.db).is_enabled(strategy.exchange_account_id):
             raise ValueError(
                 f"Account kill-switch is enabled; stage {stage_no} entry blocked. "
@@ -1122,6 +1150,27 @@ class ExecutionService:
             if limit_price is None or Decimal(str(limit_price)) <= 0:
                 raise ValueError("LIMIT 주문에는 limit_price (양수) 가 필요합니다")
             ref_price = Decimal(str(limit_price))
+            # 🌟 2026-07-24 v128 사장님 결정: 미체결 LIMIT 제한 완전 제거!
+            #   v127 = 「1개만 허용」 = 사장님 반대 = 「여러 미체결 = 정상 운영!」
+            #   사장님 사상: 여러 가격에 미리 예약 → 어떤 가격 도달해도 자동 진입!
+            #   = 유연한 운영 = 자본 blow-out 걱정 → preflight 검증 (availableBalance) 로 방지!
+            #   기존 미체결 = 로그만 남기고 진행!
+            from app.models.order import Order as _OrdM
+            from sqlalchemy import and_ as _andM
+            _pending_count = self.db.query(_OrdM).filter(
+                _andM(
+                    _OrdM.strategy_instance_id == strategy.id,
+                    _OrdM.stage_no.is_(None),
+                    _OrdM.purpose == "ENTRY",
+                    _OrdM.order_type == "LIMIT",
+                    _OrdM.status.in_(["NEW", "PARTIALLY_FILLED"]),
+                )
+            ).count()
+            if _pending_count > 0:
+                logger.info(
+                    "[add_position v128 사장님 자율] 기존 미체결 ad-hoc LIMIT %s개 존재 = 신 추가 허용 (사장님 사상)!",
+                    _pending_count,
+                )
         else:
             ref_price = self._fetch_current_mark_price(strategy.symbol)
         # 수량 계산
@@ -1147,6 +1196,12 @@ class ExecutionService:
                 suffix="ADHOC_M",
             )
         else:
+            # 🚨 2026-07-24 v127 CRITICAL fix: LIMIT 도 preflight 검증!
+            #   옛 silent bug: LIMIT 경로는 preflight 없음 → Binance -2019 → 502 에러 (친절 X)
+            #   fix: LIMIT 도 ISOLATED 모드 = 즉시 initial_margin lock → 사전 검증 필수!
+            self._preflight_entry_market_check(
+                strategy, qty=qty, current_price=ref_price, purpose="add_position_limit",
+            )
             order = self._place_limit_entry(
                 strategy,
                 stage_no=None,  # ad-hoc
@@ -1163,6 +1218,18 @@ class ExecutionService:
         mode_normalized = (mode or "reset").lower()
         if mode_normalized not in ("preserve", "reset"):
             mode_normalized = "reset"  # 알 수 없는 값 = default!
+        # 🚨 2026-07-24 v127 HIGH fix: LIMIT + reset = 즉시 리셋 X (체결 시 이연)!
+        #   옛 silent bug: LIMIT 발송 즉시 max_profit_pct/peak 리셋 → LIMIT 미체결/취소 시 리셋 낭비!
+        #   = TRAILING 옛 peak 소실 = 사장님 자율 운영 진행 백지화 = 실 손실!
+        #   fix: MARKET 만 즉시 리셋 (=체결 확정). LIMIT 은 체결 시점 이연 처리.
+        #   현재 이연 처리 = 미구현 → 안전 옵션: LIMIT+reset 은 preserve 강제!
+        if mode_normalized == "reset" and order_type_u == "LIMIT":
+            logger.warning(
+                "[add_position v127] LIMIT + reset = 즉시 리셋 위험 → preserve 강제! "
+                "strategy=%s (사장님 opinion: LIMIT 체결 후 「↻ 설정만 수정」 사용 권장)",
+                strategy.id,
+            )
+            mode_normalized = "preserve"
         if mode_normalized == "reset":
             try:
                 cur_stage = strategy.current_stage or 1
@@ -1171,6 +1238,20 @@ class ExecutionService:
                 strategy.status = new_status
                 old_max_profit = strategy.max_profit_pct
                 strategy.max_profit_pct = None  # TRAILING peak 초기화!
+                # 🚨 2026-07-24 v127 CRITICAL fix: Redis peak도 리셋!
+                #   옛 silent bug: max_profit_pct만 리셋 → Redis stored는 옛 peak 유지!
+                #   = TP3 재도달 시 = 옛 peak 기준 trailing 즉시 발동 = 전량 청산!
+                #   = 사장님 「TP1부터 다시」 사상 완전 위반!
+                try:
+                    from app.core.redis_client import get_redis_client
+                    _r = get_redis_client()
+                    if _r:
+                        _r.delete(f"strategy:{strategy.id}:peak_pnl_pct")
+                except Exception as _re:
+                    logger.warning(
+                        "[add_position v127 reset] Redis peak 리셋 실패 (계속!): strategy=%s error=%s",
+                        strategy.id, _re,
+                    )
                 old_crisis_done = strategy.crisis_first_tp_done_at
                 strategy.crisis_first_tp_done_at = None
                 from app.models.risk_event import RiskEvent

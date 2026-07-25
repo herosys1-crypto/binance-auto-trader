@@ -232,19 +232,20 @@ def update_strategy_settings_in_place(
         stage4_trigger_percent=old_tpl.stage4_trigger_percent,
         # TP/SL — payload 우선, 없으면 원본
         # 2026-05-06: TP1~10 동적 (10단계 익절 확장).
+        # 2026-07-22 v120: TP20 확장!
         **{
             f"tp{n}_percent": (
                 getattr(payload, f"tp{n}_percent")
                 if getattr(payload, f"tp{n}_percent", None) is not None
                 else getattr(old_tpl, f"tp{n}_percent", None)
-            ) for n in range(1, 11)
+            ) for n in range(1, 21)
         },
         **{
             f"tp{n}_qty_ratio": (
                 getattr(payload, f"tp{n}_qty_ratio")
                 if getattr(payload, f"tp{n}_qty_ratio", None) is not None
                 else getattr(old_tpl, f"tp{n}_qty_ratio", None)
-            ) for n in range(1, 11)
+            ) for n in range(1, 21)
         },
         stop_loss_percent_of_capital=(
             payload.stop_loss_percent_of_capital

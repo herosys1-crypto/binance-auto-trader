@@ -561,6 +561,42 @@ def get_balance(
         if template_ids else {}
     )
 
+    # 🚨 2026-07-24 v127 CRITICAL: 미체결 ad-hoc LIMIT 마진 예약 계산!
+    #   사장님 -2019 사고 근본 원인: 「💉 포지션 추가 LIMIT」 미체결 = _reserved_one 계산에서 완전 누락!
+    #   = 신 전략 130% 검증도 miss → 사장님 -2019 재발 위험!
+    #   fix: Orders 테이블에서 미체결 ad-hoc LIMIT (stage_no IS NULL) 의 marginal 합 추가.
+    from app.models.order import Order as _OrderModel
+    from sqlalchemy import and_ as _and_
+    adhoc_limit_margin_by_strategy: dict[int, Decimal] = {}
+    if active_strategies:
+        _sids = [s.id for s in active_strategies]
+        _adhoc_rows = db.query(
+            _OrderModel.strategy_instance_id,
+            _OrderModel.orig_qty,
+            _OrderModel.price,
+        ).filter(
+            _and_(
+                _OrderModel.strategy_instance_id.in_(_sids),
+                _OrderModel.stage_no.is_(None),
+                _OrderModel.purpose == "ENTRY",
+                _OrderModel.order_type == "LIMIT",
+                _OrderModel.status.in_(["NEW", "PARTIALLY_FILLED"]),
+            )
+        ).all()
+        _s_lev = {s.id: Decimal(str(s.leverage or 1)) for s in active_strategies}
+        for _sid, _oqty, _px in _adhoc_rows:
+            if _oqty is None or _px is None:
+                continue
+            try:
+                _notional = Decimal(str(_oqty)) * Decimal(str(_px))
+                _lev = _s_lev.get(_sid, Decimal("1"))
+                _margin = _notional / _lev if _lev > 0 else _notional
+                adhoc_limit_margin_by_strategy[_sid] = (
+                    adhoc_limit_margin_by_strategy.get(_sid, Decimal("0")) + _margin
+                )
+            except Exception:
+                continue
+
     def _reserved_one(s) -> Decimal:
         actual = binance_margin_by_symbol.get((s.symbol or "").upper(), Decimal("0"))
         # 🚨 v101 사장님 CRITICAL fix: capital = 마진 (같은 단위, 나눗셈 X!)
@@ -570,12 +606,14 @@ def get_balance(
         #   = 옛 개발자 오해! 사장님 「자본」 입력 = 이미 마진!
         # v101 fix: untriggered_capital 그대로 사용 (사장님 표시 = 사장님 입력값!)
         # PR #57 헌법: SL = total_capital × sl_pct = 자본 (= 마진!) 기준
+        # 🚨 v127 (2026-07-24): 미체결 ad-hoc LIMIT 마진 = 항상 포함!
         lev = Decimal(str(s.leverage or 1))
+        adhoc_lim = adhoc_limit_margin_by_strategy.get(s.id, Decimal("0"))
         if has_plans_by_strategy.get(s.id):
             untriggered_capital = untriggered_sum_by_strategy.get(s.id, Decimal("0"))
-            # 🚨 v101: 자본 = 마진 (사장님 사상!) = 나눗셈 X!
-            return actual + untriggered_capital
-        # fallback 1: template stages_config (= 옛 PR #131 안전망, 마진 변환)
+            # 🚨 v101 + v127: 자본 = 마진 + 미체결 ad-hoc LIMIT 마진!
+            return actual + untriggered_capital + adhoc_lim
+        # fallback 1: template stages_config (= 옛 PR #131 안전망)
         tpl = templates_map.get(s.strategy_template_id)
         stages_sum = Decimal("0")
         if tpl and tpl.stages_config:
@@ -587,13 +625,13 @@ def get_balance(
                     stages_sum += Decimal(str(c))
                 except Exception:
                     continue
+        # 🚨 v127 (2026-07-24): fallback 도 v101/v112 준수 = 나눗셈 X!
+        #   사장님 헌법 = capital = 이미 margin 단위!
         if stages_sum > 0:
-            stages_margin = (stages_sum / lev) if lev > 0 else stages_sum
-            return max(stages_margin, actual)
+            return max(stages_sum, actual) + adhoc_lim
         # fallback 2: total_capital (= legacy)
         planned = s.total_capital or Decimal("0")
-        planned_margin = (planned / lev) if lev > 0 else planned
-        return max(planned_margin, actual)
+        return max(planned, actual) + adhoc_lim
 
     reserved_for_strategies = sum(
         (_reserved_one(s) for s in active_strategies), Decimal("0")

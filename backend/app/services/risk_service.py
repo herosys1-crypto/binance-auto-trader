@@ -153,12 +153,19 @@ class RiskService:
 
         # 🛡 평단 (= 포지션 진입가) 조회!
         avg_entry = Decimal(str(strategy.avg_entry_price)) if strategy.avg_entry_price else None
-        # 현재가 = position.mark_price 조회
+        # 🚨 2026-07-24 v127 CRITICAL fix: mark_price = Redis 우선 (헌법 6 단일 진실!)
+        #   옛 silent bug: DB snapshot만 사용 = 최대 2분 stale!
+        #   = SL 발동 2분 지연 = 사장님 자본 추가 손실!
+        #   force_sl / stage_trigger 는 이미 Redis 우선. 여기만 옛 로직 = 대칭성 위반!
+        from app.services.mark_price_cache import get_mark_price
         latest_position = self.position_repo.latest_by_strategy(strategy_id)
-        mark_price = (
-            Decimal(str(latest_position.mark_price))
-            if latest_position and latest_position.mark_price else None
-        )
+        _redis_mark = get_mark_price(strategy.symbol)
+        if _redis_mark is not None:
+            mark_price = Decimal(str(_redis_mark))
+        elif latest_position and latest_position.mark_price:
+            mark_price = Decimal(str(latest_position.mark_price))
+        else:
+            mark_price = None
 
         # 평단/현재가 미존재 시 = SL 검증 불가 = False
         if not avg_entry or not mark_price or avg_entry <= 0:
@@ -292,10 +299,19 @@ class RiskService:
 
         strategy = self.strategy_repo.get_strategy(strategy_id)
         latest_position = self.position_repo.latest_by_strategy(strategy_id)
-        if not strategy or not latest_position or latest_position.mark_price is None or strategy.avg_entry_price is None:
+        if not strategy or strategy.avg_entry_price is None:
             return None
         avg_entry = Decimal(str(strategy.avg_entry_price))
-        mark_price = Decimal(str(latest_position.mark_price))
+        # 🚨 2026-07-24 v127 CRITICAL fix: mark_price = Redis 우선 (헌법 6 단일 진실!)
+        #   옛 silent bug: DB snapshot only = 2분 stale = TP 발동 지연 + trailing peak 손실!
+        from app.services.mark_price_cache import get_mark_price
+        _redis_mark = get_mark_price(strategy.symbol)
+        if _redis_mark is not None:
+            mark_price = Decimal(str(_redis_mark))
+        elif latest_position and latest_position.mark_price is not None:
+            mark_price = Decimal(str(latest_position.mark_price))
+        else:
+            return None
         # raw 가격 변동률에 레버리지 곱해서 사용자 실제 ROI 로 변환.
         # 이 한 곳에서 변환하면 TP1~5, 트레일링, 크라이시스, peak 추적, max_loss/profit 모두
         # 자동으로 leveraged ROI 기준으로 동작.
@@ -321,15 +337,32 @@ class RiskService:
         # 2026-05-06 fix (#103): Redis key 휘발 시 DB historical peak 으로 fallback.
         peak = self._update_peak_pnl(strategy_id, pnl_ratio, strategy.max_profit_pct)
 
-        # 템플릿에서 모든 TP 임계치 가져오기 (TP1~TP10, 2026-05-06 사용자 요청).
-        # NULL 인 단계는 미사용 — 활성 단계만 평가.
+        # 템플릿에서 모든 TP 임계치 가져오기 (TP1~TP20, 2026-05-06 사용자 요청).
+        # 🚨 2026-07-24 v126 CRITICAL: 사장님 #505 DEXEUSDT 사고!
+        #   옛 template = TP1~TP10만 = TP10에서 100% 청산 = 사장님 원한 TP20까지 X!
+        # 신 로직: TP11~TP20 NULL 이면 = auto-extend (이전 값 + 5%씩 증가)!
+        #   = 사장님 = template 편집 안 해도 = TP20까지 사용 가능!
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
         tp_levels: list[tuple[str, Decimal]] = []
-        for n in range(20, 0, -1):  # 🚀 v118: TP20..TP1 (사장님 확장!)
+        # 1) 먼저 = template의 명시된 TP1~TP20 수집 (오름차순!)
+        _tpl_vals: dict[int, Decimal] = {}
+        for n in range(1, 21):
             attr = f"tp{n}_percent"
             val = getattr(tpl, attr, None) if tpl else None
             if val is not None:
-                tp_levels.append((f"TP{n}", Decimal(str(val))))
+                _tpl_vals[n] = Decimal(str(val))
+        # 2) auto-extend: 마지막 명시된 TP 이후 = 5%씩 자동 증가!
+        _all_tps: dict[int, Decimal] = dict(_tpl_vals)
+        if _tpl_vals:
+            _last_n = max(_tpl_vals.keys())
+            _last_v = _tpl_vals[_last_n]
+            for n in range(_last_n + 1, 21):
+                _last_v = _last_v + Decimal("5")
+                _all_tps[n] = _last_v
+        # 3) TP20..TP1 순 (내림차순) — 옛 로직과 동일하게 tp_levels 채움
+        for n in range(20, 0, -1):
+            if n in _all_tps:
+                tp_levels.append((f"TP{n}", _all_tps[n]))
 
         # ─────────── 크라이시스 모드 — TP 임계치 override (사용자 기획) ───────────
         # 정상 모드: TP1 = 사장님 옵션 (10/15/20/25) 또는 template default, TP2-4 = template
@@ -389,7 +422,14 @@ class RiskService:
             if strategy.trailing_retrace_pct is not None
             else TRAILING_TP_RETRACE_AMOUNT  # global default = 5
         )
-        if (
+        # 🚨 2026-07-24 v127 HIGH fix: TP1_override=0 (「TP 완전 끔」) = TRAILING도 차단!
+        # 옛 silent bug: v115 tp_levels=[] 만 비웠고 = 아래 trailing 분기 = 여전히 발동!
+        # = 사장님 「TP 끔」 후 자동 청산 발생 = 「수동 관리」 의도 정면 위반!
+        _tp1_override = strategy.tp1_pct_override
+        if _tp1_override is not None and Decimal(str(_tp1_override)) == 0:
+            # TP 완전 끔 = trailing도 차단!
+            pass  # TP + TRAILING 모두 발동 X (수동 관리 모드!)
+        elif (
             (strategy.status or "").upper() in TRAILING_ARMED_STATUSES
             and (strategy.current_stage or 0) >= TRAILING_MIN_STAGE
             and peak >= TRAILING_TP_PEAK_THRESHOLD

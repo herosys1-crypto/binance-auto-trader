@@ -276,6 +276,16 @@ def _do_reconcile(decrypt_func) -> None:
                                 strategy.id, strategy.symbol, strategy.status,
                             )
                             continue
+                        # 🚨 2026-07-24 v127 HIGH fix: MANUAL_CLEANUP_REQUIRED = stuck 제외!
+                        # 옛 silent bug: MCR도 stuck 카운트 증가 → escalate_stuck_strategy → **Kill-Switch 발동!**
+                        # = 사장님이 「✅ 처리 완료」 클릭 못 한 사이 = 계정 전체 마비!
+                        # fix: MCR = 사장님 ack 대기 = stuck 카운트 제외!
+                        if strategy.status == MANUAL_CLEANUP_REQUIRED:
+                            logger.info(
+                                "[reconcile v127] #%s %s status=MCR = 사장님 ack 대기 = stuck 제외 (Kill-Switch 방지!)",
+                                strategy.id, strategy.symbol,
+                            )
+                            continue
                         # 그 외 = stuck counter (= 정상 동작!)
                         n_stuck = _stuck_inc(strategy.id)
                         db.add(RiskEvent(
@@ -338,6 +348,18 @@ def _do_reconcile(decrypt_func) -> None:
                         ),
                         event_payload={"strategy_id": strategy.id, "old_status": strategy.status},
                     ))
+                    # 🚨 2026-07-24 v127 CRITICAL: cancel_all_orders 필수!
+                    #   옛 silent bug: flat 좀비 = STOPPED 마킹만 = 미체결 LIMIT 잔재!
+                    #   = VELVETUSDT/DYDXUSDT 자본 lock 사고 재발 위험!
+                    #   fix: STOPPED 마킹 전에 모든 미체결 LIMIT 자동 취소!
+                    try:
+                        client.cancel_all_orders(symbol=strategy.symbol)
+                    except Exception as _ce:
+                        logger.warning(
+                            "[reconcile v127] cancel_all_orders 실패 (계속!): "
+                            "strategy=%s symbol=%s error=%s",
+                            strategy.id, strategy.symbol, _ce,
+                        )
                     strategy.status = "STOPPED"
                     strategy.current_position_qty = Decimal("0")
                     strategy.stopped_at = datetime.now(timezone.utc)

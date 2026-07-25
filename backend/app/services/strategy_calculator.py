@@ -293,11 +293,15 @@ class StrategyCalculator:
                 continue
 
             # 중간 단계 — 2단계=10%, 3단계 이후=20% 자동 (명시값 있으면 그것 우선)
+            # 🚨 2026-07-24 v127 CRITICAL fix: leverage 누락 silent bug!
+            #   옛 silent bug: leverage 안 넘김 → default=1 → qty = capital / price (v107 위반!)
+            #   = 3x 6-stage 전략 = stage 2/3/4/5 = 사장님 의도 1/3 qty로 진입!
+            #   = 자율 운영 큰 이익 축소 + 계획 대비 실제 진입 X!
             pct = trigger_percents[i] if trigger_percents[i] is not None else _default_middle_trigger_pct(stage_no)
             mode = "PRICE_UP_PCT" if side == "SHORT" else "PRICE_DOWN_PCT"
             multiplier = self._multiplier(side, pct)
             price = self._quantize_price(prev_anchor_price * multiplier)
-            qty = self.compute_qty_from_capital(capital=capital, price=price)
+            qty = self.compute_qty_from_capital(capital=capital, price=price, leverage=leverage)
             stages.append(
                 StagePlan(
                     stage_no=stage_no,
