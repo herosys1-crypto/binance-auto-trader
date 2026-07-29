@@ -156,7 +156,8 @@ _CACHE_TTL_SEC = {  # period 별 캐시 시간
 
 
 def _ranking_cache_key(period: str) -> str:
-    return f"symbol_ranking:{period}"
+    # v129 (2026-07-29): 캐시 키 버전 up = 옛 top50 캐시 무효화!
+    return f"symbol_ranking:v129:{period}"
 
 
 def _build_ranking_for_period(db: Session, period: str) -> list[dict]:
@@ -203,13 +204,31 @@ def _build_ranking_for_period(db: Session, period: str) -> list[dict]:
     if period == "1d":
         return items_24h
 
-    # 3) 그 외 기간: top 50 심볼 (24h 거래대금 기준) 만 klines 로 정확 계산
-    items_24h.sort(key=lambda x: float(x["quote_volume"]), reverse=True)
-    top50 = items_24h[:50]
+    # 🚨 2026-07-29 v129 CRITICAL fix: 사장님 BULLAUSDT (1d +32.81%, 15일 350%) 누락 사고!
+    #   옛 silent bug: top 50 (24h 거래대금) 만 계산 → 급등 심볼 (거래대금 낮으면) 누락!
+    #   = 사장님 관심 심볼 (급등/급락) = 다중일 순위에서 안 보임!
+    #
+    #   신 로직: 3가지 pool union
+    #     ① 24h 거래대금 top 200 (큰 코인 포함)
+    #     ② 1d 상승률 top 100 (사장님 급등 관심)
+    #     ③ 1d 하락률 top 100 (사장님 급락 관심)
+    #     = 중복 제거 후 = 최대 ~400 심볼 (실제 200~300)
+    #     = klines 호출 증가하지만 = 정확성 우선!
+    _by_volume = sorted(items_24h, key=lambda x: float(x["quote_volume"]), reverse=True)[:200]
+    _by_gainers = sorted(items_24h, key=lambda x: float(x["change_pct"]), reverse=True)[:100]
+    _by_losers = sorted(items_24h, key=lambda x: float(x["change_pct"]))[:100]
+    _seen_syms: set = set()
+    candidates: list[dict] = []
+    for pool in (_by_volume, _by_gainers, _by_losers):
+        for it in pool:
+            sym = it.get("symbol")
+            if sym and sym not in _seen_syms:
+                _seen_syms.add(sym)
+                candidates.append(it)
     interval, klines_limit = _PERIOD_TO_KLINE_PARAMS[period]
 
     out: list[dict] = []
-    for it in top50:
+    for it in candidates:
         try:
             kl = client.get_klines(symbol=it["symbol"], interval=interval, limit=klines_limit)
             if not kl or len(kl) < 2:
