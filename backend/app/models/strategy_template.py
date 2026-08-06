@@ -93,6 +93,15 @@ class StrategyTemplate(Base):
     tp20_qty_ratio: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
     stop_loss_percent_of_capital: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
 
+    # 🌟 2026-08-06 사장님 v130 신 기능 (alembic 0022):
+    # trigger_mode = 신 「차트 OBV 자동 재진입」 지원!
+    # 값: 'PRICE_DOWN_PCT' (기존, 가격 도달 시 진입)
+    #     'OBV_REVERSE'    (신, 4H OBV 첫 하락 봉 + 15m/1h + 10% 가격)
+    # spec: docs/CHART_REENTRY_STRATEGY_SPEC.md
+    trigger_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="PRICE_DOWN_PCT"
+    )
+
     # ---- 크라이시스 모드 qty ratio override (선택, alembic 0009) ----
     # NULL 이면 기본값 {"TP1":25,"TP2":25,"TP3":50,"TP4":100} 사용 (사용자 spec).
     # JSON 형식: {"TP1": 30, "TP2": 30, "TP3": 40, "TP4": 100}
