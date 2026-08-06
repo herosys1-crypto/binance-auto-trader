@@ -1035,7 +1035,8 @@
       <!-- 빠른 작업 — 시스템상태 아래 빈 공간 채움 -->
       <div class="card rounded-lg flex gap-2 items-center flex-wrap" style="padding:6px 10px">
         <span class="text-xs font-semibold text-slate-300 mr-1 hidden sm:inline">⚡ 빠른 작업</span>
-        <button class="btn-success btn text-xs" style="padding:8px 12px;min-height:36px" onclick="openCreateModal()">➕ 새 전략</button>
+        <button class="btn-success btn text-xs" style="padding:8px 12px;min-height:36px" onclick="openCreateModal()" title="구 시스템 = 사장님 세팅 단계별 진입 (가격 도달 시)">🔧 신 전략 (구)</button>
+        <button class="btn-primary btn text-xs" style="padding:8px 12px;min-height:36px;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:white;border:none" onclick="openCreateChartObvModal()" title="신 시스템 = 차트 OBV 분석 자동 재진입 (spec: docs/CHART_REENTRY_STRATEGY_SPEC.md)">📊 신 전략 (OBV 자동)</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="openSymbolRankingModal('gainers')" title="24h/주/월 변동률 상승/하락 순위 — 진입 후보 검색">📈 시장 순위</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="testTelegram()">📨 Telegram</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="window.open('http://localhost:3000','_blank')">📊 Grafana</button>

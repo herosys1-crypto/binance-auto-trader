@@ -24,7 +24,31 @@
  * Phase 3 create-modal 분리 완료 (3a~3i).
  */
 
-// ==================== 신규 전략 모달 ====================
+// ==================== 신 「차트 OBV 자동」 전략 모달 (v130!) ====================
+// 🌟 2026-08-06 사장님 요구: 신 시스템 = 2개 페이지 (구/OBV)
+// spec: docs/CHART_REENTRY_STRATEGY_SPEC.md
+// - 1단계 = 사장님 시작가 진입 (구 시스템 동일!)
+// - 2~N단계 = 4H OBV 첫 하락 봉 + 15m/1h 확인 + 10% 가격 = 자동 재진입!
+// - N+ = 사장님 수동 관리 (구 시스템 동일!)
+// - TP/SL = 구 시스템 그대로!
+//
+// 현재 = Phase 1 UI = placeholder (Backend chart_analyzer + alembic 완성 후 = 신 모달 UI 완성)
+async function openCreateChartObvModal() {
+  const msg =
+    '📊 「신 전략 (OBV 자동)」 = Phase 2 준비 중!\n\n' +
+    '✅ Phase 1 완료:\n' +
+    '  - spec 문서: docs/CHART_REENTRY_STRATEGY_SPEC.md\n' +
+    '  - 대시보드 신 버튼 추가!\n\n' +
+    '🚀 다음 Phase (곧 배포!):\n' +
+    '  - alembic: template.trigger_mode 신 컬럼\n' +
+    '  - Backend: chart_analyzer.py (OBV 계산)\n' +
+    '  - Backend: stage_trigger_worker 확장\n' +
+    '  - Frontend: 신 모달 UI (OBV 옵션 완성)\n\n' +
+    '지금 = 「🔧 신 전략 (구)」 사용 부탁드립니다!';
+  alert(msg);
+}
+
+// ==================== 신규 전략 모달 (구 시스템) ====================
 let cmState = {
   accountId: null,
   side: 'SHORT',
