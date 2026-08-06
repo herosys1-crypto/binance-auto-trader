@@ -107,6 +107,9 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # default 4 로 두면 backward-compat (이전 frontend 도 동작)
     total_active_stages: int = 4
     total_active_tps: int = 4
+    # 🌟 2026-08-06 v130 신 필드: template의 trigger_mode (구/OBV 구분!)
+    # 'PRICE_DOWN_PCT' (기존) or 'OBV_REVERSE' (신)
+    trigger_mode: str = "PRICE_DOWN_PCT"
     # ─── 실제 TP 발동 카운트 + 종료 사유 (UI 정확 표시용, 2026-05-03 fix) ───
     # tp_triggered_count: notifications 의 [TPN 익절 체결] 카운트 (TRAILING 제외)
     # last_close_reason: TP_FINAL / TRAILING / SL / MANUAL / NONE
