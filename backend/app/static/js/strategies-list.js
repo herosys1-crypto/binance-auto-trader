@@ -778,7 +778,11 @@ async function refreshStrategies() {
                title="🔗 ${s.symbol} — 바이낸스 선물 차트 새 탭 열기">${s.symbol}</a>${renderWhitelistBadge(s.symbol)}
             <button onclick="event.stopPropagation(); if(window.openSymbolTradingModal) window.openSymbolTradingModal('${s.symbol}');"
                     title="📊 ${s.symbol} 차트 + Order Book (내장 모달)"
-                    style="background:#1e3a5f;color:#7dd3fc;border:0;border-radius:3px;padding:1px 5px;font-size:10px;cursor:pointer;margin-left:3px;">📊</button><br>
+                    style="background:#1e3a5f;color:#7dd3fc;border:0;border-radius:3px;padding:1px 5px;font-size:10px;cursor:pointer;margin-left:3px;">📊</button>
+            ${s.trigger_mode === 'OBV_REVERSE'
+              ? '<span style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 6px rgba(124,58,237,0.6)" title="📊 신 OBV 자동 재진입 전략! (기존과 다른 자동 재진입 로직!)">📊 OBV</span>'
+              : '<span style="display:inline-block;background:#475569;color:#cbd5e1;padding:2px 6px;border-radius:4px;font-size:10px;margin-left:4px" title="기존 방식 = 가격 도달 시 진입">➕ 기존</span>'
+            }<br>
             <span class="text-slate-500" style="font-size:12px" title="전략 생성 일시">${createdShort}</span>
           </div>
         </td>

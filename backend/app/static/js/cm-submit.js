@@ -212,7 +212,11 @@ async function submitCreate() {
         leverage_override: leverageFromInput,
       },
     });
-    toast('✅ 전략 #' + created.id + ' 생성됨. 1단계 주문 발송 중...', 'success');
+    // 🌟 v130: trigger_mode 명시 표시 = 사장님 어떤 방식인지 즉시 확인!
+    const _modeLabel = (cmState._triggerMode === 'OBV_REVERSE')
+      ? '📊 OBV 자동 재진입'
+      : '➕ 기존 방식';
+    toast(`✅ 전략 #${created.id} 생성됨! [${_modeLabel}] 1단계 주문 발송 중...`, 'success');
     try {
       await api('/strategies/' + created.id + '/start', { method: 'POST' });
       toast('🚀 전략 #' + created.id + ' 시작 완료. 1단계 주문 발송됨.', 'success');
