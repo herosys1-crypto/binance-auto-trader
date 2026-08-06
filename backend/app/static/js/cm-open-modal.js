@@ -32,20 +32,32 @@
 // - N+ = 사장님 수동 관리 (구 시스템 동일!)
 // - TP/SL = 구 시스템 그대로!
 //
-// 현재 = Phase 1 UI = placeholder (Backend chart_analyzer + alembic 완성 후 = 신 모달 UI 완성)
+// 구현: 기존 openCreateModal() 재사용 + trigger_mode='OBV_REVERSE' flag!
 async function openCreateChartObvModal() {
-  const msg =
-    '📊 「신 전략 (OBV 자동)」 = Phase 2 준비 중!\n\n' +
-    '✅ Phase 1 완료:\n' +
-    '  - spec 문서: docs/CHART_REENTRY_STRATEGY_SPEC.md\n' +
-    '  - 대시보드 신 버튼 추가!\n\n' +
-    '🚀 다음 Phase (곧 배포!):\n' +
-    '  - alembic: template.trigger_mode 신 컬럼\n' +
-    '  - Backend: chart_analyzer.py (OBV 계산)\n' +
-    '  - Backend: stage_trigger_worker 확장\n' +
-    '  - Frontend: 신 모달 UI (OBV 옵션 완성)\n\n' +
-    '지금 = 「🔧 신 전략 (구)」 사용 부탁드립니다!';
-  alert(msg);
+  // 기존 모달 오픈
+  await openCreateModal();
+  // OBV 모드 flag 설정 (cmState 확장)
+  cmState._triggerMode = 'OBV_REVERSE';
+  // 모달 타이틀 변경 = 사장님 명확!
+  const titleEl = document.getElementById('cm-title');
+  if (titleEl) {
+    titleEl.textContent = '📊 신 전략 (OBV 자동 재진입!)';
+    titleEl.style.color = '#a78bfa';  // 보라 = 신 모드 시각!
+  }
+  // 배너 = OBV 설명!
+  const bannerEl = document.getElementById('cm-edit-banner-detail');
+  if (bannerEl) {
+    bannerEl.innerHTML =
+      '<b style="color:#a78bfa">📊 신 「차트 OBV 자동 재진입」 모드!</b><br>' +
+      '• 1단계 = 사장님 시작가 진입 (기존과 동일!)<br>' +
+      '• 2~N단계 = 자동! (4H OBV 첫 하락 + 15m/1h 확인 + 10% 가격 이동!)<br>' +
+      '• 손절/TP = 기존 로직 그대로! (사장님 옵션 우선!)<br>' +
+      '• N+ 단계 = 수동 관리!';
+    bannerEl.style.borderLeft = '3px solid #a78bfa';
+    bannerEl.style.paddingLeft = '8px';
+  }
+  const bannerParent = document.getElementById('cm-edit-banner');
+  if (bannerParent) bannerParent.classList.remove('hidden');
 }
 
 // ==================== 신규 전략 모달 (구 시스템) ====================

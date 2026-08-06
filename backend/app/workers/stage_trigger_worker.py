@@ -295,10 +295,52 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     _alert_silent_block_once(_redis, db, strategy, "mark_price 없음 (mark-price-stream 점검 필요)", next_stage_no)
                     continue
                 mark = Decimal(str(mark))
-                trigger = Decimal(str(next_plan.trigger_price))
-                # SHORT: 가격 위로 더 갔으면 추가 SHORT 진입 (mark >= trigger)
-                # LONG: 가격 아래로 더 갔으면 추가 LONG 진입 (mark <= trigger)
-                should_fire = (mark >= trigger) if strategy.side == "SHORT" else (mark <= trigger)
+                # 🌟 2026-08-06 v130 사장님 신 로직: trigger_mode 분기!
+                # spec: docs/CHART_REENTRY_STRATEGY_SPEC.md
+                # 기존 (PRICE_DOWN_PCT): 가격 도달 시 진입
+                # 신 (OBV_REVERSE): 4H OBV 첫 하락 + 15m/1h + 10% 가격 이동
+                _tpl_trigger_mode = "PRICE_DOWN_PCT"
+                try:
+                    from app.models.strategy_template import StrategyTemplate as _TmplM
+                    _tpl_row = db.get(_TmplM, strategy.strategy_template_id) if strategy.strategy_template_id else None
+                    if _tpl_row and getattr(_tpl_row, "trigger_mode", None):
+                        _tpl_trigger_mode = _tpl_row.trigger_mode
+                except Exception:
+                    pass
+                should_fire = False
+                if _tpl_trigger_mode == "OBV_REVERSE":
+                    # 신 로직: ChartAnalyzer 호출!
+                    # 이전 손절가 = strategy.avg_entry_price (1단계 진입가 = 손절 기준)
+                    # 또는 prev_stage_plan.trigger_price (이전 stage 진입가)
+                    try:
+                        from app.services.chart_analyzer import ChartAnalyzer
+                        from app.integrations.binance.client import BinanceClient
+                        _bc = BinanceClient(
+                            api_key=decrypt_text(account.api_key_enc),
+                            api_secret=decrypt_text(account.api_secret_enc),
+                            is_testnet=account.is_testnet,
+                        )
+                        _prev_price = Decimal(str(strategy.avg_entry_price or 0))
+                        if _prev_price > 0:
+                            _analyzer = ChartAnalyzer(_bc)
+                            _signal, _detail = _analyzer.check_obv_reverse_signal(
+                                strategy.symbol, _prev_price
+                            )
+                            should_fire = _signal
+                            if should_fire:
+                                logger.info(
+                                    "[stage-trigger v130 OBV] 🎯 신호 발동! strategy=%s stage=%s detail=%s",
+                                    strategy.id, next_stage_no, _detail,
+                                )
+                    except Exception as _e:
+                        logger.warning("[stage-trigger v130 OBV] 분석 실패 (skip): %s", _e)
+                        should_fire = False
+                else:
+                    # 기존 로직 (PRICE_DOWN_PCT)
+                    trigger = Decimal(str(next_plan.trigger_price))
+                    # SHORT: 가격 위로 더 갔으면 추가 SHORT 진입 (mark >= trigger)
+                    # LONG: 가격 아래로 더 갔으면 추가 LONG 진입 (mark <= trigger)
+                    should_fire = (mark >= trigger) if strategy.side == "SHORT" else (mark <= trigger)
                 if not should_fire:
                     continue
                 # LIMIT 주문 발송
