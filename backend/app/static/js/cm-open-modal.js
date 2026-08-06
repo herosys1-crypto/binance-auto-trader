@@ -36,19 +36,31 @@
 async function openCreateChartObvModal() {
   // 기존 모달 오픈
   await openCreateModal();
-  // OBV 모드 flag 설정 (cmState 확장)
+  // 🚨 v130 CRITICAL fix (2026-08-06): OBV 모드 = 「직접 입력」 강제!
+  //   옛 silent bug: template 모드 = 옛 template 재사용 = trigger_mode=PRICE_DOWN_PCT!
+  //   = 사장님 OBV 원했는데 = 「➕ 기존」 저장!
+  //   fix: mode='direct' 강제 + template 선택 무효!
   cmState._triggerMode = 'OBV_REVERSE';
+  cmState.mode = 'direct';  // 강제!
+  cmState.templateId = null;  // template 선택 무효화!
+  // UI = direct 라디오 강제 선택 (있으면)
+  const directRadio = document.querySelector('input[name="cm-mode"][value="direct"]');
+  if (directRadio) directRadio.checked = true;
+  // template 선택 UI = 숨김 or 비활성 (있으면)
+  const tplSelectEl = document.getElementById('cm-template-select');
+  if (tplSelectEl) tplSelectEl.disabled = true;
   // 모달 타이틀 변경 = 사장님 명확!
   const titleEl = document.getElementById('cm-title');
   if (titleEl) {
-    titleEl.textContent = '📊 신 전략 (OBV 자동 재진입!)';
+    titleEl.textContent = '📊 새 전략 (OBV 자동 재진입!) — 직접 입력 필수!';
     titleEl.style.color = '#a78bfa';  // 보라 = 신 모드 시각!
   }
-  // 배너 = OBV 설명!
+  // 배너 = OBV 설명 + direct 강제 안내!
   const bannerEl = document.getElementById('cm-edit-banner-detail');
   if (bannerEl) {
     bannerEl.innerHTML =
-      '<b style="color:#a78bfa">📊 신 「차트 OBV 자동 재진입」 모드!</b><br>' +
+      '<b style="color:#a78bfa">📊 새 「차트 OBV 자동 재진입」 모드!</b><br>' +
+      '<b style="color:#fbbf24">⚠️ 직접 입력 필수!</b> (저장된 template 사용 X = 신 template 자동 생성!)<br>' +
       '• 1단계 = 사장님 시작가 진입 (기존과 동일!)<br>' +
       '• 2~N단계 = 자동! (4H OBV 첫 하락 + 15m/1h 확인 + 10% 가격 이동!)<br>' +
       '• 손절/TP = 기존 로직 그대로! (사장님 옵션 우선!)<br>' +
