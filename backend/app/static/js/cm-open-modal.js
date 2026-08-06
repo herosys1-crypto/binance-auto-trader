@@ -71,6 +71,9 @@ let cmState = {
 };
 
 async function openCreateModal(editStrategyId) {
+  // 🌟 v130 (2026-08-06): _triggerMode 초기화 = default 'PRICE_DOWN_PCT' (구 시스템!)
+  //   openCreateChartObvModal()가 = 이후에 = 'OBV_REVERSE'로 덮어씀!
+  cmState._triggerMode = 'PRICE_DOWN_PCT';
   const _modalEl = document.getElementById('create-modal');
   _modalEl.classList.remove('hidden');
   /* 🚨 v92: 「⬆ 심볼로」 fixed 버튼 = 모달 열림 시 = 표시! */

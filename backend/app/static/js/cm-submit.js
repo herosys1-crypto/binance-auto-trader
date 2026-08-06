@@ -195,6 +195,8 @@ async function submitCreate() {
           stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
           crisis_max_loss_threshold: tpsl.crisis_max_loss_threshold,
           reentry_policy: 'manual_ready',
+          // 🌟 2026-08-06 v130: cmState._triggerMode 전달 (구/OBV 구분!)
+          trigger_mode: cmState._triggerMode || 'PRICE_DOWN_PCT',
         },
       });
       templateId = tplCreated.id;

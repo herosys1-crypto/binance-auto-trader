@@ -98,6 +98,12 @@ class StrategyTemplateCreate(BaseModel):
     # 2026-05-14 (사용자 요청, alembic 0015): 크라이시스 임계 사용자 정의.
     # NULL = global default -50% / -50~-80 = 그 값 사용 / -100 (이하) = 비활성.
     crisis_max_loss_threshold: Decimal | None = Field(default=None, ge=Decimal("-200"), le=Decimal("-30"))
+    # 🌟 2026-08-06 v130 사장님 신 필드: trigger_mode (구/OBV 구분!)
+    # 'PRICE_DOWN_PCT' (기존, default) or 'OBV_REVERSE' (신 차트 자동!)
+    trigger_mode: str = Field(
+        default="PRICE_DOWN_PCT",
+        description="stage 진입 조건: PRICE_DOWN_PCT (가격 도달) or OBV_REVERSE (4H OBV 첫 하락 + 15m/1h + 10%)"
+    )
 
 
 class StrategyTemplateResponse(BaseModel):
@@ -216,6 +222,7 @@ def create_strategy_template(
         reentry_delay_seconds=payload.reentry_delay_seconds,
         reentry_offset_pct=payload.reentry_offset_pct,
         crisis_max_loss_threshold=payload.crisis_max_loss_threshold,
+        trigger_mode=payload.trigger_mode,  # 🌟 v130: 구/OBV 구분!
         is_active=True,
     )
     db.add(template)
