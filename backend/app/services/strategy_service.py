@@ -403,9 +403,19 @@ class StrategyService:
         # 🌟 2026-08-06 v130 사장님: OBV 모드 = 1단계 마진만 검증!
         if _trigger_mode_check == "OBV_REVERSE":
             # 1단계 자본 = 마진 (v107)
+            # 🚨 v130 fix: None 방어! (additional_margins = [None, None] 시 500!)
+            def _safe_dec(val):
+                if val is None or val == "":
+                    return D("0")
+                try:
+                    return D(str(val))
+                except Exception:
+                    return D("0")
             _stages = getattr(template_model, "stages_config", {}) or {}
-            _first_cap = D(str((_stages.get("capitals") or [0])[0]))
-            _first_add_m = D(str((_stages.get("additional_margins") or [0])[0]))
+            _caps = _stages.get("capitals") or [0]
+            _adds = _stages.get("additional_margins") or [0]
+            _first_cap = _safe_dec(_caps[0] if _caps else 0)
+            _first_add_m = _safe_dec(_adds[0] if _adds else 0)
             _first_margin_total = _first_cap + _first_add_m
             if _first_margin_total > available:
                 raise ValueError(
@@ -457,9 +467,17 @@ class StrategyService:
         max_pct = _settings.max_strategy_capital_pct_of_balance
         if _trigger_mode == "OBV_REVERSE":
             # OBV 모드 = 완화 = 1단계 자본만 검증 (즉시 진입!)
+            # 🚨 v130 fix: None 방어!
+            def _safe_dec_a(val):
+                if val is None or val == "":
+                    return D("0")
+                try:
+                    return D(str(val))
+                except Exception:
+                    return D("0")
             _stages = getattr(template_model, "stages_config", {}) or {}
             _capitals = _stages.get("capitals") or [0]
-            _first_cap = D(str(_capitals[0] if _capitals else 0))
+            _first_cap = _safe_dec_a(_capitals[0] if _capitals else 0)
             if max_pct and max_pct >= 100 and available > 0 and _first_cap > 0:
                 _first_margin = _first_cap  # v107: capital = margin
                 if _first_margin > available:
