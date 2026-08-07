@@ -109,8 +109,7 @@ function _collectTpSl() {
 }
 
 function _defaultLeverageForSide(side) {
-  // 2026-05-15 사용자 요청: SHORT/LONG 둘 다 2x default
-  // 🌟 2026-08-08 v130 사장님 재확정: 구 시스템 = 원상태 (2x 복원)!
-  //   신 OBV 전략 = openCreateChartObvModal에서 = 5x로 override!
-  return 2;
+  // 🌟 2026-08-08 v130 사장님 확정: 5x default (구/신 모두!)
+  //   사장님: '새로 정한건 모두 유효해'
+  return 5;
 }

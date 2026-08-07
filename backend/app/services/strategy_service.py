@@ -509,10 +509,8 @@ class StrategyService:
                     "  • USDT 추가 입금으로 마진 여유 확보"
                 )
         preview = self.calculate_preview(symbol=symbol, side=side, start_price=start_price, strategy_template_id=strategy_template_id, leverage_override=leverage_override)
-        # 🌟 2026-08-08 v130 사장님 재확정: 구 시스템 = 원상태!
-        #   tp1_pct_override = 신 OBV만 = 25 자동!
-        #   구 시스템 = None (원래 = 사장님 실시간 dropdown 조정!)
-        _is_obv = (getattr(template_model, "trigger_mode", "PRICE_DOWN_PCT") == "OBV_REVERSE")
+        # 🌟 2026-08-08 v130 사장님 확정: 모든 전략 = tp1_pct_override=25 자동!
+        #   사장님: '새로 정한건 모두 유효해'
         instance = StrategyInstance(
             user_id=user_id,
             exchange_account_id=exchange_account_id,
@@ -524,7 +522,7 @@ class StrategyService:
             leverage=preview.leverage,
             total_capital=template_model.total_capital,
             status="WAITING",
-            tp1_pct_override=(D("25") if _is_obv else None),
+            tp1_pct_override=D("25"),  # v130 신 default: 25% 자동 (구/신 모두!)
         )
         self.repo.create_strategy_instance(instance)
         plans = [StrategyStagePlan(
