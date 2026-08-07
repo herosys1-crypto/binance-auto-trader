@@ -1032,8 +1032,20 @@ class ExecutionService:
                 "Kill-switch 를 해제한 후 재시도하세요."
             )
         stage_plan = next((p for p in strategy.stage_plans if p.stage_no == stage_no), None)
+        # 🌟 2026-08-06 v130 사장님 fix: 미세팅 단계 = 마지막 stage_plan의 자본 재사용!
+        #   옛: stage_plan 없으면 400 에러!
+        #   신: 사장님이 1단계만 세팅 후 ▶ 클릭 = 그 자본으로 강제 진입!
         if not stage_plan:
-            raise ValueError(f"Stage {stage_no} plan not found")
+            _prev_plans = [p for p in strategy.stage_plans if p.planned_capital is not None]
+            if _prev_plans:
+                _last_plan = max(_prev_plans, key=lambda p: p.stage_no)
+                logger.info(
+                    "[trigger_next v130] Stage %s plan 없음 = 마지막 plan (stage=%s, capital=%s) 재사용!",
+                    stage_no, _last_plan.stage_no, _last_plan.planned_capital,
+                )
+                stage_plan = _last_plan  # 임시 재사용 (Order 생성 시 stage_no만 override)
+            else:
+                raise ValueError(f"Stage {stage_no} plan not found + fallback plan도 없음!")
         if stage_plan.planned_capital is None:
             raise ValueError(f"Stage {stage_no} planned_capital is missing")
         # 2026-05-06 (사용자 결정): 모든 거래 ISOLATED. 빈 포지션이면 변경, 보유 중이면 noop.

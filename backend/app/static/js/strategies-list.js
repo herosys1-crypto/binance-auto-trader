@@ -645,11 +645,16 @@ async function refreshStrategies() {
       // 2026-05-04: 증거금 추가 버튼은 수량/마진 column 으로 이동 (위 addMarginBtnInQty).
       // 「▶ 다음 단계 즉시 진입」 — 활성 strategy + 다음 단계 미발동 시. trigger_price 무시, planned_capital 그대로.
       // 2026-05-04 (사용자 피드백): 액션 버튼 컴팩트화 — 아이콘만 + nowrap + flex inline.
-      const totalStagesForBtn = s.total_active_stages || 4;
-      const canTriggerNext = !isTerminal && (s.current_stage || 0) < totalStagesForBtn;
+      // 🌟 2026-08-06 v130 사장님 fix:
+      //   옛: current_stage < totalStagesForBtn (세팅 단계까지만!) = 1단계만 세팅 시 = 표시 X!
+      //   신: 활성 strategy면 = 언제든 표시 (사장님 자율 = 강제 진입!)
+      //       미체결 상황 or 세팅 없는 단계도 = 사장님이 「▶」 클릭 가능!
+      //   최대 20단계까지 (v118 확장 반영)!
+      const totalStagesForBtn = 20;
+      const canTriggerNext = !isTerminal && (s.current_stage || 0) >= 1 && (s.current_stage || 0) < totalStagesForBtn;
       const btnStyle = "padding:3px 6px;font-size:12px;white-space:nowrap;line-height:1.3";
       const triggerNextBtn = canTriggerNext
-        ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="현재가에서 다음 단계 즉시 진입 (trigger_price 무시, 사전 계획된 자본 그대로)">▶</button>`
+        ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="▶ 다음 단계 즉시 강제 진입! (미체결 시 재시도, 세팅 없어도 마지막 자본으로 진입)">▶</button>`
         : '';
       // 2026-06-08 사장님 UI 단순화 결정:
       // 🔄 (recalcUntriggeredFromCurrent) + ➕ (openAddUntriggeredStagesModal) 버튼 = 제거.
