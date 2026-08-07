@@ -70,6 +70,21 @@ async function openCreateChartObvModal() {
   }
   const bannerParent = document.getElementById('cm-edit-banner');
   if (bannerParent) bannerParent.classList.remove('hidden');
+
+  // 🌟 v130 (2026-08-08): 신 OBV 자동 세팅!
+  //   - 레버리지 = 5x (기존 2x → 5x)
+  //   - TP1/2/3/4 qty = 10/15/20/25 (사장님 진짜 요구!)
+  setTimeout(() => {
+    // 레버리지 5x
+    const lvInp = document.getElementById('cm-leverage');
+    if (lvInp && !lvInp.value) lvInp.value = 5;
+    // TP qty 자동 세팅 (사장님 원하면 = 수정 가능!)
+    const _tpQtyDefaults = {'cm-tp1-qty': 10, 'cm-tp2-qty': 15, 'cm-tp3-qty': 20, 'cm-tp4-qty': 25};
+    for (const [id, val] of Object.entries(_tpQtyDefaults)) {
+      const el = document.getElementById(id);
+      if (el && !el.value) el.value = val;
+    }
+  }, 200);
 }
 
 // ==================== 신규 전략 모달 (구 시스템) ====================
