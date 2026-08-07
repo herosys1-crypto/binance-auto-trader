@@ -183,6 +183,26 @@ class RiskService:
         # SL 발동: ROI <= -80%
         is_stop = unrealized_roi <= -sl_pct
 
+        # 🌟 2026-08-06 v130 사장님 CRITICAL 요구:
+        # '손실설정시 모든 단계가 진입한 상태에서 설정한 손실일때 정산이 진행되어야 해
+        #  만약 다음단계가 남아 있는 경우에는 설정한 손실에서 청산되면 안된다'
+        # = 다음 단계 미진입 시 = SL 발동 X!
+        # = 사장님 사상: 다음 단계 = 손실 회복 기회!
+        # 예: 3단계 세팅 + 1단계만 진입 + -10% 도달 = SL 발동 X (2, 3단계 남음!)
+        #     3단계 모두 진입 + -10% 도달 = SL 발동 O
+        if is_stop:
+            # 활성 단계 수 vs 현재 진입 단계 비교
+            from app.api.v1.strategies.helpers import _count_active_stages
+            _total_stages = _count_active_stages(tpl)
+            _current_stage = strategy.current_stage or 0
+            if _current_stage < _total_stages:
+                logger.info(
+                    "[SL v130] 사장님 사상: SL 발동 조건 도달 (ROI %.2f%%) but "
+                    "다음 단계 남음 (%s/%s) = 발동 X! 손실 회복 기회 유지!",
+                    unrealized_roi, _current_stage, _total_stages,
+                )
+                return False  # SL 발동 X!
+
         if is_stop:
             current_loss_amount = Decimal(str(strategy.realized_pnl or 0)) + Decimal(str(strategy.unrealized_pnl or 0))
             self.db.add(RiskEvent(
@@ -252,6 +272,20 @@ class RiskService:
             side=side, avg_entry=avg_entry, mark_price=mark_price,
             leverage=leverage, enabled=enabled, threshold=threshold,
         )
+        # 🌟 2026-08-06 v130 사장님 CRITICAL:
+        # 다음 단계 미진입 시 = force SL도 발동 X! (손실 회복 기회 유지!)
+        if is_force:
+            from app.api.v1.strategies.helpers import _count_active_stages
+            from app.models.strategy_template import StrategyTemplate as _TmplM_fsl
+            _tpl_fsl = self.db.get(_TmplM_fsl, strategy.strategy_template_id) if strategy.strategy_template_id else None
+            _total_stages_fsl = _count_active_stages(_tpl_fsl)
+            _current_stage_fsl = strategy.current_stage or 0
+            if _current_stage_fsl < _total_stages_fsl:
+                logger.info(
+                    "[force_sl v130] 사장님 사상: 발동 조건 도달 but 다음 단계 남음 (%s/%s) = 발동 X!",
+                    _current_stage_fsl, _total_stages_fsl,
+                )
+                return False
         if is_force:
             from app.core.risk_constants import PERCENT_DENOMINATOR
             if side == "LONG":
