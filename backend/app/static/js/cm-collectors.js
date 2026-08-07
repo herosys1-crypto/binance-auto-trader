@@ -109,6 +109,7 @@ function _collectTpSl() {
 }
 
 function _defaultLeverageForSide(side) {
-  // 2026-05-15 사용자 요청: SHORT/LONG 둘 다 2x default (이전 LONG=1 → 사용자 거의 항상 직접 2 로 변경하는 패턴 발견)
-  return 2;
+  // 2026-05-15: SHORT/LONG 둘 다 2x default
+  // 🌟 2026-08-06 v130 사장님 신 default: 5x (기존 2x → 5x)!
+  return 5;
 }

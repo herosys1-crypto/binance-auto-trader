@@ -62,14 +62,14 @@ FORCE_SL_LONG_ENABLED_KEY: Final[str] = "force_sl_long_enabled"
 FORCE_SL_LONG_ROI_KEY: Final[str] = "force_sl_long_roi"
 FORCE_SL_SHORT_ENABLED_KEY: Final[str] = "force_sl_short_enabled"
 FORCE_SL_SHORT_ROI_KEY: Final[str] = "force_sl_short_roi"
-# 기본값 (사장님 확정 2026-06-24): 롱 ON / 숏 OFF.
-# 🌟 2026-08-06 v130: default -10% → -5% 변경 (사장님 요구, 신 OBV 전략 도입)!
-#   신 로직 = 손절 후 = OBV 신호 시 = 자동 재진입!
-#   = 손절 빠르게 (-5%) → 재진입 여러번 시도 = 사장님 자율 운영!
+# 기본값 (사장님 확정 2026-08-06 v130):
+#   롱 ON / 숏 ON (양방향 안전!)
+#   default = -10% (사장님 재확정 = 다음 단계 진입 후에만 발동!)
+#   신 로직: '다음 단계 남으면 = SL 발동 X!' (risk_service v130 사장님 사상!)
 FORCE_SL_LONG_ENABLED_DEFAULT: Final[bool] = True
-FORCE_SL_SHORT_ENABLED_DEFAULT: Final[bool] = True  # 신 default: SHORT도 ON!
-# 양수로 저장 (예: 5 = ROI <= -5% 시 발동).
-FORCE_SL_ROI_DEFAULT: Final[Decimal] = Decimal("5")
+FORCE_SL_SHORT_ENABLED_DEFAULT: Final[bool] = True  # SHORT도 ON!
+# 양수로 저장 (예: 10 = ROI <= -10% 시 발동, 모든 단계 진입 후에만!).
+FORCE_SL_ROI_DEFAULT: Final[Decimal] = Decimal("10")
 # 허용 ROI 한도 (사장님 선택지). 그 외 값은 API 400.
 FORCE_SL_ALLOWED_ROI: Final[tuple[Decimal, ...]] = (
     Decimal("5"), Decimal("10"), Decimal("15"), Decimal("20"),

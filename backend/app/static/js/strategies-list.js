@@ -398,7 +398,8 @@ async function refreshStrategies() {
       // 사장님 결정: Crisis = 영구 비활성, 사장님 옵션 = 항상 우선!
       // 사장님 = 상황에 따라 = 즉시 선택 = 즉시 적용!
       // 활성 strategy 만 노출 (= TERMINAL X)
-      const _tp1Pct = (s.tp1_pct_override != null) ? Number(s.tp1_pct_override) : 10;
+      // 🌟 2026-08-06 v130 사장님 신 default: 25% (기존 10% → 25%)!
+      const _tp1Pct = (s.tp1_pct_override != null) ? Number(s.tp1_pct_override) : 25;
       const _isActiveForTp1 = !TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
       const tp1ThresholdSelect = _isActiveForTp1
         ? `<select onclick="event.stopPropagation()"
