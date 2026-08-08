@@ -463,6 +463,23 @@ class RiskService:
         if _tp1_override is not None and Decimal(str(_tp1_override)) == 0:
             # TP 완전 끔 = trailing도 차단!
             pass  # TP + TRAILING 모두 발동 X (수동 관리 모드!)
+        # 🌟 2026-08-08 v130 사장님 신 로직: peak >= 20% 이면 = TP3 발동한 것과 같은 상황!
+        # 사장님: '20% 이상이면 tp3 단계가 실현되었다고 보고 강제 청산 로직을 실행!'
+        # = TP1_override=25% 인 경우 = TP1 발동 = 즉시 trailing 활성화!
+        # = status 조건 (TP{n}_DONE_PARTIAL) 완화 = peak 20% 이상이면 = 무조건 활성!
+        elif (
+            peak >= Decimal("20")  # 20% 이상 도달 = TP3와 동등!
+            and (strategy.current_stage or 0) >= 1  # 1단계 이상 진입
+            and pnl_ratio <= (peak - _strategy_retrace)
+            and pnl_ratio < peak
+        ):
+            logger.info(
+                "[trailing v130] peak=%.2f%% >= 20%% 도달 = trailing 활성 → 청산! "
+                "(pnl=%.2f%% <= peak - retrace %.2f%%)",
+                peak, pnl_ratio, _strategy_retrace,
+            )
+            return "TRAILING_TP"
+        # 옛 로직 (backward-compat): TP3+ 발동 + stage 3+
         elif (
             (strategy.status or "").upper() in TRAILING_ARMED_STATUSES
             and (strategy.current_stage or 0) >= TRAILING_MIN_STAGE
