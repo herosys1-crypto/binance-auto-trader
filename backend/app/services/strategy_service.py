@@ -509,8 +509,9 @@ class StrategyService:
                     "  • USDT 추가 입금으로 마진 여유 확보"
                 )
         preview = self.calculate_preview(symbol=symbol, side=side, start_price=start_price, strategy_template_id=strategy_template_id, leverage_override=leverage_override)
-        # 🌟 2026-08-08 v130 사장님 확정: 모든 전략 = tp1_pct_override=25 자동!
-        #   사장님: '새로 정한건 모두 유효해'
+        # 🌟 2026-08-08 v130 사장님 확정 default:
+        #   tp1_pct_override = 25 (모든 TP 상향!)
+        #   force_sl_enabled_override = True + force_sl_roi_override = 15 (강제 -15%)!
         instance = StrategyInstance(
             user_id=user_id,
             exchange_account_id=exchange_account_id,
@@ -522,7 +523,9 @@ class StrategyService:
             leverage=preview.leverage,
             total_capital=template_model.total_capital,
             status="WAITING",
-            tp1_pct_override=D("25"),  # v130 신 default: 25% 자동 (구/신 모두!)
+            tp1_pct_override=D("25"),  # 25% 자동
+            force_sl_enabled_override=True,  # 강제 SL ON!
+            force_sl_roi_override=D("15"),  # -15% 자동!
         )
         self.repo.create_strategy_instance(instance)
         plans = [StrategyStagePlan(

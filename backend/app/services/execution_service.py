@@ -985,11 +985,30 @@ class ExecutionService:
         return response
 
     def _place_stage_entry_order(self, strategy, stage_plan) -> Order:
-        if stage_plan.planned_qty is None or stage_plan.trigger_price is None:
-            raise ValueError(f"Stage {stage_plan.stage_no} planned_qty/trigger_price is missing")
+        # 🌟 2026-08-08 v130 사장님: 시작가 없으면 (start_price=None) = MARKET 진입!
+        #   trigger_price=None → MARKET (현재가 즉시 진입!)
+        #   trigger_price=값 → LIMIT (기존 로직!)
+        if stage_plan.planned_qty is None:
+            raise ValueError(f"Stage {stage_plan.stage_no} planned_qty is missing")
         side = "BUY" if strategy.side == "LONG" else "SELL"
         position_side = strategy.side
         client_order_id = self._new_client_order_id(strategy.symbol, f"ENTRY{stage_plan.stage_no}")
+        # trigger_price 없음 = MARKET!
+        if stage_plan.trigger_price is None:
+            current_price = self._fetch_current_mark_price(strategy.symbol)
+            # preflight 검증
+            self._preflight_entry_market_check(
+                strategy, qty=Decimal(str(stage_plan.planned_qty)),
+                current_price=current_price, purpose=f"stage{stage_plan.stage_no}_market",
+            )
+            payload = {"symbol": strategy.symbol, "side": side, "positionSide": position_side, "type": "MARKET", "quantity": str(stage_plan.planned_qty), "newClientOrderId": client_order_id}
+            adapter = self.execution_router.route_for_type(payload["type"])
+            response = adapter.place_order(payload)
+            order = Order(strategy_instance_id=strategy.id, stage_no=stage_plan.stage_no, purpose="ENTRY", symbol=strategy.symbol, side=side, position_side=position_side, order_type="MARKET", client_order_id=client_order_id, exchange_order_id=response.get("orderId"), trigger_price=None, price=None, orig_qty=stage_plan.planned_qty, executed_qty=Decimal(str(response.get("executedQty", "0"))), avg_price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, status=response.get("status", "NEW"), raw_request=payload, raw_response=response)
+            self.order_repo.create(order)
+            logger.info("[stage_entry v130] MARKET 진입 완료: strategy=%s stage=%s qty=%s @ current=%s", strategy.id, stage_plan.stage_no, stage_plan.planned_qty, current_price)
+            return order
+        # trigger_price 있음 = 기존 LIMIT 로직!
         payload = {"symbol": strategy.symbol, "side": side, "positionSide": position_side, "type": "LIMIT", "quantity": str(stage_plan.planned_qty), "price": str(stage_plan.trigger_price), "timeInForce": "GTC", "newClientOrderId": client_order_id}
         adapter = self.execution_router.route_for_type(payload["type"])
         response = adapter.place_order(payload)

@@ -427,9 +427,10 @@ async function refreshStrategies() {
       // 🌟 2026-06-24 사장님: 손실 한도 강제 청산 전략별 override 드롭다운.
       // 전역 설정(「💼 계정」) 이 모든 전략 기본 + 전략별 선택 우선 (= 전역/끔/-5~-20%).
       // NULL,NULL=전역 상속 / enabled=false=끔 / enabled=true=이 전략 우선(-roi%).
-      let _fslSel = 'inherit';
+      // 🌟 2026-08-08 v130 사장님 신 default: 강제 -15% (기존 inherit → on:15)!
+      let _fslSel = 'on:15';  // default = -15%!
       if (s.force_sl_enabled_override === false) _fslSel = 'off';
-      else if (s.force_sl_enabled_override === true) _fslSel = 'on:' + (s.force_sl_roi_override != null ? Number(s.force_sl_roi_override) : 10);
+      else if (s.force_sl_enabled_override === true) _fslSel = 'on:' + (s.force_sl_roi_override != null ? Number(s.force_sl_roi_override) : 15);
       const forceSlSelect = _isActiveForTp1
         ? `<select onclick="event.stopPropagation()"
                   onmousedown="event.stopPropagation()"
