@@ -298,4 +298,10 @@ def get_strategy_blueprint(
         "stop_loss_percent_of_capital": str(tpl.stop_loss_percent_of_capital),
         # 2026-05-14 (사용자 요청, alembic 0015): 크라이시스 임계 사용자 정의 자동 채움.
         "crisis_max_loss_threshold": str(tpl.crisis_max_loss_threshold) if tpl.crisis_max_loss_threshold is not None else None,
+        # 🌟 v131 (2026-08-09 사장님!): 청산 후 재진입 옵션 = 수정 모드에도 반영!
+        # 사장님 지적: "청산후 재진입이라 이곳도 수정해야해"
+        "retry_after_liquidation_enabled": bool(getattr(strategy, "retry_after_liquidation_enabled", False) or False),
+        "retry_trigger_pct": str(strategy.retry_trigger_pct) if getattr(strategy, "retry_trigger_pct", None) is not None else "10",
+        "capital_management_mode": getattr(strategy, "capital_management_mode", None) or "fixed",
+        "retry_stage_trigger_pcts": getattr(strategy, "retry_stage_trigger_pcts", None) or {},
     }

@@ -139,6 +139,45 @@ async function loadPrevBlueprint(strategyId, silent) {
     const _mktEl = document.getElementById('cm-mkt-price');
     if (_mktEl) _mktEl.textContent = '-';
     onCapitalsChange();
+
+    // 🌟 v131 (2026-08-09 사장님!): 청산 후 재진입 옵션 = 수정 모드 반영!
+    // 사장님 지적: "청산후 재진입이라 이곳도 수정해야해"
+    try {
+      // 활성 여부 → 두 checkbox 모두 반영!
+      const _enabled = bp.retry_after_liquidation_enabled === true;
+      const _retryElBottom = document.getElementById('cm-retry-after-liq-enabled');
+      const _retryElTop = document.getElementById('cm-retry-after-liq-enabled-top');
+      if (_retryElBottom) _retryElBottom.checked = _enabled;
+      if (_retryElTop) _retryElTop.checked = _enabled;
+      // 상단 배경 강조 반영!
+      if (typeof _syncRetryCheckbox === 'function') _syncRetryCheckbox('bottom');
+
+      // 기본 트리거 % (dropdown 반영!)
+      const _trgEl = document.getElementById('cm-retry-trigger-pct');
+      if (_trgEl && bp.retry_trigger_pct) {
+        const _pct = String(Number(bp.retry_trigger_pct));
+        // dropdown에 있는 값만 반영 (5/10/15/20/25/30)
+        const _validVals = ['5', '10', '15', '20', '25', '30'];
+        _trgEl.value = _validVals.includes(_pct) ? _pct : '10';
+      }
+
+      // 단계별 개별 트리거 (2~10단계!)
+      const _stagePcts = bp.retry_stage_trigger_pcts || {};
+      for (let n = 2; n <= 10; n++) {
+        const _el = document.getElementById('cm-retry-trg-' + n);
+        if (_el) {
+          const _key = String(n);
+          if (_key in _stagePcts && _stagePcts[_key] !== null && _stagePcts[_key] !== undefined) {
+            _el.value = _stagePcts[_key];
+          } else {
+            _el.value = '';  // 미설정 = 빈칸 (기본값 사용!)
+          }
+        }
+      }
+    } catch (_v131e) {
+      console.warn('[v131] retry 옵션 반영 실패 (silent 무시):', _v131e);
+    }
+
     if (!silent) {
       const editNote = cmState.editingStrategyId
         ? ` (수정 모드 — 옛 시작가 ${oldStartPrice || '?'} 그대로! 사장님 자율 = 「현재가」 클릭 시 변경)`
