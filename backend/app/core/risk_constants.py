@@ -70,8 +70,13 @@ FORCE_SL_SHORT_ENABLED_DEFAULT: Final[bool] = False  # 원상태 복원!
 # 양수로 저장 (예: 10 = ROI <= -10% 시 발동, 모든 단계 진입 후에만!).
 FORCE_SL_ROI_DEFAULT: Final[Decimal] = Decimal("10")
 # 허용 ROI 한도 (사장님 선택지). 그 외 값은 API 400.
+# 🌟 2026-08-09 v131 사장님 확장: 0 (끔!) + 5 ~ 100 (5% 간격)!
 FORCE_SL_ALLOWED_ROI: Final[tuple[Decimal, ...]] = (
+    Decimal("0"),   # 끔! (강제 SL 미사용)
     Decimal("5"), Decimal("10"), Decimal("15"), Decimal("20"),
+    Decimal("25"), Decimal("30"), Decimal("35"), Decimal("40"),
+    Decimal("45"), Decimal("50"), Decimal("60"), Decimal("70"),
+    Decimal("80"), Decimal("90"), Decimal("100"),
 )
 
 

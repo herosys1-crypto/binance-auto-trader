@@ -1046,11 +1046,16 @@
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('orders')">📥 주문 CSV</button>
       </div>
 
-      <!-- 🌟 v130: 재진입 알람 카드 (신 OBV+RSI 신호 감지!) -->
+      <!-- 🌟 v130: 재진입 알람 카드 (신 OBV+RSI 신호 감지!) + v131 자동 실행 세팅 -->
       <div id="reentry-alerts-card" class="card rounded-lg hidden" style="padding:8px 12px;background:linear-gradient(135deg,rgba(124,58,237,0.15),rgba(59,130,246,0.15));border:1px solid rgba(124,58,237,0.4)">
         <div class="flex items-center justify-between mb-2">
           <span class="text-sm font-bold" style="color:#c4b5fd">🎯 재진입 알람 <span id="reentry-alerts-count" style="background:#a78bfa;color:#000;padding:1px 6px;border-radius:8px;font-size:11px">0</span></span>
-          <span class="text-xs text-slate-400">강제 종료 후 = OBV+RSI+10% 신호!</span>
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-slate-400">강제 종료 후 = OBV+RSI+10% 신호!</span>
+            <button onclick="openReentrySettingsModal()"
+                    class="text-xs bg-purple-700 hover:bg-purple-600 text-white px-2 py-1 rounded"
+                    title="자동 실행 vs 수동 승인 세팅">⚙ 세팅</button>
+          </div>
         </div>
         <div id="reentry-alerts-list" class="flex flex-wrap gap-2"></div>
       </div>

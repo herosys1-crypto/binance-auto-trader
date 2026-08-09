@@ -127,11 +127,137 @@ async function createStrategyFromAlert(safeKey, symbol, side, exchangeAccountId)
   }
 }
 
+// 🌟 v131 자동 실행 세팅 (사장님 요청 2026-08-09!)
+async function openReentrySettingsModal() {
+  try {
+    const settings = await api('/api/v1/reentry-alerts/settings', 'GET');
+    const allowedSl = settings.allowed_force_sl_roi || ['5','10','15','20'];
+    const allowedLev = settings.allowed_leverage || [1,2,3,5,10,20];
+
+    // 강제 SL options
+    const slOpts = allowedSl.map(v =>
+      `<option value="${v}" ${settings.auto_execute_force_sl_roi===v?'selected':''}>
+        ${v==='0'?'끔':'-'+v+'%'}
+      </option>`
+    ).join('');
+
+    // 레버리지 options
+    const levOpts = allowedLev.map(v =>
+      `<option value="${v}" ${String(settings.auto_execute_leverage)===String(v)?'selected':''}>
+        ${v}x
+      </option>`
+    ).join('');
+
+    const html = `
+      <div id="reentry-settings-modal" class="fixed inset-0 z-50 flex items-center justify-center"
+           style="background:rgba(0,0,0,0.7)">
+        <div class="bg-slate-900 rounded-lg p-6 max-w-md w-full mx-4"
+             style="border:2px solid #a855f7;box-shadow:0 0 20px #a855f766">
+          <h3 class="text-lg font-bold text-purple-300 mb-4">
+            ⚙ 재진입 알람 자동 실행 세팅
+          </h3>
+          <p class="text-xs text-slate-400 mb-4">
+            💡 <strong>자동 실행 ON</strong> = 알람 감지 시 = 신 전략 즉시 자동 생성!<br>
+            💡 <strong>자동 실행 OFF</strong> = 알람만 표시 (사장님 클릭 = 신 전략!)
+          </p>
+
+          <div class="space-y-3">
+            <div>
+              <label class="flex items-center gap-2 text-sm text-slate-200">
+                <input type="checkbox" id="reset-auto-execute"
+                       ${settings.auto_execute_enabled?'checked':''}
+                       style="width:18px;height:18px;cursor:pointer">
+                <span class="font-bold">🤖 자동 실행 활성화</span>
+              </label>
+              <p class="text-xs text-yellow-400 mt-1">
+                ⚠️ ON = 사장님 승인 없이 = 자동 진입!
+              </p>
+            </div>
+
+            <div>
+              <label class="text-sm text-slate-300 block mb-1">💰 자동 진입 자본 (USDT):</label>
+              <input type="number" id="reset-auto-capital"
+                     value="${settings.auto_execute_capital}"
+                     min="1" step="1"
+                     class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200">
+            </div>
+
+            <div>
+              <label class="text-sm text-slate-300 block mb-1">🛑 강제 SL ROI (0=끔 ~ -100%):</label>
+              <select id="reset-auto-force-sl"
+                      class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200">
+                ${slOpts}
+              </select>
+            </div>
+
+            <div>
+              <label class="text-sm text-slate-300 block mb-1">⚡ 레버리지:</label>
+              <select id="reset-auto-leverage"
+                      class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200">
+                ${levOpts}
+              </select>
+            </div>
+          </div>
+
+          <div class="flex gap-2 mt-6">
+            <button onclick="saveReentrySettings()"
+                    class="flex-1 bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 rounded">
+              💾 저장
+            </button>
+            <button onclick="closeReentrySettingsModal()"
+                    class="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-300 py-2 rounded">
+              ✕ 취소
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // 기존 modal 제거 후 삽입
+    const existing = document.getElementById('reentry-settings-modal');
+    if (existing) existing.remove();
+    document.body.insertAdjacentHTML('beforeend', html);
+  } catch (e) {
+    if (typeof toast === 'function') toast('❌ 세팅 조회 실패: ' + (e.message || e), 'error');
+  }
+}
+
+function closeReentrySettingsModal() {
+  const el = document.getElementById('reentry-settings-modal');
+  if (el) el.remove();
+}
+
+async function saveReentrySettings() {
+  try {
+    const enabled = document.getElementById('reset-auto-execute').checked;
+    const capital = document.getElementById('reset-auto-capital').value;
+    const forceSl = document.getElementById('reset-auto-force-sl').value;
+    const leverage = document.getElementById('reset-auto-leverage').value;
+
+    await api('/api/v1/reentry-alerts/settings', 'PUT', {
+      auto_execute_enabled: enabled,
+      auto_execute_capital: capital,
+      auto_execute_force_sl_roi: forceSl,
+      auto_execute_leverage: leverage,
+    });
+
+    if (typeof toast === 'function') {
+      toast(`✅ 세팅 저장! 자동 실행 ${enabled?'ON 🤖':'OFF 🙋'}`, 'success');
+    }
+    closeReentrySettingsModal();
+  } catch (e) {
+    if (typeof toast === 'function') toast('❌ 저장 실패: ' + (e.message || e), 'error');
+  }
+}
+
 // 5초마다 알람 갱신 (dashboard-refresh polling에 통합)
 if (typeof window !== 'undefined') {
   window.loadReentryAlerts = loadReentryAlerts;
   window.deleteReentryAlert = deleteReentryAlert;
   window.createStrategyFromAlert = createStrategyFromAlert;
+  window.openReentrySettingsModal = openReentrySettingsModal;
+  window.closeReentrySettingsModal = closeReentrySettingsModal;
+  window.saveReentrySettings = saveReentrySettings;
   // 초기 로드
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(loadReentryAlerts, 1000);

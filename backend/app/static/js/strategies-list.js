@@ -444,6 +444,17 @@ async function refreshStrategies() {
             <option value="on:10"   ${_fslSel==='on:10'?'selected':''}>강제 -10%</option>
             <option value="on:15"   ${_fslSel==='on:15'?'selected':''}>강제 -15%</option>
             <option value="on:20"   ${_fslSel==='on:20'?'selected':''}>강제 -20%</option>
+            <option value="on:25"   ${_fslSel==='on:25'?'selected':''}>강제 -25%</option>
+            <option value="on:30"   ${_fslSel==='on:30'?'selected':''}>강제 -30%</option>
+            <option value="on:35"   ${_fslSel==='on:35'?'selected':''}>강제 -35%</option>
+            <option value="on:40"   ${_fslSel==='on:40'?'selected':''}>강제 -40%</option>
+            <option value="on:45"   ${_fslSel==='on:45'?'selected':''}>강제 -45%</option>
+            <option value="on:50"   ${_fslSel==='on:50'?'selected':''}>강제 -50%</option>
+            <option value="on:60"   ${_fslSel==='on:60'?'selected':''}>강제 -60%</option>
+            <option value="on:70"   ${_fslSel==='on:70'?'selected':''}>강제 -70%</option>
+            <option value="on:80"   ${_fslSel==='on:80'?'selected':''}>강제 -80%</option>
+            <option value="on:90"   ${_fslSel==='on:90'?'selected':''}>강제 -90%</option>
+            <option value="on:100"  ${_fslSel==='on:100'?'selected':''}>강제 -100%</option>
           </select>`
         : '';
       // 🌟 2026-06-09 사장님 신 기능: 단계 클릭 = 단계별 상세 popup (진입예정가 + 자본)
