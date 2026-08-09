@@ -210,14 +210,17 @@ async function openReentrySettingsModal() {
           <strong class="text-yellow-400">자동 실행 = 안전장치 미완성!</strong>
         </p>
         <div class="bg-slate-800 rounded p-3 mb-4 text-xs text-slate-300 space-y-1">
-          <div class="font-bold text-yellow-300 mb-1">🚨 완성 필요 안전장치 (6개):</div>
+          <div class="font-bold text-yellow-300 mb-1">🚨 완성 필요 안전장치 (4개):</div>
           <div>1. 4H 봉 완성 후에만 판정!</div>
           <div>2. 중복 진입 방지 (같은 심볼)!</div>
           <div>3. 심볼 blacklist (연속 손실!)</div>
-          <div>4. 일일 자동 실행 한도!</div>
-          <div>5. 총 자본 한도 (잔고 30%)!</div>
-          <div>6. RSI 극값 필터 (< 30 / > 70)!</div>
+          <div>4. RSI 극값 필터 (&lt; 30 / &gt; 70)!</div>
         </div>
+        <p class="text-xs text-blue-300 mb-2">
+          💡 <strong>자본 한도는 필요 X!</strong><br>
+          이유 = 신 전략 만들 때 사장님이 단계별 자본 세팅!<br>
+          (1단계 500 / 2단계 500 / 3단계 1000 = 사장님 결정!)
+        </p>
         <p class="text-xs text-green-300 mb-4">
           ✅ <strong>지금 = 수동 승인만!</strong><br>
           알람 클릭 → 신/구 방식 선택 → 사장님 승인 = 안전!
