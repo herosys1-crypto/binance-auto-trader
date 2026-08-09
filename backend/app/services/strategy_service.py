@@ -36,6 +36,38 @@ class StrategyService:
             "last_stage_trigger_percent": template_model.stage4_trigger_percent,
         }
 
+    @staticmethod
+    def _normalize_stage_trigger_pcts(payload) -> dict:
+        """v131 단계별 개별 트리거 정규화 (사장님 하이브리드!).
+
+        입력 형식 (사장님 payload):
+          - None or {} → {} (모두 기본!)
+          - {"3": 15, "4": 20} → {"3": 15.0, "4": 20.0}
+          - {"3": null} → {} (명시적 default = 저장 X)
+          - {"3": "15"} → {"3": 15.0} (문자열 → float)
+
+        검증:
+          - key = "2" ~ "10" 만 (1단계 = 없음)
+          - value = 0 ~ 100 (또는 null)
+        """
+        if not payload:
+            return {}
+        _out: dict = {}
+        for k, v in payload.items():
+            try:
+                _key_int = int(k)
+                if _key_int < 2 or _key_int > 10:
+                    continue  # 1단계 or 11+ = 무시
+                if v is None or v == "":
+                    continue  # 명시적 default = 저장 X
+                _val = float(v)
+                if _val < 0 or _val > 100:
+                    continue  # 범위 초과 = 무시
+                _out[str(_key_int)] = _val
+            except (ValueError, TypeError):
+                continue
+        return _out
+
     def calculate_preview(self, *, symbol: str, side: str, start_price: Decimal, strategy_template_id: int, leverage_override: int | None = None):
         template_model = self.repo.get_template(strategy_template_id)
         symbol_model = self.repo.get_symbol(symbol)
@@ -81,6 +113,8 @@ class StrategyService:
         retry_after_liquidation_enabled: bool | None = False,
         retry_trigger_pct: Decimal | None = None,
         capital_management_mode: str | None = "fixed",
+        # 🌟 v131 단계별 개별 트리거 (사장님 하이브리드!)
+        retry_stage_trigger_pcts: dict | None = None,
     ) -> StrategyInstance:
         template_model = self.repo.get_template(strategy_template_id)
         symbol_model = self.repo.get_symbol(symbol)
@@ -544,6 +578,10 @@ class StrategyService:
             retry_after_liquidation_enabled=bool(retry_after_liquidation_enabled),
             retry_trigger_pct=D(str(retry_trigger_pct)) if retry_trigger_pct is not None else D("10"),
             capital_management_mode=(capital_management_mode or "fixed"),
+            # 🌟 v131 단계별 개별 트리거 (사장님 하이브리드!)
+            # 예: {"3": 15, "4": 20} → 3/4단계만 개별!
+            # 정규화: 문자열 키 + Decimal → float 변환 (JSONB!)
+            retry_stage_trigger_pcts=self._normalize_stage_trigger_pcts(retry_stage_trigger_pcts),
         )
         self.repo.create_strategy_instance(instance)
         plans = [StrategyStagePlan(

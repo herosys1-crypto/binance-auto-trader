@@ -45,6 +45,8 @@ def create_strategy(
             retry_after_liquidation_enabled=payload.retry_after_liquidation_enabled,
             retry_trigger_pct=payload.retry_trigger_pct,
             capital_management_mode=payload.capital_management_mode,
+            # 🌟 v131 단계별 개별 트리거 (사장님 하이브리드!)
+            retry_stage_trigger_pcts=payload.retry_stage_trigger_pcts,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e

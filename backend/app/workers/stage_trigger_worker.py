@@ -314,7 +314,19 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 if strategy.status == "LIQUIDATED_WAITING_RETRY":
                     try:
                         _liq_price = Decimal(str(strategy.last_liquidation_price or 0))
-                        _trg_pct = Decimal(str(strategy.retry_trigger_pct or 10))
+                        # 🌟 v131 하이브리드 (사장님!): 단계별 개별 우선 → 기본값!
+                        _trg_pct = Decimal(str(strategy.retry_trigger_pct or 10))  # 기본값!
+                        try:
+                            _overrides = getattr(strategy, "retry_stage_trigger_pcts", None) or {}
+                            _key = str(next_stage_no)
+                            if _key in _overrides and _overrides[_key] is not None:
+                                _trg_pct = Decimal(str(_overrides[_key]))  # 개별 override!
+                                logger.info(
+                                    "[v131 retry] 개별 트리거 사용! strategy=%s stage=%s pct=%s (기본=%s)",
+                                    strategy.id, next_stage_no, _trg_pct, strategy.retry_trigger_pct,
+                                )
+                        except Exception as _oe:
+                            logger.warning("[v131 retry] 개별 트리거 조회 실패 → 기본값: %s", _oe)
                         if _liq_price <= 0:
                             _record_block_reason(
                                 _redis, strategy.id,
