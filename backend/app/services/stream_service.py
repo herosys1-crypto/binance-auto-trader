@@ -172,15 +172,70 @@ class StreamService:
                     # status 전환:
                     #   COMPLETED  : _execute_take_profit 가 이미 마킹 → 보존
                     #   STOPPING   : 사용자 「수동 정지」 → STOPPED (좀비 방지)
-                    #   기타       : TP/SL 자동 청산 → REENTRY_READY
+                    #   기타       : TP/SL 자동 청산 →
+                    #     🌟 v131 신 (2026-08-09 사장님!): retry_after_liquidation_enabled?
+                    #        → 다음 단계 있음 = LIQUIDATED_WAITING_RETRY (대기!)
+                    #        → 없음 = REENTRY_READY (기존!)
+                    #     아니면 = REENTRY_READY (기존!)
                     if strategy.status == "COMPLETED":
                         pass
                     elif strategy.status == "STOPPING":
                         strategy.status = "STOPPED"
                         strategy.stopped_at = datetime.now(timezone.utc)
                     else:
-                        strategy.status = "REENTRY_READY"
-                        strategy.reentry_ready = True
+                        # 🌟 v131: 청산 후 자동 재진입 옵션 확인!
+                        _use_retry_flow = False
+                        try:
+                            if getattr(strategy, "retry_after_liquidation_enabled", False):
+                                # 다음 단계 존재 확인!
+                                from app.models.strategy_stage_plan import StrategyStagePlan
+                                _next_stage_no = int(strategy.current_stage or 0) + 1
+                                _next_plan = self.db.execute(
+                                    select(StrategyStagePlan)
+                                    .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+                                    .where(StrategyStagePlan.stage_no == _next_stage_no)
+                                ).scalar_one_or_none()
+
+                                if _next_plan:
+                                    # 다음 단계 있음 = 재진입 대기!
+                                    strategy.status = "LIQUIDATED_WAITING_RETRY"
+                                    # 청산가 저장 (다음 트리거 계산 기준!)
+                                    if order.avg_price:
+                                        try:
+                                            strategy.last_liquidation_price = Decimal(str(order.avg_price))
+                                        except Exception:
+                                            pass
+                                    _use_retry_flow = True
+                                    logger.info(
+                                        "[v131 retry] 🔄 %s #%s = LIQUIDATED_WAITING_RETRY! "
+                                        "청산가=%s, 다음 stage=%s, 트리거%%=%s",
+                                        strategy.symbol, strategy.id,
+                                        order.avg_price, _next_stage_no,
+                                        strategy.retry_trigger_pct,
+                                    )
+                                    # Telegram 알림!
+                                    try:
+                                        from app.services.notification_service import NotificationService
+                                        NotificationService(self.db).send_system_alert(
+                                            title=f"🔄 [자동 재진입 대기] {strategy.symbol} {strategy.side}",
+                                            body=(
+                                                f"💼 전략 #{strategy.id} = 청산 완료 → 다음 단계 대기!\n"
+                                                f"  청산가: {order.avg_price}\n"
+                                                f"  다음 stage: {_next_stage_no}\n"
+                                                f"  트리거: ±{strategy.retry_trigger_pct}% (레버리지 무관!)\n"
+                                                f"  진입 시 자본: {_next_plan.planned_capital} USDT (세팅 그대로!)\n"
+                                                f"  = 청산가 기준 트리거 도달 시 자동 진입!"
+                                            ),
+                                        )
+                                    except Exception as _te:
+                                        logger.warning("[v131 retry] Telegram 실패: %s", _te)
+                        except Exception as _re:
+                            logger.warning("[v131 retry] 판정 실패 → REENTRY_READY fallback: %s", _re)
+
+                        if not _use_retry_flow:
+                            # 기존 = REENTRY_READY!
+                            strategy.status = "REENTRY_READY"
+                            strategy.reentry_ready = True
             else:
                 # 부분 청산 — delta 만큼 차감 (cur_qty - delta_abs).
                 # status / reentry_ready 는 그대로 (TP partial 진행 중 또는 PARTIAL 후속 대기).
@@ -226,6 +281,14 @@ class StreamService:
                     realized_delta = realized_delta - commission_usdt
                     prev_realized = Decimal(str(strategy.realized_pnl or 0))
                     strategy.realized_pnl = (prev_realized + realized_delta).quantize(Decimal("0.01"))
+                    # 🌟 v131 (2026-08-09 사장님!): 누적 실현 손실 (참조 통계!)
+                    # = 재진입 대기 상태 확인 & UI 표시용 (자본 차감 X!)
+                    if realized_delta < 0:
+                        try:
+                            _cum_prev = Decimal(str(strategy.cumulative_realized_loss or 0))
+                            strategy.cumulative_realized_loss = (_cum_prev + abs(realized_delta)).quantize(Decimal("0.00000001"))
+                        except Exception as _cle:
+                            logger.warning("[v131] cumulative_realized_loss 누적 실패 strategy=%s: %s", strategy.id, _cle)
                     # 2026-05-04 v2: 일일 손실 한도 incremental 누적.
                     # daily_loss_aggregator 의 v1 한계 (realized 누적 안 됨) 보완.
                     # account_daily_risk_limit 의 오늘 row 에 realized_delta 추가.

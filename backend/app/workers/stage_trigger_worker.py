@@ -308,8 +308,39 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 except Exception:
                     pass
                 should_fire = False
-                if _tpl_trigger_mode == "OBV_REVERSE":
-                    # 신 로직: ChartAnalyzer 호출!
+                # 🌟 v131 (2026-08-09 사장님!): 청산 후 자동 재진입!
+                # LIQUIDATED_WAITING_RETRY = 청산가 기준 트리거 감시! (retry_trigger_pct!)
+                # = trigger_mode / OBV 무관 = 사장님 신 사상 우선!
+                if strategy.status == "LIQUIDATED_WAITING_RETRY":
+                    try:
+                        _liq_price = Decimal(str(strategy.last_liquidation_price or 0))
+                        _trg_pct = Decimal(str(strategy.retry_trigger_pct or 10))
+                        if _liq_price <= 0:
+                            _record_block_reason(
+                                _redis, strategy.id,
+                                "청산가 없음 (last_liquidation_price=0) — retry 진입 skip!",
+                                next_stage_no,
+                            )
+                            continue
+                        # LONG: 가격이 청산가 대비 -트리거% 도달 → 저점 매수!
+                        # SHORT: 가격이 청산가 대비 +트리거% 도달 → 고점 매도!
+                        if strategy.side == "LONG":
+                            _target = _liq_price * (Decimal("1") - _trg_pct / Decimal("100"))
+                            should_fire = mark <= _target
+                        else:  # SHORT
+                            _target = _liq_price * (Decimal("1") + _trg_pct / Decimal("100"))
+                            should_fire = mark >= _target
+                        if should_fire:
+                            logger.info(
+                                "[stage-trigger v131 retry] 🎯 청산 후 재진입! strategy=%s stage=%s "
+                                "청산가=%s trigger=%s%% target=%s mark=%s",
+                                strategy.id, next_stage_no, _liq_price, _trg_pct, _target, mark,
+                            )
+                    except Exception as _e:
+                        logger.warning("[stage-trigger v131 retry] 판정 실패: %s", _e)
+                        should_fire = False
+                elif _tpl_trigger_mode == "OBV_REVERSE":
+                    # 신 로직 v130: ChartAnalyzer 호출!
                     # 이전 손절가 = strategy.avg_entry_price (1단계 진입가 = 손절 기준)
                     # 또는 prev_stage_plan.trigger_price (이전 stage 진입가)
                     try:

@@ -69,8 +69,11 @@ ACTIVE_WITH_POSITION: frozenset[str] = frozenset(
 )
 
 # 거래소 포지션 미확정 (LIMIT 미체결) — STAGE_n_OPEN_PENDING 모두.
+# v131: LIQUIDATED_WAITING_RETRY 도 포함! (= 청산 후 대기 = 다음 진입 예정!)
+#       거래소 포지션 = 0 (청산 완료!) 이지만 = 신 전략 중복 진입 차단해야 함!
 ACTIVE_WAITING: frozenset[str] = frozenset(
     {f"STAGE{n}_OPEN_PENDING" for n in range(1, TOTAL_STAGES_MAX + 1)}
+    | {"LIQUIDATED_WAITING_RETRY"}  # v131: 청산 후 재진입 대기 = 중복 진입 차단!
 )
 
 # 모든 "active" — 신규 strategy 진입 차단해야 할 상태 (포지션 보유 + 대기 모두).
@@ -113,6 +116,7 @@ PENDING_TO_OPEN_MAP: dict[str, tuple[str, int]] = {
 STAGES_WITH_NEXT: frozenset[str] = frozenset(
     {f"STAGE{n}_OPEN" for n in range(1, TOTAL_STAGES_MAX)}
     | {f"STAGE{n}_OPEN_PENDING" for n in range(1, TOTAL_STAGES_MAX)}
+    | {"LIQUIDATED_WAITING_RETRY"}  # v131: 청산 후 재진입 대기 = stage_trigger 감시!
 )
 
 
