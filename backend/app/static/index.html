@@ -1612,12 +1612,26 @@
           <span class="text-xs text-slate-500 font-normal">(기본: 숏 2x · 롱 1x · 사이드 변경 시 자동 갱신, 직접 입력도 가능)</span>
         </label>
         <div class="flex gap-2 items-center">
-          <input id="cm-leverage" type="number" min="1" max="125" step="1" value="2"
+          <input id="cm-leverage" type="number" min="1" max="125" step="1" value="5"
             oninput="cmLeverageManuallyEdited = true; if(typeof _refreshLiveCalc==='function')_refreshLiveCalc()"
             class="w-24 px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white text-center" />
           <span class="text-slate-400 text-sm">배속</span>
           <button onclick="resetCmLeverage()" class="btn-ghost btn text-xs" style="padding:3px 8px; font-size:11px"
-            title="현재 사이드의 기본값 (숏 2x / 롱 1x) 으로 복원">↺ 기본값</button>
+            title="현재 사이드의 기본값 (숏 5x / 롱 5x) 으로 복원">↺ 기본값</button>
+
+          <!-- 🌟 v131 (2026-08-09 사장님!): 「청산 후 재진입」 옵션 = 레버리지 옆에도! -->
+          <!-- = 두 곳 동기화 = 한 곳 클릭 = 둘 다 적용! -->
+          <div class="flex items-center gap-1 ml-2 px-2 py-1 rounded bg-purple-900/30 border border-purple-700/50"
+               title="청산 후 자동 재진입 = 하단 상세 옵션과 동기화!">
+            <input type="checkbox" id="cm-retry-after-liq-enabled-top"
+                   class="w-4 h-4 rounded cursor-pointer"
+                   style="accent-color:#a855f7"
+                   onchange="_syncRetryCheckbox('top')">
+            <label for="cm-retry-after-liq-enabled-top"
+                   class="text-xs cursor-pointer font-bold text-purple-300 whitespace-nowrap">
+              🔄 청산 후 재진입
+            </label>
+          </div>
         </div>
       </div>
 
@@ -1813,7 +1827,8 @@
               <div class="mt-3 p-3 rounded bg-purple-900/20 border border-purple-700/40">
                 <label class="flex items-center gap-2 cursor-pointer mb-2">
                   <input type="checkbox" id="cm-retry-after-liq-enabled"
-                         class="w-4 h-4 rounded cursor-pointer" style="accent-color:#a855f7">
+                         class="w-4 h-4 rounded cursor-pointer" style="accent-color:#a855f7"
+                         onchange="_syncRetryCheckbox('bottom')">
                   <span class="text-sm font-bold text-purple-300">
                     🔄 청산 후 자동 재진입 (v131 신!)
                   </span>

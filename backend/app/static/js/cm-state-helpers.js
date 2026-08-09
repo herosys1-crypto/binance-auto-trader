@@ -79,6 +79,36 @@ function closeCreateModal() {
 // UX #18: 사용자가 직접 레버리지를 수정했는지 추적. true 면 사이드 변경 시 자동 갱신 안 함.
 let cmLeverageManuallyEdited = false;
 
+// 🌟 v131 (2026-08-09 사장님!): 「청산 후 재진입」 = 두 checkbox 동기화!
+// 사장님 요구: "한곳에서 선택하면 둘다 같이 적용되는거야"
+// = 상단 (레버리지 옆 compact) + 하단 (상세 옵션 카드) = 서로 동기화!
+function _syncRetryCheckbox(source) {
+  try {
+    const topEl = document.getElementById('cm-retry-after-liq-enabled-top');
+    const bottomEl = document.getElementById('cm-retry-after-liq-enabled');
+    if (!topEl || !bottomEl) return;
+    // 클릭된 source의 값을 = 반대 checkbox에 반영!
+    if (source === 'top') {
+      bottomEl.checked = topEl.checked;
+    } else {
+      topEl.checked = bottomEl.checked;
+    }
+    // 시각적 피드백 (선택 시 = 상단 배경 강조!)
+    const topContainer = topEl.closest('.flex');
+    if (topContainer) {
+      if (topEl.checked) {
+        topContainer.style.background = 'rgba(168,85,247,0.3)';
+        topContainer.style.boxShadow = '0 0 8px rgba(168,85,247,0.4)';
+      } else {
+        topContainer.style.background = '';
+        topContainer.style.boxShadow = '';
+      }
+    }
+  } catch (_e) {
+    console.warn('[v131] retry checkbox 동기화 실패:', _e);
+  }
+}
+
 function resetCmLeverage() {
   const lev = _defaultLeverageForSide(cmState.side);
   document.getElementById('cm-leverage').value = lev;

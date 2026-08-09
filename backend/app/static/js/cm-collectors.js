@@ -109,7 +109,8 @@ function _collectTpSl() {
 }
 
 function _defaultLeverageForSide(side) {
-  // 🌟 2026-08-08 v130 사장님 재확정: 2x default (모두!)
-  //   사장님: '기본 레버리지는 2배속을 변경해줘 모두'
-  return 2;
+  // 🌟 2026-08-09 v131 사장님 재확정: 5x default (모두!)
+  //   2026-08-08: 2x → 2026-08-09: 5x 재변경!
+  //   사장님: '기본 레버리지는 5배속으로 다시 변경해줘'
+  return 5;
 }

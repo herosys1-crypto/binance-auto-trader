@@ -75,9 +75,9 @@ async function openCreateChartObvModal() {
   //   - 레버리지 = 2x (사장님 재확정 = 모두 2x!)
   //   - TP1/2/3/4 qty = 10/15/20/25 (사장님 진짜 요구!)
   setTimeout(() => {
-    // 레버리지 2x (사장님 재확정)
+    // 레버리지 5x (사장님 2026-08-09 재확정!)
     const lvInp = document.getElementById('cm-leverage');
-    if (lvInp && !lvInp.value) lvInp.value = 2;
+    if (lvInp && !lvInp.value) lvInp.value = 5;
     // TP qty 자동 세팅 (사장님 원하면 = 수정 가능!)
     const _tpQtyDefaults = {'cm-tp1-qty': 10, 'cm-tp2-qty': 15, 'cm-tp3-qty': 20, 'cm-tp4-qty': 25};
     for (const [id, val] of Object.entries(_tpQtyDefaults)) {
@@ -181,7 +181,7 @@ async function openCreateModal(editStrategyId) {
   // UX #18: 레버리지 입력 + 수동수정 플래그 초기화 (모달 열 때마다)
   cmLeverageManuallyEdited = false;
   const _lvInit = document.getElementById('cm-leverage');
-  if (_lvInit) _lvInit.value = 2;  // SHORT 기본값 (다음 setCmSide 가 다시 적용)
+  if (_lvInit) _lvInit.value = 5;  // v131 (2026-08-09): 5x default (다음 setCmSide 가 다시 적용)
   await Promise.all([loadCmAccounts(), loadCmTemplates(), loadCmSymbols()]);
   setCmSide('SHORT');
   setCmMode('direct');
