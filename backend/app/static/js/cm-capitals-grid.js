@@ -518,5 +518,71 @@ function onCapitalsChange() {
     `합계: <strong>${fmtNum(total)} USDT</strong> (${count}단계 사용)`;
   cmState.preview = null;
   document.getElementById('cm-preview').classList.add('hidden');
+  // 🌟 v131 사장님 (2026-08-09): 자본 계산기 = 실시간 갱신!
+  if (typeof _refreshCapitalCalc === 'function') _refreshCapitalCalc();
   updateCmSubmit();
+}
+
+// 🌟 v131 사장님 (2026-08-09): 자본 130% 실시간 계산기!
+// 요구: "130% 넘어가면 경고 알람으로 해줘 세팅은 130% 상관없이 진행할수 있게 해줘"
+// = 총 세팅 계산 + 130% 한도 계산 + 초과 시 경고 (진행 허용!)
+function _refreshCapitalCalc() {
+  try {
+    const totalEl = document.getElementById('cm-capital-total');
+    const limitEl = document.getElementById('cm-capital-limit');
+    const ratioEl = document.getElementById('cm-capital-ratio');
+    const warnEl = document.getElementById('cm-capital-warn');
+    const capRefEl = document.getElementById('cm-user-capital-ref');
+    if (!totalEl || !limitEl || !ratioEl || !warnEl) return;
+
+    // 총 세팅 자본 계산 (모든 단계 합계!)
+    let total = 0;
+    for (let i = 1; i <= 10; i++) {
+      const v = Number((document.getElementById('cm-cap-' + i) || {}).value) || 0;
+      total += v;
+    }
+    totalEl.textContent = total.toFixed(2) + ' USDT';
+
+    // 참조 자본 (사장님 직접 입력!)
+    const capital = Number(capRefEl && capRefEl.value) || 0;
+    if (capital <= 0) {
+      limitEl.textContent = '- (자본 입력!)';
+      limitEl.className = 'font-bold text-slate-500';
+      ratioEl.textContent = '-';
+      ratioEl.className = 'font-bold text-slate-500';
+      warnEl.style.display = 'none';
+      return;
+    }
+
+    const limit = capital * 1.3;
+    const ratio = capital > 0 ? (total / capital) * 100 : 0;
+
+    limitEl.textContent = limit.toFixed(2) + ' USDT';
+    limitEl.className = 'font-bold text-blue-300';
+    ratioEl.textContent = ratio.toFixed(1) + '%';
+
+    // 경고 (130% 초과!) - 사장님 자율 진행 가능!
+    if (ratio > 130) {
+      ratioEl.className = 'font-bold text-red-400';
+      warnEl.style.display = 'block';
+      warnEl.className = 'mt-1 text-xs p-2 rounded bg-yellow-900/40 border border-yellow-600 text-yellow-200 leading-relaxed';
+      const overpct = (ratio - 130).toFixed(1);
+      warnEl.innerHTML =
+        `⚠️ <strong>130% 한도 초과!</strong> (${ratio.toFixed(1)}%, 초과 +${overpct}%)<br>` +
+        `= 여유 자금 부족! 손실 감안 재진입 시 자본 부족 가능!<br>` +
+        `= <strong class="text-green-300">사장님 자율 = 세팅 그대로 진행 가능!</strong>`;
+    } else if (ratio > 100) {
+      ratioEl.className = 'font-bold text-yellow-300';
+      warnEl.style.display = 'block';
+      warnEl.className = 'mt-1 text-xs text-slate-400';
+      warnEl.innerHTML = `✅ 130% 한도 내 (${ratio.toFixed(1)}%) — 여유 자금 확보!`;
+    } else {
+      ratioEl.className = 'font-bold text-green-300';
+      warnEl.style.display = 'block';
+      warnEl.className = 'mt-1 text-xs text-slate-400';
+      warnEl.innerHTML = `✅ 자본 대비 ${ratio.toFixed(1)}% — 여유 충분!`;
+    }
+  } catch (_e) {
+    console.warn('[v131 capital-calc] 계산 실패:', _e);
+  }
 }

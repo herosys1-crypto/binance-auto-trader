@@ -202,18 +202,17 @@ async function submitCreate() {
       templateId = tplCreated.id;
     }
 
-    // 🌟 v131 신 옵션 = 청산 후 재진입 트리거 + 자본 관리 (사장님 2026-08-09!)
-    // = MVP 상태 = payload에 저장만! Backend 로직 = 다음 세션!
+    // 🌟 v131 신 옵션 = 청산 후 재진입 트리거 (사장님 2026-08-09!)
+    // = MVP 상태 = payload에 저장만! Backend 실 로직 = 다음 세션!
+    // = 자본 관리 = 항상 'fixed' (세팅 그대로!) = 사장님 자율 130% 경고만!
     let _retryAfterLiqEnabled = false;
     let _retryTriggerPct = 10;
-    let _capitalMgmtMode = 'fixed';
+    const _capitalMgmtMode = 'fixed';  // 항상 세팅 그대로 (사장님 사고!)
     try {
       const _retryEl = document.getElementById('cm-retry-after-liq-enabled');
       const _trgEl = document.getElementById('cm-retry-trigger-pct');
-      const _mgmtEl = document.getElementById('cm-capital-mgmt-mode');
       if (_retryEl) _retryAfterLiqEnabled = _retryEl.checked;
       if (_trgEl) _retryTriggerPct = Number(_trgEl.value) || 10;
-      if (_mgmtEl) _capitalMgmtMode = _mgmtEl.value || 'fixed';
     } catch (_e) {
       console.warn('[v131] retry-after-liq 옵션 수집 실패:', _e);
     }
