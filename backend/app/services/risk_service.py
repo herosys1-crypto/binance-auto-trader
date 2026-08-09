@@ -463,20 +463,35 @@ class RiskService:
         if _tp1_override is not None and Decimal(str(_tp1_override)) == 0:
             # TP 완전 끔 = trailing도 차단!
             pass  # TP + TRAILING 모두 발동 X (수동 관리 모드!)
-        # 🌟 2026-08-08 v130 사장님 신 로직: peak >= 20% 이면 = TP3 발동한 것과 같은 상황!
-        # 사장님: '20% 이상이면 tp3 단계가 실현되었다고 보고 강제 청산 로직을 실행!'
-        # = TP1_override=25% 인 경우 = TP1 발동 = 즉시 trailing 활성화!
-        # = status 조건 (TP{n}_DONE_PARTIAL) 완화 = peak 20% 이상이면 = 무조건 활성!
-        elif (
-            peak >= Decimal("20")  # 20% 이상 도달 = TP3와 동등!
-            and (strategy.current_stage or 0) >= 1  # 1단계 이상 진입
+        # 🌟 2026-08-09 v131 사장님 정확 요구:
+        #   1. TP1_override >= 20% 세팅 (사장님 선택!)
+        #   2. TP1 실제 발동 (첫 익절 완료!)
+        #   3. 남은 qty = 트레일링 활성!
+        #   4. peak - retrace 하락 시 = 강제 청산!
+        # = 사장님: '첫 익절 실행된후에 최고가 대비 하락하면 청산'
+        _tp1_override_val = strategy.tp1_pct_override
+        _tp1_is_20plus = (
+            _tp1_override_val is not None
+            and Decimal(str(_tp1_override_val)) >= Decimal("20")
+        )
+        # 첫 TP 발동 status (TP1~TP10)
+        _TP_ANY_TRIGGERED = (
+            {f"TP{n}_DONE_PARTIAL" for n in range(1, 11)}
+            | {"TRAILING_ARMED"}
+        )
+        _any_tp_triggered = (strategy.status or "").upper() in _TP_ANY_TRIGGERED
+        if (
+            _tp1_is_20plus  # 사장님 옵션 20% 이상!
+            and _any_tp_triggered  # 첫 익절 발동 확인!
+            and peak >= Decimal(str(_tp1_override_val))  # peak >= 사장님 옵션 값!
             and pnl_ratio <= (peak - _strategy_retrace)
             and pnl_ratio < peak
         ):
             logger.info(
-                "[trailing v130] peak=%.2f%% >= 20%% 도달 = trailing 활성 → 청산! "
+                "[trailing v131] 사장님 요구 정확: TP1_override=%.2f%% (>=20) + "
+                "첫 TP 발동 (%s) + peak=%.2f%% → 회귀 청산! "
                 "(pnl=%.2f%% <= peak - retrace %.2f%%)",
-                peak, pnl_ratio, _strategy_retrace,
+                _tp1_override_val, strategy.status, peak, pnl_ratio, _strategy_retrace,
             )
             return "TRAILING_TP"
         # 옛 로직 (backward-compat): TP3+ 발동 + stage 3+
