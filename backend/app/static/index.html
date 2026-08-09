@@ -1809,6 +1809,66 @@
               </div>
               <p class="text-xs text-slate-500 mt-2">트레일링 익절: 피크 ≥ +5% 후 피크 대비 -5% 회귀 시 잔량 100% 청산 (자동, stage>=3 + TP3+ 후).</p>
 
+              <!-- 🌟 v131 신 기능 (2026-08-09): 청산 후 재진입 트리거 + 자본 관리! -->
+              <div class="mt-3 p-3 rounded bg-purple-900/20 border border-purple-700/40">
+                <label class="flex items-center gap-2 cursor-pointer mb-2">
+                  <input type="checkbox" id="cm-retry-after-liq-enabled"
+                         class="w-4 h-4 rounded cursor-pointer" style="accent-color:#a855f7">
+                  <span class="text-sm font-bold text-purple-300">
+                    🔄 청산 후 자동 재진입 (v131 신!)
+                  </span>
+                  <span class="text-xs px-2 py-0.5 rounded bg-yellow-800 text-yellow-200"
+                        title="Backend 미완성 (다음 세션 = 정식 활성!)">
+                    ⏳ MVP
+                  </span>
+                </label>
+                <p class="text-xs text-slate-400 mb-3">
+                  💡 <strong>1단계 진입 → 손절 → 다음 단계 자동 대기!</strong><br>
+                  청산가 기준 = 트리거% 만큼 오르거나 내리면 = 다음 단계 자동 진입!
+                </p>
+
+                <div class="grid grid-cols-2 gap-3 mb-2">
+                  <div>
+                    <label class="text-slate-400 text-xs">📊 재진입 트리거 % (레버리지 무관!)</label>
+                    <select id="cm-retry-trigger-pct"
+                            class="w-full mt-1 px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white">
+                      <option value="5">5% (빠른 재진입!)</option>
+                      <option value="10" selected>10% (기본!)</option>
+                      <option value="15">15%</option>
+                      <option value="20">20%</option>
+                      <option value="25">25%</option>
+                      <option value="30">30%</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="text-slate-400 text-xs">💰 자본 관리 모드</label>
+                    <select id="cm-capital-mgmt-mode"
+                            class="w-full mt-1 px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white">
+                      <option value="auto_deduct" selected>이전 손실 자동 차감! (안전!)</option>
+                      <option value="fixed">세팅값 그대로 (사장님 자율!)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="p-2 rounded bg-slate-900/50 border border-slate-700 text-xs">
+                  <p class="text-blue-300 font-semibold mb-1">📊 예상 시나리오 (BTC LONG, 500 USDT × 5단계, -15% 손절):</p>
+                  <p class="text-slate-400 leading-relaxed">
+                    1단계 <strong class="text-green-300">500</strong> USDT → 손절 -75<br>
+                    2단계 실 진입 = <strong class="text-green-300">425</strong> (500-75) → 손절 -63.75<br>
+                    3단계 실 진입 = <strong class="text-green-300">361</strong> (500-138.75) → 손절 -54<br>
+                    4단계 실 진입 = <strong class="text-yellow-300">307</strong> → 손절 -46<br>
+                    5단계 실 진입 = <strong class="text-red-300">261</strong> → 손절 -39<br>
+                    <span class="text-yellow-300">⚠️ 실용 한계 = 2~3단계! (사장님 정확!)</span>
+                  </p>
+                </div>
+
+                <p class="text-xs text-yellow-400 mt-2">
+                  ⚠️ <strong>MVP 상태:</strong> UI만 활성! Backend 로직 = 다음 세션 = 정식 구현!<br>
+                  = 지금 = 세팅해도 = 청산 시 = 전략 종료 (기존!)!<br>
+                  = 정식 구현 후 = 사장님 검증 → 활성!
+                </p>
+              </div>
+
               <!-- 2026-06-03 (#35 보강): 크라이시스 모드 정확한 정의 + 손절과의 관계 -->
               <!-- 사장님 의문: LABUSDT(#16) 크라이시스 활성 vs UI '비활성' 메시지 모순 → 명확화 -->
               <details class="mt-2 p-2 rounded bg-slate-900/50 border border-slate-700">

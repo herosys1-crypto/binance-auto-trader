@@ -41,6 +41,12 @@ class StrategyCreateRequest(BaseModel):
     # UX #18 (2026-04-29): 사용자가 템플릿 기본 레버리지를 override 할 수 있게 지원.
     # None 이면 템플릿 leverage 사용. 1~125 범위.
     leverage_override: int | None = Field(default=None, ge=1, le=125)
+    # 🌟 v131 신 옵션 (2026-08-09 사장님!): 청산 후 재진입 트리거 + 자본 관리 (MVP!)
+    # = payload 수신만! Backend 로직 = 다음 세션 = 정식 구현!
+    # = 지금 = 저장만 (안전!) / 청산 시 = 기존 로직 (전략 종료!)
+    retry_after_liquidation_enabled: bool | None = Field(default=False)
+    retry_trigger_pct: Decimal | None = Field(default=Decimal("10"), ge=0, le=100)
+    capital_management_mode: str | None = Field(default="fixed")  # "fixed" or "auto_deduct"
 
 class StrategyStopRequest(BaseModel):
     mode: Literal["cancel_only", "close_position_market", "emergency_stop"]
