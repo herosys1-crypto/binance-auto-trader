@@ -67,7 +67,21 @@ class StrategyService:
             stop_loss_percent_of_capital=Decimal(template_model.stop_loss_percent_of_capital),
         )
 
-    def create_strategy_instance(self, *, user_id: int, exchange_account_id: int, strategy_template_id: int, symbol: str, side: str, start_price: Decimal, leverage_override: int | None = None) -> StrategyInstance:
+    def create_strategy_instance(
+        self,
+        *,
+        user_id: int,
+        exchange_account_id: int,
+        strategy_template_id: int,
+        symbol: str,
+        side: str,
+        start_price: Decimal,
+        leverage_override: int | None = None,
+        # 🌟 v131 신 (2026-08-09 사장님!): 청산 후 자동 재진입 옵션!
+        retry_after_liquidation_enabled: bool | None = False,
+        retry_trigger_pct: Decimal | None = None,
+        capital_management_mode: str | None = "fixed",
+    ) -> StrategyInstance:
         template_model = self.repo.get_template(strategy_template_id)
         symbol_model = self.repo.get_symbol(symbol)
         if not template_model or not symbol_model:
@@ -526,6 +540,10 @@ class StrategyService:
             tp1_pct_override=D("25"),  # 25% 자동
             force_sl_enabled_override=True,  # 강제 SL ON!
             force_sl_roi_override=D("15"),  # -15% 자동!
+            # 🌟 v131 신 (2026-08-09 사장님!): 청산 후 자동 재진입 옵션 저장!
+            retry_after_liquidation_enabled=bool(retry_after_liquidation_enabled),
+            retry_trigger_pct=D(str(retry_trigger_pct)) if retry_trigger_pct is not None else D("10"),
+            capital_management_mode=(capital_management_mode or "fixed"),
         )
         self.repo.create_strategy_instance(instance)
         plans = [StrategyStagePlan(

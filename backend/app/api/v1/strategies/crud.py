@@ -41,6 +41,10 @@ def create_strategy(
             side=payload.side,
             start_price=payload.start_price,
             leverage_override=payload.leverage_override,
+            # 🌟 v131 신 (2026-08-09): 청산 후 자동 재진입 옵션!
+            retry_after_liquidation_enabled=payload.retry_after_liquidation_enabled,
+            retry_trigger_pct=payload.retry_trigger_pct,
+            capital_management_mode=payload.capital_management_mode,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e

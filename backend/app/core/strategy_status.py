@@ -33,6 +33,7 @@ TERMINAL_STATUSES: frozenset[str] = frozenset({
     "CLOSED_BY_SL",
     "REENTRY_READY",
     "KILL_SWITCH_TRIGGERED",
+    "STOPPED_CAPITAL_EXHAUSTED",  # v131: 자본 소진으로 자동 종료
 })
 
 
@@ -115,6 +116,25 @@ STAGES_WITH_NEXT: frozenset[str] = frozenset(
 )
 
 
+# ===== 청산 후 재진입 대기 (v131, 2026-08-09 사장님!) =====
+# 사장님 신 사상: 1단계 청산 → 다음 단계 대기 → 트리거 도달 → 자동 진입!
+# spec: docs/AUTO_RETRY_AFTER_LIQUIDATION_SPEC_v131.md
+#
+# LIQUIDATED_WAITING_RETRY = 청산 완료 + 다음 단계 대기 상태!
+#   - 거래소 포지션 = 0 (청산 완료!)
+#   - stage_trigger_worker 감시 대상 (트리거 도달 확인!)
+#   - TERMINAL_STATUSES에 X (= 자동 종료 X!)
+#   - ACTIVE_LIKE에 X (= 신규 진입 차단 X!)
+#   - reentry_after_liquidation_enabled=True 전략만 이 상태로 전환!
+#
+# STOPPED_CAPITAL_EXHAUSTED = 자본 소진으로 자동 정지!
+#   - 실 진입 자본 <= 0 → 진입 불가!
+#   - TERMINAL_STATUSES에 포함 (= 완전 종료!)
+#   - 사장님 알림 = "자본 소진! N단계에서 종료!"
+LIQUIDATED_WAITING_RETRY: str = "LIQUIDATED_WAITING_RETRY"
+STOPPED_CAPITAL_EXHAUSTED: str = "STOPPED_CAPITAL_EXHAUSTED"
+
+
 __all__ = [
     "TOTAL_STAGES_MAX",
     "TOTAL_TP_LEVELS",
@@ -128,4 +148,7 @@ __all__ = [
     "OPEN_LIKE_FOR_ORPHAN_CHECK",
     "PENDING_TO_OPEN_MAP",
     "STAGES_WITH_NEXT",
+    # v131 청산 후 재진입
+    "LIQUIDATED_WAITING_RETRY",
+    "STOPPED_CAPITAL_EXHAUSTED",
 ]
