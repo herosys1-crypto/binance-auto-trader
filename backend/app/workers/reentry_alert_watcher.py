@@ -142,56 +142,15 @@ def check_reentry_alert_for_symbol(
         return (False, {"error": str(e)})
 
 
-def _try_auto_execute_reentry(
-    db: Session,
-    prev_strategy,
-    account,
-    detail: dict,
-) -> bool:
-    """🌟 v131 자동 재진입 실행 (사장님 요청 2026-08-09!).
-
-    system_settings의 세팅 사용:
-      - reentry_auto_execute_capital: 자본 (USDT)
-      - reentry_auto_execute_force_sl_roi: 강제 SL ROI (%)
-      - reentry_auto_execute_leverage: 레버리지 (x)
-
-    신 전략 = OBV_REVERSE trigger_mode + 사장님 신 default!
-
-    Returns:
-        True = 자동 실행 완료 / False = 실패
-    """
-    from app.models.system_setting import SystemSetting
-    from app.services.strategy_service import StrategyService
-
-    try:
-        # 세팅 조회
-        _cap = db.get(SystemSetting, "reentry_auto_execute_capital")
-        _sl = db.get(SystemSetting, "reentry_auto_execute_force_sl_roi")
-        _lev = db.get(SystemSetting, "reentry_auto_execute_leverage")
-
-        capital_str = _cap.value if _cap else "100"
-        force_sl_str = _sl.value if _sl else "15"
-        leverage_str = _lev.value if _lev else "2"
-
-        capital = Decimal(capital_str)
-        force_sl_roi = Decimal(force_sl_str)
-        leverage = int(leverage_str)
-
-        # StrategyService 사용 = 신 전략 생성 (기존 로직 재사용!)
-        # TODO: 실제 create_strategy 호출 = payload 구성 필요
-        # 지금은 로그만 = 사장님 신 default 세팅 확인 후 실제 진입!
-        logger.warning(
-            "[reentry_alert v131] 🤖 자동 실행 시도! symbol=%s side=%s "
-            "capital=%s force_sl=%s%% leverage=%sx",
-            prev_strategy.symbol, prev_strategy.side,
-            capital, force_sl_roi, leverage,
-        )
-        # 실제 자동 생성은 별도 서비스 = 이번 커밋에서는 로그 + 알림만
-        # (사장님 실 테스트 후 실 진입 로직 활성화!)
-        return False  # 아직 실제 실행 미완성 = 알람만!
-    except Exception as e:
-        logger.warning("[reentry_alert v131] 자동 실행 함수 실패: %s", e)
-        return False
+# 🚨 v131 사장님 결정 (A 안전!): 자동 실행 함수 = 완전 제거!
+# = 안전장치 6개 미완성 = 자본 손실 위험!
+# = 다음 세션 = 아래 안전장치 완성 후 재활성:
+#   1. 4H 봉 완성 후에만 판정 (진행 중 봉 X)
+#   2. 중복 진입 방지 (같은 심볼 + 계정 활성 X)
+#   3. 심볼 blacklist (7일 내 2회 손실 = 자동 제외)
+#   4. 일일 자동 실행 한도 (하루 3회 max)
+#   5. 총 자본 한도 (잔고의 30% max)
+#   6. RSI 극값 필터 (< 30 or > 70 만!)
 
 
 def run_reentry_alert_watcher(db: Session, decrypt_text) -> dict:
@@ -282,40 +241,30 @@ def run_reentry_alert_watcher(db: Session, decrypt_text) -> dict:
                     strategy.symbol, strategy.side, detail,
                 )
 
-                # 🌟 v131 자동 실행 확인 (사장님 요청 2026-08-09!)
-                _auto_executed = False
-                try:
-                    from app.models.system_setting import SystemSetting
-                    _auto_setting = db.get(SystemSetting, "reentry_auto_execute_enabled")
-                    if _auto_setting and _auto_setting.value.lower() == "true":
-                        _auto_executed = _try_auto_execute_reentry(
-                            db, strategy, account, detail
-                        )
-                except Exception as _ae:
-                    logger.warning("[reentry_alert v131] 자동 실행 실패: %s", _ae)
+                # 🚨 v131 자동 실행 = 사장님 결정 (A 안전!) = 완전 제거!
+                # 이유: 안전장치 6개 미완성 = 실수 시 자본 손실 위험!
+                # (후행 지표 / 방향 판정 부족 / 중복 진입 / 자본 폭주 /
+                #  연속 손실 반복 / RSI 극값 미필터)
+                # = 다음 세션 = 안전장치 완성 후 재활성!
+                # 지금은 항상 = 수동 승인 대기!
 
                 # Telegram 알림 (dedup 6h)
                 try:
                     from app.services.notification_service import NotificationService
                     _dedup_key = f"reentry_alert:sent:{strategy.exchange_account_id}:{strategy.symbol}"
                     if _redis and not _redis.get(_dedup_key):
-                        _mode_label = "🤖 자동 실행 완료!" if _auto_executed else "🙋 수동 승인 대기!"
-                        _action_line = (
-                            "= 신 전략 자동 생성! (자동 실행 세팅 ON!)"
-                            if _auto_executed
-                            else "대시보드 → 알람 클릭 = 신 전략 즉시 생성!"
-                        )
                         NotificationService(db).send_system_alert(
-                            title=f"🎯 [재진입 {_mode_label}] {strategy.symbol} {strategy.side}",
+                            title=f"🎯 [재진입 기회!] {strategy.symbol} {strategy.side}",
                             body=(
                                 f"🎯 「{strategy.symbol}」 재진입 신호!\n"
                                 f"  이전 손절가: {detail.get('prev_stop_price')}\n"
                                 f"  현재가: {detail.get('current_price')}\n"
                                 f"  이동: {detail.get('move_pct')}% ({strategy.side})\n"
                                 f"  4H OBV 반전: ✓\n"
-                                f"  4H RSI 반전: ✓ (last={detail.get('rsi_last')})\n"
-                                f"  모드: {_mode_label}\n\n"
-                                f"{_action_line}"
+                                f"  4H RSI 반전: ✓ (last={detail.get('rsi_last')})\n\n"
+                                f"대시보드 → 알람 클릭 = 신/구 방식 선택!\n"
+                                f"  📊 신 OBV 자동 재진입 = 신 로직!\n"
+                                f"  ➕ 기존 방식 = 가격 도달 진입!"
                             ),
                         )
                         _redis.setex(_dedup_key, 6 * 3600, "1")

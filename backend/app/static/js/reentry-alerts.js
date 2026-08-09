@@ -80,19 +80,82 @@ async function deleteReentryAlert(safeKey) {
   }
 }
 
-// 알람 클릭 → 신 전략 생성 (심볼 자동 설정!)
+// 🌟 v131 (사장님 A 안전): 알람 클릭 = 신/구 선택 팝업!
 async function createStrategyFromAlert(safeKey, symbol, side, exchangeAccountId) {
+  // 이미 열려있으면 = 닫기
+  const existing = document.getElementById('reentry-choose-modal');
+  if (existing) existing.remove();
+
+  const sideIcon = side === 'LONG' ? '🐂' : '🐻';
+  const sideColor = side === 'LONG' ? '#22c55e' : '#ef4444';
+
+  const html = `
+    <div id="reentry-choose-modal" class="fixed inset-0 z-50 flex items-center justify-center"
+         style="background:rgba(0,0,0,0.7)"
+         onclick="if(event.target===this)document.getElementById('reentry-choose-modal').remove()">
+      <div class="bg-slate-900 rounded-lg p-6 max-w-md w-full mx-4"
+           style="border:2px solid ${sideColor};box-shadow:0 0 20px ${sideColor}66">
+        <h3 class="text-lg font-bold mb-2" style="color:${sideColor}">
+          ${sideIcon} ${symbol} ${side} 재진입!
+        </h3>
+        <p class="text-xs text-slate-400 mb-4">
+          💡 신/구 방식 선택하세요!
+        </p>
+
+        <div class="space-y-3">
+          <button onclick="_reentryPick('${safeKey}', '${symbol}', '${side}', ${exchangeAccountId}, 'obv')"
+                  class="w-full text-left bg-gradient-to-r from-purple-700 to-blue-700
+                         hover:from-purple-600 hover:to-blue-600
+                         text-white p-4 rounded-lg transition">
+            <div class="font-bold text-base mb-1">📊 신 OBV 자동 재진입</div>
+            <div class="text-xs opacity-90">
+              1단계 = MARKET 진입! 2단계+ = 4H OBV 신호 대기!<br>
+              (= 손절되도 자동 재진입 감지!)
+            </div>
+          </button>
+
+          <button onclick="_reentryPick('${safeKey}', '${symbol}', '${side}', ${exchangeAccountId}, 'classic')"
+                  class="w-full text-left bg-slate-700 hover:bg-slate-600
+                         text-white p-4 rounded-lg transition">
+            <div class="font-bold text-base mb-1">➕ 기존 방식 (가격 도달)</div>
+            <div class="text-xs opacity-90">
+              가격 도달 시 = 단계별 자동 진입! (옛 방식!)<br>
+              (= 사장님 옛 습관 그대로!)
+            </div>
+          </button>
+        </div>
+
+        <button onclick="document.getElementById('reentry-choose-modal').remove()"
+                class="w-full mt-4 bg-slate-800 hover:bg-slate-700 text-slate-400 py-2 rounded text-sm">
+          ✕ 취소
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+// 신/구 선택 후 실제 모달 열기
+async function _reentryPick(safeKey, symbol, side, exchangeAccountId, mode) {
   try {
-    // 옵션 A: 신 OBV 전략 모달 열기 (자동 재진입 = 사장님 사상 정확!)
-    // 옵션 B: 기존 방식 모달
-    // = 옵션 A default (신 OBV 모드!)
-    if (typeof openCreateChartObvModal !== 'function') {
-      if (typeof toast === 'function') toast('❌ 신 전략 모달 함수 없음', 'error');
+    // 선택 팝업 닫기
+    const chooseModal = document.getElementById('reentry-choose-modal');
+    if (chooseModal) chooseModal.remove();
+
+    // 신 모드 = openCreateChartObvModal / 구 모드 = openCreateModal
+    const openFn = (mode === 'obv')
+      ? window.openCreateChartObvModal
+      : window.openCreateModal;
+
+    if (typeof openFn !== 'function') {
+      if (typeof toast === 'function') {
+        toast(`❌ ${mode === 'obv' ? '신 OBV' : '구'} 모달 함수 없음`, 'error');
+      }
       return;
     }
-    await openCreateChartObvModal();
+    await openFn();
 
-    // 심볼 자동 설정
+    // 심볼 + side + 계정 자동 설정
     setTimeout(() => {
       const symbolInput = document.getElementById('cm-symbol');
       if (symbolInput) {
@@ -100,13 +163,10 @@ async function createStrategyFromAlert(safeKey, symbol, side, exchangeAccountId)
         symbolInput.dispatchEvent(new Event('input', {bubbles: true}));
         symbolInput.dispatchEvent(new Event('change', {bubbles: true}));
       }
-      // side 설정 (cmState 있으면)
       if (typeof cmState !== 'undefined') {
         cmState.side = side;
-        // 라디오 버튼 활성화 (있으면)
         const sideRadio = document.querySelector(`input[name="cm-side"][value="${side}"]`);
         if (sideRadio) sideRadio.checked = true;
-        // 계정 자동 설정
         if (exchangeAccountId) {
           cmState.accountId = Number(exchangeAccountId);
           const acctSelect = document.getElementById('cm-account');
@@ -114,7 +174,8 @@ async function createStrategyFromAlert(safeKey, symbol, side, exchangeAccountId)
         }
       }
       if (typeof toast === 'function') {
-        toast(`🎯 ${symbol} ${side} 알람 = 신 전략 모달! 자본 세팅 후 진입!`, 'success');
+        const modeLabel = mode === 'obv' ? '📊 신 OBV' : '➕ 기존 방식';
+        toast(`🎯 ${symbol} ${side} = ${modeLabel} 모달! 자본 세팅 후 진입!`, 'success');
       }
     }, 300);
 
@@ -127,99 +188,48 @@ async function createStrategyFromAlert(safeKey, symbol, side, exchangeAccountId)
   }
 }
 
-// 🌟 v131 자동 실행 세팅 (사장님 요청 2026-08-09!)
+// 🚨 v131 사장님 결정 (A 안전!): 자동 실행 세팅 = 「⏳ 준비중」!
+// = 안전장치 6개 미완성 = 잘못 켜면 자본 손실 위험!
+// = 다음 세션 안전장치 완성 후 = 정식 활성화!
 async function openReentrySettingsModal() {
-  try {
-    const settings = await api('/api/v1/reentry-alerts/settings', 'GET');
-    const allowedSl = settings.allowed_force_sl_roi || ['5','10','15','20'];
-    const allowedLev = settings.allowed_leverage || [1,2,3,5,10,20];
+  // 기존 modal 제거 후 삽입
+  const existing = document.getElementById('reentry-settings-modal');
+  if (existing) existing.remove();
 
-    // 강제 SL options
-    const slOpts = allowedSl.map(v =>
-      `<option value="${v}" ${settings.auto_execute_force_sl_roi===v?'selected':''}>
-        ${v==='0'?'끔':'-'+v+'%'}
-      </option>`
-    ).join('');
-
-    // 레버리지 options
-    const levOpts = allowedLev.map(v =>
-      `<option value="${v}" ${String(settings.auto_execute_leverage)===String(v)?'selected':''}>
-        ${v}x
-      </option>`
-    ).join('');
-
-    const html = `
-      <div id="reentry-settings-modal" class="fixed inset-0 z-50 flex items-center justify-center"
-           style="background:rgba(0,0,0,0.7)">
-        <div class="bg-slate-900 rounded-lg p-6 max-w-md w-full mx-4"
-             style="border:2px solid #a855f7;box-shadow:0 0 20px #a855f766">
-          <h3 class="text-lg font-bold text-purple-300 mb-4">
-            ⚙ 재진입 알람 자동 실행 세팅
-          </h3>
-          <p class="text-xs text-slate-400 mb-4">
-            💡 <strong>자동 실행 ON</strong> = 알람 감지 시 = 신 전략 즉시 자동 생성!<br>
-            💡 <strong>자동 실행 OFF</strong> = 알람만 표시 (사장님 클릭 = 신 전략!)
-          </p>
-
-          <div class="space-y-3">
-            <div>
-              <label class="flex items-center gap-2 text-sm text-slate-200">
-                <input type="checkbox" id="reset-auto-execute"
-                       ${settings.auto_execute_enabled?'checked':''}
-                       style="width:18px;height:18px;cursor:pointer">
-                <span class="font-bold">🤖 자동 실행 활성화</span>
-              </label>
-              <p class="text-xs text-yellow-400 mt-1">
-                ⚠️ ON = 사장님 승인 없이 = 자동 진입!
-              </p>
-            </div>
-
-            <div>
-              <label class="text-sm text-slate-300 block mb-1">💰 자동 진입 자본 (USDT):</label>
-              <input type="number" id="reset-auto-capital"
-                     value="${settings.auto_execute_capital}"
-                     min="1" step="1"
-                     class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200">
-            </div>
-
-            <div>
-              <label class="text-sm text-slate-300 block mb-1">🛑 강제 SL ROI (0=끔 ~ -100%):</label>
-              <select id="reset-auto-force-sl"
-                      class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200">
-                ${slOpts}
-              </select>
-            </div>
-
-            <div>
-              <label class="text-sm text-slate-300 block mb-1">⚡ 레버리지:</label>
-              <select id="reset-auto-leverage"
-                      class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200">
-                ${levOpts}
-              </select>
-            </div>
-          </div>
-
-          <div class="flex gap-2 mt-6">
-            <button onclick="saveReentrySettings()"
-                    class="flex-1 bg-purple-600 hover:bg-purple-500 text-white font-bold py-2 rounded">
-              💾 저장
-            </button>
-            <button onclick="closeReentrySettingsModal()"
-                    class="flex-1 bg-slate-700 hover:bg-slate-600 text-slate-300 py-2 rounded">
-              ✕ 취소
-            </button>
-          </div>
+  const html = `
+    <div id="reentry-settings-modal" class="fixed inset-0 z-50 flex items-center justify-center"
+         style="background:rgba(0,0,0,0.7)"
+         onclick="if(event.target===this)closeReentrySettingsModal()">
+      <div class="bg-slate-900 rounded-lg p-6 max-w-md w-full mx-4"
+           style="border:2px solid #f59e0b;box-shadow:0 0 20px #f59e0b66">
+        <h3 class="text-lg font-bold text-yellow-300 mb-3">
+          ⏳ 자동 실행 = 준비중!
+        </h3>
+        <p class="text-sm text-slate-200 mb-4">
+          사장님 안전 결정 (2026-08-09):<br>
+          <strong class="text-yellow-400">자동 실행 = 안전장치 미완성!</strong>
+        </p>
+        <div class="bg-slate-800 rounded p-3 mb-4 text-xs text-slate-300 space-y-1">
+          <div class="font-bold text-yellow-300 mb-1">🚨 완성 필요 안전장치 (6개):</div>
+          <div>1. 4H 봉 완성 후에만 판정!</div>
+          <div>2. 중복 진입 방지 (같은 심볼)!</div>
+          <div>3. 심볼 blacklist (연속 손실!)</div>
+          <div>4. 일일 자동 실행 한도!</div>
+          <div>5. 총 자본 한도 (잔고 30%)!</div>
+          <div>6. RSI 극값 필터 (< 30 / > 70)!</div>
         </div>
+        <p class="text-xs text-green-300 mb-4">
+          ✅ <strong>지금 = 수동 승인만!</strong><br>
+          알람 클릭 → 신/구 방식 선택 → 사장님 승인 = 안전!
+        </p>
+        <button onclick="closeReentrySettingsModal()"
+                class="w-full bg-slate-700 hover:bg-slate-600 text-slate-200 py-2 rounded">
+          알겠습니다!
+        </button>
       </div>
-    `;
-
-    // 기존 modal 제거 후 삽입
-    const existing = document.getElementById('reentry-settings-modal');
-    if (existing) existing.remove();
-    document.body.insertAdjacentHTML('beforeend', html);
-  } catch (e) {
-    if (typeof toast === 'function') toast('❌ 세팅 조회 실패: ' + (e.message || e), 'error');
-  }
+    </div>
+  `;
+  document.body.insertAdjacentHTML('beforeend', html);
 }
 
 function closeReentrySettingsModal() {
@@ -227,37 +237,17 @@ function closeReentrySettingsModal() {
   if (el) el.remove();
 }
 
-async function saveReentrySettings() {
-  try {
-    const enabled = document.getElementById('reset-auto-execute').checked;
-    const capital = document.getElementById('reset-auto-capital').value;
-    const forceSl = document.getElementById('reset-auto-force-sl').value;
-    const leverage = document.getElementById('reset-auto-leverage').value;
-
-    await api('/api/v1/reentry-alerts/settings', 'PUT', {
-      auto_execute_enabled: enabled,
-      auto_execute_capital: capital,
-      auto_execute_force_sl_roi: forceSl,
-      auto_execute_leverage: leverage,
-    });
-
-    if (typeof toast === 'function') {
-      toast(`✅ 세팅 저장! 자동 실행 ${enabled?'ON 🤖':'OFF 🙋'}`, 'success');
-    }
-    closeReentrySettingsModal();
-  } catch (e) {
-    if (typeof toast === 'function') toast('❌ 저장 실패: ' + (e.message || e), 'error');
-  }
-}
+// 🚨 saveReentrySettings 제거 = v131 사장님 A 안전!
+// = 자동 실행 = 다음 세션 안전장치 완성 후 재활성!
 
 // 5초마다 알람 갱신 (dashboard-refresh polling에 통합)
 if (typeof window !== 'undefined') {
   window.loadReentryAlerts = loadReentryAlerts;
   window.deleteReentryAlert = deleteReentryAlert;
   window.createStrategyFromAlert = createStrategyFromAlert;
+  window._reentryPick = _reentryPick;  // v131 신/구 선택!
   window.openReentrySettingsModal = openReentrySettingsModal;
   window.closeReentrySettingsModal = closeReentrySettingsModal;
-  window.saveReentrySettings = saveReentrySettings;
   // 초기 로드
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(loadReentryAlerts, 1000);
