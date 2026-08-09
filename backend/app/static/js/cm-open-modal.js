@@ -221,6 +221,20 @@ async function openCreateModal(editStrategyId) {
           if (_symEl) _symEl.value = '';
           const _startEl = document.getElementById('cm-start-price');
           if (_startEl) _startEl.value = '';
+          // 🌟 v131 사장님 지적 (2026-08-09): 레버리지 = 신 default 강제!
+          // 사장님 스크린샷: 이전 전략 5x = 자동 로드! = 신 default 2x 무시!
+          // fix: 이전 전략 로드 후 = 레버리지만 = 신 default (2x!) override!
+          //      (심볼별 조정 = 사장님 직접 입력!)
+          try {
+            const _lvEl = document.getElementById('cm-leverage');
+            if (_lvEl && typeof _defaultLeverageForSide === 'function') {
+              const _defLev = _defaultLeverageForSide(cmState ? cmState.side : 'SHORT');
+              _lvEl.value = _defLev;
+              cmLeverageManuallyEdited = false;  // = 자동 갱신 가능!
+            }
+          } catch (_le) {
+            console.warn('[new-strategy] 레버리지 신 default 세팅 실패:', _le);
+          }
           // cmState 도 리셋 (= 신 strategy 모드!)
           if (cmState) {
             cmState.editingStrategyId = null;
