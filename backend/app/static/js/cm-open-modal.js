@@ -75,9 +75,10 @@ async function openCreateChartObvModal() {
   //   - 레버리지 = 2x (사장님 재확정 = 모두 2x!)
   //   - TP1/2/3/4 qty = 10/15/20/25 (사장님 진짜 요구!)
   setTimeout(() => {
-    // 레버리지 5x (사장님 2026-08-09 재확정!)
+    // 🌟 2026-08-11 v132 사장님 재재확정: 5x → 2x (신 OBV 모달!)
+    // 히스토리: 2026-08-08 (2x) → 2026-08-09 (5x) → 2026-08-11 (2x!)
     const lvInp = document.getElementById('cm-leverage');
-    if (lvInp && !lvInp.value) lvInp.value = 5;
+    if (lvInp && !lvInp.value) lvInp.value = 2;
     // TP qty 자동 세팅 (사장님 원하면 = 수정 가능!)
     const _tpQtyDefaults = {'cm-tp1-qty': 10, 'cm-tp2-qty': 15, 'cm-tp3-qty': 20, 'cm-tp4-qty': 25};
     for (const [id, val] of Object.entries(_tpQtyDefaults)) {
