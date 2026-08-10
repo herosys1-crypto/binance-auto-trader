@@ -146,12 +146,22 @@ def run_self_check_once() -> dict:
                     ).scalars().all()
                     if not all_stage_plans:
                         continue  # stage_plan 없음 = 검증 skip!
-                    # 실제 「포지션 진입 체결」 알림 카운트로 대체 검증 (진짜 silent bug만!)
+                    # 🚨 2026-08-10 v131 사장님 critical fix (#836 CYSUSDT false positive!):
+                    # 옛 v57 = title.like("%포지션 진입 체결%")
+                    #   = 이 텍스트 = 코드 어디에도 없음!
+                    #   = entry_notif_count = 항상 0!
+                    #   = = 실제 진입 정상이어도 = false positive 반복!
+                    #   = 사장님 #836 CYSUSDT = 진입 정상, 알림 정상 = 근데 Self-Check silent bug 알림!
+                    #
+                    # 신 v131 = 실제 title 사용!
+                    #   send_stage_entered_alert: title = f"{emoji} [{stage_no}단계 진입] {symbol} {side}"
+                    #   = 예: "📉 [1단계 진입] BMTUSDT SHORT"
+                    #   = 검색 = "단계 진입]" 포함 (SQL wildcard!)
                     from app.models.notification import Notification
                     entry_notif_count = db.execute(
                         select(Notification)
                         .where(Notification.strategy_instance_id == s.id)
-                        .where(Notification.title.like("%포지션 진입 체결%"))
+                        .where(Notification.title.like("%단계 진입]%"))
                     ).scalars().all()
                     # current_stage 이상의 진입 알림 있으면 = 정상!
                     if s.current_stage and len(entry_notif_count) >= s.current_stage:
