@@ -202,6 +202,24 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 continue
             next_stage_no: int | None = None  # 2026-06-01: try 진입 전 명시 (except 분기에서 안전 참조)
             try:
+                # 🚨 2026-08-10 v131 사장님 critical (#828 TSTUSDT 사례!):
+                # 「청산 후 재진입」 세팅 = 옛 stage_trigger 완전 skip!
+                # 사장님 사고:
+                #   1단계 진입 → 손실 → 청산 (전량 0!)
+                #   → 청산가 기준 트리거 → 2단계 신 진입!
+                #   = 각 단계 = 순차 = 절대 동시 보유 X!
+                #
+                # 옛 병행 로직 (v131 초기 = 잘못!):
+                #   retry ON 이어도 = 옛 +10% 도달 시 = 2단계 진입!
+                #   → 1+2단계 동시 보유! → 사장님 사고 X!
+                #
+                # 신 v131 (사장님 정확 사고!):
+                #   retry ON = STAGES_WITH_NEXT (STAGE1_OPEN 등) 상태 = 옛 로직 skip!
+                #   = 오직 LIQUIDATED_WAITING_RETRY 상태 = 신 로직으로 진입!
+                if getattr(strategy, "retry_after_liquidation_enabled", False):
+                    if strategy.status != "LIQUIDATED_WAITING_RETRY":
+                        # 옛 stage_trigger 로직 skip! (사장님 사고 = 청산 후만!)
+                        continue
                 # 2026-06-01 Critical fix: STAGE_OPEN_PENDING 도 검사 대상 (Sub-account user-stream
                 # ORDER 미수신 시 PENDING 머무름). 단, 실 포지션 없으면 (current_position_qty=0)
                 # 다음 stage 검사 X — 1단계 진입 자체가 아직 안 됐다는 의미. 안전망.
