@@ -425,12 +425,28 @@ class RiskService:
                 )
                 tp_levels = []  # 전체 TP 비활성!
             else:
+                # 🚨 2026-08-10 v131 사장님 CRITICAL fix (#838 BMTUSDT 초과 청산 사례!):
+                # 옛 v105 = tp_levels = [(label, max(_override, val)) for ... ]
+                # = 모든 TP 임계를 override 값 이상으로 강제!
+                # = 사장님 신 default (TP1_override=25%, template TP4=25%) 시:
+                #   TP1 = max(25, 10) = 25!
+                #   TP2 = max(25, 15) = 25!
+                #   TP3 = max(25, 20) = 25!
+                #   TP4 = max(25, 25) = 25!
+                # = TP1-4 임계 = 모두 25%! = 동시 발동! = 초과 청산!
+                # = #838 BMTUSDT = TP4 audit "의도 25% vs 실제 30.96%" 사고 원인!
+                #
+                # 신 v131 = TP1만 override! (사장님 원 사고!)
+                # = TP2-10은 = template 원값 그대로!
+                # = 사장님 template 세팅 = 자율 존중!
+                # = 각 TP = 순차 발동 (tp_sl_orchestrator!)
                 tp_levels = [
-                    (label, max(_override, val) if val is not None else val)
-                    for label, val in tp_levels
+                    (label, _override if idx == 0 else val)
+                    for idx, (label, val) in enumerate(tp_levels)
                 ]
                 logger.info(
-                    "[risk] v105 사장님 TP1 옵션 = 모든 TP 상향! strategy=%s TP1_override=%s → tp_levels=%s",
+                    "[risk] v131 사장님 TP1 옵션 = TP1만 override (v105 → v131 fix!)! "
+                    "strategy=%s TP1_override=%s → tp_levels=%s",
                     strategy.id, _override, tp_levels
                 )
 
