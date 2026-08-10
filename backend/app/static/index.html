@@ -1622,15 +1622,15 @@
            템플릿 사용 시에도 이 값으로 override 됨. -->
       <div class="mb-4">
         <label class="block text-sm font-semibold mb-2 text-slate-300">⚖️  레버리지
-          <span class="text-xs text-slate-500 font-normal">(기본: 숏 2x · 롱 1x · 사이드 변경 시 자동 갱신, 직접 입력도 가능)</span>
+          <span class="text-xs text-slate-500 font-normal">(기본: 숏 2x · 롱 2x · 사이드 변경 시 자동 갱신, 직접 입력도 가능)</span>
         </label>
         <div class="flex gap-2 items-center">
-          <input id="cm-leverage" type="number" min="1" max="125" step="1" value="5"
+          <input id="cm-leverage" type="number" min="1" max="125" step="1" value="2"
             oninput="cmLeverageManuallyEdited = true; if(typeof _refreshLiveCalc==='function')_refreshLiveCalc()"
             class="w-24 px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white text-center" />
           <span class="text-slate-400 text-sm">배속</span>
           <button onclick="resetCmLeverage()" class="btn-ghost btn text-xs" style="padding:3px 8px; font-size:11px"
-            title="현재 사이드의 기본값 (숏 5x / 롱 5x) 으로 복원">↺ 기본값</button>
+            title="현재 사이드의 기본값 (숏 2x / 롱 2x) 으로 복원">↺ 기본값</button>
 
           <!-- 🌟 v131 (2026-08-09 사장님!): 「청산 후 재진입」 옵션 = 레버리지 옆에도! -->
           <!-- = 두 곳 동기화 = 한 곳 클릭 = 둘 다 적용! -->

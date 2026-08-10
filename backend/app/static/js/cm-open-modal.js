@@ -182,7 +182,7 @@ async function openCreateModal(editStrategyId) {
   // UX #18: 레버리지 입력 + 수동수정 플래그 초기화 (모달 열 때마다)
   cmLeverageManuallyEdited = false;
   const _lvInit = document.getElementById('cm-leverage');
-  if (_lvInit) _lvInit.value = 5;  // v131 (2026-08-09): 5x default (다음 setCmSide 가 다시 적용)
+  if (_lvInit) _lvInit.value = 2;  // 🌟 v132 (2026-08-11): 2x default (다음 setCmSide 가 다시 적용)
   await Promise.all([loadCmAccounts(), loadCmTemplates(), loadCmSymbols()]);
   setCmSide('SHORT');
   setCmMode('direct');
