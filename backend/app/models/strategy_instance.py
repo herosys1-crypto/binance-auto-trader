@@ -1,6 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 from sqlalchemy import String, Integer, Boolean, DateTime, ForeignKey, Text, func, Numeric
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
@@ -65,6 +66,29 @@ class StrategyInstance(Base):
     # spec: FORCE_SL_LOSS_LIMIT_SPEC_2026-06-24.md
     force_sl_enabled_override: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     force_sl_roi_override: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
+
+    # ─────────── 청산 후 자동 재진입 + 자본 관리 (alembic 0023, 2026-08-09) ───────────
+    # 사장님 신 사상 v131 = 1단계 청산 → 트리거 도달 → 다음 단계 자동 진입!
+    # 자본 관리 = 이전 손실만큼 자동 차감 (사장님 정확 통제!)
+    # 실용 한계 = 2~3단계! (사장님 인식!)
+    # spec: docs/AUTO_RETRY_AFTER_LIQUIDATION_SPEC_v131.md
+    #
+    # 활성 여부 (default=False = 옛 동작! 옵션 켜야 활성!)
+    retry_after_liquidation_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # 재진입 트리거 % (레버리지 무관!) - 청산가 기준 ±% (= 기본값!)
+    retry_trigger_pct: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("10"), nullable=False)
+    # 🌟 v131 신 (alembic 0024, 2026-08-09 사장님!): 단계별 재진입 트리거 개별 세팅!
+    # 사장님 사고: "기본세팅은 유효해야 하고 개별세팅이 우선하는거야"
+    # = 하이브리드 = 사장님 시장 분석 → 단계별 개별 트리거!
+    # 값 예: {} (모두 기본!) / {"3": 15, "4": 20} (3/4단계만 개별!)
+    # 우선순위: 개별값 있음 → 개별값 / 없음 or null → retry_trigger_pct 기본값!
+    retry_stage_trigger_pcts: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    # 자본 관리 모드 = 'fixed' (그대로) or 'auto_deduct' (손실 차감)
+    capital_management_mode: Mapped[str] = mapped_column(String(20), default="fixed", nullable=False)
+    # 누적 실현 손실 (USDT!) - 자본 차감 계산용!
+    cumulative_realized_loss: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"), nullable=False)
+    # 마지막 청산가 - 다음 단계 트리거 기준!
+    last_liquidation_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
 
     # ─────────── Soft delete (alembic 0011, 2026-05-06) ───────────
     # DELETE endpoint 와 cleanup 스크립트가 row 자체를 삭제하면 realized_pnl 이

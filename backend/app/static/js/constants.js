@@ -72,6 +72,11 @@ const STATUS_MAP = {
   // 종료 상태
   'COMPLETED':                  { ko: '✅ 정상 종료 (전체 익절)', sig: 'green',  icon: '🎯' },
   'REENTRY_READY':              { ko: '재진입 대기 (수동 시작 또는 자동)', sig: 'gray', icon: '🔄' },
+  // 🌟 v131 (2026-08-10 사장님!): 청산 후 자동 재진입 대기 (신!)
+  // 사장님 사고: "1단계 청산 → 다음 단계 있으면 = 재진입 대기중 표기!"
+  // = 매 청산마다 = 이 상태 = 청산가 기준 트리거 도달 대기!
+  'LIQUIDATED_WAITING_RETRY':   { ko: '🔄 재진입 대기중',       sig: 'purple', icon: '⏳' },
+  'STOPPED_CAPITAL_EXHAUSTED':  { ko: '💰 자본 소진 종료',      sig: 'gray',   icon: '⏹' },
   'CLOSED':                     { ko: '정상 종료',            sig: 'gray',   icon: '✓' },
   'CLOSED_BY_TP':               { ko: '익절 종료',            sig: 'green',  icon: '💎' },
   'CLOSED_BY_SL':               { ko: '손절 종료',            sig: 'red',    icon: '🛑' },

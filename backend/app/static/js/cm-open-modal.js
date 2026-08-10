@@ -24,7 +24,70 @@
  * Phase 3 create-modal 분리 완료 (3a~3i).
  */
 
-// ==================== 신규 전략 모달 ====================
+// ==================== 신 「차트 OBV 자동」 전략 모달 (v130!) ====================
+// 🌟 2026-08-06 사장님 요구: 신 시스템 = 2개 페이지 (구/OBV)
+// spec: docs/CHART_REENTRY_STRATEGY_SPEC.md
+// - 1단계 = 사장님 시작가 진입 (구 시스템 동일!)
+// - 2~N단계 = 4H OBV 첫 하락 봉 + 15m/1h 확인 + 10% 가격 = 자동 재진입!
+// - N+ = 사장님 수동 관리 (구 시스템 동일!)
+// - TP/SL = 구 시스템 그대로!
+//
+// 구현: 기존 openCreateModal() 재사용 + trigger_mode='OBV_REVERSE' flag!
+async function openCreateChartObvModal() {
+  // 기존 모달 오픈
+  await openCreateModal();
+  // 🚨 v130 CRITICAL fix (2026-08-06): OBV 모드 = 「직접 입력」 강제!
+  //   옛 silent bug: template 모드 = 옛 template 재사용 = trigger_mode=PRICE_DOWN_PCT!
+  //   = 사장님 OBV 원했는데 = 「➕ 기존」 저장!
+  //   fix: mode='direct' 강제 + template 선택 무효!
+  cmState._triggerMode = 'OBV_REVERSE';
+  cmState.mode = 'direct';  // 강제!
+  cmState.templateId = null;  // template 선택 무효화!
+  // UI = direct 라디오 강제 선택 (있으면)
+  const directRadio = document.querySelector('input[name="cm-mode"][value="direct"]');
+  if (directRadio) directRadio.checked = true;
+  // template 선택 UI = 숨김 or 비활성 (있으면)
+  const tplSelectEl = document.getElementById('cm-template-select');
+  if (tplSelectEl) tplSelectEl.disabled = true;
+  // 모달 타이틀 변경 = 사장님 명확!
+  const titleEl = document.getElementById('cm-title');
+  if (titleEl) {
+    titleEl.textContent = '📊 새 전략 (OBV 자동 재진입!) — 직접 입력 필수!';
+    titleEl.style.color = '#a78bfa';  // 보라 = 신 모드 시각!
+  }
+  // 배너 = OBV 설명 + direct 강제 안내!
+  const bannerEl = document.getElementById('cm-edit-banner-detail');
+  if (bannerEl) {
+    bannerEl.innerHTML =
+      '<b style="color:#a78bfa">📊 새 「차트 OBV 자동 재진입」 모드!</b><br>' +
+      '<b style="color:#fbbf24">⚠️ 직접 입력 필수!</b> (저장된 template 사용 X = 신 template 자동 생성!)<br>' +
+      '• 1단계 = 사장님 시작가 진입 (기존과 동일!)<br>' +
+      '• 2~N단계 = 자동! (4H OBV 첫 하락 + 15m/1h 확인 + 10% 가격 이동!)<br>' +
+      '• 손절/TP = 기존 로직 그대로! (사장님 옵션 우선!)<br>' +
+      '• N+ 단계 = 수동 관리!';
+    bannerEl.style.borderLeft = '3px solid #a78bfa';
+    bannerEl.style.paddingLeft = '8px';
+  }
+  const bannerParent = document.getElementById('cm-edit-banner');
+  if (bannerParent) bannerParent.classList.remove('hidden');
+
+  // 🌟 v130 (2026-08-08): 신 OBV 자동 세팅!
+  //   - 레버리지 = 2x (사장님 재확정 = 모두 2x!)
+  //   - TP1/2/3/4 qty = 10/15/20/25 (사장님 진짜 요구!)
+  setTimeout(() => {
+    // 레버리지 5x (사장님 2026-08-09 재확정!)
+    const lvInp = document.getElementById('cm-leverage');
+    if (lvInp && !lvInp.value) lvInp.value = 5;
+    // TP qty 자동 세팅 (사장님 원하면 = 수정 가능!)
+    const _tpQtyDefaults = {'cm-tp1-qty': 10, 'cm-tp2-qty': 15, 'cm-tp3-qty': 20, 'cm-tp4-qty': 25};
+    for (const [id, val] of Object.entries(_tpQtyDefaults)) {
+      const el = document.getElementById(id);
+      if (el && !el.value) el.value = val;
+    }
+  }, 200);
+}
+
+// ==================== 신규 전략 모달 (구 시스템) ====================
 let cmState = {
   accountId: null,
   side: 'SHORT',
@@ -35,6 +98,9 @@ let cmState = {
 };
 
 async function openCreateModal(editStrategyId) {
+  // 🌟 v130 (2026-08-06): _triggerMode 초기화 = default 'PRICE_DOWN_PCT' (구 시스템!)
+  //   openCreateChartObvModal()가 = 이후에 = 'OBV_REVERSE'로 덮어씀!
+  cmState._triggerMode = 'PRICE_DOWN_PCT';
   const _modalEl = document.getElementById('create-modal');
   _modalEl.classList.remove('hidden');
   /* 🚨 v92: 「⬆ 심볼로」 fixed 버튼 = 모달 열림 시 = 표시! */
@@ -115,7 +181,7 @@ async function openCreateModal(editStrategyId) {
   // UX #18: 레버리지 입력 + 수동수정 플래그 초기화 (모달 열 때마다)
   cmLeverageManuallyEdited = false;
   const _lvInit = document.getElementById('cm-leverage');
-  if (_lvInit) _lvInit.value = 2;  // SHORT 기본값 (다음 setCmSide 가 다시 적용)
+  if (_lvInit) _lvInit.value = 5;  // v131 (2026-08-09): 5x default (다음 setCmSide 가 다시 적용)
   await Promise.all([loadCmAccounts(), loadCmTemplates(), loadCmSymbols()]);
   setCmSide('SHORT');
   setCmMode('direct');
@@ -155,6 +221,20 @@ async function openCreateModal(editStrategyId) {
           if (_symEl) _symEl.value = '';
           const _startEl = document.getElementById('cm-start-price');
           if (_startEl) _startEl.value = '';
+          // 🌟 v131 사장님 지적 (2026-08-09): 레버리지 = 신 default 강제!
+          // 사장님 스크린샷: 이전 전략 5x = 자동 로드! = 신 default 2x 무시!
+          // fix: 이전 전략 로드 후 = 레버리지만 = 신 default (2x!) override!
+          //      (심볼별 조정 = 사장님 직접 입력!)
+          try {
+            const _lvEl = document.getElementById('cm-leverage');
+            if (_lvEl && typeof _defaultLeverageForSide === 'function') {
+              const _defLev = _defaultLeverageForSide(cmState ? cmState.side : 'SHORT');
+              _lvEl.value = _defLev;
+              cmLeverageManuallyEdited = false;  // = 자동 갱신 가능!
+            }
+          } catch (_le) {
+            console.warn('[new-strategy] 레버리지 신 default 세팅 실패:', _le);
+          }
           // cmState 도 리셋 (= 신 strategy 모드!)
           if (cmState) {
             cmState.editingStrategyId = null;

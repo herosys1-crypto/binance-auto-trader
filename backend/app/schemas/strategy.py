@@ -41,6 +41,15 @@ class StrategyCreateRequest(BaseModel):
     # UX #18 (2026-04-29): 사용자가 템플릿 기본 레버리지를 override 할 수 있게 지원.
     # None 이면 템플릿 leverage 사용. 1~125 범위.
     leverage_override: int | None = Field(default=None, ge=1, le=125)
+    # 🌟 v131 신 옵션 (2026-08-09 사장님!): 청산 후 재진입 트리거 + 단계별 개별!
+    # Backend 실 로직 완성 (Phase 2-B)!
+    retry_after_liquidation_enabled: bool | None = Field(default=False)
+    retry_trigger_pct: Decimal | None = Field(default=Decimal("10"), ge=0, le=100)
+    capital_management_mode: str | None = Field(default="fixed")  # "fixed" (사장님 사고!)
+    # 🌟 v131 단계별 개별 트리거 (사장님 하이브리드!):
+    # 예: {"3": 15, "4": 20} → 3단계 = 15% override, 4단계 = 20% override
+    #     {} or null → 모든 단계 = retry_trigger_pct 기본값!
+    retry_stage_trigger_pcts: dict[str, Decimal | None] | None = Field(default=None)
 
 class StrategyStopRequest(BaseModel):
     mode: Literal["cancel_only", "close_position_market", "emergency_stop"]
@@ -107,6 +116,9 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # default 4 로 두면 backward-compat (이전 frontend 도 동작)
     total_active_stages: int = 4
     total_active_tps: int = 4
+    # 🌟 2026-08-06 v130 신 필드: template의 trigger_mode (구/OBV 구분!)
+    # 'PRICE_DOWN_PCT' (기존) or 'OBV_REVERSE' (신)
+    trigger_mode: str = "PRICE_DOWN_PCT"
     # ─── 실제 TP 발동 카운트 + 종료 사유 (UI 정확 표시용, 2026-05-03 fix) ───
     # tp_triggered_count: notifications 의 [TPN 익절 체결] 카운트 (TRAILING 제외)
     # last_close_reason: TP_FINAL / TRAILING / SL / MANUAL / NONE
@@ -121,3 +133,7 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # 「↻ 복원」 버튼 노출. archived_at 은 archive 시점 (audit log).
     is_archived: bool = False
     archived_at: datetime | None = None
+    # 🌟 v131 (2026-08-09 사장님!): 청산 후 재진입 옵션 = UI 배지 표시!
+    # 사장님 지적: "구분을 할수 있게 해줘"
+    retry_after_liquidation_enabled: bool = False
+    retry_trigger_pct: Decimal | None = None

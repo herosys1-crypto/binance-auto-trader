@@ -195,9 +195,38 @@ async function submitCreate() {
           stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
           crisis_max_loss_threshold: tpsl.crisis_max_loss_threshold,
           reentry_policy: 'manual_ready',
+          // 🌟 2026-08-06 v130: cmState._triggerMode 전달 (구/OBV 구분!)
+          trigger_mode: cmState._triggerMode || 'PRICE_DOWN_PCT',
         },
       });
       templateId = tplCreated.id;
+    }
+
+    // 🌟 v131 신 옵션 = 청산 후 재진입 트리거 (사장님 2026-08-09!)
+    // = Backend Phase 2-B 실 로직 완성!
+    // = 자본 관리 = 항상 'fixed' (세팅 그대로!) = 사장님 자율 130% 경고만!
+    // = 단계별 개별 트리거 (하이브리드 = 사장님 시장 분석!)
+    let _retryAfterLiqEnabled = false;
+    let _retryTriggerPct = 10;
+    const _capitalMgmtMode = 'fixed';  // 항상 세팅 그대로 (사장님 사고!)
+    let _retryStagePcts = {};  // 단계별 개별 override!
+    try {
+      const _retryEl = document.getElementById('cm-retry-after-liq-enabled');
+      const _trgEl = document.getElementById('cm-retry-trigger-pct');
+      if (_retryEl) _retryAfterLiqEnabled = _retryEl.checked;
+      if (_trgEl) _retryTriggerPct = Number(_trgEl.value) || 10;
+      // 🌟 v131 하이브리드: 단계별 개별 트리거 수집 (2~10단계!)
+      for (let n = 2; n <= 10; n++) {
+        const _stageEl = document.getElementById('cm-retry-trg-' + n);
+        if (_stageEl && _stageEl.value && _stageEl.value.trim() !== '') {
+          const _v = Number(_stageEl.value);
+          if (!isNaN(_v) && _v >= 0 && _v <= 100) {
+            _retryStagePcts[String(n)] = _v;
+          }
+        }
+      }
+    } catch (_e) {
+      console.warn('[v131] retry-after-liq 옵션 수집 실패:', _e);
     }
 
     const created = await api('/strategies', {
@@ -208,9 +237,25 @@ async function submitCreate() {
         symbol, side: cmState.side, start_price: startPrice,
         // UX #18: 레버리지 override (템플릿 기본값을 덮어씀)
         leverage_override: leverageFromInput,
+        // 🌟 v131 신 옵션 (Backend 완성!)
+        retry_after_liquidation_enabled: _retryAfterLiqEnabled,
+        retry_trigger_pct: _retryTriggerPct,
+        capital_management_mode: _capitalMgmtMode,
+        retry_stage_trigger_pcts: _retryStagePcts,  // 하이브리드!
       },
     });
-    toast('✅ 전략 #' + created.id + ' 생성됨. 1단계 주문 발송 중...', 'success');
+    // 🌟 v130: trigger_mode 명시 표시 = 사장님 어떤 방식인지 즉시 확인!
+    const _modeLabel = (cmState._triggerMode === 'OBV_REVERSE')
+      ? '📊 OBV 자동 재진입'
+      : '➕ 기존 방식';
+    // 🌟 v131: 청산 후 재진입 옵션 = 사장님 안내
+    let _retryLabel = '';
+    if (_retryAfterLiqEnabled) {
+      const _stageCount = Object.keys(_retryStagePcts).length;
+      const _overrides = _stageCount > 0 ? ` + ${_stageCount}단계 개별!` : '';
+      _retryLabel = ` + 🔄 청산 후 재진입 (기본 ${_retryTriggerPct}%${_overrides})`;
+    }
+    toast(`✅ 전략 #${created.id} 생성됨! [${_modeLabel}${_retryLabel}] 1단계 주문 발송 중...`, 'success');
     try {
       await api('/strategies/' + created.id + '/start', { method: 'POST' });
       toast('🚀 전략 #' + created.id + ' 시작 완료. 1단계 주문 발송됨.', 'success');

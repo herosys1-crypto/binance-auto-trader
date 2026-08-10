@@ -202,6 +202,24 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 continue
             next_stage_no: int | None = None  # 2026-06-01: try 진입 전 명시 (except 분기에서 안전 참조)
             try:
+                # 🚨 2026-08-10 v131 사장님 critical (#828 TSTUSDT 사례!):
+                # 「청산 후 재진입」 세팅 = 옛 stage_trigger 완전 skip!
+                # 사장님 사고:
+                #   1단계 진입 → 손실 → 청산 (전량 0!)
+                #   → 청산가 기준 트리거 → 2단계 신 진입!
+                #   = 각 단계 = 순차 = 절대 동시 보유 X!
+                #
+                # 옛 병행 로직 (v131 초기 = 잘못!):
+                #   retry ON 이어도 = 옛 +10% 도달 시 = 2단계 진입!
+                #   → 1+2단계 동시 보유! → 사장님 사고 X!
+                #
+                # 신 v131 (사장님 정확 사고!):
+                #   retry ON = STAGES_WITH_NEXT (STAGE1_OPEN 등) 상태 = 옛 로직 skip!
+                #   = 오직 LIQUIDATED_WAITING_RETRY 상태 = 신 로직으로 진입!
+                if getattr(strategy, "retry_after_liquidation_enabled", False):
+                    if strategy.status != "LIQUIDATED_WAITING_RETRY":
+                        # 옛 stage_trigger 로직 skip! (사장님 사고 = 청산 후만!)
+                        continue
                 # 2026-06-01 Critical fix: STAGE_OPEN_PENDING 도 검사 대상 (Sub-account user-stream
                 # ORDER 미수신 시 PENDING 머무름). 단, 실 포지션 없으면 (current_position_qty=0)
                 # 다음 stage 검사 X — 1단계 진입 자체가 아직 안 됐다는 의미. 안전망.
@@ -295,10 +313,95 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     _alert_silent_block_once(_redis, db, strategy, "mark_price 없음 (mark-price-stream 점검 필요)", next_stage_no)
                     continue
                 mark = Decimal(str(mark))
-                trigger = Decimal(str(next_plan.trigger_price))
-                # SHORT: 가격 위로 더 갔으면 추가 SHORT 진입 (mark >= trigger)
-                # LONG: 가격 아래로 더 갔으면 추가 LONG 진입 (mark <= trigger)
-                should_fire = (mark >= trigger) if strategy.side == "SHORT" else (mark <= trigger)
+                # 🌟 2026-08-06 v130 사장님 신 로직: trigger_mode 분기!
+                # spec: docs/CHART_REENTRY_STRATEGY_SPEC.md
+                # 기존 (PRICE_DOWN_PCT): 가격 도달 시 진입
+                # 신 (OBV_REVERSE): 4H OBV 첫 하락 + 15m/1h + 10% 가격 이동
+                _tpl_trigger_mode = "PRICE_DOWN_PCT"
+                try:
+                    from app.models.strategy_template import StrategyTemplate as _TmplM
+                    _tpl_row = db.get(_TmplM, strategy.strategy_template_id) if strategy.strategy_template_id else None
+                    if _tpl_row and getattr(_tpl_row, "trigger_mode", None):
+                        _tpl_trigger_mode = _tpl_row.trigger_mode
+                except Exception:
+                    pass
+                should_fire = False
+                # 🌟 v131 (2026-08-09 사장님!): 청산 후 자동 재진입!
+                # LIQUIDATED_WAITING_RETRY = 청산가 기준 트리거 감시! (retry_trigger_pct!)
+                # = trigger_mode / OBV 무관 = 사장님 신 사상 우선!
+                if strategy.status == "LIQUIDATED_WAITING_RETRY":
+                    try:
+                        _liq_price = Decimal(str(strategy.last_liquidation_price or 0))
+                        # 🌟 v131 하이브리드 (사장님!): 단계별 개별 우선 → 기본값!
+                        _trg_pct = Decimal(str(strategy.retry_trigger_pct or 10))  # 기본값!
+                        try:
+                            _overrides = getattr(strategy, "retry_stage_trigger_pcts", None) or {}
+                            _key = str(next_stage_no)
+                            if _key in _overrides and _overrides[_key] is not None:
+                                _trg_pct = Decimal(str(_overrides[_key]))  # 개별 override!
+                                logger.info(
+                                    "[v131 retry] 개별 트리거 사용! strategy=%s stage=%s pct=%s (기본=%s)",
+                                    strategy.id, next_stage_no, _trg_pct, strategy.retry_trigger_pct,
+                                )
+                        except Exception as _oe:
+                            logger.warning("[v131 retry] 개별 트리거 조회 실패 → 기본값: %s", _oe)
+                        if _liq_price <= 0:
+                            _record_block_reason(
+                                _redis, strategy.id,
+                                "청산가 없음 (last_liquidation_price=0) — retry 진입 skip!",
+                                next_stage_no,
+                            )
+                            continue
+                        # LONG: 가격이 청산가 대비 -트리거% 도달 → 저점 매수!
+                        # SHORT: 가격이 청산가 대비 +트리거% 도달 → 고점 매도!
+                        if strategy.side == "LONG":
+                            _target = _liq_price * (Decimal("1") - _trg_pct / Decimal("100"))
+                            should_fire = mark <= _target
+                        else:  # SHORT
+                            _target = _liq_price * (Decimal("1") + _trg_pct / Decimal("100"))
+                            should_fire = mark >= _target
+                        if should_fire:
+                            logger.info(
+                                "[stage-trigger v131 retry] 🎯 청산 후 재진입! strategy=%s stage=%s "
+                                "청산가=%s trigger=%s%% target=%s mark=%s",
+                                strategy.id, next_stage_no, _liq_price, _trg_pct, _target, mark,
+                            )
+                    except Exception as _e:
+                        logger.warning("[stage-trigger v131 retry] 판정 실패: %s", _e)
+                        should_fire = False
+                elif _tpl_trigger_mode == "OBV_REVERSE":
+                    # 신 로직 v130: ChartAnalyzer 호출!
+                    # 이전 손절가 = strategy.avg_entry_price (1단계 진입가 = 손절 기준)
+                    # 또는 prev_stage_plan.trigger_price (이전 stage 진입가)
+                    try:
+                        from app.services.chart_analyzer import ChartAnalyzer
+                        from app.integrations.binance.client import BinanceClient
+                        _bc = BinanceClient(
+                            api_key=decrypt_text(account.api_key_enc),
+                            api_secret=decrypt_text(account.api_secret_enc),
+                            is_testnet=account.is_testnet,
+                        )
+                        _prev_price = Decimal(str(strategy.avg_entry_price or 0))
+                        if _prev_price > 0:
+                            _analyzer = ChartAnalyzer(_bc)
+                            _signal, _detail = _analyzer.check_obv_reverse_signal(
+                                strategy.symbol, _prev_price
+                            )
+                            should_fire = _signal
+                            if should_fire:
+                                logger.info(
+                                    "[stage-trigger v130 OBV] 🎯 신호 발동! strategy=%s stage=%s detail=%s",
+                                    strategy.id, next_stage_no, _detail,
+                                )
+                    except Exception as _e:
+                        logger.warning("[stage-trigger v130 OBV] 분석 실패 (skip): %s", _e)
+                        should_fire = False
+                else:
+                    # 기존 로직 (PRICE_DOWN_PCT)
+                    trigger = Decimal(str(next_plan.trigger_price))
+                    # SHORT: 가격 위로 더 갔으면 추가 SHORT 진입 (mark >= trigger)
+                    # LONG: 가격 아래로 더 갔으면 추가 LONG 진입 (mark <= trigger)
+                    should_fire = (mark >= trigger) if strategy.side == "SHORT" else (mark <= trigger)
                 if not should_fire:
                     continue
                 # LIMIT 주문 발송
@@ -395,17 +498,10 @@ def run_stage_trigger_once(decrypt_text) -> None:
                                 pass
                         continue  # 다음 cycle
                 except Exception as _e:
-                    # 🚨 2026-07-24 v127 HIGH fix: wallet 검증 실패 = conservative skip!
-                    # 옛 silent bug: fail-open → preflight 백업 신뢰 = 130% 초과 자본 진입!
-                    # 신: default deny + block_reason 기록 = 사장님 자본 보호!
-                    logger.warning(
-                        "[stage-trigger v127] wallet 검증 실패 = conservative skip (default deny): %s", _e
-                    )
-                    _set_block_reason(
-                        _redis, strategy.id,
-                        f"⛔ wallet 검증 오류 = 자동 진입 차단! 잠시 후 재시도. err={_e}",
-                    )
-                    continue  # 다음 cycle에서 재시도
+                    # 🌟 2026-08-08 v130 사장님: wallet 검증 실패 = fail-open 복원!
+                    #   v127 default deny → 사장님 진입 안 되는 사고!
+                    #   preflight (Binance availableBalance) = 백업 = 안전!
+                    logger.warning("[stage-trigger v130] wallet 검증 실패 (preflight 백업으로 계속): %s", _e)
 
                 logger.info(
                     f"[stage-trigger] firing stage{next_stage_no} for #{strategy.id} "

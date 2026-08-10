@@ -183,6 +183,26 @@ class RiskService:
         # SL 발동: ROI <= -80%
         is_stop = unrealized_roi <= -sl_pct
 
+        # 🌟 2026-08-06 v130 사장님 CRITICAL 요구:
+        # '손실설정시 모든 단계가 진입한 상태에서 설정한 손실일때 정산이 진행되어야 해
+        #  만약 다음단계가 남아 있는 경우에는 설정한 손실에서 청산되면 안된다'
+        # = 다음 단계 미진입 시 = SL 발동 X!
+        # = 사장님 사상: 다음 단계 = 손실 회복 기회!
+        # 예: 3단계 세팅 + 1단계만 진입 + -10% 도달 = SL 발동 X (2, 3단계 남음!)
+        #     3단계 모두 진입 + -10% 도달 = SL 발동 O
+        if is_stop:
+            # 활성 단계 수 vs 현재 진입 단계 비교
+            from app.api.v1.strategies.helpers import _count_active_stages
+            _total_stages = _count_active_stages(tpl)
+            _current_stage = strategy.current_stage or 0
+            if _current_stage < _total_stages:
+                logger.info(
+                    "[SL v130] 사장님 사상: SL 발동 조건 도달 (ROI %.2f%%) but "
+                    "다음 단계 남음 (%s/%s) = 발동 X! 손실 회복 기회 유지!",
+                    unrealized_roi, _current_stage, _total_stages,
+                )
+                return False  # SL 발동 X!
+
         if is_stop:
             current_loss_amount = Decimal(str(strategy.realized_pnl or 0)) + Decimal(str(strategy.unrealized_pnl or 0))
             self.db.add(RiskEvent(
@@ -252,6 +272,20 @@ class RiskService:
             side=side, avg_entry=avg_entry, mark_price=mark_price,
             leverage=leverage, enabled=enabled, threshold=threshold,
         )
+        # 🌟 2026-08-06 v130 사장님 CRITICAL:
+        # 다음 단계 미진입 시 = force SL도 발동 X! (손실 회복 기회 유지!)
+        if is_force:
+            from app.api.v1.strategies.helpers import _count_active_stages
+            from app.models.strategy_template import StrategyTemplate as _TmplM_fsl
+            _tpl_fsl = self.db.get(_TmplM_fsl, strategy.strategy_template_id) if strategy.strategy_template_id else None
+            _total_stages_fsl = _count_active_stages(_tpl_fsl)
+            _current_stage_fsl = strategy.current_stage or 0
+            if _current_stage_fsl < _total_stages_fsl:
+                logger.info(
+                    "[force_sl v130] 사장님 사상: 발동 조건 도달 but 다음 단계 남음 (%s/%s) = 발동 X!",
+                    _current_stage_fsl, _total_stages_fsl,
+                )
+                return False
         if is_force:
             from app.core.risk_constants import PERCENT_DENOMINATOR
             if side == "LONG":
@@ -391,12 +425,28 @@ class RiskService:
                 )
                 tp_levels = []  # 전체 TP 비활성!
             else:
+                # 🚨 2026-08-10 v131 사장님 CRITICAL fix (#838 BMTUSDT 초과 청산 사례!):
+                # 옛 v105 = tp_levels = [(label, max(_override, val)) for ... ]
+                # = 모든 TP 임계를 override 값 이상으로 강제!
+                # = 사장님 신 default (TP1_override=25%, template TP4=25%) 시:
+                #   TP1 = max(25, 10) = 25!
+                #   TP2 = max(25, 15) = 25!
+                #   TP3 = max(25, 20) = 25!
+                #   TP4 = max(25, 25) = 25!
+                # = TP1-4 임계 = 모두 25%! = 동시 발동! = 초과 청산!
+                # = #838 BMTUSDT = TP4 audit "의도 25% vs 실제 30.96%" 사고 원인!
+                #
+                # 신 v131 = TP1만 override! (사장님 원 사고!)
+                # = TP2-10은 = template 원값 그대로!
+                # = 사장님 template 세팅 = 자율 존중!
+                # = 각 TP = 순차 발동 (tp_sl_orchestrator!)
                 tp_levels = [
-                    (label, max(_override, val) if val is not None else val)
-                    for label, val in tp_levels
+                    (label, _override if idx == 0 else val)
+                    for idx, (label, val) in enumerate(tp_levels)
                 ]
                 logger.info(
-                    "[risk] v105 사장님 TP1 옵션 = 모든 TP 상향! strategy=%s TP1_override=%s → tp_levels=%s",
+                    "[risk] v131 사장님 TP1 옵션 = TP1만 override (v105 → v131 fix!)! "
+                    "strategy=%s TP1_override=%s → tp_levels=%s",
                     strategy.id, _override, tp_levels
                 )
 
@@ -429,6 +479,38 @@ class RiskService:
         if _tp1_override is not None and Decimal(str(_tp1_override)) == 0:
             # TP 완전 끔 = trailing도 차단!
             pass  # TP + TRAILING 모두 발동 X (수동 관리 모드!)
+        # 🌟 2026-08-09 v131 사장님 정확 요구:
+        #   1. TP1_override >= 20% 세팅 (사장님 선택!)
+        #   2. TP1 실제 발동 (첫 익절 완료!)
+        #   3. 남은 qty = 트레일링 활성!
+        #   4. peak - retrace 하락 시 = 강제 청산!
+        # = 사장님: '첫 익절 실행된후에 최고가 대비 하락하면 청산'
+        _tp1_override_val = strategy.tp1_pct_override
+        _tp1_is_20plus = (
+            _tp1_override_val is not None
+            and Decimal(str(_tp1_override_val)) >= Decimal("20")
+        )
+        # 첫 TP 발동 status (TP1~TP10)
+        _TP_ANY_TRIGGERED = (
+            {f"TP{n}_DONE_PARTIAL" for n in range(1, 11)}
+            | {"TRAILING_ARMED"}
+        )
+        _any_tp_triggered = (strategy.status or "").upper() in _TP_ANY_TRIGGERED
+        if (
+            _tp1_is_20plus  # 사장님 옵션 20% 이상!
+            and _any_tp_triggered  # 첫 익절 발동 확인!
+            and peak >= Decimal(str(_tp1_override_val))  # peak >= 사장님 옵션 값!
+            and pnl_ratio <= (peak - _strategy_retrace)
+            and pnl_ratio < peak
+        ):
+            logger.info(
+                "[trailing v131] 사장님 요구 정확: TP1_override=%.2f%% (>=20) + "
+                "첫 TP 발동 (%s) + peak=%.2f%% → 회귀 청산! "
+                "(pnl=%.2f%% <= peak - retrace %.2f%%)",
+                _tp1_override_val, strategy.status, peak, pnl_ratio, _strategy_retrace,
+            )
+            return "TRAILING_TP"
+        # 옛 로직 (backward-compat): TP3+ 발동 + stage 3+
         elif (
             (strategy.status or "").upper() in TRAILING_ARMED_STATUSES
             and (strategy.current_stage or 0) >= TRAILING_MIN_STAGE

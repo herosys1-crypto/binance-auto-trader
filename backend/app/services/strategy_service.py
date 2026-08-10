@@ -36,6 +36,38 @@ class StrategyService:
             "last_stage_trigger_percent": template_model.stage4_trigger_percent,
         }
 
+    @staticmethod
+    def _normalize_stage_trigger_pcts(payload) -> dict:
+        """v131 단계별 개별 트리거 정규화 (사장님 하이브리드!).
+
+        입력 형식 (사장님 payload):
+          - None or {} → {} (모두 기본!)
+          - {"3": 15, "4": 20} → {"3": 15.0, "4": 20.0}
+          - {"3": null} → {} (명시적 default = 저장 X)
+          - {"3": "15"} → {"3": 15.0} (문자열 → float)
+
+        검증:
+          - key = "2" ~ "10" 만 (1단계 = 없음)
+          - value = 0 ~ 100 (또는 null)
+        """
+        if not payload:
+            return {}
+        _out: dict = {}
+        for k, v in payload.items():
+            try:
+                _key_int = int(k)
+                if _key_int < 2 or _key_int > 10:
+                    continue  # 1단계 or 11+ = 무시
+                if v is None or v == "":
+                    continue  # 명시적 default = 저장 X
+                _val = float(v)
+                if _val < 0 or _val > 100:
+                    continue  # 범위 초과 = 무시
+                _out[str(_key_int)] = _val
+            except (ValueError, TypeError):
+                continue
+        return _out
+
     def calculate_preview(self, *, symbol: str, side: str, start_price: Decimal, strategy_template_id: int, leverage_override: int | None = None):
         template_model = self.repo.get_template(strategy_template_id)
         symbol_model = self.repo.get_symbol(symbol)
@@ -67,7 +99,23 @@ class StrategyService:
             stop_loss_percent_of_capital=Decimal(template_model.stop_loss_percent_of_capital),
         )
 
-    def create_strategy_instance(self, *, user_id: int, exchange_account_id: int, strategy_template_id: int, symbol: str, side: str, start_price: Decimal, leverage_override: int | None = None) -> StrategyInstance:
+    def create_strategy_instance(
+        self,
+        *,
+        user_id: int,
+        exchange_account_id: int,
+        strategy_template_id: int,
+        symbol: str,
+        side: str,
+        start_price: Decimal,
+        leverage_override: int | None = None,
+        # 🌟 v131 신 (2026-08-09 사장님!): 청산 후 자동 재진입 옵션!
+        retry_after_liquidation_enabled: bool | None = False,
+        retry_trigger_pct: Decimal | None = None,
+        capital_management_mode: str | None = "fixed",
+        # 🌟 v131 단계별 개별 트리거 (사장님 하이브리드!)
+        retry_stage_trigger_pcts: dict | None = None,
+    ) -> StrategyInstance:
         template_model = self.repo.get_template(strategy_template_id)
         symbol_model = self.repo.get_symbol(symbol)
         if not template_model or not symbol_model:
@@ -375,7 +423,13 @@ class StrategyService:
         # 🌟 2026-06-09 v17 Phase 3: 단일 진실 모듈 사용 (= 사장님 헌법 6번)
         from app.services.capital_calculator import calc_wallet_limit
         wallet_limit_130 = calc_wallet_limit(total_wallet).quantize(D("0.01"))
-        if total_wallet > 0 and projected_capital_total > wallet_limit_130:
+        # 🌟 2026-08-06 v130 사장님 신 요구:
+        #   OBV_REVERSE 모드 = 130% 검증 완화 (신규 전략만)!
+        #   이유: 신 로직 = 각 단계마다 손절 후 재진입 = 누적 X!
+        #   기존 활성 전략 마진은 여전히 계산에 포함 (안전!)
+        _trigger_mode_check = getattr(template_model, "trigger_mode", "PRICE_DOWN_PCT")
+        _skip_130 = (_trigger_mode_check == "OBV_REVERSE")
+        if not _skip_130 and total_wallet > 0 and projected_capital_total > wallet_limit_130:
             raise ValueError(
                 f"💰 마진 예약 130% 초과 — 사장님 안전 사상.\n\n"
                 f"📌 계산 (마진 = 사장님 자금 = 자본 / 레버리지):\n"
@@ -394,7 +448,30 @@ class StrategyService:
             )
 
         # 1) 가용 잔액 체크 (entry 마진 + 추가 증거금 합)
-        if required_margin_total > available:
+        # 🌟 2026-08-06 v130 사장님: OBV 모드 = 1단계 마진만 검증!
+        if _trigger_mode_check == "OBV_REVERSE":
+            # 1단계 자본 = 마진 (v107)
+            # 🚨 v130 fix: None 방어! (additional_margins = [None, None] 시 500!)
+            def _safe_dec(val):
+                if val is None or val == "":
+                    return D("0")
+                try:
+                    return D(str(val))
+                except Exception:
+                    return D("0")
+            _stages = getattr(template_model, "stages_config", {}) or {}
+            _caps = _stages.get("capitals") or [0]
+            _adds = _stages.get("additional_margins") or [0]
+            _first_cap = _safe_dec(_caps[0] if _caps else 0)
+            _first_add_m = _safe_dec(_adds[0] if _adds else 0)
+            _first_margin_total = _first_cap + _first_add_m
+            if _first_margin_total > available:
+                raise ValueError(
+                    f"💰 1단계 마진 부족 — 필요 {_first_margin_total:.2f} USDT > 가용 {available:.2f} USDT\n\n"
+                    f"📊 신 OBV 모드 = 1단계만 검증! (2단계+ = 각 진입 시 실시간 검증!)\n"
+                    f"💡 해결: 1단계 자본을 가용 잔액 이내로!"
+                )
+        elif required_margin_total > available:
             raise ValueError(
                 f"💰 잔액 부족 — 필요한 마진 {required_margin_total:.2f} USDT > 가용 잔액 {available:.2f} USDT\n\n"
                 f"📌 계산: 자본 {template_model.total_capital} USDT ÷ 레버리지 {effective_lev}x = entry 마진 {required_margin:.2f}\n"
@@ -429,8 +506,35 @@ class StrategyService:
         # 초과 시 거부 (mainnet 안전 가드). 사용자 의사결정으로 100% 까지 허용:
         # max_pct >= 100 일 때만 검증. 그 외 (None / 0 / 음수 / 100 미만) 모두 통과.
         # 즉 .env 의 어떤 설정이든 자동으로 비활성. 100% 까지 자본 집중 가능.
+        # 🌟 2026-08-06 v130 사장님 신 요구:
+        #   OBV_REVERSE 모드 = 자본 초과 검증 완화!
+        #   이유: 신 로직 = 손절 후 = 각 단계마다 재진입 = 누적 진입 X!
+        #   = 각 단계 = 그 때 잔액에서 가능하면 OK = 세팅 시 검증 X!
+        #   실 진입 시 = preflight (Binance availableBalance) = 여전히 안전!
+        _trigger_mode = getattr(template_model, "trigger_mode", "PRICE_DOWN_PCT")
         max_pct = _settings.max_strategy_capital_pct_of_balance
-        if max_pct and max_pct >= 100 and available > 0:
+        if _trigger_mode == "OBV_REVERSE":
+            # OBV 모드 = 완화 = 1단계 자본만 검증 (즉시 진입!)
+            # 🚨 v130 fix: None 방어!
+            def _safe_dec_a(val):
+                if val is None or val == "":
+                    return D("0")
+                try:
+                    return D(str(val))
+                except Exception:
+                    return D("0")
+            _stages = getattr(template_model, "stages_config", {}) or {}
+            _capitals = _stages.get("capitals") or [0]
+            _first_cap = _safe_dec_a(_capitals[0] if _capitals else 0)
+            if max_pct and max_pct >= 100 and available > 0 and _first_cap > 0:
+                _first_margin = _first_cap  # v107: capital = margin
+                if _first_margin > available:
+                    raise ValueError(
+                        f"💰 1단계 자본이 가용 잔액 ({available:.2f} USDT) 을 초과합니다 — {_first_margin:.2f} USDT.\n\n"
+                        f"📊 신 OBV 모드 = 1단계만 검증! (2단계+ = 각 진입 시 preflight = 안전!)\n"
+                        f"💡 해결: 1단계 자본을 가용 잔액 이내로!"
+                    )
+        elif max_pct and max_pct >= 100 and available > 0:
             cap_limit = (available * D(str(max_pct)) / D("100")).quantize(D("0.01"))
             tpl_cap = D(str(template_model.total_capital))
             if tpl_cap > cap_limit:
@@ -453,6 +557,9 @@ class StrategyService:
                     "  • USDT 추가 입금으로 마진 여유 확보"
                 )
         preview = self.calculate_preview(symbol=symbol, side=side, start_price=start_price, strategy_template_id=strategy_template_id, leverage_override=leverage_override)
+        # 🌟 2026-08-08 v130 사장님 확정 default:
+        #   tp1_pct_override = 25 (모든 TP 상향!)
+        #   force_sl_enabled_override = True + force_sl_roi_override = 15 (강제 -15%)!
         instance = StrategyInstance(
             user_id=user_id,
             exchange_account_id=exchange_account_id,
@@ -464,6 +571,17 @@ class StrategyService:
             leverage=preview.leverage,
             total_capital=template_model.total_capital,
             status="WAITING",
+            tp1_pct_override=D("25"),  # 25% 자동
+            force_sl_enabled_override=True,  # 강제 SL ON!
+            force_sl_roi_override=D("15"),  # -15% 자동!
+            # 🌟 v131 신 (2026-08-09 사장님!): 청산 후 자동 재진입 옵션 저장!
+            retry_after_liquidation_enabled=bool(retry_after_liquidation_enabled),
+            retry_trigger_pct=D(str(retry_trigger_pct)) if retry_trigger_pct is not None else D("10"),
+            capital_management_mode=(capital_management_mode or "fixed"),
+            # 🌟 v131 단계별 개별 트리거 (사장님 하이브리드!)
+            # 예: {"3": 15, "4": 20} → 3/4단계만 개별!
+            # 정규화: 문자열 키 + Decimal → float 변환 (JSONB!)
+            retry_stage_trigger_pcts=self._normalize_stage_trigger_pcts(retry_stage_trigger_pcts),
         )
         self.repo.create_strategy_instance(instance)
         plans = [StrategyStagePlan(

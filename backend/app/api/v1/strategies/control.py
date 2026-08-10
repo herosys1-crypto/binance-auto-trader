@@ -630,14 +630,18 @@ def trigger_next_stage_manually(
             detail=f"종료된 strategy ({strategy.status}) 는 추가 단계 진입 불가.",
         )
     next_stage_no = (strategy.current_stage or 0) + 1
-    # template 의 활성 단계 수 확인
+    # 🌟 2026-08-06 v130 사장님 fix: 20단계까지 허용 (강제 진입!)
+    #   옛: total_stages (사장님 세팅) 초과 = 400 에러!
+    #   신: 최대 20단계까지 = 사장님 자율 강제 진입!
+    #   (미세팅 단계는 = execution_service가 마지막 stage_plan의 자본 재사용!)
+    MAX_STAGES_HARD_LIMIT = 20
     from app.models.strategy_template import StrategyTemplate
     tpl = db.get(StrategyTemplate, strategy.strategy_template_id)
     total_stages = _count_active_stages(tpl)
-    if next_stage_no > total_stages:
+    if next_stage_no > MAX_STAGES_HARD_LIMIT:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"이미 모든 단계 ({total_stages}/{total_stages}) 진입 완료. 추가 진입 불가.",
+            detail=f"최대 20단계까지만 허용됩니다. (현재 {next_stage_no-1}/20 완료)",
         )
     # stage_plan 존재 확인 (atomic claim 전 plan 자체가 있는지)
     from app.models.strategy_stage_plan import StrategyStagePlan
@@ -648,8 +652,35 @@ def trigger_next_stage_manually(
         .where(StrategyStagePlan.strategy_instance_id == strategy.id)
         .where(StrategyStagePlan.stage_no == next_stage_no)
     ).scalar_one_or_none()
+    # 🌟 2026-08-06 v130 사장님: plan 없어도 = execution_service가 마지막 plan 재사용!
+    #   옛: plan 없으면 400 = 사장님 강제 진입 불가!
+    #   신: 신 stage_plan 만들기 (마지막 plan의 capital 재사용!)
     if not plan:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Stage {next_stage_no} plan 없음")
+        _prev_plans = db.execute(
+            sa_select(StrategyStagePlan)
+            .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+            .where(StrategyStagePlan.planned_capital.isnot(None))
+            .order_by(StrategyStagePlan.stage_no.desc())
+        ).scalars().first()
+        if not _prev_plans:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Stage {next_stage_no} plan 없음 + fallback plan도 없음! 「✏️ 수정」으로 단계 추가하세요.",
+            )
+        # 신 plan 생성 = 마지막 plan의 capital 재사용
+        plan = StrategyStagePlan(
+            strategy_instance_id=strategy.id,
+            stage_no=next_stage_no,
+            trigger_mode=None,  # 강제 진입이라 trigger 무관
+            trigger_price=None,
+            planned_capital=_prev_plans.planned_capital,
+            planned_qty=None,  # execution_service가 재계산
+            additional_margin_usdt=None,
+            is_triggered=False,
+        )
+        db.add(plan)
+        db.commit()
+        db.refresh(plan)
     # 2026-05-04 fix v2 (사용자 #96 사례): 거래소 NEW LIMIT 중복 방지.
     # 자동 워커가 LIMIT 을 placed (NEW 상태) 한 stage 에 사용자가 ▶ (MARKET) 추가 시
     # 가격 도달 시 자동 LIMIT 도 fill → 포지션 더블링. 이 가드로 차단.

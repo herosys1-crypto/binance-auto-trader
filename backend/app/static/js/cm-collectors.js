@@ -109,6 +109,8 @@ function _collectTpSl() {
 }
 
 function _defaultLeverageForSide(side) {
-  // 2026-05-15 사용자 요청: SHORT/LONG 둘 다 2x default (이전 LONG=1 → 사용자 거의 항상 직접 2 로 변경하는 패턴 발견)
-  return 2;
+  // 🌟 2026-08-09 v131 사장님 재확정: 5x default (모두!)
+  //   2026-08-08: 2x → 2026-08-09: 5x 재변경!
+  //   사장님: '기본 레버리지는 5배속으로 다시 변경해줘'
+  return 5;
 }

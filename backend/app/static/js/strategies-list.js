@@ -398,7 +398,9 @@ async function refreshStrategies() {
       // 사장님 결정: Crisis = 영구 비활성, 사장님 옵션 = 항상 우선!
       // 사장님 = 상황에 따라 = 즉시 선택 = 즉시 적용!
       // 활성 strategy 만 노출 (= TERMINAL X)
-      const _tp1Pct = (s.tp1_pct_override != null) ? Number(s.tp1_pct_override) : 10;
+      // 🌟 2026-08-08 v130 확정: 신 default = 25% (구/신 모두!)
+      // 사장님: '새로 정한건 모두 유효해'
+      const _tp1Pct = (s.tp1_pct_override != null) ? Number(s.tp1_pct_override) : 25;
       const _isActiveForTp1 = !TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
       const tp1ThresholdSelect = _isActiveForTp1
         ? `<select onclick="event.stopPropagation()"
@@ -425,9 +427,10 @@ async function refreshStrategies() {
       // 🌟 2026-06-24 사장님: 손실 한도 강제 청산 전략별 override 드롭다운.
       // 전역 설정(「💼 계정」) 이 모든 전략 기본 + 전략별 선택 우선 (= 전역/끔/-5~-20%).
       // NULL,NULL=전역 상속 / enabled=false=끔 / enabled=true=이 전략 우선(-roi%).
-      let _fslSel = 'inherit';
+      // 🌟 2026-08-08 v130 사장님 신 default: 강제 -15% (기존 inherit → on:15)!
+      let _fslSel = 'on:15';  // default = -15%!
       if (s.force_sl_enabled_override === false) _fslSel = 'off';
-      else if (s.force_sl_enabled_override === true) _fslSel = 'on:' + (s.force_sl_roi_override != null ? Number(s.force_sl_roi_override) : 10);
+      else if (s.force_sl_enabled_override === true) _fslSel = 'on:' + (s.force_sl_roi_override != null ? Number(s.force_sl_roi_override) : 15);
       const forceSlSelect = _isActiveForTp1
         ? `<select onclick="event.stopPropagation()"
                   onmousedown="event.stopPropagation()"
@@ -441,6 +444,17 @@ async function refreshStrategies() {
             <option value="on:10"   ${_fslSel==='on:10'?'selected':''}>강제 -10%</option>
             <option value="on:15"   ${_fslSel==='on:15'?'selected':''}>강제 -15%</option>
             <option value="on:20"   ${_fslSel==='on:20'?'selected':''}>강제 -20%</option>
+            <option value="on:25"   ${_fslSel==='on:25'?'selected':''}>강제 -25%</option>
+            <option value="on:30"   ${_fslSel==='on:30'?'selected':''}>강제 -30%</option>
+            <option value="on:35"   ${_fslSel==='on:35'?'selected':''}>강제 -35%</option>
+            <option value="on:40"   ${_fslSel==='on:40'?'selected':''}>강제 -40%</option>
+            <option value="on:45"   ${_fslSel==='on:45'?'selected':''}>강제 -45%</option>
+            <option value="on:50"   ${_fslSel==='on:50'?'selected':''}>강제 -50%</option>
+            <option value="on:60"   ${_fslSel==='on:60'?'selected':''}>강제 -60%</option>
+            <option value="on:70"   ${_fslSel==='on:70'?'selected':''}>강제 -70%</option>
+            <option value="on:80"   ${_fslSel==='on:80'?'selected':''}>강제 -80%</option>
+            <option value="on:90"   ${_fslSel==='on:90'?'selected':''}>강제 -90%</option>
+            <option value="on:100"  ${_fslSel==='on:100'?'selected':''}>강제 -100%</option>
           </select>`
         : '';
       // 🌟 2026-06-09 사장님 신 기능: 단계 클릭 = 단계별 상세 popup (진입예정가 + 자본)
@@ -645,11 +659,16 @@ async function refreshStrategies() {
       // 2026-05-04: 증거금 추가 버튼은 수량/마진 column 으로 이동 (위 addMarginBtnInQty).
       // 「▶ 다음 단계 즉시 진입」 — 활성 strategy + 다음 단계 미발동 시. trigger_price 무시, planned_capital 그대로.
       // 2026-05-04 (사용자 피드백): 액션 버튼 컴팩트화 — 아이콘만 + nowrap + flex inline.
-      const totalStagesForBtn = s.total_active_stages || 4;
-      const canTriggerNext = !isTerminal && (s.current_stage || 0) < totalStagesForBtn;
+      // 🌟 2026-08-06 v130 사장님 fix:
+      //   옛: current_stage < totalStagesForBtn (세팅 단계까지만!) = 1단계만 세팅 시 = 표시 X!
+      //   신: 활성 strategy면 = 언제든 표시 (사장님 자율 = 강제 진입!)
+      //       미체결 상황 or 세팅 없는 단계도 = 사장님이 「▶」 클릭 가능!
+      //   최대 20단계까지 (v118 확장 반영)!
+      const totalStagesForBtn = 20;
+      const canTriggerNext = !isTerminal && (s.current_stage || 0) >= 1 && (s.current_stage || 0) < totalStagesForBtn;
       const btnStyle = "padding:3px 6px;font-size:12px;white-space:nowrap;line-height:1.3";
       const triggerNextBtn = canTriggerNext
-        ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="현재가에서 다음 단계 즉시 진입 (trigger_price 무시, 사전 계획된 자본 그대로)">▶</button>`
+        ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="▶ 다음 단계 즉시 강제 진입! (미체결 시 재시도, 세팅 없어도 마지막 자본으로 진입)">▶</button>`
         : '';
       // 2026-06-08 사장님 UI 단순화 결정:
       // 🔄 (recalcUntriggeredFromCurrent) + ➕ (openAddUntriggeredStagesModal) 버튼 = 제거.
@@ -778,11 +797,18 @@ async function refreshStrategies() {
                title="🔗 ${s.symbol} — 바이낸스 선물 차트 새 탭 열기">${s.symbol}</a>${renderWhitelistBadge(s.symbol)}
             <button onclick="event.stopPropagation(); if(window.openSymbolTradingModal) window.openSymbolTradingModal('${s.symbol}');"
                     title="📊 ${s.symbol} 차트 + Order Book (내장 모달)"
-                    style="background:#1e3a5f;color:#7dd3fc;border:0;border-radius:3px;padding:1px 5px;font-size:10px;cursor:pointer;margin-left:3px;">📊</button><br>
+                    style="background:#1e3a5f;color:#7dd3fc;border:0;border-radius:3px;padding:1px 5px;font-size:10px;cursor:pointer;margin-left:3px;">📊</button>
+            ${s.trigger_mode === 'OBV_REVERSE'
+              ? '<span style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 6px rgba(124,58,237,0.6)" title="📊 신 OBV 자동 재진입 전략! (기존과 다른 자동 재진입 로직!)">📊 OBV</span>'
+              : '<span style="display:inline-block;background:#475569;color:#cbd5e1;padding:2px 6px;border-radius:4px;font-size:10px;margin-left:4px" title="기존 방식 = 가격 도달 시 진입">➕ 기존</span>'
+            }${s.retry_after_liquidation_enabled
+              ? `<span style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#a855f7);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(245,158,11,0.6)" title="🔄 청산 후 자동 재진입 활성! (트리거 ${s.retry_trigger_pct || 10}%) — 손절 후 = 다음 단계 자동 대기 + 트리거 도달 시 자동 진입!">🔄 재진입 ${s.retry_trigger_pct || 10}%</span>`
+              : ''
+            }<br>
             <span class="text-slate-500" style="font-size:12px" title="전략 생성 일시">${createdShort}</span>
           </div>
         </td>
-        <td>${sideBadge(s.side, s.leverage)}</td>
+        <td>${sideBadge(s.side, s.leverage)}${s.trigger_mode === 'OBV_REVERSE' ? '<br><span style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-top:2px" title="📊 신 OBV 자동 재진입 전략!">📊 OBV</span>' : ''}${s.retry_after_liquidation_enabled ? `<br><span style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#a855f7);color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-top:2px" title="🔄 청산 후 자동 재진입! 트리거 ${s.retry_trigger_pct || 10}%">🔄 재진입</span>` : ''}</td>
         <td>${stateCell}</td>
         <td>${stage}</td>
         <td class="num">${entry}</td>
@@ -983,7 +1009,11 @@ async function updateForceSl(strategyId, value) {
     body = { mode: 'off' }; label = '이 전략 끔';
   } else if (value.startsWith('on:')) {
     const roi = Number(value.slice(3));
-    if (![5, 10, 15, 20].includes(roi)) { toast(`❌ 옵션 오류: ${value}`, 'error'); return; }
+    // 🌟 v131 사장님 (2026-08-09): 강제 SL 옵션 확장 = 0 (끔) + 5~100 (16개!)
+    // 옛 [5, 10, 15, 20] = JS 검증 = v131 신 값 옵션 오류!
+    // 신: 0/5/10/15/20/25/30/35/40/45/50/60/70/80/90/100 = 모두 허용!
+    const _ALLOWED = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100];
+    if (!_ALLOWED.includes(roi)) { toast(`❌ 옵션 오류: ${value}`, 'error'); return; }
     body = { mode: 'on', roi }; label = `이 전략 -${roi}%`;
   } else {
     toast(`❌ 옵션 오류: ${value}`, 'error'); return;

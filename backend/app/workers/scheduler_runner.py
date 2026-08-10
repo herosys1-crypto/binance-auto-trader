@@ -32,6 +32,8 @@ from app.workers.mainnet_safety_worker import run_mainnet_safety_check_once  # �
 from app.workers.settings_sync_worker import run_settings_sync_once  # 🌟 v52: settings 일관성 (= #125 옛 미해결!)
 from app.workers.setting_preservation_agent import run_setting_preservation_once  # 🌟 v54: 사장님 처음 세팅 영구 유지 (= EVAAUSDT #149 사건!)
 from app.workers.telegram_retry_worker import run_telegram_retry_once  # 🌟 v56: 사장님 Telegram 실패 알림 자동 재시도!
+from app.workers.reentry_alert_watcher import run_reentry_alert_watcher  # 🌟 v130: 재진입 알람 (OBV+RSI+10% 신호!)
+from app.workers.pump_bb_middle_watcher import run_pump_bb_watcher  # 🌟 v131: 급등+BB중단 알람!
 from app.workers.tp_miss_detector_worker import run_tp_miss_detector_once  # 🌟 v57: TP 단계 도달 + 자동 진입 X = critical 감지! (사장님 ESPORTSUSDT #182!)
 from app.workers.liquidation_risk_worker import run_liquidation_risk_once  # 🚨 v58: Liquidation 사전 알림! (사장님 SYNUSDT -585 USDT 손실!)
 
@@ -146,6 +148,24 @@ def start_scheduler() -> None:
     # 사장님: SL -100% = Liquidation 보다 먼저 발동 X = 사장님 자본 손실!
     # 신: ROI -70% 도달 시 = 즉시 critical 알림!
     scheduler.add_job(guarded_job("liquidation_risk", 50, run_liquidation_risk_once), trigger=IntervalTrigger(minutes=1), id="liquidation_risk", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-08-06 v130 신: reentry_alert_watcher (= 사장님 요구 = OBV+RSI+10% 신호 알림!)
+    # 강제 종료된 심볼 = 4H OBV/RSI 반전 + 10% 이동 시 = 알람!
+    # 사장님이 = 알람 선택 = 신 전략 즉시 생성!
+    def _reentry_alert_wrap():
+        from app.db.session import SessionLocal
+        from app.core.crypto import decrypt_text as _dec
+        with SessionLocal() as _db:
+            run_reentry_alert_watcher(_db, _dec)
+    scheduler.add_job(guarded_job("reentry_alert", 240, _reentry_alert_wrap), trigger=IntervalTrigger(minutes=5), id="reentry_alert", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-08-09 v131 신: pump_bb_middle_watcher (= 사장님 요구!)
+    # 급등 top 50 종목 = 4H 최고점 = BB중단(20MA!) ±5% 근접 = 알람!
+    # 10분마다 실행 (자원 절약!)
+    def _pump_bb_wrap():
+        from app.db.session import SessionLocal
+        from app.core.crypto import decrypt_text as _dec
+        with SessionLocal() as _db:
+            run_pump_bb_watcher(_db, _dec)
+    scheduler.add_job(guarded_job("pump_bb_watcher", 540, _pump_bb_wrap), trigger=IntervalTrigger(minutes=10), id="pump_bb_watcher", replace_existing=True, max_instances=1, coalesce=True)
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.

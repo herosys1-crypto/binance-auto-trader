@@ -54,6 +54,9 @@ def _enrich_response(resp: StrategyDetailResponse, tpl) -> StrategyDetailRespons
     # SL 한도 USDT (total_capital × sl_pct / 100, 레버리지 무관 PR #57) 표시.
     if tpl and getattr(tpl, "stop_loss_percent_of_capital", None) is not None:
         resp.stop_loss_percent_of_capital = Decimal(str(tpl.stop_loss_percent_of_capital))
+    # 🌟 2026-08-06 v130: trigger_mode = template의 신 컬럼 (구/OBV 구분!)
+    if tpl and getattr(tpl, "trigger_mode", None):
+        resp.trigger_mode = tpl.trigger_mode
     return resp
 
 

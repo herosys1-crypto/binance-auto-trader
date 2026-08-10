@@ -44,6 +44,8 @@
   .badge-red    { background: rgba(239,68,68,0.15);  color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
   .badge-gray   { background: rgba(107,114,128,0.2); color: #9ca3af; border: 1px solid rgba(107,114,128,0.3); }
   .badge-blue   { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+  /* 🌟 v131 사장님 (2026-08-10): 청산 후 재진입 대기 = 눈에 띔! */
+  .badge-purple { background: linear-gradient(135deg,rgba(245,158,11,0.25),rgba(168,85,247,0.25)); color: #fbbf24; border: 1px solid rgba(245,158,11,0.5); box-shadow: 0 0 8px rgba(245,158,11,0.3); }
 
   /* 단계 진행 바 */
   .stage-bar { display: inline-flex; gap: 3px; align-items: center; }
@@ -1035,7 +1037,8 @@
       <!-- 빠른 작업 — 시스템상태 아래 빈 공간 채움 -->
       <div class="card rounded-lg flex gap-2 items-center flex-wrap" style="padding:6px 10px">
         <span class="text-xs font-semibold text-slate-300 mr-1 hidden sm:inline">⚡ 빠른 작업</span>
-        <button class="btn-success btn text-xs" style="padding:8px 12px;min-height:36px" onclick="openCreateModal()">➕ 새 전략</button>
+        <button class="btn-success btn text-xs" style="padding:8px 12px;min-height:36px" onclick="openCreateModal()" title="기존 방식 = 사장님 세팅 단계별 진입 (가격 도달 시)">➕ 새 전략 (기존 방식)</button>
+        <button class="btn-primary btn text-xs" style="padding:8px 12px;min-height:36px;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:white;border:none" onclick="openCreateChartObvModal()" title="신 방식 = 차트 OBV 분석 자동 재진입 (spec: docs/CHART_REENTRY_STRATEGY_SPEC.md)">📊 새 전략 (OBV 자동)</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="openSymbolRankingModal('gainers')" title="24h/주/월 변동률 상승/하락 순위 — 진입 후보 검색">📈 시장 순위</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="testTelegram()">📨 Telegram</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="window.open('http://localhost:3000','_blank')">📊 Grafana</button>
@@ -1043,6 +1046,31 @@
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="openAccountsModal()" title="거래소 계정 + 일일 손실 한도 관리">💼 계정</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('strategies')">📥 전략 CSV</button>
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('orders')">📥 주문 CSV</button>
+      </div>
+
+      <!-- 🌟 v131 신 (2026-08-09 사장님!): 급등 + BB중단 알람 카드! -->
+      <div id="pump-bb-alerts-card" class="card rounded-lg hidden" style="padding:8px 12px;background:linear-gradient(135deg,rgba(245,158,11,0.15),rgba(239,68,68,0.15));border:1px solid rgba(245,158,11,0.4)">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-bold" style="color:#fbbf24">
+            🚨 급등+BB중단 알람 <span id="pump-bb-count" style="background:#f59e0b;color:#000;padding:1px 6px;border-radius:8px;font-size:11px">0</span>
+          </span>
+          <span class="text-xs text-slate-400">급등 top50 = 4H 최고점 = BB중단 ±5%!</span>
+        </div>
+        <div id="pump-bb-list" class="flex flex-wrap gap-2"></div>
+      </div>
+
+      <!-- 🌟 v130: 재진입 알람 카드 (신 OBV+RSI 신호 감지!) + v131 자동 실행 세팅 -->
+      <div id="reentry-alerts-card" class="card rounded-lg hidden" style="padding:8px 12px;background:linear-gradient(135deg,rgba(124,58,237,0.15),rgba(59,130,246,0.15));border:1px solid rgba(124,58,237,0.4)">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-bold" style="color:#c4b5fd">🎯 재진입 알람 <span id="reentry-alerts-count" style="background:#a78bfa;color:#000;padding:1px 6px;border-radius:8px;font-size:11px">0</span></span>
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-slate-400">강제 종료 후 = OBV+RSI+10% 신호!</span>
+            <button onclick="openReentrySettingsModal()"
+                    class="text-xs bg-yellow-700 hover:bg-yellow-600 text-white px-2 py-1 rounded"
+                    title="자동 실행 = 준비중 (안전장치 완성 후 활성!)">⏳ 자동 실행 준비중</button>
+          </div>
+        </div>
+        <div id="reentry-alerts-list" class="flex flex-wrap gap-2"></div>
       </div>
 
       <!-- 운영 통계 (전체 누적) — 빠른작업 아래 -->
@@ -1458,12 +1486,11 @@
     </div>
   </div>
 
-  <!-- 🚨 v92 신: 「⬆ 심볼로」 fixed 버튼 (create-modal 열려 있을 때만!) -->
+  <!-- 🚨 v92: 「⬆ 심볼로」 fixed 버튼 = 사장님 요구로 제거 (2026-08-08 v130!) -->
+  <!-- 이유: 사장님 = 이제 필요 없음 = 모바일 UI 방해! -->
+  <!-- 관련 함수 (_cmScrollToSymbol 등) = 유지 = 사장님 향후 재요구 대비 -->
   <button id="cm-scroll-to-symbol-btn" onclick="_cmScrollToSymbol()"
-    style="display:none; position:fixed; bottom:80px; right:16px; z-index:100;
-           background:#3b82f6; color:white; padding:12px 16px; border-radius:24px;
-           font-size:14px; font-weight:bold; box-shadow:0 4px 12px rgba(0,0,0,0.5);
-           border:2px solid white; cursor:pointer;"
+    style="display:none !important;"
     title="심볼 선택 화면으로 이동!">⬆ 심볼로</button>
 
   <div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
@@ -1598,12 +1625,26 @@
           <span class="text-xs text-slate-500 font-normal">(기본: 숏 2x · 롱 1x · 사이드 변경 시 자동 갱신, 직접 입력도 가능)</span>
         </label>
         <div class="flex gap-2 items-center">
-          <input id="cm-leverage" type="number" min="1" max="125" step="1" value="2"
+          <input id="cm-leverage" type="number" min="1" max="125" step="1" value="5"
             oninput="cmLeverageManuallyEdited = true; if(typeof _refreshLiveCalc==='function')_refreshLiveCalc()"
             class="w-24 px-3 py-2 bg-slate-900 border border-slate-700 rounded text-white text-center" />
           <span class="text-slate-400 text-sm">배속</span>
           <button onclick="resetCmLeverage()" class="btn-ghost btn text-xs" style="padding:3px 8px; font-size:11px"
-            title="현재 사이드의 기본값 (숏 2x / 롱 1x) 으로 복원">↺ 기본값</button>
+            title="현재 사이드의 기본값 (숏 5x / 롱 5x) 으로 복원">↺ 기본값</button>
+
+          <!-- 🌟 v131 (2026-08-09 사장님!): 「청산 후 재진입」 옵션 = 레버리지 옆에도! -->
+          <!-- = 두 곳 동기화 = 한 곳 클릭 = 둘 다 적용! -->
+          <div class="flex items-center gap-1 ml-2 px-2 py-1 rounded bg-purple-900/30 border border-purple-700/50"
+               title="청산 후 자동 재진입 = 하단 상세 옵션과 동기화!">
+            <input type="checkbox" id="cm-retry-after-liq-enabled-top"
+                   class="w-4 h-4 rounded cursor-pointer"
+                   style="accent-color:#a855f7"
+                   onchange="_syncRetryCheckbox('top')">
+            <label for="cm-retry-after-liq-enabled-top"
+                   class="text-xs cursor-pointer font-bold text-purple-300 whitespace-nowrap">
+              🔄 청산 후 재진입
+            </label>
+          </div>
         </div>
       </div>
 
@@ -1662,7 +1703,7 @@
                     class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
                 <div class="col-span-5">
-                  <input id="cm-tp1-qty" type="number" step="1" min="0" max="100" placeholder="필수"
+                  <input id="cm-tp1-qty" type="number" step="1" min="0" max="100" placeholder="10" value="10"
                     class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
               </div>
@@ -1673,7 +1714,7 @@
                     class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
                 <div class="col-span-5">
-                  <input id="cm-tp2-qty" type="number" step="1" min="0" max="100" placeholder="필수"
+                  <input id="cm-tp2-qty" type="number" step="1" min="0" max="100" placeholder="15" value="15"
                     class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
               </div>
@@ -1684,7 +1725,7 @@
                     class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
                 <div class="col-span-5">
-                  <input id="cm-tp3-qty" type="number" step="1" min="0" max="100" placeholder="필수"
+                  <input id="cm-tp3-qty" type="number" step="1" min="0" max="100" placeholder="20" value="20"
                     class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
               </div>
@@ -1695,7 +1736,7 @@
                     class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
                 <div class="col-span-5">
-                  <input id="cm-tp4-qty" type="number" step="1" min="0" max="100" placeholder="선택"
+                  <input id="cm-tp4-qty" type="number" step="1" min="0" max="100" placeholder="25" value="25"
                     class="w-full px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white" />
                 </div>
               </div>
@@ -1794,6 +1835,148 @@
                 </div>
               </div>
               <p class="text-xs text-slate-500 mt-2">트레일링 익절: 피크 ≥ +5% 후 피크 대비 -5% 회귀 시 잔량 100% 청산 (자동, stage>=3 + TP3+ 후).</p>
+
+              <!-- 🌟 v131 신 기능 (2026-08-09): 청산 후 재진입 트리거 + 130% 자본 경고! -->
+              <div class="mt-3 p-3 rounded bg-purple-900/20 border border-purple-700/40">
+                <label class="flex items-center gap-2 cursor-pointer mb-2">
+                  <input type="checkbox" id="cm-retry-after-liq-enabled"
+                         class="w-4 h-4 rounded cursor-pointer" style="accent-color:#a855f7"
+                         onchange="_syncRetryCheckbox('bottom')">
+                  <span class="text-sm font-bold text-purple-300">
+                    🔄 청산 후 자동 재진입 (v131 신!)
+                  </span>
+                  <span class="text-xs px-2 py-0.5 rounded bg-yellow-800 text-yellow-200"
+                        title="Backend Phase 2-A 완료 (저장!) / Phase 2-B 실 로직 = 다음 세션!">
+                    ⏳ MVP
+                  </span>
+                </label>
+                <p class="text-xs text-slate-400 mb-3">
+                  💡 <strong>1단계 진입 → 손절 → 다음 단계 자동 대기!</strong><br>
+                  청산가 기준 = 트리거% 만큼 오르거나 내리면 = 다음 단계 자동 진입!<br>
+                  <strong class="text-blue-300">진입 = 사장님 세팅 자본 그대로! (자동 차감 X!)</strong>
+                </p>
+
+                <div class="mb-2">
+                  <label class="text-slate-400 text-xs">📊 재진입 트리거 % (기본값, 레버리지 무관!)</label>
+                  <select id="cm-retry-trigger-pct"
+                          class="w-full mt-1 px-2 py-1 bg-slate-900 border border-slate-700 rounded text-white">
+                    <option value="5">5% (빠른 재진입!)</option>
+                    <option value="10" selected>10% (기본!)</option>
+                    <option value="15">15%</option>
+                    <option value="20">20%</option>
+                    <option value="25">25%</option>
+                    <option value="30">30%</option>
+                  </select>
+                </div>
+
+                <!-- 🌟 v131 단계별 개별 트리거 (사장님 하이브리드!) -->
+                <div class="mt-2 p-2 rounded bg-blue-900/20 border border-blue-700/30">
+                  <p class="text-xs font-semibold text-blue-300 mb-1">
+                    📌 단계별 개별 트리거 (사장님 시장 분석!)
+                  </p>
+                  <p class="text-xs text-slate-400 mb-2">
+                    💡 <strong>기본값 = 항상 유효!</strong> 아래 단계 = 개별 세팅 시 = 우선!<br>
+                    (미입력 = 기본값 사용! 사장님 자율!)
+                  </p>
+                  <div class="grid grid-cols-3 gap-1 text-xs">
+                    <div><label class="text-slate-500">2단계:</label>
+                      <input type="number" id="cm-retry-trg-2" min="0" max="100" step="0.5"
+                             placeholder="기본"
+                             class="w-full mt-0 px-1 py-0.5 bg-slate-800 border border-slate-600 rounded text-white text-center">
+                    </div>
+                    <div><label class="text-slate-500">3단계:</label>
+                      <input type="number" id="cm-retry-trg-3" min="0" max="100" step="0.5"
+                             placeholder="기본"
+                             class="w-full mt-0 px-1 py-0.5 bg-slate-800 border border-slate-600 rounded text-white text-center">
+                    </div>
+                    <div><label class="text-slate-500">4단계:</label>
+                      <input type="number" id="cm-retry-trg-4" min="0" max="100" step="0.5"
+                             placeholder="기본"
+                             class="w-full mt-0 px-1 py-0.5 bg-slate-800 border border-slate-600 rounded text-white text-center">
+                    </div>
+                    <div><label class="text-slate-500">5단계:</label>
+                      <input type="number" id="cm-retry-trg-5" min="0" max="100" step="0.5"
+                             placeholder="기본"
+                             class="w-full mt-0 px-1 py-0.5 bg-slate-800 border border-slate-600 rounded text-white text-center">
+                    </div>
+                    <div><label class="text-slate-500">6단계:</label>
+                      <input type="number" id="cm-retry-trg-6" min="0" max="100" step="0.5"
+                             placeholder="기본"
+                             class="w-full mt-0 px-1 py-0.5 bg-slate-800 border border-slate-600 rounded text-white text-center">
+                    </div>
+                    <div><label class="text-slate-500">7단계:</label>
+                      <input type="number" id="cm-retry-trg-7" min="0" max="100" step="0.5"
+                             placeholder="기본"
+                             class="w-full mt-0 px-1 py-0.5 bg-slate-800 border border-slate-600 rounded text-white text-center">
+                    </div>
+                    <div><label class="text-slate-500">8단계:</label>
+                      <input type="number" id="cm-retry-trg-8" min="0" max="100" step="0.5"
+                             placeholder="기본"
+                             class="w-full mt-0 px-1 py-0.5 bg-slate-800 border border-slate-600 rounded text-white text-center">
+                    </div>
+                    <div><label class="text-slate-500">9단계:</label>
+                      <input type="number" id="cm-retry-trg-9" min="0" max="100" step="0.5"
+                             placeholder="기본"
+                             class="w-full mt-0 px-1 py-0.5 bg-slate-800 border border-slate-600 rounded text-white text-center">
+                    </div>
+                    <div><label class="text-slate-500">10단계:</label>
+                      <input type="number" id="cm-retry-trg-10" min="0" max="100" step="0.5"
+                             placeholder="기본"
+                             class="w-full mt-0 px-1 py-0.5 bg-slate-800 border border-slate-600 rounded text-white text-center">
+                    </div>
+                  </div>
+                  <p class="text-xs text-slate-500 mt-1">
+                    💡 예: 3단계 [15], 4단계 [20] = 3단계 청산 후 15%, 4단계 청산 후 20% 도달 시!
+                  </p>
+                </div>
+
+                <!-- 💰 실시간 자본 계산기 (v131 신!) -->
+                <div id="cm-capital-calc-box" class="mt-2 p-2 rounded bg-slate-900/70 border border-slate-700">
+                  <p class="text-xs font-semibold text-blue-300 mb-1">💰 실시간 자본 계산 (사장님 자율!)</p>
+
+                  <div class="mb-2">
+                    <label class="text-xs text-slate-400">💵 이 전략 자본 참조 (USDT) — 130% 한도 계산 기준!</label>
+                    <input type="number" id="cm-user-capital-ref"
+                           placeholder="예: 1000 (미입력 시 = 총 세팅만 표시!)"
+                           oninput="if(typeof _refreshCapitalCalc==='function')_refreshCapitalCalc()"
+                           class="w-full mt-1 px-2 py-1 bg-slate-800 border border-slate-600 rounded text-white text-sm">
+                  </div>
+
+                  <div class="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <span class="text-slate-500">총 세팅:</span>
+                      <div id="cm-capital-total" class="font-bold text-green-300">0 USDT</div>
+                    </div>
+                    <div>
+                      <span class="text-slate-500">130% 한도:</span>
+                      <div id="cm-capital-limit" class="font-bold text-blue-300">-</div>
+                    </div>
+                    <div>
+                      <span class="text-slate-500">비율:</span>
+                      <div id="cm-capital-ratio" class="font-bold text-slate-300">-</div>
+                    </div>
+                  </div>
+                  <div id="cm-capital-warn" class="mt-1 text-xs" style="display:none"></div>
+                </div>
+
+                <div class="p-2 mt-2 rounded bg-slate-900/50 border border-slate-700 text-xs">
+                  <p class="text-blue-300 font-semibold mb-1">📊 예상 시나리오 (자본 1000, 3단계 세팅!):</p>
+                  <p class="text-slate-400 leading-relaxed">
+                    자본 한도 = 1000 × 130% = <strong class="text-blue-300">1300 USDT</strong><br>
+                    1단계 <strong class="text-green-300">500</strong> USDT (진입!) → 손절 -75<br>
+                    2단계 <strong class="text-green-300">500</strong> USDT (진입!) → 손절 -75<br>
+                    3단계 <strong class="text-green-300">300</strong> USDT (진입! = 총 1300 한도!) → 손절 -45<br>
+                    = 총 손실 <strong class="text-yellow-300">-195 USDT (자본 -19.5%)</strong><br>
+                    = 잔여 자본 <strong class="text-green-300">805 USDT</strong> (안전!)
+                  </p>
+                </div>
+
+                <p class="text-xs text-yellow-400 mt-2">
+                  ⚠️ <strong>MVP 상태:</strong> UI + DB 저장 완료! Backend 실 로직 = 다음 세션!<br>
+                  = 지금 = 세팅해도 = 청산 시 = 전략 종료 (기존!)!<br>
+                  = 정식 구현 후 = 사장님 검증 → 활성!
+                </p>
+              </div>
 
               <!-- 2026-06-03 (#35 보강): 크라이시스 모드 정확한 정의 + 손절과의 관계 -->
               <!-- 사장님 의문: LABUSDT(#16) 크라이시스 활성 vs UI '비활성' 메시지 모순 → 명확화 -->
@@ -2164,6 +2347,8 @@
 <script src="/static/js/admin-shortcuts.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/page-router.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/auth-bootstrap.js?v=20260722v119-grid-align"></script>
+<script src="/static/js/reentry-alerts.js?v=20260806v130-obv-reentry"></script>
+<script src="/static/js/pump-bb-alerts.js?v=20260809v131-pump-bb"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
