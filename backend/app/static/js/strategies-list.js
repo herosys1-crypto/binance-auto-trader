@@ -1009,7 +1009,11 @@ async function updateForceSl(strategyId, value) {
     body = { mode: 'off' }; label = '이 전략 끔';
   } else if (value.startsWith('on:')) {
     const roi = Number(value.slice(3));
-    if (![5, 10, 15, 20].includes(roi)) { toast(`❌ 옵션 오류: ${value}`, 'error'); return; }
+    // 🌟 v131 사장님 (2026-08-09): 강제 SL 옵션 확장 = 0 (끔) + 5~100 (16개!)
+    // 옛 [5, 10, 15, 20] = JS 검증 = v131 신 값 옵션 오류!
+    // 신: 0/5/10/15/20/25/30/35/40/45/50/60/70/80/90/100 = 모두 허용!
+    const _ALLOWED = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100];
+    if (!_ALLOWED.includes(roi)) { toast(`❌ 옵션 오류: ${value}`, 'error'); return; }
     body = { mode: 'on', roi }; label = `이 전략 -${roi}%`;
   } else {
     toast(`❌ 옵션 오류: ${value}`, 'error'); return;
