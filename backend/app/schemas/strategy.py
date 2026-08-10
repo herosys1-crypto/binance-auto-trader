@@ -133,3 +133,7 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # 「↻ 복원」 버튼 노출. archived_at 은 archive 시점 (audit log).
     is_archived: bool = False
     archived_at: datetime | None = None
+    # 🌟 v131 (2026-08-09 사장님!): 청산 후 재진입 옵션 = UI 배지 표시!
+    # 사장님 지적: "구분을 할수 있게 해줘"
+    retry_after_liquidation_enabled: bool = False
+    retry_trigger_pct: Decimal | None = None
