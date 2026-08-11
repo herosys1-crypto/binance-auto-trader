@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>🎯 Strategy Suggestion Team spec (v132!)</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Malgun Gothic', sans-serif; color: #1a1a1a; line-height: 1.5; background: #f8f9fb; padding: 15px; }
+  .container { max-width: 1100px; margin: 0 auto; }
+  header { background: linear-gradient(135deg, #7c3aed 0%, #ec4899 100%); color: white; padding: 25px; border-radius: 12px; margin-bottom: 15px; text-align: center; }
+  header h1 { font-size: 22px; margin-bottom: 5px; }
+  header .meta { font-size: 12px; opacity: 0.95; }
+  section { background: white; padding: 18px; border-radius: 10px; margin-bottom: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.06); page-break-inside: avoid; }
+  h2 { font-size: 17px; color: #7c3aed; border-bottom: 2px solid #e9d5ff; padding-bottom: 5px; margin-bottom: 10px; }
+  h3 { font-size: 14px; color: #6d28d9; margin: 8px 0 5px 0; }
+  p, li { font-size: 11px; }
+  ul { margin-left: 18px; margin-bottom: 6px; }
+  li { margin-bottom: 2px; }
+  .agent-card { background: #faf5ff; border-left: 4px solid #7c3aed; padding: 10px; border-radius: 6px; margin: 6px 0; }
+  .flow-box { background: #f9fafb; padding: 6px 10px; margin: 3px 0; border-radius: 4px; font-size: 11px; border-left: 3px solid #7c3aed; }
+  .flow-arrow { text-align: center; color: #7c3aed; font-size: 14px; margin: 2px 0; }
+  code { background: #f3f4f6; padding: 1px 4px; border-radius: 3px; color: #7c3aed; font-family: 'Consolas', monospace; font-size: 10px; }
+  pre { background: #1e293b; color: #e2e8f0; padding: 10px; border-radius: 5px; overflow-x: auto; font-size: 10px; margin: 5px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 5px 0; }
+  th, td { border: 1px solid #e5e7eb; padding: 4px 6px; text-align: left; }
+  th { background: #f3f4f6; font-weight: 700; color: #7c3aed; }
+  .info { background: #eff6ff; color: #1e40af; padding: 8px; border-radius: 5px; border-left: 4px solid #2563eb; margin: 6px 0; font-size: 11px; }
+  .success { background: #dcfce7; color: #166534; padding: 8px; border-radius: 5px; border-left: 4px solid #16a34a; margin: 6px 0; font-size: 11px; }
+  .warning { background: #fef3c7; color: #92400e; padding: 8px; border-radius: 5px; border-left: 4px solid #f59e0b; margin: 6px 0; font-size: 11px; }
+  .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; margin: 0 3px; }
+  .b-green { background: #dcfce7; color: #166534; }
+  .b-purple { background: #ede9fe; color: #5b21b6; }
+  .b-red { background: #fee2e2; color: #991b1b; }
+  @media print { body { background: white; padding: 0; } section { box-shadow: none; } header { -webkit-print-color-adjust: exact; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>🎯 Strategy Suggestion Team spec (v132!)</h1>
+  <p class="meta">
+    학습 → 예측 → 전략 제안 → 사장님 결정 (수동 or 자동!)<br>
+    2026-08-11 · 13번째 팀!
+  </p>
+</header>
+
+<!-- ==================== 사장님 요구 ==================== -->
+<section>
+  <h2>📋 사장님 요구 (2026-08-11)</h2>
+  <div class="info">
+    "매일 학습하면서 급등과 급락이 예상되고 급락후 추가 지속적인 하락일경우
+    새전략을 만들어 분석한 전략으로 만들어줘 그것을 보고 자동또는 수동으로
+    매매를 할수 있게 해주고 기본은 수동으로 내가 실행할수 있게 해주고
+    차후에 자동으로도 할수 있게 선택옵션을 넣어서만들어주고 바로 사용하지
+    않은 전략은 유지 삭제 관리 가능하게 만들어진 시간도 표기해서 해줘"
+  </div>
+</section>
+
+<!-- ==================== 전체 흐름 ==================== -->
+<section>
+  <h2>🔄 전체 흐름</h2>
+  <div class="flow-box"><span class="badge b-purple">1</span> <strong>매일 06:00 UTC</strong> = Market Flow 팀 학습!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-purple">2</span> <strong>pump_dump_predictor</strong> = 예상 심볼 분석!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-purple">3</span> <strong>descent_pattern_detector</strong> = 급락 후 지속 하락 감지!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-purple">4</span> <strong>strategy_suggestion_generator</strong> = 신 전략 draft 자동 생성!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-green">5</span> <strong>DB 저장</strong> = strategy_suggestions 테이블!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-green">6</span> <strong>대시보드 표시</strong> = 「🎯 전략 제안」 카드 + 만들어진 시간!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-purple">7</span> <strong>사장님 결정</strong>:</div>
+  <div class="flow-box" style="margin-left:20px">├─ <strong>▶ 지금 실행 (수동!)</strong> ← <span class="badge b-green">기본!</span></div>
+  <div class="flow-box" style="margin-left:20px">├─ <strong>⚙ 자동 실행 옵션 켜기!</strong></div>
+  <div class="flow-box" style="margin-left:20px">└─ <strong>❌ 삭제!</strong></div>
+</section>
+
+<!-- ==================== 5 에이전트 ==================== -->
+<section>
+  <h2>🤖 5개 에이전트 상세</h2>
+
+  <div class="agent-card">
+    <h3>1. <code>pump_dump_predictor</code> (매일 06:30 UTC!)</h3>
+    <p><strong>미션:</strong> 급등/급락 예상 심볼 분석!</p>
+    <ul>
+      <li>Market Flow 팀 학습 결과 참조!</li>
+      <li>Timezone Pattern 팀 통계 참조!</li>
+      <li>4H OBV/RSI/BB 지표 분석!</li>
+      <li>과거 유사 패턴 매칭!</li>
+      <li>결과: 상위 20 예상 심볼 (pump/dump!)</li>
+    </ul>
+  </div>
+
+  <div class="agent-card">
+    <h3>2. <code>descent_pattern_detector</code></h3>
+    <p><strong>미션:</strong> 급락 후 지속 하락 감지!</p>
+    <ul>
+      <li>최근 3~7일 = 급락 심볼!</li>
+      <li>OBV = 매도세 유지?</li>
+      <li>RSI = 30 이하 지속?</li>
+      <li>BB 하단 하방 이탈?</li>
+      <li>결과: 지속 하락 예상 심볼!</li>
+    </ul>
+  </div>
+
+  <div class="agent-card">
+    <h3>3. <code>strategy_suggestion_generator</code> ⭐ 핵심!</h3>
+    <p><strong>미션:</strong> 신 전략 draft 자동 생성!</p>
+    <ul>
+      <li>예측 심볼 = 각각 전략 draft!</li>
+      <li>side, 자본, 트리거, TP/SL 자동 세팅!</li>
+      <li>사장님 신 default 적용 (2x, TP 10/15/20/25, 강제 SL -15% 등!)</li>
+      <li>confidence_score 계산 (0~1.0)!</li>
+      <li>DB `strategy_suggestions` 저장!</li>
+    </ul>
+  </div>
+
+  <div class="agent-card">
+    <h3>4. <code>suggestion_manager</code></h3>
+    <p><strong>미션:</strong> 유지/삭제 관리!</p>
+    <ul>
+      <li>사장님 = 「❌ 삭제」 클릭 = 즉시 제거!</li>
+      <li>24h 미실행 = 자동 삭제 (선택!)</li>
+      <li>실행 완료 = archived 마킹!</li>
+    </ul>
+  </div>
+
+  <div class="agent-card">
+    <h3>5. <code>auto_manual_executor</code></h3>
+    <p><strong>미션:</strong> 자동 or 수동 실행!</p>
+    <ul>
+      <li>기본 = <strong>수동!</strong> (사장님 「▶」 클릭!)</li>
+      <li>사장님 옵션 = 「⚙ 자동 옵션」!</li>
+      <li>자동 시 = 안전장치 필수 (검증!)</li>
+    </ul>
+    <div class="warning">
+      ⚠️ <strong>자동 실행 = 안전장치 필수!</strong>
+      <ul>
+        <li>confidence_score 임계 (0.85 이상만!)</li>
+        <li>일일 자동 실행 한도!</li>
+        <li>중복 심볼 방지!</li>
+        <li>사장님 잔고 여유 확인!</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== DB 스키마 ==================== -->
+<section>
+  <h2>🗃 DB 스키마 (alembic 0027!)</h2>
+  <pre>CREATE TABLE strategy_suggestions (
+    id BIGSERIAL PRIMARY KEY,
+    symbol VARCHAR(30) NOT NULL,
+    side VARCHAR(10) NOT NULL,          -- LONG/SHORT
+    suggestion_type VARCHAR(30),         -- pump_expected/dump_continuation/etc
+    strategy_config JSONB NOT NULL,      -- 자본, 트리거, TP/SL 등!
+    confidence_score DECIMAL(4, 3),      -- 0.000~1.000
+    reason TEXT,                         -- 분석 이유!
+    status VARCHAR(20) DEFAULT 'PENDING', -- PENDING/EXECUTED/DISMISSED/EXPIRED
+    execution_mode VARCHAR(10) DEFAULT 'MANUAL', -- MANUAL/AUTO
+    executed_at TIMESTAMPTZ,
+    executed_strategy_id BIGINT,         -- 실 실행 후 = strategies.id!
+    dismissed_at TIMESTAMPTZ,
+    dismissed_reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX idx_suggestions_status ON strategy_suggestions (status);
+CREATE INDEX idx_suggestions_created ON strategy_suggestions (created_at DESC);
+
+-- 자동 실행 세팅 (system_settings 확장!)
+INSERT INTO system_settings (key, value, description) VALUES
+    ('suggestion_auto_execute_enabled', 'false', '전략 제안 자동 실행 (기본 OFF!)'),
+    ('suggestion_confidence_threshold', '0.85', '자동 실행 confidence 임계!'),
+    ('suggestion_daily_auto_limit', '3', '일일 자동 실행 한도!');</pre>
+</section>
+
+<!-- ==================== UI ==================== -->
+<section>
+  <h2>🎨 UI = 신 페이지 「🎯 전략 제안」!</h2>
+
+  <div class="info">
+    <strong>대시보드 상단 = 「🎯 전략 제안 [N건]」 카드!</strong>
+  </div>
+
+  <pre style="background:#0f172a; color:#e2e8f0; padding:12px; border-radius:6px; font-size:10px">
+🎯 자동 생성 전략 제안 [3건]                        [⚙ 세팅]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📉 BTCUSDT SHORT | 급락 지속!             신뢰도 87%
+  ⏰ 생성: 2026-08-11 14:00 (2시간 전!)
+  📊 자본 500 USDT | 레버리지 2x | 강제 SL -15%
+  💡 이유: 최근 7일 -25% 하락, OBV 매도세 유지, RSI 28
+  [▶ 지금 실행 (수동!)]  [⚙ 자동 옵션]  [❌ 삭제]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🐂 ETHUSDT LONG | 급등 예상!              신뢰도 82%
+  ⏰ 생성: 2026-08-11 12:00 (4시간 전!)
+  📊 자본 500 USDT | 레버리지 2x | 강제 SL -15%
+  💡 이유: 급락 후 반등, OBV 매수세 시작, BB 하단 지지
+  [▶ 실행]  [⚙ 자동]  [❌ 삭제]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📉 SOLUSDT SHORT | 급락 지속!             신뢰도 78%
+  ⏰ 생성: 2026-08-11 10:00 (6시간 전!)
+  [▶ 실행]  [⚙ 자동]  [❌ 삭제]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  </pre>
+
+  <h3>세팅 popup:</h3>
+  <div class="agent-card">
+    <p><strong>⚙ 전략 제안 세팅</strong></p>
+    <ul>
+      <li>[ ] 🤖 자동 실행 활성! (기본 OFF!)</li>
+      <li>Confidence 임계: [0.85 ▼] (자동 실행 최소!)</li>
+      <li>일일 자동 한도: [3 회]</li>
+      <li>미실행 자동 삭제: [24시간 후!]</li>
+      <li>[💾 저장]</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ==================== 사장님 시나리오 ==================== -->
+<section>
+  <h2>👑 사장님 매매 시나리오</h2>
+
+  <h3>시나리오 1: 수동 매매 (기본!)</h3>
+  <div class="agent-card">
+    <ol>
+      <li>대시보드 = 「🎯 전략 제안 [3건]」 확인!</li>
+      <li>제안 카드 검토 (이유, 신뢰도, 생성 시간!)</li>
+      <li>사장님 판단!</li>
+      <li>「▶ 지금 실행」 클릭 = 신 전략 즉시!</li>
+      <li>포지션 진입!</li>
+    </ol>
+  </div>
+
+  <h3>시나리오 2: 자동 매매 (사장님 옵션!)</h3>
+  <div class="agent-card">
+    <ol>
+      <li>세팅 = 「🤖 자동 실행 ON」 저장!</li>
+      <li>매일 06:30 = 신 제안 생성!</li>
+      <li>Confidence &gt; 0.85 = 자동 실행!</li>
+      <li>Telegram: "🤖 자동 진입! BTCUSDT SHORT"</li>
+      <li>사장님 확인만!</li>
+    </ol>
+  </div>
+
+  <h3>시나리오 3: 관리 (유지/삭제!)</h3>
+  <div class="agent-card">
+    <ol>
+      <li>제안 = 6시간 지남 (미실행!)</li>
+      <li>사장님 = 상황 변화로 = 「❌ 삭제」!</li>
+      <li>or 24h 후 = 자동 삭제!</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ==================== 구현 순서 ==================== -->
+<section>
+  <h2>🚀 구현 순서</h2>
+  <div class="success">
+    <strong>Phase 1 (지금 = MVP!):</strong>
+    <ul>
+      <li>spec 문서 (이 파일!)</li>
+      <li>strategy_suggestion_team/ 폴더!</li>
+      <li>__init__.py + README!</li>
+    </ul>
+  </div>
+  <div class="info">
+    <strong>Phase 2 (다음 세션!):</strong>
+    <ul>
+      <li>alembic 0027 (strategy_suggestions!)</li>
+      <li>5 에이전트 실 코드!</li>
+      <li>API endpoints (GET/POST/DELETE!)</li>
+    </ul>
+  </div>
+  <div class="info">
+    <strong>Phase 3 (UI!):</strong>
+    <ul>
+      <li>「🎯 전략 제안」 카드!</li>
+      <li>세팅 모달!</li>
+      <li>실행/삭제 버튼!</li>
+    </ul>
+  </div>
+</section>
+
+<div style="text-align:center; padding:15px; font-size:10px; color:#6b7280">
+  <p><strong>🎯 Strategy Suggestion Team spec (v132)</strong></p>
+  <p>2026-08-11 · 13번째 팀 · PDF 저장: Ctrl+P!</p>
+</div>
+
+</div>
+</body>
+</html>

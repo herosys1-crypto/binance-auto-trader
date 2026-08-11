@@ -1,6 +1,6 @@
-# 🏗 12개 팀 + 50+ 에이전트 (Phase D + E + F MVP!)
+# 🏗 13개 팀 + 55+ 에이전트 (Phase D + E + F + G MVP!)
 
-**v132 완성 = 팀 폴더 구조 MVP + 신 학습 팀 2개!**
+**v132 완성 = 팀 폴더 구조 MVP + 신 학습 팀 2개 + 전략 제안 팀!**
 
 ---
 
@@ -24,12 +24,18 @@ app/agents/
 │   ├── pivot_point_detector
 │   ├── pattern_similarity_matcher   ⭐ 핵심!
 │   └── pattern_alert_generator
-└── timezone_pattern_team/  # 🌏 시간대! (v132 신!) - 한국 시간 통계!
-    ├── kst_pivot_recorder
-    ├── timezone_stats_calculator
-    ├── symbol_pattern_analyzer
-    ├── heatmap_generator
-    └── regional_alert_agent
+├── timezone_pattern_team/  # 🌏 시간대! (v132 신!) - 한국 시간 통계!
+│   ├── kst_pivot_recorder
+│   ├── timezone_stats_calculator
+│   ├── symbol_pattern_analyzer
+│   ├── heatmap_generator
+│   └── regional_alert_agent
+└── strategy_suggestion_team/  # 🎯 제안! (v132 신!) - 매일 자동 전략 제안!
+    ├── pump_dump_predictor          # 급등/급락 예상!
+    ├── descent_pattern_detector     # 급락 후 지속 하락!
+    ├── strategy_suggestion_generator ⭐ 신 전략 draft!
+    ├── suggestion_manager            # 유지/삭제!
+    └── auto_manual_executor         # 수동/자동 실행!
 ```
 
 ---
