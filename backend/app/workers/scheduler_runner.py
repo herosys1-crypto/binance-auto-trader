@@ -166,6 +166,45 @@ def start_scheduler() -> None:
         with SessionLocal() as _db:
             run_pump_bb_watcher(_db, _dec)
     scheduler.add_job(guarded_job("pump_bb_watcher", 540, _pump_bb_wrap), trigger=IntervalTrigger(minutes=10), id="pump_bb_watcher", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 2026-08-11 v132 신: Strategy Suggestion Team!
+    # 사장님 요구: 매일 자동 예측 → 전략 draft 제안 → 사장님 결정!
+    # 06:30 UTC = 매일 예측! (Team Lead 통해 EventBus로!)
+    def _suggestion_daily_predict():
+        from app.db.session import SessionLocal
+        from app.core.crypto import decrypt_text as _dec
+        from app.agents.strategy_suggestion_team.team_lead import StrategySuggestionTeamLead
+        with SessionLocal() as _db:
+            StrategySuggestionTeamLead().run_daily_prediction(_db, _dec)
+    scheduler.add_job(
+        guarded_job("suggestion_daily_predict", 1800, _suggestion_daily_predict),
+        trigger=CronTrigger(hour=6, minute=30),
+        id="suggestion_daily_predict",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # 매 1시간 = 자동 삭제 (24h 미실행!)
+    def _suggestion_cleanup():
+        from app.db.session import SessionLocal
+        from app.agents.strategy_suggestion_team.team_lead import StrategySuggestionTeamLead
+        with SessionLocal() as _db:
+            StrategySuggestionTeamLead().run_hourly_cleanup(_db)
+    scheduler.add_job(
+        guarded_job("suggestion_cleanup", 300, _suggestion_cleanup),
+        trigger=IntervalTrigger(hours=1),
+        id="suggestion_cleanup",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # 매일 07:00 = 자동 실행 배치! (사장님 옵션 ON 시!)
+    def _suggestion_auto_execute():
+        from app.db.session import SessionLocal
+        from app.agents.strategy_suggestion_team.team_lead import StrategySuggestionTeamLead
+        with SessionLocal() as _db:
+            StrategySuggestionTeamLead().run_auto_execute(_db)
+    scheduler.add_job(
+        guarded_job("suggestion_auto_execute", 600, _suggestion_auto_execute),
+        trigger=CronTrigger(hour=7, minute=0),
+        id="suggestion_auto_execute",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.
