@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>📖 자동매매 사용 매뉴얼 (v132!) - 사장님 참고서</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; color: #1a1a1a; line-height: 1.5; background: #f8f9fb; padding: 15px; }
+  .container { max-width: 1100px; margin: 0 auto; }
+  header { background: linear-gradient(135deg, #dc2626 0%, #f59e0b 100%); color: white; padding: 25px; border-radius: 12px; margin-bottom: 15px; text-align: center; }
+  header h1 { font-size: 24px; margin-bottom: 5px; }
+  header .meta { font-size: 12px; opacity: 0.95; }
+  section { background: white; padding: 18px; border-radius: 10px; margin-bottom: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.06); page-break-inside: avoid; }
+  h2 { font-size: 17px; color: #dc2626; border-bottom: 2px solid #fecaca; padding-bottom: 5px; margin-bottom: 10px; }
+  h3 { font-size: 14px; color: #b91c1c; margin: 8px 0 5px 0; }
+  h4 { font-size: 12px; color: #dc2626; margin: 6px 0 3px 0; }
+  p, li { font-size: 11px; }
+  ul, ol { margin-left: 18px; margin-bottom: 6px; }
+  li { margin-bottom: 2px; }
+  .scenario-card { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 10px 12px; border-radius: 6px; margin: 8px 0; }
+  .scenario-card h4 { color: #92400e; margin-top: 0; }
+  .tip-card { background: #dbeafe; border-left: 4px solid #2563eb; padding: 10px 12px; border-radius: 6px; margin: 8px 0; }
+  .tip-card h4 { color: #1e40af; margin-top: 0; }
+  .warning-card { background: #fee2e2; border-left: 4px solid #dc2626; padding: 10px 12px; border-radius: 6px; margin: 8px 0; }
+  .success-card { background: #dcfce7; border-left: 4px solid #16a34a; padding: 10px 12px; border-radius: 6px; margin: 8px 0; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .flow-box { background: #f9fafb; padding: 6px 10px; margin: 3px 0; border-radius: 4px; font-size: 11px; border-left: 3px solid #dc2626; }
+  .flow-arrow { text-align: center; color: #dc2626; font-size: 14px; margin: 2px 0; }
+  code { background: #f3f4f6; padding: 1px 4px; border-radius: 3px; color: #dc2626; font-family: 'Consolas', monospace; font-size: 10px; }
+  .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; margin: 0 3px; }
+  .b-green { background: #dcfce7; color: #166534; }
+  .b-red { background: #fee2e2; color: #991b1b; }
+  .b-blue { background: #dbeafe; color: #1e40af; }
+  .b-yellow { background: #fef3c7; color: #92400e; }
+  .b-purple { background: #ede9fe; color: #5b21b6; }
+  table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 5px 0; }
+  th, td { border: 1px solid #e5e7eb; padding: 4px 6px; text-align: left; }
+  th { background: #f3f4f6; font-weight: 700; color: #dc2626; }
+  .highlight { background: #fef08a; padding: 0 2px; border-radius: 2px; }
+  .toc { background: #f3f4f6; padding: 12px 15px; border-radius: 8px; margin-bottom: 15px; }
+  .toc h3 { color: #dc2626; margin: 0 0 6px 0; }
+  .toc ol { margin-left: 20px; }
+  .toc li { font-size: 12px; margin-bottom: 2px; }
+  .toc a { color: #dc2626; text-decoration: none; }
+  .footer { text-align: center; padding: 15px; font-size: 10px; color: #6b7280; }
+  @media print { body { background: white; padding: 0; } section { box-shadow: none; } header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>📖 자동매매 사용 매뉴얼 (사장님 참고서)</h1>
+  <p class="meta">
+    Version v132 · 2026-08-11 · 상세하지만 간결한 참고서!<br>
+    「기획은 했지만 = 머리에 남아있지 않아」 = 언제든 이 문서 참고!
+  </p>
+</header>
+
+<!-- ==================== 목차 ==================== -->
+<div class="toc">
+  <h3>📋 목차 (사장님이 찾는 상황!)</h3>
+  <ol>
+    <li><a href="#s1">자동매매 = 어떻게 작동?</a></li>
+    <li><a href="#s2">신 전략 만들 때 = 뭘 세팅?</a></li>
+    <li><a href="#s3">OBV 자동 재진입 (v130) = 언제 켜?</a></li>
+    <li><a href="#s4">청산 후 재진입 (v131) = 언제 켜?</a></li>
+    <li><a href="#s5">차트 분석 (OBV / RSI / BB) = 어떻게 활용?</a></li>
+    <li><a href="#s6">알람 (재진입 / 급등BB) = 언제 확인?</a></li>
+    <li><a href="#s7">사장님 매매 시나리오 (4가지!)</a></li>
+    <li><a href="#s8">FAQ (자주 하는 질문!)</a></li>
+  </ol>
+</div>
+
+<!-- ==================== 1. 자동매매 어떻게? ==================== -->
+<section id="s1">
+  <h2>1️⃣ 자동매매 = 어떻게 작동?</h2>
+
+  <div class="flow-box"><span class="badge b-blue">1</span> <strong>사장님</strong> = 「+ 새 전략」 클릭!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-blue">2</span> <strong>1단계 진입</strong>: 시장가 or 지정가 자동!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-green">3</span> <strong>실시간 감시</strong>: 매 10초 = 가격 체크!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-yellow">4a</span> <strong>가격 상승</strong> → TP1 → TP2 → TP3 → TP4 자동 익절!</div>
+  <div class="flow-box"><span class="badge b-red">4b</span> <strong>가격 하락</strong> → 2단계 자동 진입 (평단 개선!)</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-red">5</span> <strong>손실 -15%</strong> → 강제 SL 자동 청산!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-purple">6</span> <strong>청산 후 재진입 ON</strong>이면 → 다음 단계 대기!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-blue">7</span> <strong>Telegram</strong> 모든 이벤트 알림!</div>
+</section>
+
+<!-- ==================== 2. 신 전략 세팅 ==================== -->
+<section id="s2">
+  <h2>2️⃣ 신 전략 만들 때 = 뭘 세팅?</h2>
+
+  <table>
+    <thead><tr><th>항목</th><th>기본값</th><th>설명</th></tr></thead>
+    <tbody>
+      <tr><td>레버리지</td><td class="highlight">2x</td><td>자율! 사장님이 원하면 = 1~125!</td></tr>
+      <tr><td>1단계 자본</td><td>100 USDT</td><td>진입 자본! (margin!)</td></tr>
+      <tr><td>2/3/4단계</td><td>200/300/400</td><td>손실 시 추가 진입!</td></tr>
+      <tr><td>2단계 트리거</td><td>10%</td><td>1단계 대비 -10% 시 = 2단계!</td></tr>
+      <tr><td>3+단계 트리거</td><td>20%</td><td>2단계 대비 -20% 시 = 3단계!</td></tr>
+      <tr><td>TP1/2/3/4</td><td>10/15/20/25%</td><td>익절 임계 (수익률!)</td></tr>
+      <tr><td>TP qty</td><td>10/15/20/25%</td><td>각 TP = qty %!</td></tr>
+      <tr><td>TP1_override</td><td>25%</td><td>TP1을 이 %까지 대기! (사장님 옵션!)</td></tr>
+      <tr><td>강제 SL</td><td>-15%</td><td>손실 -15% 도달 = 자동 청산!</td></tr>
+      <tr><td>시작가</td><td class="highlight">비우면 MARKET!</td><td>즉시 진입! (사장님 편의!)</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tip-card">
+    <h4>💡 팁 (사장님 자율!):</h4>
+    <ul>
+      <li><strong>안전 매매:</strong> 레버리지 = 2x, 강제 SL = -15%!</li>
+      <li><strong>공격적 매매:</strong> 레버리지 = 5~10x, 강제 SL = -5%!</li>
+      <li><strong>장기 매매:</strong> 레버리지 = 2x, 강제 SL = 끔!</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ==================== 3. OBV 자동 재진입 ==================== -->
+<section id="s3">
+  <h2>3️⃣ OBV 자동 재진입 (v130) = 언제 켜?</h2>
+
+  <div class="scenario-card">
+    <h4>🎯 언제 사용?</h4>
+    <p><strong>OBV 흐름 = 반전 = 자동 재진입 원할 때!</strong></p>
+  </div>
+
+  <h3>클릭 방법:</h3>
+  <div class="flow-box">대시보드 → 「📊 새 전략 (OBV 자동)」 클릭!</div>
+
+  <h3>동작:</h3>
+  <ol>
+    <li><strong>1단계 = MARKET 즉시 진입!</strong></li>
+    <li>가격 하락 → 강제 SL 청산!</li>
+    <li><strong>OBV 자동 감시!</strong> (4H OBV + 15m/1h + 10% 이동!)</li>
+    <li>3조건 만족 = 자동 2단계 진입!</li>
+    <li>계속!</li>
+  </ol>
+
+  <div class="tip-card">
+    <h4>💡 OBV 사장님 언제?</h4>
+    <ul>
+      <li>✅ 시장 = 상승 추세! (매수세 강함!)</li>
+      <li>✅ 사장님 = 시간 없음! (자동 재진입!)</li>
+      <li>❌ 하락장 = OBV 신호 안 옴! (기존 방식 나음!)</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ==================== 4. 청산 후 재진입 ==================== -->
+<section id="s4">
+  <h2>4️⃣ 청산 후 재진입 (v131) = 언제 켜?</h2>
+
+  <div class="scenario-card">
+    <h4>🎯 언제 사용?</h4>
+    <p><strong>손절 후 = 청산가 대비 반등 대기!</strong></p>
+    <p><strong>= DCA (Dollar Cost Averaging) 강화!</strong></p>
+  </div>
+
+  <h3>클릭 방법:</h3>
+  <div class="flow-box">신 전략 모달 → 레버리지 옆 「🔄 청산 후 재진입」 체크!</div>
+
+  <h3>동작 (예시!):</h3>
+  <ol>
+    <li>1단계 500 USDT 진입!</li>
+    <li>손실 -15% → 자동 청산!</li>
+    <li><strong>[재진입 대기중!] 상태!</strong> (LIQUIDATED_WAITING_RETRY!)</li>
+    <li>청산가 × (1 - 10%) 도달 → <strong>자동 2단계 진입!</strong></li>
+    <li>계속!</li>
+  </ol>
+
+  <div class="warning-card">
+    <h4>⚠️ 주의 = 순차 진입!</h4>
+    <p>재진입 ON = <strong>절대 동시 보유 X!</strong></p>
+    <p>= 1단계 청산 완료 후 = 2단계!</p>
+    <p>= 2단계 청산 후 = 3단계!</p>
+    <p>= 실용 = 2~3단계 한계! (사장님 정확!)</p>
+  </div>
+
+  <h3>단계별 개별 트리거!</h3>
+  <p>사장님 세팅 예:</p>
+  <table>
+    <thead><tr><th>단계</th><th>트리거%</th><th>이유</th></tr></thead>
+    <tbody>
+      <tr><td>2단계</td><td>10%</td><td>기본 (빠른 재진입!)</td></tr>
+      <tr><td>3단계</td><td>15%</td><td>사장님 = 시장 분석 = 더 대기!</td></tr>
+      <tr><td>4단계</td><td>20%</td><td>사장님 = 많이 대기!</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ==================== 5. 차트 분석 활용 ==================== -->
+<section id="s5">
+  <h2>5️⃣ 차트 분석 (OBV / RSI / BB) = 어떻게 활용?</h2>
+
+  <div class="grid">
+    <div class="tip-card">
+      <h4>📊 OBV (On-Balance Volume)</h4>
+      <p><strong>= 매수/매도 세력!</strong></p>
+      <ul>
+        <li>OBV ↑ = 매수세 강!</li>
+        <li>OBV ↓ = 매도세 강!</li>
+        <li>OBV 반전 = 추세 반전 신호!</li>
+      </ul>
+      <p><strong>사장님 활용:</strong> OBV 반전 = 재진입 or 신 진입!</p>
+    </div>
+    <div class="tip-card">
+      <h4>📈 RSI(14)</h4>
+      <p><strong>= 과매수/과매도!</strong></p>
+      <ul>
+        <li>RSI &gt; 70 = 과매수 (하락 임박!)</li>
+        <li>RSI &lt; 30 = 과매도 (반등 임박!)</li>
+        <li>RSI 반전 = 추세 전환!</li>
+      </ul>
+      <p><strong>사장님 활용:</strong> SHORT = RSI &gt; 70! / LONG = RSI &lt; 30!</p>
+    </div>
+    <div class="tip-card">
+      <h4>📉 Bollinger Bands (BB)</h4>
+      <p><strong>= 20MA + 표준편차!</strong></p>
+      <ul>
+        <li>BB 상단 = 저항선!</li>
+        <li>BB 중단 (20MA) = 지지선/저항선!</li>
+        <li>BB 하단 = 지지선!</li>
+      </ul>
+      <p><strong>사장님 활용:</strong> 급등 후 BB중단 근접 = 매수 기회!</p>
+    </div>
+    <div class="tip-card">
+      <h4>📊 EMA (Exponential Moving Avg)</h4>
+      <p><strong>= 이동평균 (지수!)</strong></p>
+      <ul>
+        <li>EMA(20/50/200)</li>
+        <li>가격 &gt; EMA200 = 상승 추세!</li>
+        <li>가격 &lt; EMA200 = 하락 추세!</li>
+      </ul>
+      <p><strong>사장님 활용:</strong> 추세 확인!</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 6. 알람 활용 ==================== -->
+<section id="s6">
+  <h2>6️⃣ 알람 (재진입 / 급등BB) = 언제 확인?</h2>
+
+  <h3>🎯 재진입 알람 (강제 종료 후!)</h3>
+  <div class="scenario-card">
+    <h4>조건: OBV + RSI + 10% 이동!</h4>
+    <ol>
+      <li>강제 종료된 심볼 (SL 발동!)</li>
+      <li>4H OBV 반전 + 4H RSI 반전!</li>
+      <li>손절가 대비 10% 이상 이동!</li>
+      <li><strong>→ 사장님 대시보드 알람!</strong></li>
+    </ol>
+    <p><strong>사장님 액션:</strong> 알람 클릭 → 신 전략 즉시 생성!</p>
+  </div>
+
+  <h3>🚨 급등+BB중단 알람 (v131 신!)</h3>
+  <div class="scenario-card">
+    <h4>조건: 24h 급등 top 50 + 4H 최고점 = BB중단 ±5%!</h4>
+    <ol>
+      <li>Binance 급등 top 50 자동 스캔!</li>
+      <li>4H 최고점 계산!</li>
+      <li>BB중단(20MA) 근접 (±5%)!</li>
+      <li><strong>→ 사장님 대시보드 알람!</strong></li>
+    </ol>
+    <p><strong>의미:</strong> 급등 후 = 조정 = 지지선 근접 = <span class="highlight">매수 기회!</span></p>
+  </div>
+</section>
+
+<!-- ==================== 7. 시나리오 ==================== -->
+<section id="s7">
+  <h2>7️⃣ 사장님 매매 시나리오 (4가지!)</h2>
+
+  <div class="scenario-card">
+    <h4>🎯 시나리오 A: 급등 종목 발견!</h4>
+    <ol>
+      <li>대시보드 「🚨 급등+BB중단 알람」 감지!</li>
+      <li>「🚨 BTCUSDT」 클릭!</li>
+      <li>신 전략 모달 = 심볼 자동!</li>
+      <li>방향 = SHORT (급등 후 반락!) or LONG (지지선 매수!)</li>
+      <li>자본 세팅 → 「✓ 진입」!</li>
+    </ol>
+  </div>
+
+  <div class="scenario-card">
+    <h4>🔄 시나리오 B: 손절 후 재진입!</h4>
+    <ol>
+      <li>SL 발동 → 청산!</li>
+      <li>Telegram 알람 = 「강제 종료!」</li>
+      <li>4H 관찰!</li>
+      <li>「🎯 재진입 알람」 감지!</li>
+      <li>알람 클릭 → 신/구 방식 선택!</li>
+      <li>재진입!</li>
+    </ol>
+  </div>
+
+  <div class="scenario-card">
+    <h4>⏰ 시나리오 C: 시간대 활용! (v132 신!)</h4>
+    <ol>
+      <li>대시보드 「⏰ Timezone 통계」!</li>
+      <li>BTCUSDT = 새벽 03시 KST = 45% 급등!</li>
+      <li>사장님 = 이 시간대 = 준비!</li>
+      <li>02:50 = 「+ 새 전략」 대기!</li>
+      <li>03:00 = 급등 감지 → 진입!</li>
+    </ol>
+  </div>
+
+  <div class="scenario-card">
+    <h4>🧠 시나리오 D: 자동 학습 활용! (v132 신!)</h4>
+    <ol>
+      <li>매일 06:00 = 자동 학습!</li>
+      <li>매 10분 = 유사 패턴 감지!</li>
+      <li>Telegram = 「XXXUSDT = 저장 사례와 87% 유사!」</li>
+      <li>사장님 = 알람 → 검토!</li>
+      <li>진입 or 무시!</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ==================== 8. FAQ ==================== -->
+<section id="s8">
+  <h2>8️⃣ FAQ (자주 하는 질문!)</h2>
+
+  <h3>Q1: 「청산 후 재진입」 = 「OBV 자동 재진입」 차이?</h3>
+  <div class="tip-card">
+    <p><strong>청산 후 재진입 (v131):</strong> 청산가 기준 = 고정 % 도달 시 진입! (단순!)</p>
+    <p><strong>OBV 자동 재진입 (v130):</strong> OBV 반전 감지 = 진입! (지표 기반!)</p>
+    <p><strong>둘 다 켜기?</strong> = OBV 우선 (「📊 새 전략 (OBV 자동)」!)</p>
+  </div>
+
+  <h3>Q2: 강제 SL은 언제 발동?</h3>
+  <div class="tip-card">
+    <p>손실 = 사장님 세팅 % 도달 시!</p>
+    <p><strong>중요:</strong> 다음 단계 남으면 = <span class="highlight">발동 X!</span></p>
+    <p>= 마지막 단계 청산 후만 = 실 발동!</p>
+    <p>= 사장님 = 손실 회복 기회!</p>
+  </div>
+
+  <h3>Q3: 130% 자본 경고 = 무슨 뜻?</h3>
+  <div class="tip-card">
+    <p>총 세팅 자본 = 초기 자본 × 130% 초과!</p>
+    <p>= 여유 자금 30% 부족!</p>
+    <p><strong>= 경고만! 진행 가능!</strong></p>
+    <p>= 사장님 자율!</p>
+  </div>
+
+  <h3>Q4: TP1_override는 뭐?</h3>
+  <div class="tip-card">
+    <p>사장님이 = TP1을 몇 % 도달 시 발동할지 세팅!</p>
+    <p>= default = 10%!</p>
+    <p>= 사장님 옵션 = 25% (신 default!)</p>
+    <p><strong>v132 신:</strong> TP1만 변경! TP2/3/4 = template 그대로!</p>
+  </div>
+
+  <h3>Q5: 자동 실행 옵션 = 언제 켜?</h3>
+  <div class="warning-card">
+    <p><strong>지금 = 자동 실행 = 비활성!</strong></p>
+    <p>= 안전장치 4개 미완성:</p>
+    <ul>
+      <li>4H 봉 완성 후 판정!</li>
+      <li>중복 진입 방지!</li>
+      <li>심볼 blacklist (연속 손실!)</li>
+      <li>RSI 극값 필터!</li>
+    </ul>
+    <p>= 완성 후 = 소액 테스트 → 정식!</p>
+  </div>
+
+  <h3>Q6: 레버리지 default = 왜 계속 바뀜?</h3>
+  <div class="tip-card">
+    <p>사장님 자율! 결정!</p>
+    <ul>
+      <li>2026-08-08: 2x</li>
+      <li>2026-08-09: 5x (사장님 재요구!)</li>
+      <li>2026-08-11: <span class="highlight">2x (최종!)</span></li>
+    </ul>
+    <p>= 언제든 변경 가능!</p>
+  </div>
+</section>
+
+<!-- ==================== 배포 명령 ==================== -->
+<section>
+  <h2>🚀 사장님 배포 명령 (앞으로!)</h2>
+  <div class="success-card">
+    <p><strong>매번 이 3줄만!</strong></p>
+    <pre style="background:#1e293b; color:#e2e8f0; padding:10px; border-radius:5px; font-size:11px; margin-top:5px">cd ~/binance-auto-trader/backend
+git pull
+docker compose restart api scheduler</pre>
+    <p style="margin-top:5px"><strong>= main branch 기본!</strong></p>
+  </div>
+</section>
+
+<div class="footer">
+  <p><strong>📖 자동매매 사용 매뉴얼 (v132)</strong></p>
+  <p>2026-08-11 · main branch · tag: v-2026-08-11-v132-12teams-complete</p>
+  <p style="margin-top:5px">
+    <strong>PDF 저장:</strong> 브라우저 → <code>Ctrl+P</code> → "PDF로 저장" → 언제든 참고!
+  </p>
+</div>
+
+</div>
+</body>
+</html>
