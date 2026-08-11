@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>Market Flow + Timezone Pattern 팀 통합 spec (v132!)</title>
+<style>
+  @page { size: A4; margin: 15mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; color: #1a1a1a; line-height: 1.5; background: #f8f9fb; padding: 20px; }
+  .container { max-width: 1200px; margin: 0 auto; }
+  header { background: linear-gradient(135deg, #059669 0%, #2563eb 100%); color: white; padding: 30px; border-radius: 12px; margin-bottom: 20px; text-align: center; }
+  header h1 { font-size: 24px; margin-bottom: 8px; }
+  header .meta { font-size: 13px; opacity: 0.9; }
+  section { background: white; padding: 20px; border-radius: 10px; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.06); page-break-inside: avoid; }
+  h2 { font-size: 18px; color: #059669; border-bottom: 2px solid #d1fae5; padding-bottom: 6px; margin-bottom: 12px; }
+  h3 { font-size: 15px; color: #047857; margin: 10px 0 6px 0; }
+  p, li { font-size: 12px; }
+  ul { margin-left: 18px; margin-bottom: 8px; }
+  li { margin-bottom: 3px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; margin: 0 4px; }
+  .b-green { background: #dcfce7; color: #166534; }
+  .b-blue { background: #dbeafe; color: #1e40af; }
+  .b-purple { background: #ede9fe; color: #5b21b6; }
+  .b-orange { background: #fed7aa; color: #9a3412; }
+  .b-red { background: #fee2e2; color: #991b1b; }
+  .agent-card { background: #f0fdf4; border-left: 4px solid #059669; padding: 12px; border-radius: 6px; margin: 8px 0; }
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  code { background: #f3f4f6; padding: 1px 5px; border-radius: 3px; color: #059669; font-family: 'Consolas', monospace; font-size: 11px; }
+  pre { background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 11px; margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; margin: 6px 0; }
+  th, td { border: 1px solid #e5e7eb; padding: 5px 8px; text-align: left; }
+  th { background: #f3f4f6; font-weight: 700; color: #059669; }
+  .heatmap-cell { display: inline-block; width: 32px; height: 22px; text-align: center; font-size: 10px; line-height: 22px; margin: 1px; border-radius: 3px; color: white; }
+  .h-0 { background: #f0fdf4; color: #166534; } /* 0-5% */
+  .h-1 { background: #86efac; color: #14532d; } /* 5-15% */
+  .h-2 { background: #22c55e; } /* 15-30% */
+  .h-3 { background: #16a34a; } /* 30-50% */
+  .h-4 { background: #15803d; } /* 50%+ */
+  .info { background: #eff6ff; color: #1e40af; padding: 8px 12px; border-radius: 6px; border-left: 4px solid #2563eb; margin: 8px 0; font-size: 12px; }
+  .success { background: #dcfce7; color: #166534; padding: 8px 12px; border-radius: 6px; border-left: 4px solid #16a34a; margin: 8px 0; font-size: 12px; }
+  .footer { text-align: center; padding: 20px; font-size: 11px; color: #6b7280; }
+  @media print { body { background: white; padding: 0; } section { box-shadow: none; } header { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>🧠 Market Flow + Timezone Pattern Team 통합 spec</h1>
+  <p class="meta">
+    Version v132 · 2026-08-11 · 자동 학습 + 지역별 조작 감지!<br>
+    2 팀 + 10 에이전트 + 4 DB 테이블
+  </p>
+</header>
+
+<!-- ==================== 개요 ==================== -->
+<section>
+  <h2>📋 개요</h2>
+  <div class="info">
+    <strong>목표:</strong> 사장님 매매 = 데이터 기반 정밀도 극대!<br>
+    <strong>Phase E (Market Flow!):</strong> 매일 top 50 자동 학습 → 유사 패턴 감지!<br>
+    <strong>Phase F (Timezone!):</strong> 한국 시간 급등락 통계 → 매매 시점 참고!
+  </div>
+</section>
+
+<!-- ==================== Phase E ==================== -->
+<section>
+  <h2>📊 Phase E = Market Flow Learning Team!</h2>
+
+  <h3>미션:</h3>
+  <p>매일 자동 = 급등/급락 top 50 = 흐름 학습 → 유사 패턴 감지!</p>
+
+  <h3>5개 에이전트:</h3>
+  <div class="agent-card">
+    <h4><code>daily_pump_dump_scanner</code> (매일 06:00 UTC!)</h4>
+    <p>Binance 24h ticker → top 50 급등 + top 50 급락 스캔!</p>
+  </div>
+  <div class="agent-card">
+    <h4><code>flow_analyzer</code></h4>
+    <p>4H 봉 100개 (16일!) 분석 → higher low/high, EMA, 지지/저항 자동!</p>
+  </div>
+  <div class="agent-card">
+    <h4><code>pivot_point_detector</code></h4>
+    <p>급등/급락 시점 감지 (volume 3x + price ±5%!)</p>
+  </div>
+  <div class="agent-card">
+    <h4><code>pattern_similarity_matcher</code> ⭐ 핵심</h4>
+    <p>매 10분 = 현재 심볼 vs DB 저장 = cosine similarity 계산!</p>
+  </div>
+  <div class="agent-card">
+    <h4><code>pattern_alert_generator</code></h4>
+    <p>유사도 &gt; 0.80 = Telegram + 대시보드!</p>
+  </div>
+
+  <h3>DB 스키마:</h3>
+  <pre>-- alembic 0025
+CREATE TABLE market_flow_records (
+    id BIGSERIAL PRIMARY KEY,
+    symbol VARCHAR(30), date DATE,
+    rank_type VARCHAR(10),  -- pump / dump
+    rank INTEGER, change_pct DECIMAL(10, 2),
+    features JSONB NOT NULL,  -- flow + indicators + pivots!
+    UNIQUE(symbol, date)
+);
+
+CREATE TABLE flow_pattern_matches (
+    id BIGSERIAL PRIMARY KEY,
+    matched_symbol VARCHAR(30), matched_time TIMESTAMPTZ,
+    similar_records BIGINT[], similarity_score DECIMAL(4, 3),
+    alerted BOOLEAN DEFAULT FALSE
+);</pre>
+
+  <h3>features JSONB 예:</h3>
+  <pre>{
+  "24h_change_pct": +23.5, "rank": 3,
+  "4h_flow": {"trend": "uptrend", "ema200": 60000, ...},
+  "support_resistance": {"support_1": 65000, "resistance_1": 71000, ...},
+  "pivots": [{"time": "...", "type": "surge", "volume_ratio": 3.5}],
+  "indicators": {"rsi_14": 68, "obv_direction": "up", "bb_position": "upper_band"}
+}</pre>
+</section>
+
+<!-- ==================== Phase F ==================== -->
+<section>
+  <h2>🌏 Phase F = Timezone Pattern Team!</h2>
+
+  <h3>미션:</h3>
+  <p>한국 시간 급등락 통계 → 심볼별 시간대 패턴 = 매매 참고!</p>
+
+  <h3>사장님 사고:</h3>
+  <div class="info">
+    「미국 외 지역 (아시아/유럽!) = 가격 조작 의심!」<br>
+    「한국 시간 = 급등락 시간대 = 통계 필요!」<br>
+    「예: BTCUSDT = 새벽 03시 KST = 45% 급등 빈번!」
+  </div>
+
+  <h3>5개 에이전트:</h3>
+  <div class="agent-card">
+    <h4><code>kst_pivot_recorder</code> (매일 06:00 UTC!)</h4>
+    <p>24h 모든 급등/급락 시점 = 한국 시간 (UTC+9) 변환 후 기록!</p>
+  </div>
+  <div class="agent-card">
+    <h4><code>timezone_stats_calculator</code> (매주 1회!)</h4>
+    <p>최근 30일 통계 = 각 심볼 = 시간대별 급등/급락 %!</p>
+  </div>
+  <div class="agent-card">
+    <h4><code>symbol_pattern_analyzer</code></h4>
+    <p>심볼 특성 분류: 미국 강함 / 아시아 강함 / 유럽 강함!</p>
+  </div>
+  <div class="agent-card">
+    <h4><code>heatmap_generator</code></h4>
+    <p>대시보드 시각화 = 24시간 x 요일 heatmap!</p>
+  </div>
+  <div class="agent-card">
+    <h4><code>regional_alert_agent</code> (매 30분!)</h4>
+    <p>상위 통계 시간대 도래 = 사장님 알림!<br>
+    예: "BTCUSDT = 20분 후 = 45% 급등 시간대!"</p>
+  </div>
+
+  <h3>DB 스키마:</h3>
+  <pre>-- alembic 0026
+CREATE TABLE timezone_pivots (
+    id BIGSERIAL PRIMARY KEY, symbol VARCHAR(30),
+    pivot_time_kst TIMESTAMP,       -- 한국 시간!
+    pivot_hour_kst INTEGER,          -- 0~23
+    pivot_dow_kst INTEGER,           -- 0=월~6=일
+    pivot_type VARCHAR(10),          -- pump / dump
+    price_change_pct DECIMAL(10, 2),
+    volume_ratio DECIMAL(10, 2)
+);
+
+CREATE TABLE timezone_stats (
+    id BIGSERIAL PRIMARY KEY, symbol VARCHAR(30),
+    hour_kst INTEGER, pump_pct DECIMAL(5, 2), dump_pct DECIMAL(5, 2),
+    total_pivots INTEGER, period_days INTEGER,
+    last_calculated TIMESTAMPTZ,
+    UNIQUE(symbol, hour_kst)
+);</pre>
+
+  <h3>BTCUSDT 예시 heatmap (30일 급등 통계!):</h3>
+  <div style="text-align:center; margin: 10px 0">
+    <div class="heatmap-cell h-3" title="00~03 KST 45%">45%</div>
+    <div class="heatmap-cell h-2" title="03~06 KST 20%">20%</div>
+    <div class="heatmap-cell h-1" title="06~09 KST 10%">10%</div>
+    <div class="heatmap-cell h-0" title="09~12 KST 5%">5%</div>
+    <div class="heatmap-cell h-0" title="12~15 KST 5%">5%</div>
+    <div class="heatmap-cell h-1" title="15~18 KST 8%">8%</div>
+    <div class="heatmap-cell h-0" title="18~21 KST 4%">4%</div>
+    <div class="heatmap-cell h-0" title="21~24 KST 3%">3%</div>
+    <br>
+    <span style="font-size:10px; color:#6b7280">각 셀 = 3시간대! (24시간 = 8칸!)</span>
+  </div>
+
+  <h3>분석 (BTCUSDT):</h3>
+  <ul>
+    <li>🇺🇸 미국 시간 (0-6 KST!) = <strong>65% 집중!</strong></li>
+    <li>🇰🇷 아시아 시간 (9-18 KST!) = <strong>18%</strong></li>
+    <li>🇪🇺 유럽 시간 (18-24 KST!) = <strong>7%</strong></li>
+    <li>💡 <strong>미국 시장 개장 전후 = 조작 의심!</strong></li>
+  </ul>
+</section>
+
+<!-- ==================== 팀 통합 흐름 ==================== -->
+<section>
+  <h2>🔄 통합 흐름 (Phase E + F)</h2>
+
+  <table>
+    <thead><tr><th>단계</th><th>팀/에이전트</th><th>동작</th><th>시간</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>daily_pump_dump_scanner</td><td>top 50 조회</td><td>매일 06:00 UTC</td></tr>
+      <tr><td>2</td><td>flow_analyzer</td><td>흐름 분석</td><td>즉시</td></tr>
+      <tr><td>3</td><td>pivot_point_detector</td><td>급등/급락 감지</td><td>즉시</td></tr>
+      <tr><td>4</td><td>kst_pivot_recorder</td><td>KST 변환 저장</td><td>즉시</td></tr>
+      <tr><td>5</td><td>timezone_stats_calculator</td><td>주간 통계</td><td>매주 일요일</td></tr>
+      <tr><td>6</td><td>pattern_similarity_matcher</td><td>실시간 매칭</td><td>매 10분</td></tr>
+      <tr><td>7</td><td>regional_alert_agent</td><td>시간대 알림</td><td>매 30분</td></tr>
+      <tr><td>8</td><td>pattern_alert_generator</td><td>유사도 알림</td><td>매칭 즉시</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ==================== UI 페이지 ==================== -->
+<section>
+  <h2>🎨 UI 신 페이지 (대시보드!)</h2>
+
+  <div class="grid">
+    <div class="agent-card">
+      <h4>📊 「Market Flow」 페이지</h4>
+      <ul>
+        <li>매일 top 50 리스트!</li>
+        <li>각 심볼 = 흐름 상세!</li>
+        <li>유사 패턴 매칭 리스트!</li>
+        <li>Telegram 알림 히스토리!</li>
+      </ul>
+    </div>
+    <div class="agent-card">
+      <h4>⏰ 「Timezone 통계」 페이지</h4>
+      <ul>
+        <li>심볼 선택 → heatmap!</li>
+        <li>급등/급락 시간대 통계!</li>
+        <li>상위 3 시간대 표시!</li>
+        <li>다음 예상 시간대 알림!</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 구현 로드맵 ==================== -->
+<section>
+  <h2>🚀 구현 로드맵</h2>
+  <div class="success">
+    <strong>Phase 1 (지금 = MVP 완료!):</strong>
+    <ul>
+      <li>spec 문서 (이 파일!)</li>
+      <li>팀 폴더 (market_flow_team/, timezone_pattern_team/)</li>
+      <li>__init__.py + README!</li>
+    </ul>
+  </div>
+  <div class="info">
+    <strong>Phase 2 (다음 세션 = DB!):</strong>
+    <ul>
+      <li>alembic 0025 (market_flow_records!)</li>
+      <li>alembic 0026 (timezone_pivots + stats!)</li>
+      <li>모델 + repository!</li>
+    </ul>
+  </div>
+  <div class="info">
+    <strong>Phase 3 (실 구현):</strong>
+    <ul>
+      <li>10 에이전트 실 코드!</li>
+      <li>scheduler = 등록!</li>
+      <li>API endpoints!</li>
+    </ul>
+  </div>
+  <div class="info">
+    <strong>Phase 4 (UI!):</strong>
+    <ul>
+      <li>Market Flow 페이지!</li>
+      <li>Timezone Heatmap 페이지!</li>
+      <li>Telegram 알림!</li>
+    </ul>
+  </div>
+</section>
+
+<div class="footer">
+  <p><strong>Market Flow + Timezone Pattern spec (v132)</strong></p>
+  <p>2026-08-11 · main branch</p>
+  <p style="margin-top:6px">
+    <strong>PDF 저장:</strong> 브라우저 → <code>Ctrl+P</code> → "PDF로 저장"
+  </p>
+</div>
+
+</div>
+</body>
+</html>

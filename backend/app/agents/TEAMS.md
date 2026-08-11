@@ -1,6 +1,6 @@
-# 🏗 10개 팀 + 40+ 에이전트 (Phase D MVP!)
+# 🏗 12개 팀 + 50+ 에이전트 (Phase D + E + F MVP!)
 
-**v132 완성 = 팀 폴더 구조 MVP + 예시 에이전트!**
+**v132 완성 = 팀 폴더 구조 MVP + 신 학습 팀 2개!**
 
 ---
 
@@ -17,7 +17,19 @@ app/agents/
 ├── analysis_team/      # 📈 분석! (chart, ranking, pnl, stats)
 ├── maintenance_team/   # 🔧 유지! (alembic, redis, telegram_retry, setting)
 ├── ui_team/            # 🎨 UI! (dashboard, list, modal, alert_card)
-└── audit_team/         # 📚 감사! (spec, silent_bug, intent, auto_fix)
+├── audit_team/         # 📚 감사! (spec, silent_bug, intent, auto_fix)
+├── market_flow_team/   # 📊 학습! (v132 신!) - 매일 top 50 흐름 학습!
+│   ├── daily_pump_dump_scanner
+│   ├── flow_analyzer
+│   ├── pivot_point_detector
+│   ├── pattern_similarity_matcher   ⭐ 핵심!
+│   └── pattern_alert_generator
+└── timezone_pattern_team/  # 🌏 시간대! (v132 신!) - 한국 시간 통계!
+    ├── kst_pivot_recorder
+    ├── timezone_stats_calculator
+    ├── symbol_pattern_analyzer
+    ├── heatmap_generator
+    └── regional_alert_agent
 ```
 
 ---
