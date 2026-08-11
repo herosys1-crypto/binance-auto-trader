@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>🎩 Orchestrator Layer spec (v132!)</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Malgun Gothic', sans-serif; color: #1a1a1a; line-height: 1.5; background: #f8f9fb; padding: 15px; }
+  .container { max-width: 1100px; margin: 0 auto; }
+  header { background: linear-gradient(135deg, #7c2d12 0%, #ea580c 100%); color: white; padding: 25px; border-radius: 12px; margin-bottom: 15px; text-align: center; }
+  header h1 { font-size: 22px; margin-bottom: 5px; }
+  header .meta { font-size: 12px; opacity: 0.95; }
+  section { background: white; padding: 18px; border-radius: 10px; margin-bottom: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.06); page-break-inside: avoid; }
+  h2 { font-size: 17px; color: #ea580c; border-bottom: 2px solid #fed7aa; padding-bottom: 5px; margin-bottom: 10px; }
+  h3 { font-size: 14px; color: #c2410c; margin: 8px 0 5px 0; }
+  h4 { font-size: 12px; color: #ea580c; margin: 6px 0 3px 0; }
+  p, li { font-size: 11px; }
+  ul, ol { margin-left: 18px; margin-bottom: 6px; }
+  li { margin-bottom: 2px; }
+  .card { background: #fff7ed; border-left: 4px solid #ea580c; padding: 10px 12px; border-radius: 6px; margin: 6px 0; }
+  .flow-box { background: #f9fafb; padding: 6px 10px; margin: 3px 0; border-radius: 4px; font-size: 11px; border-left: 3px solid #ea580c; }
+  .flow-arrow { text-align: center; color: #ea580c; font-size: 14px; margin: 2px 0; }
+  code { background: #f3f4f6; padding: 1px 4px; border-radius: 3px; color: #ea580c; font-family: 'Consolas', monospace; font-size: 10px; }
+  pre { background: #1e293b; color: #e2e8f0; padding: 10px; border-radius: 5px; overflow-x: auto; font-size: 10px; margin: 5px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 10px; margin: 5px 0; }
+  th, td { border: 1px solid #e5e7eb; padding: 4px 6px; text-align: left; }
+  th { background: #f3f4f6; font-weight: 700; color: #ea580c; }
+  .info { background: #eff6ff; color: #1e40af; padding: 8px; border-radius: 5px; border-left: 4px solid #2563eb; margin: 6px 0; font-size: 11px; }
+  .success { background: #dcfce7; color: #166534; padding: 8px; border-radius: 5px; border-left: 4px solid #16a34a; margin: 6px 0; font-size: 11px; }
+  .warning { background: #fef3c7; color: #92400e; padding: 8px; border-radius: 5px; border-left: 4px solid #f59e0b; margin: 6px 0; font-size: 11px; }
+  .tree { font-family: 'Consolas', monospace; font-size: 11px; background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 5px; }
+  @media print { body { background: white; padding: 0; } section { box-shadow: none; } header { -webkit-print-color-adjust: exact; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>🎩 Orchestrator Layer spec (v132!)</h1>
+  <p class="meta">
+    Grand Orchestrator + 13 Team Leads + EventBus!<br>
+    2026-08-11 · 총괄 지휘 계층!
+  </p>
+</header>
+
+<!-- ==================== 사장님 요구 ==================== -->
+<section>
+  <h2>📋 사장님 요구 (2026-08-11)</h2>
+  <div class="info">
+    "현재 개별 에이전트를 총괄지휘하는 지휘자가 있는지?"
+    <br>= 지금 = <strong>없음! (55+ 에이전트 = 각자 독립!)</strong>
+    <br>= 필요 = <strong>Grand Orchestrator + Team Leads + EventBus!</strong>
+  </div>
+</section>
+
+<!-- ==================== 계층 구조 ==================== -->
+<section>
+  <h2>🏗 계층 구조 (3단계!)</h2>
+  <div class="tree">
+        🎩 Grand Orchestrator (최상위 총괄!)
+        │
+        │ ├─ 전체 시스템 상태 관리!
+        │ ├─ 팀 간 협업 조율!
+        │ ├─ 이벤트 방송 (Event Bus!)
+        │ ├─ 우선순위 결정!
+        │ └─ Kill-switch 총괄!
+        │
+   ┌────┼────┬────┬────┬────┬────┬────┐
+   ⚔    🎯   🛑   📊   🚨   ⚙   📈   🎯
+  Lead Lead Lead Lead Lead Lead Lead Lead ...
+   │    │    │    │    │    │    │    │
+   │    │    │    │    │    │    │    │
+   개별 에이전트 (55+!)
+  </div>
+</section>
+
+<!-- ==================== Grand Orchestrator ==================== -->
+<section>
+  <h2>🎩 Grand Orchestrator = 최상위 총괄!</h2>
+
+  <h3>역할:</h3>
+  <div class="card">
+    <ul>
+      <li><strong>전체 시스템 상태:</strong> 모든 팀 상태 = 실시간 통합!</li>
+      <li><strong>팀 간 협업 조율:</strong> 이벤트 발생 시 = 관련 팀 통보!</li>
+      <li><strong>이벤트 방송 (Event Bus!):</strong> 팀 간 통신 프로토콜!</li>
+      <li><strong>우선순위 결정:</strong> 동시 이벤트 = 우선 순서!</li>
+      <li><strong>Kill-switch 총괄:</strong> 최우선 = 모든 팀 정지!</li>
+      <li><strong>감사 (Audit):</strong> 모든 결정 = 로그!</li>
+    </ul>
+  </div>
+
+  <h3>실 코드 (예시!):</h3>
+  <pre>class GrandOrchestrator(BaseAgent):
+    TEAM = "orchestrator"
+    AGENT_NAME = "grand_orchestrator"
+
+    def __init__(self):
+        super().__init__()
+        # 13 팀 리더 인스턴스!
+        self.teams = {
+            "entry": EntryTeamLead(),
+            "tp": TpTeamLead(),
+            "sl": SlTeamLead(),
+            "monitoring": MonitoringTeamLead(),
+            "alert": AlertTeamLead(),
+            "capital": CapitalTeamLead(),
+            "analysis": AnalysisTeamLead(),
+            "maintenance": MaintenanceTeamLead(),
+            "ui": UiTeamLead(),
+            "audit": AuditTeamLead(),
+            "market_flow": MarketFlowTeamLead(),
+            "timezone_pattern": TimezonePatternTeamLead(),
+            "strategy_suggestion": StrategySuggestionTeamLead(),
+        }
+        # 이벤트 버스!
+        self.event_bus = EventBus()
+        self._subscribe_all_teams()
+
+    def dispatch_event(self, event: str, data: dict):
+        """이벤트 방송!"""
+        # 헌법 검증!
+        self.validate(f"EVENT_{event}")
+        # 이벤트 → 관련 팀!
+        self.event_bus.publish(event, data)
+
+    def emergency_stop_all(self, reason: str):
+        """🚨 최우선 Kill-Switch!"""
+        for team in self.teams.values():
+            team.emergency_stop(reason)</pre>
+</section>
+
+<!-- ==================== Team Lead ==================== -->
+<section>
+  <h2>👤 Team Lead = 각 팀 관리자!</h2>
+
+  <h3>역할:</h3>
+  <div class="card">
+    <ul>
+      <li>팀 내 에이전트 관리!</li>
+      <li>팀 이벤트 처리!</li>
+      <li>다른 팀 통신 (via EventBus!)</li>
+      <li>팀 지표 = Orchestrator 리포트!</li>
+      <li>팀 정책 = 자체 관리!</li>
+    </ul>
+  </div>
+
+  <h3>실 코드 (예시!):</h3>
+  <pre>class BaseTeamLead(BaseAgent):
+    """각 팀의 관리자!"""
+    TEAM = None
+    AGENTS = []  # 서브클래스에서 정의!
+
+    def __init__(self):
+        super().__init__()
+        self.agents = [cls() for cls in self.AGENTS]
+        self.orchestrator = None  # 나중 setup!
+
+    def handle_event(self, event: str, data: dict):
+        """Orchestrator에서 이벤트 받음!"""
+        # 담당 에이전트에 배정!
+        pass
+
+    def report_status(self) -> dict:
+        """팀 상태 = 상위 보고!"""
+        return {
+            "team": self.TEAM,
+            "agents": len(self.agents),
+            "active": ...,
+        }
+
+    def emergency_stop(self, reason: str):
+        """팀 전체 정지!"""
+        pass
+
+
+class EntryTeamLead(BaseTeamLead):
+    TEAM = "entry"
+    AGENTS = [
+        StageTriggerAgent,
+        RetryReentryAgent,
+        MarketEntryAgent,
+        ManualEntryAgent,
+    ]</pre>
+</section>
+
+<!-- ==================== Event Bus ==================== -->
+<section>
+  <h2>📡 EventBus = 팀 간 통신 프로토콜!</h2>
+
+  <h3>이벤트 종류:</h3>
+  <table>
+    <thead><tr><th>이벤트</th><th>발신 팀</th><th>수신 팀</th><th>데이터</th></tr></thead>
+    <tbody>
+      <tr><td>STRATEGY_ENTERED</td><td>Entry</td><td>Monitoring, Alert, Capital</td><td>strategy_id</td></tr>
+      <tr><td>STAGE_LIQUIDATED</td><td>SL/Stream</td><td>Alert, Audit, Suggestion</td><td>strategy_id, price</td></tr>
+      <tr><td>FORCE_SL_TRIGGERED</td><td>SL</td><td>Capital, Alert, Audit</td><td>strategy_id, reason</td></tr>
+      <tr><td>PATTERN_MATCHED</td><td>Market Flow</td><td>Alert, Suggestion</td><td>symbol, score</td></tr>
+      <tr><td>DAILY_LEARNING_DONE</td><td>Market Flow</td><td>Suggestion</td><td>predictions</td></tr>
+      <tr><td>SUGGESTION_CREATED</td><td>Suggestion</td><td>Alert, UI</td><td>suggestion_id</td></tr>
+      <tr><td>KILL_SWITCH</td><td>Audit</td><td>ALL</td><td>reason</td></tr>
+    </tbody>
+  </table>
+
+  <h3>실 코드 (예시!):</h3>
+  <pre>class EventBus:
+    """팀 간 pub/sub 통신!"""
+    def __init__(self):
+        self._subscribers: dict[str, list] = {}
+
+    def subscribe(self, event: str, handler):
+        self._subscribers.setdefault(event, []).append(handler)
+
+    def publish(self, event: str, data: dict):
+        for handler in self._subscribers.get(event, []):
+            try:
+                handler(event, data)
+            except Exception as e:
+                logger.error("Event handler 실패: %s", e)</pre>
+</section>
+
+<!-- ==================== 흐름 예시 ==================== -->
+<section>
+  <h2>🔄 실제 흐름 예시!</h2>
+
+  <h3>사장님 신 전략 진입 → 청산 흐름:</h3>
+  <div class="flow-box">1. 사장님 = 「+ 새 전략」 클릭!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box">2. <strong>EntryTeamLead</strong> → StageTriggerAgent 진입!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box">3. <strong>EntryTeamLead</strong> → publish(STRATEGY_ENTERED!)</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box">4. <strong>Orchestrator</strong> → 관련 팀 통보!</div>
+  <div class="flow-box" style="margin-left:20px">→ MonitoringTeamLead = 감시 시작!</div>
+  <div class="flow-box" style="margin-left:20px">→ AlertTeamLead = Telegram 진입 알림!</div>
+  <div class="flow-box" style="margin-left:20px">→ CapitalTeamLead = 자본 재계산!</div>
+  <div class="flow-arrow">↓ (손실!)</div>
+  <div class="flow-box">5. <strong>SlTeamLead</strong> → force_sl 발동!</div>
+  <div class="flow-box">6. → publish(FORCE_SL_TRIGGERED!)</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box">7. <strong>Orchestrator</strong> → 관련 팀 통보!</div>
+  <div class="flow-box" style="margin-left:20px">→ AlertTeamLead = 청산 알림!</div>
+  <div class="flow-box" style="margin-left:20px">→ CapitalTeamLead = 자본 마감 처리!</div>
+  <div class="flow-box" style="margin-left:20px">→ AuditTeamLead = silent bug 검증!</div>
+</section>
+
+<!-- ==================== 파일 구조 ==================== -->
+<section>
+  <h2>📁 파일 구조!</h2>
+  <div class="tree">
+app/agents/
+├── base.py                        # BaseAgent (기존!)
+├── memory_reader.py               # MemoryReader (기존!)
+├── constitution_validator.py      # (기존!)
+│
+├── orchestrator/                  # 🎩 신 계층!
+│   ├── __init__.py
+│   ├── grand_orchestrator.py      # 최상위 총괄!
+│   ├── team_lead_base.py          # Team Lead base!
+│   ├── event_bus.py               # 팀 간 통신!
+│   ├── event_types.py             # 이벤트 상수!
+│   └── README.md
+│
+├── entry_team/
+│   ├── team_lead.py               # 신! EntryTeamLead!
+│   ├── stage_trigger_agent.py
+│   └── ...
+├── tp_team/
+│   ├── team_lead.py               # 신! TpTeamLead!
+│   └── ...
+├── sl_team/
+│   ├── team_lead.py               # 신! SlTeamLead!
+│   └── ...
+... (13개 팀 모두!)
+  </div>
+</section>
+
+<!-- ==================== 구현 순서 ==================== -->
+<section>
+  <h2>🚀 구현 순서!</h2>
+
+  <div class="success">
+    <strong>Phase H1 (지금 = MVP!):</strong>
+    <ul>
+      <li>spec 문서 (이 파일!)</li>
+      <li>app/agents/orchestrator/ 폴더!</li>
+      <li>GrandOrchestrator MVP (skeleton!)</li>
+      <li>TeamLeadBase MVP!</li>
+      <li>EventBus MVP!</li>
+      <li>EventTypes 상수!</li>
+    </ul>
+  </div>
+
+  <div class="info">
+    <strong>Phase H2 (다음 세션!):</strong>
+    <ul>
+      <li>13 Team Lead 실 코드!</li>
+      <li>각 팀 = handle_event() 구현!</li>
+      <li>실제 이벤트 구독!</li>
+    </ul>
+  </div>
+
+  <div class="info">
+    <strong>Phase H3 (실 통합!):</strong>
+    <ul>
+      <li>scheduler_runner = GrandOrchestrator 사용!</li>
+      <li>기존 워커 = Team Lead 호출로 교체!</li>
+      <li>이벤트 flow 실 동작!</li>
+    </ul>
+  </div>
+</section>
+
+<div style="text-align:center; padding:15px; font-size:10px; color:#6b7280">
+  <p><strong>🎩 Orchestrator Layer spec (v132)</strong></p>
+  <p>2026-08-11 · 지휘 계층 = 55+ 에이전트 총괄!</p>
+  <p style="margin-top:5px"><strong>PDF 저장:</strong> Ctrl+P!</p>
+</div>
+
+</div>
+</body>
+</html>
