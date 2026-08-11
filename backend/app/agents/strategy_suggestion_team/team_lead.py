@@ -22,6 +22,7 @@ from app.agents.strategy_suggestion_team.descent_pattern_detector import Descent
 from app.agents.strategy_suggestion_team.strategy_suggestion_generator import StrategySuggestionGenerator
 from app.agents.strategy_suggestion_team.suggestion_manager import SuggestionManager
 from app.agents.strategy_suggestion_team.auto_manual_executor import AutoManualExecutor
+from app.agents.strategy_suggestion_team.daily_briefing_agent import DailyBriefingAgent
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class StrategySuggestionTeamLead(BaseTeamLead):
         StrategySuggestionGenerator,
         SuggestionManager,
         AutoManualExecutor,
+        DailyBriefingAgent,  # 🌅 매일 아침 브리핑!
     ]
     HANDLED_EVENTS = [
         EventType.EMERGENCY_STOP_ALL,
@@ -96,6 +98,11 @@ class StrategySuggestionTeamLead(BaseTeamLead):
         """매일 07:00 = 자동 실행 배치! (사장님 옵션 ON 시!)."""
         executor = self.get_agent(AutoManualExecutor)
         return executor.execute_auto_batch(db)
+
+    def run_daily_briefing(self, db) -> dict:
+        """🌅 매일 아침 브리핑! (KST 07:30 = UTC 22:30!)"""
+        briefer = self.get_agent(DailyBriefingAgent)
+        return briefer.execute(db)
 
     def emergency_stop(self, reason: str) -> None:
         """🚨 팀 정지!"""

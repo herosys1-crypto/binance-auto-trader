@@ -205,6 +205,19 @@ def start_scheduler() -> None:
         id="suggestion_auto_execute",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🌅 매일 아침 브리핑! (KST 07:30 = UTC 22:30 = 사장님 요구!)
+    # 사장님: "학습한 내용을 매일 아침에 간략하게 요점정리해서 브리핑해줘"
+    def _daily_briefing():
+        from app.db.session import SessionLocal
+        from app.agents.strategy_suggestion_team.team_lead import StrategySuggestionTeamLead
+        with SessionLocal() as _db:
+            StrategySuggestionTeamLead().run_daily_briefing(_db)
+    scheduler.add_job(
+        guarded_job("daily_briefing", 300, _daily_briefing),
+        trigger=CronTrigger(hour=22, minute=30),  # KST 07:30 = UTC 22:30
+        id="daily_briefing",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.
