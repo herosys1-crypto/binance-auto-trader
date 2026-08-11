@@ -12,3 +12,4 @@ from app.models.stream_session import StreamSession
 from app.models.account_kill_switch import AccountKillSwitch
 from app.models.account_daily_risk_limit import AccountDailyRiskLimit
 from app.models.system_setting import SystemSetting
+from app.models.strategy_suggestion import StrategySuggestion  # v132 Strategy Suggestion Team!
