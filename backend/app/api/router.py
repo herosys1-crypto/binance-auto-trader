@@ -11,6 +11,7 @@ from app.api.v1.market import router as market_router
 from app.api.v1.reentry_alerts import router as reentry_alerts_router
 from app.api.v1.pump_bb_alerts import router as pump_bb_alerts_router  # 🌟 v131 급등+BB중단!
 from app.api.v1.strategy_suggestions import router as strategy_suggestions_router  # 🌟 v132 전략 제안!
+from app.api.v1.suggestion_profiles import router as suggestion_profiles_router  # 🌟 v132 프로필!
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth_router)
@@ -25,3 +26,4 @@ api_router.include_router(market_router)
 api_router.include_router(reentry_alerts_router)  # 🌟 v130 신 재진입 알람!
 api_router.include_router(pump_bb_alerts_router)  # 🌟 v131 신 급등+BB중단 알람!
 api_router.include_router(strategy_suggestions_router)  # 🌟 v132 전략 제안!
+api_router.include_router(suggestion_profiles_router)  # 🌟 v132 제안 프로필!

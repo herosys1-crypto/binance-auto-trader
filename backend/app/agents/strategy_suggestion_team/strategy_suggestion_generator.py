@@ -54,7 +54,7 @@ class StrategySuggestionGenerator(BaseAgent):
                 continue  # 오늘 이미 있음!
 
             side = self._infer_side(p["type"])
-            config = self._build_config(symbol, side)
+            config = self._build_config(symbol, side, db=db)  # 프로필 참조!
 
             suggestion = StrategySuggestion(
                 symbol=symbol,
@@ -87,23 +87,46 @@ class StrategySuggestionGenerator(BaseAgent):
             return "SHORT"
         return "LONG"
 
-    def _build_config(self, symbol: str, side: str) -> dict:
-        """사장님 신 default (v132!)."""
-        return {
-            "symbol": symbol,
-            "side": side,
-            "leverage": 2,
-            "start_price": None,  # MARKET
-            "capitals": [500, 500, 500, 500],
-            "trigger_percents": [None, 10, 20, 20],
-            "tp1_percent": 10, "tp2_percent": 15,
-            "tp3_percent": 20, "tp4_percent": 25,
-            "tp1_qty_ratio": 10, "tp2_qty_ratio": 15,
-            "tp3_qty_ratio": 20, "tp4_qty_ratio": 25,
-            "tp1_pct_override": 25,
-            "force_sl_enabled_override": True,
-            "force_sl_roi_override": 15,
-            "stop_loss_percent_of_capital": 90,
-            "retry_after_liquidation_enabled": False,
-            "retry_trigger_pct": 10,
-        }
+    def _build_config(self, symbol: str, side: str, db=None) -> dict:
+        """사장님 default 프로필 참조! (v132 신!)"""
+        # 사장님 default 프로필 로드!
+        profile_config = self._load_default_profile(db) if db else None
+        if not profile_config:
+            # fallback = 하드코딩 default!
+            profile_config = {
+                "leverage": 2,
+                "capitals": [500, 500, 500, 500],
+                "trigger_percents": [None, 10, 20, 20],
+                "tp1_percent": 10, "tp2_percent": 15,
+                "tp3_percent": 20, "tp4_percent": 25,
+                "tp1_qty_ratio": 10, "tp2_qty_ratio": 15,
+                "tp3_qty_ratio": 20, "tp4_qty_ratio": 25,
+                "tp1_pct_override": 25,
+                "force_sl_enabled_override": True,
+                "force_sl_roi_override": 15,
+                "stop_loss_percent_of_capital": 90,
+                "start_price": None,
+                "retry_after_liquidation_enabled": False,
+                "retry_trigger_pct": 10,
+            }
+        # symbol + side 추가!
+        return {"symbol": symbol, "side": side, **profile_config}
+
+    def _load_default_profile(self, db) -> dict | None:
+        """system_settings에서 default 프로필 config 로드!"""
+        import json
+        from app.models.system_setting import SystemSetting
+
+        _p_row = db.get(SystemSetting, "suggestion_default_profiles")
+        _d_row = db.get(SystemSetting, "suggestion_current_default_profile")
+        if not _p_row or not _d_row:
+            return None
+        try:
+            profiles = json.loads(_p_row.value)
+            default_name = _d_row.value
+            for p in profiles:
+                if p.get("name") == default_name:
+                    return p.get("config") or {}
+        except Exception as e:
+            logger.warning("[%s] default profile 로드 실패: %s", self.AGENT_NAME, e)
+        return None
