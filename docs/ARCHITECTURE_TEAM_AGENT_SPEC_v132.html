@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>바이낸스 자동 매매 = 팀+에이전트 종합 기획서 (v132)</title>
+<style>
+  @page { size: A4; margin: 15mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+    color: #1a1a1a;
+    line-height: 1.5;
+    background: #f8f9fb;
+    padding: 20px;
+  }
+  .container { max-width: 1200px; margin: 0 auto; }
+  header {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: white;
+    padding: 30px;
+    border-radius: 12px;
+    margin-bottom: 20px;
+    text-align: center;
+  }
+  header h1 { font-size: 26px; margin-bottom: 8px; }
+  header .meta { font-size: 13px; opacity: 0.9; }
+  section {
+    background: white;
+    padding: 20px;
+    border-radius: 10px;
+    margin-bottom: 15px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+    page-break-inside: avoid;
+  }
+  h2 {
+    font-size: 18px;
+    color: #6366f1;
+    border-bottom: 2px solid #e0e7ff;
+    padding-bottom: 6px;
+    margin-bottom: 12px;
+  }
+  h3 {
+    font-size: 15px;
+    color: #4f46e5;
+    margin: 10px 0 6px 0;
+  }
+  h4 { font-size: 13px; color: #6366f1; margin: 8px 0 4px 0; }
+  p, li { font-size: 12px; }
+  ul { margin-left: 18px; margin-bottom: 8px; }
+  li { margin-bottom: 3px; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    margin: 0 4px;
+  }
+  .b-green { background: #dcfce7; color: #166534; }
+  .b-blue { background: #dbeafe; color: #1e40af; }
+  .b-purple { background: #ede9fe; color: #5b21b6; }
+  .b-orange { background: #fed7aa; color: #9a3412; }
+  .b-red { background: #fee2e2; color: #991b1b; }
+  .b-yellow { background: #fef3c7; color: #92400e; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  .grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+  .team-card {
+    background: #f9fafb;
+    border-left: 4px solid #6366f1;
+    padding: 12px;
+    border-radius: 6px;
+  }
+  .team-card h3 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 0;
+  }
+  .agent {
+    background: white;
+    padding: 6px 10px;
+    margin: 3px 0;
+    border-radius: 4px;
+    border: 1px solid #e5e7eb;
+    font-size: 11px;
+  }
+  .agent code {
+    background: #f3f4f6;
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: #6366f1;
+    font-family: 'Consolas', monospace;
+    font-size: 10px;
+  }
+  .memory-layer {
+    background: #f0fdf4;
+    padding: 12px;
+    border-radius: 6px;
+    border-left: 4px solid #16a34a;
+    margin-bottom: 8px;
+  }
+  .memory-layer.constitution { background: #fef2f2; border-color: #dc2626; }
+  .memory-layer.specs { background: #eff6ff; border-color: #2563eb; }
+  .memory-layer.defaults { background: #fefce8; border-color: #ca8a04; }
+  .memory-layer.silent-bugs { background: #faf5ff; border-color: #9333ea; }
+  .flow-box {
+    background: #f0f9ff;
+    padding: 8px 12px;
+    margin: 4px 0;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .flow-arrow {
+    text-align: center;
+    color: #6366f1;
+    font-size: 16px;
+    margin: 2px 0;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11px;
+    margin: 6px 0;
+  }
+  th, td {
+    border: 1px solid #e5e7eb;
+    padding: 5px 8px;
+    text-align: left;
+  }
+  th {
+    background: #f3f4f6;
+    font-weight: 700;
+    color: #4f46e5;
+  }
+  .highlight {
+    background: linear-gradient(120deg, #fef3c7 0%, #fef3c7 100%);
+    padding: 0 3px;
+    border-radius: 2px;
+  }
+  .critical {
+    background: #fee2e2;
+    color: #991b1b;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border-left: 4px solid #dc2626;
+    margin: 8px 0;
+    font-size: 12px;
+  }
+  .info {
+    background: #eff6ff;
+    color: #1e40af;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border-left: 4px solid #2563eb;
+    margin: 8px 0;
+    font-size: 12px;
+  }
+  .success {
+    background: #dcfce7;
+    color: #166534;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border-left: 4px solid #16a34a;
+    margin: 8px 0;
+    font-size: 12px;
+  }
+  code.mini {
+    background: #f3f4f6;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: #6366f1;
+    font-family: 'Consolas', monospace;
+    font-size: 11px;
+  }
+  .footer {
+    text-align: center;
+    padding: 20px;
+    font-size: 11px;
+    color: #6b7280;
+  }
+  @media print {
+    body { background: white; padding: 0; }
+    section { box-shadow: none; page-break-inside: avoid; }
+    header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<header>
+  <h1>🎯 바이낸스 자동 매매 = 팀+에이전트 종합 기획서</h1>
+  <p class="meta">
+    Version v132 · 2026-08-11 · main branch<br>
+    10개 팀 + 40+ 에이전트 + 4계층 메모리 시스템
+  </p>
+</header>
+
+<!-- ==================== 개요 ==================== -->
+<section>
+  <h2>📋 전체 개요</h2>
+  <div class="info">
+    <strong>목표:</strong> 사장님 자율 매매 시스템 = 완벽 자동화!<br>
+    <strong>구조:</strong> 서버 에이전트 = <span class="highlight">10개 팀</span> + <span class="highlight">40+ 개별 에이전트</span> + <span class="highlight">4계층 메모리</span>!<br>
+    <strong>원칙:</strong> 모든 에이전트 = 메모리(헌법+spec+default) 참조 = 사장님 사상 100% 준수!
+  </div>
+  <div class="grid-3">
+    <div class="team-card">
+      <h4>✅ 완성 시스템</h4>
+      <p>v130 OBV 재진입 + v131 청산후 재진입 + v131 급등BB알람 + v132 CRITICAL fix 5건!</p>
+    </div>
+    <div class="team-card">
+      <h4>📚 축적 지식</h4>
+      <p>헌법 51+ / spec 10+ / silent bug 25+ / 사장님 결정 100+ = 모두 메모리!</p>
+    </div>
+    <div class="team-card">
+      <h4>🎯 다음 단계</h4>
+      <p>모든 에이전트 = 메모리 참조 = 자율 진화 = 사장님 = 100% 신뢰!</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 메모리 시스템 ==================== -->
+<section>
+  <h2>🧠 메모리 시스템 = 4계층 구조</h2>
+  <p style="margin-bottom: 10px;">모든 에이전트 = 시작 시 메모리 로드 = 실행 중 참조 = 결과 저장!</p>
+
+  <div class="memory-layer constitution">
+    <h3>📜 Layer 1: Constitution (헌법 = 절대 원칙!)</h3>
+    <p><strong>위치:</strong> <code class="mini">memory/constitution/</code></p>
+    <p><strong>내용:</strong> 사장님 사상 = 절대 원칙 = 모든 에이전트가 준수!</p>
+    <p><strong>예시:</strong></p>
+    <ul>
+      <li><code class="mini">C01_mainnet_real_capital.md</code> — 메인넷 = 실 자금 = 신중!</li>
+      <li><code class="mini">C02_user_first.md</code> — 사장님 사상 우선!</li>
+      <li><code class="mini">C03_no_silent_bug.md</code> — Silent bug 금지!</li>
+      <li><code class="mini">C07_capital_equals_margin.md</code> — capital = margin (v107!)</li>
+      <li><code class="mini">C09_retry_sequential_only.md</code> — retry = 순차 진입!</li>
+      <li><code class="mini">C10_tp1_override_tp1_only.md</code> — TP1_override = TP1만! (v132 신!)</li>
+    </ul>
+  </div>
+
+  <div class="memory-layer specs">
+    <h3>📖 Layer 2: Specs (사양 = 상세 규칙!)</h3>
+    <p><strong>위치:</strong> <code class="mini">memory/specs/</code></p>
+    <p><strong>내용:</strong> 각 기능의 상세 명세 = 어떻게 작동하는지!</p>
+    <p><strong>예시:</strong></p>
+    <ul>
+      <li><code class="mini">retry_after_liquidation_v131.md</code> — 청산 후 재진입 spec!</li>
+      <li><code class="mini">pump_bb_middle_alert_v131.md</code> — 급등 BB 알람!</li>
+      <li><code class="mini">obv_reentry_v130.md</code> — OBV 자동 재진입!</li>
+      <li><code class="mini">force_sl_loss_limit.md</code> — 강제 SL!</li>
+      <li><code class="mini">capital_130pct_warning.md</code> — 130% 자본 경고!</li>
+    </ul>
+  </div>
+
+  <div class="memory-layer defaults">
+    <h3>⚙ Layer 3: Defaults (신 default 설정!)</h3>
+    <p><strong>위치:</strong> <code class="mini">memory/defaults/</code></p>
+    <p><strong>내용:</strong> 사장님 신 default = 모든 신 전략에 자동 적용!</p>
+    <p><strong>예시:</strong></p>
+    <ul>
+      <li><code class="mini">leverage_2x.md</code> — 레버리지 2x default (v132!)</li>
+      <li><code class="mini">tp_qty_gradient.md</code> — TP qty 10/15/20/25!</li>
+      <li><code class="mini">force_sl_15pct.md</code> — 강제 SL -15%!</li>
+      <li><code class="mini">market_entry_default.md</code> — 시작가 없으면 MARKET!</li>
+      <li><code class="mini">retry_trigger_10pct.md</code> — 재진입 트리거 10%!</li>
+    </ul>
+  </div>
+
+  <div class="memory-layer silent-bugs">
+    <h3>🐛 Layer 4: Silent Bugs (fix 기록!)</h3>
+    <p><strong>위치:</strong> <code class="mini">memory/silent_bugs/</code></p>
+    <p><strong>내용:</strong> 발견된 silent bug + fix 방법 + 재발 방지!</p>
+    <p><strong>예시:</strong></p>
+    <ul>
+      <li><code class="mini">SB001_beatusdt_sl_critical.md</code></li>
+      <li><code class="mini">SB023_tp1_override_all_tps.md</code> (v131!)</li>
+      <li><code class="mini">SB024_self_check_false_positive.md</code> (v131!)</li>
+      <li><code class="mini">SB025_retry_stage_parallel.md</code> (v131!)</li>
+      <li><code class="mini">SB026_leverage_5x_stuck.md</code> (v132!)</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ==================== 10 팀 구조 ==================== -->
+<section>
+  <h2>🏗 10개 팀 + 40+ 에이전트 구조</h2>
+
+  <div class="grid">
+
+    <div class="team-card">
+      <h3>⚔️ 1. Entry Team (진입 팀)</h3>
+      <p style="font-size:11px;color:#666;margin-bottom:6px"><strong>미션:</strong> 사장님 세팅에 따라 정확 진입!</p>
+      <div class="agent"><code>stage_trigger_agent</code> — 가격 도달 시 다음 단계 자동!</div>
+      <div class="agent"><code>retry_reentry_agent</code> — 청산 후 자동 재진입! (v131)</div>
+      <div class="agent"><code>market_entry_agent</code> — 시작가 없음 = MARKET 진입!</div>
+      <div class="agent"><code>manual_entry_agent</code> — ▶ 강제 진입 (사장님!)</div>
+    </div>
+
+    <div class="team-card">
+      <h3>🎯 2. Take Profit Team (익절 팀)</h3>
+      <p style="font-size:11px;color:#666;margin-bottom:6px"><strong>미션:</strong> TP 순차 발동 + 트레일링!</p>
+      <div class="agent"><code>tp_orchestrator_agent</code> — TP1~10 순차 관리!</div>
+      <div class="agent"><code>trailing_tp_agent</code> — 트레일링 익절 (v131!)</div>
+      <div class="agent"><code>tp1_override_agent</code> — 사장님 TP1 옵션!</div>
+      <div class="agent"><code>crisis_tp_agent</code> — Crisis TP (비활성!)</div>
+    </div>
+
+    <div class="team-card">
+      <h3>🛑 3. Stop Loss Team (손절 팀)</h3>
+      <p style="font-size:11px;color:#666;margin-bottom:6px"><strong>미션:</strong> 사장님 자본 보호!</p>
+      <div class="agent"><code>sl_agent</code> — 기본 SL (자본 대비 %)</div>
+      <div class="agent"><code>force_sl_agent</code> — 강제 SL (ROI 기준 -15%)</div>
+      <div class="agent"><code>liquidation_risk_agent</code> — 청산 임박 감지!</div>
+      <div class="agent"><code>capital_exhausted_agent</code> — 자본 소진 정지!</div>
+    </div>
+
+    <div class="team-card">
+      <h3>📊 4. Monitoring Team (감시 팀)</h3>
+      <p style="font-size:11px;color:#666;margin-bottom:6px"><strong>미션:</strong> 실시간 상태 정합성!</p>
+      <div class="agent"><code>mark_price_watcher</code> — mark price 실시간!</div>
+      <div class="agent"><code>position_reconciler</code> — 거래소↔DB 동기화!</div>
+      <div class="agent"><code>zombie_guardian</code> — 좀비 포지션 감지!</div>
+      <div class="agent"><code>self_check_agent</code> — 시스템 정합성 검증!</div>
+    </div>
+
+    <div class="team-card">
+      <h3>🚨 5. Alert Team (알람 팀)</h3>
+      <p style="font-size:11px;color:#666;margin-bottom:6px"><strong>미션:</strong> 사장님 = 즉시 인지!</p>
+      <div class="agent"><code>reentry_alert_agent</code> — 재진입 (OBV+RSI+10%)!</div>
+      <div class="agent"><code>pump_bb_alert_agent</code> — 급등+BB중단! (v131!)</div>
+      <div class="agent"><code>tp_miss_detector</code> — TP 도달 진입 X 감지!</div>
+      <div class="agent"><code>telegram_notifier</code> — Telegram 발송!</div>
+    </div>
+
+    <div class="team-card">
+      <h3>⚙️ 6. Capital Team (자본 관리 팀)</h3>
+      <p style="font-size:11px;color:#666;margin-bottom:6px"><strong>미션:</strong> 사장님 자본 완전 보호!</p>
+      <div class="agent"><code>capital_calculator</code> — 130% 한도 계산!</div>
+      <div class="agent"><code>daily_loss_limiter</code> — 일일 손실 한도!</div>
+      <div class="agent"><code>kill_switch_agent</code> — Kill-Switch 발동!</div>
+      <div class="agent"><code>margin_manager</code> — 증거금 관리!</div>
+    </div>
+
+    <div class="team-card">
+      <h3>📈 7. Analysis Team (분석 팀)</h3>
+      <p style="font-size:11px;color:#666;margin-bottom:6px"><strong>미션:</strong> 시장 데이터 분석!</p>
+      <div class="agent"><code>chart_analyzer_agent</code> — OBV/RSI/BB 지표!</div>
+      <div class="agent"><code>market_ranking_agent</code> — 시장 순위 top 50!</div>
+      <div class="agent"><code>pnl_aggregator</code> — PnL 집계!</div>
+      <div class="agent"><code>stats_reporter</code> — 통계 리포트!</div>
+    </div>
+
+    <div class="team-card">
+      <h3>🔧 8. Maintenance Team (유지보수)</h3>
+      <p style="font-size:11px;color:#666;margin-bottom:6px"><strong>미션:</strong> 시스템 안정성!</p>
+      <div class="agent"><code>alembic_migration_agent</code> — DB 마이그레이션!</div>
+      <div class="agent"><code>redis_maintenance_agent</code> — Redis 정리!</div>
+      <div class="agent"><code>telegram_retry_agent</code> — Telegram 재시도!</div>
+      <div class="agent"><code>setting_preservation</code> — 사장님 세팅 영구!</div>
+    </div>
+
+    <div class="team-card">
+      <h3>🎨 9. UI Team (Frontend!)</h3>
+      <p style="font-size:11px;color:#666;margin-bottom:6px"><strong>미션:</strong> 사장님 UX!</p>
+      <div class="agent"><code>dashboard_agent</code> — 대시보드 실시간!</div>
+      <div class="agent"><code>strategy_list_agent</code> — 전략 리스트!</div>
+      <div class="agent"><code>create_modal_agent</code> — 신 전략 모달!</div>
+      <div class="agent"><code>alert_card_agent</code> — 알람 카드!</div>
+    </div>
+
+    <div class="team-card">
+      <h3>📚 10. Audit Team (감사 = 자율!)</h3>
+      <p style="font-size:11px;color:#666;margin-bottom:6px"><strong>미션:</strong> 시스템 진화!</p>
+      <div class="agent"><code>spec_audit_agent</code> — 사양 감사!</div>
+      <div class="agent"><code>silent_bug_detector</code> — Silent bug 감지!</div>
+      <div class="agent"><code>user_intent_validator</code> — 사장님 의도 검증!</div>
+      <div class="agent"><code>auto_fix_proposer</code> — 자동 fix 제안!</div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ==================== 팀 간 흐름 ==================== -->
+<section>
+  <h2>🔄 팀 간 상호작용 (전형 흐름!)</h2>
+
+  <div class="flow-box"><span class="badge b-blue">1</span> <strong>Entry Team</strong> → 사장님 신 전략 = 진입!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-green">2</span> <strong>Monitoring Team</strong> → 실시간 감시!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-purple">3</span> <strong>Analysis Team</strong> → 지표 계산 (OBV/RSI/BB!)</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-orange">4</span> <strong>TP or SL Team</strong> → TP/SL 판단 + 발동!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-red">5</span> <strong>Capital Team</strong> → 자본 재계산 + 안전 체크!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-yellow">6</span> <strong>Alert Team</strong> → Telegram + 대시보드!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-blue">7</span> <strong>UI Team</strong> → 대시보드 갱신!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-purple">8</span> <strong>Audit Team</strong> → Silent bug 검증 + 메모리 갱신!</div>
+  <div class="flow-arrow">↓</div>
+  <div class="flow-box"><span class="badge b-green">🔄</span> <strong>Entry Team</strong> → 재진입 시 = 다시 시작!</div>
+</section>
+
+<!-- ==================== 헌법 요약 ==================== -->
+<section>
+  <h2>📜 헌법 51+ 요약 (핵심만!)</h2>
+  <table>
+    <thead><tr><th>번호</th><th>원칙</th><th>이유</th></tr></thead>
+    <tbody>
+      <tr><td>C01</td><td>메인넷 = 실 자금!</td><td>모든 결정 = 신중!</td></tr>
+      <tr><td>C02</td><td>사장님 사상 우선!</td><td>사장님 자율 = 완전 존중!</td></tr>
+      <tr><td>C03</td><td>Silent bug 금지!</td><td>모든 차단 = 사장님 인지!</td></tr>
+      <tr><td>C04</td><td>검증 없는 코드 금지!</td><td>테스트 후 배포!</td></tr>
+      <tr><td>C05</td><td>대칭성!</td><td>UI ↔ Backend 100% 동일!</td></tr>
+      <tr><td>C06</td><td>단일 진실 (Single Source)!</td><td>중복 = drift 방지!</td></tr>
+      <tr><td>C07</td><td>capital = margin (v107!)</td><td>qty = capital × leverage!</td></tr>
+      <tr><td>C08</td><td>130% 자본 = 경고만!</td><td>사장님 자율 진행!</td></tr>
+      <tr><td>C09</td><td>retry ON = 순차 진입!</td><td>동시 보유 X (v131!)</td></tr>
+      <tr><td>C10</td><td>TP1_override = TP1만! (v132!)</td><td>다른 TP 상향 X!</td></tr>
+      <tr><td>C11</td><td>branch 확인 = 필수!</td><td>main branch에 배포!</td></tr>
+      <tr><td>C12</td><td>레버리지 = 사장님 자율!</td><td>언제든 변경 가능!</td></tr>
+      <tr><td>C13</td><td>다음 단계 남으면 SL X!</td><td>손실 회복 기회!</td></tr>
+      <tr><td>...</td><td>50+ 개 헌법 (memory/constitution/)</td><td>완전 기록!</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ==================== 신 default ==================== -->
+<section>
+  <h2>⚙ 신 Default 설정 (v132 최종!)</h2>
+  <div class="grid">
+    <div class="team-card">
+      <h4>진입</h4>
+      <ul>
+        <li>레버리지 = <strong>2x</strong> (v132 최종!)</li>
+        <li>시작가 없으면 = <strong>MARKET</strong>!</li>
+        <li>1단계 = 즉시 진입!</li>
+        <li>2단계+ = 트리거 대기!</li>
+      </ul>
+    </div>
+    <div class="team-card">
+      <h4>익절 (TP)</h4>
+      <ul>
+        <li>TP1 qty = <strong>10%</strong></li>
+        <li>TP2 qty = <strong>15%</strong></li>
+        <li>TP3 qty = <strong>20%</strong></li>
+        <li>TP4 qty = <strong>25%</strong></li>
+        <li>TP1_override = 25% (조정 가능!)</li>
+      </ul>
+    </div>
+    <div class="team-card">
+      <h4>손절 (SL)</h4>
+      <ul>
+        <li>강제 SL = <strong>-15%</strong> (default!)</li>
+        <li>옵션 = <strong>0~100%</strong> (자유!)</li>
+        <li>다음 단계 남으면 = SL X!</li>
+        <li>Crisis mode = <strong>비활성</strong>!</li>
+      </ul>
+    </div>
+    <div class="team-card">
+      <h4>재진입 (v131!)</h4>
+      <ul>
+        <li>재진입 트리거 = <strong>10%</strong> (default!)</li>
+        <li>단계별 개별 = 자유!</li>
+        <li>retry ON = 순차 진입!</li>
+        <li>130% 자본 = 경고만!</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== 다음 세션 로드맵 ==================== -->
+<section>
+  <h2>🚀 다음 세션 로드맵</h2>
+  <div class="success">
+    <strong>Phase 1: 메모리 시스템 구축 (다음 세션!)</strong>
+    <ul style="margin-top:5px">
+      <li>memory/constitution/ 51+ 파일 = 실 생성!</li>
+      <li>memory/specs/ 10+ 파일 = 실 생성!</li>
+      <li>memory/defaults/ 5+ 파일 = 실 생성!</li>
+      <li>memory/silent_bugs/ 25+ 파일 = 실 생성!</li>
+    </ul>
+  </div>
+  <div class="info">
+    <strong>Phase 2: BaseAgent + MemoryReader 코드!</strong>
+    <ul style="margin-top:5px">
+      <li>BaseAgent class = 모든 에이전트 상속!</li>
+      <li>MemoryReader = 메모리 자동 로드!</li>
+      <li>ConstitutionValidator = 헌법 자동 검증!</li>
+    </ul>
+  </div>
+  <div class="critical">
+    <strong>Phase 3: 팀별 폴더 구조 리팩터링!</strong>
+    <ul style="margin-top:5px">
+      <li>app/agents/entry_team/, app/agents/tp_team/, ...</li>
+      <li>기존 워커 = 팀별 이동!</li>
+      <li>기존 코드 = 100% 유지 (기능 X 변경!)</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ==================== 사장님 사용 흐름 ==================== -->
+<section>
+  <h2>👑 사장님 자율 운영 흐름</h2>
+  <div class="flow-box"><span class="badge b-blue">1</span> 사장님 = 대시보드 확인!</div>
+  <div class="flow-box"><span class="badge b-green">2</span> 알람 감지 → 「🚨 XXXUSDT」 클릭!</div>
+  <div class="flow-box"><span class="badge b-purple">3</span> 신 전략 모달 = 신 default 자동!</div>
+  <div class="flow-box"><span class="badge b-orange">4</span> 사장님 세팅 (자본, retry 등!)</div>
+  <div class="flow-box"><span class="badge b-red">5</span> ✓ 진입!</div>
+  <div class="flow-box"><span class="badge b-yellow">6</span> 시스템 자동 = TP/SL/재진입 완전!</div>
+  <div class="flow-box"><span class="badge b-blue">7</span> Telegram + 대시보드 실시간 = 사장님 인지!</div>
+</section>
+
+<div class="footer">
+  <p><strong>바이낸스 자동 매매 시스템 = 팀+에이전트 종합 기획서 (v132)</strong></p>
+  <p>2026-08-11 · main branch · tag: v-2026-08-11-v132-critical-fixes</p>
+  <p style="margin-top:6px">
+    <strong>PDF 저장 방법:</strong>
+    이 HTML 파일 → 브라우저 열기 → <code class="mini">Ctrl+P</code> (Windows) 또는 <code class="mini">Cmd+P</code> (Mac) →
+    "대상: PDF로 저장" → 저장!
+  </p>
+</div>
+
+</div>
+</body>
+</html>
