@@ -91,6 +91,97 @@ def _calc_change_pct(open_p: float, close_p: float) -> float:
     return round(((close_p - open_p) / open_p) * 100, 2)
 
 
+def _calc_obv(closes: list[float], volumes: list[float]) -> dict:
+    """OBV (On-Balance Volume) + 추세!
+
+    OBV 상승 = 매수 압력 (LONG 유리!)
+    OBV 하락 = 매도 압력 (SHORT 유리!)
+    """
+    if len(closes) < 2 or len(closes) != len(volumes):
+        return {"value": None, "trend": None, "change_pct": None}
+    obv = 0.0
+    obv_history = [obv]
+    for i in range(1, len(closes)):
+        if closes[i] > closes[i - 1]:
+            obv += volumes[i]
+        elif closes[i] < closes[i - 1]:
+            obv -= volumes[i]
+        obv_history.append(obv)
+    # 최근 10 vs 이전 10 = 추세!
+    if len(obv_history) >= 20:
+        recent_avg = sum(obv_history[-10:]) / 10
+        prev_avg = sum(obv_history[-20:-10]) / 10
+        trend = "UP" if recent_avg > prev_avg else ("DOWN" if recent_avg < prev_avg else "FLAT")
+        change_pct = round(((recent_avg - prev_avg) / abs(prev_avg) * 100), 2) if prev_avg != 0 else None
+    else:
+        trend = "UP" if obv_history[-1] > 0 else ("DOWN" if obv_history[-1] < 0 else "FLAT")
+        change_pct = None
+    return {
+        "value": round(obv, 2),
+        "trend": trend,
+        "change_pct": change_pct,
+    }
+
+
+def _calc_ema(values: list[float], period: int) -> list[float]:
+    """EMA (Exponential Moving Average)"""
+    if len(values) < period:
+        return []
+    k = 2 / (period + 1)
+    ema = [sum(values[:period]) / period]  # SMA로 시작!
+    for i in range(period, len(values)):
+        ema.append(values[i] * k + ema[-1] * (1 - k))
+    return ema
+
+
+def _calc_macd(closes: list[float]) -> dict:
+    """MACD (12, 26, 9)!
+
+    MACD > Signal = 매수 신호 (LONG 유리!)
+    MACD < Signal = 매도 신호 (SHORT 유리!)
+    Histogram = MACD - Signal (강도!)
+    """
+    if len(closes) < 35:
+        return {"macd": None, "signal": None, "histogram": None, "trend": None}
+    ema12 = _calc_ema(closes, 12)
+    ema26 = _calc_ema(closes, 26)
+    # ema12는 index 11부터, ema26는 index 25부터 시작 = 정렬!
+    offset = 26 - 12  # ema12를 ema26에 맞추기!
+    ema12_aligned = ema12[offset:]
+    macd_line = [a - b for a, b in zip(ema12_aligned, ema26)]
+    if len(macd_line) < 9:
+        return {"macd": round(macd_line[-1], 6), "signal": None, "histogram": None, "trend": None}
+    signal_line = _calc_ema(macd_line, 9)
+    if not signal_line:
+        return {"macd": round(macd_line[-1], 6), "signal": None, "histogram": None, "trend": None}
+    macd_now = macd_line[-1]
+    signal_now = signal_line[-1]
+    hist = macd_now - signal_now
+    trend = "BULLISH" if hist > 0 else ("BEARISH" if hist < 0 else "NEUTRAL")
+    return {
+        "macd": round(macd_now, 6),
+        "signal": round(signal_now, 6),
+        "histogram": round(hist, 6),
+        "trend": trend,
+    }
+
+
+def _volume_analysis(volumes: list[float]) -> dict:
+    """Volume 분석 = 최근 5봉 평균 vs 이전 15봉 평균!"""
+    if len(volumes) < 20:
+        return {"recent_avg": None, "prev_avg": None, "spike_ratio": None}
+    recent = volumes[-5:]
+    prev = volumes[-20:-5]
+    recent_avg = sum(recent) / len(recent)
+    prev_avg = sum(prev) / len(prev) if prev else 0
+    spike_ratio = round(recent_avg / prev_avg, 2) if prev_avg > 0 else None
+    return {
+        "recent_avg": round(recent_avg, 2),
+        "prev_avg": round(prev_avg, 2),
+        "spike_ratio": spike_ratio,  # 1.5+ = 급증!
+    }
+
+
 @router.get("/symbol/{symbol}")
 def analyze_symbol(
     symbol: str,
@@ -145,13 +236,17 @@ def analyze_symbol(
             changes[key] = None
     result["changes"] = changes
 
-    # 3. RSI + BB (15분봉!)
+    # 3. RSI + BB + OBV + MACD + Volume (15분봉!)
     try:
-        klines_15m = bc.get_klines(symbol=symbol, interval="15m", limit=50)
+        klines_15m = bc.get_klines(symbol=symbol, interval="15m", limit=100)
         if isinstance(klines_15m, list) and len(klines_15m) >= 20:
             closes = [float(k[4]) for k in klines_15m]
+            volumes = [float(k[5]) for k in klines_15m]
             result["rsi_15m"] = _calc_rsi(closes)
             result["bb_15m"] = _calc_bb(closes)
+            result["obv_15m"] = _calc_obv(closes, volumes)
+            result["macd_15m"] = _calc_macd(closes)
+            result["volume_15m"] = _volume_analysis(volumes)
     except Exception as e:
         logger.warning("[analyze_symbol] 15m klines 실패 %s: %s", symbol, e)
 
@@ -174,6 +269,9 @@ def _judge_entry(analysis: dict, side: str) -> dict:
 
     rsi = analysis.get("rsi_15m")
     bb = analysis.get("bb_15m") or {}
+    obv = analysis.get("obv_15m") or {}
+    macd = analysis.get("macd_15m") or {}
+    vol = analysis.get("volume_15m") or {}
     price = analysis.get("price", 0)
     change_5m = (analysis.get("changes") or {}).get("change_5m", 0) or 0
     change_1h = (analysis.get("changes") or {}).get("change_1h", 0) or 0
@@ -202,6 +300,24 @@ def _judge_entry(analysis: dict, side: str) -> dict:
         elif change_5m > 3:
             score += 10
             signals.append(f"✅ 5분 +{change_5m:.1f}% 급등 중 = LONG 모멘텀!")
+        # OBV 상승 = 매수 압력 = LONG 유리!
+        if obv.get("trend") == "UP":
+            score += 10
+            signals.append(f"✅ OBV 상승 (매수 압력!) = LONG 유리!")
+        elif obv.get("trend") == "DOWN":
+            score -= 10
+            signals.append(f"⚠️ OBV 하락 (매도 압력!) = LONG 불리!")
+        # MACD BULLISH = LONG 유리!
+        if macd.get("trend") == "BULLISH":
+            score += 10
+            signals.append(f"✅ MACD Bullish (매수 신호!) = LONG 유리!")
+        elif macd.get("trend") == "BEARISH":
+            score -= 10
+            signals.append(f"⚠️ MACD Bearish (매도 신호!) = LONG 불리!")
+        # Volume 급증 = 추세 강화!
+        if vol.get("spike_ratio") and vol["spike_ratio"] >= 1.5:
+            score += 5
+            signals.append(f"📊 Volume {vol['spike_ratio']}x 급증 = 추세 강화!")
     else:  # SHORT
         # 과매수 = SHORT 유리!
         if rsi is not None:
@@ -226,6 +342,24 @@ def _judge_entry(analysis: dict, side: str) -> dict:
         elif change_5m < -3:
             score += 10
             signals.append(f"✅ 5분 {change_5m:.1f}% 급락 중 = SHORT 모멘텀!")
+        # OBV 하락 = 매도 압력 = SHORT 유리!
+        if obv.get("trend") == "DOWN":
+            score += 10
+            signals.append(f"✅ OBV 하락 (매도 압력!) = SHORT 유리!")
+        elif obv.get("trend") == "UP":
+            score -= 10
+            signals.append(f"⚠️ OBV 상승 (매수 압력!) = SHORT 불리!")
+        # MACD BEARISH = SHORT 유리!
+        if macd.get("trend") == "BEARISH":
+            score += 10
+            signals.append(f"✅ MACD Bearish (매도 신호!) = SHORT 유리!")
+        elif macd.get("trend") == "BULLISH":
+            score -= 10
+            signals.append(f"⚠️ MACD Bullish (매수 신호!) = SHORT 불리!")
+        # Volume 급증!
+        if vol.get("spike_ratio") and vol["spike_ratio"] >= 1.5:
+            score += 5
+            signals.append(f"📊 Volume {vol['spike_ratio']}x 급증 = 추세 강화!")
 
     # 판단 결과!
     if score >= 75:

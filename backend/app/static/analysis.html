@@ -157,12 +157,16 @@ function fmtChange(v) {
 }
 
 function render(data) {
-  const changes = data.changes || (data.symbol_analysis && data.symbol_analysis.changes) || {};
-  const rsi = data.rsi_15m || (data.symbol_analysis && data.symbol_analysis.rsi_15m);
-  const bb = data.bb_15m || (data.symbol_analysis && data.symbol_analysis.bb_15m) || {};
-  const price = data.price || (data.symbol_analysis && data.symbol_analysis.price) || 0;
-  const change24 = data.change_24h !== undefined ? data.change_24h : (data.symbol_analysis && data.symbol_analysis.change_24h);
-  const judgment = data.judgment || (data.symbol_analysis && data.symbol_analysis.judgment) || {};
+  const sa = data.symbol_analysis || {};
+  const changes = data.changes || sa.changes || {};
+  const rsi = data.rsi_15m ?? sa.rsi_15m;
+  const bb = data.bb_15m || sa.bb_15m || {};
+  const obv = data.obv_15m || sa.obv_15m || {};
+  const macd = data.macd_15m || sa.macd_15m || {};
+  const vol = data.volume_15m || sa.volume_15m || {};
+  const price = data.price || sa.price || 0;
+  const change24 = data.change_24h !== undefined ? data.change_24h : sa.change_24h;
+  const judgment = data.judgment || sa.judgment || {};
   const posJudgment = data.position_judgment || null;
 
   let html = '';
@@ -223,6 +227,43 @@ function render(data) {
       <div class="row"><span class="label">BB 중단:</span><span class="value">${bb.middle || '-'}</span></div>
       <div class="row"><span class="label">BB 하단:</span><span class="value">${bb.lower || '-'}</span></div>
     </div>
+
+    <div class="section">
+      <div class="section-title">📈 OBV (매수/매도 압력)</div>
+      <div class="row"><span class="label">추세:</span><span class="value">
+        ${obv.trend === 'UP' ? '<span class="pos-change">🚀 상승 (매수 압력!)</span>' :
+          obv.trend === 'DOWN' ? '<span class="neg-change">📉 하락 (매도 압력!)</span>' :
+          obv.trend === 'FLAT' ? '➖ 횡보' : '-'}
+      </span></div>
+      <div class="row"><span class="label">변동:</span><span class="value">${obv.change_pct !== null && obv.change_pct !== undefined ? fmtChange(obv.change_pct) : '-'}</span></div>
+      <div class="row"><span class="label">값:</span><span class="value">${obv.value !== null && obv.value !== undefined ? obv.value : '-'}</span></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">📊 MACD (12/26/9)</div>
+      <div class="row"><span class="label">추세:</span><span class="value">
+        ${macd.trend === 'BULLISH' ? '<span class="pos-change">🚀 Bullish (매수 신호!)</span>' :
+          macd.trend === 'BEARISH' ? '<span class="neg-change">📉 Bearish (매도 신호!)</span>' :
+          macd.trend === 'NEUTRAL' ? '➖ 중립' : '-'}
+      </span></div>
+      <div class="row"><span class="label">MACD:</span><span class="value">${macd.macd !== null && macd.macd !== undefined ? macd.macd : '-'}</span></div>
+      <div class="row"><span class="label">Signal:</span><span class="value">${macd.signal !== null && macd.signal !== undefined ? macd.signal : '-'}</span></div>
+      <div class="row"><span class="label">Histogram:</span><span class="value">
+        ${macd.histogram !== null && macd.histogram !== undefined ?
+          `<span style="color:${macd.histogram >= 0 ? '#22c55e' : '#ef4444'}">${macd.histogram >= 0 ? '+' : ''}${macd.histogram}</span>` : '-'}
+      </span></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">📊 Volume 분석</div>
+      <div class="row"><span class="label">최근 5봉 평균:</span><span class="value">${vol.recent_avg !== null && vol.recent_avg !== undefined ? vol.recent_avg.toLocaleString() : '-'}</span></div>
+      <div class="row"><span class="label">이전 15봉 평균:</span><span class="value">${vol.prev_avg !== null && vol.prev_avg !== undefined ? vol.prev_avg.toLocaleString() : '-'}</span></div>
+      <div class="row"><span class="label">Spike 비율:</span><span class="value">
+        ${vol.spike_ratio !== null && vol.spike_ratio !== undefined ?
+          `<span style="color:${vol.spike_ratio >= 1.5 ? '#22c55e' : vol.spike_ratio < 0.7 ? '#ef4444' : '#94a3b8'}">${vol.spike_ratio}x</span>
+           ${vol.spike_ratio >= 2 ? ' <span class="pos-change">🔥 폭증!</span>' : vol.spike_ratio >= 1.5 ? ' <span class="pos-change">📈 급증!</span>' : vol.spike_ratio < 0.5 ? ' <span class="neg-change">💤 급감!</span>' : ''}` : '-'}
+      </span></div>
+    </div>
   `;
 
   // 심볼 진입 판단!
@@ -246,8 +287,8 @@ function render(data) {
           🚨 대시보드에서 긴급 청산
         </button>
       ` : `
-        <button class="btn btn-primary" onclick="window.opener?.focus();window.close()">
-          ✏ 세팅 후 진입 (대시보드로!)
+        <button class="btn btn-primary" onclick="openCreateModalInParent()">
+          ✏ 세팅 후 진입
         </button>
       `}
       <button class="btn btn-secondary" onclick="fetchAnalysis()">
@@ -257,6 +298,29 @@ function render(data) {
   `;
 
   document.getElementById('content').innerHTML = html;
+}
+
+// 🌟 v134d: 세팅 후 진입 = 대시보드 새 전략 modal 자동 열기 + fill!
+function openCreateModalInParent() {
+  try {
+    if (!window.opener || window.opener.closed) {
+      alert('❌ 대시보드 창이 닫혔음! 대시보드를 새로 열어주세요.');
+      return;
+    }
+    // 대시보드 창의 함수 호출!
+    if (typeof window.opener.openCreateModalWithSymbol === 'function') {
+      window.opener.openCreateModalWithSymbol(symbol, side);
+      window.opener.focus();
+      window.close();
+    } else {
+      // fallback = 새 창에서 직접 실행 시도!
+      alert('❌ 대시보드에서 새 전략 modal 열기 함수 없음! 대시보드에서 직접 열어주세요.');
+      window.opener.focus();
+    }
+  } catch (e) {
+    console.warn('openCreateModalInParent 실패:', e);
+    alert('❌ 대시보드로 이동 실패: ' + (e.message || e));
+  }
 }
 
 fetchAnalysis();

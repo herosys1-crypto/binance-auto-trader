@@ -106,11 +106,52 @@
     }
   }
 
+  // 🌟 v134d: analysis.html에서 호출 = 새 전략 modal 자동 열기 + symbol/side fill!
+  async function openCreateModalWithSymbol(symbol, side) {
+    try {
+      if (typeof window.openCreateModal !== 'function') {
+        console.warn('[openCreateModalWithSymbol] openCreateModal 없음!');
+        return;
+      }
+      // 1. 새 전략 modal 열기!
+      await window.openCreateModal();
+      // 2. 지연 후 = symbol + side 세팅! (modal DOM ready 대기!)
+      setTimeout(() => {
+        try {
+          const symInput = document.getElementById('cm-symbol');
+          if (symInput) {
+            symInput.value = (symbol || '').toUpperCase();
+            // change/input 이벤트 발생 = validation trigger!
+            symInput.dispatchEvent(new Event('change', { bubbles: true }));
+            symInput.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          // side 설정!
+          if (typeof window.setCmSide === 'function' && side) {
+            window.setCmSide(side.toUpperCase());
+          }
+          // 시장 정보 로드!
+          if (typeof window.loadCmMarketInfo === 'function') {
+            window.loadCmMarketInfo();
+          }
+          // toast!
+          if (typeof window.toast === 'function') {
+            window.toast(`✅ 분석 완료 심볼 자동 fill: ${symbol} ${side}`, 'success');
+          }
+        } catch (e) {
+          console.warn('[openCreateModalWithSymbol] fill 실패:', e);
+        }
+      }, 500);
+    } catch (e) {
+      console.warn('[openCreateModalWithSymbol] modal 열기 실패:', e);
+    }
+  }
+
   if (typeof window !== 'undefined') {
     window.analyzeSymbolNow = analyzeSymbolNow;
     window.loadActiveSymbolsForAnalyzer = loadActiveSymbolsForAnalyzer;
     window.openActiveStrategyAnalysis = openActiveStrategyAnalysis;
     window.openCreateModalAnalysis = openCreateModalAnalysis;  // 🔎 v134c!
+    window.openCreateModalWithSymbol = openCreateModalWithSymbol;  // 🌟 v134d!
     document.addEventListener('DOMContentLoaded', () => {
       setTimeout(loadActiveSymbolsForAnalyzer, 2500);
       setInterval(loadActiveSymbolsForAnalyzer, 60000);  // 60초마다 새로고침!
