@@ -1049,17 +1049,25 @@
       </div>
 
       <!-- 🌟 v132 신 (2026-08-11 사장님!): 전략 제안 카드! (Strategy Suggestion Team!) -->
-      <div id="strategy-suggestions-card" class="card rounded-lg hidden" style="padding:8px 12px;background:linear-gradient(135deg,rgba(124,58,237,0.15),rgba(236,72,153,0.15));border:1px solid rgba(124,58,237,0.4)">
-        <div class="flex items-center justify-between mb-2">
+      <div id="strategy-suggestions-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(124,58,237,0.15),rgba(236,72,153,0.15));border:1px solid rgba(124,58,237,0.4)">
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-1">
           <span class="text-sm font-bold" style="color:#c4b5fd">
             🎯 자동 전략 제안 <span id="suggestions-count" style="background:#a78bfa;color:#000;padding:1px 6px;border-radius:8px;font-size:11px">0</span>
           </span>
-          <div class="flex items-center gap-2">
-            <span class="text-xs text-slate-400">매일 자동 생성! 사장님 결정!</span>
+          <div class="flex items-center gap-1 flex-wrap">
+            <button onclick="triggerLearningNow()"
+                    class="text-xs bg-purple-600 hover:bg-purple-500 text-white px-2 py-1 rounded font-bold"
+                    title="지금 즉시 = 급등/급락 예측!">🎯 지금 실행</button>
+            <button onclick="briefingNow()"
+                    class="text-xs bg-yellow-600 hover:bg-yellow-500 text-white px-2 py-1 rounded"
+                    title="지금 브리핑 = Telegram 발송!">🌅 지금 브리핑</button>
             <button onclick="openSuggestionsSettingsModal()"
                     class="text-xs bg-purple-700 hover:bg-purple-600 text-white px-2 py-1 rounded"
                     title="자동 실행 세팅 (기본 OFF!)">⚙ 세팅</button>
           </div>
+        </div>
+        <div class="text-xs text-slate-400 mb-2">
+          매일 06:30 UTC 자동 학습! 사장님이 결정! (내일 아침 07:30 KST = 브리핑!)
         </div>
         <div id="suggestions-list" class="space-y-2"></div>
       </div>
@@ -2365,7 +2373,7 @@
 <script src="/static/js/auth-bootstrap.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/reentry-alerts.js?v=20260806v130-obv-reentry"></script>
 <script src="/static/js/pump-bb-alerts.js?v=20260809v131-pump-bb"></script>
-<script src="/static/js/strategy-suggestions.js?v=20260811v132-suggestions"></script>
+<script src="/static/js/strategy-suggestions.js?v=20260811v132c-triggernow"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES

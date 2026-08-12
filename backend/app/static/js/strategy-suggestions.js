@@ -133,6 +133,35 @@ async function dismissSuggestion(id) {
   }
 }
 
+// 🌟 v132 사장님 요구: 즉시 학습 실행!
+async function triggerLearningNow() {
+  if (!confirm('지금 즉시 학습 실행하시겠습니까?\n\n= Binance 급등/급락 top 40 예측!\n= 최대 30초 소요!')) return;
+  try {
+    if (typeof toast === 'function') toast('🎯 학습 시작! 30초 대기...', 'info');
+    const r = await api('/strategy-suggestions/trigger-now', 'POST');
+    const created = (r.result || {}).created || 0;
+    const preds = (r.result || {}).predictions || 0;
+    if (typeof toast === 'function') {
+      toast(`✅ 학습 완료! ${preds} 예측, ${created} 신 제안 생성!`, 'success');
+    }
+    loadStrategySuggestions();  // 카드 즉시 새로고침!
+  } catch (e) {
+    if (typeof toast === 'function') toast('❌ 학습 실패: ' + (e.message || e), 'error');
+  }
+}
+
+async function briefingNow() {
+  if (!confirm('지금 즉시 브리핑 발송하시겠습니까?\n\n= Telegram으로 요약!')) return;
+  try {
+    const r = await api('/strategy-suggestions/briefing-now', 'POST');
+    if (typeof toast === 'function') {
+      toast(`✅ 브리핑 발송 완료! Telegram 확인!`, 'success');
+    }
+  } catch (e) {
+    if (typeof toast === 'function') toast('❌ 브리핑 실패: ' + (e.message || e), 'error');
+  }
+}
+
 async function openSuggestionsSettingsModal() {
   try {
     const settings = await api('/strategy-suggestions/settings', 'GET');
@@ -241,6 +270,8 @@ if (typeof window !== 'undefined') {
   window.loadStrategySuggestions = loadStrategySuggestions;
   window.executeSuggestion = executeSuggestion;
   window.dismissSuggestion = dismissSuggestion;
+  window.triggerLearningNow = triggerLearningNow;  // v132 즉시 실행!
+  window.briefingNow = briefingNow;  // v132 즉시 브리핑!
   window.openSuggestionsSettingsModal = openSuggestionsSettingsModal;
   window.closeSuggestionsSettingsModal = closeSuggestionsSettingsModal;
   window.saveSuggestionsSettings = saveSuggestionsSettings;
