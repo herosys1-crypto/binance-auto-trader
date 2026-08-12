@@ -307,12 +307,12 @@ async function openSuggestionsSettingsModal() {
             </div>
           </div>
 
-          <!-- ═══════ 섹션 2: 기본 프로필 세팅 (신!) ═══════ -->
+          <!-- ═══════ 섹션 2: 기본 프로필 세팅 (심플!) ═══════ -->
           <div class="mb-4 p-3 rounded bg-slate-800 border border-purple-700">
-            <h4 class="text-sm font-bold text-purple-300 mb-2">💰 기본 세팅값 (프로필!)</h4>
+            <h4 class="text-sm font-bold text-purple-300 mb-2">💰 단계별 진입금액 + 트리거율!</h4>
             <p class="text-xs text-slate-400 mb-2">
-              💡 자동 학습 = 이 프로필로 신 전략 제안!<br>
-              💡 개별 세팅 (「✏ 세팅 후 진입」) = 이 값 = 시작점!
+              💡 자동 학습 = 이 세팅으로 신 전략 제안!<br>
+              💡 나머지 (레버리지/TP/SL) = 「✏ 세팅 후 진입」 = 신 전략 모달에서!
             </p>
 
             <div class="mb-2">
@@ -324,81 +324,48 @@ async function openSuggestionsSettingsModal() {
               </select>
             </div>
 
-            <div class="grid grid-cols-2 gap-2 text-xs">
+            <div class="grid grid-cols-4 gap-1 text-xs mt-2">
               <div>
-                <label class="text-slate-400">⚡ 레버리지:</label>
-                <input type="number" id="prof-leverage" value="${cfg.leverage||2}" min="1" max="125"
-                       class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-200">
-              </div>
-              <div>
-                <label class="text-slate-400">🛑 강제 SL (%):</label>
-                <input type="number" id="prof-force-sl" value="${cfg.force_sl_roi_override||15}" min="0" max="100"
-                       class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-200">
-              </div>
-            </div>
-
-            <div class="grid grid-cols-4 gap-1 mt-2 text-xs">
-              <div>
-                <label class="text-slate-400">1단계 자본:</label>
+                <label class="text-slate-400 block mb-1">💰 1단계 자본:</label>
                 <input type="number" id="prof-cap-1" value="${(cfg.capitals||[])[0]||500}"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
               <div>
-                <label class="text-slate-400">2단계:</label>
+                <label class="text-slate-400 block mb-1">2단계:</label>
                 <input type="number" id="prof-cap-2" value="${(cfg.capitals||[])[1]||500}"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
               <div>
-                <label class="text-slate-400">3단계:</label>
+                <label class="text-slate-400 block mb-1">3단계:</label>
                 <input type="number" id="prof-cap-3" value="${(cfg.capitals||[])[2]||500}"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
               <div>
-                <label class="text-slate-400">4단계:</label>
+                <label class="text-slate-400 block mb-1">4단계:</label>
                 <input type="number" id="prof-cap-4" value="${(cfg.capitals||[])[3]||500}"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
             </div>
 
-            <div class="grid grid-cols-4 gap-1 mt-2 text-xs">
+            <div class="grid grid-cols-4 gap-1 text-xs mt-2">
               <div>
-                <label class="text-slate-400">TP1 %:</label>
-                <input type="number" id="prof-tp1-pct" value="${cfg.tp1_percent||10}"
+                <label class="text-slate-400 block mb-1">📊 1단계 트리거:</label>
+                <input type="number" value="즉시" disabled
+                       class="w-full bg-slate-900 border border-slate-700 rounded px-1 py-1 text-slate-500 text-center">
+              </div>
+              <div>
+                <label class="text-slate-400 block mb-1">2단계 %:</label>
+                <input type="number" id="prof-trg-2" value="${(cfg.trigger_percents||[])[1]||10}"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
               <div>
-                <label class="text-slate-400">TP2 %:</label>
-                <input type="number" id="prof-tp2-pct" value="${cfg.tp2_percent||15}"
+                <label class="text-slate-400 block mb-1">3단계 %:</label>
+                <input type="number" id="prof-trg-3" value="${(cfg.trigger_percents||[])[2]||20}"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
               <div>
-                <label class="text-slate-400">TP3 %:</label>
-                <input type="number" id="prof-tp3-pct" value="${cfg.tp3_percent||20}"
-                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
-              </div>
-              <div>
-                <label class="text-slate-400">TP4 %:</label>
-                <input type="number" id="prof-tp4-pct" value="${cfg.tp4_percent||25}"
-                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
-              </div>
-              <div>
-                <label class="text-slate-400">TP1 qty:</label>
-                <input type="number" id="prof-tp1-qty" value="${cfg.tp1_qty_ratio||10}"
-                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
-              </div>
-              <div>
-                <label class="text-slate-400">TP2 qty:</label>
-                <input type="number" id="prof-tp2-qty" value="${cfg.tp2_qty_ratio||15}"
-                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
-              </div>
-              <div>
-                <label class="text-slate-400">TP3 qty:</label>
-                <input type="number" id="prof-tp3-qty" value="${cfg.tp3_qty_ratio||20}"
-                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
-              </div>
-              <div>
-                <label class="text-slate-400">TP4 qty:</label>
-                <input type="number" id="prof-tp4-qty" value="${cfg.tp4_qty_ratio||25}"
+                <label class="text-slate-400 block mb-1">4단계 %:</label>
+                <input type="number" id="prof-trg-4" value="${(cfg.trigger_percents||[])[3]||20}"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
             </div>
@@ -437,7 +404,7 @@ function closeSuggestionsSettingsModal() {
   if (el) el.remove();
 }
 
-// 🌟 v132 사장님: 프로필 전환!
+// 🌟 v132 사장님: 프로필 전환 (심플 = 자본 + 트리거만!)
 async function _switchProfile(profileName) {
   try {
     const profilesData = await api('/suggestion-profiles');
@@ -445,25 +412,19 @@ async function _switchProfile(profileName) {
     const p = profiles.find(x => x.name === profileName);
     if (!p) return;
     const cfg = p.config || {};
-    // 폼 값 갱신!
     const set = (id, val) => {
       const el = document.getElementById(id);
       if (el) el.value = val !== undefined ? val : '';
     };
-    set('prof-leverage', cfg.leverage || 2);
-    set('prof-force-sl', cfg.force_sl_roi_override || 15);
+    // 자본 (1~4단계!)
     set('prof-cap-1', (cfg.capitals||[])[0] || 500);
     set('prof-cap-2', (cfg.capitals||[])[1] || 500);
     set('prof-cap-3', (cfg.capitals||[])[2] || 500);
     set('prof-cap-4', (cfg.capitals||[])[3] || 500);
-    set('prof-tp1-pct', cfg.tp1_percent || 10);
-    set('prof-tp2-pct', cfg.tp2_percent || 15);
-    set('prof-tp3-pct', cfg.tp3_percent || 20);
-    set('prof-tp4-pct', cfg.tp4_percent || 25);
-    set('prof-tp1-qty', cfg.tp1_qty_ratio || 10);
-    set('prof-tp2-qty', cfg.tp2_qty_ratio || 15);
-    set('prof-tp3-qty', cfg.tp3_qty_ratio || 20);
-    set('prof-tp4-qty', cfg.tp4_qty_ratio || 25);
+    // 트리거 % (2~4단계!)
+    set('prof-trg-2', (cfg.trigger_percents||[])[1] || 10);
+    set('prof-trg-3', (cfg.trigger_percents||[])[2] || 20);
+    set('prof-trg-4', (cfg.trigger_percents||[])[3] || 20);
   } catch (_e) {
     console.warn('[profile] 전환 실패:', _e);
   }
@@ -487,40 +448,34 @@ async function saveSuggestionsSettings() {
       }
     });
 
-    // 2. 🌟 신: 기본 프로필 세팅 저장!
+    // 2. 🌟 신: 심플 프로필 세팅 저장 (자본 + 트리거만!)
     const profileName = document.getElementById('sug-profile-select').value;
     const num = (id, def) => {
       const el = document.getElementById(id);
       return el ? Number(el.value) || def : def;
     };
-    // 신 config 구성!
-    const newConfig = {
-      leverage: num('prof-leverage', 2),
-      capitals: [num('prof-cap-1', 500), num('prof-cap-2', 500), num('prof-cap-3', 500), num('prof-cap-4', 500)],
-      trigger_percents: [null, 10, 20, 20],
-      tp1_percent: num('prof-tp1-pct', 10),
-      tp2_percent: num('prof-tp2-pct', 15),
-      tp3_percent: num('prof-tp3-pct', 20),
-      tp4_percent: num('prof-tp4-pct', 25),
-      tp1_qty_ratio: num('prof-tp1-qty', 10),
-      tp2_qty_ratio: num('prof-tp2-qty', 15),
-      tp3_qty_ratio: num('prof-tp3-qty', 20),
-      tp4_qty_ratio: num('prof-tp4-qty', 25),
-      tp1_pct_override: 25,
-      force_sl_enabled_override: true,
-      force_sl_roi_override: num('prof-force-sl', 15),
-      stop_loss_percent_of_capital: 90,
-      start_price: null,
-      retry_after_liquidation_enabled: false,
-      retry_trigger_pct: 10,
-    };
 
-    // 기존 프로필 리스트 로드 + 현재 프로필 update!
+    // 기존 프로필 config 로드 → 자본/트리거만 update!
     const profilesData = await api('/suggestion-profiles');
     const profiles = profilesData.profiles || [];
     const idx = profiles.findIndex(p => p.name === profileName);
     if (idx >= 0) {
-      profiles[idx].config = newConfig;
+      const existingConfig = profiles[idx].config || {};
+      // 사장님 편집 = 자본 + 트리거만 update!
+      // 나머지 = 기존 유지 (사장님 = 「✏ 세팅 후 진입」에서 조정!)
+      existingConfig.capitals = [
+        num('prof-cap-1', 500),
+        num('prof-cap-2', 500),
+        num('prof-cap-3', 500),
+        num('prof-cap-4', 500),
+      ];
+      existingConfig.trigger_percents = [
+        null,  // 1단계 = 즉시!
+        num('prof-trg-2', 10),
+        num('prof-trg-3', 20),
+        num('prof-trg-4', 20),
+      ];
+      profiles[idx].config = existingConfig;
     }
     // 저장!
     await api('/suggestion-profiles', {
