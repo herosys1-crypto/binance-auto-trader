@@ -195,6 +195,59 @@ def update_profiles(
     return ProfilesResponse(profiles=profiles, default=default_name)
 
 
+# 🌟 v132 (2026-08-12 사장님!): 세팅 변경 = 오늘 PENDING 카드에도 즉시 적용!
+@router.post("/apply-to-pending")
+def apply_current_profile_to_pending(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """default 프로필 = 오늘 PENDING 제안 카드에 = 자동 적용!
+
+    사장님 「⚙ 세팅」 = 저장 후 = 자동 호출!
+    = 기존 카드의 strategy_config도 = 신 세팅 반영!
+    """
+    from datetime import datetime, timezone
+    from app.models.strategy_suggestion import StrategySuggestion
+
+    # default 프로필 로드!
+    profiles, default_name = _load_profiles(db)
+    default_profile = next(
+        (p for p in profiles if p.get("name") == default_name),
+        None,
+    )
+    if not default_profile:
+        return {"updated": 0, "note": "default 프로필 없음"}
+
+    default_cfg = default_profile.get("config") or {}
+
+    # 오늘 PENDING 카드 조회!
+    today_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
+    pending = db.execute(
+        select(StrategySuggestion)
+        .where(StrategySuggestion.status == "PENDING")
+        .where(StrategySuggestion.created_at >= today_start)
+    ).scalars().all()
+
+    updated = 0
+    for s in pending:
+        # 각 카드 = default_cfg로 갱신! (symbol/side 유지!)
+        new_cfg = dict(default_cfg)
+        new_cfg["symbol"] = s.symbol
+        new_cfg["side"] = s.side
+        s.strategy_config = new_cfg
+        updated += 1
+
+    db.commit()
+    logger.info("[apply-to-pending] %d 카드 update!", updated)
+    return {
+        "updated": updated,
+        "profile": default_name,
+        "note": f"오늘 PENDING {updated}건 = 신 세팅 적용!",
+    }
+
+
 @router.get("/from-strategy/{strategy_id}")
 def profile_from_strategy(
     strategy_id: int,

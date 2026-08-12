@@ -581,10 +581,25 @@ async function saveSuggestionsSettings() {
       }
     });
 
+    // 🌟 v132 사장님 지적 (2026-08-12): 오늘 PENDING 카드에도 즉시 적용!
+    let applyResult = null;
+    try {
+      applyResult = await api('/suggestion-profiles/apply-to-pending', { method: 'POST' });
+    } catch (_e) {
+      console.warn('[settings] apply-to-pending 실패:', _e);
+    }
+
     if (typeof toast === 'function') {
-      toast(`✅ 세팅 + 프로필 저장! 자동 실행 ${enabled?'ON 🤖':'OFF 🙋'}, default = ${profileName}`, 'success');
+      const applyMsg = applyResult && applyResult.updated
+        ? ` + 오늘 ${applyResult.updated}건 카드 신 세팅 적용!`
+        : '';
+      toast(`✅ 세팅 저장! 자동 실행 ${enabled?'ON 🤖':'OFF 🙋'}${applyMsg}`, 'success');
     }
     closeSuggestionsSettingsModal();
+    // 카드 새로고침 = 신 세팅 반영!
+    if (typeof loadStrategySuggestions === 'function') {
+      loadStrategySuggestions();
+    }
   } catch (e) {
     if (typeof toast === 'function') toast('❌ 저장 실패: ' + (e.message || e), 'error');
   }
