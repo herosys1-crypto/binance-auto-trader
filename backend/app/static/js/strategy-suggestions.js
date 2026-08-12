@@ -653,7 +653,7 @@ async function saveSuggestionsSettings() {
 function openSuggestionAnalysis(symbol, side, suggestionId) {
   try {
     const url = `/static/analysis.html?symbol=${encodeURIComponent(symbol)}&side=${encodeURIComponent(side)}&sid=${suggestionId}`;
-    window.open(url, '_blank', 'width=800,height=900,scrollbars=yes');
+    window.open(url, '_blank', 'width=550,height=700,scrollbars=yes');
   } catch (e) {
     console.warn('[analysis] 새 창 열기 실패:', e);
     if (typeof toast === 'function') toast('❌ 새 창 열기 실패!', 'error');

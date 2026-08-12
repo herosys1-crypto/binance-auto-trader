@@ -95,7 +95,7 @@
   // 활성 전략 = 새 창 상세 분석!
   function openStrategyAnalysis(strategyId, symbol, side) {
     const url = `/static/analysis.html?strategy_id=${strategyId}&symbol=${encodeURIComponent(symbol)}&side=${side}`;
-    window.open(url, '_blank', 'width=800,height=900,scrollbars=yes');
+    window.open(url, '_blank', 'width=550,height=700,scrollbars=yes');
   }
 
   async function loadLearningSummary() {

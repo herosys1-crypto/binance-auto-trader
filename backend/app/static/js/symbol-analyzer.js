@@ -23,7 +23,7 @@
 
     const side = sideEl.value || 'LONG';
     const url = `/static/analysis.html?symbol=${encodeURIComponent(symbol)}&side=${side}`;
-    window.open(url, '_blank', 'width=800,height=900,scrollbars=yes');
+    window.open(url, '_blank', 'width=550,height=700,scrollbars=yes');
   }
 
   // 활성 포지션 심볼 quick 버튼 로드!
@@ -76,7 +76,7 @@
   // 활성 전략 = 상세 분석 새 창!
   function openActiveStrategyAnalysis(strategyId, symbol, side) {
     const url = `/static/analysis.html?strategy_id=${strategyId}&symbol=${encodeURIComponent(symbol)}&side=${side}`;
-    window.open(url, '_blank', 'width=800,height=900,scrollbars=yes');
+    window.open(url, '_blank', 'width=550,height=700,scrollbars=yes');
   }
 
   // 🔎 v134c: 신 전략 modal의 심볼 + 방향 = 즉시 분석!
@@ -100,7 +100,7 @@
       } catch (_e) { /* fallback = LONG */ }
 
       const url = `/static/analysis.html?symbol=${encodeURIComponent(symbol)}&side=${side}`;
-      window.open(url, '_blank', 'width=800,height=900,scrollbars=yes');
+      window.open(url, '_blank', 'width=550,height=700,scrollbars=yes');
     } catch (e) {
       console.warn('[create-modal] analysis 열기 실패:', e);
     }
