@@ -68,11 +68,11 @@ async function loadStrategySuggestions() {
             💡 ${reason}
           </div>
           <div class="flex gap-2">
-            <button onclick="executeSuggestion(${s.id})"
+            <button onclick="executeSuggestion(${s.id}, '${s.symbol}', '${side}', '${encodeURIComponent(JSON.stringify(cfg))}')"
                     class="text-xs font-bold px-3 py-1 rounded"
                     style="background:linear-gradient(135deg,#059669,#22c55e);color:#fff;border:0;cursor:pointer"
-                    title="지금 실행 (수동 - 사장님!)">
-              ▶ 지금 실행
+                    title="신 전략 모달 열기! 사장님 세팅 확인 후 진입!">
+              ✏ 세팅 후 진입
             </button>
             <button onclick="openSuggestionsSettingsModal()"
                     class="text-xs px-3 py-1 rounded"
@@ -110,14 +110,92 @@ function _formatTimeAgo(iso) {
   } catch { return '?'; }
 }
 
-async function executeSuggestion(id) {
-  if (!confirm('이 전략 제안을 실행하시겠습니까?\n\n= 신 전략 즉시 생성됩니다!')) return;
+// 🌟 v132 사장님 요구 (2026-08-11):
+// "기존 전략과 같이 세팅할수 있어야 하는데 기존 전략방식에 세팅을 할수 있게 해줘"
+// = executeSuggestion = 신 전략 모달 열기!
+// = 심볼/side/자본/TP/SL 자동 세팅!
+// = 사장님이 = 확인 + 세팅 조정 + 진입!
+async function executeSuggestion(id, symbol, side, configStr) {
   try {
-    const r = await api('/strategy-suggestions/' + id + '/execute', { method: 'POST' });
-    if (typeof toast === 'function') {
-      toast(`✅ ${r.symbol} ${r.side} 실행!` + (r.note ? ` (${r.note})` : ''), 'success');
+    // 1. 신 전략 모달 열기 (기존 방식!)
+    if (typeof openCreateModal !== 'function') {
+      if (typeof toast === 'function') toast('❌ 신 전략 모달 함수 없음', 'error');
+      return;
     }
-    loadStrategySuggestions();
+    await openCreateModal();
+
+    // 2. config 파싱 (encodeURIComponent 로 인코딩 되어 있음!)
+    let config = {};
+    try {
+      config = JSON.parse(decodeURIComponent(configStr));
+    } catch (_e) {
+      console.warn('[suggestion] config 파싱 실패:', _e);
+    }
+
+    // 3. 자동 세팅! (300ms 대기 = modal 완전 로드!)
+    setTimeout(() => {
+      try {
+        // 심볼!
+        const symbolInput = document.getElementById('cm-symbol');
+        if (symbolInput) {
+          symbolInput.value = symbol;
+          symbolInput.dispatchEvent(new Event('input', {bubbles: true}));
+          symbolInput.dispatchEvent(new Event('change', {bubbles: true}));
+        }
+        // side!
+        if (typeof setCmSide === 'function') setCmSide(side);
+        // 레버리지!
+        if (config.leverage) {
+          const lvEl = document.getElementById('cm-leverage');
+          if (lvEl) {
+            lvEl.value = config.leverage;
+            if (typeof cmLeverageManuallyEdited !== 'undefined') {
+              cmLeverageManuallyEdited = true;
+            }
+          }
+        }
+        // 자본 (1~10단계!)
+        const caps = config.capitals || [];
+        const trigs = config.trigger_percents || [];
+        for (let i = 0; i < 10; i++) {
+          const capEl = document.getElementById(`cm-cap-${i+1}`);
+          const trgEl = document.getElementById(`cm-trg-${i+1}`);
+          if (capEl) capEl.value = (caps[i] !== undefined && caps[i] !== null) ? caps[i] : '';
+          if (trgEl && i > 0) {
+            trgEl.value = (trigs[i] !== undefined && trigs[i] !== null) ? trigs[i] : '';
+          }
+        }
+        // TP1~10!
+        for (let n = 1; n <= 10; n++) {
+          const pctEl = document.getElementById(`cm-tp${n}-pct`);
+          const qtyEl = document.getElementById(`cm-tp${n}-qty`);
+          if (pctEl && config[`tp${n}_percent`] !== undefined) {
+            pctEl.value = config[`tp${n}_percent`] || '';
+          }
+          if (qtyEl && config[`tp${n}_qty_ratio`] !== undefined) {
+            qtyEl.value = config[`tp${n}_qty_ratio`] || '';
+          }
+        }
+        // SL!
+        if (config.stop_loss_percent_of_capital) {
+          const slEl = document.getElementById('cm-sl-pct');
+          if (slEl) slEl.value = config.stop_loss_percent_of_capital;
+        }
+        // 실시간 계산!
+        if (typeof onCapitalsChange === 'function') onCapitalsChange();
+        if (typeof _refreshLiveCalc === 'function') _refreshLiveCalc();
+
+        if (typeof toast === 'function') {
+          toast(`🎯 ${symbol} ${side} 제안 = 모달! 세팅 확인 후 진입!`, 'success');
+        }
+      } catch (_e) {
+        console.warn('[suggestion] auto-fill 실패:', _e);
+      }
+    }, 300);
+
+    // 4. 제안 삭제 (사장님 선택했으니!) - 진입 후 자동!
+    // 진입 완료 = executed status = 다른 방식으로 추적!
+    // 지금은 = 자동 삭제 X (사장님이 취소 가능!)
   } catch (e) {
     if (typeof toast === 'function') toast('❌ 실행 실패: ' + (e.message || e), 'error');
   }
