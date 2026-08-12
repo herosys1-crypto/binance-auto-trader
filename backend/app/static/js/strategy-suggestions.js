@@ -384,21 +384,25 @@ async function openSuggestionsSettingsModal() {
               <div>
                 <label class="text-slate-400 block mb-1">💰 1단계 자본:</label>
                 <input type="number" id="prof-cap-1" value="${(cfg.capitals||[])[0]||500}"
+                       placeholder="필수!"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
               <div>
-                <label class="text-slate-400 block mb-1">2단계:</label>
-                <input type="number" id="prof-cap-2" value="${(cfg.capitals||[])[1]||500}"
+                <label class="text-slate-400 block mb-1">2단계 (선택):</label>
+                <input type="number" id="prof-cap-2" value="${(cfg.capitals||[])[1]||''}"
+                       placeholder="비움"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
               <div>
-                <label class="text-slate-400 block mb-1">3단계:</label>
-                <input type="number" id="prof-cap-3" value="${(cfg.capitals||[])[2]||500}"
+                <label class="text-slate-400 block mb-1">3단계 (선택):</label>
+                <input type="number" id="prof-cap-3" value="${(cfg.capitals||[])[2]||''}"
+                       placeholder="비움"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
               <div>
-                <label class="text-slate-400 block mb-1">4단계:</label>
-                <input type="number" id="prof-cap-4" value="${(cfg.capitals||[])[3]||500}"
+                <label class="text-slate-400 block mb-1">4단계 (선택):</label>
+                <input type="number" id="prof-cap-4" value="${(cfg.capitals||[])[3]||''}"
+                       placeholder="비움"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
             </div>
@@ -406,28 +410,32 @@ async function openSuggestionsSettingsModal() {
             <div class="grid grid-cols-4 gap-1 text-xs mt-2">
               <div>
                 <label class="text-slate-400 block mb-1">📊 1단계 트리거:</label>
-                <input type="number" value="즉시" disabled
+                <input type="text" value="즉시" disabled
                        class="w-full bg-slate-900 border border-slate-700 rounded px-1 py-1 text-slate-500 text-center">
               </div>
               <div>
                 <label class="text-slate-400 block mb-1">2단계 %:</label>
                 <input type="number" id="prof-trg-2" value="${(cfg.trigger_percents||[])[1]||10}"
+                       placeholder="10"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
               <div>
                 <label class="text-slate-400 block mb-1">3단계 %:</label>
                 <input type="number" id="prof-trg-3" value="${(cfg.trigger_percents||[])[2]||20}"
+                       placeholder="20"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
               <div>
                 <label class="text-slate-400 block mb-1">4단계 %:</label>
                 <input type="number" id="prof-trg-4" value="${(cfg.trigger_percents||[])[3]||20}"
+                       placeholder="20"
                        class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
               </div>
             </div>
 
             <p class="text-xs text-green-300 mt-2">
-              💡 저장 후 = 다음 학습부터 = 이 값 사용!
+              💡 <strong>1단계 = 필수!</strong> 2/3/4단계 = 비우면 = 사용 X!<br>
+              💡 예: 1단계만 세팅 → 1단계만 진입!
             </p>
           </div>
 
@@ -461,6 +469,7 @@ function closeSuggestionsSettingsModal() {
 }
 
 // 🌟 v132 사장님: 프로필 전환 (심플 = 자본 + 트리거만!)
+// 빈 단계 = 빈 값 표시!
 async function _switchProfile(profileName) {
   try {
     const profilesData = await api('/suggestion-profiles');
@@ -470,17 +479,20 @@ async function _switchProfile(profileName) {
     const cfg = p.config || {};
     const set = (id, val) => {
       const el = document.getElementById(id);
-      if (el) el.value = val !== undefined ? val : '';
+      if (el) el.value = (val !== undefined && val !== null && val !== '') ? val : '';
     };
-    // 자본 (1~4단계!)
-    set('prof-cap-1', (cfg.capitals||[])[0] || 500);
-    set('prof-cap-2', (cfg.capitals||[])[1] || 500);
-    set('prof-cap-3', (cfg.capitals||[])[2] || 500);
-    set('prof-cap-4', (cfg.capitals||[])[3] || 500);
-    // 트리거 % (2~4단계!)
-    set('prof-trg-2', (cfg.trigger_percents||[])[1] || 10);
-    set('prof-trg-3', (cfg.trigger_percents||[])[2] || 20);
-    set('prof-trg-4', (cfg.trigger_percents||[])[3] || 20);
+    const caps = cfg.capitals || [];
+    const trigs = cfg.trigger_percents || [];
+    // 1단계 = 필수 (default 500)!
+    set('prof-cap-1', caps[0] || 500);
+    // 2~4단계 = 빈 값 지원!
+    set('prof-cap-2', caps[1]);
+    set('prof-cap-3', caps[2]);
+    set('prof-cap-4', caps[3]);
+    // 트리거 %
+    set('prof-trg-2', trigs[1] || 10);
+    set('prof-trg-3', trigs[2] || 20);
+    set('prof-trg-4', trigs[3] || 20);
   } catch (_e) {
     console.warn('[profile] 전환 실패:', _e);
   }
@@ -517,20 +529,39 @@ async function saveSuggestionsSettings() {
     const idx = profiles.findIndex(p => p.name === profileName);
     if (idx >= 0) {
       const existingConfig = profiles[idx].config || {};
-      // 사장님 편집 = 자본 + 트리거만 update!
-      // 나머지 = 기존 유지 (사장님 = 「✏ 세팅 후 진입」에서 조정!)
-      existingConfig.capitals = [
-        num('prof-cap-1', 500),
-        num('prof-cap-2', 500),
-        num('prof-cap-3', 500),
-        num('prof-cap-4', 500),
+
+      // 🌟 v132 사장님 (2026-08-12): 빈 단계 = 사용 X!
+      // 값이 있고 > 0 인 단계만 포함!
+      const numOrNull = (id) => {
+        const el = document.getElementById(id);
+        if (!el || !el.value) return null;
+        const v = Number(el.value);
+        return (v > 0) ? v : null;
+      };
+
+      const rawCaps = [
+        numOrNull('prof-cap-1'),
+        numOrNull('prof-cap-2'),
+        numOrNull('prof-cap-3'),
+        numOrNull('prof-cap-4'),
       ];
-      existingConfig.trigger_percents = [
+      // 값 있는 단계만! (1단계 필수, 없으면 = 500 default)
+      const caps = rawCaps.filter(c => c !== null);
+      if (caps.length === 0) {
+        caps.push(500);  // 1단계 필수 fallback!
+      }
+
+      const rawTrigs = [
         null,  // 1단계 = 즉시!
-        num('prof-trg-2', 10),
-        num('prof-trg-3', 20),
-        num('prof-trg-4', 20),
+        numOrNull('prof-trg-2') || 10,
+        numOrNull('prof-trg-3') || 20,
+        numOrNull('prof-trg-4') || 20,
       ];
+      // caps 개수만큼만!
+      const trigs = rawTrigs.slice(0, caps.length);
+
+      existingConfig.capitals = caps;
+      existingConfig.trigger_percents = trigs;
       profiles[idx].config = existingConfig;
     }
     // 저장!
