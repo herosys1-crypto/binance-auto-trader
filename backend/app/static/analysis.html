@@ -123,9 +123,12 @@ if (strategyId) {
   document.getElementById('header-sub').textContent = `제안 #${suggestionId}`;
 }
 
-// 토큰!
+// 토큰! (api.js와 동일 키!)
 function getToken() {
-  return localStorage.getItem('accessToken') || sessionStorage.getItem('accessToken') || '';
+  return localStorage.getItem('access_token')
+      || sessionStorage.getItem('access_token')
+      || localStorage.getItem('accessToken')  // 옛 fallback
+      || '';
 }
 
 async function fetchAnalysis() {
