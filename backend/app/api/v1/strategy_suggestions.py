@@ -137,6 +137,52 @@ def update_settings(
     return get_settings(db, user_id)
 
 
+# 🌟 v132: 사장님 즉시 실행! (specific routes = /{id} 앞에!)
+@router.post("/trigger-now")
+def trigger_learning_now(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🎯 지금 즉시 학습 실행!"""
+    try:
+        from app.core.crypto import decrypt_text
+        from app.agents.strategy_suggestion_team.team_lead import (
+            StrategySuggestionTeamLead,
+        )
+        team_lead = StrategySuggestionTeamLead()
+        result = team_lead.run_daily_prediction(db, decrypt_text)
+        return {
+            "triggered": True,
+            "result": result,
+            "note": "학습 완료! 대시보드 카드 새로고침!",
+        }
+    except Exception as e:
+        logger.error("[trigger-now] 실패: %s", e)
+        raise HTTPException(status_code=500, detail=f"학습 실행 실패: {e}")
+
+
+@router.post("/briefing-now")
+def briefing_now(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🌅 지금 즉시 브리핑!"""
+    try:
+        from app.agents.strategy_suggestion_team.team_lead import (
+            StrategySuggestionTeamLead,
+        )
+        team_lead = StrategySuggestionTeamLead()
+        result = team_lead.run_daily_briefing(db)
+        return {
+            "briefing_sent": True,
+            "result": result,
+            "note": "Telegram 확인!",
+        }
+    except Exception as e:
+        logger.error("[briefing-now] 실패: %s", e)
+        raise HTTPException(status_code=500, detail=f"브리핑 실패: {e}")
+
+
 @router.delete("/{suggestion_id}")
 def dismiss_suggestion(
     suggestion_id: int,
@@ -199,50 +245,5 @@ def execute_suggestion(
     }
 
 
-# 🌟 v132: 사장님 즉시 실행 버튼! (내일 06:30 안 기다림!)
-@router.post("/trigger-now")
-def trigger_learning_now(
-    db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
-) -> dict:
-    """🎯 지금 즉시 학습 실행! (사장님 「지금 실행!」 버튼!)"""
-    try:
-        from app.core.crypto import decrypt_text
-        from app.agents.strategy_suggestion_team.team_lead import (
-            StrategySuggestionTeamLead,
-        )
-        team_lead = StrategySuggestionTeamLead()
-        result = team_lead.run_daily_prediction(db, decrypt_text)
-        return {
-            "triggered": True,
-            "result": result,
-            "note": "학습 완료! 대시보드 카드 새로고침!",
-        }
-    except Exception as e:
-        logger.error("[trigger-now] 실패: %s", e)
-        raise HTTPException(status_code=500, detail=f"학습 실행 실패: {e}")
-
-
-@router.post("/briefing-now")
-def briefing_now(
-    db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
-) -> dict:
-    """🌅 지금 즉시 브리핑! (사장님 「지금 브리핑!」 버튼!)"""
-    try:
-        from app.agents.strategy_suggestion_team.team_lead import (
-            StrategySuggestionTeamLead,
-        )
-        team_lead = StrategySuggestionTeamLead()
-        result = team_lead.run_daily_briefing(db)
-        return {
-            "briefing_sent": True,
-            "result": result,
-            "note": "Telegram 확인!",
-        }
-    except Exception as e:
-        logger.error("[briefing-now] 실패: %s", e)
-        raise HTTPException(status_code=500, detail=f"브리핑 실패: {e}")
-
-
-# 🚨 v132 fix: 중복 /settings routes 제거 (위로 이동!)
+# 🚨 v132 fix: /trigger-now, /briefing-now, /settings routes = 위로 이동!
+# (specific routes MUST come BEFORE parametric routes!)
