@@ -17,7 +17,7 @@
 
 async function loadStrategySuggestions() {
   try {
-    const suggestions = await api('/api/v1/strategy-suggestions', 'GET');
+    const suggestions = await api('/strategy-suggestions', 'GET');
     const card = document.getElementById('strategy-suggestions-card');
     const countEl = document.getElementById('suggestions-count');
     const listEl = document.getElementById('suggestions-list');
@@ -112,7 +112,7 @@ function _formatTimeAgo(iso) {
 async function executeSuggestion(id) {
   if (!confirm('이 전략 제안을 실행하시겠습니까?\n\n= 신 전략 즉시 생성됩니다!')) return;
   try {
-    const r = await api('/api/v1/strategy-suggestions/' + id + '/execute', 'POST');
+    const r = await api('/strategy-suggestions/' + id + '/execute', 'POST');
     if (typeof toast === 'function') {
       toast(`✅ ${r.symbol} ${r.side} 실행!` + (r.note ? ` (${r.note})` : ''), 'success');
     }
@@ -125,7 +125,7 @@ async function executeSuggestion(id) {
 async function dismissSuggestion(id) {
   if (!confirm('이 제안을 삭제하시겠습니까?')) return;
   try {
-    await api('/api/v1/strategy-suggestions/' + id, 'DELETE');
+    await api('/strategy-suggestions/' + id, 'DELETE');
     if (typeof toast === 'function') toast('✅ 제안 삭제', 'success');
     loadStrategySuggestions();
   } catch (e) {
@@ -135,7 +135,7 @@ async function dismissSuggestion(id) {
 
 async function openSuggestionsSettingsModal() {
   try {
-    const settings = await api('/api/v1/strategy-suggestions/settings', 'GET');
+    const settings = await api('/strategy-suggestions/settings', 'GET');
 
     const existing = document.getElementById('suggestions-settings-modal');
     if (existing) existing.remove();
@@ -221,7 +221,7 @@ async function saveSuggestionsSettings() {
     const dailyLimit = document.getElementById('sug-daily-limit').value;
     const autoDismiss = document.getElementById('sug-auto-dismiss').value;
 
-    await api('/api/v1/strategy-suggestions/settings', 'PUT', {
+    await api('/strategy-suggestions/settings', 'PUT', {
       auto_execute_enabled: enabled,
       confidence_threshold: confidence,
       daily_auto_limit: dailyLimit,

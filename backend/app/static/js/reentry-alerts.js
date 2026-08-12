@@ -17,7 +17,7 @@
 
 async function loadReentryAlerts() {
   try {
-    const alerts = await api('/api/v1/reentry-alerts', 'GET');
+    const alerts = await api('/reentry-alerts', 'GET');
     const card = document.getElementById('reentry-alerts-card');
     const countEl = document.getElementById('reentry-alerts-count');
     const listEl = document.getElementById('reentry-alerts-list');
@@ -72,7 +72,7 @@ async function loadReentryAlerts() {
 async function deleteReentryAlert(safeKey) {
   try {
     const key = decodeURIComponent(safeKey);
-    await api('/api/v1/reentry-alerts/' + encodeURIComponent(key), 'DELETE');
+    await api('/reentry-alerts/' + encodeURIComponent(key), 'DELETE');
     if (typeof toast === 'function') toast('✅ 알람 삭제', 'success');
     loadReentryAlerts();  // 즉시 재로드
   } catch (e) {
