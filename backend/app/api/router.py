@@ -14,6 +14,7 @@ from app.api.v1.strategy_suggestions import router as strategy_suggestions_route
 from app.api.v1.suggestion_profiles import router as suggestion_profiles_router  # 🌟 v132 프로필!
 from app.api.v1.analysis import router as analysis_router  # 🌟 v133c 심볼/전략 상세 분석!
 from app.api.v1.live_pump_dump import router as live_pump_dump_router  # 🌟 v133d 급등락 실시간 진입!
+from app.api.v1.trade_learning import router as trade_learning_router  # 🎓 v134 학습 + TP/SL 조정 제안!
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth_router)
@@ -31,3 +32,4 @@ api_router.include_router(strategy_suggestions_router)  # 🌟 v132 전략 제�
 api_router.include_router(suggestion_profiles_router)  # 🌟 v132 제안 프로필!
 api_router.include_router(analysis_router)  # 🌟 v133c 심볼/전략 상세 분석!
 api_router.include_router(live_pump_dump_router)  # 🌟 v133d 급등락 실시간 진입!
+api_router.include_router(trade_learning_router)  # 🎓 v134 학습 + TP/SL 조정 제안!

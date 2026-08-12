@@ -218,6 +218,17 @@ def start_scheduler() -> None:
         id="daily_briefing",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🎓 v134 신 (2026-08-13 사장님!): 모든 거래 자동 학습!
+    # 활성 전략 = on_entry/snapshot, STOPPED = on_exit + insights!
+    def _learning_sync():
+        from app.workers.learning_sync_worker import run_learning_sync
+        run_learning_sync()
+    scheduler.add_job(
+        guarded_job("learning_sync", 240, _learning_sync),
+        trigger=IntervalTrigger(minutes=5),
+        id="learning_sync",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.

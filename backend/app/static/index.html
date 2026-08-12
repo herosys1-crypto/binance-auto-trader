@@ -1048,6 +1048,28 @@
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('orders')">📥 주문 CSV</button>
       </div>
 
+      <!-- 🎓 v134 신 (2026-08-13 사장님!): TP/SL 조정 제안 카드! -->
+      <div id="tp-sl-advisor-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(59,130,246,0.15),rgba(139,92,246,0.15));border:1px solid rgba(59,130,246,0.4)">
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-1">
+          <span class="text-sm font-bold" style="color:#93c5fd">
+            🎯 TP/SL 조정 제안 <span id="tp-sl-adv-count" style="background:#3b82f6;color:#fff;padding:1px 6px;border-radius:8px;font-size:11px">0</span>
+          </span>
+          <div class="flex items-center gap-1 flex-wrap">
+            <button onclick="scanTpSlAdvisor()"
+                    class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-2 py-1 rounded font-bold"
+                    title="지금 즉시 스캔!">🔍 지금 스캔</button>
+            <button onclick="loadLearningSummary()"
+                    class="text-xs bg-purple-700 hover:bg-purple-600 text-white px-2 py-1 rounded"
+                    title="학습 통계!">🎓 학습 통계</button>
+          </div>
+        </div>
+        <div class="text-xs text-slate-400 mb-2">
+          활성 포지션 = 심볼 흐름 분석 → 조정 제안! 사장님이 선택! (차후 자동!)
+        </div>
+        <div id="tp-sl-adv-list" class="space-y-2"></div>
+        <div id="learning-summary" class="mt-2 text-xs text-slate-400" style="display:none"></div>
+      </div>
+
       <!-- 🚀 v133d 신 (2026-08-13 사장님!): 급등락 실시간 진입 카드! -->
       <div id="live-pump-dump-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(239,68,68,0.15),rgba(34,197,94,0.15));border:1px solid rgba(239,68,68,0.4)">
         <div class="flex items-center justify-between mb-2 flex-wrap gap-1">
@@ -2397,6 +2419,7 @@
 <script src="/static/js/pump-bb-alerts.js?v=20260809v131-pump-bb"></script>
 <script src="/static/js/strategy-suggestions.js?v=20260813v133d-live-menu"></script>
 <script src="/static/js/live-pump-dump-alerts.js?v=20260813v133d"></script>
+<script src="/static/js/tp-sl-advisor.js?v=20260813v134-learning"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
