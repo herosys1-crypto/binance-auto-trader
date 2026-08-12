@@ -18,7 +18,7 @@
 
 async function loadPumpBbAlerts() {
   try {
-    const alerts = await api('/pump-bb-alerts', 'GET');
+    const alerts = await api('/pump-bb-alerts');
     const card = document.getElementById('pump-bb-alerts-card');
     const countEl = document.getElementById('pump-bb-count');
     const listEl = document.getElementById('pump-bb-list');
@@ -75,7 +75,7 @@ async function loadPumpBbAlerts() {
 async function deletePumpBbAlert(safeKey) {
   try {
     const key = decodeURIComponent(safeKey);
-    await api('/pump-bb-alerts/' + encodeURIComponent(key), 'DELETE');
+    await api('/pump-bb-alerts/' + encodeURIComponent(key), { method: 'DELETE' });
     if (typeof toast === 'function') toast('✅ 알람 삭제', 'success');
     loadPumpBbAlerts();
   } catch (e) {

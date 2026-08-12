@@ -17,7 +17,7 @@
 
 async function loadStrategySuggestions() {
   try {
-    const suggestions = await api('/strategy-suggestions', 'GET');
+    const suggestions = await api('/strategy-suggestions');
     const card = document.getElementById('strategy-suggestions-card');
     const countEl = document.getElementById('suggestions-count');
     const listEl = document.getElementById('suggestions-list');
@@ -113,7 +113,7 @@ function _formatTimeAgo(iso) {
 async function executeSuggestion(id) {
   if (!confirm('이 전략 제안을 실행하시겠습니까?\n\n= 신 전략 즉시 생성됩니다!')) return;
   try {
-    const r = await api('/strategy-suggestions/' + id + '/execute', 'POST');
+    const r = await api('/strategy-suggestions/' + id + '/execute', { method: 'POST' });
     if (typeof toast === 'function') {
       toast(`✅ ${r.symbol} ${r.side} 실행!` + (r.note ? ` (${r.note})` : ''), 'success');
     }
@@ -126,7 +126,7 @@ async function executeSuggestion(id) {
 async function dismissSuggestion(id) {
   if (!confirm('이 제안을 삭제하시겠습니까?')) return;
   try {
-    await api('/strategy-suggestions/' + id, 'DELETE');
+    await api('/strategy-suggestions/' + id, { method: 'DELETE' });
     if (typeof toast === 'function') toast('✅ 제안 삭제', 'success');
     loadStrategySuggestions();
   } catch (e) {
@@ -139,7 +139,7 @@ async function triggerLearningNow() {
   if (!confirm('지금 즉시 학습 실행하시겠습니까?\n\n= Binance 급등/급락 top 40 예측!\n= 최대 30초 소요!')) return;
   try {
     if (typeof toast === 'function') toast('🎯 학습 시작! 30초 대기...', 'info');
-    const r = await api('/strategy-suggestions/trigger-now', 'POST');
+    const r = await api('/strategy-suggestions/trigger-now', { method: 'POST' });
     const created = (r.result || {}).created || 0;
     const preds = (r.result || {}).predictions || 0;
     if (typeof toast === 'function') {
@@ -154,7 +154,7 @@ async function triggerLearningNow() {
 async function briefingNow() {
   if (!confirm('지금 즉시 브리핑 발송하시겠습니까?\n\n= Telegram으로 요약!')) return;
   try {
-    const r = await api('/strategy-suggestions/briefing-now', 'POST');
+    const r = await api('/strategy-suggestions/briefing-now', { method: 'POST' });
     if (typeof toast === 'function') {
       toast(`✅ 브리핑 발송 완료! Telegram 확인!`, 'success');
     }
@@ -165,7 +165,7 @@ async function briefingNow() {
 
 async function openSuggestionsSettingsModal() {
   try {
-    const settings = await api('/strategy-suggestions/settings', 'GET');
+    const settings = await api('/strategy-suggestions/settings');
 
     const existing = document.getElementById('suggestions-settings-modal');
     if (existing) existing.remove();
@@ -251,11 +251,14 @@ async function saveSuggestionsSettings() {
     const dailyLimit = document.getElementById('sug-daily-limit').value;
     const autoDismiss = document.getElementById('sug-auto-dismiss').value;
 
-    await api('/strategy-suggestions/settings', 'PUT', {
-      auto_execute_enabled: enabled,
-      confidence_threshold: confidence,
-      daily_auto_limit: dailyLimit,
-      auto_dismiss_hours: autoDismiss,
+    await api('/strategy-suggestions/settings', {
+      method: 'PUT',
+      body: {
+        auto_execute_enabled: enabled,
+        confidence_threshold: confidence,
+        daily_auto_limit: dailyLimit,
+        auto_dismiss_hours: autoDismiss,
+      }
     });
 
     if (typeof toast === 'function') {
