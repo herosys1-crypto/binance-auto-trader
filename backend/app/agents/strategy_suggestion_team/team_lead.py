@@ -68,14 +68,24 @@ class StrategySuggestionTeamLead(BaseTeamLead):
         if not predictions:
             return {"error": "no predictions", "step": "predict"}
 
-        # 2. 급락 지속 필터! (선택!)
+        # 2. 급락 지속 필터! (선택 = dump_continuation만!)
         detector = self.get_agent(DescentPatternDetector)
         detect_result = detector.execute(db, decrypt_text, predictions)
-        # 지속 하락 확정 심볼 = confidence 상향된 것!
-        # + pump_end 는 그대로 유지!
+        # 지속 하락 확정 심볼 (dump_continuation!) = confidence 상향된 것!
         filtered = detect_result.get("filtered", [])
-        # dump_continuation은 filtered, pump_end는 원본!
-        final = [p for p in predictions if p.get("type") == "pump_end"] + filtered
+
+        # 🌟 v132 (2026-08-12 사장님!): 모든 타입 포함!
+        # 옛 (SHORT만!): pump_end + dump_continuation(filtered)
+        # 신 (LONG + SHORT!):
+        #   - pump_end (SHORT)
+        #   - pump_continuation (LONG!)
+        #   - dump_reversal (LONG!)
+        #   - dump_continuation (SHORT!) = filtered에서 (확정 심볼만!)
+        non_dump_continuation = [
+            p for p in predictions
+            if p.get("type") in ("pump_end", "pump_continuation", "dump_reversal")
+        ]
+        final = non_dump_continuation + filtered
 
         # 3. DB 저장!
         generator = self.get_agent(StrategySuggestionGenerator)
