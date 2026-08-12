@@ -64,6 +64,91 @@ def list_records(
     ]
 
 
+@router.get("/prediction-stats")
+def prediction_stats(
+    days: int = 30,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🎓 예측 학습 통계! (사장님 요구!)
+
+    - 최근 N일 예측 성공률!
+    - 심볼별 TOP 성공률!
+    - side별 성공률!
+    """
+    from app.models.strategy_suggestion import StrategySuggestion
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = db.execute(
+        select(StrategySuggestion)
+        .where(StrategySuggestion.created_at >= cutoff)
+        .where(StrategySuggestion.outcome_status.in_(["SUCCESS", "FAIL", "PENDING", "EXPIRED"]))
+    ).scalars().all()
+
+    total = len(rows)
+    pending = sum(1 for r in rows if r.outcome_status == "PENDING")
+    success = sum(1 for r in rows if r.outcome_status == "SUCCESS")
+    fail = sum(1 for r in rows if r.outcome_status == "FAIL")
+    expired = sum(1 for r in rows if r.outcome_status == "EXPIRED")
+    judged = success + fail
+
+    # side별!
+    long_success = sum(1 for r in rows if r.side == "LONG" and r.outcome_status == "SUCCESS")
+    long_fail = sum(1 for r in rows if r.side == "LONG" and r.outcome_status == "FAIL")
+    short_success = sum(1 for r in rows if r.side == "SHORT" and r.outcome_status == "SUCCESS")
+    short_fail = sum(1 for r in rows if r.side == "SHORT" and r.outcome_status == "FAIL")
+
+    # 심볼별 성공률!
+    sym_stats: dict[str, dict] = {}
+    for r in rows:
+        if r.outcome_status not in ("SUCCESS", "FAIL"):
+            continue
+        s = sym_stats.setdefault(r.symbol, {"total": 0, "wins": 0})
+        s["total"] += 1
+        if r.outcome_status == "SUCCESS":
+            s["wins"] += 1
+
+    top_symbols = []
+    bottom_symbols = []
+    for sym, stats in sym_stats.items():
+        if stats["total"] < 2:
+            continue
+        rate = round((stats["wins"] / stats["total"]) * 100, 1)
+        entry = {"symbol": sym, "count": stats["total"], "wins": stats["wins"], "rate": rate}
+        top_symbols.append(entry)
+    top_symbols.sort(key=lambda x: x["rate"], reverse=True)
+    bottom_symbols = list(reversed(top_symbols[-10:])) if len(top_symbols) > 10 else []
+    top_symbols = top_symbols[:10]
+
+    return {
+        "days": days,
+        "total": total,
+        "pending": pending,
+        "success": success,
+        "fail": fail,
+        "expired": expired,
+        "judged": judged,
+        "success_rate": round((success / judged * 100), 1) if judged else 0,
+        "long_success": long_success,
+        "long_fail": long_fail,
+        "long_success_rate": round(long_success / (long_success + long_fail) * 100, 1) if (long_success + long_fail) else 0,
+        "short_success": short_success,
+        "short_fail": short_fail,
+        "short_success_rate": round(short_success / (short_success + short_fail) * 100, 1) if (short_success + short_fail) else 0,
+        "top_symbols": top_symbols,
+        "bottom_symbols": bottom_symbols,
+    }
+
+
+@router.post("/prediction-outcome/run-now")
+def run_outcome_now(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🎓 예측 outcome = 지금 즉시 실행! (사장님 편의!)"""
+    from app.workers.prediction_outcome_worker import run_prediction_outcome
+    return run_prediction_outcome()
+
+
 @router.get("/summary")
 def learning_summary(
     days: int = 30,

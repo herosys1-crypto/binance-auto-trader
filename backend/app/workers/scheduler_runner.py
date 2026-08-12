@@ -229,6 +229,17 @@ def start_scheduler() -> None:
         id="learning_sync",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🎓 v135 (2026-08-13 사장님!): 예측 outcome 학습!
+    # 예측된 카드 = 실제 시장 변동 학습 → 심볼별 성공률!
+    def _prediction_outcome():
+        from app.workers.prediction_outcome_worker import run_prediction_outcome
+        run_prediction_outcome()
+    scheduler.add_job(
+        guarded_job("prediction_outcome", 900, _prediction_outcome),
+        trigger=IntervalTrigger(hours=1),
+        id="prediction_outcome",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.

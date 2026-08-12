@@ -72,6 +72,9 @@ class StrategySuggestionGenerator(BaseAgent):
 
         created_ids = []
         bus = get_event_bus()
+        # 🎓 v135 (2026-08-13 사장님!): 심볼 성공률 캐시!
+        success_rate_cache: dict[tuple[str, str], float] = {}
+
         for p in predictions:
             symbol = p["symbol"]
             if symbol in existing_set:
@@ -81,15 +84,32 @@ class StrategySuggestionGenerator(BaseAgent):
             side = p.get("side") or self._infer_side(p["type"])
             config = self._build_config(symbol, side, db=db)  # 프로필 참조!
 
+            # 🎓 v135: 심볼 성공률 반영 = confidence 조정!
+            raw_conf = float(p.get("confidence", 0.5))
+            try:
+                from app.workers.prediction_outcome_worker import get_symbol_success_rate
+                key = (symbol, side)
+                if key not in success_rate_cache:
+                    success_rate_cache[key] = get_symbol_success_rate(db, symbol, side, days=30)
+                sr = success_rate_cache[key]
+                # confidence * (0.5 + sr * 0.5) → sr=0.5(중립) 배율 0.75, sr=1.0 배율 1.0, sr=0 배율 0.5
+                adjusted_conf = raw_conf * (0.5 + sr * 0.5)
+                adjusted_conf = max(0.10, min(0.99, adjusted_conf))
+            except Exception:
+                sr = 0.5
+                adjusted_conf = raw_conf
+
             suggestion = StrategySuggestion(
                 symbol=symbol,
                 side=side,
                 suggestion_type=p["type"],
                 strategy_config=config,
-                confidence_score=Decimal(str(p.get("confidence", 0.5))),
+                confidence_score=Decimal(str(round(adjusted_conf, 4))),
                 reason=p.get("reason", ""),
                 status="PENDING",
                 execution_mode="MANUAL",  # ⭐ 기본 수동!
+                symbol_prior_success_rate=Decimal(str(round(sr, 4))),
+                outcome_status="PENDING",
             )
             db.add(suggestion)
             db.flush()

@@ -62,3 +62,13 @@ class StrategySuggestion(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+    # 🎓 v135 (2026-08-13 사장님!): 예측 학습 사이클!
+    outcome_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # PENDING / SUCCESS / FAIL / EXPIRED
+    outcome_change_1h: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    outcome_change_4h: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    outcome_change_24h: Mapped[Decimal | None] = mapped_column(Numeric(10, 4), nullable=True)
+    outcome_price_at_prediction: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    outcome_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    symbol_prior_success_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 4), nullable=True)

@@ -1048,6 +1048,29 @@
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('orders')">📥 주문 CSV</button>
       </div>
 
+      <!-- 🎓 v135 신 (2026-08-13 사장님!): 예측 학습 통계 카드! -->
+      <div id="prediction-stats-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(168,85,247,0.15),rgba(59,130,246,0.15));border:1px solid rgba(168,85,247,0.4)">
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-1">
+          <span class="text-sm font-bold" style="color:#c4b5fd">
+            🎓 예측 학습 통계 <span id="pred-stats-badge" style="background:#a855f7;color:#fff;padding:1px 6px;border-radius:8px;font-size:11px">-</span>
+          </span>
+          <div class="flex items-center gap-1">
+            <button onclick="runOutcomeNow()"
+                    class="text-xs bg-purple-600 hover:bg-purple-500 text-white px-2 py-1 rounded font-bold"
+                    title="지금 즉시 = 예측 outcome 확인!">🔄 지금 확인</button>
+            <button onclick="loadPredictionStats()"
+                    class="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded"
+                    title="통계 새로고침">🎓 새로고침</button>
+          </div>
+        </div>
+        <div class="text-xs text-slate-400 mb-2">
+          예측 후 = 실제 시장 변동 학습 → 심볼별 성공률 = 다음 예측 confidence 조정!
+        </div>
+        <div id="pred-stats-content" class="text-xs">
+          <div class="text-slate-400 text-center py-3">📊 로딩...</div>
+        </div>
+      </div>
+
       <!-- 🔎 v134a 신 (2026-08-13 사장님!): 심볼 분석기 카드! -->
       <div id="symbol-analyzer-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(6,182,212,0.15),rgba(59,130,246,0.15));border:1px solid rgba(6,182,212,0.4)">
         <div class="flex items-center justify-between mb-2 flex-wrap gap-1">
@@ -2461,6 +2484,7 @@
 <script src="/static/js/live-pump-dump-alerts.js?v=20260813v133d"></script>
 <script src="/static/js/tp-sl-advisor.js?v=20260813v134-learning"></script>
 <script src="/static/js/symbol-analyzer.js?v=20260813v134f-postmsg-safe"></script>
+<script src="/static/js/prediction-stats.js?v=20260813v135-learning"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES
