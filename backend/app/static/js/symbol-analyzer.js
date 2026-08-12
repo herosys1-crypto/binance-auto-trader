@@ -146,15 +146,52 @@
     }
   }
 
+  // 🌟 v134f: postMessage listener = 분석 창의 「세팅 후 진입」 자동 처리!
+  function _handleCreateModalMessage(event) {
+    try {
+      const data = event && event.data;
+      if (!data || data.type !== 'CREATE_MODAL_WITH_SYMBOL') return;
+      const sym = data.symbol;
+      const side = data.side || 'LONG';
+      if (!sym) return;
+      openCreateModalWithSymbol(sym, side);
+    } catch (e) {
+      console.warn('[postMessage] handler 실패:', e);
+    }
+  }
+
+  // 🌟 v134f: localStorage 감지 = 페이지 로드 시 = pendingCreateModal 자동 처리!
+  function _checkPendingCreateModal() {
+    try {
+      const raw = localStorage.getItem('pendingCreateModal');
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      // 5분 이내만 처리!
+      if (!data || !data.symbol || (Date.now() - (data.ts || 0)) > 5 * 60 * 1000) {
+        localStorage.removeItem('pendingCreateModal');
+        return;
+      }
+      // 삭제 후 처리 (중복 방지!)
+      localStorage.removeItem('pendingCreateModal');
+      openCreateModalWithSymbol(data.symbol, data.side || 'LONG');
+    } catch (e) {
+      console.warn('[pendingCreateModal] 처리 실패:', e);
+    }
+  }
+
   if (typeof window !== 'undefined') {
     window.analyzeSymbolNow = analyzeSymbolNow;
     window.loadActiveSymbolsForAnalyzer = loadActiveSymbolsForAnalyzer;
     window.openActiveStrategyAnalysis = openActiveStrategyAnalysis;
     window.openCreateModalAnalysis = openCreateModalAnalysis;  // 🔎 v134c!
     window.openCreateModalWithSymbol = openCreateModalWithSymbol;  // 🌟 v134d!
+    // postMessage listener = 항상 등록! (v134f 3중 안전!)
+    window.addEventListener('message', _handleCreateModalMessage);
     document.addEventListener('DOMContentLoaded', () => {
       setTimeout(loadActiveSymbolsForAnalyzer, 2500);
       setInterval(loadActiveSymbolsForAnalyzer, 60000);  // 60초마다 새로고침!
+      // 페이지 로드 시 = localStorage pending 확인!
+      setTimeout(_checkPendingCreateModal, 1500);
     });
   }
 })();
