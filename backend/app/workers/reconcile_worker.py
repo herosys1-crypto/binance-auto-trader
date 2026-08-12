@@ -489,6 +489,32 @@ def _do_reconcile(decrypt_func) -> None:
                         .where(StrategyStagePlan.strategy_instance_id == strategy.id)
                         .where(StrategyStagePlan.stage_no == pending_stage_no)
                     ).scalar_one_or_none()
+
+                    # 🚨 2026-08-13 v133 CRITICAL fix (사장님 RAREUSDT 사고!):
+                    # user-stream 놓친 경우 = plan.is_triggered = False!
+                    # 거래소 = 실 포지션 있으면 = 자동 True 갱신!
+                    # = TP/SL 감시 = 자동 회복!
+                    if plan is not None and not plan.is_triggered and exchange_position_amt != 0:
+                        from datetime import datetime as _dt
+                        plan.is_triggered = True
+                        plan.triggered_at = _dt.now(timezone.utc)
+                        db.add(RiskEvent(
+                            strategy_instance_id=strategy.id,
+                            event_type="RECONCILE_TRIGGER_RECOVERED",
+                            severity="WARN",
+                            title="🚨 stage_plan.is_triggered 자동 회복! (user-stream 놓침 fix!)",
+                            message=(
+                                f"stage {pending_stage_no} = is_triggered=False + 실 포지션={exchange_position_amt} "
+                                f"= user-stream 이벤트 놓침! 자동 True 갱신 = TP/SL 감시 회복!"
+                            ),
+                            event_payload={
+                                "strategy_id": strategy.id,
+                                "stage_no": pending_stage_no,
+                                "position_amt": str(exchange_position_amt),
+                            },
+                        ))
+                        db.flush()  # is_triggered = True 반영!
+
                     if plan is not None and plan.is_triggered:
                         db.add(RiskEvent(
                             strategy_instance_id=strategy.id,
