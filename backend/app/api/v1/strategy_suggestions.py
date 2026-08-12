@@ -84,6 +84,59 @@ def list_suggestions(
     return [SuggestionResponse.model_validate(r, from_attributes=True) for r in _rows]
 
 
+# 🚨 v132 CRITICAL fix (사장님 404 사고!):
+# /settings = /{suggestion_id} 앞에 정의!
+# FastAPI = 순서대로 매칭 = "settings" → "{suggestion_id}" (int 파싱 실패!) = 404!
+# = specific routes must come BEFORE parametric routes!
+@router.get("/settings", response_model=SettingsResponse)
+def get_settings(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> SettingsResponse:
+    """자동 실행 세팅 조회!"""
+    _e = db.get(SystemSetting, "suggestion_auto_execute_enabled")
+    _c = db.get(SystemSetting, "suggestion_confidence_threshold")
+    _l = db.get(SystemSetting, "suggestion_daily_auto_limit")
+    _d = db.get(SystemSetting, "suggestion_auto_dismiss_hours")
+    return SettingsResponse(
+        auto_execute_enabled=(_e.value.lower() == "true") if _e else False,
+        confidence_threshold=_c.value if _c else "0.85",
+        daily_auto_limit=_l.value if _l else "3",
+        auto_dismiss_hours=_d.value if _d else "24",
+    )
+
+
+@router.put("/settings", response_model=SettingsResponse)
+def update_settings(
+    payload: SettingsUpdate,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> SettingsResponse:
+    """자동 실행 세팅 저장!"""
+    def _upsert(key: str, value: str, desc: str):
+        row = db.get(SystemSetting, key)
+        if row:
+            row.value = value
+        else:
+            row = SystemSetting(key=key, value=value, description=desc)
+            db.add(row)
+
+    _upsert("suggestion_auto_execute_enabled",
+            "true" if payload.auto_execute_enabled else "false",
+            "전략 제안 자동 실행 (기본 OFF - 사장님 사상!)")
+    _upsert("suggestion_confidence_threshold",
+            str(payload.confidence_threshold),
+            "자동 실행 최소 신뢰도")
+    _upsert("suggestion_daily_auto_limit",
+            str(payload.daily_auto_limit),
+            "일일 자동 실행 한도")
+    _upsert("suggestion_auto_dismiss_hours",
+            str(payload.auto_dismiss_hours),
+            "미실행 자동 삭제 시간")
+    db.commit()
+    return get_settings(db, user_id)
+
+
 @router.delete("/{suggestion_id}")
 def dismiss_suggestion(
     suggestion_id: int,
@@ -145,51 +198,4 @@ def execute_suggestion(
         "note": "MVP 상태 - 실 전략 생성 = 다음 세션 완성!",
     }
 
-
-@router.get("/settings", response_model=SettingsResponse)
-def get_settings(
-    db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
-) -> SettingsResponse:
-    """자동 실행 세팅 조회!"""
-    _e = db.get(SystemSetting, "suggestion_auto_execute_enabled")
-    _c = db.get(SystemSetting, "suggestion_confidence_threshold")
-    _l = db.get(SystemSetting, "suggestion_daily_auto_limit")
-    _d = db.get(SystemSetting, "suggestion_auto_dismiss_hours")
-    return SettingsResponse(
-        auto_execute_enabled=(_e.value.lower() == "true") if _e else False,
-        confidence_threshold=_c.value if _c else "0.85",
-        daily_auto_limit=_l.value if _l else "3",
-        auto_dismiss_hours=_d.value if _d else "24",
-    )
-
-
-@router.put("/settings", response_model=SettingsResponse)
-def update_settings(
-    payload: SettingsUpdate,
-    db: Session = Depends(get_db),
-    user_id: int = Depends(get_current_user_id),
-) -> SettingsResponse:
-    """자동 실행 세팅 저장!"""
-    def _upsert(key: str, value: str, desc: str):
-        row = db.get(SystemSetting, key)
-        if row:
-            row.value = value
-        else:
-            row = SystemSetting(key=key, value=value, description=desc)
-            db.add(row)
-
-    _upsert("suggestion_auto_execute_enabled",
-            "true" if payload.auto_execute_enabled else "false",
-            "전략 제안 자동 실행 (기본 OFF - 사장님 사상!)")
-    _upsert("suggestion_confidence_threshold",
-            str(payload.confidence_threshold),
-            "자동 실행 최소 신뢰도")
-    _upsert("suggestion_daily_auto_limit",
-            str(payload.daily_auto_limit),
-            "일일 자동 실행 한도")
-    _upsert("suggestion_auto_dismiss_hours",
-            str(payload.auto_dismiss_hours),
-            "미실행 자동 삭제 시간")
-    db.commit()
-    return get_settings(db, user_id)
+# 🚨 v132 fix: 중복 /settings routes 제거 (위로 이동!)
