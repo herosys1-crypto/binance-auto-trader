@@ -1715,6 +1715,13 @@
             <button id="cm-side-short" onclick="setCmSide('SHORT')" class="btn flex-1" style="background:#ef4444; color:#fff">📉 숏</button>
             <button id="cm-side-long"  onclick="setCmSide('LONG')"  class="btn flex-1 btn-ghost">📈 롱</button>
           </div>
+          <!-- 🔎 v134c 신 (사장님!): 심볼 분석기 버튼! -->
+          <button onclick="openCreateModalAnalysis()"
+                  class="btn w-full mt-2"
+                  style="background:linear-gradient(135deg,#0891b2,#3b82f6);color:#fff;padding:6px 10px;font-size:12px;font-weight:600"
+                  title="현재 심볼 + 방향 = 즉시 분석 새 창!">
+            📊 이 심볼 지금 분석
+          </button>
         </div>
       </div>
       </div><!-- 🌟 v93: /cm-symbol-sticky-wrap -->
@@ -2453,7 +2460,7 @@
 <script src="/static/js/strategy-suggestions.js?v=20260813v133d-live-menu"></script>
 <script src="/static/js/live-pump-dump-alerts.js?v=20260813v133d"></script>
 <script src="/static/js/tp-sl-advisor.js?v=20260813v134-learning"></script>
-<script src="/static/js/symbol-analyzer.js?v=20260813v134a-symbol-analyzer"></script>
+<script src="/static/js/symbol-analyzer.js?v=20260813v134c-create-modal"></script>
 <script>
 // 위 모듈에서 로드된 전역:
 //   constants.js          → STATUS_MAP / ORDER_STATUS_MAP / PURPOSE_MAP / TERMINAL_STATUSES

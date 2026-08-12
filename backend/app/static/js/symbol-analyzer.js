@@ -79,10 +79,38 @@
     window.open(url, '_blank', 'width=800,height=900,scrollbars=yes');
   }
 
+  // 🔎 v134c: 신 전략 modal의 심볼 + 방향 = 즉시 분석!
+  function openCreateModalAnalysis() {
+    try {
+      const symInput = document.getElementById('cm-symbol');
+      let symbol = symInput ? (symInput.value || '').trim().toUpperCase() : '';
+      if (!symbol) {
+        if (typeof toast === 'function') toast('❌ 심볼 입력 필요!', 'error');
+        return;
+      }
+      if (!symbol.endsWith('USDT') && !symbol.includes('/')) {
+        symbol = symbol + 'USDT';
+      }
+      // side = cmState.side (cm-state-helpers.js!)
+      let side = 'LONG';
+      try {
+        if (typeof window.cmState !== 'undefined' && window.cmState.side) {
+          side = window.cmState.side;
+        }
+      } catch (_e) { /* fallback = LONG */ }
+
+      const url = `/static/analysis.html?symbol=${encodeURIComponent(symbol)}&side=${side}`;
+      window.open(url, '_blank', 'width=800,height=900,scrollbars=yes');
+    } catch (e) {
+      console.warn('[create-modal] analysis 열기 실패:', e);
+    }
+  }
+
   if (typeof window !== 'undefined') {
     window.analyzeSymbolNow = analyzeSymbolNow;
     window.loadActiveSymbolsForAnalyzer = loadActiveSymbolsForAnalyzer;
     window.openActiveStrategyAnalysis = openActiveStrategyAnalysis;
+    window.openCreateModalAnalysis = openCreateModalAnalysis;  // 🔎 v134c!
     document.addEventListener('DOMContentLoaded', () => {
       setTimeout(loadActiveSymbolsForAnalyzer, 2500);
       setInterval(loadActiveSymbolsForAnalyzer, 60000);  // 60초마다 새로고침!
