@@ -243,60 +243,175 @@ async function briefingNow() {
 
 async function openSuggestionsSettingsModal() {
   try {
-    const settings = await api('/strategy-suggestions/settings');
+    const [settings, profilesData] = await Promise.all([
+      api('/strategy-suggestions/settings'),
+      api('/suggestion-profiles'),
+    ]);
+    const profiles = profilesData.profiles || [];
+    const currentDefault = profilesData.default || 'safe';
+    const cfg = (profiles.find(p => p.name === currentDefault) || profiles[0] || {}).config || {};
 
     const existing = document.getElementById('suggestions-settings-modal');
     if (existing) existing.remove();
+
+    // 프로필 옵션 HTML
+    const profileOpts = profiles.map(p =>
+      `<option value="${p.name}" ${p.name === currentDefault ? 'selected' : ''}>${p.label || p.name}</option>`
+    ).join('');
 
     const html = `
       <div id="suggestions-settings-modal" class="fixed inset-0 z-50 flex items-center justify-center"
            style="background:rgba(0,0,0,0.7)"
            onclick="if(event.target===this)closeSuggestionsSettingsModal()">
-        <div class="bg-slate-900 rounded-lg p-6 max-w-md w-full mx-4"
-             style="border:2px solid #a855f7;box-shadow:0 0 20px #a855f766">
+        <div class="bg-slate-900 rounded-lg p-6 max-w-2xl w-full mx-4"
+             style="border:2px solid #a855f7;box-shadow:0 0 20px #a855f766;max-height:90vh;overflow-y:auto">
           <h3 class="text-lg font-bold text-purple-300 mb-3">
-            ⚙ 전략 제안 자동 실행 세팅
+            ⚙ 전략 제안 세팅
           </h3>
-          <p class="text-xs text-slate-400 mb-3">
-            💡 <strong>기본 = OFF (수동!)</strong><br>
-            사장님 = 자동 실행 = 위험 감수!
-          </p>
 
-          <div class="space-y-3">
-            <label class="flex items-center gap-2 text-sm text-slate-200 cursor-pointer">
-              <input type="checkbox" id="sug-auto-enabled"
-                     ${settings.auto_execute_enabled?'checked':''}
-                     style="width:18px;height:18px;cursor:pointer">
-              <span class="font-bold">🤖 자동 실행 활성화</span>
-            </label>
-            <p class="text-xs text-yellow-400 -mt-2 ml-6">⚠️ ON = 사장님 승인 없이 = 자동 진입!</p>
+          <!-- ═══════ 섹션 1: 자동 실행 세팅 ═══════ -->
+          <div class="mb-4 p-3 rounded bg-slate-800 border border-slate-700">
+            <h4 class="text-sm font-bold text-yellow-300 mb-2">🤖 자동 실행 (기본 OFF!)</h4>
+            <div class="space-y-2">
+              <label class="flex items-center gap-2 text-sm text-slate-200 cursor-pointer">
+                <input type="checkbox" id="sug-auto-enabled"
+                       ${settings.auto_execute_enabled?'checked':''}
+                       style="width:16px;height:16px;cursor:pointer">
+                <span class="font-bold">자동 실행 활성화</span>
+              </label>
+              <p class="text-xs text-yellow-400 ml-6">⚠️ ON = 승인 없이 자동 진입!</p>
 
-            <div>
-              <label class="text-sm text-slate-300 block mb-1">🎯 자동 실행 최소 신뢰도:</label>
-              <input type="number" id="sug-confidence"
-                     value="${settings.confidence_threshold}"
-                     min="0" max="1" step="0.01"
-                     class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 text-sm">
-              <p class="text-xs text-slate-500 mt-1">0.85 이상 권장!</p>
-            </div>
-
-            <div>
-              <label class="text-sm text-slate-300 block mb-1">📆 일일 자동 실행 한도:</label>
-              <input type="number" id="sug-daily-limit"
-                     value="${settings.daily_auto_limit}"
-                     min="1" max="10" step="1"
-                     class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 text-sm">
-            </div>
-
-            <div>
-              <label class="text-sm text-slate-300 block mb-1">⏰ 미실행 자동 삭제 (시간):</label>
-              <input type="number" id="sug-auto-dismiss"
-                     value="${settings.auto_dismiss_hours}"
-                     min="0" max="72" step="1"
-                     class="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-slate-200 text-sm">
-              <p class="text-xs text-slate-500 mt-1">0 = 자동 삭제 안 함!</p>
+              <div class="grid grid-cols-3 gap-2 text-xs">
+                <div>
+                  <label class="text-slate-400">🎯 신뢰도:</label>
+                  <input type="number" id="sug-confidence"
+                         value="${settings.confidence_threshold}"
+                         min="0" max="1" step="0.01"
+                         class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-200">
+                </div>
+                <div>
+                  <label class="text-slate-400">📆 일일 한도:</label>
+                  <input type="number" id="sug-daily-limit"
+                         value="${settings.daily_auto_limit}"
+                         min="1" max="10"
+                         class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-200">
+                </div>
+                <div>
+                  <label class="text-slate-400">⏰ 자동 삭제(h):</label>
+                  <input type="number" id="sug-auto-dismiss"
+                         value="${settings.auto_dismiss_hours}"
+                         min="0" max="72"
+                         class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-200">
+                </div>
+              </div>
             </div>
           </div>
+
+          <!-- ═══════ 섹션 2: 기본 프로필 세팅 (신!) ═══════ -->
+          <div class="mb-4 p-3 rounded bg-slate-800 border border-purple-700">
+            <h4 class="text-sm font-bold text-purple-300 mb-2">💰 기본 세팅값 (프로필!)</h4>
+            <p class="text-xs text-slate-400 mb-2">
+              💡 자동 학습 = 이 프로필로 신 전략 제안!<br>
+              💡 개별 세팅 (「✏ 세팅 후 진입」) = 이 값 = 시작점!
+            </p>
+
+            <div class="mb-2">
+              <label class="text-xs text-slate-400 block mb-1">📋 현재 default 프로필:</label>
+              <select id="sug-profile-select"
+                      onchange="_switchProfile(this.value)"
+                      class="w-full bg-slate-900 border border-purple-600 rounded px-2 py-1 text-slate-200 text-sm">
+                ${profileOpts}
+              </select>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <label class="text-slate-400">⚡ 레버리지:</label>
+                <input type="number" id="prof-leverage" value="${cfg.leverage||2}" min="1" max="125"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-200">
+              </div>
+              <div>
+                <label class="text-slate-400">🛑 강제 SL (%):</label>
+                <input type="number" id="prof-force-sl" value="${cfg.force_sl_roi_override||15}" min="0" max="100"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-slate-200">
+              </div>
+            </div>
+
+            <div class="grid grid-cols-4 gap-1 mt-2 text-xs">
+              <div>
+                <label class="text-slate-400">1단계 자본:</label>
+                <input type="number" id="prof-cap-1" value="${(cfg.capitals||[])[0]||500}"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
+              </div>
+              <div>
+                <label class="text-slate-400">2단계:</label>
+                <input type="number" id="prof-cap-2" value="${(cfg.capitals||[])[1]||500}"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
+              </div>
+              <div>
+                <label class="text-slate-400">3단계:</label>
+                <input type="number" id="prof-cap-3" value="${(cfg.capitals||[])[2]||500}"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
+              </div>
+              <div>
+                <label class="text-slate-400">4단계:</label>
+                <input type="number" id="prof-cap-4" value="${(cfg.capitals||[])[3]||500}"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
+              </div>
+            </div>
+
+            <div class="grid grid-cols-4 gap-1 mt-2 text-xs">
+              <div>
+                <label class="text-slate-400">TP1 %:</label>
+                <input type="number" id="prof-tp1-pct" value="${cfg.tp1_percent||10}"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
+              </div>
+              <div>
+                <label class="text-slate-400">TP2 %:</label>
+                <input type="number" id="prof-tp2-pct" value="${cfg.tp2_percent||15}"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
+              </div>
+              <div>
+                <label class="text-slate-400">TP3 %:</label>
+                <input type="number" id="prof-tp3-pct" value="${cfg.tp3_percent||20}"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
+              </div>
+              <div>
+                <label class="text-slate-400">TP4 %:</label>
+                <input type="number" id="prof-tp4-pct" value="${cfg.tp4_percent||25}"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
+              </div>
+              <div>
+                <label class="text-slate-400">TP1 qty:</label>
+                <input type="number" id="prof-tp1-qty" value="${cfg.tp1_qty_ratio||10}"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
+              </div>
+              <div>
+                <label class="text-slate-400">TP2 qty:</label>
+                <input type="number" id="prof-tp2-qty" value="${cfg.tp2_qty_ratio||15}"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
+              </div>
+              <div>
+                <label class="text-slate-400">TP3 qty:</label>
+                <input type="number" id="prof-tp3-qty" value="${cfg.tp3_qty_ratio||20}"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
+              </div>
+              <div>
+                <label class="text-slate-400">TP4 qty:</label>
+                <input type="number" id="prof-tp4-qty" value="${cfg.tp4_qty_ratio||25}"
+                       class="w-full bg-slate-900 border border-slate-600 rounded px-1 py-1 text-slate-200 text-center">
+              </div>
+            </div>
+
+            <p class="text-xs text-green-300 mt-2">
+              💡 저장 후 = 다음 학습부터 = 이 값 사용!
+            </p>
+          </div>
+
+          <p class="text-xs text-blue-300 mb-3">
+            💡 <strong>개별 세팅 우선!</strong> 「✏ 세팅 후 진입」 = 사장님 조정 가능!<br>
+            💡 <strong>이 기본값</strong> = 자동 학습 + 신 제안 시 = 시작점!
+          </p>
 
           <div class="flex gap-2 mt-4">
             <button onclick="saveSuggestionsSettings()"
@@ -322,8 +437,41 @@ function closeSuggestionsSettingsModal() {
   if (el) el.remove();
 }
 
+// 🌟 v132 사장님: 프로필 전환!
+async function _switchProfile(profileName) {
+  try {
+    const profilesData = await api('/suggestion-profiles');
+    const profiles = profilesData.profiles || [];
+    const p = profiles.find(x => x.name === profileName);
+    if (!p) return;
+    const cfg = p.config || {};
+    // 폼 값 갱신!
+    const set = (id, val) => {
+      const el = document.getElementById(id);
+      if (el) el.value = val !== undefined ? val : '';
+    };
+    set('prof-leverage', cfg.leverage || 2);
+    set('prof-force-sl', cfg.force_sl_roi_override || 15);
+    set('prof-cap-1', (cfg.capitals||[])[0] || 500);
+    set('prof-cap-2', (cfg.capitals||[])[1] || 500);
+    set('prof-cap-3', (cfg.capitals||[])[2] || 500);
+    set('prof-cap-4', (cfg.capitals||[])[3] || 500);
+    set('prof-tp1-pct', cfg.tp1_percent || 10);
+    set('prof-tp2-pct', cfg.tp2_percent || 15);
+    set('prof-tp3-pct', cfg.tp3_percent || 20);
+    set('prof-tp4-pct', cfg.tp4_percent || 25);
+    set('prof-tp1-qty', cfg.tp1_qty_ratio || 10);
+    set('prof-tp2-qty', cfg.tp2_qty_ratio || 15);
+    set('prof-tp3-qty', cfg.tp3_qty_ratio || 20);
+    set('prof-tp4-qty', cfg.tp4_qty_ratio || 25);
+  } catch (_e) {
+    console.warn('[profile] 전환 실패:', _e);
+  }
+}
+
 async function saveSuggestionsSettings() {
   try {
+    // 1. 자동 실행 세팅 저장!
     const enabled = document.getElementById('sug-auto-enabled').checked;
     const confidence = document.getElementById('sug-confidence').value;
     const dailyLimit = document.getElementById('sug-daily-limit').value;
@@ -339,8 +487,52 @@ async function saveSuggestionsSettings() {
       }
     });
 
+    // 2. 🌟 신: 기본 프로필 세팅 저장!
+    const profileName = document.getElementById('sug-profile-select').value;
+    const num = (id, def) => {
+      const el = document.getElementById(id);
+      return el ? Number(el.value) || def : def;
+    };
+    // 신 config 구성!
+    const newConfig = {
+      leverage: num('prof-leverage', 2),
+      capitals: [num('prof-cap-1', 500), num('prof-cap-2', 500), num('prof-cap-3', 500), num('prof-cap-4', 500)],
+      trigger_percents: [null, 10, 20, 20],
+      tp1_percent: num('prof-tp1-pct', 10),
+      tp2_percent: num('prof-tp2-pct', 15),
+      tp3_percent: num('prof-tp3-pct', 20),
+      tp4_percent: num('prof-tp4-pct', 25),
+      tp1_qty_ratio: num('prof-tp1-qty', 10),
+      tp2_qty_ratio: num('prof-tp2-qty', 15),
+      tp3_qty_ratio: num('prof-tp3-qty', 20),
+      tp4_qty_ratio: num('prof-tp4-qty', 25),
+      tp1_pct_override: 25,
+      force_sl_enabled_override: true,
+      force_sl_roi_override: num('prof-force-sl', 15),
+      stop_loss_percent_of_capital: 90,
+      start_price: null,
+      retry_after_liquidation_enabled: false,
+      retry_trigger_pct: 10,
+    };
+
+    // 기존 프로필 리스트 로드 + 현재 프로필 update!
+    const profilesData = await api('/suggestion-profiles');
+    const profiles = profilesData.profiles || [];
+    const idx = profiles.findIndex(p => p.name === profileName);
+    if (idx >= 0) {
+      profiles[idx].config = newConfig;
+    }
+    // 저장!
+    await api('/suggestion-profiles', {
+      method: 'PUT',
+      body: {
+        profiles: profiles,
+        default: profileName,  // 사장님 선택 = default!
+      }
+    });
+
     if (typeof toast === 'function') {
-      toast(`✅ 세팅 저장! 자동 실행 ${enabled?'ON 🤖':'OFF 🙋'}`, 'success');
+      toast(`✅ 세팅 + 프로필 저장! 자동 실행 ${enabled?'ON 🤖':'OFF 🙋'}, default = ${profileName}`, 'success');
     }
     closeSuggestionsSettingsModal();
   } catch (e) {
@@ -354,6 +546,7 @@ if (typeof window !== 'undefined') {
   window.dismissSuggestion = dismissSuggestion;
   window.triggerLearningNow = triggerLearningNow;  // v132 즉시 실행!
   window.briefingNow = briefingNow;  // v132 즉시 브리핑!
+  window._switchProfile = _switchProfile;  // v132 프로필 전환!
   window.openSuggestionsSettingsModal = openSuggestionsSettingsModal;
   window.closeSuggestionsSettingsModal = closeSuggestionsSettingsModal;
   window.saveSuggestionsSettings = saveSuggestionsSettings;
