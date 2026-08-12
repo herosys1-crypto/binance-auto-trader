@@ -87,15 +87,36 @@ function renderSuggestions() {
 
     const suggestions = filtered;
     countEl.textContent = String(all.length);
-    // 아래 렌더링 로직 (기존!)
-    const cardsHtml = suggestions.map(s => {
+    // 아래 렌더링 로직 (v133 사장님 요구: 신뢰도 순 + 순위 + 배지!)
+    const cardsHtml = suggestions.map((s, idx) => {
       const side = s.side || 'SHORT';
       const sideColor = side === 'LONG' ? '#22c55e' : '#ef4444';
       const sideIcon = side === 'LONG' ? '🐂' : '🐻';
       const sideLabel = side === 'LONG' ? 'LONG' : 'SHORT';
-      const conf = s.confidence_score
-        ? (Number(s.confidence_score) * 100).toFixed(0) + '%'
-        : '?';
+      const confRaw = s.confidence_score ? Number(s.confidence_score) : 0;
+      const confPct = (confRaw * 100).toFixed(0);
+      const conf = confRaw ? confPct + '%' : '?';
+
+      // 🌟 v133 신: 신뢰도별 배지 + 색상!
+      let confBadge = '';
+      let confColor = '#fbbf24';  // 기본 노랑
+      if (confRaw >= 0.90) {
+        confBadge = '🔥 최상';
+        confColor = '#ef4444';  // 빨강 = 최상!
+      } else if (confRaw >= 0.80) {
+        confBadge = '⭐ 상';
+        confColor = '#f59e0b';  // 주황 = 상!
+      } else if (confRaw >= 0.70) {
+        confBadge = '✨ 중';
+        confColor = '#fbbf24';  // 노랑 = 중!
+      } else {
+        confBadge = '💧 하';
+        confColor = '#94a3b8';  // 회색 = 하!
+      }
+
+      // 순위 (1위, 2위, 3위!)
+      const rankIcon = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`;
+
       const createdAgo = _formatTimeAgo(s.created_at);
       const cfg = s.strategy_config || {};
       const cap1 = (cfg.capitals && cfg.capitals[0]) || '?';
@@ -107,11 +128,12 @@ function renderSuggestions() {
         <div style="background:rgba(0,0,0,0.3);border:1px solid ${sideColor};border-radius:6px;padding:8px 10px;box-shadow:0 0 8px ${sideColor}44">
           <div class="flex items-center justify-between mb-1">
             <span class="text-sm font-bold" style="color:${sideColor}">
+              <span style="color:#c4b5fd;font-size:0.85em">${rankIcon}</span>
               ${sideIcon} ${s.symbol} ${sideLabel}
-              <span class="text-xs text-slate-400 ml-2">| ${s.suggestion_type}</span>
+              <span class="text-xs text-slate-400 ml-1">| ${s.suggestion_type}</span>
             </span>
-            <span class="text-xs font-bold" style="color:#fbbf24">
-              🎯 신뢰도 ${conf}
+            <span class="text-xs font-bold" style="color:${confColor}">
+              ${confBadge} ${conf}
             </span>
           </div>
           <div class="text-xs text-slate-400 mb-1">

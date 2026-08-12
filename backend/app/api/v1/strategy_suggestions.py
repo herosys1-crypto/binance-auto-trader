@@ -74,11 +74,19 @@ def list_suggestions(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> list[SuggestionResponse]:
-    """PENDING 제안 리스트 (최근 순!)"""
+    """PENDING 제안 리스트 (신뢰도 높은 순! v133 사장님 요구!)
+
+    신뢰도 = 성공 확률!
+    - 높을수록 = 확실한 예측!
+    - 사장님이 = 위부터 = 골라볼 수 있게!
+    """
     _rows = db.execute(
         select(StrategySuggestion)
         .where(StrategySuggestion.status == "PENDING")
-        .order_by(StrategySuggestion.created_at.desc())
+        .order_by(
+            StrategySuggestion.confidence_score.desc(),  # 🌟 신뢰도 우선!
+            StrategySuggestion.created_at.desc(),  # 동률 = 최근 순!
+        )
         .limit(50)
     ).scalars().all()
     return [SuggestionResponse.model_validate(r, from_attributes=True) for r in _rows]
