@@ -23,14 +23,15 @@ async function loadStrategySuggestions() {
     const listEl = document.getElementById('suggestions-list');
     if (!card || !countEl || !listEl) return;
 
+    // 🌟 v132 사장님: 항상 카드 표시! (0건이어도 「지금 실행」 버튼 접근!)
+    card.classList.remove('hidden');
+
     if (!suggestions || suggestions.length === 0) {
-      card.classList.add('hidden');
       countEl.textContent = '0';
-      listEl.innerHTML = '';
+      listEl.innerHTML = '<div class="text-xs text-slate-400 text-center py-2">아직 학습 X! 「🎯 지금 실행」 클릭!</div>';
       return;
     }
 
-    card.classList.remove('hidden');
     countEl.textContent = String(suggestions.length);
     listEl.innerHTML = suggestions.map(s => {
       const side = s.side || 'SHORT';
