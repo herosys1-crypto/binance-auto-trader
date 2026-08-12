@@ -140,19 +140,26 @@ def update_settings(
 # 🌟 v132: 사장님 즉시 실행! (specific routes = /{id} 앞에!)
 @router.post("/trigger-now")
 def trigger_learning_now(
+    force: bool = False,  # 🌟 v132: 오늘 PENDING = 자동 dismiss 후 재생성!
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> dict:
-    """🎯 지금 즉시 학습 실행!"""
+    """🎯 지금 즉시 학습 실행!
+
+    Args:
+        force: True = 오늘 이미 있는 PENDING 제안 = 자동 삭제 후 재생성!
+               (LONG 예측 다시 하고 싶을 때!)
+    """
     try:
         from app.core.crypto import decrypt_text
         from app.agents.strategy_suggestion_team.team_lead import (
             StrategySuggestionTeamLead,
         )
         team_lead = StrategySuggestionTeamLead()
-        result = team_lead.run_daily_prediction(db, decrypt_text)
+        result = team_lead.run_daily_prediction(db, decrypt_text, force=force)
         return {
             "triggered": True,
+            "force": force,
             "result": result,
             "note": "학습 완료! 대시보드 카드 새로고침!",
         }

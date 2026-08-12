@@ -270,10 +270,18 @@ async function dismissSuggestion(id) {
 
 // 🌟 v132 사장님 요구: 즉시 학습 실행!
 async function triggerLearningNow() {
-  if (!confirm('지금 즉시 학습 실행하시겠습니까?\n\n= Binance 급등/급락 top 40 예측!\n= 최대 30초 소요!')) return;
+  // 사장님 = 재실행 시 = 오늘 것 삭제하고 새로!
+  const force = confirm(
+    '지금 즉시 학습 실행!\n\n' +
+    '= Binance 급등/급락 top 40 예측!\n' +
+    '= 20 LONG + 20 SHORT!\n\n' +
+    '👉 [확인] = 오늘 기존 제안 = 자동 삭제 후 재생성!\n' +
+    '👉 [취소] = 실행 안 함!'
+  );
+  if (!force) return;
   try {
     if (typeof toast === 'function') toast('🎯 학습 시작! 30초 대기...', 'info');
-    const r = await api('/strategy-suggestions/trigger-now', { method: 'POST' });
+    const r = await api('/strategy-suggestions/trigger-now?force=true', { method: 'POST' });
     const created = (r.result || {}).created || 0;
     const preds = (r.result || {}).predictions || 0;
     if (typeof toast === 'function') {

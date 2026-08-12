@@ -25,26 +25,50 @@ class StrategySuggestionGenerator(BaseAgent):
     TEAM = "strategy_suggestion"
     AGENT_NAME = "strategy_suggestion_generator"
 
-    def execute(self, db, predictions: list[dict]) -> dict:
-        """예상 심볼 → 전략 draft DB 저장!"""
+    def execute(self, db, predictions: list[dict], force: bool = False) -> dict:
+        """예상 심볼 → 전략 draft DB 저장!
+
+        Args:
+            force: True 시 = 오늘 PENDING 제안 = 자동 DISMISS 후 재생성!
+                   (사장님 「지금 실행」 재실행 편의!)
+        """
         self.validate("STRATEGY_SUGGESTION_GENERATE")
 
         if not predictions:
             return {"created": 0, "total": 0}
 
         from app.models.strategy_suggestion import StrategySuggestion
-        from sqlalchemy import select
+        from sqlalchemy import select, update
 
-        # 중복 방지 = 오늘 이미 생성된 심볼 skip!
         today_start = datetime.now(timezone.utc).replace(
             hour=0, minute=0, second=0, microsecond=0,
         )
-        existing_today = db.execute(
-            select(StrategySuggestion.symbol)
-            .where(StrategySuggestion.created_at >= today_start)
-            .where(StrategySuggestion.status == "PENDING")
-        ).scalars().all()
-        existing_set = set(existing_today)
+
+        # 🌟 v132 (2026-08-12 사장님!): force 모드 = 오늘 PENDING 자동 삭제!
+        # 사장님 = LONG 예측 = 옛 SHORT가 있어서 skip!
+        # force = true = 오늘 PENDING = 모두 DISMISS 후 재생성!
+        if force:
+            dismissed_count = db.execute(
+                update(StrategySuggestion)
+                .where(StrategySuggestion.created_at >= today_start)
+                .where(StrategySuggestion.status == "PENDING")
+                .values(
+                    status="DISMISSED",
+                    dismissed_at=datetime.now(timezone.utc),
+                    dismissed_reason="force=True 재생성 (사장님 「지금 실행」!)",
+                )
+            ).rowcount
+            db.commit()
+            logger.info("[%s] force=True: 오늘 PENDING %d건 dismiss!", self.AGENT_NAME, dismissed_count)
+            existing_set = set()  # 모두 재생성!
+        else:
+            # 중복 방지 = 오늘 이미 있는 심볼 skip!
+            existing_today = db.execute(
+                select(StrategySuggestion.symbol)
+                .where(StrategySuggestion.created_at >= today_start)
+                .where(StrategySuggestion.status == "PENDING")
+            ).scalars().all()
+            existing_set = set(existing_today)
 
         created_ids = []
         bus = get_event_bus()

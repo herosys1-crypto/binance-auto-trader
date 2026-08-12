@@ -48,14 +48,18 @@ class StrategySuggestionTeamLead(BaseTeamLead):
         if event == EventType.EMERGENCY_STOP_ALL:
             self.emergency_stop(data.get("reason", ""))
 
-    def run_daily_prediction(self, db, decrypt_text) -> dict:
+    def run_daily_prediction(self, db, decrypt_text, force: bool = False) -> dict:
         """매일 06:30 UTC 스케줄!
+
+        Args:
+            force: True 시 = 오늘 PENDING 자동 dismiss 후 재생성!
+                   (사장님 「지금 실행」 재실행 편의!)
 
         1. PumpDumpPredictor → 예측!
         2. DescentPatternDetector → 필터!
         3. StrategySuggestionGenerator → DB 저장!
         """
-        logger.info("[%s Lead] 🎯 매일 예측 시작!", self.TEAM)
+        logger.info("[%s Lead] 🎯 매일 예측 시작! (force=%s)", self.TEAM, force)
 
         # 1. 예측!
         predictor = self.get_agent(PumpDumpPredictor)
@@ -75,7 +79,7 @@ class StrategySuggestionTeamLead(BaseTeamLead):
 
         # 3. DB 저장!
         generator = self.get_agent(StrategySuggestionGenerator)
-        gen_result = generator.execute(db, final)
+        gen_result = generator.execute(db, final, force=force)
 
         # 팀 이벤트!
         self.publish(EventType.SUGGESTION_CREATED, {
