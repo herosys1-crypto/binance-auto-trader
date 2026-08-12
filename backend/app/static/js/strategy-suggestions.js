@@ -15,25 +15,80 @@
  *   GET/PUT /strategy-suggestions/settings
  */
 
+// 🌟 v132 필터 상태 (전역!)
+let _sugSideFilter = 'ALL';  // ALL / LONG / SHORT
+let _cachedSuggestions = [];
+
 async function loadStrategySuggestions() {
   try {
     const suggestions = await api('/strategy-suggestions');
+    _cachedSuggestions = suggestions || [];
+    renderSuggestions();
+  } catch (e) {
+    console.warn('[suggestions] load 실패:', e);
+  }
+}
+
+function _setSugFilter(filter) {
+  _sugSideFilter = filter;
+  renderSuggestions();
+}
+
+function renderSuggestions() {
+  try {
     const card = document.getElementById('strategy-suggestions-card');
     const countEl = document.getElementById('suggestions-count');
     const listEl = document.getElementById('suggestions-list');
     if (!card || !countEl || !listEl) return;
 
-    // 🌟 v132 사장님: 항상 카드 표시! (0건이어도 「지금 실행」 버튼 접근!)
+    // 🌟 v132 사장님: 항상 카드 표시!
     card.classList.remove('hidden');
 
-    if (!suggestions || suggestions.length === 0) {
-      countEl.textContent = '0';
-      listEl.innerHTML = '<div class="text-xs text-slate-400 text-center py-2">아직 학습 X! 「🎯 지금 실행」 클릭!</div>';
+    const all = _cachedSuggestions || [];
+    const longs = all.filter(s => s.side === 'LONG');
+    const shorts = all.filter(s => s.side === 'SHORT');
+
+    // 필터 적용!
+    let filtered = all;
+    if (_sugSideFilter === 'LONG') filtered = longs;
+    else if (_sugSideFilter === 'SHORT') filtered = shorts;
+
+    countEl.textContent = String(all.length);
+
+    // 필터 버튼 HTML!
+    const filterBtns = `
+      <div class="flex gap-1 mb-2 text-xs">
+        <button onclick="_setSugFilter('ALL')"
+                class="px-2 py-1 rounded ${_sugSideFilter==='ALL'?'bg-purple-600 text-white font-bold':'bg-slate-700 text-slate-300'}">
+          전체 (${all.length})
+        </button>
+        <button onclick="_setSugFilter('LONG')"
+                class="px-2 py-1 rounded ${_sugSideFilter==='LONG'?'bg-green-600 text-white font-bold':'bg-slate-700 text-slate-300'}">
+          🐂 LONG (${longs.length})
+        </button>
+        <button onclick="_setSugFilter('SHORT')"
+                class="px-2 py-1 rounded ${_sugSideFilter==='SHORT'?'bg-red-600 text-white font-bold':'bg-slate-700 text-slate-300'}">
+          🐻 SHORT (${shorts.length})
+        </button>
+      </div>
+    `;
+
+    if (all.length === 0) {
+      listEl.innerHTML = filterBtns +
+        '<div class="text-xs text-slate-400 text-center py-2">아직 학습 X! 「🎯 지금 실행」 클릭!</div>';
       return;
     }
 
-    countEl.textContent = String(suggestions.length);
-    listEl.innerHTML = suggestions.map(s => {
+    if (filtered.length === 0) {
+      listEl.innerHTML = filterBtns +
+        `<div class="text-xs text-slate-400 text-center py-2">「${_sugSideFilter}」 = 0건! 다른 필터 선택!</div>`;
+      return;
+    }
+
+    const suggestions = filtered;
+    countEl.textContent = String(all.length);
+    // 아래 렌더링 로직 (기존!)
+    const cardsHtml = suggestions.map(s => {
       const side = s.side || 'SHORT';
       const sideColor = side === 'LONG' ? '#22c55e' : '#ef4444';
       const sideIcon = side === 'LONG' ? '🐂' : '🐻';
@@ -90,8 +145,9 @@ async function loadStrategySuggestions() {
         </div>
       `;
     }).join('');
+    listEl.innerHTML = filterBtns + cardsHtml;
   } catch (e) {
-    console.warn('[suggestions] load 실패:', e);
+    console.warn('[suggestions] render 실패:', e);
   }
 }
 
@@ -502,6 +558,8 @@ if (typeof window !== 'undefined') {
   window.triggerLearningNow = triggerLearningNow;  // v132 즉시 실행!
   window.briefingNow = briefingNow;  // v132 즉시 브리핑!
   window._switchProfile = _switchProfile;  // v132 프로필 전환!
+  window._setSugFilter = _setSugFilter;  // v132 롱/숏 필터!
+  window.renderSuggestions = renderSuggestions;
   window.openSuggestionsSettingsModal = openSuggestionsSettingsModal;
   window.closeSuggestionsSettingsModal = closeSuggestionsSettingsModal;
   window.saveSuggestionsSettings = saveSuggestionsSettings;

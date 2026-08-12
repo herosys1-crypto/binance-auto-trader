@@ -77,34 +77,67 @@ class PumpDumpPredictor(BaseAgent):
         dumps = sorted_by_pump[-self.TOP_N:][::-1]
 
         predictions = []
-        for t in pumps:
+        # 🌟 v132: 4 시나리오 = LONG + SHORT 균형!
+
+        # 급등 상위 = 2가지 시나리오!
+        for i, t in enumerate(pumps):
             symbol = str(t.get("symbol"))
             change = float(t.get("priceChangePercent", 0) or 0)
             volume = float(t.get("quoteVolume", 0) or 0)
-            # 급등 후 = 조정 예상! (SHORT 기회!)
-            confidence = min(0.75 + (change - 20) / 100, 0.95) if change > 20 else 0.6
-            predictions.append({
-                "symbol": symbol,
-                "type": "pump_end",  # 급등 후 반락 예상!
-                "confidence": round(confidence, 3),
-                "change_pct": round(change, 2),
-                "volume": volume,
-                "reason": f"24h +{change:.1f}% 급등, 조정 예상!",
-            })
-        for t in dumps:
+            if i < self.TOP_N // 2:
+                # 상위 절반 = SHORT (급등 후 반락!)
+                confidence = min(0.75 + (change - 20) / 100, 0.95) if change > 20 else 0.6
+                predictions.append({
+                    "symbol": symbol,
+                    "type": "pump_end",  # 급등 후 반락!
+                    "side": "SHORT",
+                    "confidence": round(confidence, 3),
+                    "change_pct": round(change, 2),
+                    "volume": volume,
+                    "reason": f"24h +{change:.1f}% 급등, 조정 예상 (SHORT!)",
+                })
+            else:
+                # 하위 절반 = LONG (지속 상승 모멘텀!)
+                confidence = min(0.65 + (change - 10) / 100, 0.85) if change > 10 else 0.55
+                predictions.append({
+                    "symbol": symbol,
+                    "type": "pump_continuation",  # 상승 지속!
+                    "side": "LONG",
+                    "confidence": round(confidence, 3),
+                    "change_pct": round(change, 2),
+                    "volume": volume,
+                    "reason": f"24h +{change:.1f}% 상승 모멘텀 지속 예상 (LONG!)",
+                })
+
+        # 급락 상위 = 2가지 시나리오!
+        for i, t in enumerate(dumps):
             symbol = str(t.get("symbol"))
             change = float(t.get("priceChangePercent", 0) or 0)
             volume = float(t.get("quoteVolume", 0) or 0)
-            # 급락 = 지속 하락 or 반등!
-            confidence = min(0.70 + abs(change - 20) / 100, 0.90) if change < -20 else 0.6
-            predictions.append({
-                "symbol": symbol,
-                "type": "dump_continuation",  # 급락 지속!
-                "confidence": round(confidence, 3),
-                "change_pct": round(change, 2),
-                "volume": volume,
-                "reason": f"24h {change:.1f}% 급락, 지속 하락 예상!",
-            })
+            if i < self.TOP_N // 2:
+                # 상위 절반 = SHORT (지속 하락!)
+                confidence = min(0.70 + abs(change - 20) / 100, 0.90) if change < -20 else 0.6
+                predictions.append({
+                    "symbol": symbol,
+                    "type": "dump_continuation",  # 급락 지속!
+                    "side": "SHORT",
+                    "confidence": round(confidence, 3),
+                    "change_pct": round(change, 2),
+                    "volume": volume,
+                    "reason": f"24h {change:.1f}% 급락, 지속 하락 예상 (SHORT!)",
+                })
+            else:
+                # 하위 절반 = LONG (급락 후 반등 기대!)
+                confidence = min(0.60 + abs(change - 10) / 100, 0.80) if change < -10 else 0.5
+                predictions.append({
+                    "symbol": symbol,
+                    "type": "dump_reversal",  # 급락 후 반등!
+                    "side": "LONG",
+                    "confidence": round(confidence, 3),
+                    "change_pct": round(change, 2),
+                    "volume": volume,
+                    "reason": f"24h {change:.1f}% 급락, 반등 기대 (LONG!)",
+                })
 
         logger.info(
             "[%s] 예측 완료: pumps=%d dumps=%d total=%d",

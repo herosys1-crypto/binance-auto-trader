@@ -53,7 +53,8 @@ class StrategySuggestionGenerator(BaseAgent):
             if symbol in existing_set:
                 continue  # 오늘 이미 있음!
 
-            side = self._infer_side(p["type"])
+            # 🌟 v132: predictor에서 side 명시 (LONG/SHORT!) or type 유추!
+            side = p.get("side") or self._infer_side(p["type"])
             config = self._build_config(symbol, side, db=db)  # 프로필 참조!
 
             suggestion = StrategySuggestion(
@@ -83,8 +84,10 @@ class StrategySuggestionGenerator(BaseAgent):
         return {"created": len(created_ids), "created_ids": created_ids}
 
     def _infer_side(self, suggestion_type: str) -> str:
+        """suggestion_type → side 유추 (fallback!). v132에서는 predictor가 side 명시!"""
         if suggestion_type in ("dump_continuation", "pump_end"):
             return "SHORT"
+        # pump_continuation, dump_reversal, reversal_up = LONG
         return "LONG"
 
     def _build_config(self, symbol: str, side: str, db=None) -> dict:
