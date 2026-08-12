@@ -108,10 +108,14 @@ class StrategySuggestionGenerator(BaseAgent):
         return {"created": len(created_ids), "created_ids": created_ids}
 
     def _infer_side(self, suggestion_type: str) -> str:
-        """suggestion_type → side 유추 (fallback!). v132에서는 predictor가 side 명시!"""
-        if suggestion_type in ("dump_continuation", "pump_end"):
+        """suggestion_type → side 유추 (fallback!). v132에서는 predictor가 side 명시!
+
+        SHORT = dump_continuation, pump_end, dump_live (🌟 v133c!)
+        LONG = pump_continuation, dump_reversal, pump_live (🌟 v133c!)
+        """
+        if suggestion_type in ("dump_continuation", "pump_end", "dump_live"):
             return "SHORT"
-        # pump_continuation, dump_reversal, reversal_up = LONG
+        # pump_continuation, dump_reversal, reversal_up, pump_live = LONG
         return "LONG"
 
     def _build_config(self, symbol: str, side: str, db=None) -> dict:

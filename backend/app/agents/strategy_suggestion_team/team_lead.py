@@ -75,15 +75,20 @@ class StrategySuggestionTeamLead(BaseTeamLead):
         filtered = detect_result.get("filtered", [])
 
         # 🌟 v132 (2026-08-12 사장님!): 모든 타입 포함!
-        # 옛 (SHORT만!): pump_end + dump_continuation(filtered)
-        # 신 (LONG + SHORT!):
-        #   - pump_end (SHORT)
-        #   - pump_continuation (LONG!)
-        #   - dump_reversal (LONG!)
+        # 🌟 v133c (2026-08-13 사장님!): 실시간 급등락 진입 추가!
+        # 신 (LONG + SHORT + 실시간!):
+        #   - pump_end (SHORT) = 급등 후 반락
+        #   - pump_continuation (LONG!) = 24h 상승 지속
+        #   - dump_reversal (LONG!) = 24h 급락 후 반등
         #   - dump_continuation (SHORT!) = filtered에서 (확정 심볼만!)
+        #   - 🌟 pump_live (LONG!) = 실시간 급등 중 즉시 진입!
+        #   - 🌟 dump_live (SHORT!) = 실시간 급락 중 즉시 진입!
         non_dump_continuation = [
             p for p in predictions
-            if p.get("type") in ("pump_end", "pump_continuation", "dump_reversal")
+            if p.get("type") in (
+                "pump_end", "pump_continuation", "dump_reversal",
+                "pump_live", "dump_live",  # 🌟 v133c: 실시간 진입!
+            )
         ]
         final = non_dump_continuation + filtered
 

@@ -139,6 +139,18 @@ class PumpDumpPredictor(BaseAgent):
                     "reason": f"24h {change:.1f}% 급락, 반등 기대 (LONG!)",
                 })
 
+        # 🌟 v133c (2026-08-13 사장님!): 급등락 진행 중 실시간 진입!
+        # = 5분 klines 조회 = 최근 5분 변동 큰 심볼 = 즉시 진입 기회!
+        try:
+            live_predictions = self._detect_live_pump_dump(bc, pumps + dumps)
+            predictions.extend(live_predictions)
+            logger.info(
+                "[%s] 실시간 급등락 진입: %d건 추가!",
+                self.AGENT_NAME, len(live_predictions),
+            )
+        except Exception as e:
+            logger.warning("[%s] 실시간 감지 실패: %s", self.AGENT_NAME, e)
+
         logger.info(
             "[%s] 예측 완료: pumps=%d dumps=%d total=%d",
             self.AGENT_NAME, len(pumps), len(dumps), len(predictions),
@@ -153,3 +165,69 @@ class PumpDumpPredictor(BaseAgent):
         })
 
         return {"predictions": predictions, "total": len(predictions)}
+
+    def _detect_live_pump_dump(self, bc, candidates: list) -> list:
+        """🌟 v133c: 실시간 급등락 진행 중 감지!
+
+        로직:
+        - 상위 20 pump + 20 dump 심볼 = 5분 klines 조회!
+        - 최근 5분봉 변동 > 3% = 실시간 급등/급락!
+        - LONG (pump_live) = 급등 중 즉시 진입!
+        - SHORT (dump_live) = 급락 중 즉시 진입!
+
+        신뢰도 = 5분 변동 크기 기반!
+        """
+        live_preds = []
+        symbols = set()
+
+        # 후보 심볼 수집 (중복 제거!)
+        for t in candidates[:40]:
+            symbol = str(t.get("symbol", ""))
+            if not symbol or not symbol.endswith("USDT"):
+                continue
+            symbols.add(symbol)
+
+        # 각 심볼 = 5분 klines 조회!
+        for symbol in list(symbols)[:30]:  # 최대 30 심볼 (rate limit!)
+            try:
+                klines = bc.get_klines(symbol=symbol, interval="5m", limit=3)
+                if not isinstance(klines, list) or len(klines) < 2:
+                    continue
+                # 최근 완료 5분봉 = klines[-2] (klines[-1] = 진행 중!)
+                last = klines[-2]
+                # kline 배열: [open_time, open, high, low, close, volume, ...]
+                open_price = float(last[1])
+                close_price = float(last[4])
+                if open_price <= 0:
+                    continue
+                change_5m = ((close_price - open_price) / open_price) * 100
+
+                # 5분 변동 > 3% = 실시간 급등/급락!
+                if change_5m >= 3.0:
+                    # 급등 중 = LONG 즉시 진입!
+                    confidence = min(0.65 + (change_5m - 3) / 20, 0.90)
+                    live_preds.append({
+                        "symbol": symbol,
+                        "type": "pump_live",  # 🌟 신 타입!
+                        "side": "LONG",
+                        "confidence": round(confidence, 3),
+                        "change_pct": round(change_5m, 2),
+                        "volume": 0,
+                        "reason": f"🚀 5분 +{change_5m:.1f}% 실시간 급등! 즉시 LONG 진입!",
+                    })
+                elif change_5m <= -3.0:
+                    # 급락 중 = SHORT 즉시 진입!
+                    confidence = min(0.65 + (abs(change_5m) - 3) / 20, 0.90)
+                    live_preds.append({
+                        "symbol": symbol,
+                        "type": "dump_live",  # 🌟 신 타입!
+                        "side": "SHORT",
+                        "confidence": round(confidence, 3),
+                        "change_pct": round(change_5m, 2),
+                        "volume": 0,
+                        "reason": f"📉 5분 {change_5m:.1f}% 실시간 급락! 즉시 SHORT 진입!",
+                    })
+            except Exception:
+                continue
+
+        return live_preds

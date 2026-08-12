@@ -117,6 +117,20 @@ function renderSuggestions() {
       // 순위 (1위, 2위, 3위!)
       const rankIcon = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`;
 
+      // 🌟 v133c: suggestion_type label 매핑!
+      const TYPE_LABELS = {
+        'pump_end': '급등후 반락',
+        'pump_continuation': '급등 지속',
+        'pump_live': '🚀 실시간 급등!',
+        'dump_continuation': '급락 지속',
+        'dump_reversal': '급락 반등',
+        'dump_live': '📉 실시간 급락!',
+      };
+      const typeLabel = TYPE_LABELS[s.suggestion_type] || s.suggestion_type;
+      // 실시간은 = 더 강조!
+      const isLive = s.suggestion_type === 'pump_live' || s.suggestion_type === 'dump_live';
+      const liveGlow = isLive ? 'box-shadow:0 0 15px ' + sideColor + ',0 0 5px ' + sideColor + ';animation:pulse 1.5s infinite' : '';
+
       const createdAgo = _formatTimeAgo(s.created_at);
       const cfg = s.strategy_config || {};
       const cap1 = (cfg.capitals && cfg.capitals[0]) || '?';
@@ -125,12 +139,14 @@ function renderSuggestions() {
       const reason = s.reason || '(이유 없음)';
 
       return `
-        <div style="background:rgba(0,0,0,0.3);border:1px solid ${sideColor};border-radius:6px;padding:8px 10px;box-shadow:0 0 8px ${sideColor}44">
+        <div style="background:rgba(0,0,0,0.3);border:1px solid ${sideColor};border-radius:6px;padding:8px 10px;box-shadow:0 0 8px ${sideColor}44;${liveGlow};cursor:pointer"
+             onclick="openSuggestionAnalysis('${s.symbol}', '${side}', ${s.id})"
+             title="클릭 = 상세 분석 새 창!">
           <div class="flex items-center justify-between mb-1">
             <span class="text-sm font-bold" style="color:${sideColor}">
               <span style="color:#c4b5fd;font-size:0.85em">${rankIcon}</span>
               ${sideIcon} ${s.symbol} ${sideLabel}
-              <span class="text-xs text-slate-400 ml-1">| ${s.suggestion_type}</span>
+              <span class="text-xs text-slate-400 ml-1">| ${typeLabel}</span>
             </span>
             <span class="text-xs font-bold" style="color:${confColor}">
               ${confBadge} ${conf}
@@ -145,19 +161,25 @@ function renderSuggestions() {
             💡 ${reason}
           </div>
           <div class="flex gap-2">
-            <button onclick="executeSuggestion(${s.id}, '${s.symbol}', '${side}', '${encodeURIComponent(JSON.stringify(cfg))}')"
+            <button onclick="event.stopPropagation();executeSuggestion(${s.id}, '${s.symbol}', '${side}', '${encodeURIComponent(JSON.stringify(cfg))}')"
                     class="text-xs font-bold px-3 py-1 rounded"
                     style="background:linear-gradient(135deg,#059669,#22c55e);color:#fff;border:0;cursor:pointer"
                     title="신 전략 모달 열기! 사장님 세팅 확인 후 진입!">
               ✏ 세팅 후 진입
             </button>
-            <button onclick="openSuggestionsSettingsModal()"
+            <button onclick="event.stopPropagation();openSuggestionAnalysis('${s.symbol}', '${side}', ${s.id})"
+                    class="text-xs font-bold px-3 py-1 rounded"
+                    style="background:linear-gradient(135deg,#3b82f6,#8b5cf6);color:#fff;border:0;cursor:pointer"
+                    title="상세 분석 새 창 열기!">
+              📊 상세 분석
+            </button>
+            <button onclick="event.stopPropagation();openSuggestionsSettingsModal()"
                     class="text-xs px-3 py-1 rounded"
                     style="background:#7c3aed;color:#fff;border:0;cursor:pointer"
                     title="자동 실행 옵션 세팅!">
               ⚙ 자동
             </button>
-            <button onclick="dismissSuggestion(${s.id})"
+            <button onclick="event.stopPropagation();dismissSuggestion(${s.id})"
                     class="text-xs px-3 py-1 rounded"
                     style="background:#475569;color:#fff;border:0;cursor:pointer"
                     title="이 제안 삭제!">
@@ -627,6 +649,17 @@ async function saveSuggestionsSettings() {
   }
 }
 
+// 🌟 v133c (2026-08-13 사장님!): 상세 분석 새 창!
+function openSuggestionAnalysis(symbol, side, suggestionId) {
+  try {
+    const url = `/static/analysis.html?symbol=${encodeURIComponent(symbol)}&side=${encodeURIComponent(side)}&sid=${suggestionId}`;
+    window.open(url, '_blank', 'width=800,height=900,scrollbars=yes');
+  } catch (e) {
+    console.warn('[analysis] 새 창 열기 실패:', e);
+    if (typeof toast === 'function') toast('❌ 새 창 열기 실패!', 'error');
+  }
+}
+
 if (typeof window !== 'undefined') {
   window.loadStrategySuggestions = loadStrategySuggestions;
   window.executeSuggestion = executeSuggestion;
@@ -639,6 +672,7 @@ if (typeof window !== 'undefined') {
   window.openSuggestionsSettingsModal = openSuggestionsSettingsModal;
   window.closeSuggestionsSettingsModal = closeSuggestionsSettingsModal;
   window.saveSuggestionsSettings = saveSuggestionsSettings;
+  window.openSuggestionAnalysis = openSuggestionAnalysis;  // 🌟 v133c!
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(loadStrategySuggestions, 1200);
     setInterval(loadStrategySuggestions, 30000);  // 30초 polling
