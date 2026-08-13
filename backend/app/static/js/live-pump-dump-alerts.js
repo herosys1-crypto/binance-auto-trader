@@ -1,11 +1,14 @@
 // 🚀 v133d (2026-08-13 사장님!): 급등락 실시간 진입 카드!
-// = 5분 1.5%+ or 1h 3%+ 심볼 감지!
+// v147: **15분봉 20% 전후(17.5~22.5%)** 급등만 추격 LONG / 급락은 진입 비권장!
+//       (옛 5분 1.5% / 1h 3% 추격 = 실측상 근거 없어 폐기)
 // = 30초마다 자동 새로고침!
 
 (function() {
   'use strict';
 
   const TYPE_LABELS = {
+      'pump_15m': '🚀 15m 20% 급등',
+      'dump_15m_avoid': '🚫 15m 급락 (비권장)',
     'pump_live': '🚀 5분 급등',
     'dump_live': '📉 5분 급락',
     'pump_1h': '🚀 1h 급등',
@@ -14,7 +17,7 @@
 
   async function scanLivePumpDump() {
     try {
-      const data = await api('/live-pump-dump/scan?threshold_5m=1.5&threshold_1h=3');
+      const data = await api('/live-pump-dump/scan?max_symbols=60&include_dump=true');
       renderLivePumpDump(data);
     } catch (e) {
       console.warn('[live-pd] scan 실패:', e);
@@ -39,71 +42,85 @@
     }
 
     const html = alerts.map((a, idx) => {
-      const side = a.side || 'LONG';
-      const sideColor = side === 'LONG' ? '#22c55e' : '#ef4444';
-      const sideIcon = side === 'LONG' ? '🐂' : '🐻';
+      // 🚨 v147 CRITICAL: side 가 null 이면 = **진입 비권장**(급락).
+      //    옛 코드 `a.side || 'LONG'` 는 null 을 LONG 으로 둔갑시켜
+      //    실측상 기대값 없는 급락에 「즉시 진입」 버튼을 띄웠습니다!
+      const entrySide = a.side || null;
+      const canEnter = entrySide === 'LONG' || entrySide === 'SHORT';
+      const sideColor = !canEnter ? '#64748b' : (entrySide === 'LONG' ? '#22c55e' : '#ef4444');
+      const sideIcon = !canEnter ? '🚫' : (entrySide === 'LONG' ? '🐂' : '🐻');
       const typeLabel = TYPE_LABELS[a.type] || a.type;
       const confPct = ((a.confidence || 0) * 100).toFixed(0);
       const rankIcon = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`;
 
-      // 신뢰도 배지!
       let confBadge = '💧';
       let confColor = '#94a3b8';
       if (a.confidence >= 0.85) { confBadge = '🔥'; confColor = '#ef4444'; }
       else if (a.confidence >= 0.75) { confBadge = '⭐'; confColor = '#f59e0b'; }
       else if (a.confidence >= 0.65) { confBadge = '✨'; confColor = '#fbbf24'; }
 
-      const change5m = a.change_5m !== null && a.change_5m !== undefined ? `${a.change_5m > 0 ? '+' : ''}${a.change_5m}%` : '-';
-      const change1h = a.change_1h !== null && a.change_1h !== undefined ? `${a.change_1h > 0 ? '+' : ''}${a.change_1h}%` : '-';
+      const chg = (a.change_pct !== null && a.change_pct !== undefined)
+        ? `${a.change_pct > 0 ? '+' : ''}${Number(a.change_pct).toFixed(1)}%` : '-';
+      const evNet = (a.expected_value_after_fee_pct !== null && a.expected_value_after_fee_pct !== undefined)
+        ? `${a.expected_value_after_fee_pct > 0 ? '+' : ''}${a.expected_value_after_fee_pct}%` : null;
 
-      // 즉시 진입용 config!
-      const cfg = {
+      // 진입 config — v147 기본값과 일치시킴 (TP1 15% / SL 50%)
+      const cfg = canEnter ? {
         leverage: 2,
         capitals: [300, 500],
         trigger_percents: [null, 10],
         tp1_percent: 10, tp2_percent: 15, tp3_percent: 20, tp4_percent: 25,
         tp1_qty_ratio: 10, tp2_qty_ratio: 15, tp3_qty_ratio: 20, tp4_qty_ratio: 25,
-        tp1_pct_override: 25,
+        tp1_pct_override: 15,                 // v147 (옛 25)
         force_sl_enabled_override: true,
         force_sl_roi_override: 15,
-        stop_loss_percent_of_capital: 90,
+        stop_loss_percent_of_capital: 50,     // v147 (옛 90)
         start_price: null,
         symbol: a.symbol,
-        side: side,
-      };
+        side: entrySide,
+      } : null;
+
+      // 상세 분석은 급락도 열 수 있게 (관찰용) — 방향은 SHORT 관점
+      const analysisSide = entrySide || 'SHORT';
+
+      const metricsRow = canEnter
+        ? `<div class="text-xs text-slate-400 mb-1">
+             🎯 TP <span style="color:#22c55e">+${a.tp_pct}%</span> / SL <span style="color:#ef4444">-${a.sl_pct}%</span>
+             &nbsp;|&nbsp; TP선착 ${a.tp_first_rate ?? '-'}%
+             ${evNet ? `&nbsp;|&nbsp; 기대값(수수료후) <span style="color:#f59e0b">${evNet}</span>` : ''}
+             ${a.sample_n ? `<span style="color:#64748b"> (표본 ${a.sample_n}건)</span>` : ''}
+           </div>`
+        : `<div class="text-xs mb-1" style="color:#f59e0b">
+             ⚠️ 실측상 급락은 양방향 모두 기대값이 없어 <b>진입 버튼을 제공하지 않습니다</b>.
+           </div>`;
 
       return `
-        <div style="background:rgba(0,0,0,0.3);border:2px solid ${sideColor};border-radius:6px;padding:8px 10px;box-shadow:0 0 12px ${sideColor}66;animation:pulse 2s infinite;cursor:pointer"
-             onclick="openSuggestionAnalysis('${a.symbol}', '${side}', 0)"
+        <div style="background:rgba(0,0,0,0.3);border:2px solid ${sideColor};border-radius:6px;padding:8px 10px;${canEnter ? `box-shadow:0 0 12px ${sideColor}66;animation:pulse 2s infinite;` : 'opacity:0.75;'}cursor:pointer"
+             onclick="openSuggestionAnalysis('${a.symbol}', '${analysisSide}', 0)"
              title="클릭 = 상세 분석 새 창!">
           <div class="flex items-center justify-between mb-1">
             <span class="text-sm font-bold" style="color:${sideColor}">
               <span style="color:#c4b5fd;font-size:0.85em">${rankIcon}</span>
-              ${sideIcon} ${a.symbol} ${side}
-              <span class="text-xs text-slate-400 ml-1">| ${typeLabel}</span>
+              ${sideIcon} ${a.symbol} ${canEnter ? entrySide : '진입 비권장'}
+              <span class="text-xs text-slate-400 ml-1">| 15m ${a.window || ''} ${chg}</span>
             </span>
             <span class="text-xs font-bold" style="color:${confColor}">
-              ${confBadge} ${confPct}%
+              ${canEnter ? `${confBadge} ${confPct}%` : ''}
             </span>
           </div>
-          <div class="text-xs text-slate-400 mb-1">
-            📊 5분: <span style="color:${sideColor};font-weight:600">${change5m}</span>
-            &nbsp;|&nbsp;
-            1h: <span style="color:${sideColor}">${change1h}</span>
-            &nbsp;|&nbsp;
-            💰 ${a.price || '?'}
-          </div>
+          ${metricsRow}
           <div class="text-xs text-blue-300 mb-2" style="font-style:italic">
-            💡 ${a.reason}
+            💡 ${a.verdict || a.reason || ''}
           </div>
           <div class="flex gap-2">
-            <button onclick="event.stopPropagation();confirmLiveEntry('${a.symbol}', '${side}', '${encodeURIComponent(JSON.stringify(cfg))}')"
+            ${canEnter ? `
+            <button onclick="event.stopPropagation();confirmLiveEntry('${a.symbol}', '${entrySide}', '${encodeURIComponent(JSON.stringify(cfg))}')"
                     class="text-xs font-bold px-3 py-1 rounded"
                     style="background:linear-gradient(135deg,#059669,#22c55e);color:#fff;border:0;cursor:pointer"
                     title="추천 이유 확인 → 진입!">
               ▶ 즉시 진입
-            </button>
-            <button onclick="event.stopPropagation();openSuggestionAnalysis('${a.symbol}', '${side}', 0)"
+            </button>` : ''}
+            <button onclick="event.stopPropagation();openSuggestionAnalysis('${a.symbol}', '${analysisSide}', 0)"
                     class="text-xs font-bold px-3 py-1 rounded"
                     style="background:linear-gradient(135deg,#3b82f6,#8b5cf6);color:#fff;border:0;cursor:pointer">
               📊 상세 분석
