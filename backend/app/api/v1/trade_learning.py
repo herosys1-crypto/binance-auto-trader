@@ -157,7 +157,6 @@ def learning_insights(
     """🧠 학습 인사이트 (Learning Team 결과 조회!)"""
     import json
     from app.models.system_setting import SystemSetting
-    from app.agents.learning_team.team_lead import LEARNING_KEY  # noqa
     row = db.get(SystemSetting, "learning_agent_insights")
     if not row or not row.value:
         return {
