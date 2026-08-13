@@ -161,10 +161,10 @@ function renderSuggestions() {
             💡 ${reason}
           </div>
           <div class="flex gap-2">
-            <button onclick="event.stopPropagation();executeSuggestion(${s.id}, '${s.symbol}', '${side}', '${encodeURIComponent(JSON.stringify(cfg))}')"
+            <button onclick="event.stopPropagation();confirmLiveEntry('${s.symbol}', '${side}', '${encodeURIComponent(JSON.stringify(cfg))}')"
                     class="text-xs font-bold px-3 py-1 rounded"
                     style="background:linear-gradient(135deg,#059669,#22c55e);color:#fff;border:0;cursor:pointer"
-                    title="신 전략 모달 열기! 사장님 세팅 확인 후 진입!">
+                    title="추천 이유 확인 → 세팅 modal!">
               ✏ 세팅 후 진입
             </button>
             <button onclick="event.stopPropagation();openSuggestionAnalysis('${s.symbol}', '${side}', ${s.id})"

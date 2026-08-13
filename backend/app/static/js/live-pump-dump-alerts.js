@@ -97,10 +97,10 @@
             💡 ${a.reason}
           </div>
           <div class="flex gap-2">
-            <button onclick="event.stopPropagation();executeSuggestion(0, '${a.symbol}', '${side}', '${encodeURIComponent(JSON.stringify(cfg))}')"
+            <button onclick="event.stopPropagation();confirmLiveEntry('${a.symbol}', '${side}', '${encodeURIComponent(JSON.stringify(cfg))}')"
                     class="text-xs font-bold px-3 py-1 rounded"
                     style="background:linear-gradient(135deg,#059669,#22c55e);color:#fff;border:0;cursor:pointer"
-                    title="세팅 modal 열기 = 즉시 진입!">
+                    title="추천 이유 확인 → 진입!">
               ▶ 즉시 진입
             </button>
             <button onclick="event.stopPropagation();openSuggestionAnalysis('${a.symbol}', '${side}', 0)"
@@ -116,8 +116,173 @@
     listEl.innerHTML = html;
   }
 
+  // 🌟 v135a (2026-08-13 사장님!): 즉시 진입 = 이유 확인 모달!
+  async function confirmLiveEntry(symbol, side, cfgEncoded) {
+    // 기존 모달 삭제!
+    const oldModal = document.getElementById('live-entry-confirm-modal');
+    if (oldModal) oldModal.remove();
+
+    // 로딩 모달 즉시 표시!
+    const modal = document.createElement('div');
+    modal.id = 'live-entry-confirm-modal';
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML = `
+      <div style="background:#0f172a;border:2px solid ${side === 'LONG' ? '#22c55e' : '#ef4444'};border-radius:8px;padding:16px;max-width:500px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 0 30px ${side === 'LONG' ? '#22c55e88' : '#ef444488'}">
+        <div style="text-align:center;color:#fff;padding:20px">
+          📡 <span style="color:${side === 'LONG' ? '#22c55e' : '#ef4444'};font-weight:bold">${symbol} ${side}</span> 분석 중...
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    // 분석 API 호출!
+    let analysis = null;
+    try {
+      analysis = await api(`/analysis/symbol/${encodeURIComponent(symbol)}?side=${side}`);
+    } catch (e) {
+      console.warn('[confirmLiveEntry] 분석 실패:', e);
+    }
+
+    // 모달 내용 업데이트!
+    renderConfirmModal(modal, symbol, side, cfgEncoded, analysis);
+  }
+
+  function renderConfirmModal(modal, symbol, side, cfgEncoded, analysis) {
+    const sideColor = side === 'LONG' ? '#22c55e' : '#ef4444';
+    const sideIcon = side === 'LONG' ? '🐂' : '🐻';
+    const sideLabel = side === 'LONG' ? '롱 (상승 기대!)' : '숏 (하락 기대!)';
+
+    let reasonHtml = '';
+    let verdictHtml = '';
+
+    if (analysis && !analysis.price_error) {
+      const j = analysis.judgment || {};
+      const signals = j.signals || [];
+      const score = j.score || 0;
+      const verdict = j.verdict || '판단 없음';
+      const vColor = j.color || '#94a3b8';
+
+      // 지표 요약!
+      const rsi = analysis.rsi_15m;
+      const obv = analysis.obv_15m || {};
+      const macd = analysis.macd_15m || {};
+      const vol = analysis.volume_15m || {};
+      const changes = analysis.changes || {};
+
+      verdictHtml = `
+        <div style="text-align:center;padding:10px;border-radius:6px;background:${vColor}22;border:2px solid ${vColor};color:${vColor};font-weight:bold;font-size:14px;margin-bottom:10px">
+          ${verdict} (score ${score})
+        </div>
+      `;
+
+      // 이유 설명 (상세하지만 간략!)
+      let explanation = `<strong style="color:${sideColor}">${sideIcon} ${symbol}</strong>을 <strong style="color:${sideColor}">${sideLabel}</strong>로 진입하는 이유:<br><br>`;
+
+      const reasons = [];
+      // 시장 현황!
+      if (analysis.change_24h !== undefined) {
+        const c24 = Number(analysis.change_24h);
+        const c24Color = c24 >= 0 ? '#22c55e' : '#ef4444';
+        reasons.push(`24시간 변동 <span style="color:${c24Color}">${c24 >= 0 ? '+' : ''}${c24.toFixed(2)}%</span>`);
+      }
+      if (changes.change_5m !== null && changes.change_5m !== undefined) {
+        const c5 = Number(changes.change_5m);
+        const c5Color = c5 >= 0 ? '#22c55e' : '#ef4444';
+        reasons.push(`5분 <span style="color:${c5Color}">${c5 >= 0 ? '+' : ''}${c5}%</span>`);
+      }
+      if (changes.change_1h !== null && changes.change_1h !== undefined) {
+        const c1 = Number(changes.change_1h);
+        const c1Color = c1 >= 0 ? '#22c55e' : '#ef4444';
+        reasons.push(`1시간 <span style="color:${c1Color}">${c1 >= 0 ? '+' : ''}${c1}%</span>`);
+      }
+      if (reasons.length) {
+        explanation += `📈 <strong>시장 현황:</strong> ${reasons.join(' | ')}<br><br>`;
+      }
+
+      // 기술 지표!
+      let indics = [];
+      if (rsi !== null && rsi !== undefined) {
+        const rsiState = rsi > 70 ? '<span style="color:#ef4444">과매수</span>' : rsi < 30 ? '<span style="color:#22c55e">과매도</span>' : '중립';
+        indics.push(`RSI <strong>${rsi}</strong> (${rsiState})`);
+      }
+      if (obv.trend) {
+        const oColor = obv.trend === 'UP' ? '#22c55e' : obv.trend === 'DOWN' ? '#ef4444' : '#94a3b8';
+        const oLabel = obv.trend === 'UP' ? '상승 (매수 압력!)' : obv.trend === 'DOWN' ? '하락 (매도 압력!)' : '횡보';
+        indics.push(`OBV <span style="color:${oColor}">${oLabel}</span>`);
+      }
+      if (macd.trend) {
+        const mColor = macd.trend === 'BULLISH' ? '#22c55e' : macd.trend === 'BEARISH' ? '#ef4444' : '#94a3b8';
+        const mLabel = macd.trend === 'BULLISH' ? 'Bullish (매수!)' : macd.trend === 'BEARISH' ? 'Bearish (매도!)' : '중립';
+        indics.push(`MACD <span style="color:${mColor}">${mLabel}</span>`);
+      }
+      if (vol.spike_ratio) {
+        const spike = Number(vol.spike_ratio);
+        const spikeLabel = spike >= 2 ? '<span style="color:#22c55e">폭증!</span>' : spike >= 1.5 ? '<span style="color:#22c55e">급증</span>' : spike < 0.5 ? '<span style="color:#ef4444">급감</span>' : '정상';
+        indics.push(`Volume <strong>${spike}x</strong> (${spikeLabel})`);
+      }
+      if (indics.length) {
+        explanation += `📊 <strong>기술 지표:</strong> ${indics.join(' | ')}<br><br>`;
+      }
+
+      // 신호 상세!
+      if (signals.length) {
+        explanation += `📋 <strong>판단 신호:</strong><br>`;
+        signals.forEach(s => {
+          explanation += `&nbsp;&nbsp;• ${s}<br>`;
+        });
+      }
+
+      reasonHtml = `<div style="background:rgba(30,41,59,0.6);padding:10px;border-radius:6px;font-size:12px;line-height:1.6">${explanation}</div>`;
+    } else {
+      reasonHtml = `<div style="text-align:center;color:#ef4444;padding:10px">❌ 분석 실패! 그래도 진입하시겠습니까?</div>`;
+    }
+
+    modal.innerHTML = `
+      <div style="background:#0f172a;border:2px solid ${sideColor};border-radius:8px;padding:14px;max-width:520px;width:100%;max-height:92vh;overflow-y:auto;box-shadow:0 0 30px ${sideColor}88">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #334155">
+          <div style="color:${sideColor};font-weight:bold;font-size:15px">
+            ${sideIcon} ${symbol} ${side} 진입 확인
+          </div>
+          <button onclick="document.getElementById('live-entry-confirm-modal').remove()"
+                  style="background:#7c3aed;color:#fff;padding:4px 10px;border:0;border-radius:4px;cursor:pointer;font-size:12px">
+            ✕ 취소
+          </button>
+        </div>
+
+        ${verdictHtml}
+        ${reasonHtml}
+
+        <div style="margin-top:12px;display:flex;gap:8px;justify-content:center">
+          <button onclick="proceedLiveEntry('${symbol}', '${side}', '${cfgEncoded}')"
+                  style="background:linear-gradient(135deg,#059669,${sideColor});color:#fff;padding:8px 18px;border:0;border-radius:5px;cursor:pointer;font-weight:bold;font-size:13px">
+            ▶ 진입 진행 (세팅 modal 열기!)
+          </button>
+          <button onclick="document.getElementById('live-entry-confirm-modal').remove()"
+                  style="background:#475569;color:#fff;padding:8px 18px;border:0;border-radius:5px;cursor:pointer;font-size:13px">
+            ❌ 취소
+          </button>
+        </div>
+        <div style="text-align:center;margin-top:8px;font-size:10px;color:#94a3b8">
+          💡 「진입 진행」 클릭 = 신 전략 modal 자동 열림 + symbol/side 자동 fill!
+        </div>
+      </div>
+    `;
+  }
+
+  // 진입 진행 = 세팅 modal 열기!
+  function proceedLiveEntry(symbol, side, cfgEncoded) {
+    const modal = document.getElementById('live-entry-confirm-modal');
+    if (modal) modal.remove();
+    // 기존 executeSuggestion 호출!
+    if (typeof window.executeSuggestion === 'function') {
+      window.executeSuggestion(0, symbol, side, cfgEncoded);
+    }
+  }
+
   if (typeof window !== 'undefined') {
     window.scanLivePumpDump = scanLivePumpDump;
+    window.confirmLiveEntry = confirmLiveEntry;
+    window.proceedLiveEntry = proceedLiveEntry;
     document.addEventListener('DOMContentLoaded', () => {
       setTimeout(scanLivePumpDump, 2000);  // 초기 로드 = 2초 후!
       setInterval(scanLivePumpDump, 60000);  // 60초 폴링 (API 부담!)
