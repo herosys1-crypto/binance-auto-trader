@@ -1123,7 +1123,7 @@
 
         <!-- 활성 심볼 quick 버튼! -->
         <div class="text-xs text-slate-400 mb-1">💼 활성 포지션 (클릭 = 분석!):</div>
-        <div id="sym-active-list" class="flex flex-wrap gap-1"></div>
+        <div id="sym-active-list" class="flex flex-wrap gap-1" style="max-height:120px;overflow-y:auto;padding-right:4px"></div>
       </div>
 
       <!-- 🎓 v134 신 (2026-08-13 사장님!): TP/SL 조정 제안 카드! -->
@@ -1144,7 +1144,7 @@
         <div class="text-xs text-slate-400 mb-2">
           활성 포지션 = 심볼 흐름 분석 → 조정 제안! 사장님이 선택! (차후 자동!)
         </div>
-        <div id="tp-sl-adv-list" class="space-y-2"></div>
+        <div id="tp-sl-adv-list" class="space-y-2" style="max-height:400px;overflow-y:auto;padding-right:4px"></div>
         <div id="learning-summary" class="mt-2 text-xs text-slate-400" style="display:none"></div>
       </div>
 
@@ -1165,7 +1165,7 @@
           <br>
           <span style="color:#22c55e">🐂 LONG (급등 중)</span> / <span style="color:#ef4444">🐻 SHORT (급락 중)</span> — 신뢰도 순!
         </div>
-        <div id="live-pd-list" class="space-y-2"></div>
+        <div id="live-pd-list" class="space-y-2" style="max-height:500px;overflow-y:auto;padding-right:4px"></div>
       </div>
 
       <!-- 🌟 v132 신 (2026-08-11 사장님!): 전략 제안 카드! (Strategy Suggestion Team!) -->
@@ -1191,7 +1191,7 @@
           <br>
           <span style="color:#fbbf24">🎯 신뢰도 순 정렬!</span> 🥇 = 최우선 추천! 🔥 90%+ / ⭐ 80%+ / ✨ 70%+ / 💧 70% 미만
         </div>
-        <div id="suggestions-list" class="space-y-2"></div>
+        <div id="suggestions-list" class="space-y-2" style="max-height:600px;overflow-y:auto;padding-right:4px"></div>
       </div>
 
       <!-- 🌟 v131 신 (2026-08-09 사장님!): 급등 + BB중단 알람 카드! -->
@@ -2502,7 +2502,7 @@
 <script src="/static/js/auth-bootstrap.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/reentry-alerts.js?v=20260806v130-obv-reentry"></script>
 <script src="/static/js/pump-bb-alerts.js?v=20260809v131-pump-bb"></script>
-<script src="/static/js/strategy-suggestions.js?v=20260813v135a-confirm-reason"></script>
+<script src="/static/js/strategy-suggestions.js?v=20260813v136a-active-badge"></script>
 <script src="/static/js/live-pump-dump-alerts.js?v=20260813v135a-confirm-reason"></script>
 <script src="/static/js/tp-sl-advisor.js?v=20260813v134-learning"></script>
 <script src="/static/js/symbol-analyzer.js?v=20260813v134f-postmsg-safe"></script>

@@ -19,10 +19,28 @@
 let _sugSideFilter = 'ALL';  // ALL / LONG / SHORT
 let _cachedSuggestions = [];
 
+// 🌟 v136a: 활성 포지션 심볼 캐시!
+let _activeSymbolsCache = new Set();
+
 async function loadStrategySuggestions() {
   try {
-    const suggestions = await api('/strategy-suggestions');
+    // 활성 심볼 로드 (병렬!)
+    const [suggestions, strategies] = await Promise.all([
+      api('/strategy-suggestions'),
+      api('/strategies?limit=200').catch(() => []),
+    ]);
     _cachedSuggestions = suggestions || [];
+    // 활성 심볼 캐시 갱신!
+    const openStatuses = new Set([
+      'STAGE_1_OPEN', 'STAGE_2_OPEN', 'STAGE_3_OPEN', 'STAGE_4_OPEN',
+      'STAGE_5_OPEN', 'STAGE_6_OPEN', 'STAGE_7_OPEN', 'STAGE_8_OPEN',
+      'STAGE_9_OPEN', 'STAGE_10_OPEN',
+    ]);
+    _activeSymbolsCache = new Set(
+      (Array.isArray(strategies) ? strategies : [])
+        .filter(s => openStatuses.has(s.status) && Math.abs(Number(s.current_position_qty || 0)) > 0)
+        .map(s => `${s.symbol}:${s.side}`)
+    );
     renderSuggestions();
   } catch (e) {
     console.warn('[suggestions] load 실패:', e);
@@ -85,7 +103,14 @@ function renderSuggestions() {
       return;
     }
 
-    const suggestions = filtered;
+    // 🌟 v136a: 활성 심볼은 뒤로! (구분 명확!)
+    const suggestionsSorted = [...filtered].sort((a, b) => {
+      const aActive = _activeSymbolsCache.has(`${a.symbol}:${a.side}`);
+      const bActive = _activeSymbolsCache.has(`${b.symbol}:${b.side}`);
+      if (aActive === bActive) return 0;
+      return aActive ? 1 : -1;  // 활성 = 뒤!
+    });
+    const suggestions = suggestionsSorted;
     countEl.textContent = String(all.length);
     // 아래 렌더링 로직 (v133 사장님 요구: 신뢰도 순 + 순위 + 배지!)
     const cardsHtml = suggestions.map((s, idx) => {
@@ -96,6 +121,12 @@ function renderSuggestions() {
       const confRaw = s.confidence_score ? Number(s.confidence_score) : 0;
       const confPct = (confRaw * 100).toFixed(0);
       const conf = confRaw ? confPct + '%' : '?';
+      // 🌟 v136a: 활성 포지션 여부!
+      const isActive = _activeSymbolsCache.has(`${s.symbol}:${side}`);
+      const activeBadge = isActive
+        ? `<span style="background:#fbbf24;color:#000;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px" title="이 심볼 = 이미 진입 중! (중복 진입 주의!)">🔒 진입중</span>`
+        : '';
+      const activeOpacity = isActive ? 'opacity:0.6' : '';
 
       // 🌟 v133 신: 신뢰도별 배지 + 색상!
       let confBadge = '';
@@ -139,13 +170,13 @@ function renderSuggestions() {
       const reason = s.reason || '(이유 없음)';
 
       return `
-        <div style="background:rgba(0,0,0,0.3);border:1px solid ${sideColor};border-radius:6px;padding:8px 10px;box-shadow:0 0 8px ${sideColor}44;${liveGlow};cursor:pointer"
+        <div style="background:rgba(0,0,0,0.3);border:1px solid ${sideColor};border-radius:6px;padding:8px 10px;box-shadow:0 0 8px ${sideColor}44;${liveGlow};${activeOpacity};cursor:pointer"
              onclick="openSuggestionAnalysis('${s.symbol}', '${side}', ${s.id})"
              title="클릭 = 상세 분석 새 창!">
           <div class="flex items-center justify-between mb-1">
             <span class="text-sm font-bold" style="color:${sideColor}">
               <span style="color:#c4b5fd;font-size:0.85em">${rankIcon}</span>
-              ${sideIcon} ${s.symbol} ${sideLabel}
+              ${sideIcon} ${s.symbol} ${sideLabel}${activeBadge}
               <span class="text-xs text-slate-400 ml-1">| ${typeLabel}</span>
             </span>
             <span class="text-xs font-bold" style="color:${confColor}">
