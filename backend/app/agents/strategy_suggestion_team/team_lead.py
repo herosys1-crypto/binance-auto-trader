@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 from app.agents.orchestrator import BaseTeamLead, EventType
 
+from app.agents.strategy_suggestion_team.bb_4h_scanner import BB4HScanner
 from app.agents.strategy_suggestion_team.pump_dump_predictor import PumpDumpPredictor
 from app.agents.strategy_suggestion_team.descent_pattern_detector import DescentPatternDetector
 from app.agents.strategy_suggestion_team.strategy_suggestion_generator import StrategySuggestionGenerator
@@ -33,6 +34,7 @@ class StrategySuggestionTeamLead(BaseTeamLead):
     AGENT_NAME = "strategy_suggestion_team_lead"
     AGENTS = [
         PumpDumpPredictor,
+        BB4HScanner,
         DescentPatternDetector,
         StrategySuggestionGenerator,
         SuggestionManager,
@@ -61,34 +63,33 @@ class StrategySuggestionTeamLead(BaseTeamLead):
         """
         logger.info("[%s Lead] 🎯 매일 예측 시작! (force=%s)", self.TEAM, force)
 
-        # 1. 예측!
-        predictor = self.get_agent(PumpDumpPredictor)
-        pred_result = predictor.execute(db, decrypt_text)
-        predictions = pred_result.get("predictions", [])
+        # 🎯 v143a 사장님 최종 결정 (2026-08-14):
+        #   "자동전략 제안은 4시간봉이 볼밴 중단과 하단 깨는 경우로 해줘 롱과 숏을"
+        #   → 제안 소스를 **4H 볼밴 스캐너**로 전환합니다.
+        #     기존 PumpDumpPredictor(24h 급등락 순위)는 근거가 실측되지 않았고,
+        #     v139 백테스트에서 추천 성공률이 40.5%에 그쳤습니다.
+        #     4H BB 는 표본 13,053건 / 도달률 82~87% / 기대값 +0.42~0.44% 로
+        #     이번 세션에서 검증한 신호 중 가장 견고합니다.
+        scanner = self.get_agent(BB4HScanner)
+        scan_result = scanner.execute(db, decrypt_text)
+        predictions = scan_result.get("predictions", [])
         if not predictions:
-            return {"error": "no predictions", "step": "predict"}
+            logger.info("[%s Lead] 4H BB 신호 없음 = 제안 생성 안 함", self.TEAM)
+            return {"error": "no bb4h signals", "step": "scan",
+                    "scanned": scan_result.get("scanned", 0)}
 
-        # 2. 급락 지속 필터! (선택 = dump_continuation만!)
-        detector = self.get_agent(DescentPatternDetector)
-        detect_result = detector.execute(db, decrypt_text, predictions)
-        # 지속 하락 확정 심볼 (dump_continuation!) = confidence 상향된 것!
-        filtered = detect_result.get("filtered", [])
+        # v143a: 4H BB 신호는 이미 실측 기대값 기반이라 별도 필터를 걸지 않습니다.
+        #        (급락 지속 필터는 24h 순위 기반 제안용이었음)
+        filtered: list = []
 
-        # 🌟 v132 (2026-08-12 사장님!): 모든 타입 포함!
-        # 🌟 v133c (2026-08-13 사장님!): 실시간 급등락 진입 추가!
-        # 신 (LONG + SHORT + 실시간!):
-        #   - pump_end (SHORT) = 급등 후 반락
-        #   - pump_continuation (LONG!) = 24h 상승 지속
-        #   - dump_reversal (LONG!) = 24h 급락 후 반등
-        #   - dump_continuation (SHORT!) = filtered에서 (확정 심볼만!)
-        #   - 🌟 pump_live (LONG!) = 실시간 급등 중 즉시 진입!
-        #   - 🌟 dump_live (SHORT!) = 실시간 급락 중 즉시 진입!
+        # v143a: 4가지 4H BB 트리거 = 롱·숏 대칭 (사장님 지시!)
+        #   bb4h_mid_down    (SHORT) = 중단 하향 이탈 → 하단 목표   기대값 +0.42%
+        #   bb4h_mid_up      (LONG)  = 중단 상향 돌파 → 상단 목표   기대값 +0.44%
+        #   bb4h_lower_break (SHORT) = 하단 이탈 후 추세 지속        기대값 +0.14%
+        #   bb4h_upper_break (LONG)  = 상단 돌파 후 추세 지속        기대값 +0.27%
         non_dump_continuation = [
             p for p in predictions
-            if p.get("type") in (
-                "pump_end", "pump_continuation", "dump_reversal",
-                "pump_live", "dump_live",  # 🌟 v133c: 실시간 진입!
-            )
+            if str(p.get("type", "")).startswith("bb4h_")
         ]
         final = non_dump_continuation + filtered
 

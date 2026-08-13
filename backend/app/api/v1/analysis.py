@@ -21,6 +21,18 @@ from app.core.crypto import decrypt_text
 from app.models.exchange_account import ExchangeAccount
 from app.models.strategy_instance import StrategyInstance
 from app.integrations.binance.client import BinanceClient
+from app.core.risk_constants import (
+    ACTION_PNL_PCT_DEFAULT,
+    ACTION_PNL_REVIEW_PCT,
+    ACTION_PNL_URGENT_PCT,
+)
+from app.services import strategy_confluence
+from app.services.bb_4h_band_analyzer import BB4HBandAnalyzer
+from app.services.bb_top_analyzer import BBTopAnalyzer
+from app.services.ema_vcp_analyzer import EMAVCPAnalyzer
+from app.services.pump_continuation_analyzer import PumpContinuationAnalyzer
+from app.services.pump_dump_live_analyzer import PumpDumpLiveAnalyzer
+from app.services.sar_ichimoku_analyzer import SARIchimokuAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +51,16 @@ def _get_binance_client(db: Session) -> BinanceClient:
         api_secret=decrypt_text(account.api_secret_enc),
         is_testnet=account.is_testnet,
     )
+
+
+def _safe_klines(bc: BinanceClient, symbol: str, interval: str, limit: int = 120) -> list | None:
+    """캔들 조회 (실패 = None = 분석기가 알아서 fail-safe 처리!)."""
+    try:
+        kl = bc.get_klines(symbol=symbol, interval=interval, limit=limit)
+        return kl if isinstance(kl, list) else None
+    except Exception as e:
+        logger.warning("[analysis] %s %s 캔들 실패: %s", symbol, interval, e)
+        return None
 
 
 def _calc_rsi(closes: list[float], period: int = 14) -> float | None:
@@ -237,6 +259,7 @@ def analyze_symbol(
     result["changes"] = changes
 
     # 3. RSI + BB + OBV + MACD + Volume (15분봉!)
+    klines_15m: list | None = None
     try:
         klines_15m = bc.get_klines(symbol=symbol, interval="15m", limit=100)
         if isinstance(klines_15m, list) and len(klines_15m) >= 20:
@@ -249,6 +272,45 @@ def analyze_symbol(
             result["volume_15m"] = _volume_analysis(volumes)
     except Exception as e:
         logger.warning("[analyze_symbol] 15m klines 실패 %s: %s", symbol, e)
+
+    # 3-2. 📐 EMA/VCP (v137) + ☁️ SAR/구름대 (v138) = 멀티 타임프레임 2대 전략!
+    #      4h/1h 캔들은 **1회만 조회해서 두 분석기가 공유** = Binance 호출 절감!
+    #      (읽기 전용 = 주문 X!)
+    k4h = _safe_klines(bc, symbol, "4h")
+    k1h = _safe_klines(bc, symbol, "1h")
+    k15 = klines_15m if isinstance(klines_15m, list) else None
+
+    result["ema_vcp"] = EMAVCPAnalyzer(bc).analyze(
+        symbol, side, klines_4h=k4h, klines_1h=k1h, klines_15m=k15,
+    )
+    result["sar_ichimoku"] = SARIchimokuAnalyzer(bc).analyze(
+        symbol, side, klines_4h=k4h, klines_1h=k1h, klines_15m=k15,
+    )
+    # 🤝 두 전략 합의 판정 = 「같이 적용」의 핵심!
+    result["confluence"] = strategy_confluence.evaluate(
+        result["ema_vcp"], result["sar_ichimoku"], side,
+    )
+
+    # 3-3. 🔺 15m 천장/바닥 + 볼밴 중단 (v140 신! 사장님 주력 전략!)
+    #      15m이 주도하고 1H/4H는 보조 = 위 두 전략과 반대 구조!
+    #      15m은 200봉 필요 (BB20 + MACD26 + 다이버전스 20) → 별도 조회
+    k15_deep = _safe_klines(bc, symbol, "15m", BBTopAnalyzer.KLINE_LIMIT) or k15
+    result["bb_top"] = BBTopAnalyzer(bc).analyze(
+        symbol, side, klines_15m=k15_deep, klines_1h=k1h, klines_4h=k4h,
+    )
+
+    # 3-4. ⚡ 5m/15m 급등락 실시간 진입 (v141 신!)
+    #      실측: 급등은 추격 LONG / 급락은 진입 비권장 (양방향 기대값 없음!)
+    k5 = _safe_klines(bc, symbol, "5m", PumpDumpLiveAnalyzer.KLINE_LIMIT)
+    result["pump_dump"] = PumpDumpLiveAnalyzer(bc).analyze(
+        symbol, klines_5m=k5, klines_15m=k15_deep,
+    )
+
+    # 3-5. 📉 4H 볼밴 중단 이탈 → 반대 밴드 (v143 신! 실측 표본 최대)
+    result["bb_4h"] = BB4HBandAnalyzer(bc).analyze(symbol, side, klines_4h=k4h)
+
+    # 3-6. 🔀 20% 급등 지속/전환 판별 (v146 — 롱/숏 동시 판단!)
+    result["pump_continuation"] = PumpContinuationAnalyzer(bc).analyze(symbol, klines_5m=k5)
 
     # 4. 판단!
     result["judgment"] = _judge_entry(result, side)
@@ -361,7 +423,116 @@ def _judge_entry(analysis: dict, side: str) -> dict:
             score += 5
             signals.append(f"📊 Volume {vol['spike_ratio']}x 급증 = 추세 강화!")
 
-    # 판단 결과!
+    # 📐 EMA/VCP (v137) + ☁️ SAR/구름대 (v138) = 방향 무관 공통 가산!
+    ema_vcp = analysis.get("ema_vcp") or {}
+    sar_ich = analysis.get("sar_ichimoku") or {}
+    confluence = analysis.get("confluence") or {}
+
+    _grade_pts = {"A": 15, "B": 8, "C": 0, "D": -20}
+    _grade_msg = {
+        "A": "{icon} {name} A등급 = 방아쇠!",
+        "B": "{icon} {name} B등급 = 셋업 완성, 트리거 대기!",
+        "C": "{icon} {name} C등급 = 상위 추세만 OK!",
+        "D": "🚫 {name} D등급 = 진입 금지 신호!",
+    }
+    for res, name, icon in (
+        (ema_vcp, "EMA/VCP", "📐"),
+        (sar_ich, "SAR/구름대", "☁️"),
+    ):
+        if not res.get("available"):
+            continue
+        g = res.get("grade")
+        if g not in _grade_pts:
+            continue
+        score += _grade_pts[g]
+        signals.append(_grade_msg[g].format(icon=icon, name=name))
+
+    # 🤝 합의 보너스/감점 = 두 전략이 서로를 검증!
+    if confluence.get("available"):
+        level = confluence.get("level")
+        if level == "STRONG_AGREE":
+            score += 15
+            signals.append("🔥 두 전략 모두 A등급 = 최상위 합의!")
+        elif level == "AGREE":
+            score += 8
+            signals.append("🤝 두 전략 합의 = 방향 일치!")
+        elif level == "CONFLICT":
+            # v139: -15 → -25. 실측상 충돌 구간(67건)이 적중률 16.4%로
+            #       금지(AVOID) 구간보다도 나빴습니다!
+            score -= 25
+            signals.append(f"🚫 전략 충돌! {confluence.get('verdict', '')} (실측 적중률 16%)")
+        elif level == "AVOID":
+            score -= 10
+            signals.append("🚫 두 전략 모두 금지 = 이 방향은 피하세요! (과거 손실의 87%가 이 구간)")
+
+    # 🔺 v140 = 15m 천장/바닥 (사장님 주력!) = 가장 큰 가중치!
+    #    실측 근거: S등급 적중 38.5%(11.9배) / A 32.2%(10.0배) / D 2.0%(0.6배)
+    #    ※ SHORT 분석에서 천장 신호 = 진입 근거 / LONG 분석에서 천장 = 위험 신호!
+    bb_top = analysis.get("bb_top") or {}
+    if bb_top.get("available"):
+        g = bb_top.get("grade")
+        n_div = bb_top.get("div_count", 0)
+        pts = {"S": 30, "A": 22, "B": 12, "C": 5, "D": 0}.get(g, 0)
+        if pts:
+            score += pts
+            word = "천장" if side == "SHORT" else "바닥"
+            signals.append(
+                f"🔺 15m {word} {g}등급 (다이버전스 {n_div}개) = {bb_top.get('verdict', '')}"
+            )
+        mid = bb_top.get("bb_mid") or {}
+        if mid.get("position") == "AT_MID":
+            signals.append(
+                "🎯 BB 중단 도달 = 1차 목표 지점! (실측: 이탈 47% > 반등 18% = 지지선 아님!)"
+            )
+
+    # ⚡ v141 = 급등락 실시간 진입 (방향이 맞을 때만 가산!)
+    pump = analysis.get("pump_dump") or {}
+    if pump.get("available") and pump.get("side"):
+        if pump["side"] == side:
+            score += {"A": 20, "B": 12, "C": 5}.get(pump.get("grade"), 0)
+            signals.append(f"⚡ {pump.get('verdict', '')}")
+            lv = pump.get("levels") or {}
+            if lv.get("expected_value_after_fee_pct") is not None:
+                signals.append(
+                    f"💸 수수료 차감 후 기대값 {lv['expected_value_after_fee_pct']:+.2f}% "
+                    "(슬리피지 별도 = 실제로는 더 낮음!)"
+                )
+        else:
+            signals.append(
+                f"↔️ 급등락 신호는 {pump['side']} 방향인데 지금 분석은 {side} = 방향 불일치!"
+            )
+    elif (pump.get("event") or {}).get("kind") == "DUMP":
+        score -= 10
+        signals.append("🚫 급락 진행 중 = 실측상 양방향 모두 기대값 없음 = 진입 비권장!")
+
+    # 📉 v143 = 4H BB 중단 이탈 (실측 도달률 82~87% = 가장 견고!)
+    bb4h = analysis.get("bb_4h") or {}
+    if bb4h.get("available") and bb4h.get("grade") in ("A", "B"):
+        score += {"A": 25, "B": 15}[bb4h["grade"]]
+        lv4 = bb4h.get("levels") or {}
+        signals.append(
+            f"📉 {bb4h.get('verdict', '')} "
+            f"(도달률 {lv4.get('reach_rate')}%, 기대값 {lv4.get('expected_value_pct'):+.2f}%)"
+        )
+    elif bb4h.get("stage") == "TARGET_HIT":
+        signals.append("✅ 4H 밴드 목표 도달 = 청산 검토 (밴드는 지지선 아님!)")
+
+    # 🔀 v146 = 20% 급등 지속/전환 (방향이 맞을 때만 가산)
+    pc = analysis.get("pump_continuation") or {}
+    if pc.get("available") and pc.get("side"):
+        if pc["side"] == side:
+            score += 15
+            signals.append(f"🔀 {pc.get('verdict', '')}")
+        else:
+            score -= 10
+            signals.append(
+                f"↔️ 급등 판별은 {pc['side']} 신호인데 지금은 {side} = 반대 방향!"
+            )
+    elif pc.get("kind") == "NEUTRAL":
+        signals.append("👀 20% 급등했지만 지속/전환 신호 불충분 = 동전던지기 구간(41:49)")
+
+    # 판단 결과! (v138: 지표가 늘어 100 초과 가능 → 0~100으로 고정!)
+    score = max(0, min(100, score))
     if score >= 75:
         verdict = "🔥 강력 추천!"
         color = "#ef4444" if side == "SHORT" else "#22c55e"
@@ -438,14 +609,21 @@ def _judge_position(strategy: StrategyInstance, analysis: dict) -> dict:
     max_profit = float(strategy.max_profit_pct or 0) if strategy.max_profit_pct is not None else 0
 
     # 손실 판단!
-    if pnl <= -50:
+    if pnl <= ACTION_PNL_URGENT_PCT:
         action = "URGENT_CLOSE"
         color = "#ef4444"
         signals.append(f"🚨 손실 {pnl:.1f}% = 위험! 청산 검토!")
-    elif pnl <= -20:
+    elif pnl <= ACTION_PNL_REVIEW_PCT:
         action = "REVIEW"
         color = "#f59e0b"
         signals.append(f"⚠️ 손실 {pnl:.1f}% = 주의! 지지선 확인!")
+    elif pnl <= ACTION_PNL_PCT_DEFAULT:
+        # v147 사장님 지시: 액션 기본 임계 = -5%
+        action = "ACTION_CHECK"
+        color = "#f59e0b"
+        signals.append(
+            f"🔔 손실 {pnl:.1f}% = 액션 기준({ACTION_PNL_PCT_DEFAULT:.0f}%) 도달 = 조치 검토!"
+        )
     elif pnl >= 30:
         action = "HOLD_STRONG"
         color = "#22c55e"

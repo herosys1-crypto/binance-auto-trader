@@ -1158,6 +1158,13 @@
             <button onclick="scanLivePumpDump()"
                     class="text-xs bg-red-600 hover:bg-red-500 text-white px-2 py-1 rounded font-bold"
                     title="지금 즉시 스캔!">🔍 지금 스캔</button>
+            <!-- 🌟 v147 (사장님 2026-08-14): 15분 급등/급락 순위 팝업 (바이낸스는 24h만 제공!) -->
+            <button onclick="openPumpRanking('gainers')"
+                    class="text-xs bg-green-600 hover:bg-green-500 text-white px-2 py-1 rounded font-bold"
+                    title="15분 급등 순위 새 창!">🚀 15분 급등</button>
+            <button onclick="openPumpRanking('losers')"
+                    class="text-xs bg-rose-700 hover:bg-rose-600 text-white px-2 py-1 rounded font-bold"
+                    title="15분 급락 순위 새 창!">📉 15분 급락</button>
           </div>
         </div>
         <div class="text-xs text-slate-400 mb-2">
@@ -2463,6 +2470,21 @@
 <!--   health-page.js : 「🩺 점검」 dashboard (api.js 의존) -->
 <!--   ranking-page.js: 시장 순위 별도 페이지 (#ranking hash) -->
 <!--   helpers.js     : statusInfo/sideBadge/fmtNum/escapeHtml 등 공통 helper -->
+<script>
+/* 🌟 v147 (사장님 2026-08-14): 15분 급등/급락 순위 팝업.
+   "바이낸스는 24시간은 있는데" → 15m/30m/1h/4h 는 우리가 직접 계산합니다.
+   급등창과 하락창을 **각각** 띄웁니다 (창 이름이 달라 동시에 열립니다). */
+function openPumpRanking(direction) {
+  const isUp = direction === 'gainers';
+  const name = isUp ? 'pumpRanking' : 'dumpRanking';
+  const left = isUp ? 40 : 560;
+  window.open(
+    `/static/pump-ranking.html?direction=${direction}&period=15m&limit=30`,
+    name,
+    `width=500,height=820,left=${left},top=60`
+  );
+}
+</script>
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
 <script src="/static/js/constants.js?v=20260722v119-grid-align"></script>

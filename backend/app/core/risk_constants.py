@@ -44,10 +44,19 @@ DEFAULT_STEP_SIZE_FALLBACK: Final[Decimal] = Decimal("0.001")
 
 # ===== Stop Loss (SL) =====
 # template.stop_loss_percent_of_capital 가 NULL/0 일 때 default.
-# 🚨 2026-06-19 사장님 critical 변경: 100% → 90% (= 사장님 SYNUSDT Liquidation 사건!)
-# SYNUSDT = 가격 +49% 상승 → Liquidation 먼저! SL -100% = 발동 X = 사장님 -585 USDT 손실!
-# 신 v5 = SL 90% = Liquidation 안전 마진 + 사장님 자본 보호!
-DEFAULT_SL_PCT_OF_CAPITAL: Final[Decimal] = Decimal("90")
+# = 마진(사장님 자금) 대비 몇 % 손실에서 손절할 것인가.
+#
+# 이력:
+#   2026-06-19 v5  : 100 → 90
+#       🚨 SYNUSDT Liquidation 사건! 가격 +49% 상승 → Liquidation 이 SL 보다 먼저 발동
+#          (SL -100% = 청산 뒤라 무의미) = 사장님 -585 USDT 손실.
+#          → 90% 로 낮춰 **청산 전에 손절**되도록 안전 마진 확보.
+#   2026-08-14 v147: 90 → **50** (사장님 지시)
+#       = 청산 회피를 넘어 **손실 자체를 절반에서 끊는** 방향.
+#       v139 백테스트 근거와도 일치: 깊은 물타기 8건이 전체 손실의 43% 였음
+#       (일찍 끊었다면 그 대형 손실이 크게 줄었을 구간).
+# ⚠️ 효과: 손절이 **더 일찍** 발동합니다 = 건당 손실 감소 / 되돌아올 자리에서도 끊길 수 있음.
+DEFAULT_SL_PCT_OF_CAPITAL: Final[Decimal] = Decimal("50")
 
 # 강제 청산 알림 임계 — max_loss_pct 가 처음 이 값 이하로 내려가는 사이클에 1회 알림.
 LOSS_ALERT_THRESHOLD_PCT: Final[Decimal] = Decimal("-50")
@@ -87,15 +96,26 @@ DEFAULT_TP_QTY_RATIO_PCT: Final[Decimal] = Decimal("25")
 TP_FINAL_QTY_RATIO_PCT: Final[Decimal] = Decimal("100")  # TP10 default
 
 
+# ===== TP1 임계 =====
+# 신규 전략 생성 시 tp1_pct_override 에 넣는 기본값 (= TP1 이 발동하는 ROI %).
+# 이력:
+#   2026-08-08 v130 : 25 (사장님 "새로 정한건 모두 유효해")
+#   2026-08-14 v147 : 25 → **15** (사장님 지시 — "tp1 단계 시작도 15%로")
+# ⚠️ 낮추면 **더 일찍 1차 익절**합니다. 기존 전략은 저장된 값을 유지하며,
+#    목록의 「TP1」 드롭다운으로 전략별 변경 가능 (0=TP 끔 / 10~30).
+TP1_PCT_DEFAULT: Final[Decimal] = Decimal("15")
+
 # ===== Trailing TP =====
 # 피크가 이 % 이상 도달했어야 trailing armed.
 TRAILING_PEAK_THRESHOLD_PCT: Final[Decimal] = Decimal("5")
 # 피크 대비 이 % 회귀 시 전량 청산.
-# 🌟 2026-06-10 v36 사장님 결정: default 5 → 10 (더 큰 익절 잠재력!)
-# 사장님: "tp3단계 익절후 최고가 대비 -5% 하락하면 청산을 하는데
-#          기본을 10%으로 해주고 상황에 따라 설정할수 있게"
-# = default 10% 변경 + 옵션 5/10/15/20 그대로 (= 사장님 자율)
-TRAILING_RETRACE_PCT: Final[Decimal] = Decimal("10")
+# 이력:
+#   2026-06-10 v36 : 5 → 10 (사장님 "기본을 10%으로 해주고 상황에 따라 설정")
+#   2026-08-14 v147: 10 → **5** (사장님 지시 — 전략 인스턴스 목록의
+#                    「PNL / ROI 액션」 드롭다운 기본을 -5% 로)
+# ⚠️ 이 값을 낮추면 피크 후 **더 빨리 청산**됩니다 (익절을 짧게 가져감).
+#    옵션 5/10/15/20 은 그대로 = 전략별로 사장님이 개별 변경 가능.
+TRAILING_RETRACE_PCT: Final[Decimal] = Decimal("5")
 # Trailing 발동 최소 TP index (TP3 이상부터 활성).
 TRAILING_MIN_TP_INDEX: Final[int] = 3
 # 🌟 2026-06-09 v8 사장님 BEATUSDT 사례로 완화 (= 1단계만 진입해도 트레일링 발동):
@@ -136,6 +156,17 @@ CRISIS_QTY_RATIO_DEFAULT: Final[dict[str, Decimal]] = {
 CRISIS_RATIO_KEYS: Final[tuple[str, ...]] = ("TP1", "TP2", "TP3", "TP4")
 
 
+# ── 손익 액션 기준 (v147, 사장님 지시 2026-08-14) ─────────────────────
+#   "pnl/roi 액션 기본을 -5%로 해줘"
+#   기존엔 분석 판단(-20/-50)과 TP/SL 어드바이저(-20)에 **흩어져** 있었습니다.
+#   → 여기 한 곳으로 모읍니다 (헌법 6번 단일 진실).
+#
+#   ACTION_PNL_PCT_DEFAULT = 사장님이 지정한 **기본 액션 임계**.
+#     ROI 가 이 값 이하로 내려가면 화면에 「조치 검토」를 띄웁니다.
+ACTION_PNL_PCT_DEFAULT = -5.0      # 사장님 지정 기본
+ACTION_PNL_REVIEW_PCT = -20.0      # 주의 단계
+ACTION_PNL_URGENT_PCT = -50.0      # 긴급 청산 검토
+
 __all__ = [
     # 일반
     "PERCENT_DENOMINATOR",
@@ -158,6 +189,7 @@ __all__ = [
     "FORCE_SL_ROI_DEFAULT",
     "FORCE_SL_ALLOWED_ROI",
     # TP
+    "TP1_PCT_DEFAULT",
     "DEFAULT_TP_QTY_RATIO_PCT",
     "TP_FINAL_QTY_RATIO_PCT",
     # Trailing
@@ -166,6 +198,10 @@ __all__ = [
     "TRAILING_MIN_TP_INDEX",
     "TRAILING_MIN_STAGE",
     "PEAK_REDIS_TTL_SECONDS",
+    # 손익 액션 기준 (v147)
+    "ACTION_PNL_PCT_DEFAULT",
+    "ACTION_PNL_REVIEW_PCT",
+    "ACTION_PNL_URGENT_PCT",
     # Crisis
     "CRISIS_MAX_LOSS_THRESHOLD_DEFAULT",
     "CRISIS_DISABLED_SENTINEL",

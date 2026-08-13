@@ -31,7 +31,14 @@ def test_ranking_route_registered_before_catch_all_symbol():
 def test_period_keys_supported():
     """/symbols/ranking 에서 지원하는 period 목록 검증."""
     from app.api.v1.symbols import _PERIOD_TO_KLINE_PARAMS
-    expected = {"1d", "2d", "3d", "4d", "5d", "6d", "7d", "1w", "2w", "1m", "3m", "6m", "1y"}
+    # v147 (사장님 2026-08-14): 15분 급등/급락 순위 = 단기 기간 4개 추가!
+    #   바이낸스 ticker 는 24h 만 제공하므로 단기는 1m/5m 캔들로 직접 계산합니다.
+    #   ⚠️ "1m" 는 여기서 **1개월**입니다 (분이 아님!) — 그래서 분 단위는 15m/30m 만 씁니다.
+    expected = {
+        "15m", "30m", "1h", "4h",                       # v147 단기
+        "1d", "2d", "3d", "4d", "5d", "6d", "7d",
+        "1w", "2w", "1m", "3m", "6m", "1y",
+    }
     actual = set(_PERIOD_TO_KLINE_PARAMS.keys())
     assert actual == expected, f"period 옵션 mismatch: {actual} != {expected}"
 

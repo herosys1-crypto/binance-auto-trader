@@ -23,6 +23,7 @@ from app.integrations.binance.client import BinanceClient
 from app.models.exchange_account import ExchangeAccount
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_template import StrategyTemplate
+from app.core.risk_constants import ACTION_PNL_PCT_DEFAULT
 from app.models.trade_learning_record import TradeLearningRecord
 
 logger = logging.getLogger(__name__)
@@ -183,6 +184,209 @@ def run_learning_cycle_now(
     return LearningTeamLead().run_learning_cycle(db, days=30)
 
 
+@router.get("/setup-stats")
+def setup_stats(
+    days: int = 90,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """📐☁️🤝 셋업 등급별 실제 승률! (v137 → v138 확장!)
+
+    사장님 사상 (2026-08-14):
+      "남의 매매법도 우리 데이터로 검증해서 쓴다!"
+
+    - 진입 시 저장된 entry_context의 등급을 종료된 거래의 실제 손익과 대조!
+      · `grades`      = 📐 EMA/VCP (돌파형) 등급별
+      · `sar_grades`  = ☁️ SAR/구름대 (추세추종형) 등급별
+      · `confluence`  = 🤝 두 전략 합의 수준별  ← 「같이 적용」의 검증 지표!
+      · `flags`       = 개별 조건별 (어떤 조건이 실제로 돈이 됐나?)
+
+    등급 없는 옛 기록 = 집계 제외 (= no_context 개수로만 표시!)
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = db.execute(
+        select(TradeLearningRecord)
+        .where(TradeLearningRecord.status == "CLOSED")
+        .where(TradeLearningRecord.updated_at >= cutoff)
+    ).scalars().all()
+
+    def _bucket() -> dict[str, Any]:
+        return {"count": 0, "wins": 0, "total_pnl": 0.0, "best": None, "worst": None}
+
+    by_grade: dict[str, dict[str, Any]] = {}
+    by_sar_grade: dict[str, dict[str, Any]] = {}
+    by_confluence: dict[str, dict[str, Any]] = {}
+    by_bb_top: dict[str, dict[str, Any]] = {}
+    by_pump: dict[str, dict[str, Any]] = {}
+    by_bb4h: dict[str, dict[str, Any]] = {}
+    by_flag: dict[str, dict[str, Any]] = {}
+    no_context = 0
+
+    for r in rows:
+        entry = r.entry_context or {}
+        ctx = entry.get("ema_vcp") or {}
+        sctx = entry.get("sar_ichimoku") or {}
+        cctx = entry.get("confluence") or {}
+        bctx = entry.get("bb_top") or {}
+
+        has_ema = bool(ctx.get("available") and ctx.get("grade"))
+        has_sar = bool(sctx.get("available") and sctx.get("grade"))
+        has_bb = bool(bctx.get("available") and bctx.get("grade"))
+        if not has_ema and not has_sar and not has_bb:
+            no_context += 1
+            continue
+
+        pnl = float(r.pnl_pct or 0)
+
+        def _add(target: dict[str, Any]) -> None:
+            target["count"] += 1
+            target["total_pnl"] += pnl
+            if pnl > 0:
+                target["wins"] += 1
+            if target["best"] is None or pnl > target["best"]:
+                target["best"] = pnl
+            if target["worst"] is None or pnl < target["worst"]:
+                target["worst"] = pnl
+
+        if has_ema:
+            _add(by_grade.setdefault(ctx["grade"], _bucket()))
+            # 📐 조건별 = 어떤 조건이 실제로 돈이 됐나?
+            for key, on in [
+                ("trend_ok", ctx.get("trend_ok")),
+                ("aligned_1h", ctx.get("aligned_1h")),
+                ("vcp_contracting", ctx.get("vcp_contracting")),
+                ("volume_dry", ctx.get("volume_dry")),
+                ("breakout_closed", ctx.get("breakout_closed")),
+                ("volume_spike", ctx.get("volume_spike")),
+                ("first_rally_only", ctx.get("first_rally_only")),
+            ]:
+                _add(by_flag.setdefault(f"{key}={'Y' if on else 'N'}", _bucket()))
+
+        if has_sar:
+            _add(by_sar_grade.setdefault(sctx["grade"], _bucket()))
+            # ☁️ 조건별!
+            for key, on in [
+                ("cloud_4h_ok", sctx.get("cloud_4h_ok")),
+                ("cloud_1h_ok", sctx.get("cloud_1h_ok")),
+                ("cloud_1h_ideal", sctx.get("cloud_1h_ideal")),
+                ("cloud_15m_ok", sctx.get("cloud_15m_ok")),
+                ("sar_aligned", sctx.get("sar_aligned")),
+                ("sar_fresh_flip", sctx.get("sar_fresh_flip")),
+            ]:
+                _add(by_flag.setdefault(f"{key}={'Y' if on else 'N'}", _bucket()))
+
+        if cctx.get("available") and cctx.get("level"):
+            _add(by_confluence.setdefault(cctx["level"], _bucket()))
+
+        # 📉 v143: 4H BB 중단 이탈 상태
+        b4 = entry.get("bb_4h") or {}
+        if b4.get("available") and b4.get("grade"):
+            _add(by_bb4h.setdefault(f"{b4.get('cross','?')}_{b4['grade']}", _bucket()))
+
+        # ⚡ v141: 급등락 실시간 진입 (진입 당시 급등 중이었나?)
+        pctx = entry.get("pump_dump") or {}
+        if pctx.get("available") and pctx.get("kind"):
+            _add(by_pump.setdefault(
+                f"{pctx['kind']}_{pctx.get('grade', '?')}", _bucket()))
+            _add(by_flag.setdefault(
+                f"pump_live={'Y' if pctx.get('side') else 'N'}", _bucket()))
+
+        # 🔺 v140: 15m 천장/바닥 (사장님 주력 전략!)
+        if has_bb:
+            _add(by_bb_top.setdefault(bctx["grade"], _bucket()))
+            for key, on in [
+                ("div_rsi", bctx.get("div_rsi")),
+                ("div_macd", bctx.get("div_macd")),
+                ("div_obv", bctx.get("div_obv")),
+                ("bb_touch", bctx.get("bb_touch")),
+                ("wick", bctx.get("wick")),
+            ]:
+                _add(by_flag.setdefault(f"{key}={'Y' if on else 'N'}", _bucket()))
+            nd = bctx.get("div_count")
+            if nd is not None:
+                _add(by_bb_top.setdefault(f"div{nd}", _bucket()))
+
+    def _finish(bucket: dict[str, Any]) -> dict[str, Any]:
+        cnt = bucket["count"]
+        return {
+            "count": cnt,
+            "wins": bucket["wins"],
+            "win_rate": round(bucket["wins"] / cnt * 100, 1) if cnt else 0,
+            "avg_pnl_pct": round(bucket["total_pnl"] / cnt, 2) if cnt else 0,
+            "best_pnl_pct": bucket["best"],
+            "worst_pnl_pct": bucket["worst"],
+        }
+
+    grades = {g: _finish(by_grade[g]) for g in sorted(by_grade)}
+    sar_grades = {g: _finish(by_sar_grade[g]) for g in sorted(by_sar_grade)}
+    confluence = {k: _finish(by_confluence[k]) for k in sorted(by_confluence)}
+    bb_top_grades = {k: _finish(by_bb_top[k]) for k in sorted(by_bb_top)}
+    pump_stats = {k: _finish(by_pump[k]) for k in sorted(by_pump)}
+    bb4h_stats = {k: _finish(by_bb4h[k]) for k in sorted(by_bb4h)}
+    flags = {k: _finish(by_flag[k]) for k in sorted(by_flag)}
+
+    # --- 사장님용 한 줄 결론들! (표본 10건 미만 = 판정 금지!) ---
+    MIN_SAMPLE = 10
+    verdicts: list[str] = []
+
+    def _compare(label: str, table: dict, hi: str, lo: str) -> None:
+        total = sum(v["count"] for v in table.values())
+        if total < MIN_SAMPLE:
+            return
+        a = table.get(hi, {}).get("avg_pnl_pct")
+        d = table.get(lo, {}).get("avg_pnl_pct")
+        if a is not None and d is not None:
+            verdicts.append(
+                f"{label} {hi} 평균 {a:+.1f}% vs {lo} 평균 {d:+.1f}% "
+                + ("= 유효! ✅" if a > d else "= 효과 불확실! ⚠️")
+            )
+        elif a is not None:
+            verdicts.append(f"{label} {hi} 평균 {a:+.1f}% (비교군 {lo} 표본 없음!)")
+
+    _compare("📐 EMA/VCP", grades, "A", "D")
+    _compare("☁️ SAR/구름대", sar_grades, "A", "D")
+    _compare("🔺 15m 천장(v140)", bb_top_grades, "S", "D")
+    # 🤝 합의 검증 = 「같이 적용」이 실제로 이득이었나?
+    conf_total = sum(v["count"] for v in confluence.values())
+    if conf_total >= MIN_SAMPLE:
+        agree = confluence.get("STRONG_AGREE") or confluence.get("AGREE")
+        clash = confluence.get("CONFLICT")
+        if agree and clash:
+            verdicts.append(
+                f"🤝 합의 평균 {agree['avg_pnl_pct']:+.1f}% vs 충돌 평균 {clash['avg_pnl_pct']:+.1f}% "
+                + ("= **두 전략 같이 보는 게 이득!** ✅" if agree["avg_pnl_pct"] > clash["avg_pnl_pct"]
+                   else "= 합의 효과 아직 불확실! ⚠️")
+            )
+        elif agree:
+            verdicts.append(f"🤝 합의 평균 {agree['avg_pnl_pct']:+.1f}% (충돌 표본 없음!)")
+
+    graded_total = sum(v["count"] for v in grades.values())
+    sar_total = sum(v["count"] for v in sar_grades.values())
+    if not verdicts:
+        verdicts.append(
+            f"📊 표본 부족 = 더 쌓아야 판정 가능! "
+            f"(EMA/VCP {graded_total}건 / SAR {sar_total}건 / 합의 {conf_total}건, 최소 {MIN_SAMPLE}건 필요)"
+        )
+
+    return {
+        "days": days,
+        "min_sample": MIN_SAMPLE,
+        "graded_total": graded_total,
+        "sar_total": sar_total,
+        "confluence_total": conf_total,
+        "no_context": no_context,
+        "grades": grades,
+        "sar_grades": sar_grades,
+        "confluence": confluence,
+        "bb_top_grades": bb_top_grades,
+        "pump_dump_stats": pump_stats,
+        "bb_4h_stats": bb4h_stats,
+        "flags": flags,
+        "verdict": verdicts[0],
+        "verdicts": verdicts,
+    }
+
+
 @router.get("/summary")
 def learning_summary(
     days: int = 30,
@@ -319,11 +523,13 @@ def tp_sl_advisor(
                 })
 
             # 손실 > -20% = SL 완화 or 청산!
-            if pnl < -20:
+            # v147: 액션 기본 임계 = -5% (사장님 지시, 단일 상수)
+            if pnl <= ACTION_PNL_PCT_DEFAULT:
                 proposals.append({
                     "kind": "SL_REVIEW",
-                    "reason": f"🚨 손실 {pnl:.1f}% = 청산 or 홀드 결정 필요!",
-                    "action": "긴급 청산 or 추가 진입 검토!",
+                    "reason": (f"🔔 손실 {pnl:.1f}% = 액션 기준"
+                               f"({ACTION_PNL_PCT_DEFAULT:.0f}%) 도달!"),
+                    "action": "청산 / 홀드 / 추가 진입 결정 필요!",
                 })
 
             if not proposals:

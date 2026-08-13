@@ -135,6 +135,12 @@ class RankingResponse(BaseModel):
 _PERIOD_TO_KLINE_PARAMS: dict[str, tuple[str, int]] = {
     # period_key: (binance interval, candle count)
     # 변동률 = (close[N-1] - close[0]) / close[0] * 100  → N+1 개 candle 필요 (close[0] = 시작점)
+    # 🌟 v147 (사장님 2026-08-14): "15분 급등 급락 순위" — 바이낸스는 24h만 제공!
+    #    단기 구간은 1m/5m 캔들로 정확히 계산합니다.
+    "15m": ("1m", 16),    # 최근 15분
+    "30m": ("1m", 31),
+    "1h":  ("1m", 61),
+    "4h":  ("5m", 49),
     "1d":  ("1h", 25),    # 1d = 24h, 24h ago vs now
     "2d":  ("4h", 13),
     "3d":  ("4h", 19),
@@ -150,14 +156,16 @@ _PERIOD_TO_KLINE_PARAMS: dict[str, tuple[str, int]] = {
     "1y":  ("1w", 53),
 }
 _CACHE_TTL_SEC = {  # period 별 캐시 시간
+    # 단기 = 실시간성이 생명이라 짧게! (급등 포착이 목적)
+    "15m": 30, "30m": 45, "1h": 60, "4h": 120,
     "1d": 60, "2d": 120, "3d": 180, "4d": 300, "5d": 300, "6d": 300, "7d": 300,
     "1w": 300, "2w": 600, "1m": 1800, "3m": 3600, "6m": 7200, "1y": 14400,
 }
 
 
 def _ranking_cache_key(period: str) -> str:
-    # v129 (2026-07-29): 캐시 키 버전 up = 옛 top50 캐시 무효화!
-    return f"symbol_ranking:v129:{period}"
+    # v147 (2026-08-14): 15m/30m/1h/4h 단기 기간 추가 = 캐시 버전 up!
+    return f"symbol_ranking:v147:{period}"
 
 
 def _build_ranking_for_period(db: Session, period: str) -> list[dict]:
@@ -214,7 +222,12 @@ def _build_ranking_for_period(db: Session, period: str) -> list[dict]:
     #     ③ 1d 하락률 top 100 (사장님 급락 관심)
     #     = 중복 제거 후 = 최대 ~400 심볼 (실제 200~300)
     #     = klines 호출 증가하지만 = 정확성 우선!
-    _by_volume = sorted(items_24h, key=lambda x: float(x["quote_volume"]), reverse=True)[:200]
+    # 🌟 v147: 단기(15m~4h) 는 **거래대금 상위를 더 넓게** 봅니다.
+    #    15분 급등은 24h 순위에 아직 안 나타난 저거래대금 심볼에서 자주 터집니다
+    #    (v129 BULLAUSDT 누락 사고와 같은 이유). 대신 캐시 TTL 을 짧게 잡습니다.
+    _is_short = period in ("15m", "30m", "1h", "4h")
+    _vol_top = 300 if _is_short else 200
+    _by_volume = sorted(items_24h, key=lambda x: float(x["quote_volume"]), reverse=True)[:_vol_top]
     _by_gainers = sorted(items_24h, key=lambda x: float(x["change_pct"]), reverse=True)[:100]
     _by_losers = sorted(items_24h, key=lambda x: float(x["change_pct"]))[:100]
     _seen_syms: set = set()
@@ -251,7 +264,7 @@ def _build_ranking_for_period(db: Session, period: str) -> list[dict]:
 
 @router.get("/ranking", response_model=RankingResponse)
 def get_symbol_ranking(
-    period: str = Query(default="1d", description="기간: 1d/2d/.../7d/1w/2w/1m/3m/6m/1y"),
+    period: str = Query(default="1d", description="기간: 15m/30m/1h/4h/1d/2d/.../1y"),
     direction: Literal["gainers", "losers"] = Query(default="gainers"),
     limit: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),

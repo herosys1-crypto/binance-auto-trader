@@ -147,7 +147,7 @@ class RiskService:
         sl_pct = (
             Decimal(str(tpl.stop_loss_percent_of_capital))
             if tpl and tpl.stop_loss_percent_of_capital and Decimal(str(tpl.stop_loss_percent_of_capital)) > 0
-            else DEFAULT_SL_PCT_OF_CAPITAL  # template 미설정 시 default 80%
+            else DEFAULT_SL_PCT_OF_CAPITAL  # template 미설정 시 default (v147 = 50%)
         )
         leverage = Decimal(str(strategy.leverage)) if strategy.leverage else LEVERAGE_FALLBACK
 

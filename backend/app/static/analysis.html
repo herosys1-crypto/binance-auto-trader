@@ -157,6 +157,14 @@ function fmtChange(v) {
   return `<span class="${cls}">${sign}${v}%</span>`;
 }
 
+// 가격 표기 (v137): 1 이상 = 소수 4자리 / 1 미만 = 유효숫자 6자리 (알트 저가 대응!)
+function fmtPrice(v) {
+  if (v === null || v === undefined || isNaN(v)) return '-';
+  const n = Number(v);
+  if (n === 0) return '0';
+  return Math.abs(n) >= 1 ? String(parseFloat(n.toFixed(4))) : String(parseFloat(n.toPrecision(6)));
+}
+
 function render(data) {
   const sa = data.symbol_analysis || {};
   const changes = data.changes || sa.changes || {};
@@ -169,6 +177,12 @@ function render(data) {
   const change24 = data.change_24h !== undefined ? data.change_24h : sa.change_24h;
   const judgment = data.judgment || sa.judgment || {};
   const posJudgment = data.position_judgment || null;
+  const emaVcp = data.ema_vcp || sa.ema_vcp || {};
+  const sarIch = data.sar_ichimoku || sa.sar_ichimoku || {};
+  const conf = data.confluence || sa.confluence || {};
+  const bbTop = data.bb_top || sa.bb_top || {};
+  const pump = data.pump_dump || sa.pump_dump || {};
+  const bb4h = data.bb_4h || sa.bb_4h || {};
 
   let html = '';
 
@@ -266,6 +280,268 @@ function render(data) {
       </span></div>
     </div>
   `;
+
+  // 📉 4H 볼밴 중단 이탈 → 반대 밴드 (v143! 실측 표본 최대 = 가장 견고)
+  if (bb4h.grade && bb4h.available) {
+    const s4 = bb4h.state || {};
+    const l4 = bb4h.levels || {};
+    const isDown = bb4h.cross === 'DOWN';
+    html += `
+      <div class="verdict-box" style="background:${bb4h.color}22;border:2px solid ${bb4h.color};color:${bb4h.color}">
+        📉 ${bb4h.verdict || ''} (score ${bb4h.score})
+      </div>
+      <div class="section">
+        <div class="section-title">📉 4시간봉 볼밴 (중단 이탈 → 반대 밴드)</div>
+        <div class="row"><span class="label">중단 이탈:</span><span class="value">
+          ${bb4h.cross ? `${isDown ? '<span class="neg-change">📉 하향 이탈</span>' : '<span class="pos-change">📈 상향 돌파</span>'} (${s4.bars_since_cross}봉 전 = ${(s4.bars_since_cross||0)*4}시간)` : '➖ 없음'}
+        </span></div>
+        <div class="row"><span class="label">신호 방향:</span><span class="value">${bb4h.signal_side || '-'}</span></div>
+        <div class="row"><span class="label">BB 상/중/하:</span><span class="value">${fmtPrice(s4.upper)} / ${fmtPrice(s4.mid)} / ${fmtPrice(s4.lower)}</span></div>
+        <div class="row"><span class="label">목표 밴드:</span><span class="value">${fmtPrice(l4.target_band)} ${l4.target_dist_pct !== null && l4.target_dist_pct !== undefined ? `(${l4.target_dist_pct}%)` : ''}</span></div>
+        <div class="row"><span class="label">실측 도달률:</span><span class="value"><span class="pos-change">${l4.reach_rate}%</span> <span style="color:#94a3b8">(표본 ${l4.sample_n ? l4.sample_n.toLocaleString() : '-'}건)</span></span></div>
+        <div class="row"><span class="label">예상 소요:</span><span class="value">${l4.expected_bars}봉 (약 ${(l4.expected_bars||0)*4}시간)</span></div>
+        <div class="row"><span class="label">권장 SL:</span><span class="value">-${l4.sl_pct}% (${fmtPrice(l4.sl_price)})</span></div>
+        <div class="row"><span class="label">기대값(수수료 후):</span><span class="value" style="color:#f59e0b">${l4.expected_value_after_fee_pct !== null && l4.expected_value_after_fee_pct !== undefined ? `${l4.expected_value_after_fee_pct > 0 ? '+' : ''}${l4.expected_value_after_fee_pct}%` : '-'}</span></div>
+        <div class="row"><span class="label">밴드 도달:</span><span class="value">${s4.band_reached ? '<span style="color:#a855f7">✅ 목표 달성 (청산 검토)</span>' : '➖ 진행 중'}</span></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">📉 4H 볼밴 신호</div>
+        ${(bb4h.signals || []).map(s => `<div class="signal-item">${s}</div>`).join('')}
+      </div>
+    `;
+  }
+
+  // ⚡ 급등락 실시간 진입 (v141! 시간 민감 = 최상단!)
+  if (pump.grade && pump.event) {
+    const ev = pump.event || {};
+    const lvP = pump.levels || {};
+    const m = (ev.tf === '15m' ? pump.m15 : pump.m5) || {};
+    html += `
+      <div class="verdict-box" style="background:${pump.color}22;border:2px solid ${pump.color};color:${pump.color}">
+        ⚡ ${pump.verdict || ''}
+      </div>
+      <div class="section">
+        <div class="section-title">⚡ 급등락 실시간 (${ev.tf} · ${ev.window})</div>
+        <div class="row"><span class="label">유형:</span><span class="value">
+          ${ev.kind === 'PUMP' ? '<span class="pos-change">🚀 급등 진행 중</span>' : '<span class="neg-change">📉 급락 진행 중</span>'}
+          ${ev.change_pct !== undefined ? fmtChange(ev.change_pct) : ''}
+        </span></div>
+        <div class="row"><span class="label">권고 방향:</span><span class="value">
+          ${pump.side === 'LONG' ? '<span class="pos-change">📈 추격 LONG</span>'
+            : pump.side === 'SHORT' ? '<span class="neg-change">📉 SHORT</span>'
+            : '<span class="neg-change">🚫 진입 비권장</span>'}
+        </span></div>
+        ${pump.side ? `
+        <div class="row"><span class="label">TP / SL:</span><span class="value">+${lvP.tp_pct}% / -${lvP.sl_pct}%</span></div>
+        <div class="row"><span class="label">TP / SL 가격:</span><span class="value">${fmtPrice(lvP.tp_price)} / ${fmtPrice(lvP.sl_price)}</span></div>
+        <div class="row"><span class="label">TP 선착률:</span><span class="value">${lvP.tp_first_rate !== null && lvP.tp_first_rate !== undefined ? `${lvP.tp_first_rate}%` : '-'} ${lvP.sample_n ? `<span style="color:#94a3b8">(표본 ${lvP.sample_n}건)</span>` : ''}</span></div>
+        <div class="row"><span class="label">기대값(수수료 전):</span><span class="value">${lvP.expected_value_pct !== null && lvP.expected_value_pct !== undefined ? fmtChange(lvP.expected_value_pct) : '-'}</span></div>
+        <div class="row"><span class="label" style="color:#f59e0b">기대값(수수료 후):</span><span class="value" style="color:#f59e0b">${lvP.expected_value_after_fee_pct !== null && lvP.expected_value_after_fee_pct !== undefined ? `${lvP.expected_value_after_fee_pct > 0 ? '+' : ''}${lvP.expected_value_after_fee_pct}% (슬리피지 별도!)` : '-'}</span></div>
+        ` : ''}
+        <div class="row"><span class="label">창 내 고가/저가:</span><span class="value">${fmtPrice(m.window_high)} / ${fmtPrice(m.window_low)}</span></div>
+        <div class="row"><span class="label">정점 대비:</span><span class="value">${m.from_high_pct !== null && m.from_high_pct !== undefined ? fmtChange(m.from_high_pct) : '-'}</span></div>
+      </div>
+
+      ${(pump.retrace && pump.retrace.available) ? `
+      <div class="section">
+        <div class="section-title">🔄 되돌림 상태 (보유 판단용 — 진입 신호 아님!)</div>
+        <div class="row"><span class="label">최근 고점(4시간):</span><span class="value">${fmtPrice(pump.retrace.recent_high)}</span></div>
+        <div class="row"><span class="label">현재 되돌림:</span><span class="value">${fmtChange(pump.retrace.retrace_pct)}</span></div>
+        <div class="row"><span class="label">실측 고점 회복률:</span><span class="value">
+          ${pump.retrace.recovery_rate !== null && pump.retrace.recovery_rate !== undefined
+            ? `<span style="color:${pump.retrace.recovery_rate >= 55 ? '#22c55e' : pump.retrace.recovery_rate >= 35 ? '#f59e0b' : '#ef4444'}">${pump.retrace.recovery_rate}%</span> <span style="color:#94a3b8">(표본 ${pump.retrace.sample_n}건)</span>`
+            : '-'}
+        </span></div>
+        <div class="signal-item">${pump.retrace.advice || ''}</div>
+      </div>
+      ` : ''}
+
+      <div class="section">
+        <div class="section-title">⚡ 급등락 신호</div>
+        ${(pump.signals || []).map(s => `<div class="signal-item">${s}</div>`).join('')}
+      </div>
+    `;
+  }
+
+  // 🔺 15m 천장/바닥 + 볼밴 중단 (v140! 사장님 주력 = 맨 위에!)
+  if (bbTop.grade) {
+    const t15 = bbTop.tf_15m || {};
+    const mid = bbTop.bb_mid || {};
+    const lvB = bbTop.levels || {};
+    const h1 = bbTop.tf_1h || {};
+    const h4 = bbTop.tf_4h || {};
+    const isTop = (bbTop.side || 'SHORT') !== 'LONG';
+    const divTxt = (on, name, rate) => on
+      ? `<span class="pos-change">✅ ${name} 다이버전스</span> <span style="color:#94a3b8">(적중 ${rate})</span>`
+      : `<span style="color:#94a3b8">➖ ${name}</span>`;
+    const posTxt = mid.position === 'AT_MID' ? '<span style="color:#a855f7">🎯 BB중단 도달!</span>'
+                 : mid.position === 'ABOVE_MID' ? '⬆ 중단 위'
+                 : mid.position === 'BELOW_MID' ? '⬇ 중단 아래' : '-';
+    html += `
+      <div class="verdict-box" style="background:${bbTop.color}22;border:2px solid ${bbTop.color};color:${bbTop.color}">
+        🔺 15m ${isTop ? '천장' : '바닥'} ${bbTop.verdict || ''} (score ${bbTop.score})
+      </div>
+      <div class="section">
+        <div class="section-title">🔺 15분봉 ${isTop ? '천장' : '바닥'} 예측 (주 타임프레임)</div>
+        <div class="row"><span class="label">RSI:</span><span class="value">${divTxt(t15.div_rsi, 'RSI', '29.7%')}</span></div>
+        <div class="row"><span class="label">OBV:</span><span class="value">${divTxt(t15.div_obv, 'OBV', '28.5%')}</span></div>
+        <div class="row"><span class="label">MACD:</span><span class="value">${divTxt(t15.div_macd, 'MACD', '25.5%')}</span></div>
+        <div class="row"><span class="label">BB ${isTop ? '상' : '하'}단 터치:</span><span class="value">${t15.bb_touch ? '<span class="pos-change">✅ 터치!</span>' : '<span style="color:#94a3b8">➖</span>'}</span></div>
+        <div class="row"><span class="label">${isTop ? '윗' : '아랫'}꼬리:</span><span class="value">${t15.wick ? `<span class="pos-change">✅ ${(t15.wick_ratio*100).toFixed(0)}%</span>` : `<span style="color:#94a3b8">➖ ${t15.wick_ratio !== undefined && t15.wick_ratio !== null ? (t15.wick_ratio*100).toFixed(0)+'%' : '-'}</span>`}</span></div>
+        <div class="row"><span class="label">RSI 값:</span><span class="value">${t15.rsi ?? '-'} <span style="color:#94a3b8">(참고 — 점수 미반영)</span></span></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">🎯 볼밴 중단 (1차 목표)</div>
+        <div class="row"><span class="label">현재 위치:</span><span class="value">${posTxt}</span></div>
+        <div class="row"><span class="label">BB 중단:</span><span class="value">${fmtPrice(lvB.bb_mid)}</span></div>
+        <div class="row"><span class="label">중단까지 거리:</span><span class="value">${mid.dist_pct !== null && mid.dist_pct !== undefined ? `${mid.dist_pct}%` : '-'}</span></div>
+        <div class="row"><span class="label">BB 상단 / 하단:</span><span class="value">${fmtPrice(lvB.bb_upper)} / ${fmtPrice(lvB.bb_lower)}</span></div>
+        <div class="row"><span class="label">예상 도달:</span><span class="value">${lvB.expected_bars_to_mid ?? '-'}봉 (약 ${(lvB.expected_bars_to_mid||0)*15}분)</span></div>
+        <div class="row"><span class="label" style="color:#f59e0b">⚠️ 중단은 지지선 아님:</span><span class="value" style="color:#f59e0b">이탈 47% vs 반등 18%</span></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">🤝 1H·4H (보조 — 거부권 없음)</div>
+        <div class="row"><span class="label">1H 추세:</span><span class="value">${h1.trend || '-'} ${h1.gap_pct !== null && h1.gap_pct !== undefined ? `(${h1.gap_pct}%)` : ''}</span></div>
+        <div class="row"><span class="label">4H 추세:</span><span class="value">${h4.trend || '-'} ${h4.gap_pct !== null && h4.gap_pct !== undefined ? `(${h4.gap_pct}%)` : ''}</span></div>
+        <div class="row"><span class="label">실측 보조 효과:</span><span class="value" style="color:#94a3b8">미미 (32% → 33~34%)</span></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">🔺 천장 신호</div>
+        ${(bbTop.signals || []).map(s => `<div class="signal-item">${s}</div>`).join('')}
+      </div>
+    `;
+  }
+
+  // 🤝 두 전략 합의 (v138!) = 돌파형(EMA/VCP) + 추세추종형(SAR/구름대)
+  if (conf.level && conf.level !== 'NONE') {
+    const g = conf.grades || {};
+    html += `
+      <div class="verdict-box" style="background:${conf.color}22;border:2px solid ${conf.color};color:${conf.color}">
+        🤝 ${conf.verdict || ''} (score ${conf.score})
+      </div>
+      <div class="section">
+        <div class="section-title">🤝 전략 합의 판정</div>
+        <div class="row"><span class="label">📐 EMA/VCP (돌파형):</span><span class="value">${g.ema_vcp || '-'}등급</span></div>
+        <div class="row"><span class="label">☁️ SAR/구름대 (추세추종):</span><span class="value">${g.sar_ichimoku || '-'}등급</span></div>
+        ${(conf.signals || []).map(s => `<div class="signal-item">${s}</div>`).join('')}
+      </div>
+    `;
+  } else if (conf.signals && conf.signals.length) {
+    html += `
+      <div class="section">
+        <div class="section-title">🤝 전략 합의 판정</div>
+        ${(conf.signals || []).map(s => `<div class="signal-item">${s}</div>`).join('')}
+      </div>
+    `;
+  }
+
+  // ☁️ 파라볼릭 SAR + 일목 구름대 (v138! 추세추종형)
+  if (sarIch.grade) {
+    const lv2 = sarIch.levels || {};
+    const s4 = sarIch.tf_4h || {};
+    const s1 = sarIch.tf_1h || {};
+    const s15 = sarIch.tf_15m || {};
+    const sar15 = s15.sar || {};
+    const posTxt = (p) => p === 'ABOVE' ? '<span class="pos-change">☁️⬆ 구름 위 (상승 추세)</span>' :
+                          p === 'BELOW' ? '<span class="neg-change">☁️⬇ 구름 아래 (하락 추세)</span>' :
+                          p === 'INSIDE' ? '<span style="color:#f59e0b">☁️⏸ 구름 안 (관망!)</span>' : '-';
+    const ox2 = (v) => v ? '<span class="pos-change">✅</span>' : '<span style="color:#94a3b8">➖</span>';
+    html += `
+      <div class="verdict-box" style="background:${sarIch.color}22;border:2px solid ${sarIch.color};color:${sarIch.color}">
+        ☁️ SAR/구름대 ${sarIch.verdict || ''} (score ${sarIch.score})
+      </div>
+      <div class="section">
+        <div class="section-title">🧭 4H 나침반 (방향 제한)</div>
+        <div class="row"><span class="label">구름 위치:</span><span class="value">${posTxt(s4.position)}</span></div>
+        <div class="row"><span class="label">구름 상단/하단:</span><span class="value">${fmtPrice(s4.top)} / ${fmtPrice(s4.bottom)}</span></div>
+        <div class="row"><span class="label">진입 허가:</span><span class="value">${s4.ok ? '<span class="pos-change">✅ 허가</span>' : '<span class="neg-change">🚫 금지</span>'}</span></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">🔍 1H 교차검증 (2중 필터)</div>
+        <div class="row"><span class="label">구름 위치:</span><span class="value">${posTxt(s1.position)}</span></div>
+        <div class="row"><span class="label">구름 두께:</span><span class="value">${s1.thickness_pct !== null && s1.thickness_pct !== undefined ? `${s1.thickness_pct}%` : '-'} ${s1.thin ? '<span class="pos-change">(얇음!)</span>' : ''}</span></div>
+        <div class="row"><span class="label">구름 이격:</span><span class="value">${s1.dist_pct !== null && s1.dist_pct !== undefined ? `${s1.dist_pct}%` : '-'} ${s1.near ? '<span class="pos-change">(눌림목 근접!)</span>' : ''}</span></div>
+        <div class="row"><span class="label">이상적 셋업:</span><span class="value">${ox2(s1.ideal)}</span></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">🔫 15m 방아쇠 (SAR 전환)</div>
+        <div class="row"><span class="label">구름 위치:</span><span class="value">${posTxt(s15.position)}</span></div>
+        <div class="row"><span class="label">SAR 방향:</span><span class="value">
+          ${sar15.uptrend === true ? '<span class="pos-change">🔵 점이 캔들 아래 (매수 구간)</span>' :
+            sar15.uptrend === false ? '<span class="neg-change">🔴 점이 캔들 위 (매도 구간)</span>' : '-'}
+        </span></div>
+        <div class="row"><span class="label">전환 경과:</span><span class="value">
+          ${sar15.flip_bars_ago === null || sar15.flip_bars_ago === undefined ? '-' :
+            (sar15.fresh_flip ? `<span class="pos-change">🎯 ${sar15.flip_bars_ago}봉 전 전환 = 첫 점!</span>`
+                              : `${sar15.flip_bars_ago}봉 경과 (추격 주의)`)}
+        </span></div>
+        <div class="row"><span class="label">SAR 값 (15m / 1H):</span><span class="value">${fmtPrice(lv2.sar_15m)} / ${fmtPrice(lv2.sar_1h)}</span></div>
+        <div class="row"><span class="label">손절 (15m 구름 반대끝):</span><span class="value">${fmtPrice(lv2.stop_loss)} ${lv2.risk_pct !== null && lv2.risk_pct !== undefined ? `<span class="neg-change">(-${lv2.risk_pct}%)</span>` : ''}</span></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">☁️ SAR/구름대 신호</div>
+        ${(sarIch.signals || []).map(s => `<div class="signal-item">${s}</div>`).join('')}
+      </div>
+    `;
+  }
+
+  // 📐 EMA + VCP 멀티 타임프레임 (v137! 4H 나침반 → 1H 작전지도 → 15m 방아쇠!)
+  if (emaVcp.grade) {
+    const lv = emaVcp.levels || {};
+    const t4 = emaVcp.tf_4h || {};
+    const t1 = emaVcp.tf_1h || {};
+    const t15 = emaVcp.tf_15m || {};
+    const ox = (v) => v ? '<span class="pos-change">✅</span>' : '<span style="color:#94a3b8">➖</span>';
+    html += `
+      <div class="verdict-box" style="background:${emaVcp.color}22;border:2px solid ${emaVcp.color};color:${emaVcp.color}">
+        📐 EMA/VCP ${emaVcp.verdict || ''} (score ${emaVcp.score})
+      </div>
+      <div class="section">
+        <div class="section-title">🧭 4H 나침반 (추세 필터)</div>
+        <div class="row"><span class="label">추세:</span><span class="value">
+          ${t4.direction === 'UP' ? '<span class="pos-change">🚀 상승</span>' :
+            t4.direction === 'DOWN' ? '<span class="neg-change">📉 하락</span>' :
+            t4.direction === 'FLAT' ? '➖ 횡보' : '-'}
+          ${t4.available ? (t4.ok ? ' <span class="pos-change">(진입 허가!)</span>' : ' <span class="neg-change">(역방향 = 금지!)</span>') : ''}
+        </span></div>
+        <div class="row"><span class="label">EMA50:</span><span class="value">${fmtPrice(t4.ema50)}</span></div>
+        <div class="row"><span class="label">EMA50 기울기:</span><span class="value">${t4.slope_pct !== null && t4.slope_pct !== undefined ? fmtChange(t4.slope_pct) : '-'}</span></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">🗺 1H 작전지도 (셋업)</div>
+        <div class="row"><span class="label">이평선 배열:</span><span class="value">${ox(t1.aligned)} 10/20/50</span></div>
+        <div class="row"><span class="label">VCP 수축:</span><span class="value">${ox(t1.vcp_contracting)} ${t1.vcp_ranges ? `${t1.vcp_ranges.join('% → ')}%` : ''} ${t1.vcp_ratio !== null && t1.vcp_ratio !== undefined ? `(비율 ${t1.vcp_ratio})` : ''}</span></div>
+        <div class="row"><span class="label">거래량 고갈:</span><span class="value">${ox(t1.volume_dry)} ${t1.vol_ratio !== null && t1.vol_ratio !== undefined ? `${t1.vol_ratio}x` : ''}</span></div>
+        <div class="row"><span class="label">첫 반등 필터:</span><span class="value">${t1.first_rally_only ? '<span class="neg-change">⚠️ 첫 파동 = 관망!</span>' : `<span class="pos-change">✅ ${t1.rally_count}번째 파동 = 통과!</span>`}</span></div>
+        <div class="row"><span class="label">돌파선:</span><span class="value">${fmtPrice(lv.breakout)}</span></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">🔫 15m 방아쇠 (타점/리스크)</div>
+        <div class="row"><span class="label">돌파:</span><span class="value">
+          ${t15.breakout_closed ? '<span class="pos-change">🎯 종가 돌파 확정!</span>' :
+            t15.breakout_intrabar ? '<span style="color:#f59e0b">⏳ 장중 돌파 중!</span>' : '➖ 대기'}
+        </span></div>
+        <div class="row"><span class="label">거래량 폭발:</span><span class="value">${ox(t15.volume_spike)} ${t15.vol_spike_ratio !== null && t15.vol_spike_ratio !== undefined ? `${t15.vol_spike_ratio}x` : ''}</span></div>
+        <div class="row"><span class="label">손절 기준 (스윙):</span><span class="value">${fmtPrice(lv.stop_loss)} ${lv.risk_pct !== null && lv.risk_pct !== undefined ? `<span class="neg-change">(-${lv.risk_pct}%)</span>` : ''}</span></div>
+        <div class="row"><span class="label">절반 익절 (15m EMA20):</span><span class="value">${fmtPrice(lv.exit_half_15m_ema20)}</span></div>
+        <div class="row"><span class="label">전량 익절 (1H EMA20):</span><span class="value">${fmtPrice(lv.exit_full_1h_ema20)}</span></div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">📐 EMA/VCP 신호</div>
+        ${(emaVcp.signals || []).map(s => `<div class="signal-item">${s}</div>`).join('')}
+      </div>
+    `;
+  }
 
   // 심볼 진입 판단!
   if (judgment.verdict) {

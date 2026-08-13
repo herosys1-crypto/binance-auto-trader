@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🚀 급등 순위</title>
+<style>
+  body {
+    background: #0f172a; color: #e2e8f0;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    padding: 6px 8px; margin: 0; line-height: 1.35; font-size: 12px;
+  }
+  .header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid #334155;
+    position: sticky; top: 0; background: #0f172a; z-index: 10;
+  }
+  .title { font-size: 1rem; font-weight: bold; }
+  .sub { color: #94a3b8; font-size: 0.72rem; }
+  .controls { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
+  .chip {
+    padding: 3px 8px; border-radius: 999px; border: 1px solid #334155;
+    background: #1e293b; color: #94a3b8; cursor: pointer; font-size: 0.72rem;
+  }
+  .chip.on { background: #7c3aed; color: #fff; border-color: #7c3aed; }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; color: #94a3b8; font-size: 0.7rem; font-weight: 600;
+    padding: 3px 4px; border-bottom: 1px solid #334155;
+    position: sticky; top: 34px; background: #0f172a;
+  }
+  td { padding: 3px 4px; border-bottom: 1px dashed #1e293b; font-size: 0.74rem; }
+  td.num, th.num { text-align: right; }
+  tr:hover { background: rgba(124,58,237,0.12); }
+  .sym { font-weight: 700; cursor: pointer; color: #e2e8f0; }
+  .sym:hover { text-decoration: underline; color: #a78bfa; }
+  .pos { color: #22c55e; font-weight: 700; }
+  .neg { color: #ef4444; font-weight: 700; }
+  .hot { background: rgba(239,68,68,0.18); }
+  .loading { text-align: center; color: #94a3b8; padding: 30px; }
+  .btn {
+    padding: 3px 8px; border-radius: 4px; border: 0; font-weight: bold;
+    cursor: pointer; font-size: 0.7rem; background: #7c3aed; color: #fff;
+  }
+  .badge {
+    display: inline-block; padding: 0 5px; border-radius: 3px;
+    font-size: 0.65rem; font-weight: 700; margin-left: 3px;
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <div class="title" id="title">🚀 급등 순위</div>
+    <div class="sub" id="sub">불러오는 중...</div>
+  </div>
+  <div>
+    <button class="btn" onclick="load()">🔄</button>
+    <button class="btn" style="background:#475569" onclick="window.close()">✕</button>
+  </div>
+</div>
+
+<div class="controls" id="periods"></div>
+<div id="content"><div class="loading">📡 조회 중...</div></div>
+
+<script>
+const API_BASE = '/api/v1';
+const params = new URLSearchParams(window.location.search);
+// direction=gainers(급등) / losers(급락)
+const DIRECTION = (params.get('direction') || 'gainers').toLowerCase();
+const IS_UP = DIRECTION === 'gainers';
+// 사장님 지시: 15분 급등/급락 순위가 기본 (바이낸스는 24h만 제공!)
+let period = params.get('period') || '15m';
+let limit = Number(params.get('limit') || 30);
+let timer = null;
+
+const PERIODS = ['15m', '30m', '1h', '4h', '1d'];
+// 강조 임계 = 전략 연구에서 쓰는 20% 기준
+const HOT_PCT = 20;
+
+document.title = IS_UP ? '🚀 급등 순위' : '📉 급락 순위';
+document.getElementById('title').textContent = IS_UP ? '🚀 급등 순위' : '📉 급락 순위';
+
+function getToken() {
+  return localStorage.getItem('access_token')
+      || sessionStorage.getItem('access_token')
+      || localStorage.getItem('accessToken') || '';
+}
+
+function renderPeriods() {
+  document.getElementById('periods').innerHTML = PERIODS.map(p =>
+    `<span class="chip ${p === period ? 'on' : ''}" onclick="setPeriod('${p}')">${p}</span>`
+  ).join('') + `<span class="chip" onclick="toggleAuto()" id="autoChip">⏱ 자동 30초</span>`;
+}
+
+function setPeriod(p) { period = p; renderPeriods(); load(); }
+
+function toggleAuto() {
+  const chip = document.getElementById('autoChip');
+  if (timer) { clearInterval(timer); timer = null; chip.classList.remove('on'); }
+  else { timer = setInterval(load, 30000); chip.classList.add('on'); }
+}
+
+function fmtVol(v) {
+  const n = Number(v || 0);
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K';
+  return n.toFixed(0);
+}
+
+function fmtPrice(v) {
+  const n = Number(v);
+  if (!isFinite(n) || n === 0) return '-';
+  return Math.abs(n) >= 1 ? String(parseFloat(n.toFixed(4)))
+                          : String(parseFloat(n.toPrecision(6)));
+}
+
+// 심볼 클릭 = 상세 분석 창 (기존 analysis.html 재사용)
+function openAnalysis(sym) {
+  const side = IS_UP ? 'SHORT' : 'LONG';   // 급등이면 천장/역추세 관점, 급락이면 반등 관점
+  window.open(`/static/analysis.html?symbol=${encodeURIComponent(sym)}&side=${side}`,
+              `an_${sym}`, 'width=460,height=900');
+}
+
+async function load() {
+  try {
+    const r = await fetch(
+      `${API_BASE}/symbols/ranking?period=${period}&direction=${DIRECTION}&limit=${limit}`,
+      { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    render(data);
+  } catch (e) {
+    document.getElementById('content').innerHTML =
+      `<div class="loading" style="color:#ef4444">❌ 조회 실패: ${e.message}</div>`;
+  }
+}
+
+function render(data) {
+  const items = data.items || [];
+  const now = new Date().toLocaleTimeString('ko-KR');
+  document.getElementById('sub').textContent =
+    `${period} 기준 · ${items.length}건 · ${now}` +
+    (period === '15m' ? ' (바이낸스 미제공 = 자체 계산)' : '');
+
+  if (!items.length) {
+    document.getElementById('content').innerHTML =
+      `<div class="loading">해당 조건의 심볼이 없습니다.</div>`;
+    return;
+  }
+
+  const rows = items.map((it, i) => {
+    const chg = Number(it.change_pct);
+    const cls = chg >= 0 ? 'pos' : 'neg';
+    const hot = Math.abs(chg) >= HOT_PCT;
+    const badge = hot
+      ? `<span class="badge" style="background:${IS_UP ? '#22c55e' : '#ef4444'};color:#fff">${HOT_PCT}%+</span>`
+      : '';
+    return `
+      <tr class="${hot ? 'hot' : ''}">
+        <td class="num" style="color:#64748b">${i + 1}</td>
+        <td><span class="sym" onclick="openAnalysis('${it.symbol}')">${it.symbol}</span>${badge}</td>
+        <td class="num">${fmtPrice(it.last_price)}</td>
+        <td class="num ${cls}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</td>
+        <td class="num" style="color:#94a3b8">${fmtVol(it.quote_volume)}</td>
+      </tr>`;
+  }).join('');
+
+  document.getElementById('content').innerHTML = `
+    <table>
+      <thead><tr>
+        <th class="num">#</th><th>심볼</th><th class="num">현재가</th>
+        <th class="num">${period} 변동</th><th class="num">24h 거래대금</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="loading" style="padding:8px;font-size:0.68rem">
+      심볼을 누르면 상세 분석 창이 열립니다
+      (${IS_UP ? '급등 = 천장/역추세 관점 SHORT' : '급락 = 반등 관점 LONG'}).
+    </div>`;
+}
+
+renderPeriods();
+load();
+</script>
+</body>
+</html>

@@ -95,6 +95,8 @@ class TestRiskConstantsCentralization:
         assert FULL_CLOSE_RATIO == Decimal("1.00")
 
         # SL
+        # v147 (2026-08-14 사장님 지시): 90 → 50 으로 되돌림 = 테스트 기대와 일치.
+        #   (v5 에서 SYNUSDT 청산 사고로 100→90 했다가, 손실 자체를 절반에서 끊도록 50 으로)
         assert DEFAULT_SL_PCT_OF_CAPITAL == Decimal("50"), "사용자 default SL = 50%"
         assert LOSS_ALERT_THRESHOLD_PCT == Decimal("-50")
 
@@ -106,7 +108,11 @@ class TestRiskConstantsCentralization:
         assert TRAILING_PEAK_THRESHOLD_PCT == Decimal("5")
         assert TRAILING_RETRACE_PCT == Decimal("5")
         assert TRAILING_MIN_TP_INDEX == 3, "사용자 v5: TP3+ 부터 trailing"
-        assert TRAILING_MIN_STAGE == 3, "사용자 v5: stage 3+ 부터 trailing"
+        # 🚨 테스트 stale fix (2026-08-14):
+        #   v5 는 stage 3+ 였지만, **v8 (2026-06-09) 에서 사장님 BEATUSDT 사례로 1 로 완화**
+        #   되었습니다 (= 1단계만 진입해도 트레일링 발동). 코드가 맞고 테스트가 뒤처져 있었습니다.
+        #   risk_constants.TRAILING_MIN_STAGE 주석에 그 이력이 남아 있습니다.
+        assert TRAILING_MIN_STAGE == 1, "v8: 1단계 진입만으로도 trailing 발동 (BEATUSDT 사례)"
 
         # Crisis
         assert CRISIS_MAX_LOSS_THRESHOLD_DEFAULT == Decimal("-50")

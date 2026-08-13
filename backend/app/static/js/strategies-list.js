@@ -398,9 +398,9 @@ async function refreshStrategies() {
       // 사장님 결정: Crisis = 영구 비활성, 사장님 옵션 = 항상 우선!
       // 사장님 = 상황에 따라 = 즉시 선택 = 즉시 적용!
       // 활성 strategy 만 노출 (= TERMINAL X)
-      // 🌟 2026-08-08 v130 확정: 신 default = 25% (구/신 모두!)
-      // 사장님: '새로 정한건 모두 유효해'
-      const _tp1Pct = (s.tp1_pct_override != null) ? Number(s.tp1_pct_override) : 25;
+      // 🌟 2026-08-14 v147 사장님 지시: default 25 → **15%** ("tp1 단계 시작도 15%로")
+      //    backend risk_constants.TP1_PCT_DEFAULT 와 반드시 일치해야 함 (헌법 6번)!
+      const _tp1Pct = (s.tp1_pct_override != null) ? Number(s.tp1_pct_override) : 15;
       const _isActiveForTp1 = !TERMINAL_STATUSES.includes((s.status || '').toUpperCase());
       const tp1ThresholdSelect = _isActiveForTp1
         ? `<select onclick="event.stopPropagation()"
@@ -618,8 +618,9 @@ async function refreshStrategies() {
         : '';
       // 🌟 2026-06-08 사장님 trailing retrace 옵션 드롭다운 (Phase 3 — spec).
       // 활성 strategy 만 노출 (= TERMINAL X). 변경 즉시 PATCH = 다음 risk cycle 적용.
-      // 🌟 2026-06-10 v36 사장님 결정: default 5 → 10 (사장님 큰 익절 잠재력!)
-      const _trailingRetracePct = (s.trailing_retrace_pct != null) ? Number(s.trailing_retrace_pct) : 10;
+      // 🌟 2026-08-14 v147 사장님 지시: default 10 → **5** (「PNL / ROI 액션」 기본 -5%)
+      //    backend risk_constants.TRAILING_RETRACE_PCT 와 반드시 일치해야 함 (헌법 6번)!
+      const _trailingRetracePct = (s.trailing_retrace_pct != null) ? Number(s.trailing_retrace_pct) : 5;
       // 🚨 2026-06-08 fix: 드롭다운 클릭 시 = parent <tr onclick="selectStrategy()"> bubble → 다른 페이지 이동
       // = onclick + onmousedown + onchange 모두 = event.stopPropagation() 필수
       const trailingRetraceSelect = (!TERMINAL_STATUSES.includes((s.status || '').toUpperCase()) && hasPosition)
