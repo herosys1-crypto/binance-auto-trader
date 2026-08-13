@@ -240,6 +240,39 @@ def start_scheduler() -> None:
         id="prediction_outcome",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🔬 v136 (2026-08-13 사장님!): 시장 관찰!
+    # 매 4시간 = 상위 100 심볼 snapshot / 매 1시간 = 관찰 update!
+    def _market_obs_snapshot():
+        from app.workers.market_observation_worker import run_market_observation_snapshot
+        run_market_observation_snapshot()
+    scheduler.add_job(
+        guarded_job("market_obs_snapshot", 600, _market_obs_snapshot),
+        trigger=IntervalTrigger(hours=4),
+        id="market_obs_snapshot",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    def _market_obs_update():
+        from app.workers.market_observation_worker import run_market_observation_update
+        run_market_observation_update()
+    scheduler.add_job(
+        guarded_job("market_obs_update", 300, _market_obs_update),
+        trigger=IntervalTrigger(hours=1),
+        id="market_obs_update",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # 🎓 v136 (2026-08-13 사장님!): Learning Team cycle!
+    # 매 4시간 = 메모리 → 분석 → 학습!
+    def _learning_team_cycle():
+        from app.db.session import SessionLocal
+        from app.agents.learning_team.team_lead import LearningTeamLead
+        with SessionLocal() as _db:
+            LearningTeamLead().run_learning_cycle(_db, days=30)
+    scheduler.add_job(
+        guarded_job("learning_team_cycle", 600, _learning_team_cycle),
+        trigger=IntervalTrigger(hours=4),
+        id="learning_team_cycle",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.

@@ -14,3 +14,4 @@ from app.models.account_daily_risk_limit import AccountDailyRiskLimit
 from app.models.system_setting import SystemSetting
 from app.models.strategy_suggestion import StrategySuggestion  # v132 Strategy Suggestion Team!
 from app.models.trade_learning_record import TradeLearningRecord  # v134 학습!
+from app.models.market_observation import MarketObservation  # v136 관찰!

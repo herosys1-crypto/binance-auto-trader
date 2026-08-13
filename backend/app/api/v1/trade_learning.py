@@ -149,6 +149,41 @@ def run_outcome_now(
     return run_prediction_outcome()
 
 
+@router.get("/insights")
+def learning_insights(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🧠 학습 인사이트 (Learning Team 결과 조회!)"""
+    import json
+    from app.models.system_setting import SystemSetting
+    from app.agents.learning_team.team_lead import LEARNING_KEY  # noqa
+    row = db.get(SystemSetting, "learning_agent_insights")
+    if not row or not row.value:
+        return {
+            "generated_at": None,
+            "insights": [],
+            "top_trade_symbols": [],
+            "top_pred_symbols": [],
+            "big_moves_missed": [],
+            "trail_late_count": 0,
+        }
+    try:
+        return json.loads(row.value)
+    except Exception:
+        return {"error": "parse failed"}
+
+
+@router.post("/learning-cycle/run-now")
+def run_learning_cycle_now(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🎓 Learning Team = 지금 즉시 실행!"""
+    from app.agents.learning_team.team_lead import LearningTeamLead
+    return LearningTeamLead().run_learning_cycle(db, days=30)
+
+
 @router.get("/summary")
 def learning_summary(
     days: int = 30,
