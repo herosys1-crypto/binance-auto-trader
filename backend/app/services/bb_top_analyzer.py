@@ -492,7 +492,7 @@ class BBTopAnalyzer:
         pos = mid_state.get("position")
         if pos == "AT_MID":
             signals.append(
-                f"🎯 현재가가 **BB 중단 도달**! 실측 → 여기서 이탈 {cls.MID_BREAK_RATE}% vs "
+                f"🎯 현재가가 「BB 중단 도달」! 실측 → 여기서 이탈 {cls.MID_BREAK_RATE}% vs "
                 f"반등 {cls.MID_BOUNCE_RATE}% = 지지선이 아닙니다! 절반만 익절 권장!"
             )
         elif grade in ("S", "A"):

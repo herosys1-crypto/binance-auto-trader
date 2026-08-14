@@ -112,14 +112,14 @@ class BB4HScanner(BaseAgent):
         elif trigger == "LOWER_BREAK":
             target = close * (1 - tp_pct / 100) if close else None
             reason = (
-                f"📉 4H **하단 이탈**! 실측 추가 하락 중앙값 8.13% (표본 {n:,}건). "
+                f"📉 4H 「하단 이탈」! 실측 추가 하락 중앙값 8.13% (표본 {n:,}건). "
                 f"+{tp_pct:.0f}%/-{sl_pct:.0f}% 기준 기대값 {ev:+.2f}% "
                 "(⚠️ 중단 이탈보다 기대값 낮음)"
             )
         else:  # UPPER_BREAK
             target = close * (1 + tp_pct / 100) if close else None
             reason = (
-                f"📈 4H **상단 돌파**! 실측 추가 상승 중앙값 10.23% (표본 {n:,}건). "
+                f"📈 4H 「상단 돌파」! 실측 추가 상승 중앙값 10.23% (표본 {n:,}건). "
                 f"+{tp_pct:.0f}%/-{sl_pct:.0f}% 기준 기대값 {ev:+.2f}% "
                 "(⚠️ 중단 이탈보다 기대값 낮음)"
             )

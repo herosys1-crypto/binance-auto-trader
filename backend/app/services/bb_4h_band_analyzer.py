@@ -217,7 +217,7 @@ class BB4HBandAnalyzer:
             f"({bars}봉 전 = {bars*4}시간 전)"
         )
         signals.append(
-            f"🎯 실측: 이탈 후 5일 내 {band_word} 도달 **{reach:.1f}%** "
+            f"🎯 실측: 이탈 후 5일 내 {band_word} 도달 「{reach:.1f}%」 "
             f"(표본 {cls.EVENTS[cross]:,}건), 소요 중앙값 {cls.REACH_BARS[cross]}봉"
             f"({cls.REACH_BARS[cross]*4}시간)"
         )
@@ -225,21 +225,21 @@ class BB4HBandAnalyzer:
         # 방향 일치 여부
         if side != want:
             signals.append(
-                f"↔️ 이 신호는 **{want}** 방향인데 지금 분석은 {side} = 방향 불일치!"
+                f"↔️ 이 신호는 「{want}」 방향인데 지금 분석은 {side} = 방향 불일치!"
             )
 
         if st.get("band_reached"):
             grade, stage = "C", "TARGET_HIT"
             verdict = f"✅ {band_word} 도달 = 목표 달성 (청산 검토!)"
             signals.append(
-                f"⚠️ 다만 {band_word}은 지지·저항이 **아닙니다** — 실측상 "
+                f"⚠️ 다만 {band_word}은 지지·저항이 「아닙니다」 — 실측상 "
                 f"{cls.BREAK_RATE[cross]:.1f}%가 밴드를 뚫고 마감했고, "
                 f"뚫으면 추가 {move_word} 중앙값 {cls.EXTRA_MOVE[cross]:.2f}%입니다."
             )
             b_sl, b_tp_rate, b_ev = cls.RULE_B_BEST[cross]
             signals.append(
                 f"💡 여기서 역방향(중단 복귀) 진입은 SL -{b_sl:.0f}% 기준 "
-                f"TP선착 {b_tp_rate:.1f}%, 기대값 {b_ev:+.2f}% = **추세 방향의 절반 이하**입니다."
+                f"TP선착 {b_tp_rate:.1f}%, 기대값 {b_ev:+.2f}% = 「추세 방향의 절반 이하」입니다."
             )
             score = 30
         elif bars <= cls.FRESH_BARS:

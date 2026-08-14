@@ -306,13 +306,13 @@ class PumpDumpLiveAnalyzer:
             lo, hi = cls.BAND_15M
             oob = cls.out_of_band_15m(m15)
             msgs = [
-                f"➖ 급등락 진입 신호는 **15m {lo:g}~{hi:g}% 밴드** 하나만 씁니다 "
+                f"➖ 급등락 진입 신호는 「15m {lo:g}~{hi:g}% 밴드」 하나만 씁니다 "
                 "(사장님 결정 = 5m 신호는 사용 안 함)"
             ]
             if oob is not None:
                 # 왜 15m 신호가 없는지 = 사장님이 헷갈리지 않게 명시!
                 msgs.append(
-                    f"➖ 15m 변동 {oob:+.1f}% 는 **20% 전후 밴드({lo:g}~{hi:g}%) 밖** "
+                    f"➖ 15m 변동 {oob:+.1f}% 는 「20% 전후 밴드({lo:g}~{hi:g}%) 밖」 "
                     "= 사장님 지시대로 신호를 내지 않습니다."
                 )
             return {
@@ -338,7 +338,7 @@ class PumpDumpLiveAnalyzer:
         # --- 🚫 급락은 진입 비권장 (실측: 양방향 모두 기대값 없음) ---
         if not is_pump:
             signals.append(
-                "🚫 실측상 **급락은 방향성이 없습니다** — 양의 기대값 셀 54개 중 "
+                "🚫 실측상 「급락은 방향성이 없습니다」 — 양의 기대값 셀 54개 중 "
                 "급락 역추세 6개 / 급락 추격 5개로 사실상 동전던지기입니다."
             )
             signals.append(
@@ -358,7 +358,7 @@ class PumpDumpLiveAnalyzer:
             play = cls.PLAYBOOK_15M_BAND.get(window)
             if play is None:
                 signals.append(
-                    f"➖ 15m {window} 창의 20% 전후 급등은 **실측 기대값 0.00%** "
+                    f"➖ 15m {window} 창의 20% 전후 급등은 「실측 기대값 0.00%」 "
                     "(416건) = 양방향 모두 무의미 → 신호를 내지 않습니다."
                 )
                 signals.append(
@@ -396,7 +396,7 @@ class PumpDumpLiveAnalyzer:
                 f"👀 변동 {chg:+.1f}% = 관찰 구간 ({cls.TH_BASE:.0f}% 미만) — 신호 약함!"
             )
 
-        signals.append("✅ 방향 = **추격 LONG** (실측: 양의 기대값 54셀 중 37개(69%)가 급등 추격!)")
+        signals.append("✅ 방향 = 「추격 LONG」 (실측: 양의 기대값 54셀 중 37개(69%)가 급등 추격!)")
         signals.append(
             f"⚠️ 작은 TP는 독입니다 — +3%/-3% 조합은 대부분 마이너스였습니다 "
             f"(변동성이 커서 TP 전에 SL을 먼저 맞음)"
@@ -416,7 +416,7 @@ class PumpDumpLiveAnalyzer:
             net = ev - cls.ROUND_TRIP_FEE
             signals.append(
                 f"💸 수수료 차감 후 기대값 ≈ {net:+.2f}% "
-                f"(왕복 {cls.ROUND_TRIP_FEE:.2f}% 가정, **슬리피지 별도**). "
+                f"(왕복 {cls.ROUND_TRIP_FEE:.2f}% 가정, 「슬리피지 별도」). "
                 "급등 중 알트는 스프레드가 벌어져 실제로는 더 낮습니다!"
             )
         signals.append(

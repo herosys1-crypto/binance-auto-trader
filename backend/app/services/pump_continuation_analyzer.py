@@ -207,7 +207,7 @@ class PumpContinuationAnalyzer:
                 f"= 지속 신호! (표본 {s['n']}건, +30% 도달 {s['big30']}%)"
             )
             signals.append(
-                f"⏱ 사장님 지시대로 **짧게** — TP +{tp:.0f}% / SL -{sl:.0f}%, "
+                f"⏱ 사장님 지시대로 「짧게」 — TP +{tp:.0f}% / SL -{sl:.0f}%, "
                 f"최대 {cls.MAX_STAGES}단계"
             )
             score = 70
@@ -235,7 +235,7 @@ class PumpContinuationAnalyzer:
         # 사장님이 보신 「20%→100%」의 실제 빈도
         signals.append(
             f"📌 참고: 20% 급등 후 +30% 도달 {cls.BIG_MOVE_RATES[30]}% / "
-            f"+50% {cls.BIG_MOVE_RATES[50]}% / **+100% {cls.BIG_MOVE_RATES[100]}%** "
+            f"+50% {cls.BIG_MOVE_RATES[50]}% / 「+100% {cls.BIG_MOVE_RATES[100]}%」 "
             "= 큰 건은 극히 드뭅니다."
         )
         signals.append(
