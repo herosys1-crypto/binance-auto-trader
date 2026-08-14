@@ -313,3 +313,63 @@ def test_되돌림은_진입신호가_아님():
     assert "마이너스" in P.REVERSAL_ENTRY_VERDICT
     st = P.retrace_state(_flat(20) + ramp(10, 100.0, 20.0) + [kline(115.0)] * 3)
     assert "side" not in st, "되돌림 상태는 진입 방향을 제시하지 않습니다!"
+
+
+# ----------------------------------------------------------------------
+# 🌟 v147d — 사장님 결정: 15m 밴드 상한 22.5% → 27.5% 확대
+#    단, 하위 밴드를 **합치지 않고** 따로 씁니다 (합치면 기대값이 나빠져서!)
+# ----------------------------------------------------------------------
+def test_v147d_밴드_상한_27_5():
+    assert P.BAND_15M == (17.5, 27.5)
+    assert P._qualifies("15m", 25.0) is True, "25% 는 이제 밴드 안!"
+    assert P._qualifies("15m", 27.5) is False, "상한은 미포함 (27.5% 는 밖)"
+    assert P._qualifies("15m", 17.4) is False, "하한 미만은 그대로 밖"
+
+
+def test_v147d_하위밴드_분리_유지():
+    """합쳐서 하나의 플레이북을 쓰면 안 됩니다 — 밴드별 최적 TP/SL 이 다릅니다."""
+    assert set(P.PLAYBOOK_15M_BAND) == {(17.5, 22.5), (22.5, 27.5)}
+
+
+def test_v147d_경계_22_5에서_플레이북이_바뀐다():
+    """22.4% 는 작은 TP(+5%), 22.5% 부터는 큰 TP(+15%)."""
+    _, lo_play = P._band_15m_play(22.4, "1시간")
+    _, hi_play = P._band_15m_play(22.5, "1시간")
+    assert lo_play[1] == 5.0 and lo_play[2] == 5.0
+    assert hi_play[1] == 15.0 and hi_play[2] == 7.0
+
+
+def test_v147d_22_5_27_5_1시간은_큰TP_LONG():
+    """실측: LONG 이 9개 TP/SL 조합 중 6개 양수, SHORT 는 0개 = 방향 확실."""
+    r = _res(_flat(40), _flat(30) + ramp(5, 100.0, 25.0))
+    assert r["side"] == "LONG"
+    lv = r["levels"]
+    assert (lv["tp_pct"], lv["sl_pct"]) == (15.0, 7.0)
+    assert lv["expected_value_pct"] == 1.59
+    assert lv["sample_n"] == 114
+    assert any("22.5~27.5%" in s for s in r["signals"]), r["signals"]
+
+
+def test_v147d_큰TP밴드는_연패_경고를_반드시_노출():
+    """TP선착 36% = 64%는 지는 구조! 사장님이 모르고 들어가면 안 됩니다."""
+    r = _res(_flat(40), _flat(30) + ramp(5, 100.0, 25.0))
+    warn = [s for s in r["signals"] if "자주 지고" in s]
+    assert warn, r["signals"]
+    assert "36%" in warn[0] and "-7%" in warn[0]
+
+
+def test_v147d_22_5_27_5_는_4시간창_신호없음():
+    """실측 0/9 조합 양수 = 신호 없음. 밴드 안이어도 진입 X!"""
+    _, play = P._band_15m_play(25.0, "4시간")
+    assert play is None
+    _, play2 = P._band_15m_play(25.0, "2시간")
+    assert play2 is None, "2시간도 노이즈 (LONG 1/9·SHORT 2/9)"
+
+
+def test_v147d_밴드안_신호없는창은_이유를_설명():
+    """왜 안 들어가는지 밴드 값과 함께 알려줘야 합니다."""
+    r = P.combine("T", P.measure(_flat(40), "5m"),
+                  P.measure(_flat(30) + ramp(17, 100.0, 25.0), "15m"))
+    if r["side"] is None and (r.get("event") or {}).get("window") == "4시간":
+        assert any("22.5~27.5%" in s for s in r["signals"]), r["signals"]
+        assert r["grade"] == "D"

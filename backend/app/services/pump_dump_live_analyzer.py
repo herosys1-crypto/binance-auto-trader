@@ -65,19 +65,51 @@ class PumpDumpLiveAnalyzer:
     # 🎯 v141a 사장님 지시 2026-08-14:
     #   "15분봉 급등락은 20% 전후만 흐름을 급등락 실시간 진입 전략으로 알려줘"
     #   → 15m 은 이 밴드 **밖이면 신호를 내지 않습니다** (5m 은 기존대로 10%+)
-    BAND_15M = (17.5, 22.5)
+    # 🌟 사장님 결정 (2026-08-14 v147d): 상한 22.5% → **27.5%** 확대
+    BAND_15M = (17.5, 27.5)
 
-    # 15m 20% 전후 밴드 = 창별 실측 (scripts/study_15m_pump_bands.py)
-    #   같은 20% 급등이라도 **얼마 만에 갔느냐**로 결과가 갈립니다!
-    #   (등급, TP%, SL%, 기대값%, 표본, TP선착%) / None = 신호 없음
+    # 15m 밴드 플레이북 (scripts/study_15m_pump_bands.py, 181심볼 15m 25일치)
+    #   같은 20%대 급등이라도 ①얼마 만에 갔느냐(창) ②얼마나 갔느냐(하위 밴드)
+    #   두 축으로 결과가 갈립니다. 그래서 **하위 밴드를 합치지 않고 따로** 씁니다.
+    #
+    #   ⚠️ 합치면 오히려 나빠집니다 (v147d 재측정):
+    #       17.5~27.5% 통합 → 1시간 +0.23% / 2시간 -0.07% / 4시간 +0.16%
+    #       하위 밴드 분리 → 1시간 +0.18%·+1.59% / 4시간 +0.23%
+    #     하위 밴드마다 최적 TP/SL 이 달라서(+5% vs +15%) 하나로 묶으면
+    #     절충된 TP/SL 이 양쪽 모두에 안 맞기 때문입니다.
+    #
+    #   구조: {(하한, 상한): {창: (등급, TP%, SL%, 기대값%, 표본, TP선착%) | None}}
+    #   None = 실측상 신호 없음 → 진입하지 않습니다.
     PLAYBOOK_15M_BAND = {
-        # 1시간 만에 20% = 빠른 급등 → 추격 LONG
-        "1시간": ("B", 5.0, 5.0, 0.18, 255, 51.4),
-        # 2시간에 걸쳐 20% → 기대값 0.00% = **신호 없음** (양방향 무의미!)
-        "2시간": None,
-        # 4시간에 걸쳐 20% = 완만한 상승 → 추격 LONG (표본 최다)
-        "4시간": ("B", 5.0, 5.0, 0.23, 546, 49.1),
+        # ── 20% 전후 (기존) = 작은 TP 로 짧게 ────────────────────────
+        (17.5, 22.5): {
+            "1시간": ("B", 5.0, 5.0, 0.18, 255, 51.4),
+            "2시간": None,                      # 기대값 0.00% (416건) = 무의미
+            "4시간": ("B", 5.0, 5.0, 0.23, 546, 49.1),
+        },
+        # ── 22.5~27.5% (v147d 신설) = 큰 TP 로 길게 ──────────────────
+        #   이 밴드는 **작은 TP 가 오히려 손해**인 구간입니다.
+        #   1시간 창 전 조합 실측: +3/-3 -1.11% → +10/-7 +1.12% → +15/-7 +1.59%
+        #   = TP 를 키울수록 좋아지는 우측 꼬리형. LONG 이 9개 조합 중 6개 양수,
+        #     SHORT 는 0개 양수 = 방향은 확실히 LONG.
+        (22.5, 27.5): {
+            "1시간": ("B", 15.0, 7.0, 1.59, 114, 36.0),
+            "2시간": None,                      # LONG 1/9·SHORT 2/9 양수 = 노이즈
+            "4시간": None,                      # 양방향 0/9 양수 = 신호 없음
+        },
     }
+
+    @classmethod
+    def _band_15m_play(cls, abs_chg: float, window: str):
+        """15m 변동폭이 속한 하위 밴드와 그 창의 플레이 → ((lo,hi), play).
+
+        밴드 밖이면 (None, None), 밴드 안이지만 그 창에 신호가 없으면 ((lo,hi), None).
+        """
+        for bounds, plays in cls.PLAYBOOK_15M_BAND.items():
+            lo, hi = bounds
+            if lo <= abs_chg < hi:
+                return bounds, plays.get(window)
+        return None, None
 
     # 실측 기대값 테이블 = (등급, TP%, SL%, 기대값%, 표본, TP선착%)
     # ⚠️ 전부 수수료/슬리피지 **차감 전** 값!
@@ -353,21 +385,26 @@ class PumpDumpLiveAnalyzer:
             }
 
         # --- 🚀 급등 = 추격 LONG (실측 69%가 여기) ---
+        sub_band = None
         if tf == "15m":
-            # 사장님 지시 = 20% 전후 밴드 전용 플레이북 (창별로 결과가 다름!)
-            play = cls.PLAYBOOK_15M_BAND.get(window)
+            # 사장님 지시 = 밴드 전용 플레이북 (창별·하위 밴드별로 결과가 다름!)
+            sub_band, play = cls._band_15m_play(event["abs"], window)
             if play is None:
+                sb_txt = (f"{sub_band[0]:g}~{sub_band[1]:g}%" if sub_band
+                          else f"{cls.BAND_15M[0]:g}~{cls.BAND_15M[1]:g}%")
                 signals.append(
-                    f"➖ 15m {window} 창의 20% 전후 급등은 「실측 기대값 0.00%」 "
-                    "(416건) = 양방향 모두 무의미 → 신호를 내지 않습니다."
+                    f"➖ 15m {sb_txt} 급등은 {window} 창에서 「실측 신호가 없습니다」 "
+                    "— 진입하지 않습니다."
                 )
                 signals.append(
-                    "💡 같은 20%라도 1시간·4시간 창은 유효합니다 = 「얼마 만에 갔느냐」가 갈랐습니다."
+                    "💡 같은 20%대라도 「얼마 만에 갔느냐(창)」와 「얼마나 갔느냐(밴드)」로 "
+                    "결과가 갈립니다. 유효한 조합은 "
+                    "17.5~22.5%(1시간·4시간) / 22.5~27.5%(1시간) 뿐입니다."
                 )
                 return {
                     "available": True, "symbol": symbol, "grade": "D", "stage": "NONE",
                     "event": event, "side": None,
-                    "verdict": f"➖ 15m {window} 20% 전후 = 기대값 없음 (진입 비권장)",
+                    "verdict": f"➖ 15m {sb_txt} {window} = 실측 신호 없음 (진입 비권장)",
                     "color": "#64748b", "score": 0, "signals": signals,
                     "m5": m5, "m15": m15, "retrace": retrace, "levels": {},
                 }
@@ -376,12 +413,22 @@ class PumpDumpLiveAnalyzer:
 
         if play:
             grade, tp, sl, ev, n, tp_rate = play
-            band_txt = (f"{cls.BAND_15M[0]:g}~{cls.BAND_15M[1]:g}%"
-                        if tf == "15m" else f"{band}%")
+            band_txt = (f"{sub_band[0]:g}~{sub_band[1]:g}%"
+                        if (tf == "15m" and sub_band) else f"{band}%")
             signals.append(
                 f"📊 실측 플레이북 적중: {tf} {band_txt} {window} 급등 → 추격 LONG "
                 f"+{tp:.0f}%/-{sl:.0f}% = TP선착 {tp_rate:.1f}%, 기대값 {ev:+.2f}% (표본 {n}건)"
             )
+            # 🚨 큰 TP 밴드는 「자주 지고 가끔 크게 이기는」 구조 = 미리 알려드립니다
+            if tp_rate is not None and tp_rate < 45:
+                loss_rate = 100 - tp_rate
+                signals.append(
+                    f"🚨 이 밴드는 「자주 지고 가끔 크게 이기는」 형태입니다 — "
+                    f"TP 도달은 {tp_rate:.0f}%뿐이고 나머지 {loss_rate:.0f}% 는 "
+                    f"-{sl:.0f}% 손절/시간초과입니다. 기대값이 +인 이유는 "
+                    f"이기는 판이 +{tp:.0f}% 로 크기 때문 = 연패를 견딜 수 있는 "
+                    f"자본으로만 하세요."
+                )
         elif band:
             grade, tp, sl = "C", cls.DEFAULT_TP, cls.DEFAULT_SL
             ev = n = tp_rate = None

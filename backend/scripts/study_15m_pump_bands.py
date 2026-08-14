@@ -11,6 +11,8 @@
 
 사용:
     python scripts/study_15m_pump_bands.py --cache15m <klines_cache>
+    # 밴드를 직접 지정 (v147d — 사장님 상한 확대 결정 재측정용)
+    python scripts/study_15m_pump_bands.py --cache15m <c> --bands 17.5:22.5,22.5:27.5,17.5:27.5
 """
 from __future__ import annotations
 
@@ -60,7 +62,17 @@ def detect_band_events(closes, window, lo, hi):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache15m", required=True)
+    ap.add_argument(
+        "--bands", default=None,
+        help='밴드 직접 지정 "lo:hi,lo:hi" (미지정 시 기본 BANDS). '
+             '겹치는 밴드도 허용 — 합친 밴드와 구성 밴드를 한 번에 비교할 때 씁니다.',
+    )
+    ap.add_argument("--min-n", type=int, default=40, help="판정 보류 기준 표본 수")
     args = ap.parse_args()
+
+    global BANDS
+    if args.bands:
+        BANDS = [tuple(float(x) for x in b.split(":")) for b in args.bands.split(",")]
 
     files = sorted(glob.glob(os.path.join(args.cache15m, "*.json")))
     acc: dict = defaultdict(lambda: {
@@ -111,7 +123,7 @@ def main() -> None:
             for lo, hi in BANDS:
                 key = (wlabel, band_label(lo, hi), kind)
                 b = acc.get(key)
-                if not b or b["n"] < 40:      # 표본 40건 미만은 판정 보류
+                if not b or b["n"] < args.min_n:   # 표본 부족은 판정 보류
                     if b:
                         print(f"   {band_label(lo,hi):<12}{b['n']:>7}   (표본 부족)")
                     continue
