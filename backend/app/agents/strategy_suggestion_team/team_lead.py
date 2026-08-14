@@ -57,9 +57,13 @@ class StrategySuggestionTeamLead(BaseTeamLead):
             force: True 시 = 오늘 PENDING 자동 dismiss 후 재생성!
                    (사장님 「지금 실행」 재실행 편의!)
 
-        1. PumpDumpPredictor → 예측!
-        2. DescentPatternDetector → 필터!
+        v143a 이후 흐름:
+        1. **BB4HScanner** → 4H 볼밴 신호 스캔 (옛 PumpDumpPredictor 대체)
+        2. (필터 없음 — 4H BB 신호는 이미 실측 기대값 기반)
         3. StrategySuggestionGenerator → DB 저장!
+
+        ⚠️ PumpDumpPredictor / DescentPatternDetector 는 **더 이상 호출되지 않습니다**.
+           (import·AGENTS 등록은 롤백 대비로 남겨둠 — 되돌리려면 scanner 호출부만 교체)
         """
         logger.info("[%s Lead] 🎯 매일 예측 시작! (force=%s)", self.TEAM, force)
 

@@ -18,6 +18,15 @@
   - BB 중단 (20MA!) = 지지선!
   - 근접 = 매수 기회 감지! (재상승 가능!)
 
+⚠️ 2026-08-14 v147b — 실측이 이 전제와 **어긋납니다**:
+    · 4H BB 중단/하단 (215,561 캔들): 밴드 도달 후 **68.3% 가 뚫고 마감**
+      (docs/BB_4H_BAND_STRATEGY_SPEC.md)
+    · 15m BB 중단 (478,435 캔들): 도달 후 **이탈 47.2% vs 반등 18.3%**
+      (docs/BB_TOP_15M_STRATEGY_SPEC.md)
+    → **BB 중단은 지지선이 아닙니다.** 「닿으면 반등」 전제로 매수하면 위험합니다.
+    이 알람은 **관찰 신호로만** 쓰시고, 진입은 반등이 확인된 뒤에 판단하십시오.
+    (기능 자체는 사장님 요청이므로 유지하되, 알람에 경고를 함께 실어 보냅니다.)
+
 헌법 v131 (신!):
   '급등 후 지지선 도달 = 사장님 진입 기회 자동 알림!'
 """
@@ -171,6 +180,11 @@ def run_pump_bb_watcher(db: Session, decrypt_text) -> dict:
                     "symbol": symbol,
                     "detail": detail,
                     "created_at": datetime.now(timezone.utc).isoformat(),
+                    # v147b: 실측 경고를 알람에 동봉 (UI 가 그대로 표시)
+                    "caution": (
+                        "⚠️ 실측: BB 중단은 지지선이 아닙니다 — 4H 밴드 도달 후 "
+                        "68.3%가 뚫고 마감(추가 하락 중앙 5.69%). 반등 확인 후 판단!"
+                    ),
                 }
                 if _redis:
                     import hashlib
