@@ -269,6 +269,124 @@ class PumpDumpLiveAnalyzer:
         return out
 
     # ------------------------------------------------------------------
+    # 🐻 v148a 사장님 지시 (2026-08-14): 급등 후 하락 전환 = SHORT 진입!
+    # ------------------------------------------------------------------
+    # 조건 (모두 만족!):
+    #   1. 최근 창(REVERSAL_LOOKBACK 봉) 내 = 저점 대비 +REVERSAL_MIN_PUMP% 이상 상승!
+    #   2. 정점 = 최근 1~REVERSAL_MAX_BARS_SINCE_PEAK 봉 이내 (오래된 정점 X!)
+    #   3. 현재 = 정점 대비 -REVERSAL_MIN_DROP ~ -REVERSAL_MAX_DROP% (첫 되돌림!)
+    #   4. 마지막 봉 = 음봉! (하락 시작 확정!)
+    # = 이 4 조건 = SHORT 진입 시점!
+    REVERSAL_LOOKBACK = 15         # 최근 15봉 검사!
+    REVERSAL_MIN_PUMP = 15.0       # 급등 최소 +15% (저점 → 정점!)
+    REVERSAL_MAX_BARS_SINCE_PEAK = 5  # 정점 = 최근 1~5봉!
+    REVERSAL_MIN_DROP = 2.0        # 최소 되돌림 -2%
+    REVERSAL_MAX_DROP = 8.0        # 최대 되돌림 -8% (더 넘으면 = 반등 기회 놓침!)
+
+    @classmethod
+    def pump_reversal_signal(cls, klines: list, tf: str) -> dict[str, Any]:
+        """🐻 급등 후 하락 전환 감지 = SHORT 진입 신호! (v148a 사장님!)
+
+        사장님 지시 2026-08-14:
+        "급등후 하락하는 시점을 찾아줘 숏으로 진입할수 있게 로직을 만들어줘"
+
+        조건 (모두 만족!):
+        1. 최근 15봉 = 저점 대비 +15% 이상 급등!
+        2. 정점 = 최근 1~5봉 이내 (너무 오래된 정점 X)
+        3. 현재 = 정점 대비 -2 ~ -8% (첫 되돌림!)
+        4. 마지막 봉 = 음봉!
+        """
+        need = cls.REVERSAL_LOOKBACK + 2
+        if not klines or len(klines) < need:
+            return {"detected": False, "reason": f"{tf} 캔들 부족"}
+
+        try:
+            highs = [float(k[2]) for k in klines]
+            lows = [float(k[3]) for k in klines]
+            opens = [float(k[1]) for k in klines]
+            closes = [float(k[4]) for k in klines]
+        except Exception as e:
+            return {"detected": False, "reason": f"파싱 실패: {e}"}
+
+        price = closes[-1]
+
+        # 최근 REVERSAL_LOOKBACK 봉 정점!
+        recent_highs = highs[-cls.REVERSAL_LOOKBACK:]
+        recent_high = max(recent_highs)
+        # 정점 위치 (뒤에서 몇 번째?)
+        for i in range(len(recent_highs) - 1, -1, -1):
+            if recent_highs[i] == recent_high:
+                # bars_since_peak = 1 (마지막 봉이 정점) ~ REVERSAL_LOOKBACK
+                bars_since_peak = len(recent_highs) - i
+                break
+        else:
+            return {"detected": False, "reason": "정점 위치 실패"}
+
+        # 조건 2: 정점 = 최근 1~5봉!
+        if bars_since_peak < 1 or bars_since_peak > cls.REVERSAL_MAX_BARS_SINCE_PEAK:
+            return {
+                "detected": False,
+                "reason": f"정점이 {bars_since_peak}봉 전 = 범위(1~{cls.REVERSAL_MAX_BARS_SINCE_PEAK}) 밖",
+            }
+
+        # 조건 1: 정점 이전 저점 대비 +15% 상승!
+        # 정점 이전 = recent_lows[0:-bars_since_peak+1]
+        idx_peak = len(recent_highs) - bars_since_peak
+        recent_lows = lows[-cls.REVERSAL_LOOKBACK:]
+        lows_before_peak = recent_lows[:idx_peak + 1] if idx_peak >= 0 else [recent_lows[0]]
+        lo_before_peak = min(lows_before_peak) if lows_before_peak else recent_lows[0]
+        if lo_before_peak <= 0:
+            return {"detected": False, "reason": "invalid low"}
+        pump_pct = (recent_high - lo_before_peak) / lo_before_peak * 100
+        if pump_pct < cls.REVERSAL_MIN_PUMP:
+            return {
+                "detected": False,
+                "reason": f"급등 크기 부족: +{pump_pct:.1f}% (< +{cls.REVERSAL_MIN_PUMP:g}%)",
+            }
+
+        # 조건 3: 정점 대비 -2 ~ -8%!
+        from_high = (price - recent_high) / recent_high * 100
+        if from_high > -cls.REVERSAL_MIN_DROP:
+            return {
+                "detected": False,
+                "reason": f"되돌림 부족: {from_high:.1f}% (>-{cls.REVERSAL_MIN_DROP:g}%)",
+            }
+        if from_high < -cls.REVERSAL_MAX_DROP:
+            return {
+                "detected": False,
+                "reason": f"이미 너무 하락: {from_high:.1f}% (<-{cls.REVERSAL_MAX_DROP:g}%)",
+            }
+
+        # 조건 4: 마지막 봉 = 음봉!
+        if closes[-1] >= opens[-1]:
+            return {
+                "detected": False,
+                "reason": "마지막 봉이 양봉 (하락 확정 X)",
+            }
+
+        # ✅ 모두 만족! SHORT 진입!
+        confidence = min(0.55 + (pump_pct - cls.REVERSAL_MIN_PUMP) / 40, 0.85)
+        return {
+            "detected": True,
+            "side": "SHORT",
+            "tf": tf,
+            "kind": "PUMP_REVERSAL",
+            "pump_pct": round(pump_pct, 2),
+            "from_high_pct": round(from_high, 2),
+            "bars_since_peak": bars_since_peak,
+            "recent_high": round(recent_high, 8),
+            "current_price": round(price, 8),
+            "confidence": round(confidence, 3),
+            "tp_pct": 5.0,     # 되돌림 목표 = 정점 대비 -5%~-8%!
+            "sl_pct": 3.0,     # 정점 재돌파 = 손절 (반등 가능성!)
+            "reason": (
+                f"🐻 {tf} 저점→정점 +{pump_pct:.1f}% 급등 후 "
+                f"정점 대비 {from_high:.1f}% 하락 + 첫 음봉 감지! "
+                f"(정점 {bars_since_peak}봉 전)"
+            ),
+        }
+
+    # ------------------------------------------------------------------
     # 이벤트 판정
     # ------------------------------------------------------------------
     # 🌟 v148 사장님 최종 결정 (2026-08-14):

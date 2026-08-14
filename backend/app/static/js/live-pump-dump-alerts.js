@@ -11,10 +11,12 @@
   const TYPE_LABELS = {
       'pump_15m': '🚀 15m 20% 급등',
       'dump_15m_avoid': '🚫 15m 급락 (비권장)',
+      'pump_reversal': '🐻 급등 후 하락 전환 (SHORT!)',
     'pump_live': '🚀 5분 급등',
     'dump_live': '📉 5분 급락',
     'pump_1h': '🚀 1h 급등',
     'dump_1h': '📉 1h 급락',
+    'out_of_band_15m': '➖ 밴드 밖 (D등급)',
   };
 
   async function scanLivePumpDump() {

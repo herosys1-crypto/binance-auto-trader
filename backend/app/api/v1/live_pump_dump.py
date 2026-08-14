@@ -108,6 +108,50 @@ def scan_live_pump_dump(
             if not isinstance(k15, list) or not isinstance(k5, list):
                 continue
             res = analyzer.analyze(symbol, klines_5m=k5, klines_15m=k15)
+
+            # 🐻 v148a 사장님 (2026-08-14): 급등 후 하락 전환 = SHORT!
+            # 5m + 15m 모두 검사 → 감지 시 = 우선순위 SHORT 신호!
+            rev_15m = PumpDumpLiveAnalyzer.pump_reversal_signal(k15, "15m")
+            rev_5m = PumpDumpLiveAnalyzer.pump_reversal_signal(k5, "5m")
+            rev_best = None
+            if rev_15m.get("detected") and rev_5m.get("detected"):
+                # 둘 다 감지 = confidence 높은 것!
+                rev_best = rev_15m if rev_15m.get("confidence", 0) >= rev_5m.get("confidence", 0) else rev_5m
+            elif rev_15m.get("detected"):
+                rev_best = rev_15m
+            elif rev_5m.get("detected"):
+                rev_best = rev_5m
+
+            if rev_best:
+                # 급등 후 하락 전환 = SHORT alert 별도 추가!
+                alerts.append({
+                    "symbol": symbol,
+                    "side": "SHORT",
+                    "type": "pump_reversal",
+                    "grade": "A" if rev_best["confidence"] >= 0.75 else "B",
+                    "window": None,
+                    "change_pct": rev_best["from_high_pct"],
+                    "confidence": rev_best["confidence"],
+                    "verdict": (
+                        f"🐻 {rev_best['tf']} 급등 후 하락 전환! "
+                        f"(정점 +{rev_best['pump_pct']}% → 현재 {rev_best['from_high_pct']}%)"
+                    ),
+                    "reason": rev_best["reason"],
+                    "signals": [rev_best["reason"]],
+                    "tp_pct": rev_best["tp_pct"],
+                    "sl_pct": rev_best["sl_pct"],
+                    "expected_value_pct": None,
+                    "expected_value_after_fee_pct": None,
+                    "tp_first_rate": None,
+                    "sample_n": None,
+                    "price": float(t.get("lastPrice", 0) or 0),
+                    "volume_24h": float(t.get("quoteVolume", 0) or 0),
+                    "change_24h": float(t.get("priceChangePercent", 0) or 0),
+                    "pump_pct": rev_best["pump_pct"],
+                    "recent_high": rev_best["recent_high"],
+                    "bars_since_peak": rev_best["bars_since_peak"],
+                })
+                continue  # pump_reversal 우선! 일반 감지 안 함!
         except Exception as e:
             logger.debug("[live_pump_dump] %s 분석 실패: %s", symbol, e)
             continue
@@ -182,8 +226,9 @@ def scan_live_pump_dump(
         "band": {"low": band_lo, "high": band_hi},
         "scanned": len(candidates),
         "policy": (
-            f"v148 — 5분·15분 두 시간대 모두 {band_lo:g}~{band_hi:g}% 급등락 감지! "
+            f"v148a — 5분·15분 두 시간대 모두 {band_lo:g}~{band_hi:g}% 급등락 감지! "
             f"급등(추격 LONG) = 「추천」, 급락·밴드 밖 = 「표시」만. "
+            "🐻 **급등 후 하락 전환** (저점→정점 +15%↑ + 정점 대비 -2~-8% + 첫 음봉) = **SHORT 진입 신호!** "
             "**막지는 않습니다 — 최종 결정은 사장님** (사장님 지시 2026-08-14)."
         ),
     }
