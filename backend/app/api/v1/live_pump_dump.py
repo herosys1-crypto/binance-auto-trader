@@ -110,7 +110,38 @@ def scan_live_pump_dump(
 
         ev = res.get("event") or {}
         if not ev:
-            continue                      # 밴드 밖 = 신호 없음
+            # 🌟 v147i 사장님 지시: "결정은 내가 해"
+            #   밴드 밖이라고 **목록에서 빼지 않습니다.** 10%+ 움직임이면 보여드리고,
+            #   실측 근거가 없다는 사실만 함께 적어 사장님이 판단하시게 합니다.
+            oob = PumpDumpLiveAnalyzer.out_of_band_15m(res.get("m15") or {})
+            if oob is None:
+                continue                  # 10% 미만 = 표시할 움직임 자체가 없음
+            if oob < 0 and not include_dump:
+                continue
+            alerts.append({
+                "symbol": symbol,
+                "side": None,             # 추천 방향 없음 = 사장님이 고르십니다
+                "type": "out_of_band_15m",
+                "grade": "D",
+                "window": (res.get("m15") or {}).get("window_of_biggest"),
+                "change_pct": round(oob, 2),
+                "confidence": 0.0,
+                "verdict": f"15m {oob:+.1f}% — 실측 밴드({band_lo:g}~{band_hi:g}%) 밖",
+                "reason": (
+                    f"실측 플레이북이 다루는 구간이 아닙니다 "
+                    f"(밴드 {band_lo:g}~{band_hi:g}%). 기대값·표본 근거가 없으니 "
+                    f"진입하실 경우 사장님 판단으로만 하세요."
+                ),
+                "signals": res.get("signals") or [],
+                "tp_pct": None, "sl_pct": None,
+                "expected_value_pct": None, "expected_value_after_fee_pct": None,
+                "tp_first_rate": None, "sample_n": None,
+                "price": float(t.get("lastPrice", 0) or 0),
+                "volume_24h": float(t.get("quoteVolume", 0) or 0),
+                "change_24h": float(t.get("priceChangePercent", 0) or 0),
+            })
+            continue
+
         is_dump = ev.get("kind") == "DUMP"
         if is_dump and not include_dump:
             continue
@@ -147,7 +178,8 @@ def scan_live_pump_dump(
         "band": {"low": band_lo, "high": band_hi},
         "scanned": len(candidates),
         "policy": (
-            f"v147 실측 로직 — 15분봉 {band_lo:g}~{band_hi:g}% 급등만 추격 LONG. "
-            "급락은 실측상 양방향 기대값이 없어 **진입 비권장**으로 표시합니다."
+            f"v147i — 실측 밴드({band_lo:g}~{band_hi:g}%) 급등은 추격 LONG 을 「추천」하고, "
+            "급락·밴드 밖은 근거가 없다고 「표시」만 합니다. "
+            "**막지는 않습니다 — 최종 결정은 사장님** (사장님 지시 2026-08-14)."
         ),
     }
