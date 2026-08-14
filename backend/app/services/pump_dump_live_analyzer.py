@@ -67,6 +67,11 @@ class PumpDumpLiveAnalyzer:
     #   → 15m 은 이 밴드 **밖이면 신호를 내지 않습니다** (5m 은 기존대로 10%+)
     # 🌟 사장님 결정 (2026-08-14 v147d): 상한 22.5% → **27.5%** 확대
     BAND_15M = (17.5, 27.5)
+    # 🌟 v148 사장님 최종 결정 (2026-08-14):
+    #   "급등락 실시간 진입은 5분과 15분 차트의 20% 전후 상승과하락일때 할수 있게 해주고"
+    #   = 5분봉도 = 15분봉 동일 밴드 (17.5~27.5%)로 신호!
+    #   (v141b에서 5m 신호 껐던 것 = 사장님 재요청으로 복원 + 20% 밴드 통일!)
+    BAND_5M = (17.5, 27.5)
 
     # 15m 밴드 플레이북 (scripts/study_15m_pump_bands.py, 181심볼 15m 25일치)
     #   같은 20%대 급등이라도 ①얼마 만에 갔느냐(창) ②얼마나 갔느냐(하위 밴드)
@@ -266,26 +271,27 @@ class PumpDumpLiveAnalyzer:
     # ------------------------------------------------------------------
     # 이벤트 판정
     # ------------------------------------------------------------------
-    # 🎯 v141b 사장님 최종 결정 2026-08-14:
-    #   "급등락 실시간 진입은 **15분봉 20% 전후** 급등락으로 해줘"
-    #   → 5m 신호는 **끕니다**. 진입 신호는 15m 20% 전후 밴드 하나로 통일!
-    #   (5m 변동률은 화면에 참고로만 계속 표시합니다)
-    ENABLE_5M_SIGNAL = False
+    # 🌟 v148 사장님 최종 결정 (2026-08-14):
+    #   "급등락 실시간 진입은 5분과 15분 차트의 20% 전후 상승과하락일때 할수 있게 해주고"
+    #   → 5m 신호 = **ON!** (BAND_5M = BAND_15M 동일 = 17.5~27.5%!)
+    ENABLE_5M_SIGNAL = True
 
     @classmethod
     def _qualifies(cls, tf: str, abs_chg: float) -> bool:
         """타임프레임별 신호 자격.
 
-        · 15m = **20% 전후 밴드 안에서만** (사장님 지시 v141a)
-                 → 15%도, 30%도 15m 에서는 신호를 내지 않습니다.
-        · 5m  = **신호 없음** (v141b 사장님 결정) — 측정만 하고 진입 근거로 쓰지 않음
+        · 15m = 20% 전후 밴드 (BAND_15M = 17.5~27.5%) 안에서만!
+        · 5m  = 20% 전후 밴드 (BAND_5M = 17.5~27.5%) 안에서만! (v148 사장님!)
         """
         if tf == "15m":
             lo, hi = cls.BAND_15M
             return lo <= abs_chg < hi
-        if not cls.ENABLE_5M_SIGNAL:
-            return False
-        return abs_chg >= cls.TH_WATCH
+        if tf == "5m":
+            if not cls.ENABLE_5M_SIGNAL:
+                return False
+            lo, hi = cls.BAND_5M
+            return lo <= abs_chg < hi
+        return False
 
     @classmethod
     def detect(cls, m5: dict, m15: dict) -> dict[str, Any]:

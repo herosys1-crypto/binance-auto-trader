@@ -100,10 +100,14 @@ def scan_live_pump_dump(
                 symbol=symbol, interval="15m",
                 limit=PumpDumpLiveAnalyzer.KLINE_LIMIT,
             )
-            if not isinstance(k15, list):
+            # 🌟 v148 사장님 (2026-08-14): 5m도 진입 신호로 활용!
+            k5 = bc.get_klines(
+                symbol=symbol, interval="5m",
+                limit=PumpDumpLiveAnalyzer.KLINE_LIMIT,
+            )
+            if not isinstance(k15, list) or not isinstance(k5, list):
                 continue
-            # 5m 은 화면 참고용으로만 사용 (신호는 15m 전용 = v141b)
-            res = analyzer.analyze(symbol, klines_5m=[], klines_15m=k15)
+            res = analyzer.analyze(symbol, klines_5m=k5, klines_15m=k15)
         except Exception as e:
             logger.debug("[live_pump_dump] %s 분석 실패: %s", symbol, e)
             continue
@@ -178,8 +182,8 @@ def scan_live_pump_dump(
         "band": {"low": band_lo, "high": band_hi},
         "scanned": len(candidates),
         "policy": (
-            f"v147i — 실측 밴드({band_lo:g}~{band_hi:g}%) 급등은 추격 LONG 을 「추천」하고, "
-            "급락·밴드 밖은 근거가 없다고 「표시」만 합니다. "
+            f"v148 — 5분·15분 두 시간대 모두 {band_lo:g}~{band_hi:g}% 급등락 감지! "
+            f"급등(추격 LONG) = 「추천」, 급락·밴드 밖 = 「표시」만. "
             "**막지는 않습니다 — 최종 결정은 사장님** (사장님 지시 2026-08-14)."
         ),
     }
