@@ -38,6 +38,36 @@ logger = logging.getLogger(__name__)
 
 SUCCESS_THRESHOLD = 1.5  # % (LONG +1.5% / SHORT -1.5%)
 
+# v139: 시점별 가격 조회 캐시 (symbol, interval) → klines
+_KLINE_CACHE: dict[str, list] = {}
+
+
+def _price_at(bc, symbol: str, target: datetime) -> float | None:
+    """특정 시각의 가격 = 그 시각 직전 완료 15m 봉 종가 (v139 신!).
+
+    기존엔 「현재가」로 1h/4h/24h를 전부 채워서 학습 데이터가 오염됐습니다.
+    미래 시각이면 None (아직 판정 불가).
+    """
+    now = datetime.now(timezone.utc)
+    if target > now:
+        return None
+    try:
+        kl = _KLINE_CACHE.get(symbol)
+        if kl is None:
+            # 15m × 1000 = 약 10일치 = 24h 판정에 충분!
+            kl = bc.get_klines(symbol=symbol, interval="15m", limit=1000) or []
+            _KLINE_CACHE[symbol] = kl
+        target_ms = int(target.timestamp() * 1000)
+        prev = None
+        for k in kl:
+            if int(k[6]) <= target_ms:   # close_time
+                prev = k
+            else:
+                break
+        return float(prev[4]) if prev else None
+    except Exception:
+        return None
+
 
 def run_prediction_outcome() -> dict:
     """예측 outcome 자동 계산!"""
@@ -114,13 +144,30 @@ def run_prediction_outcome() -> dict:
                 predict_price = float(s.outcome_price_at_prediction)
                 change_pct = ((current_price - predict_price) / predict_price) * 100
 
-                # 시간대별 변동 (elapsed >= 각 시간대!)
-                if elapsed >= 1 and s.outcome_change_1h is None:
-                    s.outcome_change_1h = Decimal(str(round(change_pct, 4)))
-                if elapsed >= 4 and s.outcome_change_4h is None:
-                    s.outcome_change_4h = Decimal(str(round(change_pct, 4)))
-                if elapsed >= 24 and s.outcome_change_24h is None:
-                    s.outcome_change_24h = Decimal(str(round(change_pct, 4)))
+                # 🚨 v139 CRITICAL FIX (2026-08-14 백테스트에서 발견!)
+                #
+                # 기존 버그: 1h/4h/24h 칸을 전부 **지금 현재가**로 채웠습니다.
+                #   worker 는 1시간마다 도는데, 어떤 예측을 처음 볼 때 이미 4시간이
+                #   지났으면 outcome_change_1h 에 4시간치 변동이 들어갔습니다.
+                #
+                # 실측 피해 (프로덕션 789건):
+                #   - 1h == 4h 로 같은 값이 들어간 건 = 397건 (60%!)
+                #   - 캔들 재계산과 1%p 초과 불일치 = 459/662건 (69%)
+                #   = 「예측 후 1시간 변동」 학습 데이터가 사실상 전부 가짜였음!
+                #
+                # fix: 각 시간대는 **그 시점의 캔들 종가**로 계산 (현재가 X!)
+                for hours, field in ((1, "outcome_change_1h"),
+                                     (4, "outcome_change_4h"),
+                                     (24, "outcome_change_24h")):
+                    if elapsed < hours or getattr(s, field) is not None:
+                        continue
+                    px = _price_at(bc, s.symbol, s.created_at + timedelta(hours=hours))
+                    if px is None:
+                        continue
+                    setattr(
+                        s, field,
+                        Decimal(str(round((px - predict_price) / predict_price * 100, 4))),
+                    )
 
                 # 판정 (elapsed >= 4h!)
                 if elapsed >= 4 and (s.outcome_status is None or s.outcome_status == "PENDING"):
@@ -150,6 +197,7 @@ def run_prediction_outcome() -> dict:
                 logger.warning("[prediction_outcome] %s 실패: %s", s.symbol, e)
                 continue
 
+        _KLINE_CACHE.clear()   # v139: 실행마다 캐시 비움 (다음 실행은 새 캔들!)
         db.commit()
         logger.info(
             "[prediction_outcome] updated=%d success=%d fail=%d expired=%d",

@@ -174,7 +174,7 @@ class TestTrailingFiresWhenAboveTPThreshold:
         assert result != "TRAILING_TP", f"{done_status}: trailing 발동되면 안 됨 (status 조건 미달)"
 
     @pytest.mark.parametrize("stage_no", [1, 2])
-    def test_trailing_NOT_armed_when_stage_below_3(
+    def test_trailing_ARMED_even_when_stage_below_3(
         self,
         stage_no: int,
         db_session,
@@ -183,10 +183,25 @@ class TestTrailingFiresWhenAboveTPThreshold:
         make_position_with_mark,
         patched_redis_for_risk,
     ) -> None:
-        """v5 신규: status=TP3+ 라도 current_stage<3 이면 trailing 미발동 (사용자 기획 v5).
+        """🌟 v8(2026-06-09) 사장님 BEATUSDT 결정: **1단계만 진입해도 트레일링 발동**.
 
-        시나리오: 2단계까지만 진입한 strategy 가 빠른 가격 상승으로 TP1~3 모두 발동된 케이스.
-        v4 까지는 trailing 발동했으나, v5 부터는 「충분히 분할 진입」 한 strategy 만 trailing.
+        원래 이 테스트는 v5 기획(「stage>=3 만 trailing」)을 지키는지 보는 것이었으나,
+        그 규칙은 **v8 에서 사장님이 폐기**하셨습니다:
+
+            risk_constants.TRAILING_MIN_STAGE = 1
+            # 사장님 의도: 'tp3 정상 익절후 계속 유지하고 tp4를 못가도
+            #              최고가 대비 회귀만큼 빠지면 익절청산'
+            # = stage<3 인 strategy 도 트레일링 작동해야 함
+
+        그런데 테스트는 v5 문구 그대로 남아 「발동하면 안 된다」고 주장하고 있었습니다.
+        v8 이후에도 통과한 건 규칙 때문이 아니라 **산술 우연**이었습니다 —
+        회귀폭이 10% 이던 시절엔 이 시나리오(ROI 20.25% vs peak 30%)가
+        `20.25 <= 30-10 = 20` 을 못 넘겨서 발동하지 않았을 뿐입니다.
+        v147 에서 사장님이 회귀를 5% 로 낮추시자(`20.25 <= 25`) 정상 발동하면서
+        이 stale 테스트가 드러났습니다.
+
+        → 그래서 **코드가 아니라 테스트를 사장님 v8 결정에 맞춰 정정**합니다.
+          (코드를 v5 로 되돌리면 사장님 BEATUSDT 결정을 뒤집는 것이 됩니다)
         """
         tpl = make_template(
             tp1_percent=Decimal("5"), tp2_percent=Decimal("10"),
@@ -197,15 +212,23 @@ class TestTrailingFiresWhenAboveTPThreshold:
             current_position_qty=Decimal("-100"),
             avg_entry_price=Decimal("2.37"),
             leverage=2,
-            template=tpl, current_stage=stage_no,  # 1 또는 2 — v5 조건 미달
+            template=tpl, current_stage=stage_no,  # 1 또는 2 — v8 부터는 이래도 발동!
         )
         make_position_with_mark(strategy, Decimal("2.13"))
         patched_redis_for_risk.store[f"strategy:{strategy.id}:peak_pnl_pct"] = "30"
 
         result = RiskService(db_session).evaluate_take_profit_level(strategy.id)
-        assert result != "TRAILING_TP", (
-            f"current_stage={stage_no} → trailing 발동되면 안 됨 (v5 진입 단계 3 이상 필수). "
-            f"실제 결과: {result}"
+        assert result == "TRAILING_TP", (
+            f"current_stage={stage_no} → v8 사장님 결정상 트레일링은 **발동해야** 함 "
+            f"(TRAILING_MIN_STAGE=1). 실제 결과: {result}"
+        )
+
+    def test_trailing_min_stage_is_1_per_v8_decision(self) -> None:
+        """상수가 v5(3) 로 되돌아가면 위 테스트가 조용히 깨지므로 상수 자체를 못 박습니다."""
+        from app.core.risk_constants import TRAILING_MIN_STAGE
+        assert TRAILING_MIN_STAGE == 1, (
+            "사장님 v8 BEATUSDT 결정 = 1단계만 진입해도 트레일링. "
+            "이 값을 3 으로 되돌리려면 사장님 확인이 필요합니다."
         )
 
 

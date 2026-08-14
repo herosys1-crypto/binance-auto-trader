@@ -150,6 +150,12 @@ function renderSuggestions() {
 
       // 🌟 v133c: suggestion_type label 매핑!
       const TYPE_LABELS = {
+        // 🌟 v143a: 자동 제안 소스가 4H 볼밴 스캐너로 교체됨 (실측 기대값 기반)
+        'bb4h_mid_down': '📉 4H 중단이탈→하단',
+        'bb4h_mid_up': '📈 4H 중단돌파→상단',
+        'bb4h_lower_break': '📉 4H 하단이탈',
+        'bb4h_upper_break': '📈 4H 상단돌파',
+        // 아래는 옛 24h 순위 기반 (v143a 이전 생성분 = 24h 내 자동 만료)
         'pump_end': '급등후 반락',
         'pump_continuation': '급등 지속',
         'pump_live': '🚀 실시간 급등!',

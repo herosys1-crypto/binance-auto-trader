@@ -1,6 +1,7 @@
 from decimal import Decimal
 from typing import Any
 
+from app.core.risk_constants import TP1_PCT_DEFAULT
 from app.core.strategy_status import TERMINAL_STATUSES
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_stage_plan import StrategyStagePlan
@@ -557,8 +558,8 @@ class StrategyService:
                     "  • USDT 추가 입금으로 마진 여유 확보"
                 )
         preview = self.calculate_preview(symbol=symbol, side=side, start_price=start_price, strategy_template_id=strategy_template_id, leverage_override=leverage_override)
-        # 🌟 2026-08-08 v130 사장님 확정 default:
-        #   tp1_pct_override = 25 (모든 TP 상향!)
+        # 🌟 default (v130 → v147):
+        #   tp1_pct_override = TP1_PCT_DEFAULT (v147 사장님 지시로 25 → 15!)
         #   force_sl_enabled_override = True + force_sl_roi_override = 15 (강제 -15%)!
         instance = StrategyInstance(
             user_id=user_id,
@@ -571,7 +572,7 @@ class StrategyService:
             leverage=preview.leverage,
             total_capital=template_model.total_capital,
             status="WAITING",
-            tp1_pct_override=D("25"),  # 25% 자동
+            tp1_pct_override=TP1_PCT_DEFAULT,  # v147: 15% (사장님 지시)
             force_sl_enabled_override=True,  # 강제 SL ON!
             force_sl_roi_override=D("15"),  # -15% 자동!
             # 🌟 v131 신 (2026-08-09 사장님!): 청산 후 자동 재진입 옵션 저장!

@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🚀 급등 순위</title>
+<style>
+  body {
+    background: #0f172a; color: #e2e8f0;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    padding: 6px 8px; margin: 0; line-height: 1.35; font-size: 12px;
+  }
+  .header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px solid #334155;
+    position: sticky; top: 0; background: #0f172a; z-index: 10;
+  }
+  .title { font-size: 1rem; font-weight: bold; }
+  .sub { color: #94a3b8; font-size: 0.72rem; }
+  .controls { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
+  .chip {
+    padding: 3px 8px; border-radius: 999px; border: 1px solid #334155;
+    background: #1e293b; color: #94a3b8; cursor: pointer; font-size: 0.72rem;
+  }
+  .chip.on { background: #7c3aed; color: #fff; border-color: #7c3aed; }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; color: #94a3b8; font-size: 0.7rem; font-weight: 600;
+    padding: 3px 4px; border-bottom: 1px solid #334155;
+    position: sticky; top: 34px; background: #0f172a;
+  }
+  td { padding: 3px 4px; border-bottom: 1px dashed #1e293b; font-size: 0.74rem; }
+  td.num, th.num { text-align: right; }
+  tr:hover { background: rgba(124,58,237,0.12); }
+  .sym { font-weight: 700; cursor: pointer; color: #e2e8f0; }
+  .sym:hover { text-decoration: underline; color: #a78bfa; }
+  .pos { color: #22c55e; font-weight: 700; }
+  .neg { color: #ef4444; font-weight: 700; }
+  .hot { background: rgba(239,68,68,0.18); }
+  .loading { text-align: center; color: #94a3b8; padding: 30px; }
+  .btn {
+    padding: 3px 8px; border-radius: 4px; border: 0; font-weight: bold;
+    cursor: pointer; font-size: 0.7rem; background: #7c3aed; color: #fff;
+  }
+  .badge {
+    display: inline-block; padding: 0 5px; border-radius: 3px;
+    font-size: 0.65rem; font-weight: 700; margin-left: 3px;
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <div class="title" id="title">🚀 급등 순위</div>
+    <div class="sub" id="sub">불러오는 중...</div>
+  </div>
+  <div>
+    <button class="btn" onclick="load()">🔄</button>
+    <button class="btn" style="background:#475569" onclick="window.close()">✕</button>
+  </div>
+</div>
+
+<div class="controls" id="periods"></div>
+<div id="content"><div class="loading">📡 조회 중...</div></div>
+
+<script>
+const API_BASE = '/api/v1';
+const params = new URLSearchParams(window.location.search);
+// direction=gainers(급등) / losers(급락)
+const DIRECTION = (params.get('direction') || 'gainers').toLowerCase();
+const IS_UP = DIRECTION === 'gainers';
+// 사장님 지시: 15분 급등/급락 순위가 기본 (바이낸스는 24h만 제공!)
+let period = params.get('period') || '15m';
+let limit = Number(params.get('limit') || 30);
+// 🌟 v148 사장님 (2026-08-14): "15분 급상승 급락은 각각 팝업창으로 뛰워서 계속 볼수있게"
+// 자동 새로고침 = 기본 ON! (10초마다!)
+const AUTO_REFRESH_MS = 10000;
+let timer = setInterval(() => { try { load(); } catch (_e) {} }, AUTO_REFRESH_MS);
+
+// 사장님: "바이낸스에는 24시간·2일·3일 등등 우리도 있고" → 장기도 함께 제공
+const PERIODS = ['15m', '30m', '1h', '4h', '1d', '2d', '3d'];
+const PERIOD_LABEL = { '15m':'15분', '30m':'30분', '1h':'1시간', '4h':'4시간',
+                       '1d':'24시간', '2d':'2일', '3d':'3일' };
+
+// 🌟 v147f 강조 티어 = **기간별 실측 분포**로 정했습니다 (180심볼 × 25일, 표본 49만건)
+//   예전엔 20% 고정이었는데, 15분 기준 20%+ 는 **하루 3.5회**뿐이라
+//   사장님이 요청하신 15분 화면이 사실상 늘 비어 있었습니다.
+//   각 기간의 [상위5%, 상위1%, 상위0.5%, 상위0.1%] 지점을 티어로 씁니다.
+const TIERS = {
+  '15m': [3, 5, 7, 15],     // 15분 실측: 상위5%=2.07 / 1%=4.70 / 0.5%=6.37 / 0.1%=11.75
+  '30m': [3, 7, 10, 20],    // 상위5%=2.92 / 1%=6.72 / 0.5%=9.09 / 0.1%=16.38
+  '1h':  [5, 10, 15, 25],   // 상위5%=4.21 / 1%=9.69 / 0.5%=13.11 / 0.1%=22.96
+  '4h':  [10, 25, 30, 50],  // 상위5%=8.91 / 1%=20.07 / 0.5%=26.39 / 0.1%=45.94
+  '1d':  [25, 75, 100],     // 상위5%=24.62 / 1%=53.99 / 0.5%=73.49
+  '2d':  [30, 80, 120],     // 1d 분포에서 눈금만 확장 (장기는 참고용)
+  '3d':  [35, 90, 140],
+};
+const TIER_STYLE = [
+  { bg: '#334155', fg: '#cbd5e1', tag: '주목'   },  // 상위 5%
+  { bg: '#0ea5e9', fg: '#fff',    tag: '큼'     },  // 상위 1%
+  { bg: '#f59e0b', fg: '#fff',    tag: '매우큼' },  // 상위 0.5%
+  { bg: '#ef4444', fg: '#fff',    tag: '극단'   },  // 상위 0.1%
+];
+
+// 전략 밴드 (v147d) — 팝업 기간과 **재는 대상이 다릅니다**:
+//   팝업 = 「최근 N분 변동」 / 전략 = 「15분봉 1시간 창 누적 변동」
+//   둘이 같아지는 기간은 1h 뿐이라, 밴드 표식(🎯)은 그때만 덧붙입니다.
+const BAND_LO = 17.5, BAND_MID = 22.5, BAND_HI = 27.5;
+const STRATEGY_PERIOD = '1h';
+
+/** 변동폭이 속한 티어 index (-1 = 티어 없음) */
+function tierOf(period, absChg) {
+  const t = TIERS[period] || TIERS['1h'];
+  let idx = -1;
+  for (let i = 0; i < t.length; i++) if (absChg >= t[i]) idx = i;
+  return idx;
+}
+
+document.title = IS_UP ? '🚀 급등 순위' : '📉 급락 순위';
+document.getElementById('title').textContent = IS_UP ? '🚀 급등 순위' : '📉 급락 순위';
+
+function getToken() {
+  return localStorage.getItem('access_token')
+      || sessionStorage.getItem('access_token')
+      || localStorage.getItem('accessToken') || '';
+}
+
+function renderPeriods() {
+  const autoOn = !!timer;
+  document.getElementById('periods').innerHTML = PERIODS.map(p =>
+    `<span class="chip ${p === period ? 'on' : ''}" onclick="setPeriod('${p}')">${PERIOD_LABEL[p] || p}</span>`
+  ).join('') + `<span class="chip ${autoOn ? 'on' : ''}" onclick="toggleAuto()" id="autoChip">⏱ 자동 10초 ${autoOn ? 'ON' : 'OFF'}</span>`;
+}
+
+function setPeriod(p) { period = p; renderPeriods(); load(); }
+
+function toggleAuto() {
+  if (timer) { clearInterval(timer); timer = null; }
+  else { timer = setInterval(load, AUTO_REFRESH_MS); }
+  renderPeriods();
+}
+
+function fmtVol(v) {
+  const n = Number(v || 0);
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K';
+  return n.toFixed(0);
+}
+
+function fmtPrice(v) {
+  const n = Number(v);
+  if (!isFinite(n) || n === 0) return '-';
+  return Math.abs(n) >= 1 ? String(parseFloat(n.toFixed(4)))
+                          : String(parseFloat(n.toPrecision(6)));
+}
+
+// 심볼 클릭 = 상세 분석 창 (기존 analysis.html 재사용)
+function openAnalysis(sym) {
+  // 🚨 v147d fix: 예전엔 급등을 SHORT 로 열었는데 **실측과 정반대**였습니다.
+  //   실측(181심볼 5m/15m): 급등 → 추격 LONG 이 양의 기대값,
+  //                        급락 → 양방향 모두 기대값 없음(진입 비권장).
+  //   analysis.html 의 side 는 전략 생성 모달까지 프리필하므로 방향이 틀리면
+  //   반대 포지션이 그대로 만들어집니다.
+  const side = IS_UP ? 'LONG' : 'LONG';   // 급등=추격 / 급락=반등(v140 신호 있을 때만!)
+  window.open(`/static/analysis.html?symbol=${encodeURIComponent(sym)}&side=${side}`,
+              `an_${sym}`, 'width=460,height=900');
+}
+
+async function load() {
+  try {
+    const r = await fetch(
+      `${API_BASE}/symbols/ranking?period=${period}&direction=${DIRECTION}&limit=${limit}`,
+      { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    render(data);
+  } catch (e) {
+    document.getElementById('content').innerHTML =
+      `<div class="loading" style="color:#ef4444">❌ 조회 실패: ${e.message}</div>`;
+  }
+}
+
+function render(data) {
+  const items = data.items || [];
+  const now = new Date().toLocaleTimeString('ko-KR');
+  document.getElementById('sub').textContent =
+    `${period} 기준 · ${items.length}건 · ${now}` +
+    (period === '15m' ? ' (바이낸스 미제공 = 자체 계산)' : '');
+
+  if (!items.length) {
+    document.getElementById('content').innerHTML =
+      `<div class="loading">해당 조건의 심볼이 없습니다.</div>`;
+    return;
+  }
+
+  const rows = items.map((it, i) => {
+    const chg = Number(it.change_pct);
+    const cls = chg >= 0 ? 'pos' : 'neg';
+    const a = Math.abs(chg);
+
+    // ① 크기 티어 = 이 기간의 실측 분포 기준 (모든 기간에서 표시!)
+    const ti = tierOf(period, a);
+    const hot = ti >= 2;                     // 상위 0.5% 이상이면 행 강조
+    let badge = '';
+    if (ti >= 0) {
+      const s = TIER_STYLE[ti];
+      badge = `<span class="badge" style="background:${s.bg};color:${s.fg}" `
+            + `title="${PERIOD_LABEL[period]} 기준 ${TIERS[period][ti]}%+ = 실측 상위권">`
+            + `${s.tag}</span>`;
+    }
+
+    // ② 전략 밴드 표식 = 같은 기준으로 재는 1h + 급등일 때만 덧붙임
+    if (IS_UP && period === STRATEGY_PERIOD && a >= BAND_LO) {
+      if (a < BAND_HI) {
+        const big = a >= BAND_MID;
+        badge += `<span class="badge" style="background:${big ? '#7c3aed' : '#22c55e'};color:#fff" `
+              + `title="${big ? '22.5~27.5% = 추격 LONG +15%/-7% (길게)'
+                              : '17.5~22.5% = 추격 LONG +5%/-5% (짧게)'}">`
+              + `🎯${big ? '길게' : '짧게'}</span>`;
+      } else {
+        badge += `<span class="badge" style="background:#475569;color:#cbd5e1" `
+              + `title="${BAND_HI}% 이상은 실측 밴드 밖 = 전략 신호를 내지 않습니다">🎯밴드밖</span>`;
+      }
+    }
+    return `
+      <tr class="${hot ? 'hot' : ''}">
+        <td class="num" style="color:#64748b">${i + 1}</td>
+        <td><span class="sym" onclick="openAnalysis('${it.symbol}')">${it.symbol}</span>${badge}</td>
+        <td class="num">${fmtPrice(it.last_price)}</td>
+        <td class="num ${cls}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</td>
+        <td class="num" style="color:#94a3b8">${fmtVol(it.quote_volume)}</td>
+      </tr>`;
+  }).join('');
+
+  document.getElementById('content').innerHTML = `
+    <table>
+      <thead><tr>
+        <th class="num">#</th><th>심볼</th><th class="num">현재가</th>
+        <th class="num">${period} 변동</th><th class="num">24h 거래대금</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="loading" style="padding:8px;font-size:0.68rem;text-align:left;line-height:1.6">
+      배지는 <b>${PERIOD_LABEL[period]} 실측 분포</b> 기준입니다 —
+      ${(TIERS[period] || []).map((v, i) =>
+          `<span class="badge" style="background:${TIER_STYLE[i].bg};color:${TIER_STYLE[i].fg}">${TIER_STYLE[i].tag}</span> ${v}%+`
+        ).join(' · ')}
+      <br>
+      ${IS_UP
+        ? `📈 실측: <b style="color:#22c55e">급등 = 추격 LONG</b> 이 양의 기대값입니다.`
+        : `🚫 실측: <b style="color:#ef4444">급락은 양방향 모두 기대값이 없습니다</b> —
+           진입 비권장. 반등을 노리시려면 v140(15m 바닥 다이버전스) 신호가 같이 뜰 때만 하세요.`}
+      <br>
+      ${period === STRATEGY_PERIOD
+        ? `🎯 표식은 전략 밴드입니다 —
+           <b>${BAND_LO}~${BAND_MID}% 짧게(+5%/-5%)</b>,
+           <b>${BAND_MID}~${BAND_HI}% 길게(+15%/-7%)</b>, ${BAND_HI}%+ 는 밴드 밖.`
+        : `🎯 전략 밴드 표식은 <b>1시간</b> 에서만 붙습니다 —
+           전략은 「15분봉 1시간 창 누적」을 보는데 지금은 「최근 ${PERIOD_LABEL[period]} 변동」이라
+           <b>재는 대상이 다릅니다</b>.`}
+      <br>심볼을 누르면 상세 분석 창이 열립니다.
+    </div>`;
+}
+
+renderPeriods();
+load();
+</script>
+</body>
+</html>

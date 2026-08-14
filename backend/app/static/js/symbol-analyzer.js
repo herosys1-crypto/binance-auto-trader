@@ -53,15 +53,24 @@
       const html = active.map(s => {
         const sideColor = s.side === 'LONG' ? '#22c55e' : '#ef4444';
         const sideIcon = s.side === 'LONG' ? '🐂' : '🐻';
-        const pnl = Number(s.unrealized_pnl_pct || 0);
-        const pnlColor = pnl >= 0 ? '#22c55e' : '#ef4444';
-        const pnlSign = pnl >= 0 ? '+' : '';
+        // 🚨 v147b fix: `/strategies` 응답에는 unrealized_pnl_pct 가 **없습니다**.
+        //    옛 코드 `Number(s.unrealized_pnl_pct || 0)` = 모든 심볼이 항상 **+0.0%** 로 표시됨
+        //    (= 사장님이 「다 본전이네」로 오해할 수 있는 silent bug)
+        //    → strategies-list.js 가 채우는 Binance 실시간 포지션 캐시에서 roi_pct 를 읽고,
+        //      없으면 숫자를 **지어내지 말고 '-'** 로 표시합니다.
+        const _acct = (window._binancePositionsCache || {})[s.exchange_account_id] || {};
+        const _bp = (_acct.positions || {})[s.symbol];
+        const pnl = (_bp && _bp.roi_pct !== null && _bp.roi_pct !== undefined)
+          ? Number(_bp.roi_pct) : null;
+        const hasPnl = pnl !== null && isFinite(pnl);
+        const pnlColor = !hasPnl ? '#94a3b8' : (pnl >= 0 ? '#22c55e' : '#ef4444');
+        const pnlText = !hasPnl ? '-' : `${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)}%`;
         return `
           <button onclick="openActiveStrategyAnalysis(${s.id}, '${s.symbol}', '${s.side}')"
                   style="background:rgba(0,0,0,0.4);border:1px solid ${sideColor};color:#fff;padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer"
                   title="클릭 = 활성 전략 상세 분석 새 창!">
             ${sideIcon} <span style="font-weight:600">${s.symbol}</span>
-            <span style="color:${pnlColor};margin-left:4px">${pnlSign}${pnl.toFixed(1)}%</span>
+            <span style="color:${pnlColor};margin-left:4px">${pnlText}</span>
           </button>
         `;
       }).join('');

@@ -5,7 +5,9 @@
 
 검증:
 1. WALLET_LIMIT_PCT = .env 일치
-2. TRAILING_RETRACE_PCT default = 10 (= v36!)
+2. TRAILING_RETRACE_PCT = .env override 와 코드 상수 일치
+   (v147: 사장님 지시로 10 → 5. 기대값을 여기 또 적으면 두 곳 = 헌법 6번 위반이라
+    코드 상수를 진실로 삼고, .env 로 덮어썼을 때만 불일치로 봅니다)
 3. 기타 critical 설정 일관성
 
 = 사장님 시스템 안정성 영구!
@@ -46,16 +48,22 @@ def run_settings_sync_once() -> dict:
         except Exception as e:
             logger.warning("[settings-sync] WALLET_LIMIT_PCT 검증 실패: %s", e)
 
-        # 2. TRAILING_RETRACE_PCT default 검증
+        # 2. TRAILING_RETRACE_PCT 검증
+        # 🚨 v147h fix: 예전엔 `!= 10` 을 하드코딩해서, 사장님이 v147 에서 5 로
+        #    바꾸시자 **매시간 「불일치」 오탐 알림**이 나가는 상태였습니다.
+        #    기대값을 워커에 또 적는 것 자체가 두 곳 = 헌법 6번(단일 진실) 위반이라,
+        #    코드 상수를 진실로 두고 **.env 로 덮어쓴 경우에만** 불일치로 봅니다.
         try:
             from app.core.risk_constants import TRAILING_RETRACE_PCT
-            if float(TRAILING_RETRACE_PCT) != 10:
-                result["mismatches"] += 1
-                result["details"].append({
-                    "key": "TRAILING_RETRACE_PCT",
-                    "expected": 10,
-                    "actual": float(TRAILING_RETRACE_PCT),
-                })
+            _env_tr = os.environ.get("TRAILING_RETRACE_PCT")
+            if _env_tr is not None and _env_tr.strip() != "":
+                if abs(float(TRAILING_RETRACE_PCT) - float(_env_tr)) > 0.01:
+                    result["mismatches"] += 1
+                    result["details"].append({
+                        "key": "TRAILING_RETRACE_PCT",
+                        "env": float(_env_tr),
+                        "actual": float(TRAILING_RETRACE_PCT),
+                    })
         except Exception as e:
             logger.warning("[settings-sync] TRAILING 검증 실패: %s", e)
 
