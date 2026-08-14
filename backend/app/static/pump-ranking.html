@@ -75,8 +75,12 @@ let limit = Number(params.get('limit') || 30);
 let timer = null;
 
 const PERIODS = ['15m', '30m', '1h', '4h', '1d'];
-// 강조 임계 = 전략 연구에서 쓰는 20% 기준
-const HOT_PCT = 20;
+// 강조 임계 = 실측 전략 밴드 (v147d). 20% 고정이 아니라 밴드로 봅니다.
+//   17.5~22.5% = +5%/-5% 짧게 / 22.5~27.5% = +15%/-7% 길게 / 27.5%+ = 밴드 밖(신호 X)
+const BAND_LO = 17.5, BAND_MID = 22.5, BAND_HI = 27.5;
+// 이 팝업의 기간은 「최근 N분간 변동」이고, 전략 밴드는 「15분봉 1시간 창 누적」입니다.
+// 둘이 같은 값을 재는 기간은 1h 뿐이라, 그때만 밴드 판정을 표시합니다.
+const STRATEGY_PERIOD = '1h';
 
 document.title = IS_UP ? '🚀 급등 순위' : '📉 급락 순위';
 document.getElementById('title').textContent = IS_UP ? '🚀 급등 순위' : '📉 급락 순위';
@@ -118,7 +122,12 @@ function fmtPrice(v) {
 
 // 심볼 클릭 = 상세 분석 창 (기존 analysis.html 재사용)
 function openAnalysis(sym) {
-  const side = IS_UP ? 'SHORT' : 'LONG';   // 급등이면 천장/역추세 관점, 급락이면 반등 관점
+  // 🚨 v147d fix: 예전엔 급등을 SHORT 로 열었는데 **실측과 정반대**였습니다.
+  //   실측(181심볼 5m/15m): 급등 → 추격 LONG 이 양의 기대값,
+  //                        급락 → 양방향 모두 기대값 없음(진입 비권장).
+  //   analysis.html 의 side 는 전략 생성 모달까지 프리필하므로 방향이 틀리면
+  //   반대 포지션이 그대로 만들어집니다.
+  const side = IS_UP ? 'LONG' : 'LONG';   // 급등=추격 / 급락=반등(v140 신호 있을 때만!)
   window.open(`/static/analysis.html?symbol=${encodeURIComponent(sym)}&side=${side}`,
               `an_${sym}`, 'width=460,height=900');
 }
@@ -153,10 +162,20 @@ function render(data) {
   const rows = items.map((it, i) => {
     const chg = Number(it.change_pct);
     const cls = chg >= 0 ? 'pos' : 'neg';
-    const hot = Math.abs(chg) >= HOT_PCT;
-    const badge = hot
-      ? `<span class="badge" style="background:${IS_UP ? '#22c55e' : '#ef4444'};color:#fff">${HOT_PCT}%+</span>`
-      : '';
+    const a = Math.abs(chg);
+    // 밴드 판정은 전략과 같은 기간(1h)일 때만 — 다른 기간은 다른 걸 재는 값이라 표시 X
+    const inBand = IS_UP && period === STRATEGY_PERIOD && a >= BAND_LO && a < BAND_HI;
+    const hot = inBand;
+    let badge = '';
+    if (inBand) {
+      const big = a >= BAND_MID;
+      badge = `<span class="badge" style="background:${big ? '#7c3aed' : '#22c55e'};color:#fff" `
+            + `title="${big ? '22.5~27.5% = +15%/-7% 길게' : '17.5~22.5% = +5%/-5% 짧게'}">`
+            + `${big ? '길게 +15%' : '짧게 +5%'}</span>`;
+    } else if (a >= BAND_HI && IS_UP && period === STRATEGY_PERIOD) {
+      badge = `<span class="badge" style="background:#475569;color:#cbd5e1" `
+            + `title="${BAND_HI}% 이상은 실측 밴드 밖 = 신호를 내지 않습니다">밴드밖</span>`;
+    }
     return `
       <tr class="${hot ? 'hot' : ''}">
         <td class="num" style="color:#64748b">${i + 1}</td>
@@ -175,9 +194,19 @@ function render(data) {
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    <div class="loading" style="padding:8px;font-size:0.68rem">
-      심볼을 누르면 상세 분석 창이 열립니다
-      (${IS_UP ? '급등 = 천장/역추세 관점 SHORT' : '급락 = 반등 관점 LONG'}).
+    <div class="loading" style="padding:8px;font-size:0.68rem;text-align:left;line-height:1.6">
+      심볼을 누르면 상세 분석 창이 열립니다.<br>
+      ${IS_UP
+        ? `📈 실측: <b style="color:#22c55e">급등 = 추격 LONG</b> 이 양의 기대값입니다.`
+        : `🚫 실측: <b style="color:#ef4444">급락은 양방향 모두 기대값이 없습니다</b> —
+           진입 비권장. 반등을 노리시려면 v140(15m 바닥 다이버전스) 신호가 같이 뜰 때만 하세요.`}
+      <br>
+      ${period === STRATEGY_PERIOD
+        ? `🎯 지금 기간(1h)은 전략 밴드와 같은 기준입니다 —
+           <b>${BAND_LO}~${BAND_MID}% = +5%/-5% 짧게</b>,
+           <b>${BAND_MID}~${BAND_HI}% = +15%/-7% 길게</b>, ${BAND_HI}%+ 는 밴드 밖.`
+        : `⚠️ 이 기간은 <b>최근 ${period} 변동</b>이라 전략 밴드(15분봉 1시간 창 누적)와
+           다른 값입니다. 밴드 판정을 보시려면 <b>1h</b> 를 눌러주세요.`}
     </div>`;
 }
 
