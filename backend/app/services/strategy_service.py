@@ -1,6 +1,7 @@
 from decimal import Decimal
 from typing import Any
 
+from app.core.risk_constants import TP1_PCT_DEFAULT
 from app.core.strategy_status import TERMINAL_STATUSES
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_stage_plan import StrategyStagePlan
