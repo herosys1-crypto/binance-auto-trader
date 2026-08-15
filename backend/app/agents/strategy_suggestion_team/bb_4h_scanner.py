@@ -170,12 +170,43 @@ class BB4HScanner(BaseAgent):
         predictions: list[dict] = []
         counts: dict[str, int] = {}
 
+        # 24h 티커 정보 (change_24h_pct 사용 위해!)
+        try:
+            tickers_data = bc.get_24hr_ticker()
+            ticker_map = {str(t.get("symbol", "")): t for t in tickers_data if isinstance(t, dict)}
+        except Exception:
+            ticker_map = {}
+
         for sym in symbols:
             try:
                 kl = bc.get_klines(symbol=sym, interval="4h",
                                    limit=BB4HBandAnalyzer.KLINE_LIMIT)
                 if not isinstance(kl, list):
                     continue
+
+                # 🎯 v154 사장님 (2026-08-16): 큰 수익 (20~50%!) 사냥 = 최우선!
+                # 사장님: "내가 올린 이미지정도 되는 수익을 원해!"
+                sym_ticker = ticker_map.get(sym, {})
+                change_24h = float(sym_ticker.get("priceChangePercent", 0) or 0)
+                bm = BB4HBandAnalyzer.big_move_signal(kl, change_24h_pct=change_24h)
+                if bm.get("detected") and (bm.get("confidence") or 0) >= 0.90:
+                    predictions.append({
+                        "symbol": sym,
+                        "type": bm["type"],  # bb4h_big_move
+                        "side": bm["side"],
+                        "confidence": bm["confidence"],
+                        "change_pct": bm.get("change_24h_pct"),
+                        "volume": 0,
+                        "reason": bm["reason"],
+                        "current_price": bm["current_price"],
+                        "rsi": bm["rsi"],
+                        "volume_multiplier": bm["volume_multiplier"],
+                        "bb_width_pct": bm["bb_width_pct"],
+                        "tp_pct": bm["tp_pct"],   # 25%!
+                        "sl_pct": bm["sl_pct"],   # 5%!
+                    })
+                    counts["BIG_MOVE"] = counts.get("BIG_MOVE", 0) + 1
+                    continue  # big_move = 최우선!
 
                 # 🐂 v151 사장님 (2026-08-16): 4H 저점 → 눌림 성공 → 재상승 = LONG! (최우선!)
                 # 사장님 8개 스크린샷 = 저점 → 반등 → 눌림 → 성공 → 재상승!

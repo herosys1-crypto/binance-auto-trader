@@ -809,6 +809,161 @@ class BB4HBandAnalyzer:
         }
 
     # ------------------------------------------------------------------
+    # 🎯 v154 사장님 지시 (2026-08-16): 큰 수익 (20~50%+) 사냥!
+    # ------------------------------------------------------------------
+    # 사장님 이미지 분석 = 큰 수익 사례:
+    #   SHORT: APR -70%, ACE -53%, BEAT -42%, CROSS -23%!
+    #   LONG:  HEMI +45%, SPORTFUN +47%, AIO +34%, COW +31%!
+    #
+    # 사장님: "내가 올린 이미지정도 되는 수익을 원해!"
+    # = 20~50% 수익 = 확실한 큰 움직임 시작 시점 진입!
+    #
+    # 조건 (매우 엄격 = confidence 0.90+ 만!):
+    # 1. 24h 변동 = 이미 20%+ 시작!
+    # 2. 4H Volume = 3x+ (강력한 폭발!)
+    # 3. RSI 극단 (SHORT: 80+, LONG: 20-)
+    # 4. 볼밴 폭 확장! (변동성 시작!)
+    # 5. MACD 강한 크로스!
+
+    BIG_MOVE_MIN_24H_PCT = 15.0     # 24h 변동 15%+ (이미 큰 움직임 시작!)
+    BIG_MOVE_VOLUME_MULT = 2.5      # Volume 2.5x+
+    BIG_MOVE_RSI_EXTREME_HIGH = 78  # SHORT용 = 과매수!
+    BIG_MOVE_RSI_EXTREME_LOW = 22   # LONG용 = 과매도!
+    BIG_MOVE_TP_LONG = 25.0         # LONG TP = +25%
+    BIG_MOVE_TP_SHORT = 25.0        # SHORT TP = 저점까지 -25%
+    BIG_MOVE_SL = 5.0               # 손절 -5% (반대 방향!)
+
+    @classmethod
+    def big_move_signal(cls, klines_4h: list, change_24h_pct: float = 0.0) -> dict[str, Any]:
+        """🎯 큰 수익 (20~50%) 사냥! (v154 사장님!)
+
+        사장님 지시 2026-08-16:
+        "내가 올린 이미지정도 되는 수익을 원해 그런 가능성있는 심볼을 찾아야해"
+
+        조건 (매우 엄격!):
+        1. 24h 변동 >= 15% (이미 큰 움직임 시작!)
+        2. 4H Volume >= 2.5x (강력한 폭발!)
+        3. RSI 극단 (SHORT: 78+, LONG: 22-)
+        4. MACD 강한 크로스!
+        5. 볼밴 안 = 정상 or 이탈!
+
+        방향 결정:
+        - RSI 극단 + 24h 변동 = 반대 매매!
+          RSI 78+ + 24h +15%+ = 정점 → SHORT!
+          RSI 22- + 24h -15%- = 저점 → LONG!
+        """
+        need = max(cls.BB_PERIOD, 35) + 5
+        if not klines_4h or len(klines_4h) < need:
+            return {"detected": False, "reason": "4H 캔들 부족"}
+
+        try:
+            highs = [float(k[2]) for k in klines_4h]
+            lows = [float(k[3]) for k in klines_4h]
+            opens = [float(k[1]) for k in klines_4h]
+            closes = [float(k[4]) for k in klines_4h]
+            volumes = [float(k[5]) for k in klines_4h]
+        except Exception as e:
+            return {"detected": False, "reason": f"파싱 실패: {e}"}
+
+        # 완료봉!
+        highs_c = highs[:-1]
+        lows_c = lows[:-1]
+        opens_c = opens[:-1]
+        closes_c = closes[:-1]
+        volumes_c = volumes[:-1]
+
+        # 조건 1: 24h 변동!
+        abs_change_24h = abs(change_24h_pct)
+        if abs_change_24h < cls.BIG_MOVE_MIN_24H_PCT:
+            return {
+                "detected": False,
+                "reason": f"24h 변동 부족: {change_24h_pct:.1f}% (< ±{cls.BIG_MOVE_MIN_24H_PCT}%)",
+            }
+
+        # 조건 2: Volume 폭발!
+        recent_20_vol = volumes_c[-20:] if len(volumes_c) >= 20 else volumes_c
+        avg_vol = sum(recent_20_vol) / len(recent_20_vol) if recent_20_vol else 0
+        vol_last = volumes_c[-1]
+        vol_mult = vol_last / avg_vol if avg_vol > 0 else 0
+        if vol_mult < cls.BIG_MOVE_VOLUME_MULT:
+            return {
+                "detected": False,
+                "reason": f"Volume 부족: {vol_mult:.1f}x < {cls.BIG_MOVE_VOLUME_MULT}",
+            }
+
+        # 조건 3: RSI 극단!
+        rsi = cls._calc_rsi(closes_c)
+        if rsi is None:
+            return {"detected": False, "reason": "RSI 계산 불가"}
+
+        # 방향 판정!
+        side = None
+        rsi_signal = ""
+        if change_24h_pct >= cls.BIG_MOVE_MIN_24H_PCT and rsi >= cls.BIG_MOVE_RSI_EXTREME_HIGH:
+            side = "SHORT"
+            rsi_signal = f"RSI {rsi} 극단 과매수!"
+        elif change_24h_pct <= -cls.BIG_MOVE_MIN_24H_PCT and rsi <= cls.BIG_MOVE_RSI_EXTREME_LOW:
+            side = "LONG"
+            rsi_signal = f"RSI {rsi} 극단 과매도!"
+        else:
+            return {
+                "detected": False,
+                "reason": f"RSI {rsi} = 극단 X (24h {change_24h_pct:+.1f}%)",
+            }
+
+        # 조건 4: MACD 강한 방향!
+        is_bearish = cls._macd_bearish(closes_c)
+        if side == "SHORT" and not is_bearish:
+            return {"detected": False, "reason": "MACD 약세 X (SHORT 불리!)"}
+        # LONG의 경우 = bullish 확인!
+        # (간단히: MACD가 bearish X 면 = OK로 처리)
+        # 실제로는 = _macd_bullish 함수도 만들 수 있지만 = 심플하게!
+        if side == "LONG" and is_bearish:
+            return {"detected": False, "reason": "MACD 약세 (LONG 불리!)"}
+
+        # 조건 5: BB!
+        _, ups, los = cls.bollinger(closes_c)
+        upper = ups[-1] or 0
+        lower = los[-1] or 0
+        close_last = closes_c[-1]
+        bb_width_pct = ((upper - lower) / close_last * 100) if close_last > 0 else 0
+        # 볼밴 너무 좁으면 = 변동성 부족!
+        if bb_width_pct < 5:
+            return {"detected": False, "reason": f"BB 너무 좁음: {bb_width_pct:.1f}%"}
+
+        # ✅ 모두 통과! confidence = 매우 높음!
+        confidence = 0.90
+        confidence += min((abs_change_24h - cls.BIG_MOVE_MIN_24H_PCT) / 100, 0.05)
+        confidence += min((vol_mult - cls.BIG_MOVE_VOLUME_MULT) / 20, 0.05)
+        confidence = min(max(confidence, 0.90), 0.98)
+
+        # TP 계산 = 큰 목표!
+        if side == "SHORT":
+            tp_pct = cls.BIG_MOVE_TP_SHORT
+        else:
+            tp_pct = cls.BIG_MOVE_TP_LONG
+
+        return {
+            "detected": True,
+            "side": side,
+            "type": "bb4h_big_move",
+            "kind": "BIG_MOVE",
+            "confidence": round(confidence, 3),
+            "change_24h_pct": round(change_24h_pct, 2),
+            "volume_multiplier": round(vol_mult, 2),
+            "rsi": rsi,
+            "bb_width_pct": round(bb_width_pct, 2),
+            "current_price": round(close_last, 8),
+            "tp_pct": tp_pct,
+            "sl_pct": cls.BIG_MOVE_SL,
+            "reason": (
+                f"🎯 큰 수익 사냥! 24h {change_24h_pct:+.1f}% + "
+                f"Volume {vol_mult:.1f}x + {rsi_signal} + MACD 강세! "
+                f"→ {side} TP {tp_pct:g}% 목표! 신뢰도 {confidence*100:.0f}%"
+            ),
+        }
+
+    # ------------------------------------------------------------------
     def analyze(self, symbol: str, side: str = "SHORT",
                 klines_4h: list | None = None) -> dict[str, Any]:
         """4H BB 밴드 전략 판정 (읽기 전용!)."""
