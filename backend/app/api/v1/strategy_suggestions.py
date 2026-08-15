@@ -71,25 +71,79 @@ class DismissRequest(BaseModel):
 # =====================================================================
 @router.get("", response_model=list[SuggestionResponse])
 def list_suggestions(
+    min_confidence: float = 0.85,   # 🌟 v155 사장님: 「85% 이상만 노출!」
+    exclude_active: bool = True,    # 🌟 v155 사장님: 활성 포지션 심볼 = 완전 숨기기!
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> list[SuggestionResponse]:
-    """PENDING 제안 리스트 (신뢰도 높은 순! v133 사장님 요구!)
+    """PENDING 제안 리스트 (85%+ + 활성 심볼 제외!)
 
-    신뢰도 = 성공 확률!
-    - 높을수록 = 확실한 예측!
-    - 사장님이 = 위부터 = 골라볼 수 있게!
+    v155 사장님 지시 (2026-08-16):
+    - 「85% 이상만 노출해줘!」 → min_confidence=0.85 (기본!)
+    - 「포지션에 진입해서 전략 인스턴스에 있으면 = 확실히 구분!」
+      → exclude_active=True = 활성 포지션 심볼 = 완전 숨기기!
+
+    신뢰도 = 성공 확률! 높을수록 = 확실한 예측!
     """
-    _rows = db.execute(
+    q = (
         select(StrategySuggestion)
         .where(StrategySuggestion.status == "PENDING")
-        .order_by(
-            StrategySuggestion.confidence_score.desc(),  # 🌟 신뢰도 우선!
-            StrategySuggestion.created_at.desc(),  # 동률 = 최근 순!
-        )
-        .limit(50)
+        .where(StrategySuggestion.confidence_score >= min_confidence)
+    )
+
+    # 🌟 v155 사장님: 활성 포지션 심볼 = 완전 제외!
+    if exclude_active:
+        from app.models.strategy_instance import StrategyInstance
+        open_statuses = [
+            "STAGE_1_OPEN", "STAGE_2_OPEN", "STAGE_3_OPEN",
+            "STAGE_4_OPEN", "STAGE_5_OPEN", "STAGE_6_OPEN",
+            "STAGE_7_OPEN", "STAGE_8_OPEN", "STAGE_9_OPEN",
+            "STAGE_10_OPEN",
+        ]
+        active_symbols = db.execute(
+            select(StrategyInstance.symbol)
+            .where(StrategyInstance.status.in_(open_statuses))
+            .where(StrategyInstance.current_position_qty != 0)
+        ).scalars().all()
+        active_set = set(active_symbols)
+        if active_set:
+            q = q.where(~StrategySuggestion.symbol.in_(active_set))
+
+    _rows = db.execute(
+        q.order_by(
+            StrategySuggestion.confidence_score.desc(),
+            StrategySuggestion.created_at.desc(),
+        ).limit(50)
     ).scalars().all()
     return [SuggestionResponse.model_validate(r, from_attributes=True) for r in _rows]
+
+
+@router.post("/dismiss-low-confidence")
+def dismiss_low_confidence(
+    threshold: float = 0.85,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🚨 v155 사장님 지시: 「초기화해서 다시 해줘」
+    = 85% 미만 = 모두 DISMISSED 처리!
+    """
+    from sqlalchemy import update
+    result = db.execute(
+        update(StrategySuggestion)
+        .where(StrategySuggestion.status == "PENDING")
+        .where(StrategySuggestion.confidence_score < threshold)
+        .values(
+            status="DISMISSED",
+            dismissed_at=datetime.now(timezone.utc),
+            dismissed_reason=f"v155 사장님 지시 = 신뢰도 <{threshold*100:.0f}% 초기화!",
+        )
+    )
+    db.commit()
+    return {
+        "dismissed": result.rowcount,
+        "threshold": threshold,
+        "note": f"신뢰도 <{threshold*100:.0f}% 제안 {result.rowcount}건 = DISMISSED!",
+    }
 
 
 # 🚨 v132 CRITICAL fix (사장님 404 사고!):
