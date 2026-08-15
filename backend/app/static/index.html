@@ -1148,6 +1148,30 @@
         <div id="learning-summary" class="mt-2 text-xs text-slate-400" style="display:none"></div>
       </div>
 
+      <!-- ⚖ v159 신 (2026-08-16 사장님!): BB 중단 ±5% + 당일 최고 상승 순! -->
+      <div id="bb-middle-scan-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(139,92,246,0.15),rgba(245,158,11,0.15));border:1px solid rgba(245,158,11,0.4)">
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-1">
+          <span class="text-sm font-bold" style="color:#fbbf24">
+            ⚖ BB 중단 ±5% <span id="bb-middle-count" style="background:#f59e0b;color:#000;padding:1px 6px;border-radius:8px;font-size:11px">0</span>
+          </span>
+          <div class="flex items-center gap-1 flex-wrap">
+            <button onclick="scanBBMiddle('4h')"
+                    class="text-xs bg-purple-600 hover:bg-purple-500 text-white px-2 py-1 rounded font-bold">
+              4H BB
+            </button>
+            <button onclick="scanBBMiddle('15m')"
+                    class="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded">
+              15m BB
+            </button>
+          </div>
+        </div>
+        <div class="text-xs text-slate-400 mb-2">
+          <span style="color:#fbbf24">BB 중단선 ±5% 근처</span> 심볼 = <span style="color:#22c55e">당일 최고 상승 순!</span><br>
+          <span style="color:#94a3b8">중단 위 = 지지 or 이탈? / 중단 아래 = 저항 or 돌파?</span>
+        </div>
+        <div id="bb-middle-list" class="space-y-2" style="max-height:500px;overflow-y:auto;padding-right:4px"></div>
+      </div>
+
       <!-- 🚀 v133d 신 (2026-08-13 사장님!): 급등락 실시간 진입 카드! -->
       <div id="live-pump-dump-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(239,68,68,0.15),rgba(34,197,94,0.15));border:1px solid rgba(239,68,68,0.4)">
         <div class="flex items-center justify-between mb-2 flex-wrap gap-1">
@@ -2529,6 +2553,7 @@ function openPumpRanking(direction) {
 <script src="/static/js/pump-bb-alerts.js?v=20260809v131-pump-bb"></script>
 <script src="/static/js/strategy-suggestions.js?v=20260816v155-85filter-exclude-active"></script>
 <script src="/static/js/live-pump-dump-alerts.js?v=20260814v148a-pump-reversal-short"></script>
+<script src="/static/js/bb-middle-scan.js?v=20260816v159-bb-middle-5"></script>
 <script src="/static/js/tp-sl-advisor.js?v=20260813v134-learning"></script>
 <script src="/static/js/symbol-analyzer.js?v=20260813v134f-postmsg-safe"></script>
 <script src="/static/js/prediction-stats.js?v=20260813v135-learning"></script>
