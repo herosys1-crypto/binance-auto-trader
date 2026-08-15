@@ -47,8 +47,13 @@ router = APIRouter(prefix="/live-pump-dump", tags=["live-pump-dump"])
 def scan_live_pump_dump(
     max_symbols: int = Query(default=60, ge=10, le=150),
     include_dump: bool = Query(
-        default=True,
-        description="급락도 목록에 표시할지 (표시하되 진입 비권장으로 표기)",
+        default=False,  # 🌟 v153 사장님 (2026-08-16): 기본 False! 85%+ 만 표시!
+        description="급락도 목록에 표시할지",
+    ),
+    min_confidence: float = Query(
+        default=0.85,  # 🌟 v153 사장님: 「85% 이상만 노출!」
+        ge=0.0, le=1.0,
+        description="이 신뢰도 미만 = 목록에서 제외 (백엔드에서 학습 자료로 별도 저장!)",
     ),
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
@@ -217,18 +222,32 @@ def scan_live_pump_dump(
             "change_24h": float(t.get("priceChangePercent", 0) or 0),
         })
 
+    # 🌟 v153 사장님 (2026-08-16): 「85% 이상만 노출!」 필터!
+    # 미달 심볼 = 학습용으로 로그만 기록 (chart_pattern_worker가 매 6시간 별도 학습!)
+    total_before_filter = len(alerts)
+    excluded_alerts = [a for a in alerts if (a.get("confidence") or 0) < min_confidence]
+    alerts = [a for a in alerts if (a.get("confidence") or 0) >= min_confidence]
+
+    if excluded_alerts:
+        logger.info(
+            "[live_pump_dump] %d건 filter (min_conf=%.2f) - 학습 자료 (chart_pattern_learning_team 매 6시간!)",
+            len(excluded_alerts), min_confidence,
+        )
+
     # 진입 가능(급등) 먼저, 그 다음 신뢰도 순
     alerts.sort(key=lambda a: (a["side"] is None, -(a.get("confidence") or 0)))
 
     return {
         "alerts": alerts,
         "total": len(alerts),
+        "excluded_low_confidence": len(excluded_alerts),
+        "min_confidence": min_confidence,
         "band": {"low": band_lo, "high": band_hi},
         "scanned": len(candidates),
         "policy": (
-            f"v148a — 5분·15분 두 시간대 모두 {band_lo:g}~{band_hi:g}% 급등락 감지! "
-            f"급등(추격 LONG) = 「추천」, 급락·밴드 밖 = 「표시」만. "
-            "🐻 **급등 후 하락 전환** (저점→정점 +15%↑ + 정점 대비 -2~-8% + 첫 음봉) = **SHORT 진입 신호!** "
-            "**막지는 않습니다 — 최종 결정은 사장님** (사장님 지시 2026-08-14)."
+            f"v153 — 5분·15분 두 시간대 모두 {band_lo:g}~{band_hi:g}% 급등락 감지! "
+            f"**신뢰도 {min_confidence*100:.0f}%+ 만 표시!** (사장님 지시 2026-08-16) "
+            f"미달 심볼 = 학습 자료로 매 6시간 자동 분석 (chart_pattern_learning_team!). "
+            f"급등(추격 LONG) = 「추천」, 🐻 급등 후 하락 전환 = SHORT!"
         ),
     }

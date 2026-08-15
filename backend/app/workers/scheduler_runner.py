@@ -273,6 +273,20 @@ def start_scheduler() -> None:
         id="learning_team_cycle",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 📊 v152 (2026-08-16 사장님!): Chart Pattern Learning Team!
+    # 매 6시간 = 1달 4H 캔들 → 패턴 감지 → 저장 + outcome tracking!
+    def _chart_pattern_scan():
+        from app.db.session import SessionLocal
+        from app.core.crypto import decrypt_text as _dec
+        from app.agents.chart_pattern_learning_team.team_lead import ChartPatternLearningTeamLead
+        with SessionLocal() as _db:
+            ChartPatternLearningTeamLead().run_full_scan(_db, _dec, top_n=100)
+    scheduler.add_job(
+        guarded_job("chart_pattern_scan", 1800, _chart_pattern_scan),
+        trigger=IntervalTrigger(hours=6),
+        id="chart_pattern_scan",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.
