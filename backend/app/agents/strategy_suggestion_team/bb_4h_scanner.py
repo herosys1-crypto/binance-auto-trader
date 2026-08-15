@@ -177,6 +177,31 @@ class BB4HScanner(BaseAgent):
                 if not isinstance(kl, list):
                     continue
 
+                # 🐻 v150 사장님 (2026-08-16): 4H 정점 → 반등 실패 = SHORT! (최우선!)
+                # 사장님 9개 스크린샷 = 정점 → 1차 하락 → 반등 → 반등 실패 → 재하락!
+                bf = BB4HBandAnalyzer.bounce_failure_signal(kl)
+                if bf.get("detected") and (bf.get("confidence") or 0) >= 0.85:
+                    predictions.append({
+                        "symbol": sym,
+                        "type": bf["type"],  # bb4h_bounce_failure
+                        "side": bf["side"],  # SHORT
+                        "confidence": bf["confidence"],
+                        "change_pct": bf.get("first_drop_pct"),
+                        "volume": 0,
+                        "reason": bf["reason"],
+                        "peak": bf["peak"],
+                        "trough": bf["trough"],
+                        "bounce_peak": bf["bounce_peak"],
+                        "current_price": bf["current_price"],
+                        "first_drop_pct": bf["first_drop_pct"],
+                        "bounce_pct": bf["bounce_pct"],
+                        "recovery_ratio": bf["recovery_ratio"],
+                        "tp_pct": bf["tp_pct"],
+                        "sl_pct": bf["sl_pct"],
+                    })
+                    counts["BOUNCE_FAILURE"] = counts.get("BOUNCE_FAILURE", 0) + 1
+                    continue  # bounce_failure 감지 = 최우선!
+
                 # 🐻 v149 사장님 (2026-08-16): 4H 볼밴 상단 정점 후 하락 = SHORT!
                 # 사장님: "4시간봉 이런 차트가 가능한 확률로 심볼을 찾아줘 확률 85% 이상만!"
                 rev = BB4HBandAnalyzer.top_reversal_signal(kl)
