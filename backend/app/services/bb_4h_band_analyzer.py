@@ -485,6 +485,171 @@ class BB4HBandAnalyzer:
         }
 
     # ------------------------------------------------------------------
+    # 🐻 v150 사장님 지시 (2026-08-16): 4H 정점 → 반등 실패 = SHORT!
+    # ------------------------------------------------------------------
+    # 사장님 스크린샷 9개 (ACE/BEAT/JCT/EDEN/CROSS/TAG/BICO/DOLO/SKYAI):
+    #
+    #   큰 박스 = 전체 사이클 / 작은 박스 = SHORT 진입 시점!
+    #   1. 정점 (볼밴 상단 근처!)
+    #   2. 1차 급락!
+    #   3. 반등 시도 (중단까지!)
+    #   4. **반등 실패** = 여기가 SHORT!  ← 사장님 작은 박스!
+    #   5. 재하락!
+    #
+    # = 이 패턴 = 확률 85%+ = 재하락!
+
+    BOUNCE_LOOKBACK = 30           # 최근 30봉 = 정점 검색
+    BOUNCE_PEAK_UPPER_TOUCH = 0.90 # 정점 = high >= upper * 0.90
+    BOUNCE_FIRST_DROP_MIN = 10.0   # 1차 하락 최소 10%
+    BOUNCE_MIN_PCT = 3.0           # 반등 최소 +3%
+    BOUNCE_MAX_RECOVERY = 0.85     # 반등 최대 = 정점의 85% (완전 회복 X)
+    BOUNCE_FAILURE_MIN = 0.60      # 반등 정점 = upper의 60%+ (중단 근처!)
+
+    @classmethod
+    def bounce_failure_signal(cls, klines_4h: list) -> dict[str, Any]:
+        """🐻 4H 정점 → 1차 하락 → 반등 → 반등 실패 = SHORT!
+
+        사장님 지시 2026-08-16 (9개 스크린샷!):
+        "이것도 분석해서 같이 활용해줘"
+
+        조건 (모두 만족!):
+        1. **정점**: 최근 30봉 내 = high가 upper의 90%+
+        2. **1차 하락**: 정점 대비 -10% 이상 하락!
+        3. **반등**: 저점 대비 +3% 이상 반등!
+        4. **반등 실패**: 반등 정점 = 원 정점의 85% 미만 = 완전 회복 X!
+                        + 반등 정점 = upper의 60%+ (중단 근처!)
+        5. **재하락 시작**: 마지막 봉 = 반등 정점 아래 close + 음봉!
+        """
+        need = cls.BB_PERIOD + cls.BOUNCE_LOOKBACK + 2
+        if not klines_4h or len(klines_4h) < need:
+            return {"detected": False, "reason": f"4H 캔들 부족 ({len(klines_4h or [])}/{need})"}
+
+        try:
+            highs = [float(k[2]) for k in klines_4h]
+            lows = [float(k[3]) for k in klines_4h]
+            opens = [float(k[1]) for k in klines_4h]
+            closes = [float(k[4]) for k in klines_4h]
+            volumes = [float(k[5]) for k in klines_4h]
+        except Exception as e:
+            return {"detected": False, "reason": f"파싱 실패: {e}"}
+
+        # 완료봉!
+        highs_c = highs[:-1]
+        lows_c = lows[:-1]
+        opens_c = opens[:-1]
+        closes_c = closes[:-1]
+        volumes_c = volumes[:-1]
+
+        if len(closes_c) < cls.BB_PERIOD + cls.BOUNCE_LOOKBACK:
+            return {"detected": False, "reason": "완료봉 부족"}
+
+        _, ups, _ = cls.bollinger(closes_c)
+
+        # 최근 lookback 창 = 정점 찾기!
+        window_highs = highs_c[-cls.BOUNCE_LOOKBACK:]
+        window_lows = lows_c[-cls.BOUNCE_LOOKBACK:]
+        window_ups = ups[-cls.BOUNCE_LOOKBACK:]
+
+        peak = max(window_highs)
+        peak_idx = window_highs.index(peak)   # 창 안 index (0~lookback-1)
+        if peak_idx >= cls.BOUNCE_LOOKBACK - 3:
+            return {"detected": False, "reason": "정점이 너무 최근 = 반등 아직 X"}
+
+        # 조건 1: 정점 = 볼밴 상단 근처!
+        peak_upper = window_ups[peak_idx]
+        if not peak_upper or peak < peak_upper * cls.BOUNCE_PEAK_UPPER_TOUCH:
+            return {"detected": False, "reason": f"정점 {peak:.6g} = 상단 근접 X (upper {peak_upper})"}
+
+        # 조건 2: 1차 하락!
+        # 정점 후 = 저점!
+        after_peak_lows = window_lows[peak_idx + 1:]
+        if not after_peak_lows:
+            return {"detected": False, "reason": "정점 후 데이터 없음"}
+        trough = min(after_peak_lows)
+        trough_idx_in_after = after_peak_lows.index(trough)
+        trough_idx = peak_idx + 1 + trough_idx_in_after  # 창 안 index
+        first_drop_pct = (trough - peak) / peak * 100
+        if first_drop_pct > -cls.BOUNCE_FIRST_DROP_MIN:
+            return {"detected": False, "reason": f"1차 하락 부족: {first_drop_pct:.1f}%"}
+
+        # 조건 3: 반등!
+        after_trough_highs = window_highs[trough_idx + 1:]
+        if not after_trough_highs:
+            return {"detected": False, "reason": "반등 시작 안 됨"}
+        bounce_peak = max(after_trough_highs)
+        bounce_peak_idx_in_after = after_trough_highs.index(bounce_peak)
+        bounce_peak_idx = trough_idx + 1 + bounce_peak_idx_in_after
+        bounce_pct = (bounce_peak - trough) / trough * 100
+        if bounce_pct < cls.BOUNCE_MIN_PCT:
+            return {"detected": False, "reason": f"반등 부족: {bounce_pct:.1f}%"}
+
+        # 조건 4: 반등 실패 = 원 정점의 85% 미만!
+        recovery_ratio = bounce_peak / peak
+        if recovery_ratio >= cls.BOUNCE_MAX_RECOVERY:
+            return {
+                "detected": False,
+                "reason": f"반등이 정점의 {recovery_ratio*100:.1f}% 회복 = 실패 아님",
+            }
+
+        # + 반등 정점 = upper의 60%+ (중단 근처 = 실패 확정!)
+        bounce_peak_upper = window_ups[bounce_peak_idx]
+        if bounce_peak_upper:
+            bounce_upper_ratio = bounce_peak / bounce_peak_upper
+            if bounce_upper_ratio < cls.BOUNCE_FAILURE_MIN:
+                return {
+                    "detected": False,
+                    "reason": f"반등 너무 약함: {bounce_upper_ratio*100:.1f}% of upper",
+                }
+
+        # 조건 5: 재하락 시작 = 마지막 봉 = 반등 정점 아래 + 음봉!
+        close_last = closes_c[-1]
+        open_last = opens_c[-1]
+        if close_last >= bounce_peak:
+            return {"detected": False, "reason": f"아직 반등 정점 위 close"}
+        if close_last >= open_last:
+            return {"detected": False, "reason": "마지막 봉 양봉 = 재하락 확정 X"}
+
+        # 반등 후 몇 봉?
+        bars_since_bounce = cls.BOUNCE_LOOKBACK - 1 - bounce_peak_idx
+        if bars_since_bounce > 5:
+            return {
+                "detected": False,
+                "reason": f"반등 정점 {bars_since_bounce}봉 전 = 너무 오래됨",
+            }
+
+        # ✅ 모두 만족! confidence 85%+
+        # 신뢰도 = 반등 실패 정도 + 1차 하락 크기!
+        confidence = 0.85
+        confidence += min((abs(first_drop_pct) - cls.BOUNCE_FIRST_DROP_MIN) / 100, 0.05)
+        confidence += min((cls.BOUNCE_MAX_RECOVERY - recovery_ratio) / 2, 0.05)
+        confidence = min(max(confidence, 0.85), 0.95)
+
+        # TP = 저점까지 재하락!
+        tp_target_pct = (trough - close_last) / close_last * 100  # 음수!
+        return {
+            "detected": True,
+            "side": "SHORT",
+            "type": "bb4h_bounce_failure",
+            "kind": "BOUNCE_FAILURE",
+            "confidence": round(confidence, 3),
+            "peak": round(peak, 8),
+            "trough": round(trough, 8),
+            "bounce_peak": round(bounce_peak, 8),
+            "current_price": round(close_last, 8),
+            "first_drop_pct": round(first_drop_pct, 2),
+            "bounce_pct": round(bounce_pct, 2),
+            "recovery_ratio": round(recovery_ratio * 100, 1),
+            "bars_since_bounce": bars_since_bounce,
+            "tp_pct": round(abs(tp_target_pct), 2) if tp_target_pct < 0 else 8.0,
+            "sl_pct": 3.0,  # 반등 정점 재돌파 = 손절!
+            "reason": (
+                f"🐻 4H 정점({peak:.6g}) → 1차 급락 {first_drop_pct:.1f}% → "
+                f"반등 정점({bounce_peak:.6g}, 회복 {recovery_ratio*100:.1f}%) 실패 → "
+                f"음봉 재하락 시작! 신뢰도 {confidence*100:.0f}%"
+            ),
+        }
+
+    # ------------------------------------------------------------------
     def analyze(self, symbol: str, side: str = "SHORT",
                 klines_4h: list | None = None) -> dict[str, Any]:
         """4H BB 밴드 전략 판정 (읽기 전용!)."""
