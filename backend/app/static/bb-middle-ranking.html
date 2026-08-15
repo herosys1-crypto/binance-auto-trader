@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>⚖ BB 중단 순위</title>
+<style>
+  body {
+    background: #0f172a; color: #e2e8f0;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    padding: 8px; margin: 0; font-size: 12px;
+  }
+  .header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #334155;
+  }
+  .title { font-size: 15px; font-weight: bold; color: #fbbf24; }
+  .close-btn {
+    background: #7c3aed; color: #fff; border: 0; padding: 4px 10px;
+    border-radius: 4px; cursor: pointer; font-size: 12px;
+  }
+  .controls { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .chip {
+    background: #1e293b; color: #94a3b8;
+    padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;
+    border: 1px solid transparent;
+  }
+  .chip.on { background: #f59e0b; color: #000; font-weight: 600; border-color: #f59e0b; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { padding: 4px 6px; text-align: left; border-bottom: 1px solid #1e293b; }
+  th { color: #94a3b8; font-weight: 500; }
+  .num { text-align: right; }
+  .sym {
+    color: #fff; font-weight: 600; cursor: pointer;
+    padding: 2px 4px;
+  }
+  .sym:hover { color: #fbbf24; }
+  .pos { color: #22c55e; }
+  .neg { color: #ef4444; }
+  .warning { color: #fbbf24; }
+  .loading { text-align: center; color: #94a3b8; padding: 20px; }
+  .footer {
+    margin-top: 8px; padding-top: 6px; border-top: 1px solid #334155;
+    font-size: 10px; color: #94a3b8; line-height: 1.5;
+  }
+  .analysis-btn {
+    background: linear-gradient(135deg,#3b82f6,#8b5cf6); color: #fff;
+    border: 0; padding: 2px 6px; border-radius: 3px; cursor: pointer; font-size: 10px;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="title" id="title">⚖ BB 중단 순위</div>
+    <div style="font-size:10px;color:#94a3b8" id="subtitle">로딩...</div>
+  </div>
+  <button class="close-btn" onclick="window.close()">✕ 닫기</button>
+</div>
+
+<div class="controls" id="periods"></div>
+<div id="content"><div class="loading">📡 조회 중...</div></div>
+
+<script>
+const API_BASE = '/api/v1';
+const params = new URLSearchParams(window.location.search);
+
+// direction = up(상승 = position ABOVE) / down(하락 = position BELOW)
+const DIRECTION = (params.get('direction') || 'up').toLowerCase();
+const IS_UP = DIRECTION === 'up';
+
+let interval = params.get('interval') || '4h';
+let proximity = Number(params.get('proximity') || 5);
+let timer = null;
+const AUTO_MS = 15000;
+
+const INTERVALS = ['15m', '1h', '4h', '1d'];
+const INTERVAL_LABEL = {'15m': '15분', '1h': '1시간', '4h': '4시간', '1d': '24시간'};
+
+document.title = IS_UP
+  ? `⚖ BB 중단 상승 (${interval})`
+  : `⚖ BB 중단 하락 (${interval})`;
+document.getElementById('title').textContent = IS_UP
+  ? '⚖ BB 중단 상승'
+  : '⚖ BB 중단 하락';
+
+function getToken() {
+  return localStorage.getItem('access_token')
+      || sessionStorage.getItem('access_token')
+      || '';
+}
+
+function fmtPrice(v) {
+  const n = Number(v);
+  if (!isFinite(n) || n === 0) return '-';
+  return Math.abs(n) >= 1 ? String(parseFloat(n.toFixed(4)))
+                          : String(parseFloat(n.toPrecision(6)));
+}
+
+function fmtVol(v) {
+  const n = Number(v || 0);
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K';
+  return n.toFixed(0);
+}
+
+function renderIntervals() {
+  const auto = !!timer;
+  document.getElementById('periods').innerHTML =
+    INTERVALS.map(iv =>
+      `<span class="chip ${iv === interval ? 'on' : ''}" onclick="setInterval2('${iv}')">${INTERVAL_LABEL[iv]}</span>`
+    ).join('')
+    + `<span class="chip ${auto ? 'on' : ''}" onclick="toggleAuto()" id="autoChip">⏱ 자동 15초 ${auto ? 'ON' : 'OFF'}</span>`;
+}
+
+function setInterval2(iv) {
+  interval = iv;
+  document.title = IS_UP ? `⚖ BB 중단 상승 (${iv})` : `⚖ BB 중단 하락 (${iv})`;
+  renderIntervals();
+  load();
+}
+
+function toggleAuto() {
+  if (timer) { clearInterval(timer); timer = null; }
+  else { timer = setInterval(load, AUTO_MS); }
+  renderIntervals();
+}
+
+function openBinanceChart(sym) {
+  window.open(`https://www.binance.com/en/futures/${encodeURIComponent(sym)}`,
+              `bnc_${sym}`, 'noopener');
+}
+
+function openAnalysis(sym) {
+  const side = IS_UP ? 'SHORT' : 'LONG';  // 상승 = 이탈 대비 SHORT, 하락 = 반등 대비 LONG
+  window.open(`/static/analysis.html?symbol=${encodeURIComponent(sym)}&side=${side}`,
+              `an_${sym}`, 'width=550,height=700');
+}
+
+async function load() {
+  try {
+    const r = await fetch(
+      `${API_BASE}/bb-middle-scan/scan?interval=${interval}&proximity_pct=${proximity}&max_symbols=150`,
+      { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    render(data);
+  } catch (e) {
+    document.getElementById('content').innerHTML =
+      `<div class="loading" style="color:#ef4444">❌ ${e.message || e}</div>`;
+  }
+}
+
+function render(data) {
+  const wantPos = IS_UP ? 'ABOVE' : 'BELOW';
+  const filtered = (data.symbols || []).filter(s => s.position === wantPos);
+  const subtitle = `${interval} 기준 · 중단 ${IS_UP ? '위' : '아래'} ±${proximity}% · ${filtered.length}건`;
+  document.getElementById('subtitle').textContent = subtitle;
+
+  if (filtered.length === 0) {
+    document.getElementById('content').innerHTML =
+      `<div class="loading">🕰️ ${interval} 중단 ${IS_UP ? '위' : '아래'} ±${proximity}% 심볼 = 없음!</div>`;
+    return;
+  }
+
+  const rows = filtered.slice(0, 50).map((s, i) => {
+    const chgCls = s.change_24h >= 0 ? 'pos' : 'neg';
+    const distCls = Math.abs(s.dist_pct_from_middle) < 2 ? 'warning' : '';
+    return `
+      <tr>
+        <td class="num" style="color:#64748b">${i + 1}</td>
+        <td>
+          <span class="sym" onclick="openBinanceChart('${s.symbol}')"
+                title="클릭 = 바이낸스!">${s.symbol}</span>
+          <button class="analysis-btn" onclick="openAnalysis('${s.symbol}')"
+                  title="분석 창">📊</button>
+        </td>
+        <td class="num">${fmtPrice(s.current_price)}</td>
+        <td class="num ${distCls}">${s.dist_pct_from_middle > 0 ? '+' : ''}${s.dist_pct_from_middle}%</td>
+        <td class="num pos" style="font-weight:600">+${s.max_rise_pct_24h}%</td>
+        <td class="num ${chgCls}">${s.change_24h >= 0 ? '+' : ''}${s.change_24h}%</td>
+        <td class="num" style="color:#94a3b8">${fmtVol(s.volume_24h)}</td>
+      </tr>`;
+  }).join('');
+
+  document.getElementById('content').innerHTML = `
+    <table>
+      <thead><tr>
+        <th class="num">#</th><th>심볼</th><th class="num">현재가</th>
+        <th class="num">중단이격</th><th class="num">당일상승</th>
+        <th class="num">24h</th><th class="num">거래량</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="footer">
+      💡 <b>심볼 클릭 = 바이낸스</b> / 📊 = 상세 분석<br>
+      ${IS_UP
+        ? '⬆️ 중단 위 = 상승 추세 or 저항? 이탈 시 = SHORT 고려!'
+        : '⬇️ 중단 아래 = 하락 추세 or 지지? 돌파 시 = LONG 고려!'}<br>
+      정렬 = <b>당일 최고 상승 큰 순!</b> (사장님 요구!)
+    </div>
+  `;
+}
+
+renderIntervals();
+load();
+timer = setInterval(load, AUTO_MS);
+</script>
+</body>
+</html>
