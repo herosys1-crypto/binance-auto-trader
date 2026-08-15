@@ -19,6 +19,21 @@
 let _sugSideFilter = 'ALL';  // ALL / LONG / SHORT
 let _cachedSuggestions = [];
 
+// 🌟 v155 사장님 (2026-08-16): 85% 미만 초기화!
+async function dismissLowConfidence() {
+  if (!confirm('신뢰도 85% 미만 = 모두 삭제(DISMISSED)? 되돌릴 수 없습니다!')) return;
+  try {
+    const result = await api('/strategy-suggestions/dismiss-low-confidence?threshold=0.85',
+                             { method: 'POST' });
+    if (typeof toast === 'function') {
+      toast(`✅ 초기화 완료! ${result.dismissed || 0}건 dismiss!`, 'success');
+    }
+    setTimeout(loadStrategySuggestions, 500);
+  } catch (e) {
+    if (typeof toast === 'function') toast('❌ 실패: ' + (e.message || e), 'error');
+  }
+}
+
 // 🌟 v136a: 활성 포지션 심볼 캐시!
 let _activeSymbolsCache = new Set();
 
@@ -26,7 +41,7 @@ async function loadStrategySuggestions() {
   try {
     // 활성 심볼 로드 (병렬!)
     const [suggestions, strategies] = await Promise.all([
-      api('/strategy-suggestions'),
+      api('/strategy-suggestions?min_confidence=0.85&exclude_active=true'),
       api('/strategies?limit=200').catch(() => []),
     ]);
     _cachedSuggestions = suggestions || [];
@@ -702,6 +717,7 @@ if (typeof window !== 'undefined') {
   window.executeSuggestion = executeSuggestion;
   window.dismissSuggestion = dismissSuggestion;
   window.triggerLearningNow = triggerLearningNow;  // v132 즉시 실행!
+  window.dismissLowConfidence = dismissLowConfidence;  // v155 85%↓ 초기화!
   window.briefingNow = briefingNow;  // v132 즉시 브리핑!
   window._switchProfile = _switchProfile;  // v132 프로필 전환!
   window._setSugFilter = _setSugFilter;  // v132 롱/숏 필터!
