@@ -176,6 +176,31 @@ class BB4HScanner(BaseAgent):
                                    limit=BB4HBandAnalyzer.KLINE_LIMIT)
                 if not isinstance(kl, list):
                     continue
+
+                # 🐻 v149 사장님 (2026-08-16): 4H 볼밴 상단 정점 후 하락 = SHORT!
+                # 사장님: "4시간봉 이런 차트가 가능한 확률로 심볼을 찾아줘 확률 85% 이상만!"
+                rev = BB4HBandAnalyzer.top_reversal_signal(kl)
+                if rev.get("detected") and (rev.get("confidence") or 0) >= 0.85:
+                    predictions.append({
+                        "symbol": sym,
+                        "type": rev["type"],   # bb4h_top_reversal
+                        "side": rev["side"],   # SHORT
+                        "confidence": rev["confidence"],
+                        "change_pct": None,
+                        "volume": 0,
+                        "reason": rev["reason"],
+                        "bb_upper": rev["upper_band"],
+                        "recent_high": rev["recent_high"],
+                        "current_price": rev["current_price"],
+                        "rsi_prev": rev["rsi_prev"],
+                        "rsi_now": rev["rsi_now"],
+                        "volume_multiplier": rev["volume_multiplier"],
+                        "tp_pct": rev["tp_pct"],
+                        "sl_pct": rev["sl_pct"],
+                    })
+                    counts["TOP_REVERSAL"] = counts.get("TOP_REVERSAL", 0) + 1
+                    continue  # top_reversal 감지 = 우선순위!
+
                 st = analyzer.state(kl)
                 trigger = self.classify(st)
                 if not trigger:

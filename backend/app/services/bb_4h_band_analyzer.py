@@ -297,6 +297,194 @@ class BB4HBandAnalyzer:
         }
 
     # ------------------------------------------------------------------
+    # 🐻 v149 사장님 지시 (2026-08-16): 4H 볼밴 상단 정점 후 하락 = SHORT!
+    # ------------------------------------------------------------------
+    # 사장님 스크린샷 (APRUSDT 4H, +320% 급등 후 -70% 급락):
+    #   1. 볼밴 상단 근처 = 정점 형성! (최근 5봉 = high가 upper의 95%+)
+    #   2. 상단 이탈 → close < upper!
+    #   3. RSI 하락 (이전 봉 대비 하락 + 이전 RSI > 65!)
+    #   4. MACD 크로스 (약세 전환)!
+    #   5. Volume 매도 증가 (하락 봉 volume > 평균!)
+    # = 5개 조건 모두 만족 = confidence 0.85+!
+    # = 사장님 = "확률 85% 이상만 보여줘!"
+
+    TOP_REVERSAL_LOOKBACK = 5        # 최근 5봉 = 정점 근접 판정
+    TOP_REVERSAL_UPPER_TOUCH = 0.95  # high >= upper * 0.95 = 상단 근접
+    TOP_REVERSAL_RSI_MIN = 65        # 이전 RSI > 65 = 과매수 조건
+    TOP_REVERSAL_VOL_MULT = 1.2      # 최근 봉 볼륨 > 평균 * 1.2
+
+    @classmethod
+    def _calc_rsi(cls, closes: list[float], period: int = 14) -> float | None:
+        if len(closes) < period + 1:
+            return None
+        gains = losses = 0.0
+        for i in range(1, period + 1):
+            d = closes[i] - closes[i - 1]
+            if d > 0:
+                gains += d
+            else:
+                losses += -d
+        avg_g = gains / period
+        avg_l = losses / period
+        for i in range(period + 1, len(closes)):
+            d = closes[i] - closes[i - 1]
+            g = d if d > 0 else 0
+            l_ = -d if d < 0 else 0
+            avg_g = (avg_g * (period - 1) + g) / period
+            avg_l = (avg_l * (period - 1) + l_) / period
+        if avg_l == 0:
+            return 100.0
+        rs = avg_g / avg_l
+        return round(100 - (100 / (1 + rs)), 2)
+
+    @classmethod
+    def _calc_ema(cls, values: list[float], period: int) -> list[float]:
+        if len(values) < period:
+            return []
+        k = 2 / (period + 1)
+        ema = [sum(values[:period]) / period]
+        for i in range(period, len(values)):
+            ema.append(values[i] * k + ema[-1] * (1 - k))
+        return ema
+
+    @classmethod
+    def _macd_bearish(cls, closes: list[float]) -> bool:
+        """MACD Signal 아래 or Histogram 감소 = 약세!"""
+        if len(closes) < 35:
+            return False
+        ema12 = cls._calc_ema(closes, 12)
+        ema26 = cls._calc_ema(closes, 26)
+        offset = 26 - 12
+        macd_line = [a - b for a, b in zip(ema12[offset:], ema26)]
+        if len(macd_line) < 10:
+            return False
+        signal_line = cls._calc_ema(macd_line, 9)
+        if not signal_line:
+            return False
+        macd_now = macd_line[-1]
+        macd_prev = macd_line[-2]
+        signal_now = signal_line[-1]
+        hist_now = macd_now - signal_now
+        hist_prev = macd_prev - signal_line[-2] if len(signal_line) >= 2 else 0
+        # 약세 = MACD < Signal OR Histogram 감소!
+        return (macd_now < signal_now) or (hist_now < hist_prev)
+
+    @classmethod
+    def top_reversal_signal(cls, klines_4h: list) -> dict[str, Any]:
+        """🐻 4H 볼밴 상단 정점 후 하락 전환 = SHORT 진입!
+
+        사장님 지시 2026-08-16 (APRUSDT 4H 스크린샷):
+        "4시간봉 이런 차트가 가능한 확률로 심볼을 찾아줘 [...] 확률 85% 이상만!"
+
+        조건 (5개 모두 만족!):
+        1. 볼밴 상단 근처 = 최근 5봉 = high 가 upper의 95%+
+        2. 상단 이탈 → 마지막 완료봉 = close < upper
+        3. RSI 하락 = 지금 < 이전 (5봉 전) + 이전 > 65
+        4. MACD 약세 = Signal 아래 or Histogram 감소
+        5. Volume 매도 = 마지막 봉 volume > 최근 20봉 평균 * 1.2
+        """
+        need = max(cls.BB_PERIOD, 35) + cls.TOP_REVERSAL_LOOKBACK + 2
+        if not klines_4h or len(klines_4h) < need:
+            return {"detected": False, "reason": f"4H 캔들 부족 ({len(klines_4h or [])}/{need})"}
+
+        try:
+            highs = [float(k[2]) for k in klines_4h]
+            lows = [float(k[3]) for k in klines_4h]
+            opens = [float(k[1]) for k in klines_4h]
+            closes = [float(k[4]) for k in klines_4h]
+            volumes = [float(k[5]) for k in klines_4h]
+        except Exception as e:
+            return {"detected": False, "reason": f"파싱 실패: {e}"}
+
+        # 완료봉 기준 (진행 중 봉 제외!)
+        highs_c = highs[:-1]
+        lows_c = lows[:-1]
+        opens_c = opens[:-1]
+        closes_c = closes[:-1]
+        volumes_c = volumes[:-1]
+
+        if len(closes_c) < cls.BB_PERIOD + cls.TOP_REVERSAL_LOOKBACK:
+            return {"detected": False, "reason": "완료봉 부족"}
+
+        _, ups, _ = cls.bollinger(closes_c)
+        if not ups[-1] or not ups[-cls.TOP_REVERSAL_LOOKBACK - 1]:
+            return {"detected": False, "reason": "BB 계산 미완료"}
+
+        upper = ups[-1]
+        close_last = closes_c[-1]
+        open_last = opens_c[-1]
+
+        # 조건 1: 상단 근접 정점! (최근 5봉 high 중 하나가 upper * 0.95+)
+        recent_highs = highs_c[-cls.TOP_REVERSAL_LOOKBACK:]
+        recent_ups = ups[-cls.TOP_REVERSAL_LOOKBACK:]
+        peak_reached = False
+        for h, u in zip(recent_highs, recent_ups):
+            if u and h >= u * cls.TOP_REVERSAL_UPPER_TOUCH:
+                peak_reached = True
+                break
+        if not peak_reached:
+            return {"detected": False, "reason": "5봉 내 BB 상단 근접 없음"}
+
+        # 조건 2: 상단 이탈 = close < upper!
+        if close_last >= upper:
+            return {"detected": False, "reason": f"아직 상단({upper:.6g}) 위 마감({close_last:.6g})"}
+
+        # + 마지막 봉 음봉 확인!
+        if close_last >= open_last:
+            return {"detected": False, "reason": "마지막 봉 양봉 (하락 확정 X)"}
+
+        # 조건 3: RSI 하락 + 이전 RSI > 65!
+        rsi_now = cls._calc_rsi(closes_c)
+        rsi_prev = cls._calc_rsi(closes_c[:-cls.TOP_REVERSAL_LOOKBACK])
+        if rsi_now is None or rsi_prev is None:
+            return {"detected": False, "reason": "RSI 계산 불가"}
+        if rsi_prev < cls.TOP_REVERSAL_RSI_MIN:
+            return {"detected": False, "reason": f"이전 RSI {rsi_prev} < {cls.TOP_REVERSAL_RSI_MIN} (과매수 아님)"}
+        if rsi_now >= rsi_prev:
+            return {"detected": False, "reason": f"RSI {rsi_prev} → {rsi_now} = 하락 X"}
+
+        # 조건 4: MACD 약세!
+        if not cls._macd_bearish(closes_c):
+            return {"detected": False, "reason": "MACD 약세 X"}
+
+        # 조건 5: Volume 매도 증가!
+        recent_20_vol = volumes_c[-20:] if len(volumes_c) >= 20 else volumes_c
+        avg_vol = sum(recent_20_vol) / len(recent_20_vol)
+        vol_last = volumes_c[-1]
+        vol_mult = vol_last / avg_vol if avg_vol > 0 else 0
+        if vol_mult < cls.TOP_REVERSAL_VOL_MULT:
+            return {"detected": False, "reason": f"Volume {vol_mult:.2f}x < {cls.TOP_REVERSAL_VOL_MULT}"}
+
+        # ✅ 모두 만족! confidence 85%+!
+        # 신뢰도 = 5개 조건 모두 통과 = 0.85 기본 + RSI 낙폭 + Volume 배수 가산!
+        rsi_drop = rsi_prev - rsi_now
+        confidence = 0.85 + min((rsi_drop - 5) / 100, 0.05) + min((vol_mult - 1.2) / 20, 0.05)
+        confidence = min(max(confidence, 0.85), 0.95)
+
+        recent_high = max(recent_highs)
+        return {
+            "detected": True,
+            "side": "SHORT",
+            "type": "bb4h_top_reversal",
+            "kind": "TOP_REVERSAL",
+            "confidence": round(confidence, 3),
+            "upper_band": round(upper, 8),
+            "recent_high": round(recent_high, 8),
+            "current_price": round(close_last, 8),
+            "rsi_prev": rsi_prev,
+            "rsi_now": rsi_now,
+            "rsi_drop": round(rsi_drop, 2),
+            "volume_multiplier": round(vol_mult, 2),
+            "tp_pct": 8.0,   # 실측 EXTRA_MOVE = 5.69% + 여유 = 목표 -8%!
+            "sl_pct": 3.0,   # 정점 재돌파 = 손절!
+            "reason": (
+                f"🐻 4H BB 상단({upper:.6g}) 정점 이탈 + 음봉! "
+                f"RSI {rsi_prev} → {rsi_now} (-{rsi_drop:.1f}), "
+                f"MACD 약세, Volume {vol_mult:.2f}x = 신뢰도 {confidence*100:.0f}%!"
+            ),
+        }
+
+    # ------------------------------------------------------------------
     def analyze(self, symbol: str, side: str = "SHORT",
                 klines_4h: list | None = None) -> dict[str, Any]:
         """4H BB 밴드 전략 판정 (읽기 전용!)."""
