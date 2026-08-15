@@ -577,53 +577,88 @@ function render(data) {
   document.getElementById('content').innerHTML = html;
 }
 
-// 🌟 v134f: 세팅 후 진입 = 3중 안전장치!
-// 1) 직접 함수 호출 (같은 origin!)
-// 2) postMessage (표준 API!)
-// 3) localStorage fallback (창 닫혀도 = 대시보드 재열림 시 감지!)
+// 🌟 v160 사장님 fix (2026-08-16): 대시보드 재귀 검색!
+// 문제: 대시보드 → 급락 팝업 → 상세 분석 창
+//   → 상세 분석의 window.opener = 급락 팝업 (대시보드 X!)
+//   → openCreateModalWithSymbol 함수 = 급락 팝업에 없음 → 실패!
+// fix: opener 체인 재귀 검색 → 대시보드 찾기 + postMessage 브로드캐스트!
+function findDashboardWindow() {
+  const seen = new Set();
+  let win = window.opener;
+  let depth = 0;
+  while (win && !win.closed && depth < 5) {
+    if (seen.has(win)) break;
+    seen.add(win);
+    try {
+      if (typeof win.openCreateModalWithSymbol === 'function') {
+        return win;
+      }
+    } catch (_e) { /* cross-origin - skip */ }
+    try {
+      const next = win.opener;
+      if (!next || next === win) break;
+      win = next;
+    } catch (_e) { break; }
+    depth++;
+  }
+  return null;
+}
+
+// 🌟 v160: 세팅 후 진입 = 대시보드 재귀 검색 + 4중 안전!
 function openCreateModalInParent() {
   try {
-    // localStorage 저장 = 항상! (fallback 대비!)
+    // 🔹 localStorage 저장 = 항상! (최후 fallback!)
     try {
       localStorage.setItem('pendingCreateModal', JSON.stringify({
-        symbol: symbol,
-        side: side,
-        ts: Date.now(),
+        symbol: symbol, side: side, ts: Date.now(),
       }));
     } catch (_e) { /* silent */ }
 
-    if (!window.opener || window.opener.closed) {
-      alert('✅ 심볼 저장 완료! 대시보드로 이동해서 「+ 새 전략」 클릭하면 자동 fill!');
-      return;
-    }
-
-    // 1) 직접 함수 호출 (같은 origin에서만 성공!)
-    try {
-      if (typeof window.opener.openCreateModalWithSymbol === 'function') {
-        window.opener.openCreateModalWithSymbol(symbol, side);
-        window.opener.focus();
+    // 🔹 1) opener 체인 재귀 검색 → 대시보드 찾기!
+    const dashboard = findDashboardWindow();
+    if (dashboard) {
+      try {
+        dashboard.openCreateModalWithSymbol(symbol, side);
+        dashboard.focus();
         window.close();
         return;
+      } catch (e) {
+        console.warn('[v160] 대시보드 함수 호출 실패:', e);
       }
-    } catch (_e) { /* cross-origin 등 = 아래 fallback! */ }
+    }
 
-    // 2) postMessage (표준 API = 항상 작동!)
+    // 🔹 2) 모든 opener에 postMessage 브로드캐스트!
     try {
-      window.opener.postMessage({
-        type: 'CREATE_MODAL_WITH_SYMBOL',
-        symbol: symbol,
-        side: side,
-        source: 'analysis_html',
-      }, '*');
-      window.opener.focus();
-      // 짧은 지연 후 창 닫기 (message 도착 대기!)
+      let win = window.opener;
+      let depth = 0;
+      const seen = new Set();
+      while (win && !win.closed && depth < 5) {
+        if (seen.has(win)) break;
+        seen.add(win);
+        try {
+          win.postMessage({
+            type: 'CREATE_MODAL_WITH_SYMBOL',
+            symbol: symbol, side: side,
+            source: 'analysis_html',
+          }, '*');
+        } catch (_e) { /* silent */ }
+        try {
+          const next = win.opener;
+          if (!next || next === win) break;
+          win = next;
+        } catch (_e) { break; }
+        depth++;
+      }
+      // dashboard 창 focus (있으면!)
+      if (dashboard) {
+        try { dashboard.focus(); } catch (_e) {}
+      }
       setTimeout(() => { try { window.close(); } catch (_e) {} }, 300);
       return;
     } catch (_e) { /* silent */ }
 
-    // 3) localStorage만 저장 = 사장님 안내!
-    alert('✅ 심볼 저장! 대시보드에서 「+ 새 전략」 클릭 = 자동 fill!');
-    window.opener.focus();
+    // 🔹 3) 최후 = alert!
+    alert('✅ 심볼 저장 완료! 대시보드에서 「+ 새 전략」 클릭 = 자동 fill!');
   } catch (e) {
     console.warn('openCreateModalInParent 실패:', e);
     alert('❌ 실패: ' + (e.message || e));
