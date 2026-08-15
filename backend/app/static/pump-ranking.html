@@ -155,14 +155,17 @@ function fmtPrice(v) {
                           : String(parseFloat(n.toPrecision(6)));
 }
 
-// 심볼 클릭 = 상세 분석 창 (기존 analysis.html 재사용)
+// 🌟 v157 사장님 지시 (2026-08-16):
+//   "급등과 급락 심볼을 선택하면 바이낸스 차트로 연결해줘"
+// = 심볼 클릭 = 바이낸스 Futures 차트 새 창!
+function openBinanceChart(sym) {
+  const url = `https://www.binance.com/en/futures/${encodeURIComponent(sym)}`;
+  window.open(url, `bnc_${sym}`, 'noopener');
+}
+
+// 상세 분석 창 (기존 analysis.html) - 별도 버튼!
 function openAnalysis(sym) {
-  // 🚨 v147d fix: 예전엔 급등을 SHORT 로 열었는데 **실측과 정반대**였습니다.
-  //   실측(181심볼 5m/15m): 급등 → 추격 LONG 이 양의 기대값,
-  //                        급락 → 양방향 모두 기대값 없음(진입 비권장).
-  //   analysis.html 의 side 는 전략 생성 모달까지 프리필하므로 방향이 틀리면
-  //   반대 포지션이 그대로 만들어집니다.
-  const side = IS_UP ? 'LONG' : 'LONG';   // 급등=추격 / 급락=반등(v140 신호 있을 때만!)
+  const side = IS_UP ? 'LONG' : 'LONG';
   window.open(`/static/analysis.html?symbol=${encodeURIComponent(sym)}&side=${side}`,
               `an_${sym}`, 'width=460,height=900');
 }
@@ -226,7 +229,14 @@ function render(data) {
     return `
       <tr class="${hot ? 'hot' : ''}">
         <td class="num" style="color:#64748b">${i + 1}</td>
-        <td><span class="sym" onclick="openAnalysis('${it.symbol}')">${it.symbol}</span>${badge}</td>
+        <td>
+          <span class="sym" onclick="openBinanceChart('${it.symbol}')"
+                title="클릭 = 바이낸스 Futures 차트!">${it.symbol}</span>
+          ${badge}
+          <span onclick="openAnalysis('${it.symbol}')"
+                style="cursor:pointer;color:#a78bfa;margin-left:6px;font-size:11px"
+                title="상세 분석 창!">📊</span>
+        </td>
         <td class="num">${fmtPrice(it.last_price)}</td>
         <td class="num ${cls}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</td>
         <td class="num" style="color:#94a3b8">${fmtVol(it.quote_volume)}</td>
@@ -259,7 +269,7 @@ function render(data) {
         : `🎯 전략 밴드 표식은 <b>1시간</b> 에서만 붙습니다 —
            전략은 「15분봉 1시간 창 누적」을 보는데 지금은 「최근 ${PERIOD_LABEL[period]} 변동」이라
            <b>재는 대상이 다릅니다</b>.`}
-      <br>심볼을 누르면 상세 분석 창이 열립니다.
+      <br>💡 <b>심볼 클릭 = 바이낸스 차트!</b> / 📊 클릭 = 상세 분석 창!
     </div>`;
 }
 
