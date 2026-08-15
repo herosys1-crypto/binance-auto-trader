@@ -36,7 +36,12 @@ from app.models.strategy_suggestion import StrategySuggestion
 logger = logging.getLogger(__name__)
 
 
-SUCCESS_THRESHOLD = 1.5  # % (LONG +1.5% / SHORT -1.5%)
+SUCCESS_THRESHOLD = 10.0  # % (LONG +10% / SHORT -10%)
+# 🚨 v156 사장님 지시 (2026-08-16):
+#   "10%이상 수익만 성공으로 해줘"
+# = 옛 v135 기준 (1.5%) = 너무 낮음 → 100% 성공률이 사실은 애매!
+# = 신 기준 (10%) = 진짜 큰 수익 낸 심볼만 SUCCESS!
+# = 심볼 성공률 = 진짜 신뢰할 수 있는 데이터!
 
 # v139: 시점별 가격 조회 캐시 (symbol, interval) → klines
 _KLINE_CACHE: dict[str, list] = {}
@@ -211,6 +216,64 @@ def run_prediction_outcome() -> dict:
         }
     except Exception as e:
         logger.warning("[prediction_outcome] 실행 실패: %s", e)
+        db.rollback()
+        return {"error": str(e)}
+    finally:
+        db.close()
+
+
+def recompute_all_outcomes() -> dict:
+    """🚨 v156 사장님 지시: 「10%이상 수익만 성공」 = 기존 판정 재계산!
+
+    옛 판정 (1.5% 기준!) → 신 판정 (10% 기준!) 재적용!
+    - outcome_change_4h >= 10% (LONG) or <= -10% (SHORT) = SUCCESS!
+    - 그 외 = FAIL!
+    - outcome_change_4h 데이터 있는 것만 재판정!
+    """
+    db: Session = SessionLocal()
+    updated = 0
+    to_success = 0
+    to_fail = 0
+    try:
+        rows = db.execute(
+            select(StrategySuggestion)
+            .where(StrategySuggestion.outcome_status.in_(["SUCCESS", "FAIL", "EXPIRED"]))
+            .where(StrategySuggestion.outcome_change_4h.isnot(None))
+        ).scalars().all()
+
+        for s in rows:
+            try:
+                change_4h = float(s.outcome_change_4h or 0)
+                old_status = s.outcome_status
+                if s.side == "LONG":
+                    new_status = "SUCCESS" if change_4h >= SUCCESS_THRESHOLD else "FAIL"
+                else:  # SHORT
+                    new_status = "SUCCESS" if change_4h <= -SUCCESS_THRESHOLD else "FAIL"
+
+                if new_status != old_status:
+                    s.outcome_status = new_status
+                    updated += 1
+                    if new_status == "SUCCESS":
+                        to_success += 1
+                    else:
+                        to_fail += 1
+            except Exception:
+                continue
+
+        db.commit()
+        logger.info(
+            "[recompute_outcomes] v156 재계산 완료: %d건 변경 (→SUCCESS: %d, →FAIL: %d)",
+            updated, to_success, to_fail,
+        )
+        return {
+            "reprocessed": len(rows),
+            "changed": updated,
+            "to_success": to_success,
+            "to_fail": to_fail,
+            "threshold": SUCCESS_THRESHOLD,
+        }
+    except Exception as e:
+        logger.warning("[recompute_outcomes] 실패: %s", e)
         db.rollback()
         return {"error": str(e)}
     finally:

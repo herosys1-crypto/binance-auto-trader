@@ -150,6 +150,18 @@ def run_outcome_now(
     return run_prediction_outcome()
 
 
+@router.post("/prediction-outcome/recompute")
+def recompute_outcomes(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🚨 v156 사장님 지시: 「10%이상 수익만 성공」 = 전체 재계산!
+    옛 1.5% 기준 판정 → 신 10% 기준으로 SUCCESS/FAIL 재판정!
+    """
+    from app.workers.prediction_outcome_worker import recompute_all_outcomes
+    return recompute_all_outcomes()
+
+
 @router.get("/insights")
 def learning_insights(
     db: Session = Depends(get_db),
