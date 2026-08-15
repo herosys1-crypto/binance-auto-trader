@@ -177,6 +177,31 @@ class BB4HScanner(BaseAgent):
                 if not isinstance(kl, list):
                     continue
 
+                # 🐂 v151 사장님 (2026-08-16): 4H 저점 → 눌림 성공 → 재상승 = LONG! (최우선!)
+                # 사장님 8개 스크린샷 = 저점 → 반등 → 눌림 → 성공 → 재상승!
+                br = BB4HBandAnalyzer.bottom_reversal_signal(kl)
+                if br.get("detected") and (br.get("confidence") or 0) >= 0.85:
+                    predictions.append({
+                        "symbol": sym,
+                        "type": br["type"],  # bb4h_bottom_reversal
+                        "side": br["side"],  # LONG
+                        "confidence": br["confidence"],
+                        "change_pct": br.get("first_up_pct"),
+                        "volume": 0,
+                        "reason": br["reason"],
+                        "bottom": br["bottom"],
+                        "first_peak": br["first_peak"],
+                        "pullback_low": br["pullback_low"],
+                        "current_price": br["current_price"],
+                        "first_up_pct": br["first_up_pct"],
+                        "pullback_pct": br["pullback_pct"],
+                        "hold_ratio": br["hold_ratio"],
+                        "tp_pct": br["tp_pct"],
+                        "sl_pct": br["sl_pct"],
+                    })
+                    counts["BOTTOM_REVERSAL"] = counts.get("BOTTOM_REVERSAL", 0) + 1
+                    continue  # bottom_reversal 감지 = 최우선 LONG!
+
                 # 🐻 v150 사장님 (2026-08-16): 4H 정점 → 반등 실패 = SHORT! (최우선!)
                 # 사장님 9개 스크린샷 = 정점 → 1차 하락 → 반등 → 반등 실패 → 재하락!
                 bf = BB4HBandAnalyzer.bounce_failure_signal(kl)

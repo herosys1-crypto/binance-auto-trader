@@ -650,6 +650,165 @@ class BB4HBandAnalyzer:
         }
 
     # ------------------------------------------------------------------
+    # 🐂 v151 사장님 지시 (2026-08-16): 4H 저점 → 재상승 = LONG!
+    # ------------------------------------------------------------------
+    # 사장님 스크린샷 8개 (HEMI/SPORTFUN/AIO/COW/XNY/CHIP/RED/ENSO):
+    #
+    #   1. 저점 (볼밴 하단 근처!)
+    #   2. 1차 반등!
+    #   3. 눌림목 (숨 고르기!)
+    #   4. 눌림 성공! (저점 안 무너짐!)
+    #   5. 재상승 시작! ← LONG 진입!
+    #
+    # = v150 SHORT의 완벽한 반대 패턴!
+    # = 사장님 요구 = "실패없는 심볼" = confidence 85%+!
+
+    RALLY_LOOKBACK = 30            # 최근 30봉 = 저점 검색
+    RALLY_LOW_LOWER_TOUCH = 1.10   # 저점 = low <= lower * 1.10 (하단 근접!)
+    RALLY_FIRST_UP_MIN = 5.0       # 1차 반등 최소 +5%
+    RALLY_PULLBACK_MIN = 2.0       # 눌림 최소 -2%
+    RALLY_HOLD_RATIO = 1.05        # 눌림 저점 >= 원 저점 * 1.05 = 지지 확인!
+    RALLY_PULLBACK_ROOM = 0.85     # 눌림 저점 = 반등 정점의 85% 미만 = 조정 확인
+
+    @classmethod
+    def bottom_reversal_signal(cls, klines_4h: list) -> dict[str, Any]:
+        """🐂 4H 저점 → 1차 반등 → 눌림 성공 → 재상승 = LONG!
+
+        사장님 지시 2026-08-16 (8개 스크린샷!):
+        "롱과 숏이 같이 있는 차트야 이것들을 참고해서 실패없는 심볼을 찾아줘"
+
+        조건 (5개 모두 만족 = confidence 85%+!):
+        1. **저점** = 최근 30봉 내 = low 가 lower의 110% 이내!
+        2. **1차 반등** = 저점 대비 +5% 이상 반등!
+        3. **눌림목** = 반등 후 저점 형성 (-2% 이상 하락!)
+        4. **눌림 성공** = 눌림 저점 >= 원 저점 * 1.05 = 지지 확인!
+                        + 눌림 저점 < 반등 정점 * 0.85 = 조정 완료!
+        5. **재상승 시작** = 마지막 봉 = 눌림 저점 위 close + 양봉!
+        """
+        need = cls.BB_PERIOD + cls.RALLY_LOOKBACK + 2
+        if not klines_4h or len(klines_4h) < need:
+            return {"detected": False, "reason": f"4H 캔들 부족 ({len(klines_4h or [])}/{need})"}
+
+        try:
+            highs = [float(k[2]) for k in klines_4h]
+            lows = [float(k[3]) for k in klines_4h]
+            opens = [float(k[1]) for k in klines_4h]
+            closes = [float(k[4]) for k in klines_4h]
+        except Exception as e:
+            return {"detected": False, "reason": f"파싱 실패: {e}"}
+
+        # 완료봉!
+        highs_c = highs[:-1]
+        lows_c = lows[:-1]
+        opens_c = opens[:-1]
+        closes_c = closes[:-1]
+
+        if len(closes_c) < cls.BB_PERIOD + cls.RALLY_LOOKBACK:
+            return {"detected": False, "reason": "완료봉 부족"}
+
+        _, _, los = cls.bollinger(closes_c)
+
+        # 최근 lookback 창 = 저점 찾기!
+        window_highs = highs_c[-cls.RALLY_LOOKBACK:]
+        window_lows = lows_c[-cls.RALLY_LOOKBACK:]
+        window_los = los[-cls.RALLY_LOOKBACK:]
+
+        bottom = min(window_lows)
+        bottom_idx = window_lows.index(bottom)  # 창 안 index
+        if bottom_idx >= cls.RALLY_LOOKBACK - 3:
+            return {"detected": False, "reason": "저점이 너무 최근 = 반등 아직 X"}
+
+        # 조건 1: 저점 = 볼밴 하단 근처!
+        bottom_lower = window_los[bottom_idx]
+        if not bottom_lower or bottom > bottom_lower * cls.RALLY_LOW_LOWER_TOUCH:
+            return {"detected": False, "reason": f"저점 {bottom:.6g} = 하단 근접 X (lower {bottom_lower})"}
+
+        # 조건 2: 1차 반등!
+        after_bottom_highs = window_highs[bottom_idx + 1:]
+        if not after_bottom_highs:
+            return {"detected": False, "reason": "저점 후 데이터 없음"}
+        first_peak = max(after_bottom_highs)
+        first_peak_idx_in_after = after_bottom_highs.index(first_peak)
+        first_peak_idx = bottom_idx + 1 + first_peak_idx_in_after
+        first_up_pct = (first_peak - bottom) / bottom * 100
+        if first_up_pct < cls.RALLY_FIRST_UP_MIN:
+            return {"detected": False, "reason": f"1차 반등 부족: +{first_up_pct:.1f}%"}
+
+        # 조건 3: 눌림목!
+        after_peak_lows = window_lows[first_peak_idx + 1:]
+        if not after_peak_lows:
+            return {"detected": False, "reason": "눌림 시작 안 됨"}
+        pullback_low = min(after_peak_lows)
+        pullback_low_idx_in_after = after_peak_lows.index(pullback_low)
+        pullback_low_idx = first_peak_idx + 1 + pullback_low_idx_in_after
+        pullback_pct = (pullback_low - first_peak) / first_peak * 100
+        if pullback_pct > -cls.RALLY_PULLBACK_MIN:
+            return {"detected": False, "reason": f"눌림 부족: {pullback_pct:.1f}%"}
+
+        # 조건 4a: 눌림 성공 = 원 저점보다 위!
+        hold_ratio = pullback_low / bottom
+        if hold_ratio < cls.RALLY_HOLD_RATIO:
+            return {
+                "detected": False,
+                "reason": f"눌림이 원 저점의 {hold_ratio*100:.1f}%까지 = 지지 X",
+            }
+
+        # 조건 4b: 눌림 = 반등 정점의 85% 미만!
+        pullback_from_peak_ratio = pullback_low / first_peak
+        if pullback_from_peak_ratio >= cls.RALLY_PULLBACK_ROOM:
+            return {
+                "detected": False,
+                "reason": f"눌림 얕음: {pullback_from_peak_ratio*100:.1f}% of 반등 정점",
+            }
+
+        # 조건 5: 재상승 시작 = 마지막 봉 = 눌림 저점 위 close + 양봉!
+        close_last = closes_c[-1]
+        open_last = opens_c[-1]
+        if close_last <= pullback_low:
+            return {"detected": False, "reason": "아직 눌림 저점 아래 close"}
+        if close_last <= open_last:
+            return {"detected": False, "reason": "마지막 봉 음봉 = 재상승 확정 X"}
+
+        # 눌림 후 몇 봉?
+        bars_since_pullback = cls.RALLY_LOOKBACK - 1 - pullback_low_idx
+        if bars_since_pullback > 5:
+            return {
+                "detected": False,
+                "reason": f"눌림 저점 {bars_since_pullback}봉 전 = 너무 오래됨",
+            }
+
+        # ✅ 모두 만족! confidence 85%+!
+        confidence = 0.85
+        confidence += min((first_up_pct - cls.RALLY_FIRST_UP_MIN) / 100, 0.05)
+        confidence += min((cls.RALLY_PULLBACK_ROOM - pullback_from_peak_ratio) / 2, 0.05)
+        confidence = min(max(confidence, 0.85), 0.95)
+
+        # TP = 반등 정점 재도달! (동적!)
+        tp_target_pct = (first_peak - close_last) / close_last * 100  # 양수!
+        return {
+            "detected": True,
+            "side": "LONG",
+            "type": "bb4h_bottom_reversal",
+            "kind": "BOTTOM_REVERSAL",
+            "confidence": round(confidence, 3),
+            "bottom": round(bottom, 8),
+            "first_peak": round(first_peak, 8),
+            "pullback_low": round(pullback_low, 8),
+            "current_price": round(close_last, 8),
+            "first_up_pct": round(first_up_pct, 2),
+            "pullback_pct": round(pullback_pct, 2),
+            "hold_ratio": round(hold_ratio * 100, 1),
+            "bars_since_pullback": bars_since_pullback,
+            "tp_pct": round(tp_target_pct, 2) if tp_target_pct > 0 else 8.0,
+            "sl_pct": 3.0,   # 눌림 저점 하향 이탈 = 손절!
+            "reason": (
+                f"🐂 4H 저점({bottom:.6g}) → 1차 반등 +{first_up_pct:.1f}% → "
+                f"눌림 저점({pullback_low:.6g}, 지지 {hold_ratio*100:.1f}%) 성공 → "
+                f"양봉 재상승 시작! 신뢰도 {confidence*100:.0f}%"
+            ),
+        }
+
+    # ------------------------------------------------------------------
     def analyze(self, symbol: str, side: str = "SHORT",
                 klines_4h: list | None = None) -> dict[str, Any]:
         """4H BB 밴드 전략 판정 (읽기 전용!)."""
