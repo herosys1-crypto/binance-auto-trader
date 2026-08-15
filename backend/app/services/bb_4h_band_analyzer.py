@@ -825,13 +825,18 @@ class BB4HBandAnalyzer:
     # 4. 볼밴 폭 확장! (변동성 시작!)
     # 5. MACD 강한 크로스!
 
-    BIG_MOVE_MIN_24H_PCT = 15.0     # 24h 변동 15%+ (이미 큰 움직임 시작!)
-    BIG_MOVE_VOLUME_MULT = 2.5      # Volume 2.5x+
-    BIG_MOVE_RSI_EXTREME_HIGH = 78  # SHORT용 = 과매수!
-    BIG_MOVE_RSI_EXTREME_LOW = 22   # LONG용 = 과매도!
-    BIG_MOVE_TP_LONG = 25.0         # LONG TP = +25%
-    BIG_MOVE_TP_SHORT = 25.0        # SHORT TP = 저점까지 -25%
-    BIG_MOVE_SL = 5.0               # 손절 -5% (반대 방향!)
+    # 🚨 v155 사장님 통찰 (2026-08-16, -792 USDT 손실 사고!):
+    # "TP1 마진을 높게 잡으면 좋지만 상승 후 하락에 수익 없이 손실만 볼꺼야"
+    # = 심볼이 = 시스템 예상만큼 안 감! = TP 크면 = 수익 0!
+    # = 조건 더 엄격 + 분할 TP!
+    BIG_MOVE_MIN_24H_PCT = 20.0     # 15 → 20 (더 엄격!)
+    BIG_MOVE_VOLUME_MULT = 3.5      # 2.5 → 3.5 (강력한 폭발만!)
+    BIG_MOVE_RSI_EXTREME_HIGH = 80  # 78 → 80 (진짜 극단!)
+    BIG_MOVE_RSI_EXTREME_LOW = 20   # 22 → 20 (진짜 극단!)
+    BIG_MOVE_TP_LONG = 15.0         # 25 → 15 (사장님 통찰!)
+    BIG_MOVE_TP_SHORT = 15.0        # 25 → 15 (사장님 통찰!)
+    BIG_MOVE_SL = 5.0
+    BIG_MOVE_MIN_CONF = 0.92        # 0.90 → 0.92 (더 엄격!)
 
     @classmethod
     def big_move_signal(cls, klines_4h: list, change_24h_pct: float = 0.0) -> dict[str, Any]:
