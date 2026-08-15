@@ -969,6 +969,164 @@ class BB4HBandAnalyzer:
         }
 
     # ------------------------------------------------------------------
+    # 🎯 v158 사장님 지시 (2026-08-16): 긴 상승 후 첫 큰 빨간 봉 = SHORT!
+    # ------------------------------------------------------------------
+    # 사장님 스크린샷 (CYSUSDT 4H, +200% 상승 후 -52% 급락!):
+    #
+    #   1. 긴 상승 (10봉+ = 저점 대비 20%+ 상승!)
+    #   2. 정점 = 볼밴 상단 근처!
+    #   3. 마지막 봉 = 큰 빨간 봉 (몸통 큼!)
+    #   4. Volume = 그 봉 급증!
+    #   5. RSI 하락 + MACD 크로스!
+    # = 매우 강력한 반전 신호! → SHORT!
+
+    UPTREND_LOOKBACK = 12          # 최근 12봉 = 상승 트렌드 검사!
+    UPTREND_MIN_RISE = 20.0        # 저점 대비 +20% 이상!
+    UPTREND_GREEN_MIN = 6          # 6봉+ = 녹색!
+    UPTREND_UPPER_TOUCH = 0.90     # 정점 = upper * 90%+
+    UPTREND_RED_BODY_MULT = 1.5    # 빨간 봉 몸통 = 최근 평균 * 1.5!
+    UPTREND_VOLUME_MULT = 1.5      # Volume = 평균 * 1.5!
+
+    @classmethod
+    def long_uptrend_reversal_signal(cls, klines_4h: list) -> dict[str, Any]:
+        """🎯 긴 상승 후 첫 큰 빨간 봉 = SHORT 반전! (v158 사장님!)
+
+        사장님 지시 2026-08-16 (CYSUSDT 스크린샷!):
+        "이런 패턴 최고인듯한데 이런 패턴도 메모리해줘!"
+
+        조건 (6개 모두 만족!):
+        1. **긴 상승** = 최근 12봉 = 저점 대비 +20% 이상!
+        2. **녹색 봉 다수** = 6봉+ = 양봉!
+        3. **정점 = 볼밴 상단 근처** = upper의 90%+!
+        4. **마지막 큰 빨간 봉** = 몸통 = 최근 평균 * 1.5!
+        5. **Volume 급증** = 평균 * 1.5!
+        6. **RSI 하락 + MACD 약세**!
+        """
+        need = max(cls.BB_PERIOD, 35) + cls.UPTREND_LOOKBACK + 2
+        if not klines_4h or len(klines_4h) < need:
+            return {"detected": False, "reason": "4H 캔들 부족"}
+
+        try:
+            highs = [float(k[2]) for k in klines_4h]
+            lows = [float(k[3]) for k in klines_4h]
+            opens = [float(k[1]) for k in klines_4h]
+            closes = [float(k[4]) for k in klines_4h]
+            volumes = [float(k[5]) for k in klines_4h]
+        except Exception as e:
+            return {"detected": False, "reason": f"파싱 실패: {e}"}
+
+        # 완료봉!
+        highs_c = highs[:-1]
+        lows_c = lows[:-1]
+        opens_c = opens[:-1]
+        closes_c = closes[:-1]
+        volumes_c = volumes[:-1]
+
+        # 조건 1: 긴 상승 (최근 12봉 = 저점 대비 +20%+!)
+        window_lows = lows_c[-cls.UPTREND_LOOKBACK:]
+        window_highs = highs_c[-cls.UPTREND_LOOKBACK:]
+        window_opens = opens_c[-cls.UPTREND_LOOKBACK:]
+        window_closes = closes_c[-cls.UPTREND_LOOKBACK:]
+        window_vols = volumes_c[-cls.UPTREND_LOOKBACK:]
+
+        low_window = min(window_lows)
+        high_window = max(window_highs)
+        if low_window <= 0:
+            return {"detected": False, "reason": "invalid low"}
+        rise_pct = (high_window - low_window) / low_window * 100
+        if rise_pct < cls.UPTREND_MIN_RISE:
+            return {"detected": False, "reason": f"상승 부족: +{rise_pct:.1f}%"}
+
+        # 조건 2: 녹색 봉 다수!
+        green_count = sum(
+            1 for o, c in zip(window_opens[:-1], window_closes[:-1])
+            if c > o
+        )
+        if green_count < cls.UPTREND_GREEN_MIN:
+            return {"detected": False, "reason": f"녹색 봉 부족: {green_count}봉"}
+
+        # 조건 3: 정점 = 볼밴 상단 근처!
+        _, ups, _ = cls.bollinger(closes_c)
+        # 정점 근처 상단!
+        peak_idx = window_highs.index(high_window)
+        # 창 안 index → 전체 ups index로!
+        peak_absolute_idx = len(closes_c) - cls.UPTREND_LOOKBACK + peak_idx
+        peak_upper = ups[peak_absolute_idx] if 0 <= peak_absolute_idx < len(ups) else None
+        if not peak_upper or high_window < peak_upper * cls.UPTREND_UPPER_TOUCH:
+            return {
+                "detected": False,
+                "reason": f"정점 {high_window} = 상단 근접 X (upper {peak_upper})",
+            }
+
+        # 조건 4: 마지막 봉 = 큰 빨간 봉!
+        last_o = opens_c[-1]
+        last_c = closes_c[-1]
+        last_body = abs(last_c - last_o)
+        # 마지막 봉 = 음봉!
+        if last_c >= last_o:
+            return {"detected": False, "reason": "마지막 봉 양봉!"}
+        # 최근 5봉 평균 몸통!
+        recent_bodies = [abs(closes_c[i] - opens_c[i]) for i in range(-6, -1)]
+        avg_body = sum(recent_bodies) / len(recent_bodies) if recent_bodies else 0
+        if avg_body > 0 and last_body < avg_body * cls.UPTREND_RED_BODY_MULT:
+            return {
+                "detected": False,
+                "reason": f"빨간 봉 몸통 부족: {last_body:.6g} < {avg_body:.6g} * {cls.UPTREND_RED_BODY_MULT}",
+            }
+
+        # 조건 5: Volume 급증!
+        recent_vol_avg = sum(volumes_c[-11:-1]) / 10 if len(volumes_c) >= 11 else 0
+        vol_last = volumes_c[-1]
+        vol_mult = vol_last / recent_vol_avg if recent_vol_avg > 0 else 0
+        if vol_mult < cls.UPTREND_VOLUME_MULT:
+            return {"detected": False, "reason": f"Volume 부족: {vol_mult:.2f}x"}
+
+        # 조건 6: RSI + MACD!
+        rsi = cls._calc_rsi(closes_c)
+        rsi_prev = cls._calc_rsi(closes_c[:-3])  # 3봉 전!
+        if rsi is None or rsi_prev is None:
+            return {"detected": False, "reason": "RSI 계산 불가"}
+        # RSI 하락!
+        if rsi >= rsi_prev:
+            return {"detected": False, "reason": f"RSI 하락 X ({rsi_prev} → {rsi})"}
+        # MACD 약세!
+        if not cls._macd_bearish(closes_c):
+            return {"detected": False, "reason": "MACD 약세 X"}
+
+        # ✅ 모두 통과!
+        confidence = 0.90
+        confidence += min((rise_pct - cls.UPTREND_MIN_RISE) / 200, 0.05)  # 상승 크기!
+        confidence += min((vol_mult - cls.UPTREND_VOLUME_MULT) / 20, 0.03)
+        confidence = min(max(confidence, 0.90), 0.98)
+
+        # TP = 저점 재도달! (동적!)
+        tp_target_pct = (last_c - low_window) / last_c * 100  # 양수 = 하락 폭!
+        return {
+            "detected": True,
+            "side": "SHORT",
+            "type": "bb4h_long_uptrend_reversal",
+            "kind": "LONG_UPTREND_REVERSAL",
+            "confidence": round(confidence, 3),
+            "uptrend_rise_pct": round(rise_pct, 2),
+            "green_bars": green_count,
+            "peak_price": round(high_window, 8),
+            "peak_upper": round(peak_upper, 8),
+            "last_red_body_pct": round(last_body / avg_body if avg_body else 0, 2),
+            "volume_multiplier": round(vol_mult, 2),
+            "rsi_prev": rsi_prev,
+            "rsi_now": rsi,
+            "current_price": round(last_c, 8),
+            "tp_pct": min(round(tp_target_pct, 2), 30.0),  # 최대 30%
+            "sl_pct": 5.0,   # 정점 재돌파!
+            "reason": (
+                f"🎯 긴 상승 반전! 12봉 +{rise_pct:.1f}% 상승 (녹색 {green_count}봉) → "
+                f"정점 {high_window:.6g} → 큰 빨간 봉 (몸통 {last_body/avg_body if avg_body else 0:.1f}x) + "
+                f"Volume {vol_mult:.1f}x + RSI {rsi_prev}→{rsi} + MACD 약세! "
+                f"신뢰도 {confidence*100:.0f}%"
+            ),
+        }
+
+    # ------------------------------------------------------------------
     def analyze(self, symbol: str, side: str = "SHORT",
                 klines_4h: list | None = None) -> dict[str, Any]:
         """4H BB 밴드 전략 판정 (읽기 전용!)."""

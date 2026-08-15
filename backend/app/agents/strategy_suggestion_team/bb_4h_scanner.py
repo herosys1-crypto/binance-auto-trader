@@ -210,6 +210,32 @@ class BB4HScanner(BaseAgent):
                 if not isinstance(kl, list):
                     continue
 
+                # 🎯 v158 사장님 (2026-08-16, CYSUSDT 스크린샷!):
+                # 긴 상승 후 첫 큰 빨간 봉 = SHORT 반전 = 최고 패턴!
+                # (v149/v150보다 더 강력!)
+                lur = BB4HBandAnalyzer.long_uptrend_reversal_signal(kl)
+                if lur.get("detected") and (lur.get("confidence") or 0) >= 0.90:
+                    predictions.append({
+                        "symbol": sym,
+                        "type": lur["type"],  # bb4h_long_uptrend_reversal
+                        "side": lur["side"],  # SHORT
+                        "confidence": lur["confidence"],
+                        "change_pct": lur.get("uptrend_rise_pct"),
+                        "volume": 0,
+                        "reason": lur["reason"],
+                        "uptrend_rise_pct": lur["uptrend_rise_pct"],
+                        "green_bars": lur["green_bars"],
+                        "peak_price": lur["peak_price"],
+                        "current_price": lur["current_price"],
+                        "volume_multiplier": lur["volume_multiplier"],
+                        "rsi_prev": lur["rsi_prev"],
+                        "rsi_now": lur["rsi_now"],
+                        "tp_pct": lur["tp_pct"],
+                        "sl_pct": lur["sl_pct"],
+                    })
+                    counts["LONG_UPTREND_REVERSAL"] = counts.get("LONG_UPTREND_REVERSAL", 0) + 1
+                    continue  # v158 = 최우선!
+
                 # 🎯 v154 사장님 (2026-08-16): 큰 수익 (20~50%!) 사냥 = 최우선!
                 # 사장님: "내가 올린 이미지정도 되는 수익을 원해!"
                 sym_ticker = ticker_map.get(sym, {})
