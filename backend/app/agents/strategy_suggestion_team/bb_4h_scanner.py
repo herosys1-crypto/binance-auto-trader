@@ -177,7 +177,33 @@ class BB4HScanner(BaseAgent):
         except Exception:
             ticker_map = {}
 
+        # 🚨 v155 사장님 지시 (2026-08-16, -792 USDT 손실 사고!):
+        # 30일 성공률 < 40% 심볼 = 완전 블록!
+        # (기존 = 배율만 조정, 지금은 = 완전 제외!)
+        SYMBOL_BLOCKLIST_THRESHOLD = 0.40
+        blocked_symbols: set[str] = set()
+        try:
+            from app.workers.prediction_outcome_worker import get_symbol_success_rate
+            for sym in symbols:
+                # LONG/SHORT 각각 확인 = 어느 쪽이라도 < 40% = 블록!
+                for chk_side in ("LONG", "SHORT"):
+                    sr = get_symbol_success_rate(db, sym, chk_side, days=30)
+                    if sr < SYMBOL_BLOCKLIST_THRESHOLD:
+                        blocked_symbols.add(sym)
+                        break
+        except Exception as e:
+            logger.warning("[%s] blocklist 계산 실패: %s", self.AGENT_NAME, e)
+        if blocked_symbols:
+            logger.info(
+                "[%s] v155 심볼 블록 = %d개 (성공률 <%.0f%%)",
+                self.AGENT_NAME, len(blocked_symbols), SYMBOL_BLOCKLIST_THRESHOLD * 100,
+            )
+
         for sym in symbols:
+            # 🚨 v155: 블록 심볼 = 완전 스킵!
+            if sym in blocked_symbols:
+                counts["BLOCKED_LOW_SR"] = counts.get("BLOCKED_LOW_SR", 0) + 1
+                continue
             try:
                 kl = bc.get_klines(symbol=sym, interval="4h",
                                    limit=BB4HBandAnalyzer.KLINE_LIMIT)
@@ -189,7 +215,8 @@ class BB4HScanner(BaseAgent):
                 sym_ticker = ticker_map.get(sym, {})
                 change_24h = float(sym_ticker.get("priceChangePercent", 0) or 0)
                 bm = BB4HBandAnalyzer.big_move_signal(kl, change_24h_pct=change_24h)
-                if bm.get("detected") and (bm.get("confidence") or 0) >= 0.90:
+                # v155: 0.90 → 0.92 (더 엄격!)
+                if bm.get("detected") and (bm.get("confidence") or 0) >= BB4HBandAnalyzer.BIG_MOVE_MIN_CONF:
                     predictions.append({
                         "symbol": sym,
                         "type": bm["type"],  # bb4h_big_move
