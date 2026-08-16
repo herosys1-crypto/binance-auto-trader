@@ -179,6 +179,68 @@ def scan_bb_breakdown(
     - up   = middle 상향 돌파 (LONG!)
     """
     is_down = direction == "down"
+    recommend_side = "SHORT" if is_down else "LONG"
+
+    # 🎯 v165 사장님 (2026-08-16): 학습 기반 성공 가능성!
+    from app.workers.prediction_outcome_worker import get_symbol_success_rate
+
+    def _calc_success_probability(
+        symbol: str, stage: str, sustained_bars: int,
+        change_24h: float, dist_pct: float,
+    ) -> tuple[float, list[str]]:
+        """🎯 학습 기반 성공 가능성 계산! (0.0 ~ 1.0)
+
+        요소:
+        1. 심볼 30일 성공률 (학습!)  = 최대 40%
+        2. 이탈 단계 = SUSTAINED > STARTED > PENDING = 최대 30%
+        3. 이탈 지속 봉수 (SUSTAINED만!) = 최대 15%
+        4. 24h 변동 크기 = 최대 10%
+        5. middle 이격 거리 = 최대 5%
+        """
+        reasons: list[str] = []
+        # 1. 심볼 학습 성공률!
+        try:
+            sr = get_symbol_success_rate(db, symbol, recommend_side, days=30)
+        except Exception:
+            sr = 0.5
+        symbol_score = sr * 0.40
+        reasons.append(f"심볼 학습 {int(sr*100)}%")
+
+        # 2. 단계 점수!
+        stage_scores = {
+            "BREAK_SUSTAINED": 0.30,
+            "BREAK_STARTED": 0.20,
+            "BREAK_PENDING": 0.05,
+        }
+        stage_score = stage_scores.get(stage, 0.0)
+        reasons.append(f"단계 {stage.replace('BREAK_', '')}")
+
+        # 3. 지속 봉수 (SUSTAINED만!)
+        bars_score = 0.0
+        if stage == "BREAK_SUSTAINED":
+            # 3봉 = 0.05, 5봉 = 0.10, 7봉+ = 0.15!
+            bars_score = min((sustained_bars - 2) * 0.025, 0.15)
+            reasons.append(f"지속 {sustained_bars}봉")
+
+        # 4. 24h 변동!
+        # ±20% = 0.10 만점!
+        change_score = min(abs(change_24h) / 200, 0.10)
+        if abs(change_24h) >= 10:
+            reasons.append(f"24h {change_24h:+.1f}%")
+
+        # 5. middle 이격!
+        # 이격 클수록 = 확실! (SUSTAINED에서!)
+        # DOWN = 아래로 이격 큰 순 (음수!)
+        # UP = 위로 이격 큰 순 (양수!)
+        dist_score = 0.0
+        if stage == "BREAK_SUSTAINED":
+            wanted_dir_dist = -dist_pct if is_down else dist_pct
+            if wanted_dir_dist > 0:
+                dist_score = min(wanted_dir_dist / 200, 0.05)
+
+        total = symbol_score + stage_score + bars_score + change_score + dist_score
+        return round(min(max(total, 0.0), 1.0), 4), reasons
+
     account = db.execute(
         select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
     ).scalar_one_or_none()
@@ -269,60 +331,66 @@ def scan_bb_breakdown(
                 "positions_recent": positions,  # 최근 5봉 이탈 여부
             }
 
-            # 🎯 3단계 분류!
+            # 🎯 3단계 분류 + v165 성공 가능성 계산!
 
             # 3. SUSTAINED = 최근 3봉+ 지속 이탈! (⭐ 제일 확실!)
             if all(positions[-3:]) and current_broken:
-                # + 마지막 3봉 이탈 + 진행 봉도 이탈!
-                # 이탈 봉 수 계산 (마지막 몇 봉 연속?)
                 sustained_bars = 0
                 for p in reversed(positions):
                     if p:
                         sustained_bars += 1
                     else:
                         break
+                prob, reasons = _calc_success_probability(
+                    symbol, "BREAK_SUSTAINED", sustained_bars, change_24h, dist_pct,
+                )
                 sustained.append({
                     **common,
                     "stage": "BREAK_SUSTAINED",
                     "sustained_bars": sustained_bars,
+                    "success_probability": prob,
+                    "probability_reasons": reasons,
                 })
             # 2. STARTED = 최근 1~2봉 이탈 시작!
             elif current_broken and (
-                positions[-1] or  # 마지막 완료봉 이탈
-                positions[-2] or  # 2봉 전 이탈
-                positions[-3]     # 3봉 전 이탈 (하지만 sustained 조건 X)
+                positions[-1] or positions[-2] or positions[-3]
             ):
+                prob, reasons = _calc_success_probability(
+                    symbol, "BREAK_STARTED", 0, change_24h, dist_pct,
+                )
                 started.append({
                     **common,
                     "stage": "BREAK_STARTED",
+                    "success_probability": prob,
+                    "probability_reasons": reasons,
                 })
             # 1. PENDING = 이탈 안 함 + middle 근접!
             elif not current_broken and abs(dist_pct) <= 3.0:
-                # DOWN: 지금 middle 위 = 근접!
-                # UP: 지금 middle 아래 = 근접!
-                if is_down and dist_pct >= 0 and dist_pct <= 3.0:
+                if (is_down and 0 <= dist_pct <= 3.0) or (not is_down and -3.0 <= dist_pct <= 0):
+                    prob, reasons = _calc_success_probability(
+                        symbol, "BREAK_PENDING", 0, change_24h, dist_pct,
+                    )
                     pending.append({
                         **common,
                         "stage": "BREAK_PENDING",
-                    })
-                elif not is_down and dist_pct <= 0 and dist_pct >= -3.0:
-                    pending.append({
-                        **common,
-                        "stage": "BREAK_PENDING",
+                        "success_probability": prob,
+                        "probability_reasons": reasons,
                     })
         except Exception as e:
             logger.debug("[bb_breakdown] %s 실패: %s", symbol, e)
             continue
 
-    # 정렬:
-    # SUSTAINED = 지속 봉 많은 순 + 24h 변동 (하락 강도!)
+    # 🎯 v165 사장님: 성공 가능성 순 정렬!
+    # SUSTAINED = 성공률 큰 순 → 지속 봉 → 24h 변동!
     sustained.sort(
-        key=lambda x: (-x.get("sustained_bars", 0), -abs(x["change_24h"]))
+        key=lambda x: (-x.get("success_probability", 0),
+                       -x.get("sustained_bars", 0),
+                       -abs(x["change_24h"]))
     )
-    # STARTED = 24h 변동 큰 순!
-    started.sort(key=lambda x: -abs(x["change_24h"]))
-    # PENDING = middle 근접 가까운 순!
-    pending.sort(key=lambda x: abs(x["dist_pct"]))
+    # STARTED = 성공률 큰 순 → 24h 변동!
+    started.sort(key=lambda x: (-x.get("success_probability", 0), -abs(x["change_24h"])))
+    # PENDING = 성공률 큰 순 → middle 근접!
+    pending.sort(key=lambda x: (-x.get("success_probability", 0), abs(x["dist_pct"])))
 
     total = len(pending) + len(started) + len(sustained)
     return {
