@@ -148,6 +148,33 @@ async function load() {
   }
 }
 
+// 🌟 v162 사장님 (2026-08-16): 원클릭 진입 = 1단계 즉시!
+function instantEnter(sym, sideOverride) {
+  const side = sideOverride || (IS_DOWN ? 'SHORT' : 'LONG');
+  if (!confirm(`⚡ ${sym} ${side} = 1단계 즉시 진입?\n\n= 사장님 default profile로 = 신 전략 자동 생성!\n= MARKET 즉시 진입!\n= 되돌릴 수 없음!`)) return;
+
+  // 대시보드 창 찾기 = opener 체인 재귀!
+  let dashboard = null;
+  let w = window.opener;
+  let depth = 0;
+  const seen = new Set();
+  while (w && !w.closed && depth < 5) {
+    if (seen.has(w)) break;
+    seen.add(w);
+    try {
+      if (typeof w.enterOneStageBBBreak === 'function') { dashboard = w; break; }
+    } catch (_e) {}
+    try { w = w.opener; } catch (_e) { break; }
+    depth++;
+  }
+  if (dashboard) {
+    dashboard.enterOneStageBBBreak(sym, side);
+    dashboard.focus();
+  } else {
+    alert('❌ 대시보드를 찾을 수 없음! 대시보드에서 「+ 새 전략」 사용해주세요.');
+  }
+}
+
 function renderStageTable(stage_key, stage_label, stage_class, items) {
   if (!items || items.length === 0) {
     return `<div class="section">
@@ -159,17 +186,25 @@ function renderStageTable(stage_key, stage_label, stage_class, items) {
   const rows = items.slice(0, 20).map((s, i) => {
     const chgCls = s.change_24h >= 0 ? 'pos' : 'neg';
     const distTxt = s.dist_pct > 0 ? `+${s.dist_pct}%` : `${s.dist_pct}%`;
-    // 최근 5봉 이탈 여부 시각화!
     const posDots = (s.positions_recent || []).map(p =>
       `<span style="color:${p ? '#ef4444' : '#94a3b8'}">${p ? '●' : '○'}</span>`
     ).join('');
     const bars = s.sustained_bars ? `<span class="badge" style="background:#ef4444;color:#fff">${s.sustained_bars}봉</span>` : '';
+    // 🌟 v162: SUSTAINED만 = ⚡ 즉시 진입 버튼! (제일 확실!)
+    const isSustained = stage_key === 'sustained';
+    const enterBtn = isSustained ? `
+      <button onclick="instantEnter('${s.symbol}')"
+              style="background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff;border:0;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:10px;margin-left:3px;font-weight:600"
+              title="⚡ 1단계 즉시 진입! (85%+ 확실!)">
+        ⚡ 즉시
+      </button>` : '';
     return `
       <tr>
         <td class="num" style="color:#64748b">${i + 1}</td>
         <td>
           <span class="sym" onclick="openBinanceChart('${s.symbol}')" title="바이낸스!">${s.symbol}</span>
           <button class="analysis-btn" onclick="openAnalysis('${s.symbol}')" title="분석">📊</button>
+          ${enterBtn}
           ${bars}
         </td>
         <td class="num">${fmtPrice(s.current_price)}</td>
