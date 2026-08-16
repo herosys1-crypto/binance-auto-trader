@@ -484,7 +484,12 @@ async function openSuggestionsSettingsModal() {
              style="border:2px solid #a855f7;box-shadow:0 0 20px #a855f766;max-height:90vh;overflow-y:auto">
           <h3 class="text-lg font-bold text-purple-300 mb-3">
             ⚙ 전략 제안 세팅
+            <span class="text-xs text-slate-400 font-normal">(자동 전략 제안 + 급등락 BB 이탈 자동 진입 = 공유!)</span>
           </h3>
+          <div class="text-xs text-yellow-400 mb-3 p-2 rounded bg-slate-800 border border-yellow-800">
+            💡 <b>v164a 사장님:</b> 이 세팅은 = 「🎯 자동 전략 제안」 + 「🤖 BB 이탈 자동 진입」 모두 사용!<br>
+            = 자본, 트리거 %, TP, SL, 레버리지 = <b>공유 설정!</b>
+          </div>
 
           <!-- ═══════ 섹션 1: 자동 실행 세팅 ═══════ -->
           <div class="mb-4 p-3 rounded bg-slate-800 border border-slate-700">

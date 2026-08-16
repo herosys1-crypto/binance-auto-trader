@@ -190,23 +190,35 @@ function renderStageTable(stage_key, stage_label, stage_class, items) {
       `<span style="color:${p ? '#ef4444' : '#94a3b8'}">${p ? '●' : '○'}</span>`
     ).join('');
     const bars = s.sustained_bars ? `<span class="badge" style="background:#ef4444;color:#fff">${s.sustained_bars}봉</span>` : '';
-    // 🌟 v162: SUSTAINED만 = ⚡ 즉시 진입 버튼! (제일 확실!)
+
+    // 🎯 v165: 성공 가능성 표시! (0.0~1.0)
+    const prob = Number(s.success_probability || 0);
+    const probPct = Math.round(prob * 100);
+    const probColor = prob >= 0.75 ? '#22c55e' : prob >= 0.60 ? '#84cc16' : prob >= 0.45 ? '#fbbf24' : prob >= 0.30 ? '#f59e0b' : '#94a3b8';
+    const probIcon = prob >= 0.75 ? '🔥' : prob >= 0.60 ? '⭐' : prob >= 0.45 ? '✨' : '💧';
+    const reasonsTitle = (s.probability_reasons || []).join(' + ');
+    const probCell = `<span style="color:${probColor};font-weight:700" title="${reasonsTitle}">${probIcon} ${probPct}%</span>`;
+
     const isSustained = stage_key === 'sustained';
+    // v165: SUSTAINED + 성공률 60%+ = 최우선 (🏆)!
+    const rank = isSustained && i === 0 ? '🏆 ' : isSustained && i === 1 ? '🥈 ' : isSustained && i === 2 ? '🥉 ' : '';
+
     const enterBtn = isSustained ? `
       <button onclick="instantEnter('${s.symbol}')"
               style="background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff;border:0;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:10px;margin-left:3px;font-weight:600"
-              title="⚡ 1단계 즉시 진입! (85%+ 확실!)">
+              title="⚡ 1단계 즉시 진입! 성공률 ${probPct}%!">
         ⚡ 즉시
       </button>` : '';
     return `
       <tr>
         <td class="num" style="color:#64748b">${i + 1}</td>
         <td>
-          <span class="sym" onclick="openBinanceChart('${s.symbol}')" title="바이낸스!">${s.symbol}</span>
+          ${rank}<span class="sym" onclick="openBinanceChart('${s.symbol}')" title="바이낸스!">${s.symbol}</span>
           <button class="analysis-btn" onclick="openAnalysis('${s.symbol}')" title="분석">📊</button>
           ${enterBtn}
           ${bars}
         </td>
+        <td class="num">${probCell}</td>
         <td class="num">${fmtPrice(s.current_price)}</td>
         <td class="num" style="color:#94a3b8">${distTxt}</td>
         <td class="num ${chgCls}">${s.change_24h >= 0 ? '+' : ''}${s.change_24h}%</td>
@@ -218,7 +230,7 @@ function renderStageTable(stage_key, stage_label, stage_class, items) {
     <div class="section-title ${stage_class}">${stage_label} <span style="color:#64748b">(${items.length})</span></div>
     <table>
       <thead><tr>
-        <th class="num">#</th><th>심볼</th><th class="num">현재가</th>
+        <th class="num">#</th><th>심볼</th><th class="num">🎯 성공률</th><th class="num">현재가</th>
         <th class="num">이격</th><th class="num">24h</th><th>최근5봉</th>
       </tr></thead>
       <tbody>${rows}</tbody>
