@@ -1174,6 +1174,24 @@
                     title="BB 중단 아래 ±5% + 당일 최고 상승 순!">⚖ BB 하락</button>
           </div>
         </div>
+        <!-- 🤖 v163a 사장님 (2026-08-16): 급등락 카드에 = 자동 진입 옵션! -->
+        <div class="flex items-center gap-1 mb-2 flex-wrap" style="padding:4px 8px;background:rgba(0,0,0,0.3);border-radius:4px">
+          <span class="text-xs" style="color:#fbbf24">🤖 BB 이탈 자동 진입:</span>
+          <select id="auto-bb-daily-limit" onchange="saveAutoBBLimit(this.value)"
+                  class="bg-slate-800 border border-slate-600 rounded text-slate-300"
+                  style="font-size:11px;padding:1px 4px;cursor:pointer">
+            <option value="0">🚫 끔</option>
+            <option value="1">1개/일</option>
+            <option value="2">2개/일</option>
+            <option value="3">3개/일</option>
+            <option value="5">5개/일</option>
+            <option value="10">10개/일</option>
+          </select>
+          <span id="auto-bb-status" class="text-xs" style="color:#fbbf24"></span>
+          <button onclick="resetAutoBBCounter()"
+                  class="text-xs bg-red-700 hover:bg-red-600 text-white px-2 py-0 rounded"
+                  style="font-size:11px" title="카운터 리셋! (활성+손절만 카운트, 익절 제외!)">🔄 리셋</button>
+        </div>
         <div class="text-xs text-slate-400 mb-2">
           <span style="color:#fbbf24">5분·15분 20% 전후 (17.5~27.5%)</span> 급등 = <span style="color:#22c55e">🐂 추격 LONG</span> · 급락은 <span style="color:#ef4444">진입 비권장 (표시만)</span><br>
           🐻 <span style="color:#ef4444"><b>급등 후 하락 전환</b></span> = <b>SHORT 자동 감지!</b> (저점→정점 +15%↑ + 정점 대비 -2~-8% + 첫 음봉!)<br>
@@ -1201,25 +1219,8 @@
             <button onclick="openSuggestionsSettingsModal()"
                     class="text-xs bg-purple-700 hover:bg-purple-600 text-white px-2 py-1 rounded"
                     title="자동 실행 세팅 (기본 OFF!)">⚙ 세팅</button>
-            <!-- 🌟 v162/v163 사장님: 자동 진입 개수 + 상태 + 리셋! -->
-            <label class="text-xs text-slate-300 flex items-center gap-1 ml-1"
-                   title="활성+손절 = 카운트! 익절 = 카운트 X!">
-              🤖 자동:
-              <select id="auto-bb-daily-limit" onchange="saveAutoBBLimit(this.value)"
-                      class="bg-slate-800 border border-slate-600 rounded text-slate-300"
-                      style="font-size:11px;padding:1px 3px;cursor:pointer">
-                <option value="0">🚫 끔</option>
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3">3</option>
-                <option value="5">5</option>
-                <option value="10">10</option>
-              </select>
-              <span id="auto-bb-status" style="font-size:10px;color:#fbbf24"></span>
-              <button onclick="resetAutoBBCounter()"
-                      class="text-xs bg-red-700 hover:bg-red-600 text-white px-1 py-0 rounded"
-                      style="font-size:10px" title="카운터 리셋!">🔄</button>
-            </label>
+            <!-- 🌟 v163a 사장님: 자동 진입 옵션은 = 「급등락 실시간 진입」 카드로 이동! -->
+            <!-- (BB 상승/하락 버튼 옆에 = 논리적으로 맞음!) -->
           </div>
         </div>
         <div class="text-xs text-slate-400 mb-2">
