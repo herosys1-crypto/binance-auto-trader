@@ -19,6 +19,34 @@
 let _sugSideFilter = 'ALL';  // ALL / LONG / SHORT
 let _cachedSuggestions = [];
 
+// 🌟 v162 사장님 (2026-08-16): BB 이탈 SUSTAINED 자동 진입 개수 옵션!
+async function saveAutoBBLimit(v) {
+  try {
+    await api('/strategy-suggestions/auto-bb-limit', {
+      method: 'PUT',
+      body: { limit: Number(v) },
+    });
+    if (typeof toast === 'function') {
+      const lim = Number(v);
+      toast(lim > 0
+        ? `✅ 자동 진입 = ${lim}개/일 = ON!`
+        : `✅ 자동 진입 = OFF (수동!)`, 'success');
+    }
+  } catch (e) {
+    if (typeof toast === 'function') toast('❌ 저장 실패: ' + (e.message || e), 'error');
+  }
+}
+
+async function loadAutoBBLimit() {
+  try {
+    const r = await api('/strategy-suggestions/auto-bb-limit');
+    const el = document.getElementById('auto-bb-daily-limit');
+    if (el && r && typeof r.limit !== 'undefined') {
+      el.value = String(r.limit);
+    }
+  } catch (_e) { /* silent */ }
+}
+
 // 🌟 v155 사장님 (2026-08-16): 85% 미만 초기화!
 async function dismissLowConfidence() {
   if (!confirm('신뢰도 85% 미만 = 모두 삭제(DISMISSED)? 되돌릴 수 없습니다!')) return;
@@ -718,6 +746,11 @@ if (typeof window !== 'undefined') {
   window.dismissSuggestion = dismissSuggestion;
   window.triggerLearningNow = triggerLearningNow;  // v132 즉시 실행!
   window.dismissLowConfidence = dismissLowConfidence;  // v155 85%↓ 초기화!
+  window.saveAutoBBLimit = saveAutoBBLimit;  // v162 자동 BB 진입 개수!
+  window.loadAutoBBLimit = loadAutoBBLimit;
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(loadAutoBBLimit, 1500);  // 대시보드 로드 시 = 저장값 로드!
+  });
   window.briefingNow = briefingNow;  // v132 즉시 브리핑!
   window._switchProfile = _switchProfile;  // v132 프로필 전환!
   window._setSugFilter = _setSugFilter;  // v132 롱/숏 필터!

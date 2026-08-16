@@ -118,6 +118,41 @@ def list_suggestions(
     return [SuggestionResponse.model_validate(r, from_attributes=True) for r in _rows]
 
 
+@router.get("/auto-bb-limit")
+def get_auto_bb_limit(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🌟 v162 사장님: BB 이탈 SUSTAINED 자동 진입 하루 개수 조회!"""
+    row = db.get(SystemSetting, "auto_bb_break_daily_limit")
+    return {"limit": int(row.value) if row and row.value else 0}
+
+
+@router.put("/auto-bb-limit")
+def set_auto_bb_limit(
+    payload: dict,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🌟 v162 사장님: BB 이탈 SUSTAINED 자동 진입 하루 개수 저장!
+    0 = OFF (수동!), 1~10 = 하루 최대 개수!
+    """
+    limit = int(payload.get("limit", 0))
+    if limit < 0 or limit > 10:
+        raise HTTPException(status_code=400, detail="0~10만 허용!")
+    row = db.get(SystemSetting, "auto_bb_break_daily_limit")
+    if row:
+        row.value = str(limit)
+    else:
+        db.add(SystemSetting(
+            key="auto_bb_break_daily_limit",
+            value=str(limit),
+            description="v162 사장님: BB 이탈 SUSTAINED 자동 진입 하루 최대 개수 (0=OFF)",
+        ))
+    db.commit()
+    return {"limit": limit, "note": "0=수동, 1~10=하루 자동 개수!"}
+
+
 @router.post("/dismiss-low-confidence")
 def dismiss_low_confidence(
     threshold: float = 0.85,

@@ -273,6 +273,17 @@ def start_scheduler() -> None:
         id="learning_team_cycle",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🤖 v162 (2026-08-16 사장님!): BB 이탈 SUSTAINED 자동 진입!
+    # (auto_bb_break_daily_limit 옵션에 따라!)
+    def _auto_bb_breakdown():
+        from app.workers.auto_bb_breakdown_worker import run_auto_bb_breakdown
+        run_auto_bb_breakdown()
+    scheduler.add_job(
+        guarded_job("auto_bb_breakdown", 900, _auto_bb_breakdown),
+        trigger=IntervalTrigger(hours=4),
+        id="auto_bb_breakdown",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 📊 v152 (2026-08-16 사장님!): Chart Pattern Learning Team!
     # 매 6시간 = 1달 4H 캔들 → 패턴 감지 → 저장 + outcome tracking!
     def _chart_pattern_scan():

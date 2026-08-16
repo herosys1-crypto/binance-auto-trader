@@ -115,6 +115,44 @@
     }
   }
 
+  // 🌟 v162 사장님 (2026-08-16): BB 이탈 SUSTAINED = 원클릭 1단계 진입!
+  // 팝업의 「⚡ 즉시」 버튼 → 이 함수 호출!
+  // = 새 전략 modal 자동 열기 + symbol/side fill + toast!
+  // = 사장님 = 「저장」 클릭 1번 만!
+  async function enterOneStageBBBreak(symbol, side) {
+    try {
+      if (typeof window.openCreateModal !== 'function') {
+        alert('❌ 새 전략 modal 열기 함수 없음! 페이지 새로고침 후 다시!');
+        return;
+      }
+      await window.openCreateModal();
+      setTimeout(() => {
+        try {
+          const symInput = document.getElementById('cm-symbol');
+          if (symInput) {
+            symInput.value = (symbol || '').toUpperCase();
+            symInput.dispatchEvent(new Event('change', { bubbles: true }));
+            symInput.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          if (typeof window.setCmSide === 'function' && side) {
+            window.setCmSide(side.toUpperCase());
+          }
+          if (typeof window.loadCmMarketInfo === 'function') {
+            window.loadCmMarketInfo();
+          }
+          if (typeof window.toast === 'function') {
+            window.toast(`⚡ ${symbol} ${side} = BB 이탈 지속 진입 준비! (저장 클릭!)`, 'success');
+          }
+        } catch (e) {
+          console.warn('[enterOneStageBBBreak] fill 실패:', e);
+        }
+      }, 500);
+    } catch (e) {
+      console.warn('[enterOneStageBBBreak] modal 열기 실패:', e);
+      alert('❌ 실패: ' + (e.message || e));
+    }
+  }
+
   // 🌟 v134d: analysis.html에서 호출 = 새 전략 modal 자동 열기 + symbol/side fill!
   async function openCreateModalWithSymbol(symbol, side) {
     try {
@@ -194,6 +232,7 @@
     window.openActiveStrategyAnalysis = openActiveStrategyAnalysis;
     window.openCreateModalAnalysis = openCreateModalAnalysis;  // 🔎 v134c!
     window.openCreateModalWithSymbol = openCreateModalWithSymbol;  // 🌟 v134d!
+    window.enterOneStageBBBreak = enterOneStageBBBreak;  // 🌟 v162 BB 이탈 원클릭!
     // postMessage listener = 항상 등록! (v134f 3중 안전!)
     window.addEventListener('message', _handleCreateModalMessage);
     document.addEventListener('DOMContentLoaded', () => {
