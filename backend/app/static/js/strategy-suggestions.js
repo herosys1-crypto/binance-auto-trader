@@ -44,7 +44,36 @@ async function loadAutoBBLimit() {
     if (el && r && typeof r.limit !== 'undefined') {
       el.value = String(r.limit);
     }
+    // v163: 상태 표시!
+    const statusEl = document.getElementById('auto-bb-status');
+    if (statusEl && r && typeof r.limit !== 'undefined') {
+      const used = r.daily_used || 0;
+      const remaining = r.remaining || 0;
+      const active = r.active || 0;
+      const stopLoss = r.stopped_loss || 0;
+      const profit = r.stopped_profit || 0;
+      if (r.limit === 0) {
+        statusEl.textContent = '';
+      } else {
+        statusEl.textContent = ` ${used}/${r.limit} (활성${active}+손절${stopLoss}, 익절${profit}✅)`;
+        statusEl.title = `자동 진입 = ${used}건 사용중 / ${r.limit}건 한도\n활성: ${active}건, 손절: ${stopLoss}건 (카운트!)\n익절: ${profit}건 (카운트 X = 재진입 가능!)`;
+      }
+    }
   } catch (_e) { /* silent */ }
+}
+
+// 🔄 v163 사장님: 자동 진입 카운터 리셋!
+async function resetAutoBBCounter() {
+  if (!confirm('🔄 자동 진입 카운터 리셋?\n\n= 지금 이후 진입만 = 카운트!\n= 이전 활성/손절 = 카운트 X!')) return;
+  try {
+    const r = await api('/strategy-suggestions/auto-bb-reset', { method: 'POST' });
+    if (typeof toast === 'function') {
+      toast('✅ 리셋 완료! 지금 이후 자동 진입만 = 카운트!', 'success');
+    }
+    setTimeout(loadAutoBBLimit, 300);
+  } catch (e) {
+    if (typeof toast === 'function') toast('❌ 리셋 실패: ' + (e.message || e), 'error');
+  }
 }
 
 // 🌟 v155 사장님 (2026-08-16): 85% 미만 초기화!
@@ -748,8 +777,10 @@ if (typeof window !== 'undefined') {
   window.dismissLowConfidence = dismissLowConfidence;  // v155 85%↓ 초기화!
   window.saveAutoBBLimit = saveAutoBBLimit;  // v162 자동 BB 진입 개수!
   window.loadAutoBBLimit = loadAutoBBLimit;
+  window.resetAutoBBCounter = resetAutoBBCounter;  // 🔄 v163 리셋!
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(loadAutoBBLimit, 1500);  // 대시보드 로드 시 = 저장값 로드!
+    setInterval(loadAutoBBLimit, 60000);  // v163 = 매 60초 상태 새로고침!
   });
   window.briefingNow = briefingNow;  // v132 즉시 브리핑!
   window._switchProfile = _switchProfile;  // v132 프로필 전환!

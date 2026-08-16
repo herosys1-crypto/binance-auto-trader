@@ -1201,20 +1201,24 @@
             <button onclick="openSuggestionsSettingsModal()"
                     class="text-xs bg-purple-700 hover:bg-purple-600 text-white px-2 py-1 rounded"
                     title="자동 실행 세팅 (기본 OFF!)">⚙ 세팅</button>
-            <!-- 🌟 v162 사장님 (2026-08-16): 자동 진입 개수 옵션! -->
+            <!-- 🌟 v162/v163 사장님: 자동 진입 개수 + 상태 + 리셋! -->
             <label class="text-xs text-slate-300 flex items-center gap-1 ml-1"
-                   title="BB 이탈 지속 SUSTAINED 심볼 = 하루 최대 몇 개 자동 진입?">
-              🤖 자동 개수:
+                   title="활성+손절 = 카운트! 익절 = 카운트 X!">
+              🤖 자동:
               <select id="auto-bb-daily-limit" onchange="saveAutoBBLimit(this.value)"
                       class="bg-slate-800 border border-slate-600 rounded text-slate-300"
                       style="font-size:11px;padding:1px 3px;cursor:pointer">
-                <option value="0">🚫 끔 (수동!)</option>
-                <option value="1">1개/일</option>
-                <option value="2">2개/일</option>
-                <option value="3">3개/일</option>
-                <option value="5">5개/일</option>
-                <option value="10">10개/일</option>
+                <option value="0">🚫 끔</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="5">5</option>
+                <option value="10">10</option>
               </select>
+              <span id="auto-bb-status" style="font-size:10px;color:#fbbf24"></span>
+              <button onclick="resetAutoBBCounter()"
+                      class="text-xs bg-red-700 hover:bg-red-600 text-white px-1 py-0 rounded"
+                      style="font-size:10px" title="카운터 리셋!">🔄</button>
             </label>
           </div>
         </div>
