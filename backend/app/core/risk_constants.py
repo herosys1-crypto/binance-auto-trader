@@ -71,13 +71,14 @@ FORCE_SL_LONG_ENABLED_KEY: Final[str] = "force_sl_long_enabled"
 FORCE_SL_LONG_ROI_KEY: Final[str] = "force_sl_long_roi"
 FORCE_SL_SHORT_ENABLED_KEY: Final[str] = "force_sl_short_enabled"
 FORCE_SL_SHORT_ROI_KEY: Final[str] = "force_sl_short_roi"
-# 기본값 (사장님 확정 2026-06-24 원상태 복원 2026-08-08):
+# 기본값 (사장님 확정 2026-06-24 원상태 복원 2026-08-08 → v166 2026-08-16):
 #   롱 ON / 숏 OFF (원상태!)
-#   default = -10% (모든 단계 진입 후에만 발동 = risk_service v130 사장님 사상!)
+#   default = **-5%** (v166 사장님 지시!)
+#   옛: v130 = -15% / v131 = -10% / v166 = -5% (사장님 「손실 최소화!」)
 FORCE_SL_LONG_ENABLED_DEFAULT: Final[bool] = True
 FORCE_SL_SHORT_ENABLED_DEFAULT: Final[bool] = False  # 원상태 복원!
-# 양수로 저장 (예: 10 = ROI <= -10% 시 발동, 모든 단계 진입 후에만!).
-FORCE_SL_ROI_DEFAULT: Final[Decimal] = Decimal("10")
+# 양수로 저장 (예: 5 = ROI <= -5% 시 발동, 모든 단계 진입 후에만!).
+FORCE_SL_ROI_DEFAULT: Final[Decimal] = Decimal("5")
 # 허용 ROI 한도 (사장님 선택지). 그 외 값은 API 400.
 # 🌟 2026-08-09 v131 사장님 확장: 0 (끔!) + 5 ~ 100 (5% 간격)!
 FORCE_SL_ALLOWED_ROI: Final[tuple[Decimal, ...]] = (

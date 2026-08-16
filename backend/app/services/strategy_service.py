@@ -558,9 +558,10 @@ class StrategyService:
                     "  • USDT 추가 입금으로 마진 여유 확보"
                 )
         preview = self.calculate_preview(symbol=symbol, side=side, start_price=start_price, strategy_template_id=strategy_template_id, leverage_override=leverage_override)
-        # 🌟 default (v130 → v147):
+        # 🌟 default (v130 → v147 → v166):
         #   tp1_pct_override = TP1_PCT_DEFAULT (v147 사장님 지시로 25 → 15!)
-        #   force_sl_enabled_override = True + force_sl_roi_override = 15 (강제 -15%)!
+        #   force_sl_enabled_override = True + force_sl_roi_override = **5** (강제 -5%!)
+        #   v166 사장님 지시 (2026-08-16): -15% → -5% (손실 최소화!)
         instance = StrategyInstance(
             user_id=user_id,
             exchange_account_id=exchange_account_id,
@@ -574,7 +575,7 @@ class StrategyService:
             status="WAITING",
             tp1_pct_override=TP1_PCT_DEFAULT,  # v147: 15% (사장님 지시)
             force_sl_enabled_override=True,  # 강제 SL ON!
-            force_sl_roi_override=D("15"),  # -15% 자동!
+            force_sl_roi_override=D("5"),  # v166: -5% 자동! (사장님 손실 최소화!)
             # 🌟 v131 신 (2026-08-09 사장님!): 청산 후 자동 재진입 옵션 저장!
             retry_after_liquidation_enabled=bool(retry_after_liquidation_enabled),
             retry_trigger_pct=D(str(retry_trigger_pct)) if retry_trigger_pct is not None else D("10"),
