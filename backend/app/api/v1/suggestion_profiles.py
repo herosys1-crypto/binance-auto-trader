@@ -51,7 +51,7 @@ INITIAL_PROFILES = [
             "tp1_qty_ratio": 10, "tp2_qty_ratio": 15, "tp3_qty_ratio": 20, "tp4_qty_ratio": 25,
             "tp1_pct_override": 25,
             "force_sl_enabled_override": True,
-            "force_sl_roi_override": 15,
+            "force_sl_roi_override": 5,
             "stop_loss_percent_of_capital": 90,
             "start_price": None,  # MARKET!
             "retry_after_liquidation_enabled": False,
@@ -115,7 +115,7 @@ class ProfileConfig(BaseModel):
     tp4_qty_ratio: float = 25
     tp1_pct_override: float = 25
     force_sl_enabled_override: bool = True
-    force_sl_roi_override: float = 15
+    force_sl_roi_override: float = 5   # v166 사장님: -15% → -5%!
     stop_loss_percent_of_capital: float = 90
     start_price: float | None = None
     retry_after_liquidation_enabled: bool = False

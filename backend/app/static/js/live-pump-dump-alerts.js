@@ -77,7 +77,7 @@
         tp1_qty_ratio: 10, tp2_qty_ratio: 15, tp3_qty_ratio: 20, tp4_qty_ratio: 25,
         tp1_pct_override: 15,                 // v147 (옛 25)
         force_sl_enabled_override: true,
-        force_sl_roi_override: 15,
+        force_sl_roi_override: 5,             // v166 (옛 15) 사장님: 손실 최소화!
         stop_loss_percent_of_capital: 50,     // v147 (옛 90)
         start_price: null,
         symbol: a.symbol,

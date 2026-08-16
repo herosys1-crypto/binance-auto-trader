@@ -154,7 +154,7 @@ class StrategySuggestionGenerator(BaseAgent):
                 "tp3_qty_ratio": 20, "tp4_qty_ratio": 25,
                 "tp1_pct_override": 25,
                 "force_sl_enabled_override": True,
-                "force_sl_roi_override": 15,
+                "force_sl_roi_override": 5,  # v166 사장님: -15% → -5%!
                 "stop_loss_percent_of_capital": 90,
                 "start_price": None,
                 "retry_after_liquidation_enabled": False,
