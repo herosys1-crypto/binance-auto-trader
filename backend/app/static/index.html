@@ -2495,16 +2495,17 @@ function openPumpRanking(direction) {
   );
 }
 
-/* ⚖ v159 사장님 (2026-08-16): BB 중단 ±5% 상승/하락 팝업!
-   direction = 'up' (중단 위!) or 'down' (중단 아래!) */
+/* ⚖ v161 사장님 (2026-08-16): BB 이탈 3단계 팝업! (COW/ACE/BR/PROM/HOME 학습!)
+   direction = 'up' (LONG 돌파!) or 'down' (SHORT 이탈!)
+   3단계: 임박 → 시작 → 지속 (⭐ 제일 확실!) */
 function openBBMiddleRanking(direction) {
   const isUp = direction === 'up';
-  const name = isUp ? 'bbMiddleUp' : 'bbMiddleDown';
+  const name = isUp ? 'bbBreakUp' : 'bbBreakDown';
   const left = isUp ? 1080 : 1600;
   window.open(
-    `/static/bb-middle-ranking.html?direction=${direction}&interval=4h&proximity=5`,
+    `/static/bb-breakdown-ranking.html?direction=${direction}&interval=4h`,
     name,
-    `width=560,height=820,left=${left},top=60`
+    `width=620,height=880,left=${left},top=60`
   );
 }
 </script>

@@ -152,3 +152,197 @@ def scan_bb_middle(
             f"(사장님 지시 2026-08-16)"
         ),
     }
+
+
+@router.get("/breakdown")
+def scan_bb_breakdown(
+    interval: str = Query(default="4h", pattern="^(4h|1h|15m|1d)$"),
+    direction: str = Query(default="down", pattern="^(down|up)$",
+                           description="down=하락 이탈(SHORT), up=상승 돌파(LONG)"),
+    max_symbols: int = Query(default=150, ge=10, le=250),
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """🐻 BB middle 이탈 3단계 분류! (v161 사장님!)
+
+    사장님 지시 2026-08-16 (5개 스크린샷 = COW/ACE/BR/PROM/HOME!):
+    "4시간봉이 볼밴 중단을 이탈할 것과 이탈을 시작한 것 그리고
+     지속적으로 이탈하는 것 이렇게 찾아서 추천해줘!"
+
+    3단계:
+    1. **BREAK_PENDING** = 이탈 임박! (middle 근접 0~3%)
+    2. **BREAK_STARTED** = 이탈 시작! (최근 1~3봉에 이탈!)
+    3. **BREAK_SUSTAINED** = 이탈 지속! (3봉+ 이탈 유지!) ← ⭐ 제일 확실!
+
+    direction:
+    - down = middle 하향 이탈 (SHORT!)
+    - up   = middle 상향 돌파 (LONG!)
+    """
+    is_down = direction == "down"
+    account = db.execute(
+        select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
+    ).scalar_one_or_none()
+    if not account:
+        return {"symbols": [], "error": "no mainnet account"}
+
+    bc = BinanceClient(
+        api_key=decrypt_text(account.api_key_enc),
+        api_secret=decrypt_text(account.api_secret_enc),
+        is_testnet=False,
+    )
+
+    try:
+        tickers = bc.get_24hr_ticker()
+        if not isinstance(tickers, list):
+            return {"symbols": [], "error": "ticker 실패"}
+    except Exception as e:
+        return {"symbols": [], "error": str(e)}
+
+    usdt = [t for t in tickers if str(t.get("symbol", "")).endswith("USDT")]
+    try:
+        usdt.sort(key=lambda x: float(x.get("quoteVolume", 0) or 0), reverse=True)
+    except Exception:
+        pass
+    candidates = usdt[:max_symbols]
+
+    pending: list[dict[str, Any]] = []   # 이탈 임박!
+    started: list[dict[str, Any]] = []   # 이탈 시작!
+    sustained: list[dict[str, Any]] = [] # 이탈 지속! ⭐
+
+    for t in candidates:
+        symbol = str(t.get("symbol", ""))
+        if not symbol.endswith("USDT"):
+            continue
+        try:
+            kl = bc.get_klines(symbol=symbol, interval=interval,
+                               limit=BB4HBandAnalyzer.KLINE_LIMIT)
+            if not isinstance(kl, list) or len(kl) < BB4HBandAnalyzer.BB_PERIOD + 5:
+                continue
+
+            closes = [float(k[4]) for k in kl]
+            mid, up, lo = BB4HBandAnalyzer.bollinger(closes)
+            if not mid or mid[-1] is None:
+                continue
+
+            middle_now = mid[-1]
+            current = float(t.get("lastPrice", 0) or 0)
+            if middle_now <= 0 or current <= 0:
+                continue
+
+            change_24h = float(t.get("priceChangePercent", 0) or 0)
+            volume_24h = float(t.get("quoteVolume", 0) or 0)
+
+            # 최근 5봉 (완료봉만!) middle 대비 close 위치!
+            positions = []
+            for i in range(-6, -1):  # -6~-2 (완료봉!)
+                if i < -len(closes) or mid[i] is None:
+                    continue
+                c = closes[i]
+                m = mid[i]
+                # DOWN: close < middle = 이탈!
+                # UP:   close > middle = 돌파!
+                if is_down:
+                    positions.append(c < m)
+                else:
+                    positions.append(c > m)
+
+            if len(positions) < 3:
+                continue
+
+            # 현재 상태!
+            close_last = closes[-1]  # 진행 중 봉!
+            if is_down:
+                current_broken = close_last < middle_now
+                # 마지막 완료봉 = positions[-1]
+            else:
+                current_broken = close_last > middle_now
+
+            dist_pct = (current - middle_now) / middle_now * 100  # + = 위, - = 아래
+
+            common = {
+                "symbol": symbol,
+                "current_price": round(current, 8),
+                "middle": round(middle_now, 8),
+                "dist_pct": round(dist_pct, 2),
+                "change_24h": round(change_24h, 2),
+                "volume_24h": round(volume_24h, 0),
+                "positions_recent": positions,  # 최근 5봉 이탈 여부
+            }
+
+            # 🎯 3단계 분류!
+
+            # 3. SUSTAINED = 최근 3봉+ 지속 이탈! (⭐ 제일 확실!)
+            if all(positions[-3:]) and current_broken:
+                # + 마지막 3봉 이탈 + 진행 봉도 이탈!
+                # 이탈 봉 수 계산 (마지막 몇 봉 연속?)
+                sustained_bars = 0
+                for p in reversed(positions):
+                    if p:
+                        sustained_bars += 1
+                    else:
+                        break
+                sustained.append({
+                    **common,
+                    "stage": "BREAK_SUSTAINED",
+                    "sustained_bars": sustained_bars,
+                })
+            # 2. STARTED = 최근 1~2봉 이탈 시작!
+            elif current_broken and (
+                positions[-1] or  # 마지막 완료봉 이탈
+                positions[-2] or  # 2봉 전 이탈
+                positions[-3]     # 3봉 전 이탈 (하지만 sustained 조건 X)
+            ):
+                started.append({
+                    **common,
+                    "stage": "BREAK_STARTED",
+                })
+            # 1. PENDING = 이탈 안 함 + middle 근접!
+            elif not current_broken and abs(dist_pct) <= 3.0:
+                # DOWN: 지금 middle 위 = 근접!
+                # UP: 지금 middle 아래 = 근접!
+                if is_down and dist_pct >= 0 and dist_pct <= 3.0:
+                    pending.append({
+                        **common,
+                        "stage": "BREAK_PENDING",
+                    })
+                elif not is_down and dist_pct <= 0 and dist_pct >= -3.0:
+                    pending.append({
+                        **common,
+                        "stage": "BREAK_PENDING",
+                    })
+        except Exception as e:
+            logger.debug("[bb_breakdown] %s 실패: %s", symbol, e)
+            continue
+
+    # 정렬:
+    # SUSTAINED = 지속 봉 많은 순 + 24h 변동 (하락 강도!)
+    sustained.sort(
+        key=lambda x: (-x.get("sustained_bars", 0), -abs(x["change_24h"]))
+    )
+    # STARTED = 24h 변동 큰 순!
+    started.sort(key=lambda x: -abs(x["change_24h"]))
+    # PENDING = middle 근접 가까운 순!
+    pending.sort(key=lambda x: abs(x["dist_pct"]))
+
+    total = len(pending) + len(started) + len(sustained)
+    return {
+        "interval": interval,
+        "direction": direction,
+        "side_recommend": "SHORT" if is_down else "LONG",
+        "sustained": sustained[:30],    # ⭐ 제일 확실!
+        "started": started[:30],
+        "pending": pending[:30],
+        "counts": {
+            "sustained": len(sustained),
+            "started": len(started),
+            "pending": len(pending),
+            "total": total,
+        },
+        "scanned": len(candidates),
+        "note": (
+            f"{interval} BB middle 이탈 3단계 ({direction}) - "
+            f"제일 확실 = 이탈 지속 (SUSTAINED)! 다음 = 이탈 시작 (STARTED)! "
+            f"관찰 = 이탈 임박 (PENDING)! "
+            f"(사장님 지시 2026-08-16)"
+        ),
+    }

@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🐻 BB 이탈 3단계</title>
+<style>
+  body {
+    background: #0f172a; color: #e2e8f0;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    padding: 8px; margin: 0; font-size: 12px;
+  }
+  .header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #334155;
+  }
+  .title { font-size: 15px; font-weight: bold; }
+  .close-btn {
+    background: #7c3aed; color: #fff; border: 0; padding: 4px 10px;
+    border-radius: 4px; cursor: pointer; font-size: 12px;
+  }
+  .controls { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .chip {
+    background: #1e293b; color: #94a3b8;
+    padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;
+    border: 1px solid transparent;
+  }
+  .chip.on { background: #f59e0b; color: #000; font-weight: 600; }
+  .section {
+    background: rgba(30,41,59,0.5); border: 1px solid #334155;
+    border-radius: 6px; padding: 8px; margin-bottom: 8px;
+  }
+  .section-title {
+    font-weight: bold; margin-bottom: 6px; font-size: 13px;
+  }
+  .sustained { color: #ef4444; }
+  .started { color: #f59e0b; }
+  .pending { color: #fbbf24; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { padding: 4px 6px; text-align: left; border-bottom: 1px solid #1e293b; }
+  th { color: #94a3b8; font-weight: 500; font-size: 10px; }
+  .num { text-align: right; }
+  .sym {
+    color: #fff; font-weight: 600; cursor: pointer;
+  }
+  .sym:hover { color: #fbbf24; }
+  .pos { color: #22c55e; }
+  .neg { color: #ef4444; }
+  .loading { text-align: center; color: #94a3b8; padding: 20px; }
+  .footer {
+    margin-top: 8px; padding-top: 6px; border-top: 1px solid #334155;
+    font-size: 10px; color: #94a3b8; line-height: 1.5;
+  }
+  .badge {
+    display: inline-block; padding: 1px 5px; border-radius: 3px;
+    font-size: 9px; margin-left: 3px;
+  }
+  .analysis-btn {
+    background: linear-gradient(135deg,#3b82f6,#8b5cf6); color: #fff;
+    border: 0; padding: 2px 5px; border-radius: 3px; cursor: pointer; font-size: 10px;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="title" id="title">🐻 BB 이탈 3단계</div>
+    <div style="font-size:10px;color:#94a3b8" id="subtitle">로딩...</div>
+  </div>
+  <button class="close-btn" onclick="window.close()">✕ 닫기</button>
+</div>
+
+<div class="controls" id="intervalChips"></div>
+<div id="content"><div class="loading">📡 조회 중...</div></div>
+
+<script>
+const API_BASE = '/api/v1';
+const params = new URLSearchParams(window.location.search);
+const DIRECTION = (params.get('direction') || 'down').toLowerCase();
+const IS_DOWN = DIRECTION === 'down';
+
+let interval = params.get('interval') || '4h';
+let timer = null;
+const AUTO_MS = 20000;
+
+const INTERVALS = ['15m', '1h', '4h', '1d'];
+const INTERVAL_LABEL = {'15m': '15분', '1h': '1시간', '4h': '4시간', '1d': '24시간'};
+
+document.title = IS_DOWN ? `🐻 BB 하락 이탈 (${interval})` : `🐂 BB 상승 돌파 (${interval})`;
+document.getElementById('title').textContent = IS_DOWN ? '🐻 BB 하락 이탈 3단계' : '🐂 BB 상승 돌파 3단계';
+document.getElementById('title').className = 'title ' + (IS_DOWN ? 'sustained' : 'pos');
+
+function getToken() {
+  return localStorage.getItem('access_token')
+      || sessionStorage.getItem('access_token') || '';
+}
+
+function fmtPrice(v) {
+  const n = Number(v);
+  if (!isFinite(n) || n === 0) return '-';
+  return Math.abs(n) >= 1 ? String(parseFloat(n.toFixed(4)))
+                          : String(parseFloat(n.toPrecision(6)));
+}
+
+function fmtVol(v) {
+  const n = Number(v || 0);
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K';
+  return n.toFixed(0);
+}
+
+function renderIntervals() {
+  const auto = !!timer;
+  document.getElementById('intervalChips').innerHTML =
+    INTERVALS.map(iv =>
+      `<span class="chip ${iv === interval ? 'on' : ''}" onclick="setIv('${iv}')">${INTERVAL_LABEL[iv]}</span>`
+    ).join('')
+    + `<span class="chip ${auto ? 'on' : ''}" onclick="toggleAuto()">⏱ 자동 20초 ${auto ? 'ON' : 'OFF'}</span>`;
+}
+
+function setIv(iv) { interval = iv; document.title = IS_DOWN ? `🐻 BB 하락 이탈 (${iv})` : `🐂 BB 상승 돌파 (${iv})`; renderIntervals(); load(); }
+function toggleAuto() {
+  if (timer) { clearInterval(timer); timer = null; }
+  else { timer = setInterval(load, AUTO_MS); }
+  renderIntervals();
+}
+
+function openBinanceChart(sym) {
+  window.open(`https://www.binance.com/en/futures/${encodeURIComponent(sym)}`, `bnc_${sym}`, 'noopener');
+}
+function openAnalysis(sym) {
+  const side = IS_DOWN ? 'SHORT' : 'LONG';
+  window.open(`/static/analysis.html?symbol=${encodeURIComponent(sym)}&side=${side}`, `an_${sym}`, 'width=550,height=700');
+}
+
+async function load() {
+  try {
+    const r = await fetch(
+      `${API_BASE}/bb-middle-scan/breakdown?interval=${interval}&direction=${DIRECTION}&max_symbols=150`,
+      { headers: { 'Authorization': `Bearer ${getToken()}` } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    render(data);
+  } catch (e) {
+    document.getElementById('content').innerHTML = `<div class="loading" style="color:#ef4444">❌ ${e.message || e}</div>`;
+  }
+}
+
+function renderStageTable(stage_key, stage_label, stage_class, items) {
+  if (!items || items.length === 0) {
+    return `<div class="section">
+      <div class="section-title ${stage_class}">${stage_label} <span style="color:#64748b">(0)</span></div>
+      <div class="loading" style="padding:10px">현재 없음!</div>
+    </div>`;
+  }
+
+  const rows = items.slice(0, 20).map((s, i) => {
+    const chgCls = s.change_24h >= 0 ? 'pos' : 'neg';
+    const distTxt = s.dist_pct > 0 ? `+${s.dist_pct}%` : `${s.dist_pct}%`;
+    // 최근 5봉 이탈 여부 시각화!
+    const posDots = (s.positions_recent || []).map(p =>
+      `<span style="color:${p ? '#ef4444' : '#94a3b8'}">${p ? '●' : '○'}</span>`
+    ).join('');
+    const bars = s.sustained_bars ? `<span class="badge" style="background:#ef4444;color:#fff">${s.sustained_bars}봉</span>` : '';
+    return `
+      <tr>
+        <td class="num" style="color:#64748b">${i + 1}</td>
+        <td>
+          <span class="sym" onclick="openBinanceChart('${s.symbol}')" title="바이낸스!">${s.symbol}</span>
+          <button class="analysis-btn" onclick="openAnalysis('${s.symbol}')" title="분석">📊</button>
+          ${bars}
+        </td>
+        <td class="num">${fmtPrice(s.current_price)}</td>
+        <td class="num" style="color:#94a3b8">${distTxt}</td>
+        <td class="num ${chgCls}">${s.change_24h >= 0 ? '+' : ''}${s.change_24h}%</td>
+        <td>${posDots}</td>
+      </tr>`;
+  }).join('');
+
+  return `<div class="section">
+    <div class="section-title ${stage_class}">${stage_label} <span style="color:#64748b">(${items.length})</span></div>
+    <table>
+      <thead><tr>
+        <th class="num">#</th><th>심볼</th><th class="num">현재가</th>
+        <th class="num">이격</th><th class="num">24h</th><th>최근5봉</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function render(data) {
+  const totalCount = (data.counts && data.counts.total) || 0;
+  const sustainedIcon = IS_DOWN ? '🔥' : '🚀';
+  document.getElementById('subtitle').textContent =
+    `${interval} 기준 · 총 ${totalCount}건 · 추천 ${data.side_recommend}`;
+
+  const stages = IS_DOWN ? [
+    ['sustained', `${sustainedIcon} 이탈 지속 ⭐ 제일 확실! (SHORT!)`, 'sustained', data.sustained],
+    ['started', '📉 이탈 시작 (SHORT 진입 시점!)', 'started', data.started],
+    ['pending', '⚠️ 이탈 임박 (관찰!)', 'pending', data.pending],
+  ] : [
+    ['sustained', `${sustainedIcon} 돌파 지속 ⭐ 제일 확실! (LONG!)`, 'pos', data.sustained],
+    ['started', '📈 돌파 시작 (LONG 진입 시점!)', 'started', data.started],
+    ['pending', '⚠️ 돌파 임박 (관찰!)', 'pending', data.pending],
+  ];
+
+  const html = stages.map(([k, l, c, items]) => renderStageTable(k, l, c, items)).join('');
+
+  document.getElementById('content').innerHTML = html + `
+    <div class="footer">
+      💡 <b>심볼 클릭 = 바이낸스</b> / 📊 = 상세 분석<br>
+      ⭐ <b>지속</b> = 3봉+ 이탈 유지 = 제일 확실! ${IS_DOWN ? 'SHORT!' : 'LONG!'}<br>
+      📊 <b>시작</b> = 최근 1~3봉 이탈 = 진입 시점!<br>
+      ⚠️ <b>임박</b> = middle 근접 (0~3%) = 관찰만!<br>
+      ● = ${IS_DOWN ? '이탈' : '돌파'} 봉 / ○ = 미이탈 봉!
+    </div>
+  `;
+}
+
+renderIntervals();
+load();
+timer = setInterval(load, AUTO_MS);
+</script>
+</body>
+</html>
