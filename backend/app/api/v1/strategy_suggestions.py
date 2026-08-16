@@ -118,14 +118,86 @@ def list_suggestions(
     return [SuggestionResponse.model_validate(r, from_attributes=True) for r in _rows]
 
 
+def _auto_bb_reset_at(db: Session) -> datetime:
+    """리셋 시각 = 사용자 리셋 (v163!) or 오늘 00:00 UTC!"""
+    row = db.get(SystemSetting, "auto_bb_break_reset_at")
+    if row and row.value:
+        try:
+            return datetime.fromisoformat(row.value)
+        except Exception:
+            pass
+    return datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
+
+
+def _count_auto_bb_used(db: Session) -> dict:
+    """🎯 v163 사장님: 자동 진입 카운트!
+    - 포함: 활성 + 손절!
+    - 제외: 익절! (성공 = 재도전 가능!)
+    """
+    from app.models.strategy_instance import StrategyInstance
+    reset_at = _auto_bb_reset_at(db)
+    suggestions = db.execute(
+        select(StrategySuggestion)
+        .where(StrategySuggestion.execution_mode == "AUTO")
+        .where(StrategySuggestion.executed_at >= reset_at)
+    ).scalars().all()
+
+    active = 0
+    stopped_loss = 0     # 손절 = 카운트!
+    stopped_profit = 0   # 익절 = 카운트 X!
+    for s in suggestions:
+        if not s.executed_strategy_id:
+            continue
+        strategy = db.get(StrategyInstance, s.executed_strategy_id)
+        if not strategy:
+            continue
+        # 활성 상태!
+        open_statuses = [
+            "STAGE_1_OPEN", "STAGE_2_OPEN", "STAGE_3_OPEN",
+            "STAGE_4_OPEN", "STAGE_5_OPEN", "STAGE_6_OPEN",
+            "STAGE_7_OPEN", "STAGE_8_OPEN", "STAGE_9_OPEN",
+            "STAGE_10_OPEN",
+        ]
+        if strategy.status in open_statuses:
+            active += 1
+            continue
+        # 종료 = realized_pnl 기준으로 판정!
+        # 익절 = realized_pnl > 0 = 카운트 X!
+        # 손절 = realized_pnl <= 0 = 카운트!
+        realized = float(strategy.realized_pnl or 0)
+        if realized > 0:
+            stopped_profit += 1  # 스킵!
+        else:
+            stopped_loss += 1    # 카운트!
+
+    daily_used = active + stopped_loss
+    return {
+        "daily_used": daily_used,
+        "active": active,
+        "stopped_loss": stopped_loss,
+        "stopped_profit": stopped_profit,  # 정보용 (카운트 X!)
+        "reset_at": reset_at.isoformat(),
+    }
+
+
 @router.get("/auto-bb-limit")
 def get_auto_bb_limit(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> dict:
-    """🌟 v162 사장님: BB 이탈 SUSTAINED 자동 진입 하루 개수 조회!"""
+    """🌟 v162 사장님: BB 이탈 SUSTAINED 자동 진입 하루 개수 조회!
+    v163: 사용 상태 (활성/손절/익절!)도 반환!
+    """
     row = db.get(SystemSetting, "auto_bb_break_daily_limit")
-    return {"limit": int(row.value) if row and row.value else 0}
+    limit = int(row.value) if row and row.value else 0
+    usage = _count_auto_bb_used(db)
+    return {
+        "limit": limit,
+        **usage,
+        "remaining": max(0, limit - usage["daily_used"]),
+    }
 
 
 @router.put("/auto-bb-limit")
@@ -151,6 +223,33 @@ def set_auto_bb_limit(
         ))
     db.commit()
     return {"limit": limit, "note": "0=수동, 1~10=하루 자동 개수!"}
+
+
+@router.post("/auto-bb-reset")
+def reset_auto_bb_counter(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🔄 v163 사장님: 자동 진입 카운터 리셋!
+    - 지금 시각 = 신 reset_at!
+    - 이후 진입 = 새로 카운트!
+    - 이전 활성/손절 = 리셋 이전 = 카운트 X!
+    """
+    now = datetime.now(timezone.utc)
+    row = db.get(SystemSetting, "auto_bb_break_reset_at")
+    if row:
+        row.value = now.isoformat()
+    else:
+        db.add(SystemSetting(
+            key="auto_bb_break_reset_at",
+            value=now.isoformat(),
+            description="v163 사장님: 자동 진입 카운터 리셋 시각!",
+        ))
+    db.commit()
+    return {
+        "reset_at": now.isoformat(),
+        "note": "카운터 리셋 완료! 지금 이후 자동 진입만 = 카운트!",
+    }
 
 
 @router.post("/dismiss-low-confidence")
