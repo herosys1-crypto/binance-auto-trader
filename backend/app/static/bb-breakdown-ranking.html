@@ -244,25 +244,27 @@ function render(data) {
   document.getElementById('subtitle').textContent =
     `${interval} 기준 · 총 ${totalCount}건 · 추천 ${data.side_recommend}`;
 
+  // 🌟 v168: 사장님 3 시나리오 = 사상 반영 (안전/중간/도전)!
   const stages = IS_DOWN ? [
-    ['sustained', `${sustainedIcon} 이탈 지속 ⭐ 제일 확실! (SHORT!)`, 'sustained', data.sustained],
-    ['started', '📉 이탈 시작 (SHORT 진입 시점!)', 'started', data.started],
-    ['pending', '⚠️ 이탈 임박 (관찰!)', 'pending', data.pending],
+    ['sustained', `${sustainedIcon} 이탈 지속 🌟 사장님 선호! (안전 SHORT!)`, 'sustained', data.sustained],
+    ['started', '📉 이탈 시작 (수익+안전 중간! SHORT!)', 'started', data.started],
+    ['pending', '💎 이탈 임박 (최고 수익 도전! SHORT!)', 'pending', data.pending],
   ] : [
-    ['sustained', `${sustainedIcon} 돌파 지속 ⭐ 제일 확실! (LONG!)`, 'pos', data.sustained],
-    ['started', '📈 돌파 시작 (LONG 진입 시점!)', 'started', data.started],
-    ['pending', '⚠️ 돌파 임박 (관찰!)', 'pending', data.pending],
+    ['sustained', `${sustainedIcon} 돌파 지속 🌟 사장님 선호! (안전 LONG!)`, 'pos', data.sustained],
+    ['started', '📈 돌파 시작 (수익+안전 중간! LONG!)', 'started', data.started],
+    ['pending', '💎 돌파 임박 (최고 수익 도전! LONG!)', 'pending', data.pending],
   ];
 
   const html = stages.map(([k, l, c, items]) => renderStageTable(k, l, c, items)).join('');
 
   document.getElementById('content').innerHTML = html + `
     <div class="footer">
-      💡 <b>심볼 클릭 = 바이낸스</b> / 📊 = 상세 분석<br>
-      ⭐ <b>지속</b> = 3봉+ 이탈 유지 = 제일 확실! ${IS_DOWN ? 'SHORT!' : 'LONG!'}<br>
-      📊 <b>시작</b> = 최근 1~3봉 이탈 = 진입 시점!<br>
-      ⚠️ <b>임박</b> = middle 근접 (0~3%) = 관찰만!<br>
-      ● = ${IS_DOWN ? '이탈' : '돌파'} 봉 / ○ = 미이탈 봉!
+      💡 <b>심볼 클릭 = 바이낸스</b> / 📊 = 상세 분석 / ⚡ = 즉시 진입<br>
+      🌟 <b>지속 (사장님 선호!)</b> = 이미 이탈 진행 = <b>안전</b>! 수익 적어도 확실!<br>
+      📉 <b>시작</b> = 최근 1~3봉 이탈 = <b>수익+안전 중간</b>!<br>
+      💎 <b>임박</b> = middle 근접 (0~3%) = <b>최고 수익 도전</b>! (위험도 큼!)<br>
+      ● = ${IS_DOWN ? '이탈' : '돌파'} 봉 / ○ = 미이탈 봉!<br>
+      🔥 성공률 툴팁 = 학습 요소 확인!
     </div>
   `;
 }

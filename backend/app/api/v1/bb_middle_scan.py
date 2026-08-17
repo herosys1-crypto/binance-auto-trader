@@ -192,27 +192,32 @@ def scan_bb_breakdown(
         current_price: float = 0,
         bb_upper: float = 0, bb_lower: float = 0,
     ) -> tuple[float, list[str]]:
-        """🎯 v167 사장님 지시! 학습 + 지속성 반영 성공 가능성 (0.0 ~ 1.0)
+        """🎯 v168 사장님 사상 3 시나리오 + 학습 강화 성공 가능성 (0.0 ~ 1.0)
 
-        옛 v165 문제 (사장님 지적!):
-        - CYSUSDT = 82% 추천 → 실제로는 이미 반등 시작 = SHORT 위험!
-        - ACEUSDT = 지속 하락 = SHORT 안전 + 수익!
+        사장님 사상 (2026-08-17):
+        - 💎 최고 수익 = PENDING → 지속 하락 예상! (도전!)
+        - 🥈 중간 = STARTED → 지속 하락! (수익+안전 중간!)
+        - 🌟 최고 안전 = SUSTAINED (지속 하락) = 사장님 선호! (수익 적어도 확실!)
 
-        v167 신 요소:
-        - 하락 지속 강도 (양봉/음봉 비율!)
-        - BB 저점 근접 = 패널티! (반등 위험!)
-        - 최근 반등 감지 = 패널티!
+        학습 강화 요소 (신!):
+        - 연속 음봉 스트릭! (SHORT 확실성!)
+        - 저점 갱신 추세! (하락 지속성!)
+        - 음봉/양봉 body 크기 비율! (모멘텀!)
 
-        요소 (합계 + 패널티!):
-        1. 심볼 30일 학습 성공률 = 최대 30% (40 → 30!)
+        요소 (합계 + 패널티 - 사장님 SUSTAINED 우대!):
+        1. 심볼 30일 학습 성공률 = 최대 25% (30 → 25!)
         2. 이탈 단계 = 최대 25%
-        3. 이탈 지속 봉수 = 최대 15%
-        4. 하락 지속 강도 (신!) = 최대 20% (음봉 비율!)
-        5. 24h 변동 = 최대 5%
-        6. middle 이격 = 최대 5%
-        패널티:
-        - BB 반대 밴드 근접 (SHORT: lower 근처!) = -20% (반등 위험!)
-        - 최근 3봉 = 반대 방향 (SHORT: 양봉!) = -15%
+        3. 이탈 지속 봉수 = 최대 12%
+        4. 하락 지속 강도 (v167) = 최대 15%
+        5. 🆕 연속 음봉 스트릭 = 최대 10%
+        6. 🆕 저점 갱신 추세 = 최대 8%
+        7. 🆕 body 비율 = 최대 5%
+        8. 24h 변동 = 최대 5%
+        9. middle 이격 = 최대 5%
+        10. 🌟 사장님 선호 가산 = SUSTAINED = +10% (안전 우대!)
+        패널티 (SUSTAINED = 완화!):
+        - BB 반대 밴드 근접: SUSTAINED -10% / 기타 -20%
+        - 최근 3봉 반대 방향: SUSTAINED -10% / 기타 -15%
         """
         reasons: list[str] = []
         # 1. 심볼 학습 성공률!
@@ -220,7 +225,7 @@ def scan_bb_breakdown(
             sr = get_symbol_success_rate(db, symbol, recommend_side, days=30)
         except Exception:
             sr = 0.5
-        symbol_score = sr * 0.30
+        symbol_score = sr * 0.25
         reasons.append(f"심볼 학습 {int(sr*100)}%")
 
         # 2. 단계 점수!
@@ -235,85 +240,150 @@ def scan_bb_breakdown(
         # 3. 지속 봉수 (SUSTAINED만!)
         bars_score = 0.0
         if stage == "BREAK_SUSTAINED":
-            bars_score = min((sustained_bars - 2) * 0.025, 0.15)
+            bars_score = min((sustained_bars - 2) * 0.02, 0.12)
             reasons.append(f"지속 {sustained_bars}봉")
 
-        # 4. v167 신: 하락 지속 강도 (음봉/양봉 비율!)
+        # 4. v167 하락 지속 강도!
         continuity_score = 0.0
         if recent_closes and recent_opens and len(recent_closes) >= 10 and len(recent_opens) >= 10:
-            # 최근 20봉 = 원하는 방향 봉 비율!
             recent20_c = recent_closes[-20:] if len(recent_closes) >= 20 else recent_closes
             recent20_o = recent_opens[-20:] if len(recent_opens) >= 20 else recent_opens
             wanted_bars = 0
             for o, c in zip(recent20_o, recent20_c):
-                # SHORT (DOWN) = 음봉 = 카운트!
-                # LONG (UP) = 양봉 = 카운트!
                 if is_down and c < o:
                     wanted_bars += 1
                 elif not is_down and c > o:
                     wanted_bars += 1
             wanted_ratio = wanted_bars / len(recent20_c) if recent20_c else 0
-            # 60%+ = 만점!
-            continuity_score = min(max((wanted_ratio - 0.4) * 2 * 0.20, 0), 0.20)
+            continuity_score = min(max((wanted_ratio - 0.4) * 2 * 0.15, 0), 0.15)
             direction_word = "음봉" if is_down else "양봉"
             reasons.append(f"지속성 {direction_word} {wanted_bars}/{len(recent20_c)}봉")
 
-        # 5. 24h 변동!
+        # 🆕 5. v168: 연속 스트릭!
+        streak_score = 0.0
+        if recent_closes and recent_opens and len(recent_closes) >= 5:
+            streak = 0
+            for o, c in zip(reversed(recent_opens), reversed(recent_closes)):
+                if is_down and c < o:
+                    streak += 1
+                elif not is_down and c > o:
+                    streak += 1
+                else:
+                    break
+            if streak >= 3:
+                streak_score = min((streak - 2) * 0.025, 0.10)
+                direction_word = "음봉" if is_down else "양봉"
+                reasons.append(f"🔥 연속 {streak}봉 {direction_word}!")
+
+        # 🆕 6. v168: 저점/고점 갱신 추세!
+        trend_score = 0.0
+        if recent_closes and len(recent_closes) >= 5:
+            recent5_c = recent_closes[-5:]
+            updates = 0
+            if is_down:
+                for i in range(1, len(recent5_c)):
+                    if recent5_c[i] < recent5_c[i - 1]:
+                        updates += 1
+            else:
+                for i in range(1, len(recent5_c)):
+                    if recent5_c[i] > recent5_c[i - 1]:
+                        updates += 1
+            trend_score = (updates / 4) * 0.08
+            if updates >= 3:
+                direction_word = "저점" if is_down else "고점"
+                reasons.append(f"📉 {direction_word} 갱신 {updates}/4봉")
+
+        # 🆕 7. v168: body 크기 비율 (모멘텀!)
+        body_score = 0.0
+        if recent_closes and recent_opens and len(recent_closes) >= 10:
+            wanted_bodies = []
+            opposite_bodies = []
+            for o, c in zip(recent_opens[-10:], recent_closes[-10:]):
+                body = abs(c - o)
+                if is_down and c < o:
+                    wanted_bodies.append(body)
+                elif not is_down and c > o:
+                    wanted_bodies.append(body)
+                elif is_down and c > o:
+                    opposite_bodies.append(body)
+                elif not is_down and c < o:
+                    opposite_bodies.append(body)
+            if wanted_bodies and opposite_bodies:
+                avg_want = sum(wanted_bodies) / len(wanted_bodies)
+                avg_opp = sum(opposite_bodies) / len(opposite_bodies)
+                if avg_want > avg_opp and avg_opp > 0:
+                    ratio = min(avg_want / avg_opp, 3.0)
+                    body_score = min((ratio - 1.0) * 0.025, 0.05)
+                    if ratio >= 1.5:
+                        reasons.append(f"💪 body 비율 {ratio:.1f}x")
+            elif wanted_bodies and not opposite_bodies:
+                body_score = 0.05
+                reasons.append("💪 반대 봉 0개!")
+
+        # 8. 24h 변동!
         change_score = min(abs(change_24h) / 400, 0.05)
         if abs(change_24h) >= 10:
             reasons.append(f"24h {change_24h:+.1f}%")
 
-        # 6. middle 이격!
+        # 9. middle 이격!
         dist_score = 0.0
         if stage == "BREAK_SUSTAINED":
             wanted_dir_dist = -dist_pct if is_down else dist_pct
             if wanted_dir_dist > 0:
                 dist_score = min(wanted_dir_dist / 200, 0.05)
 
-        # ═══════════ 패널티! ═══════════
-        penalty = 0.0
+        # 🌟 10. v168 사장님 선호: SUSTAINED = 안전 우대!
+        preference_bonus = 0.0
+        if stage == "BREAK_SUSTAINED":
+            preference_bonus = 0.10
+            reasons.append("🌟 사장님 선호 (안전!)")
 
-        # 🚨 v167 페널티 1: BB 반대 밴드 근접!
-        # SHORT = lower 근처 = 이미 다 빠짐 = 반등 위험!
-        # LONG = upper 근처 = 이미 다 오름 = 조정 위험!
+        # ═══════════ 패널티 (SUSTAINED = 완화!) ═══════════
+        penalty = 0.0
+        is_sustained = stage == "BREAK_SUSTAINED"
+
+        # 🚨 페널티 1: BB 반대 밴드 근접!
         if current_price > 0 and bb_lower > 0 and bb_upper > 0:
             band_width = bb_upper - bb_lower
             if band_width > 0:
+                max_penalty = 0.10 if is_sustained else 0.20
+                multiplier = 0.333 if is_sustained else 0.667
                 if is_down:
-                    # SHORT: current가 lower에 근접할수록 위험!
-                    # dist_from_lower = 0 = 극도 위험 / 1 = middle / 2 = upper 근처
                     dist_from_lower = (current_price - bb_lower) / band_width
-                    if dist_from_lower < 0.30:  # 하단 30% 안!
-                        penalty_val = (0.30 - dist_from_lower) * 0.667  # 0.20 max
+                    if dist_from_lower < 0.30:
+                        penalty_val = min((0.30 - dist_from_lower) * multiplier, max_penalty)
                         penalty += penalty_val
-                        reasons.append(f"⚠️ BB 하단 근접 ({dist_from_lower*100:.0f}%)")
+                        note = " (완화)" if is_sustained else ""
+                        reasons.append(f"⚠️ BB 하단 근접 ({dist_from_lower*100:.0f}%){note}")
                 else:
-                    # LONG: current가 upper에 근접할수록 위험!
                     dist_to_upper = (bb_upper - current_price) / band_width
                     if dist_to_upper < 0.30:
-                        penalty_val = (0.30 - dist_to_upper) * 0.667
+                        penalty_val = min((0.30 - dist_to_upper) * multiplier, max_penalty)
                         penalty += penalty_val
-                        reasons.append(f"⚠️ BB 상단 근접 ({dist_to_upper*100:.0f}%)")
+                        note = " (완화)" if is_sustained else ""
+                        reasons.append(f"⚠️ BB 상단 근접 ({dist_to_upper*100:.0f}%){note}")
 
-        # 🚨 v167 페널티 2: 최근 반대 방향 봉 감지!
-        # SHORT = 최근 3봉 양봉 다수 = 반등 시작 = 위험!
+        # 🚨 페널티 2: 최근 3봉 반대 방향!
         if recent_closes and recent_opens and len(recent_closes) >= 3:
             r_c = recent_closes[-3:]
             r_o = recent_opens[-3:]
             opposite_bars = 0
             for o, c in zip(r_o, r_c):
-                if is_down and c > o:  # SHORT인데 양봉!
+                if is_down and c > o:
                     opposite_bars += 1
-                elif not is_down and c < o:  # LONG인데 음봉!
+                elif not is_down and c < o:
                     opposite_bars += 1
-            if opposite_bars >= 2:  # 최근 3봉 중 2봉+ 반대!
-                penalty += 0.15
+            if opposite_bars >= 2:
+                pval = 0.10 if is_sustained else 0.15
+                penalty += pval
                 direction_word = "양봉" if is_down else "음봉"
-                reasons.append(f"⚠️ 최근 3봉 = {direction_word} {opposite_bars}봉 (반등 위험!)")
+                note = " (완화)" if is_sustained else ""
+                reasons.append(f"⚠️ 최근 3봉 = {direction_word} {opposite_bars}봉 (반등 위험!{note})")
 
         total = (
             symbol_score + stage_score + bars_score
-            + continuity_score + change_score + dist_score
+            + continuity_score + streak_score + trend_score + body_score
+            + change_score + dist_score + preference_bonus
             - penalty
         )
         return round(min(max(total, 0.0), 1.0), 4), reasons
