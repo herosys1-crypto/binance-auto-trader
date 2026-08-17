@@ -306,12 +306,14 @@ def start_scheduler() -> None:
     # 실제로는 20s 마다 1번만 실행 (½ 빈도). #103 trailing 자동 발동 지연 원인 추정.
     # lock TTL 8s 로 변경 → Interval 10s 보다 짧아 매 사이클 정상 실행.
     # run_tp_sl_once 자체는 보통 1~5s 소요 (active strategy 수 따라), 8s 충분.
-    scheduler.add_job(guarded_job("tp_sl", 8, run_tp_sl_once), trigger=IntervalTrigger(seconds=10), id="tp_sl", replace_existing=True, max_instances=1, coalesce=True)
+    # 🌟 v171 (2026-08-17): API Ban 재발 방지! interval 10s → 15s (33% 감소!)
+    # 사장님 8/17 21:50 UTC = API Ban -1003 여러 번 발생! 근본 = 너무 많은 호출!
+    scheduler.add_job(guarded_job("tp_sl", 12, run_tp_sl_once), trigger=IntervalTrigger(seconds=15), id="tp_sl", replace_existing=True, max_instances=1, coalesce=True)
     scheduler.add_job(guarded_job("symbol_sync_daily", 3600, run_symbol_sync_once), trigger=CronTrigger(hour=3, minute=0), id="symbol_sync_daily", replace_existing=True, max_instances=1, coalesce=True)
-    # 재진입 자동화 — 매 30초마다 검사 (lock TTL 25s 로 중복 방지)
-    scheduler.add_job(guarded_job("auto_reentry", 25, lambda: run_auto_reentry_once(decrypt_text)), trigger=IntervalTrigger(seconds=30), id="auto_reentry", replace_existing=True, max_instances=1, coalesce=True)
-    # Stage 2~N 자동 진입 트리거 감시 — 매 10초 (Critical: 이전엔 stage 1 만 자동, 2~N 은 수동 필요했던 버그 fix)
-    scheduler.add_job(guarded_job("stage_trigger", 8, lambda: run_stage_trigger_once(decrypt_text)), trigger=IntervalTrigger(seconds=10), id="stage_trigger", replace_existing=True, max_instances=1, coalesce=True)
+    # 재진입 자동화 — 매 60초 (v171: 30s → 60s 감소! auto_reentry는 실시간 필요 X)
+    scheduler.add_job(guarded_job("auto_reentry", 50, lambda: run_auto_reentry_once(decrypt_text)), trigger=IntervalTrigger(seconds=60), id="auto_reentry", replace_existing=True, max_instances=1, coalesce=True)
+    # Stage 2~N 자동 진입 트리거 감시 — 매 15초 (v171: 10s → 15s 감소!)
+    scheduler.add_job(guarded_job("stage_trigger", 12, lambda: run_stage_trigger_once(decrypt_text)), trigger=IntervalTrigger(seconds=15), id="stage_trigger", replace_existing=True, max_instances=1, coalesce=True)
     # Daily loss limit 체크 — 매 1분 (settings.daily_loss_limit_usdt 미설정 시 no-op).
     # audit 2026-05-04: AccountDailyLossLimiter 가 호출되는 곳 0건이라 안전장치 무력 상태였음.
     scheduler.add_job(guarded_job("daily_loss_check", 50, run_daily_loss_check_once), trigger=IntervalTrigger(minutes=1), id="daily_loss_check", replace_existing=True, max_instances=1, coalesce=True)
