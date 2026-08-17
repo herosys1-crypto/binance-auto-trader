@@ -30,6 +30,133 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/bb-middle-scan", tags=["bb-middle-scan"])
 
 
+# 🎯 v169 사장님 (2026-08-17): 보조지표 종합 분석!
+# 사장님 CYSUSDT 4H 차트 = 4구간 (상승/정점/하락+반등/큰 하락 지지 반등)
+# = 반등 구간은 피하고! 하락 구간에서 진입! + RSI/MACD/OBV/Vol 종합!
+
+def _calc_rsi(closes: list[float], period: int = 14) -> float | None:
+    """Wilder RSI = 0~100"""
+    if len(closes) < period + 1:
+        return None
+    gains, losses = [], []
+    for i in range(1, period + 1):
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(diff, 0))
+        losses.append(max(-diff, 0))
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    for i in range(period + 1, len(closes)):
+        diff = closes[i] - closes[i - 1]
+        gain = max(diff, 0)
+        loss = max(-diff, 0)
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+def _calc_macd(closes: list[float], fast: int = 12, slow: int = 26, signal: int = 9) -> dict | None:
+    """MACD = macd/signal/hist"""
+    if len(closes) < slow + signal:
+        return None
+
+    def _ema(data: list[float], period: int) -> list[float]:
+        alpha = 2 / (period + 1)
+        ema = [data[0]]
+        for x in data[1:]:
+            ema.append((x - ema[-1]) * alpha + ema[-1])
+        return ema
+
+    ema_fast = _ema(closes, fast)
+    ema_slow = _ema(closes, slow)
+    macd_line = [f - s for f, s in zip(ema_fast, ema_slow)]
+    signal_line = _ema(macd_line, signal)
+    return {
+        "macd": macd_line[-1],
+        "signal": signal_line[-1],
+        "hist": macd_line[-1] - signal_line[-1],
+    }
+
+
+def _calc_obv_slope(closes: list[float], volumes: list[float], lookback: int = 10) -> float | None:
+    """OBV 최근 lookback 봉 기울기 (%)"""
+    if len(closes) < lookback + 1 or len(volumes) < lookback + 1:
+        return None
+    obv = [0.0]
+    for i in range(1, len(closes)):
+        if closes[i] > closes[i - 1]:
+            obv.append(obv[-1] + volumes[i])
+        elif closes[i] < closes[i - 1]:
+            obv.append(obv[-1] - volumes[i])
+        else:
+            obv.append(obv[-1])
+    recent = obv[-lookback:]
+    base = abs(recent[0]) if recent[0] != 0 else 1.0
+    return (recent[-1] - recent[0]) / base
+
+
+def _calc_vol_trend(volumes: list[float], lookback: int = 10) -> float:
+    """거래량 = 최근 vs 이전 평균 비율 (>1 = 증가!)"""
+    if len(volumes) < lookback * 2:
+        return 1.0
+    recent = sum(volumes[-lookback:]) / lookback
+    prev = sum(volumes[-lookback * 2:-lookback]) / lookback
+    return recent / prev if prev > 0 else 1.0
+
+
+def _detect_regime(
+    closes: list[float], highs: list[float], lows: list[float],
+    up: list[float | None], lo: list[float | None],
+) -> str:
+    """🌟 v169 사장님 4구간 자동 감지!
+
+    UPTREND / PEAK_VOLATILE / DOWNTREND_STRONG / BOTTOM_BOUNCE / NEUTRAL
+
+    사장님 사상 (CYSUSDT 4H 예시):
+    - 1️⃣ 상승 지지 = UPTREND (진입 X)
+    - 2️⃣ 정점 = PEAK_VOLATILE (진입 X, 변동성!)
+    - 3️⃣ 하락 + 반등 = DOWNTREND_STRONG (SHORT 시점!) ⭐
+    - 4️⃣ 큰 하락 지지 반등 = BOTTOM_BOUNCE (진입 X, 반등 위험!)
+    """
+    n = min(30, len(closes))
+    if n < 20:
+        return "UNKNOWN"
+
+    close_now = closes[-1]
+    close_20 = closes[-20]
+    close_10 = closes[-10]
+    close_5 = closes[-5]
+    change_20 = (close_now - close_20) / close_20 if close_20 > 0 else 0
+    change_10 = (close_now - close_10) / close_10 if close_10 > 0 else 0
+    change_5 = (close_now - close_5) / close_5 if close_5 > 0 else 0
+
+    high_max = max(highs[-30:])
+    low_min = min(lows[-30:])
+    dist_from_top = (high_max - close_now) / high_max if high_max > 0 else 0
+    dist_from_bottom = (close_now - low_min) / low_min if low_min > 0 else 0
+
+    # BOLL 위치 (하단=0 / 중단=0.5 / 상단=1)
+    bb_pos = 0.5
+    if up and up[-1] and lo and lo[-1] and up[-1] != lo[-1]:
+        bb_pos = (close_now - lo[-1]) / (up[-1] - lo[-1])
+
+    # 1️⃣ UPTREND = 30% 이상 상승 + 최근 10봉 지지!
+    if change_20 > 0.20 and change_10 > -0.05:
+        return "UPTREND"
+    # 2️⃣ PEAK_VOLATILE = 정점 10% 안 + 저점 30%+ 위!
+    if dist_from_top < 0.10 and dist_from_bottom > 0.30:
+        return "PEAK_VOLATILE"
+    # 4️⃣ BOTTOM_BOUNCE = BOLL 하단 근처 + 최근 5봉 반등!
+    if bb_pos < 0.25 and change_5 > -0.03:
+        return "BOTTOM_BOUNCE"
+    # 3️⃣ DOWNTREND_STRONG = 20봉 -10% 이상 하락 + 10봉도 하락!
+    if change_20 < -0.10 and change_10 < 0:
+        return "DOWNTREND_STRONG"
+    return "NEUTRAL"
+
+
 @router.get("/scan")
 def scan_bb_middle(
     interval: str = Query(default="4h", pattern="^(4h|15m|1h|1d)$",
@@ -191,6 +318,11 @@ def scan_bb_breakdown(
         recent_opens: list[float] | None = None,
         current_price: float = 0,
         bb_upper: float = 0, bb_lower: float = 0,
+        rsi: float | None = None,
+        macd: dict | None = None,
+        obv_slope: float | None = None,
+        vol_trend: float = 1.0,
+        regime: str = "NEUTRAL",
     ) -> tuple[float, list[str]]:
         """🎯 v168 사장님 사상 3 시나리오 + 학습 강화 성공 가능성 (0.0 ~ 1.0)
 
@@ -380,10 +512,106 @@ def scan_bb_breakdown(
                 note = " (완화)" if is_sustained else ""
                 reasons.append(f"⚠️ 최근 3봉 = {direction_word} {opposite_bars}봉 (반등 위험!{note})")
 
+        # 🌟 v169 사장님 (2026-08-17): 보조지표 종합!
+        # RSI/MACD/OBV/Vol 종합 분석 = ±10% 조정!
+        tech_score = 0.0
+        if is_down:
+            # ═══ SHORT (하락 방향!) 지표 조합! ═══
+            if rsi is not None:
+                if 25 <= rsi < 45:
+                    tech_score += 0.05
+                    reasons.append(f"📊 RSI {rsi:.0f} (SHORT 여유!)")
+                elif rsi < 25:
+                    tech_score -= 0.05
+                    reasons.append(f"⚠️ RSI {rsi:.0f} (과매도 반등 위험!)")
+                elif rsi >= 60:
+                    tech_score += 0.03
+                    reasons.append(f"📊 RSI {rsi:.0f} (상승 → SHORT 진입!)")
+            if macd is not None:
+                if macd["macd"] < macd["signal"] and macd["hist"] < 0:
+                    tech_score += 0.05
+                    reasons.append("📉 MACD 하락!")
+                elif macd["hist"] > 0 and macd["hist"] > macd["signal"] * 0.1:
+                    tech_score -= 0.03
+                    reasons.append("⚠️ MACD 상승 (반등!)")
+            if obv_slope is not None:
+                if obv_slope < -0.05:
+                    tech_score += 0.03
+                    reasons.append(f"📉 OBV -{abs(obv_slope)*100:.0f}%")
+                elif obv_slope > 0.05:
+                    tech_score -= 0.03
+                    reasons.append(f"⚠️ OBV +{obv_slope*100:.0f}%")
+            # 거래량 = 하락 매도 확인!
+            if vol_trend > 1.3:
+                tech_score += 0.02
+                reasons.append(f"📊 거래량 +{(vol_trend-1)*100:.0f}%")
+        else:
+            # ═══ LONG (상승 방향!) 지표 조합! ═══
+            if rsi is not None:
+                if 55 <= rsi < 75:
+                    tech_score += 0.05
+                    reasons.append(f"📊 RSI {rsi:.0f} (LONG 여유!)")
+                elif rsi > 75:
+                    tech_score -= 0.05
+                    reasons.append(f"⚠️ RSI {rsi:.0f} (과매수 조정 위험!)")
+                elif rsi <= 40:
+                    tech_score += 0.03
+                    reasons.append(f"📊 RSI {rsi:.0f} (하락 → LONG 진입!)")
+            if macd is not None:
+                if macd["macd"] > macd["signal"] and macd["hist"] > 0:
+                    tech_score += 0.05
+                    reasons.append("📈 MACD 상승!")
+                elif macd["hist"] < 0:
+                    tech_score -= 0.03
+                    reasons.append("⚠️ MACD 하락 (조정!)")
+            if obv_slope is not None:
+                if obv_slope > 0.05:
+                    tech_score += 0.03
+                    reasons.append(f"📈 OBV +{obv_slope*100:.0f}%")
+                elif obv_slope < -0.05:
+                    tech_score -= 0.03
+                    reasons.append(f"⚠️ OBV -{abs(obv_slope)*100:.0f}%")
+            if vol_trend > 1.3:
+                tech_score += 0.02
+                reasons.append(f"📊 거래량 +{(vol_trend-1)*100:.0f}%")
+
+        # 🌟 v169: 4구간 (regime) 반영!
+        # 사장님 사상 = 하락 지속 진입! / 반등/정점 피함!
+        regime_score = 0.0
+        if is_down:
+            # SHORT!
+            if regime == "DOWNTREND_STRONG":
+                regime_score = 0.10  # ⭐ 최적!
+                reasons.append("🎯 하락 지속 (사장님 최적!)")
+            elif regime == "PEAK_VOLATILE":
+                regime_score = 0.05
+                reasons.append("🔺 정점 (하락 전환 가능!)")
+            elif regime == "BOTTOM_BOUNCE":
+                regime_score = -0.15  # 🚫 최악!
+                reasons.append("🚫 저점 반등 (SHORT 위험!)")
+            elif regime == "UPTREND":
+                regime_score = -0.10
+                reasons.append("⚠️ 상승 지지 (SHORT 반대!)")
+        else:
+            # LONG!
+            if regime == "UPTREND":
+                regime_score = 0.10
+                reasons.append("🎯 상승 지지 (사장님 최적!)")
+            elif regime == "BOTTOM_BOUNCE":
+                regime_score = 0.05
+                reasons.append("💡 저점 반등 (LONG 시점!)")
+            elif regime == "PEAK_VOLATILE":
+                regime_score = -0.15
+                reasons.append("🚫 정점 (LONG 위험!)")
+            elif regime == "DOWNTREND_STRONG":
+                regime_score = -0.10
+                reasons.append("⚠️ 하락 지속 (LONG 반대!)")
+
         total = (
             symbol_score + stage_score + bars_score
             + continuity_score + streak_score + trend_score + body_score
             + change_score + dist_score + preference_bonus
+            + tech_score + regime_score
             - penalty
         )
         return round(min(max(total, 0.0), 1.0), 4), reasons
@@ -446,6 +674,16 @@ def scan_bb_breakdown(
             upper_now = up[-1] if up[-1] is not None else 0
             lower_now = lo[-1] if lo[-1] is not None else 0
 
+            # 🌟 v169 사장님: 보조지표 종합 + 4구간 감지!
+            highs_all = [float(k[2]) for k in kl]
+            lows_all = [float(k[3]) for k in kl]
+            volumes_all = [float(k[5]) for k in kl]
+            rsi_val = _calc_rsi(closes[-30:])
+            macd_val = _calc_macd(closes[-60:] if len(closes) >= 60 else closes)
+            obv_val = _calc_obv_slope(closes[-30:], volumes_all[-30:])
+            vol_val = _calc_vol_trend(volumes_all[-30:])
+            regime_val = _detect_regime(closes, highs_all, lows_all, up, lo)
+
             # 최근 5봉 (완료봉만!) middle 대비 close 위치!
             positions = []
             for i in range(-6, -1):  # -6~-2 (완료봉!)
@@ -481,6 +719,12 @@ def scan_bb_breakdown(
                 "change_24h": round(change_24h, 2),
                 "volume_24h": round(volume_24h, 0),
                 "positions_recent": positions,  # 최근 5봉 이탈 여부
+                # 🌟 v169 사장님: UI 표시용 지표!
+                "regime": regime_val,
+                "rsi": round(rsi_val, 1) if rsi_val is not None else None,
+                "macd_hist": round(macd_val["hist"], 6) if macd_val else None,
+                "obv_slope_pct": round(obv_val * 100, 1) if obv_val is not None else None,
+                "vol_trend_pct": round((vol_val - 1) * 100, 1),
             }
 
             # 🎯 3단계 분류 + v165 성공 가능성 계산!
@@ -497,6 +741,8 @@ def scan_bb_breakdown(
                     symbol, "BREAK_SUSTAINED", sustained_bars, change_24h, dist_pct,
                     recent_closes=recent_closes, recent_opens=recent_opens,
                     current_price=current, bb_upper=upper_now, bb_lower=lower_now,
+                    rsi=rsi_val, macd=macd_val, obv_slope=obv_val,
+                    vol_trend=vol_val, regime=regime_val,
                 )
                 sustained.append({
                     **common,
@@ -513,6 +759,8 @@ def scan_bb_breakdown(
                     symbol, "BREAK_STARTED", 0, change_24h, dist_pct,
                     recent_closes=recent_closes, recent_opens=recent_opens,
                     current_price=current, bb_upper=upper_now, bb_lower=lower_now,
+                    rsi=rsi_val, macd=macd_val, obv_slope=obv_val,
+                    vol_trend=vol_val, regime=regime_val,
                 )
                 started.append({
                     **common,
@@ -527,6 +775,8 @@ def scan_bb_breakdown(
                         symbol, "BREAK_PENDING", 0, change_24h, dist_pct,
                         recent_closes=recent_closes, recent_opens=recent_opens,
                         current_price=current, bb_upper=upper_now, bb_lower=lower_now,
+                        rsi=rsi_val, macd=macd_val, obv_slope=obv_val,
+                        vol_trend=vol_val, regime=regime_val,
                     )
                     pending.append({
                         **common,
