@@ -85,18 +85,45 @@ class StrategySuggestionGenerator(BaseAgent):
             config = self._build_config(symbol, side, db=db)  # 프로필 참조!
 
             # 🎓 v135: 심볼 성공률 반영 = confidence 조정!
+            # 🎯 v172 (2026-08-17 사장님!): 신 심볼 우대 + 조정 완화!
+            # 사장님 지적: "신뢰도 85% 이상 없을수 없는데 로직에 문제!"
+            # 원인: 신 심볼(sr=0.5) = 배율 0.75 = 원본 0.90 → 0.675 (필터 탈락!)
+            # 신 로직:
+            #   - 학습 데이터 <5건 = 신 심볼 = 원본 conf 그대로! (판단 유보!)
+            #   - 학습 데이터 5건+ = 완화된 조정 (0.5 → 0.75!)
             raw_conf = float(p.get("confidence", 0.5))
             try:
                 from app.workers.prediction_outcome_worker import get_symbol_success_rate
+                from sqlalchemy import select, func
+                from app.models.strategy_suggestion import StrategySuggestion
+                from datetime import timedelta
+
                 key = (symbol, side)
                 if key not in success_rate_cache:
-                    success_rate_cache[key] = get_symbol_success_rate(db, symbol, side, days=30)
-                sr = success_rate_cache[key]
-                # confidence * (0.5 + sr * 0.5) → sr=0.5(중립) 배율 0.75, sr=1.0 배율 1.0, sr=0 배율 0.5
-                adjusted_conf = raw_conf * (0.5 + sr * 0.5)
+                    sr_val = get_symbol_success_rate(db, symbol, side, days=30)
+                    # v172: 학습 샘플 수 조회!
+                    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+                    samples = db.execute(
+                        select(func.count(StrategySuggestion.id))
+                        .where(StrategySuggestion.symbol == symbol)
+                        .where(StrategySuggestion.side == side)
+                        .where(StrategySuggestion.created_at >= cutoff)
+                        .where(StrategySuggestion.outcome_status.in_(["SUCCESS", "FAIL"]))
+                    ).scalar() or 0
+                    success_rate_cache[key] = (sr_val, samples)
+                sr, samples = success_rate_cache[key]
+
+                # v172: 신 심볼 (샘플 <5) = 원본 conf 그대로!
+                if samples < 5:
+                    adjusted_conf = raw_conf
+                else:
+                    # 학습 심볼 = 완화된 조정 (0.75 + sr * 0.25)
+                    # sr=0.5 → 0.875 / sr=1.0 → 1.0 / sr=0 → 0.75
+                    adjusted_conf = raw_conf * (0.75 + sr * 0.25)
                 adjusted_conf = max(0.10, min(0.99, adjusted_conf))
             except Exception:
                 sr = 0.5
+                samples = 0
                 adjusted_conf = raw_conf
 
             suggestion = StrategySuggestion(
