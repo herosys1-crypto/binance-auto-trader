@@ -30,6 +30,133 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/bb-middle-scan", tags=["bb-middle-scan"])
 
 
+# 🎯 v169 사장님 (2026-08-17): 보조지표 종합 분석!
+# 사장님 CYSUSDT 4H 차트 = 4구간 (상승/정점/하락+반등/큰 하락 지지 반등)
+# = 반등 구간은 피하고! 하락 구간에서 진입! + RSI/MACD/OBV/Vol 종합!
+
+def _calc_rsi(closes: list[float], period: int = 14) -> float | None:
+    """Wilder RSI = 0~100"""
+    if len(closes) < period + 1:
+        return None
+    gains, losses = [], []
+    for i in range(1, period + 1):
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(diff, 0))
+        losses.append(max(-diff, 0))
+    avg_gain = sum(gains) / period
+    avg_loss = sum(losses) / period
+    for i in range(period + 1, len(closes)):
+        diff = closes[i] - closes[i - 1]
+        gain = max(diff, 0)
+        loss = max(-diff, 0)
+        avg_gain = (avg_gain * (period - 1) + gain) / period
+        avg_loss = (avg_loss * (period - 1) + loss) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+def _calc_macd(closes: list[float], fast: int = 12, slow: int = 26, signal: int = 9) -> dict | None:
+    """MACD = macd/signal/hist"""
+    if len(closes) < slow + signal:
+        return None
+
+    def _ema(data: list[float], period: int) -> list[float]:
+        alpha = 2 / (period + 1)
+        ema = [data[0]]
+        for x in data[1:]:
+            ema.append((x - ema[-1]) * alpha + ema[-1])
+        return ema
+
+    ema_fast = _ema(closes, fast)
+    ema_slow = _ema(closes, slow)
+    macd_line = [f - s for f, s in zip(ema_fast, ema_slow)]
+    signal_line = _ema(macd_line, signal)
+    return {
+        "macd": macd_line[-1],
+        "signal": signal_line[-1],
+        "hist": macd_line[-1] - signal_line[-1],
+    }
+
+
+def _calc_obv_slope(closes: list[float], volumes: list[float], lookback: int = 10) -> float | None:
+    """OBV 최근 lookback 봉 기울기 (%)"""
+    if len(closes) < lookback + 1 or len(volumes) < lookback + 1:
+        return None
+    obv = [0.0]
+    for i in range(1, len(closes)):
+        if closes[i] > closes[i - 1]:
+            obv.append(obv[-1] + volumes[i])
+        elif closes[i] < closes[i - 1]:
+            obv.append(obv[-1] - volumes[i])
+        else:
+            obv.append(obv[-1])
+    recent = obv[-lookback:]
+    base = abs(recent[0]) if recent[0] != 0 else 1.0
+    return (recent[-1] - recent[0]) / base
+
+
+def _calc_vol_trend(volumes: list[float], lookback: int = 10) -> float:
+    """거래량 = 최근 vs 이전 평균 비율 (>1 = 증가!)"""
+    if len(volumes) < lookback * 2:
+        return 1.0
+    recent = sum(volumes[-lookback:]) / lookback
+    prev = sum(volumes[-lookback * 2:-lookback]) / lookback
+    return recent / prev if prev > 0 else 1.0
+
+
+def _detect_regime(
+    closes: list[float], highs: list[float], lows: list[float],
+    up: list[float | None], lo: list[float | None],
+) -> str:
+    """🌟 v169 사장님 4구간 자동 감지!
+
+    UPTREND / PEAK_VOLATILE / DOWNTREND_STRONG / BOTTOM_BOUNCE / NEUTRAL
+
+    사장님 사상 (CYSUSDT 4H 예시):
+    - 1️⃣ 상승 지지 = UPTREND (진입 X)
+    - 2️⃣ 정점 = PEAK_VOLATILE (진입 X, 변동성!)
+    - 3️⃣ 하락 + 반등 = DOWNTREND_STRONG (SHORT 시점!) ⭐
+    - 4️⃣ 큰 하락 지지 반등 = BOTTOM_BOUNCE (진입 X, 반등 위험!)
+    """
+    n = min(30, len(closes))
+    if n < 20:
+        return "UNKNOWN"
+
+    close_now = closes[-1]
+    close_20 = closes[-20]
+    close_10 = closes[-10]
+    close_5 = closes[-5]
+    change_20 = (close_now - close_20) / close_20 if close_20 > 0 else 0
+    change_10 = (close_now - close_10) / close_10 if close_10 > 0 else 0
+    change_5 = (close_now - close_5) / close_5 if close_5 > 0 else 0
+
+    high_max = max(highs[-30:])
+    low_min = min(lows[-30:])
+    dist_from_top = (high_max - close_now) / high_max if high_max > 0 else 0
+    dist_from_bottom = (close_now - low_min) / low_min if low_min > 0 else 0
+
+    # BOLL 위치 (하단=0 / 중단=0.5 / 상단=1)
+    bb_pos = 0.5
+    if up and up[-1] and lo and lo[-1] and up[-1] != lo[-1]:
+        bb_pos = (close_now - lo[-1]) / (up[-1] - lo[-1])
+
+    # 1️⃣ UPTREND = 30% 이상 상승 + 최근 10봉 지지!
+    if change_20 > 0.20 and change_10 > -0.05:
+        return "UPTREND"
+    # 2️⃣ PEAK_VOLATILE = 정점 10% 안 + 저점 30%+ 위!
+    if dist_from_top < 0.10 and dist_from_bottom > 0.30:
+        return "PEAK_VOLATILE"
+    # 4️⃣ BOTTOM_BOUNCE = BOLL 하단 근처 + 최근 5봉 반등!
+    if bb_pos < 0.25 and change_5 > -0.03:
+        return "BOTTOM_BOUNCE"
+    # 3️⃣ DOWNTREND_STRONG = 20봉 -10% 이상 하락 + 10봉도 하락!
+    if change_20 < -0.10 and change_10 < 0:
+        return "DOWNTREND_STRONG"
+    return "NEUTRAL"
+
+
 @router.get("/scan")
 def scan_bb_middle(
     interval: str = Query(default="4h", pattern="^(4h|15m|1h|1d)$",
@@ -187,15 +314,42 @@ def scan_bb_breakdown(
     def _calc_success_probability(
         symbol: str, stage: str, sustained_bars: int,
         change_24h: float, dist_pct: float,
+        recent_closes: list[float] | None = None,
+        recent_opens: list[float] | None = None,
+        current_price: float = 0,
+        bb_upper: float = 0, bb_lower: float = 0,
+        rsi: float | None = None,
+        macd: dict | None = None,
+        obv_slope: float | None = None,
+        vol_trend: float = 1.0,
+        regime: str = "NEUTRAL",
     ) -> tuple[float, list[str]]:
-        """🎯 학습 기반 성공 가능성 계산! (0.0 ~ 1.0)
+        """🎯 v168 사장님 사상 3 시나리오 + 학습 강화 성공 가능성 (0.0 ~ 1.0)
 
-        요소:
-        1. 심볼 30일 성공률 (학습!)  = 최대 40%
-        2. 이탈 단계 = SUSTAINED > STARTED > PENDING = 최대 30%
-        3. 이탈 지속 봉수 (SUSTAINED만!) = 최대 15%
-        4. 24h 변동 크기 = 최대 10%
-        5. middle 이격 거리 = 최대 5%
+        사장님 사상 (2026-08-17):
+        - 💎 최고 수익 = PENDING → 지속 하락 예상! (도전!)
+        - 🥈 중간 = STARTED → 지속 하락! (수익+안전 중간!)
+        - 🌟 최고 안전 = SUSTAINED (지속 하락) = 사장님 선호! (수익 적어도 확실!)
+
+        학습 강화 요소 (신!):
+        - 연속 음봉 스트릭! (SHORT 확실성!)
+        - 저점 갱신 추세! (하락 지속성!)
+        - 음봉/양봉 body 크기 비율! (모멘텀!)
+
+        요소 (합계 + 패널티 - 사장님 SUSTAINED 우대!):
+        1. 심볼 30일 학습 성공률 = 최대 25% (30 → 25!)
+        2. 이탈 단계 = 최대 25%
+        3. 이탈 지속 봉수 = 최대 12%
+        4. 하락 지속 강도 (v167) = 최대 15%
+        5. 🆕 연속 음봉 스트릭 = 최대 10%
+        6. 🆕 저점 갱신 추세 = 최대 8%
+        7. 🆕 body 비율 = 최대 5%
+        8. 24h 변동 = 최대 5%
+        9. middle 이격 = 최대 5%
+        10. 🌟 사장님 선호 가산 = SUSTAINED = +10% (안전 우대!)
+        패널티 (SUSTAINED = 완화!):
+        - BB 반대 밴드 근접: SUSTAINED -10% / 기타 -20%
+        - 최근 3봉 반대 방향: SUSTAINED -10% / 기타 -15%
         """
         reasons: list[str] = []
         # 1. 심볼 학습 성공률!
@@ -203,13 +357,13 @@ def scan_bb_breakdown(
             sr = get_symbol_success_rate(db, symbol, recommend_side, days=30)
         except Exception:
             sr = 0.5
-        symbol_score = sr * 0.40
+        symbol_score = sr * 0.25
         reasons.append(f"심볼 학습 {int(sr*100)}%")
 
         # 2. 단계 점수!
         stage_scores = {
-            "BREAK_SUSTAINED": 0.30,
-            "BREAK_STARTED": 0.20,
+            "BREAK_SUSTAINED": 0.25,
+            "BREAK_STARTED": 0.15,
             "BREAK_PENDING": 0.05,
         }
         stage_score = stage_scores.get(stage, 0.0)
@@ -218,27 +372,248 @@ def scan_bb_breakdown(
         # 3. 지속 봉수 (SUSTAINED만!)
         bars_score = 0.0
         if stage == "BREAK_SUSTAINED":
-            # 3봉 = 0.05, 5봉 = 0.10, 7봉+ = 0.15!
-            bars_score = min((sustained_bars - 2) * 0.025, 0.15)
+            bars_score = min((sustained_bars - 2) * 0.02, 0.12)
             reasons.append(f"지속 {sustained_bars}봉")
 
-        # 4. 24h 변동!
-        # ±20% = 0.10 만점!
-        change_score = min(abs(change_24h) / 200, 0.10)
+        # 4. v167 하락 지속 강도!
+        continuity_score = 0.0
+        if recent_closes and recent_opens and len(recent_closes) >= 10 and len(recent_opens) >= 10:
+            recent20_c = recent_closes[-20:] if len(recent_closes) >= 20 else recent_closes
+            recent20_o = recent_opens[-20:] if len(recent_opens) >= 20 else recent_opens
+            wanted_bars = 0
+            for o, c in zip(recent20_o, recent20_c):
+                if is_down and c < o:
+                    wanted_bars += 1
+                elif not is_down and c > o:
+                    wanted_bars += 1
+            wanted_ratio = wanted_bars / len(recent20_c) if recent20_c else 0
+            continuity_score = min(max((wanted_ratio - 0.4) * 2 * 0.15, 0), 0.15)
+            direction_word = "음봉" if is_down else "양봉"
+            reasons.append(f"지속성 {direction_word} {wanted_bars}/{len(recent20_c)}봉")
+
+        # 🆕 5. v168: 연속 스트릭!
+        streak_score = 0.0
+        if recent_closes and recent_opens and len(recent_closes) >= 5:
+            streak = 0
+            for o, c in zip(reversed(recent_opens), reversed(recent_closes)):
+                if is_down and c < o:
+                    streak += 1
+                elif not is_down and c > o:
+                    streak += 1
+                else:
+                    break
+            if streak >= 3:
+                streak_score = min((streak - 2) * 0.025, 0.10)
+                direction_word = "음봉" if is_down else "양봉"
+                reasons.append(f"🔥 연속 {streak}봉 {direction_word}!")
+
+        # 🆕 6. v168: 저점/고점 갱신 추세!
+        trend_score = 0.0
+        if recent_closes and len(recent_closes) >= 5:
+            recent5_c = recent_closes[-5:]
+            updates = 0
+            if is_down:
+                for i in range(1, len(recent5_c)):
+                    if recent5_c[i] < recent5_c[i - 1]:
+                        updates += 1
+            else:
+                for i in range(1, len(recent5_c)):
+                    if recent5_c[i] > recent5_c[i - 1]:
+                        updates += 1
+            trend_score = (updates / 4) * 0.08
+            if updates >= 3:
+                direction_word = "저점" if is_down else "고점"
+                reasons.append(f"📉 {direction_word} 갱신 {updates}/4봉")
+
+        # 🆕 7. v168: body 크기 비율 (모멘텀!)
+        body_score = 0.0
+        if recent_closes and recent_opens and len(recent_closes) >= 10:
+            wanted_bodies = []
+            opposite_bodies = []
+            for o, c in zip(recent_opens[-10:], recent_closes[-10:]):
+                body = abs(c - o)
+                if is_down and c < o:
+                    wanted_bodies.append(body)
+                elif not is_down and c > o:
+                    wanted_bodies.append(body)
+                elif is_down and c > o:
+                    opposite_bodies.append(body)
+                elif not is_down and c < o:
+                    opposite_bodies.append(body)
+            if wanted_bodies and opposite_bodies:
+                avg_want = sum(wanted_bodies) / len(wanted_bodies)
+                avg_opp = sum(opposite_bodies) / len(opposite_bodies)
+                if avg_want > avg_opp and avg_opp > 0:
+                    ratio = min(avg_want / avg_opp, 3.0)
+                    body_score = min((ratio - 1.0) * 0.025, 0.05)
+                    if ratio >= 1.5:
+                        reasons.append(f"💪 body 비율 {ratio:.1f}x")
+            elif wanted_bodies and not opposite_bodies:
+                body_score = 0.05
+                reasons.append("💪 반대 봉 0개!")
+
+        # 8. 24h 변동!
+        change_score = min(abs(change_24h) / 400, 0.05)
         if abs(change_24h) >= 10:
             reasons.append(f"24h {change_24h:+.1f}%")
 
-        # 5. middle 이격!
-        # 이격 클수록 = 확실! (SUSTAINED에서!)
-        # DOWN = 아래로 이격 큰 순 (음수!)
-        # UP = 위로 이격 큰 순 (양수!)
+        # 9. middle 이격!
         dist_score = 0.0
         if stage == "BREAK_SUSTAINED":
             wanted_dir_dist = -dist_pct if is_down else dist_pct
             if wanted_dir_dist > 0:
                 dist_score = min(wanted_dir_dist / 200, 0.05)
 
-        total = symbol_score + stage_score + bars_score + change_score + dist_score
+        # 🌟 10. v168 사장님 선호: SUSTAINED = 안전 우대!
+        preference_bonus = 0.0
+        if stage == "BREAK_SUSTAINED":
+            preference_bonus = 0.10
+            reasons.append("🌟 사장님 선호 (안전!)")
+
+        # ═══════════ 패널티 (SUSTAINED = 완화!) ═══════════
+        penalty = 0.0
+        is_sustained = stage == "BREAK_SUSTAINED"
+
+        # 🚨 페널티 1: BB 반대 밴드 근접!
+        if current_price > 0 and bb_lower > 0 and bb_upper > 0:
+            band_width = bb_upper - bb_lower
+            if band_width > 0:
+                max_penalty = 0.10 if is_sustained else 0.20
+                multiplier = 0.333 if is_sustained else 0.667
+                if is_down:
+                    dist_from_lower = (current_price - bb_lower) / band_width
+                    if dist_from_lower < 0.30:
+                        penalty_val = min((0.30 - dist_from_lower) * multiplier, max_penalty)
+                        penalty += penalty_val
+                        note = " (완화)" if is_sustained else ""
+                        reasons.append(f"⚠️ BB 하단 근접 ({dist_from_lower*100:.0f}%){note}")
+                else:
+                    dist_to_upper = (bb_upper - current_price) / band_width
+                    if dist_to_upper < 0.30:
+                        penalty_val = min((0.30 - dist_to_upper) * multiplier, max_penalty)
+                        penalty += penalty_val
+                        note = " (완화)" if is_sustained else ""
+                        reasons.append(f"⚠️ BB 상단 근접 ({dist_to_upper*100:.0f}%){note}")
+
+        # 🚨 페널티 2: 최근 3봉 반대 방향!
+        if recent_closes and recent_opens and len(recent_closes) >= 3:
+            r_c = recent_closes[-3:]
+            r_o = recent_opens[-3:]
+            opposite_bars = 0
+            for o, c in zip(r_o, r_c):
+                if is_down and c > o:
+                    opposite_bars += 1
+                elif not is_down and c < o:
+                    opposite_bars += 1
+            if opposite_bars >= 2:
+                pval = 0.10 if is_sustained else 0.15
+                penalty += pval
+                direction_word = "양봉" if is_down else "음봉"
+                note = " (완화)" if is_sustained else ""
+                reasons.append(f"⚠️ 최근 3봉 = {direction_word} {opposite_bars}봉 (반등 위험!{note})")
+
+        # 🌟 v169 사장님 (2026-08-17): 보조지표 종합!
+        # RSI/MACD/OBV/Vol 종합 분석 = ±10% 조정!
+        tech_score = 0.0
+        if is_down:
+            # ═══ SHORT (하락 방향!) 지표 조합! ═══
+            if rsi is not None:
+                if 25 <= rsi < 45:
+                    tech_score += 0.05
+                    reasons.append(f"📊 RSI {rsi:.0f} (SHORT 여유!)")
+                elif rsi < 25:
+                    tech_score -= 0.05
+                    reasons.append(f"⚠️ RSI {rsi:.0f} (과매도 반등 위험!)")
+                elif rsi >= 60:
+                    tech_score += 0.03
+                    reasons.append(f"📊 RSI {rsi:.0f} (상승 → SHORT 진입!)")
+            if macd is not None:
+                if macd["macd"] < macd["signal"] and macd["hist"] < 0:
+                    tech_score += 0.05
+                    reasons.append("📉 MACD 하락!")
+                elif macd["hist"] > 0 and macd["hist"] > macd["signal"] * 0.1:
+                    tech_score -= 0.03
+                    reasons.append("⚠️ MACD 상승 (반등!)")
+            if obv_slope is not None:
+                if obv_slope < -0.05:
+                    tech_score += 0.03
+                    reasons.append(f"📉 OBV -{abs(obv_slope)*100:.0f}%")
+                elif obv_slope > 0.05:
+                    tech_score -= 0.03
+                    reasons.append(f"⚠️ OBV +{obv_slope*100:.0f}%")
+            # 거래량 = 하락 매도 확인!
+            if vol_trend > 1.3:
+                tech_score += 0.02
+                reasons.append(f"📊 거래량 +{(vol_trend-1)*100:.0f}%")
+        else:
+            # ═══ LONG (상승 방향!) 지표 조합! ═══
+            if rsi is not None:
+                if 55 <= rsi < 75:
+                    tech_score += 0.05
+                    reasons.append(f"📊 RSI {rsi:.0f} (LONG 여유!)")
+                elif rsi > 75:
+                    tech_score -= 0.05
+                    reasons.append(f"⚠️ RSI {rsi:.0f} (과매수 조정 위험!)")
+                elif rsi <= 40:
+                    tech_score += 0.03
+                    reasons.append(f"📊 RSI {rsi:.0f} (하락 → LONG 진입!)")
+            if macd is not None:
+                if macd["macd"] > macd["signal"] and macd["hist"] > 0:
+                    tech_score += 0.05
+                    reasons.append("📈 MACD 상승!")
+                elif macd["hist"] < 0:
+                    tech_score -= 0.03
+                    reasons.append("⚠️ MACD 하락 (조정!)")
+            if obv_slope is not None:
+                if obv_slope > 0.05:
+                    tech_score += 0.03
+                    reasons.append(f"📈 OBV +{obv_slope*100:.0f}%")
+                elif obv_slope < -0.05:
+                    tech_score -= 0.03
+                    reasons.append(f"⚠️ OBV -{abs(obv_slope)*100:.0f}%")
+            if vol_trend > 1.3:
+                tech_score += 0.02
+                reasons.append(f"📊 거래량 +{(vol_trend-1)*100:.0f}%")
+
+        # 🌟 v169: 4구간 (regime) 반영!
+        # 사장님 사상 = 하락 지속 진입! / 반등/정점 피함!
+        regime_score = 0.0
+        if is_down:
+            # SHORT!
+            if regime == "DOWNTREND_STRONG":
+                regime_score = 0.10  # ⭐ 최적!
+                reasons.append("🎯 하락 지속 (사장님 최적!)")
+            elif regime == "PEAK_VOLATILE":
+                regime_score = 0.05
+                reasons.append("🔺 정점 (하락 전환 가능!)")
+            elif regime == "BOTTOM_BOUNCE":
+                regime_score = -0.15  # 🚫 최악!
+                reasons.append("🚫 저점 반등 (SHORT 위험!)")
+            elif regime == "UPTREND":
+                regime_score = -0.10
+                reasons.append("⚠️ 상승 지지 (SHORT 반대!)")
+        else:
+            # LONG!
+            if regime == "UPTREND":
+                regime_score = 0.10
+                reasons.append("🎯 상승 지지 (사장님 최적!)")
+            elif regime == "BOTTOM_BOUNCE":
+                regime_score = 0.05
+                reasons.append("💡 저점 반등 (LONG 시점!)")
+            elif regime == "PEAK_VOLATILE":
+                regime_score = -0.15
+                reasons.append("🚫 정점 (LONG 위험!)")
+            elif regime == "DOWNTREND_STRONG":
+                regime_score = -0.10
+                reasons.append("⚠️ 하락 지속 (LONG 반대!)")
+
+        total = (
+            symbol_score + stage_score + bars_score
+            + continuity_score + streak_score + trend_score + body_score
+            + change_score + dist_score + preference_bonus
+            + tech_score + regime_score
+            - penalty
+        )
         return round(min(max(total, 0.0), 1.0), 4), reasons
 
     account = db.execute(
@@ -293,6 +668,21 @@ def scan_bb_breakdown(
 
             change_24h = float(t.get("priceChangePercent", 0) or 0)
             volume_24h = float(t.get("quoteVolume", 0) or 0)
+            # v167: 반등 감지용 완료봉 = opens/closes 배열!
+            recent_opens = [float(k[1]) for k in kl[:-1]]  # 완료봉만!
+            recent_closes = closes[:-1]  # 완료봉만!
+            upper_now = up[-1] if up[-1] is not None else 0
+            lower_now = lo[-1] if lo[-1] is not None else 0
+
+            # 🌟 v169 사장님: 보조지표 종합 + 4구간 감지!
+            highs_all = [float(k[2]) for k in kl]
+            lows_all = [float(k[3]) for k in kl]
+            volumes_all = [float(k[5]) for k in kl]
+            rsi_val = _calc_rsi(closes[-30:])
+            macd_val = _calc_macd(closes[-60:] if len(closes) >= 60 else closes)
+            obv_val = _calc_obv_slope(closes[-30:], volumes_all[-30:])
+            vol_val = _calc_vol_trend(volumes_all[-30:])
+            regime_val = _detect_regime(closes, highs_all, lows_all, up, lo)
 
             # 최근 5봉 (완료봉만!) middle 대비 close 위치!
             positions = []
@@ -329,6 +719,12 @@ def scan_bb_breakdown(
                 "change_24h": round(change_24h, 2),
                 "volume_24h": round(volume_24h, 0),
                 "positions_recent": positions,  # 최근 5봉 이탈 여부
+                # 🌟 v169 사장님: UI 표시용 지표!
+                "regime": regime_val,
+                "rsi": round(rsi_val, 1) if rsi_val is not None else None,
+                "macd_hist": round(macd_val["hist"], 6) if macd_val else None,
+                "obv_slope_pct": round(obv_val * 100, 1) if obv_val is not None else None,
+                "vol_trend_pct": round((vol_val - 1) * 100, 1),
             }
 
             # 🎯 3단계 분류 + v165 성공 가능성 계산!
@@ -343,6 +739,10 @@ def scan_bb_breakdown(
                         break
                 prob, reasons = _calc_success_probability(
                     symbol, "BREAK_SUSTAINED", sustained_bars, change_24h, dist_pct,
+                    recent_closes=recent_closes, recent_opens=recent_opens,
+                    current_price=current, bb_upper=upper_now, bb_lower=lower_now,
+                    rsi=rsi_val, macd=macd_val, obv_slope=obv_val,
+                    vol_trend=vol_val, regime=regime_val,
                 )
                 sustained.append({
                     **common,
@@ -357,6 +757,10 @@ def scan_bb_breakdown(
             ):
                 prob, reasons = _calc_success_probability(
                     symbol, "BREAK_STARTED", 0, change_24h, dist_pct,
+                    recent_closes=recent_closes, recent_opens=recent_opens,
+                    current_price=current, bb_upper=upper_now, bb_lower=lower_now,
+                    rsi=rsi_val, macd=macd_val, obv_slope=obv_val,
+                    vol_trend=vol_val, regime=regime_val,
                 )
                 started.append({
                     **common,
@@ -369,6 +773,10 @@ def scan_bb_breakdown(
                 if (is_down and 0 <= dist_pct <= 3.0) or (not is_down and -3.0 <= dist_pct <= 0):
                     prob, reasons = _calc_success_probability(
                         symbol, "BREAK_PENDING", 0, change_24h, dist_pct,
+                        recent_closes=recent_closes, recent_opens=recent_opens,
+                        current_price=current, bb_upper=upper_now, bb_lower=lower_now,
+                        rsi=rsi_val, macd=macd_val, obv_slope=obv_val,
+                        vol_trend=vol_val, regime=regime_val,
                     )
                     pending.append({
                         **common,

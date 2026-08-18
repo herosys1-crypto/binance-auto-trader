@@ -77,7 +77,10 @@
 <script>
 const API_BASE = '/api/v1';
 const params = new URLSearchParams(window.location.search);
-const DIRECTION = (params.get('direction') || 'down').toLowerCase();
+// 🌟 v170 사장님 (2026-08-17): SHORT + LONG 통합!
+// default = both (신!) / down / up 도 지원 (backward compat!)
+const DIRECTION = (params.get('direction') || 'both').toLowerCase();
+const IS_BOTH = DIRECTION === 'both';
 const IS_DOWN = DIRECTION === 'down';
 
 let interval = params.get('interval') || '4h';
@@ -87,9 +90,15 @@ const AUTO_MS = 20000;
 const INTERVALS = ['15m', '1h', '4h', '1d'];
 const INTERVAL_LABEL = {'15m': '15분', '1h': '1시간', '4h': '4시간', '1d': '24시간'};
 
-document.title = IS_DOWN ? `🐻 BB 하락 이탈 (${interval})` : `🐂 BB 상승 돌파 (${interval})`;
-document.getElementById('title').textContent = IS_DOWN ? '🐻 BB 하락 이탈 3단계' : '🐂 BB 상승 돌파 3단계';
-document.getElementById('title').className = 'title ' + (IS_DOWN ? 'sustained' : 'pos');
+function _makeTitle() {
+  if (IS_BOTH) return `🐻🐂 BB 이탈/돌파 통합 (${interval})`;
+  return IS_DOWN ? `🐻 BB 하락 이탈 (${interval})` : `🐂 BB 상승 돌파 (${interval})`;
+}
+document.title = _makeTitle();
+document.getElementById('title').textContent = IS_BOTH
+  ? '🐻🐂 BB 이탈/돌파 통합 (SHORT+LONG)'
+  : (IS_DOWN ? '🐻 BB 하락 이탈 3단계' : '🐂 BB 상승 돌파 3단계');
+document.getElementById('title').className = 'title ' + (IS_BOTH ? '' : (IS_DOWN ? 'sustained' : 'pos'));
 
 function getToken() {
   return localStorage.getItem('access_token')
@@ -120,7 +129,7 @@ function renderIntervals() {
     + `<span class="chip ${auto ? 'on' : ''}" onclick="toggleAuto()">⏱ 자동 20초 ${auto ? 'ON' : 'OFF'}</span>`;
 }
 
-function setIv(iv) { interval = iv; document.title = IS_DOWN ? `🐻 BB 하락 이탈 (${iv})` : `🐂 BB 상승 돌파 (${iv})`; renderIntervals(); load(); }
+function setIv(iv) { interval = iv; document.title = _makeTitle(); renderIntervals(); load(); }
 function toggleAuto() {
   if (timer) { clearInterval(timer); timer = null; }
   else { timer = setInterval(load, AUTO_MS); }
@@ -130,25 +139,40 @@ function toggleAuto() {
 function openBinanceChart(sym) {
   window.open(`https://www.binance.com/en/futures/${encodeURIComponent(sym)}`, `bnc_${sym}`, 'noopener');
 }
-function openAnalysis(sym) {
-  const side = IS_DOWN ? 'SHORT' : 'LONG';
-  window.open(`/static/analysis.html?symbol=${encodeURIComponent(sym)}&side=${side}`, `an_${sym}`, 'width=550,height=700');
+// 🌟 v170: SHORT/LONG 별도 팝업!
+function openAnalysis(sym, sideHint) {
+  const side = sideHint || (IS_DOWN ? 'SHORT' : 'LONG');
+  window.open(`/static/analysis.html?symbol=${encodeURIComponent(sym)}&side=${side}`, `an_${sym}_${side}`, 'width=550,height=700');
+}
+
+async function _loadOneDirection(dir) {
+  const r = await fetch(
+    `${API_BASE}/bb-middle-scan/breakdown?interval=${interval}&direction=${dir}&max_symbols=150`,
+    { headers: { 'Authorization': `Bearer ${getToken()}` } });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
 }
 
 async function load() {
   try {
-    const r = await fetch(
-      `${API_BASE}/bb-middle-scan/breakdown?interval=${interval}&direction=${DIRECTION}&max_symbols=150`,
-      { headers: { 'Authorization': `Bearer ${getToken()}` } });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const data = await r.json();
-    render(data);
+    if (IS_BOTH) {
+      // 🌟 v170: SHORT + LONG 동시 로딩!
+      const [shortData, longData] = await Promise.all([
+        _loadOneDirection('down'),
+        _loadOneDirection('up'),
+      ]);
+      renderBoth(shortData, longData);
+    } else {
+      const data = await _loadOneDirection(DIRECTION);
+      render(data);
+    }
   } catch (e) {
     document.getElementById('content').innerHTML = `<div class="loading" style="color:#ef4444">❌ ${e.message || e}</div>`;
   }
 }
 
 // 🌟 v162 사장님 (2026-08-16): 원클릭 진입 = 1단계 즉시!
+// 🌟 v170: IS_BOTH 모드 = sideOverride 필수 전달!
 function instantEnter(sym, sideOverride) {
   const side = sideOverride || (IS_DOWN ? 'SHORT' : 'LONG');
   if (!confirm(`⚡ ${sym} ${side} = 1단계 즉시 진입?\n\n= 사장님 default profile로 = 신 전략 자동 생성!\n= MARKET 즉시 진입!\n= 되돌릴 수 없음!`)) return;
@@ -175,7 +199,10 @@ function instantEnter(sym, sideOverride) {
   }
 }
 
-function renderStageTable(stage_key, stage_label, stage_class, items) {
+// 🌟 v170: side 명시 (IS_BOTH 모드 지원!)
+function renderStageTable(stage_key, stage_label, stage_class, items, sideHint) {
+  const side = sideHint || (IS_DOWN ? 'SHORT' : 'LONG');
+  const isShort = side === 'SHORT';
   if (!items || items.length === 0) {
     return `<div class="section">
       <div class="section-title ${stage_class}">${stage_label} <span style="color:#64748b">(0)</span></div>
@@ -203,22 +230,46 @@ function renderStageTable(stage_key, stage_label, stage_class, items) {
     // v165: SUSTAINED + 성공률 60%+ = 최우선 (🏆)!
     const rank = isSustained && i === 0 ? '🏆 ' : isSustained && i === 1 ? '🥈 ' : isSustained && i === 2 ? '🥉 ' : '';
 
+    // 🌟 v169: 4구간 배지 + 지표 표시!
+    const regimeBadges = {
+      'DOWNTREND_STRONG': { icon: '🎯', label: '하락', bg: '#dc2626', color: '#fff' },
+      'PEAK_VOLATILE': { icon: '🔺', label: '정점', bg: '#f59e0b', color: '#000' },
+      'BOTTOM_BOUNCE': { icon: '🚫', label: '반등', bg: '#64748b', color: '#fff' },
+      'UPTREND': { icon: '📈', label: '상승', bg: '#22c55e', color: '#000' },
+      'NEUTRAL': { icon: '⚪', label: '중립', bg: '#334155', color: '#94a3b8' },
+    };
+    const r = regimeBadges[s.regime] || regimeBadges['NEUTRAL'];
+    const regimeBadge = `<span class="badge" style="background:${r.bg};color:${r.color};font-size:9px" title="4구간: ${s.regime}">${r.icon}${r.label}</span>`;
+
+    // RSI 색상!
+    let rsiBadge = '';
+    if (s.rsi !== null && s.rsi !== undefined) {
+      const rsiColor = s.rsi < 30 ? '#ef4444' : s.rsi > 70 ? '#22c55e' : '#94a3b8';
+      rsiBadge = `<span style="color:${rsiColor};font-size:10px" title="RSI(14)">R${s.rsi.toFixed(0)}</span>`;
+    }
+
+    // 🌟 v170: side 명시!
+    const btnGradient = isShort
+      ? 'linear-gradient(135deg,#ef4444,#dc2626)'
+      : 'linear-gradient(135deg,#22c55e,#16a34a)';
     const enterBtn = isSustained ? `
-      <button onclick="instantEnter('${s.symbol}')"
-              style="background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff;border:0;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:10px;margin-left:3px;font-weight:600"
-              title="⚡ 1단계 즉시 진입! 성공률 ${probPct}%!">
-        ⚡ 즉시
+      <button onclick="instantEnter('${s.symbol}','${side}')"
+              style="background:${btnGradient};color:#fff;border:0;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:10px;margin-left:3px;font-weight:600"
+              title="⚡ ${side} 1단계 즉시 진입! 성공률 ${probPct}%!">
+        ⚡ ${side}
       </button>` : '';
     return `
       <tr>
         <td class="num" style="color:#64748b">${i + 1}</td>
         <td>
           ${rank}<span class="sym" onclick="openBinanceChart('${s.symbol}')" title="바이낸스!">${s.symbol}</span>
-          <button class="analysis-btn" onclick="openAnalysis('${s.symbol}')" title="분석">📊</button>
+          <button class="analysis-btn" onclick="openAnalysis('${s.symbol}','${side}')" title="${side} 분석">📊</button>
           ${enterBtn}
           ${bars}
+          ${regimeBadge}
         </td>
         <td class="num">${probCell}</td>
+        <td class="num">${rsiBadge}</td>
         <td class="num">${fmtPrice(s.current_price)}</td>
         <td class="num" style="color:#94a3b8">${distTxt}</td>
         <td class="num ${chgCls}">${s.change_24h >= 0 ? '+' : ''}${s.change_24h}%</td>
@@ -230,7 +281,8 @@ function renderStageTable(stage_key, stage_label, stage_class, items) {
     <div class="section-title ${stage_class}">${stage_label} <span style="color:#64748b">(${items.length})</span></div>
     <table>
       <thead><tr>
-        <th class="num">#</th><th>심볼</th><th class="num">🎯 성공률</th><th class="num">현재가</th>
+        <th class="num">#</th><th>심볼 · 4구간</th><th class="num">🎯 성공률</th>
+        <th class="num">RSI</th><th class="num">현재가</th>
         <th class="num">이격</th><th class="num">24h</th><th>최근5봉</th>
       </tr></thead>
       <tbody>${rows}</tbody>
@@ -238,31 +290,72 @@ function renderStageTable(stage_key, stage_label, stage_class, items) {
   </div>`;
 }
 
+function _makeStages(data, isShort) {
+  const sustainedIcon = isShort ? '🔥' : '🚀';
+  return isShort ? [
+    ['sustained', `${sustainedIcon} 이탈 지속 🌟 (안전 SHORT!)`, 'sustained', data.sustained, 'SHORT'],
+    ['started', '📉 이탈 시작 (중간 SHORT!)', 'started', data.started, 'SHORT'],
+    ['pending', '💎 이탈 임박 (도전 SHORT!)', 'pending', data.pending, 'SHORT'],
+  ] : [
+    ['sustained', `${sustainedIcon} 돌파 지속 🌟 (안전 LONG!)`, 'pos', data.sustained, 'LONG'],
+    ['started', '📈 돌파 시작 (중간 LONG!)', 'started', data.started, 'LONG'],
+    ['pending', '💎 돌파 임박 (도전 LONG!)', 'pending', data.pending, 'LONG'],
+  ];
+}
+
+// 🌟 v170: SHORT + LONG 통합 렌더!
+function renderBoth(shortData, longData) {
+  const shortCount = (shortData.counts && shortData.counts.total) || 0;
+  const longCount = (longData.counts && longData.counts.total) || 0;
+  document.getElementById('subtitle').textContent =
+    `${interval} 기준 · SHORT ${shortCount}건 · LONG ${longCount}건`;
+
+  const shortStages = _makeStages(shortData, true);
+  const longStages = _makeStages(longData, false);
+
+  const shortHtml = `
+    <div style="background:rgba(239,68,68,0.1);border:2px solid #dc2626;border-radius:6px;padding:6px 8px;margin-bottom:8px">
+      <div style="font-size:14px;font-weight:bold;color:#ef4444">🐻 SHORT (하락 이탈) · ${shortCount}건</div>
+    </div>
+    ${shortStages.map(([k, l, c, items, side]) => renderStageTable(k, l, c, items, side)).join('')}
+  `;
+  const longHtml = `
+    <div style="background:rgba(34,197,94,0.1);border:2px solid #16a34a;border-radius:6px;padding:6px 8px;margin:16px 0 8px 0">
+      <div style="font-size:14px;font-weight:bold;color:#22c55e">🐂 LONG (상승 돌파) · ${longCount}건</div>
+    </div>
+    ${longStages.map(([k, l, c, items, side]) => renderStageTable(k, l, c, items, side)).join('')}
+  `;
+
+  document.getElementById('content').innerHTML = shortHtml + longHtml + _makeFooter();
+}
+
 function render(data) {
   const totalCount = (data.counts && data.counts.total) || 0;
-  const sustainedIcon = IS_DOWN ? '🔥' : '🚀';
   document.getElementById('subtitle').textContent =
     `${interval} 기준 · 총 ${totalCount}건 · 추천 ${data.side_recommend}`;
 
-  const stages = IS_DOWN ? [
-    ['sustained', `${sustainedIcon} 이탈 지속 ⭐ 제일 확실! (SHORT!)`, 'sustained', data.sustained],
-    ['started', '📉 이탈 시작 (SHORT 진입 시점!)', 'started', data.started],
-    ['pending', '⚠️ 이탈 임박 (관찰!)', 'pending', data.pending],
-  ] : [
-    ['sustained', `${sustainedIcon} 돌파 지속 ⭐ 제일 확실! (LONG!)`, 'pos', data.sustained],
-    ['started', '📈 돌파 시작 (LONG 진입 시점!)', 'started', data.started],
-    ['pending', '⚠️ 돌파 임박 (관찰!)', 'pending', data.pending],
-  ];
+  const stages = _makeStages(data, IS_DOWN);
+  const html = stages.map(([k, l, c, items, side]) => renderStageTable(k, l, c, items, side)).join('');
 
-  const html = stages.map(([k, l, c, items]) => renderStageTable(k, l, c, items)).join('');
+  document.getElementById('content').innerHTML = html + _makeFooter();
+}
 
-  document.getElementById('content').innerHTML = html + `
+function _makeFooter() {
+  return `
     <div class="footer">
-      💡 <b>심볼 클릭 = 바이낸스</b> / 📊 = 상세 분석<br>
-      ⭐ <b>지속</b> = 3봉+ 이탈 유지 = 제일 확실! ${IS_DOWN ? 'SHORT!' : 'LONG!'}<br>
-      📊 <b>시작</b> = 최근 1~3봉 이탈 = 진입 시점!<br>
-      ⚠️ <b>임박</b> = middle 근접 (0~3%) = 관찰만!<br>
-      ● = ${IS_DOWN ? '이탈' : '돌파'} 봉 / ○ = 미이탈 봉!
+      💡 <b>심볼 클릭 = 바이낸스</b> / 📊 = 상세 분석 / ⚡ = 즉시 진입<br>
+      🌟 <b>지속 (사장님 선호!)</b> = 이미 이탈/돌파 진행 = <b>안전</b>! 수익 적어도 확실!<br>
+      📉 <b>시작</b> = 최근 1~3봉 이탈/돌파 = <b>수익+안전 중간</b>!<br>
+      💎 <b>임박</b> = middle 근접 (0~3%) = <b>최고 수익 도전</b>! (위험도 큼!)<br>
+      <br>
+      🌟 <b>v169 사장님 4구간 (CYSUSDT 4H 학습!):</b><br>
+      🎯 <b>하락 지속 (DOWNTREND)</b> = SHORT 최적! (+10%) / LONG 위험! (-10%)<br>
+      🔺 <b>정점 (PEAK)</b> = SHORT 진입 시점 (+5%) / LONG 위험! (-15%)<br>
+      🚫 <b>저점 반등 (BOTTOM_BOUNCE)</b> = SHORT 위험! (-15%) / LONG 진입 시점 (+5%)<br>
+      📈 <b>상승 지지 (UPTREND)</b> = SHORT 반대! (-10%) / LONG 최적! (+10%)<br>
+      🔥 성공률 툴팁 = RSI/MACD/OBV/거래량/4구간 종합!<br>
+      <br>
+      🐻🐂 <b>v170 사장님 통합!</b> SHORT + LONG 동시에 = 각 심볼 최적 방향 진입!
     </div>
   `;
 }
