@@ -71,17 +71,26 @@ class DismissRequest(BaseModel):
 # =====================================================================
 @router.get("", response_model=list[SuggestionResponse])
 def list_suggestions(
-    min_confidence: float = 0.85,   # 🌟 v155 사장님: 「85% 이상만 노출!」
+    min_confidence: float = 0.75,   # 🌟 v172 사장님: 0.85 → 0.75 완화!
     exclude_active: bool = True,    # 🌟 v155 사장님: 활성 포지션 심볼 = 완전 숨기기!
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> list[SuggestionResponse]:
-    """PENDING 제안 리스트 (85%+ + 활성 심볼 제외!)
+    """PENDING 제안 리스트 (75%+ + 활성 심볼 제외!)
 
     v155 사장님 지시 (2026-08-16):
-    - 「85% 이상만 노출해줘!」 → min_confidence=0.85 (기본!)
+    - 옛「85% 이상만 노출」 → v172 완화!
     - 「포지션에 진입해서 전략 인스턴스에 있으면 = 확실히 구분!」
       → exclude_active=True = 활성 포지션 심볼 = 완전 숨기기!
+
+    🎯 v172 사장님 (2026-08-17):
+    - 「신뢰도 85% 없을 수 없다!」 지적!
+    - 원인: predictor 실제 conf 범위 = 0.65~0.95 (사장님 시장 20~30% 급등락 = 0.75~0.85!)
+    - v135 confidence 조정 (0.5 배율!) = 신 심볼 자동 페널티 = 대부분 필터 탈락!
+    - 신 로직: (v172 strategy_suggestion_generator.py)
+      * 학습 <5건 = 원본 conf 그대로!
+      * 학습 5건+ = 완화된 조정 (0.75 배율!)
+    - 필터: 0.85 → 0.75 (사장님 볼 수 있게! 자동 진입은 여전히 사장님 승인!)
 
     신뢰도 = 성공 확률! 높을수록 = 확실한 예측!
     """

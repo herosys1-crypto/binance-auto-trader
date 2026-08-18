@@ -98,7 +98,11 @@ async function loadStrategySuggestions() {
   try {
     // 활성 심볼 로드 (병렬!)
     const [suggestions, strategies] = await Promise.all([
-      api('/strategy-suggestions?min_confidence=0.85&exclude_active=true'),
+      // 🌟 v172 (2026-08-17 사장님!): min_confidence 0.85 → 0.75!
+      // 사장님 지적: "신뢰도 85% 없을 수 없다!"
+      // 원인: predictor 실제 conf 범위 = 0.65~0.95 (사장님 시장 = 대부분 0.75~0.85!)
+      // = 필터 완화 필요! 자동 진입은 여전히 사장님 수동 승인!
+      api('/strategy-suggestions?min_confidence=0.75&exclude_active=true'),
       api('/strategies?limit=200').catch(() => []),
     ]);
     _cachedSuggestions = suggestions || [];
