@@ -108,7 +108,15 @@ TP1_PCT_DEFAULT: Final[Decimal] = Decimal("15")
 
 # ===== Trailing TP =====
 # 피크가 이 % 이상 도달했어야 trailing armed.
-TRAILING_PEAK_THRESHOLD_PCT: Final[Decimal] = Decimal("5")
+# 이력:
+#   ~v129     : 5   (v5 옛 default)
+#   v130      : 5 → **20** (사장님 「기존 5% → 20%」 지시! 큰 이익 확보!)
+#   v173 (2026-08-18): CRITICAL fix! memory에 v130=20인데 실제 코드=5 = silent bug!
+#                     사장님 REDUSDT #1003 사례 = peak 15.65%에서 잘못 청산 원인!
+# ⚠️ 이 값 낮추면 trailing이 너무 일찍 활성 = 작은 이익도 -5% 회귀 시 청산!
+# 사장님 사상: 「20% 이상으로 익절후 -5%회귀하면 청산! TP1 25%일 때는
+#              TP1 익절후 -5% 회귀시 청산!」 (2026-08-18)
+TRAILING_PEAK_THRESHOLD_PCT: Final[Decimal] = Decimal("20")
 # 피크 대비 이 % 회귀 시 전량 청산.
 # 이력:
 #   2026-06-10 v36 : 5 → 10 (사장님 "기본을 10%으로 해주고 상황에 따라 설정")
