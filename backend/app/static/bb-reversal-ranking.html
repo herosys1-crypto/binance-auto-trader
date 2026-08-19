@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🔄 BB 반전 매매</title>
+<style>
+  body {
+    background: #0f172a; color: #e2e8f0;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    padding: 8px; margin: 0; font-size: 12px;
+  }
+  .header {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #334155;
+  }
+  .title { font-size: 15px; font-weight: bold; }
+  .close-btn {
+    background: #7c3aed; color: #fff; border: 0; padding: 4px 10px;
+    border-radius: 4px; cursor: pointer; font-size: 12px;
+  }
+  .controls { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .chip {
+    background: #1e293b; color: #94a3b8;
+    padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;
+  }
+  .chip.on { background: #f59e0b; color: #000; font-weight: 600; }
+  .section {
+    background: rgba(30,41,59,0.5); border: 1px solid #334155;
+    border-radius: 6px; padding: 8px; margin-bottom: 8px;
+  }
+  .section-title { font-weight: bold; margin-bottom: 6px; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { padding: 4px 6px; text-align: left; border-bottom: 1px solid #1e293b; }
+  th { color: #94a3b8; font-weight: 500; font-size: 10px; }
+  .num { text-align: right; }
+  .sym { color: #fff; font-weight: 600; cursor: pointer; }
+  .sym:hover { color: #fbbf24; }
+  .pos { color: #22c55e; }
+  .neg { color: #ef4444; }
+  .loading { text-align: center; color: #94a3b8; padding: 20px; }
+  .footer {
+    margin-top: 8px; padding-top: 6px; border-top: 1px solid #334155;
+    font-size: 10px; color: #94a3b8; line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="title" style="color:#a855f7">🔄 BB 볼밴 반전 매매</div>
+    <div style="font-size:10px;color:#94a3b8" id="subtitle">로딩...</div>
+  </div>
+  <button class="close-btn" onclick="window.close()">✕ 닫기</button>
+</div>
+
+<div class="controls" id="intervalChips"></div>
+<div id="content"><div class="loading">📡 조회 중...</div></div>
+
+<script>
+const API_BASE = '/api/v1';
+const params = new URLSearchParams(window.location.search);
+let interval = params.get('interval') || '4h';
+let timer = null;
+const AUTO_MS = 30000;
+
+const INTERVALS = ['15m', '1h', '4h', '1d'];
+const INTERVAL_LABEL = {'15m': '15분', '1h': '1시간', '4h': '4시간', '1d': '24시간'};
+
+function getToken() {
+  try {
+    if (window.opener && !window.opener.closed) {
+      const t = window.opener.localStorage.getItem('access_token');
+      if (t) return t;
+    }
+  } catch (_e) {}
+  return localStorage.getItem('access_token') || '';
+}
+
+function fmtPrice(v) {
+  const n = Number(v);
+  if (!isFinite(n) || n === 0) return '-';
+  return Math.abs(n) >= 1 ? String(parseFloat(n.toFixed(4)))
+                          : String(parseFloat(n.toPrecision(6)));
+}
+
+function renderIntervals() {
+  const auto = !!timer;
+  document.getElementById('intervalChips').innerHTML =
+    INTERVALS.map(iv =>
+      `<span class="chip ${iv === interval ? 'on' : ''}" onclick="setIv('${iv}')">${INTERVAL_LABEL[iv]}</span>`
+    ).join('')
+    + `<span class="chip ${auto ? 'on' : ''}" onclick="toggleAuto()">⏱ 자동 30초 ${auto ? 'ON' : 'OFF'}</span>`;
+}
+
+function setIv(iv) { interval = iv; renderIntervals(); load(); }
+function toggleAuto() {
+  if (timer) { clearInterval(timer); timer = null; }
+  else { timer = setInterval(load, AUTO_MS); }
+  renderIntervals();
+}
+
+function openBinanceChart(sym) {
+  window.open(`https://www.binance.com/en/futures/${encodeURIComponent(sym)}`, `bnc_${sym}`, 'noopener');
+}
+
+function instantEnter(sym, side) {
+  if (!confirm(`⚡ ${sym} ${side} = 1단계 즉시 진입?\n\n= 사장님 default profile로 = 신 전략 자동 생성!`)) return;
+  let dashboard = null;
+  let w = window.opener;
+  let depth = 0;
+  const seen = new Set();
+  while (w && !w.closed && depth < 5) {
+    if (seen.has(w)) break;
+    seen.add(w);
+    try {
+      if (typeof w.enterOneStageBBBreak === 'function') { dashboard = w; break; }
+    } catch (_e) {}
+    try { w = w.opener; } catch (_e) { break; }
+    depth++;
+  }
+  if (dashboard) {
+    dashboard.enterOneStageBBBreak(sym, side);
+    dashboard.focus();
+  } else {
+    alert('❌ 대시보드를 찾을 수 없음!');
+  }
+}
+
+async function load() {
+  try {
+    // v183: 부모 창 api() 우선!
+    let data;
+    const path = `/bb-middle-scan/reversal?interval=${interval}&max_symbols=150`;
+    try {
+      if (window.opener && !window.opener.closed && typeof window.opener.api === 'function') {
+        data = await window.opener.api(path);
+      } else {
+        const r = await fetch(`${API_BASE}${path}`, { headers: { 'Authorization': `Bearer ${getToken()}` } });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        data = await r.json();
+      }
+    } catch (e) {
+      throw e;
+    }
+    render(data);
+  } catch (e) {
+    const msg = e.message || String(e);
+    if (msg.includes('401')) {
+      document.getElementById('content').innerHTML = `
+        <div class="loading" style="color:#ef4444;padding:20px">
+          <div style="font-size:20px">🔐 인증 만료!</div>
+          <div style="margin-top:12px;color:#fbbf24">대시보드에서 로그아웃 → 재로그인!</div>
+          <button onclick="location.reload()" style="margin-top:16px;background:#7c3aed;color:#fff;border:0;padding:8px 16px;border-radius:6px;cursor:pointer">🔄 재시도</button>
+        </div>`;
+    } else {
+      document.getElementById('content').innerHTML = `<div class="loading" style="color:#ef4444">❌ ${msg}</div>`;
+    }
+  }
+}
+
+function renderSection(title, color, items, isLong) {
+  if (!items || items.length === 0) {
+    return `<div class="section">
+      <div class="section-title" style="color:${color}">${title} <span style="color:#64748b">(0)</span></div>
+      <div class="loading" style="padding:10px">현재 없음!</div>
+    </div>`;
+  }
+  const rows = items.slice(0, 15).map((s, i) => {
+    const rsiColor = s.rsi < 30 ? '#ef4444' : s.rsi > 70 ? '#22c55e' : '#94a3b8';
+    const cciColor = s.cci > 100 ? '#22c55e' : s.cci < -100 ? '#ef4444' : '#94a3b8';
+    const btnBg = isLong ? 'linear-gradient(135deg,#22c55e,#16a34a)' : 'linear-gradient(135deg,#ef4444,#dc2626)';
+    const side = isLong ? 'LONG' : 'SHORT';
+    const scoreColor = s.score >= 0.80 ? '#22c55e' : s.score >= 0.65 ? '#84cc16' : '#fbbf24';
+    return `
+      <tr>
+        <td class="num" style="color:#64748b">${i + 1}</td>
+        <td>
+          <span class="sym" onclick="openBinanceChart('${s.symbol}')" title="바이낸스!">${s.symbol}</span>
+          <button onclick="instantEnter('${s.symbol}','${side}')"
+                  style="background:${btnBg};color:#fff;border:0;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:10px;margin-left:3px;font-weight:600"
+                  title="⚡ ${side} 즉시 진입! score ${(s.score*100).toFixed(0)}%">⚡ ${side}</button>
+        </td>
+        <td class="num" style="color:${scoreColor};font-weight:700">${(s.score*100).toFixed(0)}%</td>
+        <td class="num">${fmtPrice(s.current_price)}</td>
+        <td class="num" style="color:${rsiColor}">${s.rsi !== null ? s.rsi.toFixed(0) : '-'}</td>
+        <td class="num" style="color:${cciColor}">${s.cci !== null ? s.cci.toFixed(0) : '-'}</td>
+        <td class="num" style="color:${s.obv_slope_pct >= 0 ? '#22c55e' : '#ef4444'}">${s.obv_slope_pct !== null ? (s.obv_slope_pct >= 0 ? '+' : '') + s.obv_slope_pct.toFixed(0) + '%' : '-'}</td>
+        <td class="num ${s.change_24h >= 0 ? 'pos' : 'neg'}">${s.change_24h >= 0 ? '+' : ''}${s.change_24h}%</td>
+        <td style="font-size:9px;color:#94a3b8" title="${s.reason}">${(s.reason || '').substring(0, 40)}...</td>
+      </tr>`;
+  }).join('');
+  return `<div class="section">
+    <div class="section-title" style="color:${color}">${title} <span style="color:#64748b">(${items.length})</span></div>
+    <table>
+      <thead><tr>
+        <th class="num">#</th><th>심볼</th><th class="num">score</th>
+        <th class="num">현재가</th><th class="num">RSI</th><th class="num">CCI</th>
+        <th class="num">OBV</th><th class="num">24h</th><th>이유</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function render(data) {
+  const total = (data.counts && data.counts.total) || 0;
+  const c = data.counts || {};
+  document.getElementById('subtitle').textContent =
+    `${interval} · 총 ${total}건 · 하단↑${c.lower_support||0} 중단↑${c.middle_support||0} 중단↓${c.middle_resistance||0} 상단↓${c.upper_resistance||0}`;
+
+  const html = ''
+    + `<div style="background:rgba(34,197,94,0.1);border:2px solid #16a34a;border-radius:6px;padding:6px 8px;margin-bottom:8px">
+        <div style="font-size:14px;font-weight:bold;color:#22c55e">🐂 LONG (지지 반등!)</div>
+      </div>`
+    + renderSection('🚀 하단 지지 (저점 반등 = 큰 상승 예상!)', '#22c55e', data.lower_support, true)
+    + renderSection('📈 중단 지지 (조정 후 재상승!)', '#84cc16', data.middle_support, true)
+    + `<div style="background:rgba(239,68,68,0.1);border:2px solid #dc2626;border-radius:6px;padding:6px 8px;margin:16px 0 8px 0">
+        <div style="font-size:14px;font-weight:bold;color:#ef4444">🐻 SHORT (저항 반전!)</div>
+      </div>`
+    + renderSection('🔻 상단 저항 (고점 도달 = 큰 하락 예상!)', '#ef4444', data.upper_resistance, false)
+    + renderSection('📉 중단 저항 (반등 실패 = 재하락!)', '#f97316', data.middle_resistance, false)
+    + `<div class="footer">
+        💡 <b>사장님 사이클 매매!</b> BB 볼밴 지지/저항 반전 감지!<br>
+        🎯 <b>4시점:</b> 하단 지지 (LONG!) / 중단 지지 (LONG!) / 중단 저항 (SHORT!) / 상단 저항 (SHORT!)<br>
+        📊 <b>3지표 종합:</b> RSI (과매수/과매도!) + CCI (추세 반전!) + OBV (거래량 흐름!)<br>
+        🎨 <b>색상:</b> RSI <30 빨강 (과매도!) / >70 초록 (과매수!) / CCI ±100 반전!<br>
+        ⚡ 즉시 진입 = 1단계 (v177/v178!) + default profile!
+      </div>`;
+  document.getElementById('content').innerHTML = html;
+}
+
+renderIntervals();
+load();
+timer = setInterval(load, AUTO_MS);
+</script>
+</body>
+</html>
