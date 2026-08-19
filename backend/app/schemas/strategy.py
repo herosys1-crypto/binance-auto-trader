@@ -119,6 +119,10 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # 🌟 2026-08-06 v130 신 필드: template의 trigger_mode (구/OBV 구분!)
     # 'PRICE_DOWN_PCT' (기존) or 'OBV_REVERSE' (신)
     trigger_mode: str = "PRICE_DOWN_PCT"
+    # 🤖 v175 (2026-08-18 사장님!): template의 strategy_type
+    # 'manual' (기존), 'auto_bb_break' (v174 BB 자동 진입!), 'obv_reentry' etc.
+    # UI에서 = 🤖 자동 진입 배지 판단!
+    strategy_type: str = "manual"
     # ─── 실제 TP 발동 카운트 + 종료 사유 (UI 정확 표시용, 2026-05-03 fix) ───
     # tp_triggered_count: notifications 의 [TPN 익절 체결] 카운트 (TRAILING 제외)
     # last_close_reason: TP_FINAL / TRAILING / SL / MANUAL / NONE

@@ -57,6 +57,9 @@ def _enrich_response(resp: StrategyDetailResponse, tpl) -> StrategyDetailRespons
     # 🌟 2026-08-06 v130: trigger_mode = template의 신 컬럼 (구/OBV 구분!)
     if tpl and getattr(tpl, "trigger_mode", None):
         resp.trigger_mode = tpl.trigger_mode
+    # 🤖 v175 (2026-08-18): strategy_type = template 필드 → UI 자동 배지!
+    if tpl and getattr(tpl, "strategy_type", None):
+        resp.strategy_type = tpl.strategy_type
     return resp
 
 

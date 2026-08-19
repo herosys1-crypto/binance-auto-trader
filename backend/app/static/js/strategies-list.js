@@ -800,9 +800,12 @@ async function refreshStrategies() {
             <button onclick="event.stopPropagation(); if(window.openSymbolTradingModal) window.openSymbolTradingModal('${s.symbol}');"
                     title="📊 ${s.symbol} 차트 + Order Book (내장 모달)"
                     style="background:#1e3a5f;color:#7dd3fc;border:0;border-radius:3px;padding:1px 5px;font-size:10px;cursor:pointer;margin-left:3px;">📊</button>
-            ${s.trigger_mode === 'OBV_REVERSE'
+            ${s.strategy_type === 'auto_bb_break'
+              ? '<span style="display:inline-block;background:linear-gradient(135deg,#dc2626,#f97316);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(220,38,38,0.7)" title="🤖 v174 BB 이탈 자동 진입! (사장님 옵션 = 매 4시간 SUSTAINED 심볼 = 성공률 85%+ = 자동 진입!)">🤖 BB 자동</span>'
+              : ''
+            }${s.trigger_mode === 'OBV_REVERSE'
               ? '<span style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 6px rgba(124,58,237,0.6)" title="📊 신 OBV 자동 재진입 전략! (기존과 다른 자동 재진입 로직!)">📊 OBV</span>'
-              : '<span style="display:inline-block;background:#475569;color:#cbd5e1;padding:2px 6px;border-radius:4px;font-size:10px;margin-left:4px" title="기존 방식 = 가격 도달 시 진입">➕ 기존</span>'
+              : (s.strategy_type !== 'auto_bb_break' ? '<span style="display:inline-block;background:#475569;color:#cbd5e1;padding:2px 6px;border-radius:4px;font-size:10px;margin-left:4px" title="기존 방식 = 가격 도달 시 진입">➕ 기존</span>' : '')
             }${s.retry_after_liquidation_enabled
               ? `<span style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#a855f7);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(245,158,11,0.6)" title="🔄 청산 후 자동 재진입 활성! (트리거 ${s.retry_trigger_pct || 10}%) — 손절 후 = 다음 단계 자동 대기 + 트리거 도달 시 자동 진입!">🔄 재진입 ${s.retry_trigger_pct || 10}%</span>`
               : ''
@@ -810,7 +813,7 @@ async function refreshStrategies() {
             <span class="text-slate-500" style="font-size:12px" title="전략 생성 일시">${createdShort}</span>
           </div>
         </td>
-        <td>${sideBadge(s.side, s.leverage)}${s.trigger_mode === 'OBV_REVERSE' ? '<br><span style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-top:2px" title="📊 신 OBV 자동 재진입 전략!">📊 OBV</span>' : ''}${s.retry_after_liquidation_enabled ? `<br><span style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#a855f7);color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-top:2px" title="🔄 청산 후 자동 재진입! 트리거 ${s.retry_trigger_pct || 10}%">🔄 재진입</span>` : ''}</td>
+        <td>${sideBadge(s.side, s.leverage)}${s.strategy_type === 'auto_bb_break' ? '<br><span style="display:inline-block;background:linear-gradient(135deg,#dc2626,#f97316);color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-top:2px" title="🤖 v174 BB 자동 진입!">🤖 BB</span>' : ''}${s.trigger_mode === 'OBV_REVERSE' ? '<br><span style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-top:2px" title="📊 신 OBV 자동 재진입 전략!">📊 OBV</span>' : ''}${s.retry_after_liquidation_enabled ? `<br><span style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#a855f7);color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-top:2px" title="🔄 청산 후 자동 재진입! 트리거 ${s.retry_trigger_pct || 10}%">🔄 재진입</span>` : ''}</td>
         <td>${stateCell}</td>
         <td>${stage}</td>
         <td class="num">${entry}</td>
