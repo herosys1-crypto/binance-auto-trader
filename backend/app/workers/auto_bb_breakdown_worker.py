@@ -92,14 +92,72 @@ def run_auto_bb_breakdown() -> dict:
                 db=db, user_id=1,
             )
         except Exception as e:
-            logger.warning("[auto_bb_breakdown] 스캔 실패: %s", e)
-            return {"error": f"scan failed: {e}", "entered": 0}
+            logger.warning("[auto_bb_breakdown] BB 스캔 실패: %s", e)
+            scan_short = {"sustained": []}
+            scan_long = {"sustained": []}
 
         all_sustained: list[dict] = []
         for it in (scan_short.get("sustained") or []):
-            all_sustained.append({**it, "side": "SHORT"})
+            all_sustained.append({**it, "side": "SHORT", "source": "BB_SUSTAINED"})
         for it in (scan_long.get("sustained") or []):
-            all_sustained.append({**it, "side": "LONG"})
+            all_sustained.append({**it, "side": "LONG", "source": "BB_SUSTAINED"})
+
+        # 🎯 v190 사장님: MTA (Multi-Timeframe) 소스 추가!
+        # 사장님 지시: "MTA 잘 활용해서 자동매매 많이 + 수익 많이 + 포지션 늘리기!"
+        try:
+            from app.api.v1.multi_timeframe_scan import scan_multi_timeframe
+            mta_result = scan_multi_timeframe(
+                max_symbols=100, min_score=18,  # 18/24 = 매우 확실!
+                db=db, user_id=1,
+            )
+            for it in (mta_result.get("long_signals") or []):
+                # MTA 형식 → BB 형식 변환!
+                all_sustained.append({
+                    "symbol": it["symbol"],
+                    "side": "LONG",
+                    "source": "MTA",
+                    "success_probability": min(0.99, it["total_score"] / 24.0 + 0.05),
+                    "sustained_bars": 5,
+                    "regime": "UPTREND",  # MTA LONG = 상승 반전!
+                    "rsi": it["tf_15m"].get("rsi"),
+                    "cci": it["tf_15m"].get("cci"),
+                    "obv_slope_pct": it["tf_15m"].get("obv_slope_pct"),
+                    "change_24h": it["change_24h"],
+                    "mta_total": it["total_score"],
+                    "mta_reason": it["reason"],
+                })
+            for it in (mta_result.get("short_signals") or []):
+                all_sustained.append({
+                    "symbol": it["symbol"],
+                    "side": "SHORT",
+                    "source": "MTA",
+                    "success_probability": min(0.99, it["total_score"] / 24.0 + 0.05),
+                    "sustained_bars": 5,
+                    "regime": "DOWNTREND_STRONG",
+                    "rsi": it["tf_15m"].get("rsi"),
+                    "cci": it["tf_15m"].get("cci"),
+                    "obv_slope_pct": it["tf_15m"].get("obv_slope_pct"),
+                    "change_24h": it["change_24h"],
+                    "mta_total": it["total_score"],
+                    "mta_reason": it["reason"],
+                })
+            logger.info(
+                "[auto_bb_breakdown] v190 MTA 소스: LONG %d + SHORT %d 추가!",
+                len(mta_result.get("long_signals") or []),
+                len(mta_result.get("short_signals") or []),
+            )
+        except Exception as e:
+            logger.warning("[auto_bb_breakdown] v190 MTA 스캔 실패: %s", e)
+
+        # 중복 제거 (같은 symbol:side!)
+        seen_keys = set()
+        deduped = []
+        for it in all_sustained:
+            k = f"{it['symbol']}:{it['side']}"
+            if k not in seen_keys:
+                seen_keys.add(k)
+                deduped.append(it)
+        all_sustained = deduped
         # 성공률 큰 순!
         all_sustained.sort(key=lambda x: -(x.get("success_probability") or 0))
 
@@ -501,26 +559,35 @@ def _get_current_price(symbol: str) -> Decimal:
 
 
 def _notify_auto_entry(strategy: StrategyInstance, prob: float, scan_info: dict) -> None:
-    """자동 진입 텔레그램 알림!"""
+    """자동 진입 텔레그램 알림! (v190: MTA 정보 포함!)"""
     try:
         from app.services.notification_service import get_notification_service
         ns = get_notification_service()
         if ns is None:
             return
         emoji = "🐻" if strategy.side == "SHORT" else "🐂"
+        source = scan_info.get("source", "BB_SUSTAINED")
+        source_icon = "🎯" if source == "MTA" else "⚡"
+        body_lines = [
+            f"{source_icon} {source} 자동 진입!",
+            f"📊 성공률: {int(prob * 100)}%",
+            f"🎯 regime: {scan_info.get('regime', 'NEUTRAL')}",
+            f"🔥 지속 봉수: {scan_info.get('sustained_bars', 0)}봉",
+        ]
+        # v190: MTA 정보!
+        if source == "MTA" and scan_info.get("mta_total"):
+            body_lines.append(f"🎯 MTA 종합점수: {scan_info['mta_total']}/24")
+            body_lines.append(f"📈 {scan_info.get('mta_reason', '')}"[:100])
+        body_lines.extend([
+            f"💰 자본: {strategy.total_capital} USDT",
+            f"⚖️ 레버리지: {strategy.leverage}x",
+            "",
+            f"= 사장님 default profile 자동 진입!",
+            f"= 대시보드 확인!",
+        ])
         ns.send_system_alert(
             title=f"🤖 [자동 진입] #{strategy.id} {strategy.symbol} {strategy.side} {emoji}",
-            body="\n".join([
-                f"⚡ BB 4H SUSTAINED 자동 진입!",
-                f"📊 성공률: {int(prob * 100)}%",
-                f"🎯 4구간: {scan_info.get('regime', 'NEUTRAL')}",
-                f"🔥 지속 봉수: {scan_info.get('sustained_bars', 0)}봉",
-                f"💰 자본: {strategy.total_capital} USDT",
-                f"⚖️ 레버리지: {strategy.leverage}x",
-                "",
-                f"= 사장님 default profile로 자동 진입 완료!",
-                f"= 대시보드에서 진행 상황 확인!",
-            ]),
+            body="\n".join(body_lines),
         )
     except Exception as e:
         logger.warning("[auto_bb_breakdown] 알림 실패: %s", e)

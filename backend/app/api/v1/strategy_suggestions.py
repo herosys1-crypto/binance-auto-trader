@@ -219,8 +219,9 @@ def set_auto_bb_limit(
     0 = OFF (수동!), 1~10 = 하루 최대 개수!
     """
     limit = int(payload.get("limit", 0))
-    if limit < 0 or limit > 10:
-        raise HTTPException(status_code=400, detail="0~10만 허용!")
+    # 🎯 v190 사장님: 「많이!」 = 최대 30!
+    if limit < 0 or limit > 30:
+        raise HTTPException(status_code=400, detail="0~30만 허용!")
     row = db.get(SystemSetting, "auto_bb_break_daily_limit")
     if row:
         row.value = str(limit)
