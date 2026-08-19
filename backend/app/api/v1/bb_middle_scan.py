@@ -106,6 +106,29 @@ def _calc_vol_trend(volumes: list[float], lookback: int = 10) -> float:
     return recent / prev if prev > 0 else 1.0
 
 
+def _calc_cci(highs: list[float], lows: list[float], closes: list[float], period: int = 9) -> float | None:
+    """🌟 v184a 사장님: CCI(9) = Commodity Channel Index!
+
+    사장님 사상 (2026-08-20): "RSI OBV CCI를 같이 보면 흐름 파악!"
+    - CCI > +100 = 강한 상승 추세!
+    - CCI < -100 = 강한 하락 추세!
+    - -100 ~ +100 = 중립!
+    - CCI 반전 = 매매 시점!
+    """
+    if len(closes) < period + 1 or len(highs) < period + 1 or len(lows) < period + 1:
+        return None
+    # Typical Price = (High + Low + Close) / 3
+    tp = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(len(closes))]
+    # SMA of Typical Price
+    sma_tp = sum(tp[-period:]) / period
+    # Mean Deviation
+    mean_dev = sum(abs(t - sma_tp) for t in tp[-period:]) / period
+    if mean_dev == 0:
+        return 0.0
+    # CCI = (TP - SMA) / (0.015 × Mean Deviation)
+    return (tp[-1] - sma_tp) / (0.015 * mean_dev)
+
+
 def _detect_regime(
     closes: list[float], highs: list[float], lows: list[float],
     up: list[float | None], lo: list[float | None],
@@ -820,5 +843,283 @@ def scan_bb_breakdown(
             f"제일 확실 = 이탈 지속 (SUSTAINED)! 다음 = 이탈 시작 (STARTED)! "
             f"관찰 = 이탈 임박 (PENDING)! "
             f"(사장님 지시 2026-08-16)"
+        ),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# 🌟 v184 사장님 (2026-08-20): BB 볼밴 반전 매매!
+# 사장님 VELVETUSDT 4H 관찰:
+# "볼밴 중단 지지 + 볼밴 하단 지지 + 볼밴 상단 저항 + 볼밴 중단 저항!
+#  롱과 숏을 왔다갔다!"
+# = 범위 매매 = 지지/저항 반전!
+# ═══════════════════════════════════════════════════════════════
+
+@router.get("/reversal")
+def scan_bb_reversal(
+    interval: str = Query(default="4h", pattern="^(4h|1h|15m|1d)$"),
+    max_symbols: int = Query(default=150, ge=10, le=250),
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict[str, Any]:
+    """🌟 v184 사장님 BB 볼밴 반전 매매 (지지/저항 4시점!)
+
+    사장님 사상 (VELVETUSDT 4H 분석):
+    - 하단 지지 (LONG!) = 저점 반등 시작!
+    - 중단 지지 (LONG!) = 조정 후 재상승!
+    - 중단 저항 (SHORT!) = 반등 실패!
+    - 상단 저항 (SHORT!) = 고점 도달!
+    = 롱과 숏 왔다갔다 = 사이클 매매!
+    """
+    account = db.execute(
+        select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
+    ).scalar_one_or_none()
+    if not account:
+        return {"symbols": [], "error": "no mainnet account"}
+
+    bc = BinanceClient(
+        api_key=decrypt_text(account.api_key_enc),
+        api_secret=decrypt_text(account.api_secret_enc),
+        is_testnet=False,
+    )
+
+    try:
+        tickers = bc.get_24hr_ticker()
+        if not isinstance(tickers, list):
+            return {"symbols": [], "error": "ticker 실패"}
+    except Exception as e:
+        return {"symbols": [], "error": str(e)}
+
+    usdt = [t for t in tickers if str(t.get("symbol", "")).endswith("USDT")]
+    try:
+        usdt.sort(key=lambda x: float(x.get("quoteVolume", 0) or 0), reverse=True)
+    except Exception:
+        pass
+    candidates = usdt[:max_symbols]
+
+    # 4가지 반전 시나리오!
+    lower_support: list[dict[str, Any]] = []  # 하단 지지 LONG
+    middle_support: list[dict[str, Any]] = []  # 중단 지지 LONG
+    middle_resistance: list[dict[str, Any]] = []  # 중단 저항 SHORT
+    upper_resistance: list[dict[str, Any]] = []  # 상단 저항 SHORT
+
+    for t in candidates:
+        symbol = str(t.get("symbol", ""))
+        if not symbol.endswith("USDT"):
+            continue
+        try:
+            kl = bc.get_klines(symbol=symbol, interval=interval,
+                               limit=BB4HBandAnalyzer.KLINE_LIMIT)
+            if not isinstance(kl, list) or len(kl) < BB4HBandAnalyzer.BB_PERIOD + 10:
+                continue
+
+            closes = [float(k[4]) for k in kl]
+            opens = [float(k[1]) for k in kl]
+            highs = [float(k[2]) for k in kl]
+            lows = [float(k[3]) for k in kl]
+            volumes = [float(k[5]) for k in kl]
+            mid, up, lo = BB4HBandAnalyzer.bollinger(closes)
+            if not mid or mid[-1] is None or up[-1] is None or lo[-1] is None:
+                continue
+
+            middle_now = mid[-1]
+            upper_now = up[-1]
+            lower_now = lo[-1]
+            current = float(t.get("lastPrice", 0) or 0)
+            change_24h = float(t.get("priceChangePercent", 0) or 0)
+            volume_24h = float(t.get("quoteVolume", 0) or 0)
+            if middle_now <= 0 or current <= 0:
+                continue
+
+            # 🌟 v184a 사장님: RSI + OBV + CCI 종합 (사장님 지시!)!
+            rsi_val = _calc_rsi(closes[-30:])
+            macd_val = _calc_macd(closes[-60:] if len(closes) >= 60 else closes)
+            obv_val = _calc_obv_slope(closes[-30:], volumes[-30:])
+            cci_val = _calc_cci(highs[-20:], lows[-20:], closes[-20:], period=9)
+
+            # 각 밴드 대비 위치!
+            dist_lower_pct = (current - lower_now) / lower_now * 100 if lower_now > 0 else 0
+            dist_middle_pct = (current - middle_now) / middle_now * 100
+            dist_upper_pct = (current - upper_now) / upper_now * 100 if upper_now > 0 else 0
+
+            # 최근 5봉 = 반전 감지용!
+            recent5_o = opens[-5:] if len(opens) >= 5 else opens
+            recent5_c = closes[-5:] if len(closes) >= 5 else closes
+            recent5_l = lows[-5:] if len(lows) >= 5 else lows
+            recent5_h = highs[-5:] if len(highs) >= 5 else highs
+            bull_bars = sum(1 for o, c in zip(recent5_o, recent5_c) if c > o)
+            bear_bars = sum(1 for o, c in zip(recent5_o, recent5_c) if c < o)
+
+            common = {
+                "symbol": symbol,
+                "current_price": round(current, 8),
+                "middle": round(middle_now, 8),
+                "upper": round(upper_now, 8),
+                "lower": round(lower_now, 8),
+                "dist_lower_pct": round(dist_lower_pct, 2),
+                "dist_middle_pct": round(dist_middle_pct, 2),
+                "dist_upper_pct": round(dist_upper_pct, 2),
+                "change_24h": round(change_24h, 2),
+                "volume_24h": round(volume_24h, 0),
+                "rsi": round(rsi_val, 1) if rsi_val is not None else None,
+                "macd_hist": round(macd_val["hist"], 6) if macd_val else None,
+                # 🌟 v184a 사장님: OBV + CCI 추가!
+                "obv_slope_pct": round(obv_val * 100, 1) if obv_val is not None else None,
+                "cci": round(cci_val, 1) if cci_val is not None else None,
+                "bull_bars_5": bull_bars,
+                "bear_bars_5": bear_bars,
+            }
+
+            # 1️⃣ 하단 지지 LONG! (사장님 3지표 종합!)
+            # 조건: 하단 근접 + 반등 시작 + RSI 과매도 + OBV 반등 + CCI 반전!
+            recent5_min_l = min(recent5_l) if recent5_l else current
+            lower_touch_pct = (recent5_min_l - lower_now) / lower_now * 100 if lower_now > 0 else 0
+            if (
+                0 <= dist_lower_pct <= 5  # 현재가 = 하단 위 5% 이내
+                and abs(lower_touch_pct) <= 3  # 최근 5봉 저점 = 하단 근접!
+                and bull_bars >= 2  # 최근 5봉 중 2봉+ 양봉 (반등!)
+                and (rsi_val is None or rsi_val < 40)  # RSI 과매도!
+            ):
+                score = 0.55
+                reasons_l = [f"BB 하단 지지!"]
+                if bull_bars >= 3:
+                    score += 0.10
+                    reasons_l.append(f"{bull_bars}봉 양봉")
+                if rsi_val is not None and rsi_val < 30:
+                    score += 0.10
+                    reasons_l.append(f"RSI {rsi_val:.0f} 과매도")
+                if macd_val and macd_val["hist"] > 0:
+                    score += 0.08
+                    reasons_l.append("MACD ↑")
+                # 🌟 v184a: OBV 반등!
+                if obv_val is not None and obv_val > 0:
+                    score += 0.08
+                    reasons_l.append(f"OBV +{obv_val*100:.0f}%")
+                # 🌟 v184a: CCI 과매도 반전! (-100 이하에서 상승 = LONG!)
+                if cci_val is not None:
+                    if cci_val < -100:
+                        score += 0.10
+                        reasons_l.append(f"CCI {cci_val:.0f} 과매도 반전!")
+                    elif cci_val < 0:
+                        score += 0.05
+                        reasons_l.append(f"CCI {cci_val:.0f}")
+                lower_support.append({
+                    **common,
+                    "signal": "LOWER_SUPPORT_LONG",
+                    "side": "LONG",
+                    "score": round(min(score, 0.99), 4),
+                    "reason": " + ".join(reasons_l),
+                })
+
+            # 2️⃣ 중단 지지 LONG!
+            # 조건: 중단 근처 (|dist_middle| < 3%) + 아래에서 상승 중!
+            if (
+                -3 <= dist_middle_pct <= 3  # 중단 근접!
+                and current > middle_now  # 중단 위!
+                and bull_bars >= 3  # 강한 상승!
+                and rsi_val is not None and 45 <= rsi_val <= 60  # 중립~약한 상승!
+            ):
+                score = 0.55
+                if macd_val and macd_val["hist"] > 0 and macd_val["macd"] > macd_val["signal"]:
+                    score += 0.15
+                middle_support.append({
+                    **common,
+                    "signal": "MIDDLE_SUPPORT_LONG",
+                    "side": "LONG",
+                    "score": round(score, 4),
+                    "reason": f"BB 중단 지지 재상승! RSI {rsi_val:.0f} MACD ↑",
+                })
+
+            # 3️⃣ 중단 저항 SHORT!
+            # 조건: 중단 근처 + 위에서 하락 시작!
+            if (
+                -3 <= dist_middle_pct <= 3
+                and current < middle_now  # 중단 아래!
+                and bear_bars >= 3  # 강한 하락!
+                and rsi_val is not None and 40 <= rsi_val <= 55
+            ):
+                score = 0.55
+                if macd_val and macd_val["hist"] < 0 and macd_val["macd"] < macd_val["signal"]:
+                    score += 0.15
+                middle_resistance.append({
+                    **common,
+                    "signal": "MIDDLE_RESISTANCE_SHORT",
+                    "side": "SHORT",
+                    "score": round(score, 4),
+                    "reason": f"BB 중단 저항 재하락! RSI {rsi_val:.0f} MACD ↓",
+                })
+
+            # 4️⃣ 상단 저항 SHORT! (사장님 3지표 종합!)
+            # 조건: 상단 근접 + 반전 시작 + RSI 과매수 + OBV 하락 + CCI 반전!
+            recent5_max_h = max(recent5_h) if recent5_h else current
+            upper_touch_pct = (upper_now - recent5_max_h) / upper_now * 100 if upper_now > 0 else 0
+            if (
+                -5 <= dist_upper_pct <= 0  # 현재가 = 상단 아래 5% 이내
+                and abs(upper_touch_pct) <= 3  # 최근 5봉 고점 = 상단 도달!
+                and bear_bars >= 2
+                and (rsi_val is None or rsi_val > 60)
+            ):
+                score = 0.55
+                reasons_u = [f"BB 상단 저항!"]
+                if bear_bars >= 3:
+                    score += 0.10
+                    reasons_u.append(f"{bear_bars}봉 음봉")
+                if rsi_val is not None and rsi_val > 70:
+                    score += 0.10
+                    reasons_u.append(f"RSI {rsi_val:.0f} 과매수")
+                if macd_val and macd_val["hist"] < 0:
+                    score += 0.08
+                    reasons_u.append("MACD ↓")
+                # 🌟 v184a: OBV 하락!
+                if obv_val is not None and obv_val < 0:
+                    score += 0.08
+                    reasons_u.append(f"OBV {obv_val*100:.0f}%")
+                # 🌟 v184a: CCI 과매수 반전!
+                if cci_val is not None:
+                    if cci_val > 100:
+                        score += 0.10
+                        reasons_u.append(f"CCI {cci_val:.0f} 과매수 반전!")
+                    elif cci_val > 0:
+                        score += 0.05
+                        reasons_u.append(f"CCI {cci_val:.0f}")
+                upper_resistance.append({
+                    **common,
+                    "signal": "UPPER_RESISTANCE_SHORT",
+                    "side": "SHORT",
+                    "score": round(min(score, 0.99), 4),
+                    "reason": " + ".join(reasons_u),
+                })
+
+        except Exception as e:
+            logger.debug("[bb_reversal] %s 실패: %s", symbol, e)
+            continue
+
+    # 각 시나리오 = score 큰 순!
+    lower_support.sort(key=lambda x: -x["score"])
+    middle_support.sort(key=lambda x: -x["score"])
+    middle_resistance.sort(key=lambda x: -x["score"])
+    upper_resistance.sort(key=lambda x: -x["score"])
+
+    return {
+        "interval": interval,
+        "lower_support": lower_support[:20],   # 🐂 하단 지지 LONG
+        "middle_support": middle_support[:20], # 🐂 중단 지지 LONG
+        "middle_resistance": middle_resistance[:20],  # 🐻 중단 저항 SHORT
+        "upper_resistance": upper_resistance[:20],    # 🐻 상단 저항 SHORT
+        "counts": {
+            "lower_support": len(lower_support),
+            "middle_support": len(middle_support),
+            "middle_resistance": len(middle_resistance),
+            "upper_resistance": len(upper_resistance),
+            "total": (
+                len(lower_support) + len(middle_support)
+                + len(middle_resistance) + len(upper_resistance)
+            ),
+        },
+        "scanned": len(candidates),
+        "note": (
+            f"🌟 v184 사장님 사상 = BB 볼밴 반전 매매!"
+            f" 하단/중단 지지 = LONG! 중단/상단 저항 = SHORT!"
+            f" 롱과 숏 왔다갔다! (사장님 VELVETUSDT 2026-08-20!)"
         ),
     }

@@ -1171,6 +1171,11 @@
                     class="text-xs text-white px-2 py-1 rounded font-bold"
                     style="background:linear-gradient(135deg,#dc2626 0%,#dc2626 50%,#16a34a 50%,#16a34a 100%)"
                     title="🐻🐂 SHORT + LONG 통합 = 3단계 x 2방향 = 6구간!">🐻🐂 통합</button>
+            <!-- 🔄 v184 사장님 (2026-08-20): BB 볼밴 반전 매매! (사이클!) -->
+            <button onclick="openBBReversal()"
+                    class="text-xs text-white px-2 py-1 rounded font-bold"
+                    style="background:linear-gradient(135deg,#a855f7,#7c3aed)"
+                    title="🔄 사장님 사이클 매매! BB 지지/저항 4시점 (하단↑ 중단↑ 중단↓ 상단↓) + RSI/CCI/OBV 종합!">🔄 반전</button>
             <button onclick="openBBMiddleRanking('up')"
                     class="text-xs bg-yellow-600 hover:bg-yellow-500 text-white px-2 py-1 rounded font-bold"
                     title="BB 중단 위 ±5% + 당일 최고 상승 순!">⚖ BB 상승</button>
@@ -2529,6 +2534,15 @@ function openPumpRanking(direction) {
 /* ⚖ v161 사장님 (2026-08-16): BB 이탈 3단계 팝업! (COW/ACE/BR/PROM/HOME 학습!)
    direction = 'up' (LONG 돌파!) or 'down' (SHORT 이탈!) or 'both' (v170 통합!)
    3단계: 임박 → 시작 → 지속 (⭐ 제일 확실!) */
+/* 🔄 v184 사장님 (2026-08-20): BB 볼밴 반전 매매 팝업! */
+function openBBReversal() {
+  window.open(
+    `/static/bb-reversal-ranking.html?interval=4h`,
+    'bbReversal',
+    'width=1100,height=900,left=600,top=50'
+  );
+}
+
 function openBBMiddleRanking(direction) {
   const isBoth = direction === 'both';
   const isUp = direction === 'up';
