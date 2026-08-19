@@ -20,29 +20,45 @@ let _sugSideFilter = 'ALL';  // ALL / LONG / SHORT
 let _cachedSuggestions = [];
 
 // 🌟 v162 사장님 (2026-08-16): BB 이탈 SUSTAINED 자동 진입 개수 옵션!
+// 🌟 v181 사장님 (2026-08-19): 「세팅 계속 유지!」 = localStorage backup!
+const _AUTO_BB_LIMIT_LS_KEY = 'auto_bb_limit_backup_v181';
+
 async function saveAutoBBLimit(v) {
+  const numV = Number(v);
+  // v181: localStorage backup 즉시 저장! (API 실패해도 유지!)
+  try { localStorage.setItem(_AUTO_BB_LIMIT_LS_KEY, String(numV)); } catch (_e) {}
   try {
     await api('/strategy-suggestions/auto-bb-limit', {
       method: 'PUT',
-      body: { limit: Number(v) },
+      body: { limit: numV },
     });
     if (typeof toast === 'function') {
-      const lim = Number(v);
-      toast(lim > 0
-        ? `✅ 자동 진입 = ${lim}개/일 = ON!`
+      toast(numV > 0
+        ? `✅ 자동 진입 = ${numV}개/일 = ON! (계속 유지!)`
         : `✅ 자동 진입 = OFF (수동!)`, 'success');
     }
   } catch (e) {
     if (typeof toast === 'function') toast('❌ 저장 실패: ' + (e.message || e), 'error');
+    console.warn('[saveAutoBBLimit] API 실패 = localStorage backup 유지:', e);
   }
 }
 
 async function loadAutoBBLimit() {
+  const el = document.getElementById('auto-bb-daily-limit');
+  // 🌟 v181: API 로드 전 = localStorage backup 우선 복원!
+  // = 사장님 세팅 = API 오류에도 유지! (계속 유지 사상!)
+  try {
+    const backup = localStorage.getItem(_AUTO_BB_LIMIT_LS_KEY);
+    if (el && backup !== null && backup !== '' && el.value === '0') {
+      el.value = backup;
+    }
+  } catch (_e) {}
   try {
     const r = await api('/strategy-suggestions/auto-bb-limit');
-    const el = document.getElementById('auto-bb-daily-limit');
     if (el && r && typeof r.limit !== 'undefined') {
       el.value = String(r.limit);
+      // v181: API 성공 = localStorage 갱신!
+      try { localStorage.setItem(_AUTO_BB_LIMIT_LS_KEY, String(r.limit)); } catch (_e) {}
     }
     // v163: 상태 표시!
     const statusEl = document.getElementById('auto-bb-status');
@@ -59,7 +75,10 @@ async function loadAutoBBLimit() {
         statusEl.title = `자동 진입 = ${used}건 사용중 / ${r.limit}건 한도\n활성: ${active}건, 손절: ${stopLoss}건 (카운트!)\n익절: ${profit}건 (카운트 X = 재진입 가능!)`;
       }
     }
-  } catch (_e) { /* silent */ }
+  } catch (e) {
+    // 🌟 v181: API 실패 = 조용히 유지! (localStorage backup!)
+    console.warn('[loadAutoBBLimit] API 실패 = localStorage backup 유지:', e && e.message);
+  }
 }
 
 // 🔄 v163 사장님: 자동 진입 카운터 리셋!
