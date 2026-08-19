@@ -36,14 +36,26 @@ from app.models.system_setting import SystemSetting
 
 logger = logging.getLogger(__name__)
 
-# 🎯 v174 사장님: 자동 진입 최소 성공률!
-MIN_SUCCESS_PROBABILITY = 0.85
-
-# 🚨 v176 사장님 (2026-08-19): 손실 방지 강화!
-# CBRSUSDT #1013 = -10.97% 손실 사례 = 학습 부족!
-# 사장님 지시: "이런 손실 없게 학습을 잘 해줘!"
-MIN_SYMBOL_SUCCESS_RATE = 0.30  # 심볼 30% 미만 = 자동 진입 제외!
-LOSS_BLOCKLIST_HOURS = 24  # 최근 24h 손실 심볼 = 자동 진입 제외!
+# 🎯 v179 사장님 (2026-08-19): 실패 확률 낮추기 = 다중 필터 강화!
+# 사장님 지시: "실패확율을 더 낮춰야 해!"
+# 이력:
+#   v174 (2026-08-18): MIN_SUCCESS_PROBABILITY = 0.85 (BB 자동 진입 시작!)
+#   v176 (2026-08-19): 손실 심볼 24h 블록 + 심볼 성공률 30% 필터!
+#   v179 (2026-08-19): 모든 필터 강화! (사장님 「더 낮춰야」!)
+MIN_SUCCESS_PROBABILITY = 0.90  # 0.85 → 0.90 (5%p 상향!)
+MIN_SYMBOL_SUCCESS_RATE = 0.40  # 0.30 → 0.40 (10%p 상향!)
+LOSS_BLOCKLIST_HOURS = 48  # 24 → 48 (2배 확대!)
+MIN_SUSTAINED_BARS = 5  # 3 → 5 (지속 확실!)
+# v179 신: regime 필수!
+REQUIRED_REGIMES = {
+    "SHORT": {"DOWNTREND_STRONG"},  # SHORT = 확실한 하락만!
+    "LONG": {"UPTREND"},  # LONG = 확실한 상승만!
+}
+# v179 신: RSI 안전 범위!
+RSI_SAFE_RANGE = {
+    "SHORT": (30, 70),  # SHORT: RSI 30~70 (과매도 반등 X, 과매수는 진입 시점!)
+    "LONG": (30, 70),  # LONG: RSI 30~70 (과매수 조정 X, 과매도는 진입 시점!)
+}
 
 
 def run_auto_bb_breakdown() -> dict:
@@ -119,32 +131,65 @@ def run_auto_bb_breakdown() -> dict:
                 skipped += 1
                 continue
 
-            # 🚨 v176: 최근 24h 손실 심볼 = skip! (CBRSUSDT 재발 방지!)
+            # 🚨 v179: 최근 48h 손실 심볼 = skip! (24h → 48h!)
             if key in recent_loss_keys:
                 skipped += 1
                 logger.info(
-                    "[auto_bb_breakdown] 🚨 v176 skip: %s (최근 24h 손실 심볼!)", key,
+                    "[auto_bb_breakdown] 🚨 v179 skip: %s (최근 48h 손실 심볼!)", key,
                 )
                 continue
 
-            # 🚨 v176: 심볼 30일 성공률 < 30% = skip! (학습 반영!)
+            # 🚨 v179: 심볼 30일 성공률 < 40% = skip! (30% → 40%!)
             try:
                 from app.workers.prediction_outcome_worker import get_symbol_success_rate
                 sr = get_symbol_success_rate(db, symbol, side, days=30)
                 if sr < MIN_SYMBOL_SUCCESS_RATE:
                     skipped += 1
                     logger.info(
-                        "[auto_bb_breakdown] 🚨 v176 skip: %s (심볼 30일 성공률 %.0f%% < %d%%)",
+                        "[auto_bb_breakdown] 🚨 v179 skip: %s (심볼 30일 성공률 %.0f%% < %d%%)",
                         key, sr * 100, int(MIN_SYMBOL_SUCCESS_RATE * 100),
                     )
                     continue
             except Exception:
                 pass  # sr 조회 실패 = 계속 진행 (fail-open)
 
-            # 6b. 성공률 필터!
+            # 6b. 성공률 필터! (85% → 90%!)
             prob = float(it.get("success_probability") or 0)
             if prob < MIN_SUCCESS_PROBABILITY:
                 continue  # low prob = 나머지 다 낮음 (정렬됨!)
+
+            # 🌟 v179 신 필터 1: 지속 봉수 = 5봉+ 필수!
+            sustained_bars = int(it.get("sustained_bars", 0) or 0)
+            if sustained_bars < MIN_SUSTAINED_BARS:
+                skipped += 1
+                logger.info(
+                    "[auto_bb_breakdown] 🌟 v179 skip: %s (지속 %d봉 < %d봉 필수!)",
+                    key, sustained_bars, MIN_SUSTAINED_BARS,
+                )
+                continue
+
+            # 🌟 v179 신 필터 2: regime 필수! (DOWNTREND_STRONG / UPTREND)
+            regime = it.get("regime", "NEUTRAL")
+            required_regimes = REQUIRED_REGIMES.get(side, set())
+            if regime not in required_regimes:
+                skipped += 1
+                logger.info(
+                    "[auto_bb_breakdown] 🌟 v179 skip: %s regime=%s (%s만 허용!)",
+                    key, regime, "/".join(required_regimes),
+                )
+                continue
+
+            # 🌟 v179 신 필터 3: RSI 안전 범위! (30~70)
+            rsi = it.get("rsi")
+            if rsi is not None:
+                rsi_min, rsi_max = RSI_SAFE_RANGE.get(side, (0, 100))
+                if rsi < rsi_min or rsi > rsi_max:
+                    skipped += 1
+                    logger.info(
+                        "[auto_bb_breakdown] 🌟 v179 skip: %s RSI %.0f (안전 범위 %d~%d 밖!)",
+                        key, rsi, rsi_min, rsi_max,
+                    )
+                    continue
 
             # 6c. 실 진입!
             try:
@@ -245,10 +290,10 @@ def _get_active_symbol_keys(db: Session) -> set[str]:
 
 
 def _get_recent_loss_symbol_keys(db: Session) -> set[str]:
-    """🚨 v176: 최근 24h 손실 심볼 keys!
+    """🚨 v179: 최근 48h 손실 심볼 keys! (v176 24h → v179 48h!)
 
     사장님 CBRSUSDT #1013 = -10.97% 손실 → 3분 후 재진입 = 같은 심볼!
-    = 손실 후 즉시 재진입 = 위험! 24h 쿨다운!
+    = 손실 후 즉시 재진입 = 위험! 48h 쿨다운!
     """
     from datetime import timedelta
     loss_keys = set()
