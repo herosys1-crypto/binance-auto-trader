@@ -86,15 +86,42 @@ class StrategySuggestionTeamLead(BaseTeamLead):
         #        (급락 지속 필터는 24h 순위 기반 제안용이었음)
         filtered: list = []
 
-        # v143a: 4가지 4H BB 트리거 = 롱·숏 대칭 (사장님 지시!)
-        #   bb4h_mid_down    (SHORT) = 중단 하향 이탈 → 하단 목표   기대값 +0.42%
-        #   bb4h_mid_up      (LONG)  = 중단 상향 돌파 → 상단 목표   기대값 +0.44%
-        #   bb4h_lower_break (SHORT) = 하단 이탈 후 추세 지속        기대값 +0.14%
-        #   bb4h_upper_break (LONG)  = 상단 돌파 후 추세 지속        기대값 +0.27%
+        # 🚨 v186 사장님 (2026-08-20): 데이터 기반 필터!
+        # 사장님 7일 통계 (1597건 검증!):
+        #   bb4h_mid_up         11.0% ❌ (273건)
+        #   bb4h_mid_down       14.7% ❌ (259건)
+        #   bb4h_upper_break    16.3% ❌ (227건)
+        #   bb4h_lower_break    10.2% ❌  (59건)
+        #   bb4h_bounce_failure  4.0% ❌❌  (25건)
+        #   bb4h_top_reversal    0.0% ❌❌❌  (19건)
+        #   bb4h_bottom_reversal 0.0% ❌❌❌  (16건)
+        #   bb4h_long_uptrend_reversal 0.0% ❌❌❌  (4건)
+        # = 모두 30% 미만 = 사장님 매매 손실 원인!
+        # v186 = 이 타입들 = **완전 제거!** (predictor에서 skip!)
+        # dump_continuation (59% 최고!) / pump_end (50%) 만 유지!
+        BLOCKED_TYPES = {
+            "bb4h_mid_up", "bb4h_mid_down",
+            "bb4h_upper_break", "bb4h_lower_break",
+            "bb4h_bounce_failure",
+            "bb4h_top_reversal", "bb4h_bottom_reversal",
+            "bb4h_long_uptrend_reversal",
+        }
         non_dump_continuation = [
             p for p in predictions
-            if str(p.get("type", "")).startswith("bb4h_")
+            if (
+                str(p.get("type", "")).startswith("bb4h_")
+                and str(p.get("type", "")) not in BLOCKED_TYPES
+            )
         ]
+        _blocked_count = sum(
+            1 for p in predictions
+            if str(p.get("type", "")) in BLOCKED_TYPES
+        )
+        if _blocked_count > 0:
+            logger.info(
+                "[%s Lead] v186: 성공률 <20%% 타입 %d건 skip!",
+                self.TEAM, _blocked_count,
+            )
         final = non_dump_continuation + filtered
 
         # 3. DB 저장!

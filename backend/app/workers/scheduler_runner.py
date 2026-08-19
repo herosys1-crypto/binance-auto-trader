@@ -284,6 +284,17 @@ def start_scheduler() -> None:
         id="auto_bb_breakdown",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🎓 v187 (2026-08-20 사장님!): 성공/실패 패턴 학습!
+    # "성공과 실패에서 포지션 진입해야 할곳을 분석해서 학습해줘!"
+    def _pattern_learning():
+        from app.workers.pattern_learning_worker import run_pattern_learning
+        run_pattern_learning()
+    scheduler.add_job(
+        guarded_job("pattern_learning", 300, _pattern_learning),
+        trigger=IntervalTrigger(hours=1),
+        id="pattern_learning",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 📊 v152 (2026-08-16 사장님!): Chart Pattern Learning Team!
     # 매 6시간 = 1달 4H 캔들 → 패턴 감지 → 저장 + outcome tracking!
     def _chart_pattern_scan():
