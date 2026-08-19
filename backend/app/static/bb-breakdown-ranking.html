@@ -101,6 +101,14 @@ document.getElementById('title').textContent = IS_BOTH
 document.getElementById('title').className = 'title ' + (IS_BOTH ? '' : (IS_DOWN ? 'sustained' : 'pos'));
 
 function getToken() {
+  // 🌟 v180 사장님 (2026-08-19): 401 방지! 부모 창 우선!
+  // API restart 시 = 팝업 옛 token → 401! 부모 창의 신 token 사용!
+  try {
+    if (window.opener && !window.opener.closed) {
+      const parentToken = window.opener.localStorage.getItem('access_token');
+      if (parentToken) return parentToken;
+    }
+  } catch (_e) { /* cross-origin */ }
   return localStorage.getItem('access_token')
       || sessionStorage.getItem('access_token') || '';
 }
@@ -167,7 +175,26 @@ async function load() {
       render(data);
     }
   } catch (e) {
-    document.getElementById('content').innerHTML = `<div class="loading" style="color:#ef4444">❌ ${e.message || e}</div>`;
+    // 🌟 v180 사장님: 401 명확 안내!
+    const msg = e.message || String(e);
+    if (msg.includes('401')) {
+      document.getElementById('content').innerHTML = `
+        <div class="loading" style="color:#ef4444;padding:20px">
+          <div style="font-size:20px;margin-bottom:12px">🔐 인증 만료!</div>
+          <div style="font-size:13px;color:#fbbf24;margin-bottom:8px">
+            대시보드에서 <b>로그아웃 → 재로그인</b> 필요!
+          </div>
+          <div style="font-size:11px;color:#94a3b8">
+            (원인: API 재시작 시 토큰 만료)
+          </div>
+          <button onclick="location.reload()"
+                  style="margin-top:16px;background:#7c3aed;color:#fff;border:0;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:12px">
+            🔄 재시도 (재로그인 후!)
+          </button>
+        </div>`;
+    } else {
+      document.getElementById('content').innerHTML = `<div class="loading" style="color:#ef4444">❌ ${msg}</div>`;
+    }
   }
 }
 
