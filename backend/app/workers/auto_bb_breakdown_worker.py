@@ -107,6 +107,9 @@ def run_auto_bb_breakdown() -> dict:
         active_keys = _get_active_symbol_keys(db)
         # 🚨 v176: 최근 24h 손실 심볼 = 제외!
         recent_loss_keys = _get_recent_loss_symbol_keys(db)
+        # 🎓 v188 사장님: 학습 인사이트 = WORST 심볼 자동 제외!
+        worst_learning_keys = _get_worst_learning_keys(db)
+        top_learning_keys = _get_top_learning_keys(db)
 
         # 5. 사장님 default profile 로드!
         from app.api.v1.suggestion_profiles import _load_profiles
@@ -129,6 +132,15 @@ def run_auto_bb_breakdown() -> dict:
             # 6a. 이미 활성 = skip!
             if key in active_keys:
                 skipped += 1
+                continue
+
+            # 🎓 v188 사장님 (2026-08-20): 학습 인사이트 = WORST 심볼 자동 제외!
+            # 사장님 인사이트: PAXG/XAUT/COIN/PLTR 등 주식/금 SHORT = 0%!
+            if key in worst_learning_keys:
+                skipped += 1
+                logger.info(
+                    "[auto_bb_breakdown] 🎓 v188 skip: %s (학습 실패 심볼 = 0%%!)", key,
+                )
                 continue
 
             # 🚨 v179: 최근 48h 손실 심볼 = skip! (24h → 48h!)
@@ -154,9 +166,16 @@ def run_auto_bb_breakdown() -> dict:
                 pass  # sr 조회 실패 = 계속 진행 (fail-open)
 
             # 6b. 성공률 필터! (85% → 90%!)
+            # 🎓 v188: TOP 학습 심볼 = 완화된 필터! (0.75!)
             prob = float(it.get("success_probability") or 0)
-            if prob < MIN_SUCCESS_PROBABILITY:
+            required_prob = 0.75 if key in top_learning_keys else MIN_SUCCESS_PROBABILITY
+            if prob < required_prob:
                 continue  # low prob = 나머지 다 낮음 (정렬됨!)
+            if key in top_learning_keys:
+                logger.info(
+                    "[auto_bb_breakdown] 🎓 v188 TOP: %s (학습 성공률 우선 = 완화 필터!)",
+                    key,
+                )
 
             # 🌟 v179 신 필터 1: 지속 봉수 = 5봉+ 필수!
             sustained_bars = int(it.get("sustained_bars", 0) or 0)
@@ -287,6 +306,54 @@ def _get_active_symbol_keys(db: Session) -> set[str]:
     ).scalars().all():
         active_keys.add(f"{a.symbol}:{a.side}")
     return active_keys
+
+
+def _get_worst_learning_keys(db: Session) -> set[str]:
+    """🎓 v188 사장님: 학습 인사이트 = WORST 심볼 자동 제외!
+
+    사장님 인사이트 (2026-08-20):
+    - PAXG/XAUT/XAU (금!) SHORT = 0%!
+    - COIN/RKLB/PLTR/SPCX (주식!) SHORT = 0%!
+    - SOXS/CRCL/INJ = 0%!
+    = 주식/금 파생 = SHORT 완전 실패! 자동 제외!
+    """
+    worst = set()
+    try:
+        from app.workers.pattern_learning_worker import get_learning_insights
+        insights = get_learning_insights(db) or {}
+        for w in insights.get("worst_symbols_short", []):
+            if w.get("total", 0) >= 5:  # 표본 5+ 만 신뢰!
+                worst.add(f"{w['symbol']}:SHORT")
+        for w in insights.get("worst_symbols_long", []):
+            if w.get("total", 0) >= 5:
+                worst.add(f"{w['symbol']}:LONG")
+    except Exception as e:
+        logger.warning("[v188] worst 심볼 로드 실패 (fail-open): %s", e)
+    return worst
+
+
+def _get_top_learning_keys(db: Session) -> set[str]:
+    """🎓 v188 사장님: 학습 인사이트 = TOP 심볼 (필터 완화!)!
+
+    사장님 인사이트 (2026-08-20):
+    - PROMUSDT SHORT = 91% (23건!)
+    - NILUSDT SHORT = 91% (11건!)
+    - CYSUSDT SHORT = 88% (17건!)
+    = TOP 심볼 = 성공률 필터 완화 (0.75!)
+    """
+    top = set()
+    try:
+        from app.workers.pattern_learning_worker import get_learning_insights
+        insights = get_learning_insights(db) or {}
+        for t in insights.get("top_symbols_short", [])[:15]:
+            if t.get("total", 0) >= 5 and t.get("success_rate", 0) >= 0.70:
+                top.add(f"{t['symbol']}:SHORT")
+        for t in insights.get("top_symbols_long", [])[:15]:
+            if t.get("total", 0) >= 5 and t.get("success_rate", 0) >= 0.70:
+                top.add(f"{t['symbol']}:LONG")
+    except Exception as e:
+        logger.warning("[v188] top 심볼 로드 실패 (fail-open): %s", e)
+    return top
 
 
 def _get_recent_loss_symbol_keys(db: Session) -> set[str]:
