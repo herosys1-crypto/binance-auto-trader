@@ -281,18 +281,23 @@ def _create_auto_bb_strategy(
     if not symbol_row:
         raise ValueError(f"symbol {symbol} not in DB")
 
-    # capital 정리!
-    capitals = cfg.get("capitals") or [500, 500, 500, 500]
-    total_capital = sum(float(c) for c in capitals)
-    trigger_percents = cfg.get("trigger_percents") or [None, 10, 20, 20]
+    # 🌟 v177 사장님 (2026-08-19): 자동 진입 = 1단계만 강제!
+    # v161 spec: "단계는 1단계로만 할꺼야 진입만 하면
+    #            우리 전략인스턴스 설정으로 진행할꺼야"
+    # 사장님 지적: default profile 4단계 → 2단계 이후 자동 차단 알림 발생!
+    # Fix: capitals = [첫 단계 자본만!] = 1단계 강제!
+    capitals_full = cfg.get("capitals") or [500, 500, 500, 500]
+    stage1_only = float(capitals_full[0]) if capitals_full else 500.0
+    capitals = [stage1_only]  # 🌟 v177: 1단계만!
+    total_capital = stage1_only
 
     stages_config = {
         "capitals": capitals,
-        "trigger_percents": trigger_percents,
-        "stages_count": len(capitals),
+        "trigger_percents": [None],  # 1단계 = 즉시 진입!
+        "stages_count": 1,  # 🌟 v177: 1단계 확정!
     }
 
-    # 신 template!
+    # 신 template = 1단계만!
     now = datetime.now(timezone.utc)
     tpl = StrategyTemplate(
         name=f"AUTO_BB_{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S')}",
@@ -301,19 +306,13 @@ def _create_auto_bb_strategy(
         leverage=int(cfg.get("leverage", 2)),
         total_capital=Decimal(str(total_capital)),
         stages_config=stages_config,
-        stage1_capital=Decimal(str(capitals[0])) if len(capitals) > 0 else None,
-        stage2_capital=Decimal(str(capitals[1])) if len(capitals) > 1 else None,
-        stage3_capital=Decimal(str(capitals[2])) if len(capitals) > 2 else None,
-        stage4_capital=Decimal(str(capitals[3])) if len(capitals) > 3 else None,
-        stage2_trigger_percent=(
-            Decimal(str(trigger_percents[1])) if len(trigger_percents) > 1 and trigger_percents[1] else None
-        ),
-        stage3_trigger_percent=(
-            Decimal(str(trigger_percents[2])) if len(trigger_percents) > 2 and trigger_percents[2] else None
-        ),
-        stage4_trigger_percent=(
-            Decimal(str(trigger_percents[3])) if len(trigger_percents) > 3 and trigger_percents[3] else None
-        ),
+        stage1_capital=Decimal(str(stage1_only)),
+        stage2_capital=None,  # 🌟 v177: 2단계 없음!
+        stage3_capital=None,
+        stage4_capital=None,
+        stage2_trigger_percent=None,
+        stage3_trigger_percent=None,
+        stage4_trigger_percent=None,
         tp1_percent=Decimal(str(cfg.get("tp1_percent", 10))),
         tp2_percent=Decimal(str(cfg.get("tp2_percent", 15))),
         tp3_percent=Decimal(str(cfg.get("tp3_percent", 20))),
