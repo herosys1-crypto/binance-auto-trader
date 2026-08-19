@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🎯 Multi-Timeframe (MTA)</title>
+<style>
+  body { background: #0f172a; color: #e2e8f0; font-family: -apple-system, sans-serif; padding: 8px; margin: 0; font-size: 12px; }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #334155; }
+  .title { font-size: 15px; font-weight: bold; color: #a78bfa; }
+  .close-btn { background: #7c3aed; color: #fff; border: 0; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+  .section { background: rgba(30,41,59,0.5); border: 1px solid #334155; border-radius: 6px; padding: 8px; margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { padding: 4px 6px; text-align: left; border-bottom: 1px solid #1e293b; }
+  th { color: #94a3b8; font-weight: 500; font-size: 10px; }
+  .num { text-align: right; }
+  .sym { color: #fff; font-weight: 600; cursor: pointer; }
+  .sym:hover { color: #fbbf24; }
+  .loading { text-align: center; color: #94a3b8; padding: 20px; }
+  .footer { margin-top: 8px; padding-top: 6px; border-top: 1px solid #334155; font-size: 10px; color: #94a3b8; line-height: 1.5; }
+  .tf-badge { display: inline-block; padding: 1px 4px; border-radius: 3px; font-size: 9px; margin: 0 1px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="title">🎯 Multi-Timeframe (사장님 MTA!)</div>
+    <div style="font-size:10px;color:#94a3b8" id="subtitle">15m + 1H + 4H 지표 반전 종합!</div>
+  </div>
+  <button class="close-btn" onclick="window.close()">✕ 닫기</button>
+</div>
+
+<div id="content"><div class="loading">📡 조회 중... (3 타임프레임 x 100 심볼 = 시간 걸림!)</div></div>
+
+<script>
+const API_BASE = '/api/v1';
+let timer = null;
+
+function fmtPrice(v) {
+  const n = Number(v);
+  if (!isFinite(n) || n === 0) return '-';
+  return Math.abs(n) >= 1 ? String(parseFloat(n.toFixed(4))) : String(parseFloat(n.toPrecision(6)));
+}
+function openBinanceChart(sym) {
+  window.open(`https://www.binance.com/en/futures/${encodeURIComponent(sym)}`, `bnc_${sym}`, 'noopener');
+}
+function instantEnter(sym, side) {
+  if (!confirm(`⚡ ${sym} ${side} = 1단계 즉시 진입?`)) return;
+  let dashboard = null;
+  let w = window.opener;
+  let depth = 0;
+  const seen = new Set();
+  while (w && !w.closed && depth < 5) {
+    if (seen.has(w)) break;
+    seen.add(w);
+    try {
+      if (typeof w.enterOneStageBBBreak === 'function') { dashboard = w; break; }
+    } catch (_e) {}
+    try { w = w.opener; } catch (_e) { break; }
+    depth++;
+  }
+  if (dashboard) {
+    dashboard.enterOneStageBBBreak(sym, side);
+    dashboard.focus();
+  } else {
+    alert('❌ 대시보드 찾을 수 없음!');
+  }
+}
+
+async function load() {
+  try {
+    const path = '/multi-timeframe-scan/scan?min_score=6&max_symbols=100';
+    let data;
+    if (window.opener && !window.opener.closed && typeof window.opener.api === 'function') {
+      data = await window.opener.api(path);
+    } else {
+      throw new Error('부모 창 X!');
+    }
+    render(data);
+  } catch (e) {
+    const msg = e.message || String(e);
+    if (msg.includes('401')) {
+      document.getElementById('content').innerHTML = `
+        <div class="loading" style="color:#ef4444;padding:20px">
+          <div style="font-size:20px">🔐 인증 만료!</div>
+          <div style="margin-top:12px;color:#fbbf24">대시보드에서 로그아웃 → 재로그인!</div>
+        </div>`;
+    } else {
+      document.getElementById('content').innerHTML = `<div class="loading" style="color:#ef4444">❌ ${msg}</div>`;
+    }
+  }
+}
+
+function tfBadge(tf, isLong) {
+  const score = isLong ? tf.long_score : tf.short_score;
+  const bg = score >= 3 ? '#22c55e' : score >= 2 ? '#84cc16' : score >= 1 ? '#fbbf24' : '#475569';
+  return `<span class="tf-badge" style="background:${bg};color:${score >= 2 ? '#000' : '#fff'}" title="${(isLong ? tf.long_reasons : tf.short_reasons).join(' + ')}">${tf.interval} ${score}/4</span>`;
+}
+
+function renderSection(title, color, items, isLong) {
+  if (!items || items.length === 0) {
+    return `<div class="section">
+      <div style="color:${color};font-weight:bold;margin-bottom:6px">${title} <span style="color:#64748b">(0)</span></div>
+      <div class="loading" style="padding:10px">현재 없음!</div>
+    </div>`;
+  }
+  const rows = items.slice(0, 15).map((s, i) => {
+    const btnBg = isLong ? 'linear-gradient(135deg,#22c55e,#16a34a)' : 'linear-gradient(135deg,#ef4444,#dc2626)';
+    const side = isLong ? 'LONG' : 'SHORT';
+    const scoreColor = s.total_score >= 18 ? '#22c55e' : s.total_score >= 12 ? '#84cc16' : '#fbbf24';
+    return `
+      <tr>
+        <td class="num" style="color:#64748b">${i + 1}</td>
+        <td>
+          <span class="sym" onclick="openBinanceChart('${s.symbol}')">${s.symbol}</span>
+          <button onclick="instantEnter('${s.symbol}','${side}')"
+                  style="background:${btnBg};color:#fff;border:0;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:10px;margin-left:3px;font-weight:600">⚡ ${side}</button>
+        </td>
+        <td class="num" style="color:${scoreColor};font-weight:700">${s.total_score}/24</td>
+        <td class="num">${fmtPrice(s.current_price)}</td>
+        <td class="num" style="color:${s.change_24h >= 0 ? '#22c55e' : '#ef4444'}">${s.change_24h >= 0 ? '+' : ''}${s.change_24h}%</td>
+        <td>${tfBadge(s.tf_15m, isLong)} ${tfBadge(s.tf_1h, isLong)} ${tfBadge(s.tf_4h, isLong)}</td>
+      </tr>`;
+  }).join('');
+  return `<div class="section">
+    <div style="color:${color};font-weight:bold;margin-bottom:6px">${title} <span style="color:#64748b">(${items.length})</span></div>
+    <table>
+      <thead><tr>
+        <th class="num">#</th><th>심볼</th><th class="num">점수</th>
+        <th class="num">현재가</th><th class="num">24h</th><th>15m / 1H / 4H</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
+function render(data) {
+  const c = data.counts || {};
+  document.getElementById('subtitle').textContent =
+    `총 ${c.total||0}건 · LONG ${c.long||0} · SHORT ${c.short||0} · 최소 점수 ${data.min_score}/24`;
+
+  const html = ''
+    + `<div style="background:rgba(34,197,94,0.1);border:2px solid #16a34a;border-radius:6px;padding:6px 8px;margin-bottom:8px">
+        <div style="font-size:14px;font-weight:bold;color:#22c55e">🐂 LONG 반전 (15m/1H 상승 시작 = 4H 상승 예상!)</div>
+      </div>`
+    + renderSection('🚀 LONG 신호 (점수 순!)', '#22c55e', data.long_signals, true)
+    + `<div style="background:rgba(239,68,68,0.1);border:2px solid #dc2626;border-radius:6px;padding:6px 8px;margin:16px 0 8px 0">
+        <div style="font-size:14px;font-weight:bold;color:#ef4444">🐻 SHORT 반전 (15m/1H 하락 시작 = 4H 하락 예상!)</div>
+      </div>`
+    + renderSection('📉 SHORT 신호 (점수 순!)', '#ef4444', data.short_signals, false)
+    + `<div class="footer">
+        🎯 <b>사장님 사상 (MTA!):</b> 15m/1H OBV/RSI/MACD 반전 = 4H 반전 선행!<br>
+        📊 <b>가중치:</b> 15m*3 + 1H*2 + 4H*1 = 최대 24!<br>
+        💡 <b>각 프레임 (0~4점):</b> RSI 변화 + OBV 방향 + MACD 반전 + CCI!<br>
+        ⚡ <b>큰 수익:</b> 4H 반전 선행 진입! / <b>짧은 손절:</b> 틀리면 -5% 즉시!<br>
+        🔄 <b>재진입:</b> 다시 반전 시점 잡으면 새 포지션!
+      </div>`;
+  document.getElementById('content').innerHTML = html;
+}
+
+load();
+timer = setInterval(load, 60000);  // 1분마다!
+</script>
+</body>
+</html>

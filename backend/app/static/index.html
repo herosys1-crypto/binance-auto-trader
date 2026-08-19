@@ -1176,6 +1176,11 @@
                     class="text-xs text-white px-2 py-1 rounded font-bold"
                     style="background:linear-gradient(135deg,#a855f7,#7c3aed)"
                     title="🔄 사장님 사이클 매매! BB 지지/저항 4시점 (하단↑ 중단↑ 중단↓ 상단↓) + RSI/CCI/OBV 종합!">🔄 반전</button>
+            <!-- 🎯 v189 사장님 (2026-08-20): Multi-Timeframe (MTA)! -->
+            <button onclick="openMultiTimeframe()"
+                    class="text-xs text-white px-2 py-1 rounded font-bold"
+                    style="background:linear-gradient(135deg,#f59e0b,#ec4899)"
+                    title="🎯 사장님 MTA! 15m/1H/4H OBV/RSI/MACD/CCI 반전 종합 = 큰 수익 조기 진입!">🎯 MTA</button>
             <button onclick="openBBMiddleRanking('up')"
                     class="text-xs bg-yellow-600 hover:bg-yellow-500 text-white px-2 py-1 rounded font-bold"
                     title="BB 중단 위 ±5% + 당일 최고 상승 순!">⚖ BB 상승</button>
@@ -2540,6 +2545,15 @@ function openBBReversal() {
     `/static/bb-reversal-ranking.html?interval=4h`,
     'bbReversal',
     'width=1100,height=900,left=600,top=50'
+  );
+}
+
+/* 🎯 v189 사장님 (2026-08-20): Multi-Timeframe (MTA) 팝업! */
+function openMultiTimeframe() {
+  window.open(
+    `/static/multi-timeframe-ranking.html`,
+    'mtaScan',
+    'width=1200,height=950,left=500,top=30'
   );
 }
 
