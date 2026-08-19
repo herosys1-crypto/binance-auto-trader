@@ -45,12 +45,13 @@ async function saveAutoBBLimit(v) {
 
 async function loadAutoBBLimit() {
   const el = document.getElementById('auto-bb-daily-limit');
-  // 🌟 v181: API 로드 전 = localStorage backup 우선 복원!
-  // = 사장님 세팅 = API 오류에도 유지! (계속 유지 사상!)
+  // 🌟 v181/v182 사장님: 「계속 유지!」 = localStorage backup 무조건 우선!
+  // v181: `el.value === '0'` 조건 = 매번 실패 (초기 로드 시 = 옛 값!)
+  // v182: 조건 제거! 무조건 backup 있으면 = 즉시 복원!
   try {
     const backup = localStorage.getItem(_AUTO_BB_LIMIT_LS_KEY);
-    if (el && backup !== null && backup !== '' && el.value === '0') {
-      el.value = backup;
+    if (el && backup !== null && backup !== '') {
+      el.value = backup;  // v182: 무조건 복원!
     }
   } catch (_e) {}
   try {
@@ -807,7 +808,15 @@ if (typeof window !== 'undefined') {
   window.loadAutoBBLimit = loadAutoBBLimit;
   window.resetAutoBBCounter = resetAutoBBCounter;  // 🔄 v163 리셋!
   document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(loadAutoBBLimit, 1500);  // 대시보드 로드 시 = 저장값 로드!
+    // 🌟 v182 사장님 「세팅 유지!」: 즉시 backup 복원! (사장님 「끔」 보임 방지!)
+    try {
+      const backup = localStorage.getItem(_AUTO_BB_LIMIT_LS_KEY);
+      const el = document.getElementById('auto-bb-daily-limit');
+      if (el && backup !== null && backup !== '') {
+        el.value = backup;  // 즉시 복원!
+      }
+    } catch (_e) {}
+    setTimeout(loadAutoBBLimit, 500);  // v182: 1500 → 500 (더 빠르게!)
     setInterval(loadAutoBBLimit, 60000);  // v163 = 매 60초 상태 새로고침!
   });
   window.briefingNow = briefingNow;  // v132 즉시 브리핑!
