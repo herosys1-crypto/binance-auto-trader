@@ -204,7 +204,7 @@ def _count_used_slots(db: Session) -> int:
 def _get_active_symbol_keys(db: Session) -> set[str]:
     """현재 활성 심볼 keys = 'SYMBOL:SIDE' 집합!"""
     active_keys = set()
-    from app.services.strategy_service import TERMINAL_STATUSES
+    from app.core.strategy_status import TERMINAL_STATUSES
     for a in db.execute(
         select(StrategyInstance)
         .where(StrategyInstance.status.notin_(TERMINAL_STATUSES))
