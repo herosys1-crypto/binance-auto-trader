@@ -154,8 +154,21 @@ function openAnalysis(sym, sideHint) {
 }
 
 async function _loadOneDirection(dir) {
+  // 🌟 v183 사장님 (2026-08-20): 「30초도 안 되서 인증 만료!」 fix!
+  // 원인: 팝업 fetch = 자동 401 재시도 로직 X! (대시보드 api.js와 다름!)
+  // Fix: 부모 창의 api() 함수 사용 = 자동 재시도 + 세션 공유!
+  const path = `/bb-middle-scan/breakdown?interval=${interval}&direction=${dir}&max_symbols=150`;
+  // 1순위: 부모 창의 api() = 자동 재시도!
+  try {
+    if (window.opener && !window.opener.closed && typeof window.opener.api === 'function') {
+      return await window.opener.api(path);
+    }
+  } catch (e) {
+    console.warn('[v183] 부모 api() 실패, 직접 fetch fallback:', e);
+  }
+  // fallback: 직접 fetch (부모 없거나 실패 시!)
   const r = await fetch(
-    `${API_BASE}/bb-middle-scan/breakdown?interval=${interval}&direction=${dir}&max_symbols=150`,
+    `${API_BASE}${path}`,
     { headers: { 'Authorization': `Bearer ${getToken()}` } });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
