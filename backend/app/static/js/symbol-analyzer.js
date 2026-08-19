@@ -126,7 +126,11 @@
         return;
       }
       await window.openCreateModal();
-      setTimeout(() => {
+      // 🌟 v178 사장님 (2026-08-19): 1단계만 강제!
+      // 사장님 지적: 「이렇게 2단계로 세팅된건 수정해줘!」
+      // 원인: openCreateModal이 이전 전략 blueprint 자동 로드 (2단계!)
+      // Fix: default profile 로드 + 1단계 세팅 + 2~10단계 강제 clear!
+      setTimeout(async () => {
         try {
           const symInput = document.getElementById('cm-symbol');
           if (symInput) {
@@ -140,8 +144,50 @@
           if (typeof window.loadCmMarketInfo === 'function') {
             window.loadCmMarketInfo();
           }
+
+          // 🌟 v178: default profile 로드 → 1단계 자본만 세팅!
+          let stage1Capital = 300;  // fallback default
+          try {
+            if (typeof window.api === 'function') {
+              const data = await window.api('/suggestion-profiles');
+              const defaultName = data?.default || 'safe';
+              const profile = (data?.profiles || []).find(p => p.name === defaultName);
+              if (profile?.config?.capitals?.[0]) {
+                stage1Capital = Number(profile.config.capitals[0]) || 300;
+              }
+            }
+          } catch (pe) {
+            console.warn('[enterOneStageBBBreak] default profile 로드 실패:', pe);
+          }
+
+          // 1단계 자본 세팅!
+          const cap1 = document.getElementById('cm-cap-1');
+          if (cap1) {
+            cap1.value = stage1Capital;
+            cap1.dispatchEvent(new Event('input', { bubbles: true }));
+            cap1.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          // 2단계 이후 = 강제 clear! (사장님 1단계만!)
+          for (let i = 2; i <= 10; i++) {
+            const capI = document.getElementById(`cm-cap-${i}`);
+            if (capI) {
+              capI.value = '';
+              capI.dispatchEvent(new Event('input', { bubbles: true }));
+              capI.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            const trgI = document.getElementById(`cm-trg-${i}`);
+            if (trgI) {
+              trgI.value = '';
+              trgI.dispatchEvent(new Event('input', { bubbles: true }));
+              trgI.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }
+
           if (typeof window.toast === 'function') {
-            window.toast(`⚡ ${symbol} ${side} = BB 이탈 지속 진입 준비! (저장 클릭!)`, 'success');
+            window.toast(
+              `⚡ ${symbol} ${side} = BB 이탈 1단계만 (${stage1Capital} USDT) 준비! (저장!)`,
+              'success',
+            );
           }
         } catch (e) {
           console.warn('[enterOneStageBBBreak] fill 실패:', e);
