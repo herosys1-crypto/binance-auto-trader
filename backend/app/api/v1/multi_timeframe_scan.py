@@ -29,7 +29,7 @@ from app.integrations.binance.client import BinanceClient
 from app.models.exchange_account import ExchangeAccount
 from app.services.bb_4h_band_analyzer import BB4HBandAnalyzer
 from app.api.v1.bb_middle_scan import (
-    _calc_rsi, _calc_macd, _calc_obv_slope, _calc_cci,
+    _calc_rsi, _calc_macd, _calc_obv_slope, _calc_cci, _calc_bb_slope,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,9 @@ def _analyze_timeframe(bc: BinanceClient, symbol: str, interval: str) -> dict | 
         macd = _calc_macd(closes[-60:] if len(closes) >= 60 else closes)
         obv_slope = _calc_obv_slope(closes[-30:], volumes[-30:])
         cci = _calc_cci(highs[-20:], lows[-20:], closes[-20:], period=9)
+        # 🌟 v192 사장님 (2026-08-20): BB 기울기 (방향!)
+        mid, up, lo = BB4HBandAnalyzer.bollinger(closes)
+        bb_slope = _calc_bb_slope(mid, lookback=5)
 
         # 반전 감지!
         rsi_delta = (rsi_now - rsi_prev) if (rsi_now is not None and rsi_prev is not None) else 0
@@ -96,6 +99,25 @@ def _analyze_timeframe(bc: BinanceClient, symbol: str, interval: str) -> dict | 
             short_score += 1
             short_reasons.append(f"CCI {cci:.0f}")
 
+        # 🌟 v192 사장님: BB 기울기 = 큰 흐름 반영!
+        # 상승 방향 = LONG 가산 / SHORT 감점!
+        # 하락 방향 = SHORT 가산 / LONG 감점!
+        if bb_slope is not None:
+            if bb_slope > 0.5:  # 강한 상승!
+                long_score += 1
+                long_reasons.append(f"🌟 BB↑+{bb_slope:.1f}%")
+                short_score = max(0, short_score - 1)
+            elif bb_slope > 0.1:
+                long_score += 1
+                long_reasons.append(f"BB↑+{bb_slope:.1f}%")
+            elif bb_slope < -0.5:  # 강한 하락!
+                short_score += 1
+                short_reasons.append(f"🌟 BB↓{bb_slope:.1f}%")
+                long_score = max(0, long_score - 1)
+            elif bb_slope < -0.1:
+                short_score += 1
+                short_reasons.append(f"BB↓{bb_slope:.1f}%")
+
         return {
             "interval": interval,
             "rsi": round(rsi_now, 1) if rsi_now is not None else None,
@@ -103,6 +125,7 @@ def _analyze_timeframe(bc: BinanceClient, symbol: str, interval: str) -> dict | 
             "macd_hist": round(macd_hist, 6) if macd else None,
             "obv_slope_pct": round(obv_slope * 100, 1) if obv_slope is not None else None,
             "cci": round(cci, 1) if cci is not None else None,
+            "bb_slope_pct": round(bb_slope, 2) if bb_slope is not None else None,
             "long_score": long_score,
             "long_reasons": long_reasons,
             "short_score": short_score,
@@ -178,18 +201,33 @@ def scan_multi_timeframe(
             current = float(t.get("lastPrice", 0) or 0)
             volume_24h = float(t.get("quoteVolume", 0) or 0)
 
+            # 🌟 v192 사장님: 4H BB 방향 = 필터! (사장님 ACEUSDT 지적!)
+            # 4H BB 상승 방향인데 SHORT 시그널 = 위험!
+            # 4H BB 하락 방향인데 LONG 시그널 = 위험!
+            tf_4h_slope = tf_4h.get("bb_slope_pct", 0) or 0
+            long_penalty = 0
+            short_penalty = 0
+            if tf_4h_slope > 0.3:  # 4H 확실 상승!
+                short_penalty = 4  # SHORT = 대폭 감점! (사장님 ACEUSDT 케이스!)
+            elif tf_4h_slope < -0.3:  # 4H 확실 하락!
+                long_penalty = 4  # LONG = 대폭 감점!
+
             # 사장님 가중치: 15m 우선! (진입!) + 1h 확인 + 4h 방향!
             long_total = (
                 tf_15m["long_score"] * 3   # 15m 최우선!
                 + tf_1h["long_score"] * 2  # 1h 확인!
                 + tf_4h["long_score"] * 1  # 4h 방향!
+                - long_penalty  # 🌟 v192: 4H BB 반대 = 감점!
             )
             short_total = (
                 tf_15m["short_score"] * 3
                 + tf_1h["short_score"] * 2
                 + tf_4h["short_score"] * 1
+                - short_penalty  # 🌟 v192: 4H BB 반대 = 감점!
             )
-            # 최대 = 3*4 + 2*4 + 1*4 = 24!
+            long_total = max(0, long_total)
+            short_total = max(0, short_total)
+            # 최대 = 3*4 + 2*4 + 1*4 = 24! (v192 반대 방향 -4!)
 
             common = {
                 "symbol": symbol,

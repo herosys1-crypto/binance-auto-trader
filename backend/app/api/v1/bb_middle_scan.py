@@ -106,6 +106,30 @@ def _calc_vol_trend(volumes: list[float], lookback: int = 10) -> float:
     return recent / prev if prev > 0 else 1.0
 
 
+def _calc_bb_slope(middle: list[float | None], lookback: int = 5) -> float | None:
+    """🌟 v192 사장님 (2026-08-20): BB middle 기울기 (방향!)
+
+    사장님 지적 (ACEUSDT 사례!):
+    "4H 볼밴 전체 상승 방향인데 시스템은 SHORT 분류!"
+    = 볼밴 기울기 = 큰 흐름 판단 필수!
+
+    반환값:
+    - > 0.5% = 강한 상승 (LONG 우세!)
+    - > 0.1% = 약한 상승 (LONG 편)
+    - -0.1~0.1% = 횡보!
+    - < -0.1% = 약한 하락 (SHORT 편)
+    - < -0.5% = 강한 하락 (SHORT 우세!)
+    """
+    if not middle or len(middle) < lookback + 1:
+        return None
+    # 최근 봉 middle 값!
+    m_now = middle[-1]
+    m_prev = middle[-1 - lookback]
+    if m_now is None or m_prev is None or m_prev <= 0:
+        return None
+    return (m_now - m_prev) / m_prev * 100  # %
+
+
 def _calc_cci(highs: list[float], lows: list[float], closes: list[float], period: int = 9) -> float | None:
     """🌟 v184a 사장님: CCI(9) = Commodity Channel Index!
 
