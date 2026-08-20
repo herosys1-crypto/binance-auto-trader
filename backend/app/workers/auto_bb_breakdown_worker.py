@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 #   v174 (2026-08-18): MIN_SUCCESS_PROBABILITY = 0.85 (BB 자동 진입 시작!)
 #   v176 (2026-08-19): 손실 심볼 24h 블록 + 심볼 성공률 30% 필터!
 #   v179 (2026-08-19): 모든 필터 강화! (사장님 「더 낮춰야」!)
-MIN_SUCCESS_PROBABILITY = 0.80  # v179: 0.85→0.90 / v194: 0.90→0.80 (진입 증가!)
+MIN_SUCCESS_PROBABILITY = 0.70  # v179: 0.85→0.90 / v194: 0.90→0.80 / v201: 0.80→0.70 (사장님 「적극」!)
 MIN_SYMBOL_SUCCESS_RATE = 0.40  # 0.30 → 0.40 (10%p 상향!)
 LOSS_BLOCKLIST_HOURS = 48  # 24 → 48 (2배 확대!)
 MIN_SUSTAINED_BARS = 5  # 3 → 5 (지속 확실!)
@@ -246,16 +246,25 @@ def run_auto_bb_breakdown() -> dict:
             except Exception:
                 pass  # sr 조회 실패 = 계속 진행 (fail-open)
 
-            # 6b. 성공률 필터! (85% → 90%!)
-            # 🎓 v188: TOP 학습 심볼 = 완화된 필터! (0.75!)
+            # 6b. 성공률 필터! (v201 사장님 「적극」!)
+            # 🎓 v188: TOP 학습 심볼 = 완화 필터 (0.65!)
+            # 🌟 v201: 학습 성공 조건 매치 시 = 대폭 완화 (0.55!)
             prob = float(it.get("success_probability") or 0)
-            required_prob = 0.75 if key in top_learning_keys else MIN_SUCCESS_PROBABILITY
-            if prob < required_prob:
-                continue  # low prob = 나머지 다 낮음 (정렬됨!)
+            required_prob = MIN_SUCCESS_PROBABILITY  # 0.70 (v201!)
+            reason_bonus = ""
             if key in top_learning_keys:
+                required_prob = 0.65
+                reason_bonus = " (TOP 심볼!)"
+            elif _matches_success_condition(it, side):
+                # v201: 학습 성공 조건 매치 = 필터 대폭 완화!
+                required_prob = 0.55
+                reason_bonus = " (성공 조건 매치!)"
+            if prob < required_prob:
+                continue
+            if reason_bonus:
                 logger.info(
-                    "[auto_bb_breakdown] 🎓 v188 TOP: %s (학습 성공률 우선 = 완화 필터!)",
-                    key,
+                    "[auto_bb_breakdown] 🌟 v201 우대: %s%s (%.0f%% >= %.0f%%)",
+                    key, reason_bonus, prob*100, required_prob*100,
                 )
 
             # 🌟 v179 신 필터 1: 지속 봉수 = 5봉+ 필수!
@@ -464,6 +473,90 @@ def _load_failure_conditions(db: Session) -> dict:
     _FAILURE_CONDITIONS_CACHE["loaded_at"] = now
     _FAILURE_CONDITIONS_CACHE["conditions"] = failures
     return failures
+
+
+# 🌟 v201 사장님: 학습 성공 조건 캐시!
+_SUCCESS_CONDITIONS_CACHE: dict = {"loaded_at": None, "conditions": {}}
+
+
+def _load_success_conditions(db: Session) -> dict:
+    """🌟 v201 사장님 「적극 매매」: 학습 인사이트에서 = 성공 조건 로드!
+
+    - 성공률 60%+ + 표본 5+ = 성공 조건!
+    - RSI/CCI/OBV/regime/시간대별!
+    """
+    from datetime import timedelta as _td
+    now = datetime.now(timezone.utc)
+    if (_SUCCESS_CONDITIONS_CACHE["loaded_at"] and
+        (now - _SUCCESS_CONDITIONS_CACHE["loaded_at"]) < _td(minutes=30)):
+        return _SUCCESS_CONDITIONS_CACHE["conditions"]
+
+    successes = {"rsi_side": set(), "cci_side": set(), "obv_side": set(),
+                 "regime_side": set(), "hour_side": set()}
+    try:
+        from app.workers.pattern_learning_worker import get_learning_insights
+        insights = get_learning_insights(db) or {}
+        snap = insights.get("snapshot_conditions") or {}
+        for key_name, out_key in [
+            ("rsi_conditions", "rsi_side"),
+            ("cci_conditions", "cci_side"),
+            ("obv_conditions", "obv_side"),
+            ("regime_conditions", "regime_side"),
+            ("hour_conditions", "hour_side"),
+        ]:
+            for row in snap.get(key_name, []):
+                if row.get("total", 0) >= 5 and row.get("success_rate", 0) >= 0.60:
+                    successes[out_key].add(row["key"])
+    except Exception as e:
+        logger.warning("[v201] 성공 조건 로드 실패: %s", e)
+
+    _SUCCESS_CONDITIONS_CACHE["loaded_at"] = now
+    _SUCCESS_CONDITIONS_CACHE["conditions"] = successes
+    return successes
+
+
+def _matches_success_condition(it: dict, side: str) -> bool:
+    """🌟 v201: 진입 조건 = 학습된 성공 조건 매치?
+
+    True 반환 = 성공 조건! = 필터 대폭 완화!
+    """
+    from app.core.database import SessionLocal as _SL
+    _db = _SL()
+    try:
+        successes = _load_success_conditions(_db)
+    finally:
+        _db.close()
+
+    match_count = 0
+
+    rsi = it.get("rsi")
+    if rsi is not None:
+        rsi_bucket = _rsi_bucket_local(rsi)
+        if f"{rsi_bucket}:{side}" in successes["rsi_side"]:
+            match_count += 1
+
+    cci = it.get("cci")
+    if cci is not None:
+        cci_bucket = _cci_bucket_local(cci)
+        if f"{cci_bucket}:{side}" in successes["cci_side"]:
+            match_count += 1
+
+    obv = it.get("obv_slope_pct")
+    if obv is not None:
+        obv_bucket = _obv_bucket_local(obv)
+        if f"{obv_bucket}:{side}" in successes["obv_side"]:
+            match_count += 1
+
+    regime = it.get("regime", "NEUTRAL")
+    if f"{regime}:{side}" in successes["regime_side"]:
+        match_count += 1
+
+    kst_h = (datetime.now(timezone.utc).hour + 9) % 24
+    if f"KST{kst_h:02d}:{side}" in successes["hour_side"]:
+        match_count += 1
+
+    # 5개 중 2개 이상 매치 = 성공 조건!
+    return match_count >= 2
 
 
 def _matches_failure_condition(it: dict, side: str) -> bool:
