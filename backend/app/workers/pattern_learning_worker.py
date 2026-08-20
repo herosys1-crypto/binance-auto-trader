@@ -87,6 +87,10 @@ def run_pattern_learning() -> dict:
             elif s.outcome_status == "FAIL":
                 change_bucket_stats[s.suggestion_type][side_bucket]["fail"] += 1
 
+        # 🎓 v198 사장님: 진입 스냅샷 조건 학습!
+        # 사장님 지시: "실패한 차트 분석해서 다음에 대처하는 학습!"
+        snapshot_condition_stats = _analyze_entry_snapshots(rows)
+
         # 4. 결과 정리 = 성공률 계산!
         insights = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -97,6 +101,8 @@ def run_pattern_learning() -> dict:
             "worst_symbols_long": _worst_symbols(symbol_side_stats, "LONG", top=10),
             "worst_symbols_short": _worst_symbols(symbol_side_stats, "SHORT", top=10),
             "change_bucket_insights": _change_bucket_summary(change_bucket_stats),
+            # 🎓 v198: 조건별 성공률!
+            "snapshot_conditions": snapshot_condition_stats,
         }
 
         # 5. system_settings 저장!
@@ -235,6 +241,109 @@ def _change_bucket_summary(stats: dict) -> dict:
     for stype, bucket_stats in stats.items():
         summary[stype] = _rank_by_success_rate(bucket_stats)
     return summary
+
+
+def _analyze_entry_snapshots(rows: list) -> dict:
+    """🎓 v198 사장님 (2026-08-21): 진입 시점 스냅샷 조건별 성공률!
+
+    사장님 지시: "실패한 차트 분석해서 다음에 대처하는 학습!
+                 보조지표 (RSI/CCI/OBV/MACD)를 잘 활용!"
+
+    분석:
+    - RSI 범위별 성공률!
+    - CCI 범위별 성공률!
+    - OBV slope 방향별!
+    - regime별!
+    - KST 시간대별!
+    - source별 (BB_SUSTAINED vs MTA!)
+    """
+    rsi_stats: dict[str, dict[str, int]] = defaultdict(lambda: {"success": 0, "fail": 0})
+    cci_stats: dict[str, dict[str, int]] = defaultdict(lambda: {"success": 0, "fail": 0})
+    obv_stats: dict[str, dict[str, int]] = defaultdict(lambda: {"success": 0, "fail": 0})
+    regime_side_stats: dict[str, dict[str, int]] = defaultdict(lambda: {"success": 0, "fail": 0})
+    hour_side_stats: dict[str, dict[str, int]] = defaultdict(lambda: {"success": 0, "fail": 0})
+    source_side_stats: dict[str, dict[str, int]] = defaultdict(lambda: {"success": 0, "fail": 0})
+
+    for s in rows:
+        snap = None
+        if s.strategy_config and isinstance(s.strategy_config, dict):
+            snap = s.strategy_config.get("entry_snapshot")
+        if not snap:
+            continue
+        outcome = s.outcome_status
+        if outcome not in ("SUCCESS", "FAIL"):
+            continue
+        result_key = "success" if outcome == "SUCCESS" else "fail"
+
+        # RSI 버킷!
+        rsi = snap.get("rsi")
+        if rsi is not None:
+            rsi_bucket = _bucket_rsi(rsi)
+            rsi_stats[f"{rsi_bucket}:{s.side}"][result_key] += 1
+
+        # CCI 버킷!
+        cci = snap.get("cci")
+        if cci is not None:
+            cci_bucket = _bucket_cci(cci)
+            cci_stats[f"{cci_bucket}:{s.side}"][result_key] += 1
+
+        # OBV slope!
+        obv = snap.get("obv_slope_pct")
+        if obv is not None:
+            obv_bucket = _bucket_obv(obv)
+            obv_stats[f"{obv_bucket}:{s.side}"][result_key] += 1
+
+        # regime!
+        regime = snap.get("regime", "NEUTRAL")
+        regime_side_stats[f"{regime}:{s.side}"][result_key] += 1
+
+        # KST 시간대!
+        kst_h = snap.get("kst_hour")
+        if kst_h is not None:
+            hour_side_stats[f"KST{kst_h:02d}:{s.side}"][result_key] += 1
+
+        # source (BB_SUSTAINED / MTA!)
+        source = snap.get("source", "BB_SUSTAINED")
+        source_side_stats[f"{source}:{s.side}"][result_key] += 1
+
+    return {
+        "rsi_conditions": _rank_by_success_rate(rsi_stats),
+        "cci_conditions": _rank_by_success_rate(cci_stats),
+        "obv_conditions": _rank_by_success_rate(obv_stats),
+        "regime_conditions": _rank_by_success_rate(regime_side_stats),
+        "hour_conditions": _rank_by_success_rate(hour_side_stats),
+        "source_conditions": _rank_by_success_rate(source_side_stats),
+    }
+
+
+def _bucket_rsi(rsi: float) -> str:
+    """RSI 버킷!"""
+    if rsi < 20: return "very_low (<20 극과매도)"
+    if rsi < 30: return "low (20~30 과매도)"
+    if rsi < 45: return "mid_low (30~45)"
+    if rsi < 55: return "neutral (45~55)"
+    if rsi < 70: return "mid_high (55~70)"
+    if rsi < 80: return "high (70~80 과매수)"
+    return "very_high (>80 극과매수)"
+
+
+def _bucket_cci(cci: float) -> str:
+    """CCI 버킷!"""
+    if cci < -200: return "extreme_low (<-200)"
+    if cci < -100: return "low (-200~-100)"
+    if cci < 0: return "mid_low (-100~0)"
+    if cci < 100: return "mid_high (0~100)"
+    if cci < 200: return "high (100~200)"
+    return "extreme_high (>200)"
+
+
+def _bucket_obv(obv: float) -> str:
+    """OBV slope % 버킷!"""
+    if obv < -10: return "strong_down (<-10%)"
+    if obv < -3: return "down (-10~-3%)"
+    if obv < 3: return "neutral (-3~+3%)"
+    if obv < 10: return "up (+3~+10%)"
+    return "strong_up (>+10%)"
 
 
 def get_learning_insights(db: Session) -> dict | None:

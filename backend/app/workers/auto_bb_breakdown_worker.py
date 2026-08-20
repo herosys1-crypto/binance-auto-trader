@@ -291,19 +291,49 @@ def run_auto_bb_breakdown() -> dict:
                     )
                     continue
 
+            # 🎓 v198 사장님: 조건 매칭 = 실패 조건이면 skip!
+            # RSI/CCI/OBV/regime/시간대 = 학습된 실패 조건 매치 시 = skip!
+            if _matches_failure_condition(it, side):
+                skipped += 1
+                logger.info(
+                    "[auto_bb_breakdown] 🎓 v198 skip: %s (실패 조건 매치!)", key,
+                )
+                continue
+
             # 6c. 실 진입!
             try:
                 new_strategy = _create_auto_bb_strategy(db, symbol, side, cfg)
                 # StrategySuggestion 저장 (자동 진입 표시!)
+                # 🎓 v198 사장님 (2026-08-21): 진입 시점 지표 스냅샷 저장!
+                # 사장님 지시: "실패한 차트 분석해서 다음에 대처하는 학습!"
+                # = 조건 조합별 성공률 분석 = 실패 조건 자동 회피!
+                _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
+                entry_snapshot = {
+                    "rsi": it.get("rsi"),
+                    "cci": it.get("cci"),
+                    "obv_slope_pct": it.get("obv_slope_pct"),
+                    "regime": it.get("regime", "NEUTRAL"),
+                    "sustained_bars": it.get("sustained_bars", 0),
+                    "change_24h": it.get("change_24h"),
+                    "source": it.get("source", "BB_SUSTAINED"),
+                    "kst_hour": _kst_hour,
+                    "mta_total": it.get("mta_total"),
+                    "entered_at": datetime.now(timezone.utc).isoformat(),
+                }
                 sugg = StrategySuggestion(
                     symbol=symbol, side=side,
                     suggestion_type="bb4h_auto_entry",
-                    strategy_config={**cfg, "symbol": symbol, "side": side},
+                    strategy_config={
+                        **cfg, "symbol": symbol, "side": side,
+                        "entry_snapshot": entry_snapshot,  # 🎓 v198!
+                    },
                     confidence_score=Decimal(str(round(prob, 4))),
                     reason=(
                         f"BB 4H SUSTAINED 자동 진입! "
                         f"성공률 {int(prob*100)}% / 지속 {it.get('sustained_bars', 0)}봉 / "
-                        f"regime={it.get('regime', 'NEUTRAL')}"
+                        f"regime={it.get('regime', 'NEUTRAL')} / "
+                        f"RSI={it.get('rsi')} CCI={it.get('cci')} OBV={it.get('obv_slope_pct')}% "
+                        f"KST={_kst_hour:02d}h"
                     ),
                     status="EXECUTED",
                     execution_mode="AUTO",
@@ -387,6 +417,126 @@ def _get_active_symbol_keys(db: Session) -> set[str]:
     ).scalars().all():
         active_keys.add(f"{a.symbol}:{a.side}")
     return active_keys
+
+
+# 🎓 v198 사장님: 학습된 실패 조건 캐시! (매 4h 갱신!)
+_FAILURE_CONDITIONS_CACHE: dict = {"loaded_at": None, "conditions": {}}
+
+
+def _load_failure_conditions(db: Session) -> dict:
+    """🎓 v198: 학습 인사이트에서 = 실패 조건 로드!
+
+    사장님 지시: "실패 차트 분석 → 다음에 대처!"
+    - 성공률 <30% + 표본 5+ = 실패 조건!
+    - RSI/CCI/OBV/regime/시간대별!
+    """
+    from datetime import timedelta as _td
+    # 캐시 유효 = 30분!
+    now = datetime.now(timezone.utc)
+    if (_FAILURE_CONDITIONS_CACHE["loaded_at"] and
+        (now - _FAILURE_CONDITIONS_CACHE["loaded_at"]) < _td(minutes=30)):
+        return _FAILURE_CONDITIONS_CACHE["conditions"]
+
+    failures = {
+        "rsi_side": set(),      # {"low:LONG", ...}
+        "cci_side": set(),
+        "obv_side": set(),
+        "regime_side": set(),
+        "hour_side": set(),
+    }
+    try:
+        from app.workers.pattern_learning_worker import get_learning_insights
+        insights = get_learning_insights(db) or {}
+        snap = insights.get("snapshot_conditions") or {}
+        for key_name, out_key in [
+            ("rsi_conditions", "rsi_side"),
+            ("cci_conditions", "cci_side"),
+            ("obv_conditions", "obv_side"),
+            ("regime_conditions", "regime_side"),
+            ("hour_conditions", "hour_side"),
+        ]:
+            for row in snap.get(key_name, []):
+                if row.get("total", 0) >= 5 and row.get("success_rate", 0) < 0.30:
+                    failures[out_key].add(row["key"])
+    except Exception as e:
+        logger.warning("[v198] 실패 조건 로드 실패: %s", e)
+
+    _FAILURE_CONDITIONS_CACHE["loaded_at"] = now
+    _FAILURE_CONDITIONS_CACHE["conditions"] = failures
+    return failures
+
+
+def _matches_failure_condition(it: dict, side: str) -> bool:
+    """🎓 v198: 진입 조건 = 학습된 실패 조건 매치?
+
+    True 반환 = 실패 조건! = 자동 진입 skip!
+    """
+    from app.core.database import SessionLocal as _SL
+    _db = _SL()
+    try:
+        failures = _load_failure_conditions(_db)
+    finally:
+        _db.close()
+
+    # RSI 매치!
+    rsi = it.get("rsi")
+    if rsi is not None:
+        rsi_bucket = _rsi_bucket_local(rsi)
+        if f"{rsi_bucket}:{side}" in failures["rsi_side"]:
+            return True
+
+    # CCI 매치!
+    cci = it.get("cci")
+    if cci is not None:
+        cci_bucket = _cci_bucket_local(cci)
+        if f"{cci_bucket}:{side}" in failures["cci_side"]:
+            return True
+
+    # OBV 매치!
+    obv = it.get("obv_slope_pct")
+    if obv is not None:
+        obv_bucket = _obv_bucket_local(obv)
+        if f"{obv_bucket}:{side}" in failures["obv_side"]:
+            return True
+
+    # regime 매치!
+    regime = it.get("regime", "NEUTRAL")
+    if f"{regime}:{side}" in failures["regime_side"]:
+        return True
+
+    # 시간대 매치!
+    kst_h = (datetime.now(timezone.utc).hour + 9) % 24
+    if f"KST{kst_h:02d}:{side}" in failures["hour_side"]:
+        return True
+
+    return False
+
+
+def _rsi_bucket_local(rsi: float) -> str:
+    if rsi < 20: return "very_low (<20 극과매도)"
+    if rsi < 30: return "low (20~30 과매도)"
+    if rsi < 45: return "mid_low (30~45)"
+    if rsi < 55: return "neutral (45~55)"
+    if rsi < 70: return "mid_high (55~70)"
+    if rsi < 80: return "high (70~80 과매수)"
+    return "very_high (>80 극과매수)"
+
+
+def _cci_bucket_local(cci: float) -> str:
+    if cci < -200: return "extreme_low (<-200)"
+    if cci < -100: return "low (-200~-100)"
+    if cci < 0: return "mid_low (-100~0)"
+    if cci < 100: return "mid_high (0~100)"
+    if cci < 200: return "high (100~200)"
+    return "extreme_high (>200)"
+
+
+def _obv_bucket_local(obv: float) -> str:
+    if obv < -10: return "strong_down (<-10%)"
+    if obv < -3: return "down (-10~-3%)"
+    if obv < 3: return "neutral (-3~+3%)"
+    if obv < 10: return "up (+3~+10%)"
+    return "strong_up (>+10%)"
 
 
 def _get_worst_learning_keys(db: Session) -> set[str]:
