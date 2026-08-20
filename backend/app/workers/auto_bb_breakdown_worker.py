@@ -559,12 +559,12 @@ def _get_current_price(symbol: str) -> Decimal:
 
 
 def _notify_auto_entry(strategy: StrategyInstance, prob: float, scan_info: dict) -> None:
-    """자동 진입 텔레그램 알림! (v190: MTA 정보 포함!)"""
+    """자동 진입 텔레그램 알림! (v193 fix: NotificationService(db) 직접 사용!)"""
     try:
-        from app.services.notification_service import get_notification_service
-        ns = get_notification_service()
-        if ns is None:
-            return
+        # 🌟 v193 fix: get_notification_service 함수 없음 → NotificationService(db) 직접!
+        from app.services.notification_service import NotificationService
+        db_notif = SessionLocal()
+        ns = NotificationService(db_notif)
         emoji = "🐻" if strategy.side == "SHORT" else "🐂"
         source = scan_info.get("source", "BB_SUSTAINED")
         source_icon = "🎯" if source == "MTA" else "⚡"
@@ -589,5 +589,9 @@ def _notify_auto_entry(strategy: StrategyInstance, prob: float, scan_info: dict)
             title=f"🤖 [자동 진입] #{strategy.id} {strategy.symbol} {strategy.side} {emoji}",
             body="\n".join(body_lines),
         )
+        try:
+            db_notif.close()
+        except Exception:
+            pass
     except Exception as e:
         logger.warning("[auto_bb_breakdown] 알림 실패: %s", e)
