@@ -1181,6 +1181,11 @@
                     class="text-xs text-white px-2 py-1 rounded font-bold"
                     style="background:linear-gradient(135deg,#f59e0b,#ec4899)"
                     title="🎯 사장님 MTA! 15m/1H/4H OBV/RSI/MACD/CCI 반전 종합 = 큰 수익 조기 진입!">🎯 MTA</button>
+            <!-- 🎯 v200 사장님 (2026-08-21): 실시간 모니터링! -->
+            <button onclick="openRealtimeMonitor()"
+                    class="text-xs text-white px-2 py-1 rounded font-bold"
+                    style="background:linear-gradient(135deg,#a78bfa,#f59e0b)"
+                    title="🎯 v200 사장님 실시간 모니터링! 5패턴 (A~E) + 진입 중/예정/성공실패 = 한눈에!">📡 실시간</button>
             <button onclick="openBBMiddleRanking('up')"
                     class="text-xs bg-yellow-600 hover:bg-yellow-500 text-white px-2 py-1 rounded font-bold"
                     title="BB 중단 위 ±5% + 당일 최고 상승 순!">⚖ BB 상승</button>
@@ -2557,6 +2562,15 @@ function openMultiTimeframe() {
     `/static/multi-timeframe-ranking.html`,
     'mtaScan',
     'width=1200,height=950,left=500,top=30'
+  );
+}
+
+/* 🎯 v200 사장님 (2026-08-21): 실시간 모니터링 팝업! */
+function openRealtimeMonitor() {
+  window.open(
+    `/static/realtime-monitor.html`,
+    'realtimeMonitor',
+    'width=1300,height=1000,left=400,top=20'
   );
 }
 

@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🎯 실시간 모니터링</title>
+<style>
+  body { background: #0f172a; color: #e2e8f0; font-family: -apple-system, sans-serif; padding: 8px; margin: 0; font-size: 12px; }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #334155; }
+  .title { font-size: 15px; font-weight: bold; color: #a78bfa; }
+  .close-btn { background: #7c3aed; color: #fff; border: 0; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+  .summary {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 4px; margin-bottom: 8px;
+  }
+  .summary-card {
+    background: rgba(30,41,59,0.5); border: 1px solid #334155;
+    border-radius: 6px; padding: 6px 10px; text-align: center;
+  }
+  .summary-card .label { font-size: 10px; color: #94a3b8; }
+  .summary-card .value { font-size: 18px; font-weight: bold; }
+  .section {
+    background: rgba(30,41,59,0.5); border: 1px solid #334155;
+    border-radius: 6px; padding: 8px; margin-bottom: 8px;
+  }
+  .section-title { font-weight: bold; margin-bottom: 6px; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { padding: 4px 6px; text-align: left; border-bottom: 1px solid #1e293b; }
+  th { color: #94a3b8; font-weight: 500; font-size: 10px; }
+  .num { text-align: right; }
+  .sym { color: #fff; font-weight: 600; cursor: pointer; }
+  .sym:hover { color: #fbbf24; }
+  .badge { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 9px; margin-left: 2px; font-weight: 600; }
+  .pos { color: #22c55e; }
+  .neg { color: #ef4444; }
+  .loading { text-align: center; color: #94a3b8; padding: 20px; }
+  .pattern-A { background: #22c55e; color: #000; }
+  .pattern-B { background: #f97316; color: #fff; }
+  .pattern-C { background: #dc2626; color: #fff; }
+  .pattern-D { background: #16a34a; color: #fff; }
+  .pattern-E { background: #7c3aed; color: #fff; }
+  .pattern-U { background: #475569; color: #cbd5e1; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="title">🎯 실시간 모니터링 (v200 사장님!)</div>
+    <div style="font-size:10px;color:#94a3b8" id="subtitle">로딩...</div>
+  </div>
+  <button class="close-btn" onclick="window.close()">✕ 닫기</button>
+</div>
+
+<div id="content"><div class="loading">📡 조회 중...</div></div>
+
+<script>
+const API_BASE = '/api/v1';
+let timer = null;
+
+function fmtNum(v, d=2) {
+  const n = Number(v);
+  if (!isFinite(n)) return '-';
+  return n.toFixed(d);
+}
+function openBinanceChart(sym) {
+  window.open(`https://www.binance.com/en/futures/${encodeURIComponent(sym)}`, `bnc_${sym}`, 'noopener');
+}
+function instantEnter(sym, side) {
+  if (!confirm(`⚡ ${sym} ${side} = 1단계 즉시 진입?`)) return;
+  let dashboard = null;
+  let w = window.opener;
+  let depth = 0;
+  const seen = new Set();
+  while (w && !w.closed && depth < 5) {
+    if (seen.has(w)) break;
+    seen.add(w);
+    try {
+      if (typeof w.enterOneStageBBBreak === 'function') { dashboard = w; break; }
+    } catch (_e) {}
+    try { w = w.opener; } catch (_e) { break; }
+    depth++;
+  }
+  if (dashboard) {
+    dashboard.enterOneStageBBBreak(sym, side);
+    dashboard.focus();
+  } else {
+    alert('❌ 대시보드 찾을 수 없음!');
+  }
+}
+
+const PATTERN_LABELS = {
+  'A_INITIAL_SURGE': { icon: '🟢', label: '급등 시작 LONG!', cls: 'pattern-A', side: 'LONG' },
+  'B_DROP_START': { icon: '🟠', label: '하락 시작 SHORT!', cls: 'pattern-B', side: 'SHORT' },
+  'C_SURGE_CRASH': { icon: '🔴', label: '급등 후 급락 SHORT!', cls: 'pattern-C', side: 'SHORT' },
+  'D_PULLBACK_RESUME': { icon: '🟢', label: '조정 후 재상승 LONG!', cls: 'pattern-D', side: 'LONG' },
+  'E_FAKE_BOUNCE': { icon: '🔴', label: '반등 실패 SHORT!', cls: 'pattern-E', side: 'SHORT' },
+  'UNKNOWN': { icon: '⚪', label: '미분류', cls: 'pattern-U', side: null },
+};
+
+async function load() {
+  try {
+    let data;
+    if (window.opener && !window.opener.closed && typeof window.opener.api === 'function') {
+      data = await window.opener.api('/realtime-monitor/dashboard');
+    } else {
+      throw new Error('부모 창 X!');
+    }
+    render(data);
+  } catch (e) {
+    const msg = e.message || String(e);
+    document.getElementById('content').innerHTML = `<div class="loading" style="color:#ef4444">❌ ${msg}</div>`;
+  }
+}
+
+function render(data) {
+  const s = data.summary || {};
+  const r = s.results_24h || {};
+  document.getElementById('subtitle').textContent =
+    `${new Date().toLocaleTimeString('ko')} · 24h 승률 ${r.win_rate||0}% · P&L ${r.total_pnl||0} USDT`;
+
+  const html = `
+    <div class="summary">
+      <div class="summary-card"><div class="label">📡 모니터링</div><div class="value" style="color:#a78bfa">${s.watchlist_count||0}</div></div>
+      <div class="summary-card"><div class="label">🚀 진입 중</div><div class="value" style="color:#22c55e">${s.active_count||0}</div></div>
+      <div class="summary-card"><div class="label">📅 진입 예정</div><div class="value" style="color:#fbbf24">${s.pending_count||0}</div></div>
+      <div class="summary-card"><div class="label">✅ 성공 24h</div><div class="value pos">${r.wins||0}</div></div>
+      <div class="summary-card"><div class="label">❌ 실패 24h</div><div class="value neg">${r.losses||0}</div></div>
+      <div class="summary-card"><div class="label">💰 P&L 24h</div><div class="value ${r.total_pnl>=0?'pos':'neg'}">${r.total_pnl>=0?'+':''}${r.total_pnl||0}</div></div>
+    </div>
+    ${renderWatchlist(data.watchlist)}
+    ${renderActive(data.active)}
+    ${renderPending(data.pending)}
+    ${renderResults(data.recent_results)}
+  `;
+  document.getElementById('content').innerHTML = html;
+}
+
+function renderWatchlist(items) {
+  if (!items || items.length === 0) return '<div class="section"><div class="section-title" style="color:#a78bfa">🎯 진입 대기 (0)</div><div class="loading">현재 없음!</div></div>';
+  const rows = items.slice(0, 20).map((w, i) => {
+    const p = PATTERN_LABELS[w.pattern] || PATTERN_LABELS['UNKNOWN'];
+    const chgCls = w.change_24h >= 0 ? 'pos' : 'neg';
+    const btn = p.side ? `<button onclick="instantEnter('${w.symbol}','${p.side}')"
+                              style="background:${p.side==='LONG'?'linear-gradient(135deg,#22c55e,#16a34a)':'linear-gradient(135deg,#ef4444,#dc2626)'};color:#fff;border:0;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:10px;margin-left:3px;font-weight:600">⚡ ${p.side}</button>` : '';
+    return `
+      <tr>
+        <td class="num" style="color:#64748b">${i+1}</td>
+        <td><span class="sym" onclick="openBinanceChart('${w.symbol}')">${w.symbol}</span>${btn}</td>
+        <td><span class="badge ${p.cls}" title="${p.label}">${p.icon} ${p.label}</span></td>
+        <td class="num ${chgCls}">${w.change_24h>=0?'+':''}${fmtNum(w.change_24h)}%</td>
+        <td class="num" style="color:#94a3b8">${(w.volume_24h/1e6).toFixed(1)}M</td>
+      </tr>`;
+  }).join('');
+  return `<div class="section">
+    <div class="section-title" style="color:#a78bfa">🎯 진입 대기 - 실시간 모니터링 (${items.length})</div>
+    <table><thead><tr><th class="num">#</th><th>심볼</th><th>패턴</th><th class="num">24h</th><th class="num">Vol</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+function renderActive(items) {
+  if (!items || items.length === 0) return '<div class="section"><div class="section-title" style="color:#22c55e">🚀 진입 중 (0)</div><div class="loading">현재 없음!</div></div>';
+  const rows = items.map((a, i) => {
+    const cls = a.roi_pct >= 0 ? 'pos' : 'neg';
+    return `
+      <tr>
+        <td class="num" style="color:#64748b">#${a.id}</td>
+        <td><span class="sym" onclick="openBinanceChart('${a.symbol}')">${a.symbol}</span></td>
+        <td><span class="badge ${a.side==='LONG'?'pattern-A':'pattern-C'}">${a.side}</span></td>
+        <td class="num">${a.current_stage}</td>
+        <td class="num ${cls}">${a.roi_pct>=0?'+':''}${fmtNum(a.roi_pct)}%</td>
+        <td class="num ${cls}">${a.unrealized_pnl>=0?'+':''}${fmtNum(a.unrealized_pnl)}</td>
+        <td style="font-size:10px;color:#94a3b8">${a.status}</td>
+      </tr>`;
+  }).join('');
+  return `<div class="section">
+    <div class="section-title" style="color:#22c55e">🚀 진입 중 (${items.length})</div>
+    <table><thead><tr><th class="num">ID</th><th>심볼</th><th>방향</th><th class="num">단계</th><th class="num">ROI</th><th class="num">PNL</th><th>상태</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+function renderPending(items) {
+  if (!items || items.length === 0) return '<div class="section"><div class="section-title" style="color:#fbbf24">📅 진입 예정 (0)</div><div class="loading">현재 없음!</div></div>';
+  const rows = items.slice(0, 10).map((p, i) => {
+    const confPct = Math.round(p.confidence * 100);
+    return `
+      <tr>
+        <td class="num" style="color:#64748b">${i+1}</td>
+        <td><span class="sym" onclick="openBinanceChart('${p.symbol}')">${p.symbol}</span></td>
+        <td><span class="badge ${p.side==='LONG'?'pattern-A':'pattern-C'}">${p.side}</span></td>
+        <td class="num" style="color:#fbbf24">${confPct}%</td>
+        <td style="font-size:10px;color:#94a3b8" title="${p.reason}">${p.reason.substring(0,50)}...</td>
+      </tr>`;
+  }).join('');
+  return `<div class="section">
+    <div class="section-title" style="color:#fbbf24">📅 진입 예정 - PENDING (${items.length})</div>
+    <table><thead><tr><th class="num">#</th><th>심볼</th><th>방향</th><th class="num">신뢰도</th><th>이유</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+function renderResults(items) {
+  if (!items || items.length === 0) return '<div class="section"><div class="section-title" style="color:#cbd5e1">📊 성공/실패 24h (0)</div><div class="loading">현재 없음!</div></div>';
+  const rows = items.map((r, i) => {
+    const icon = r.outcome === 'SUCCESS' ? '✅' : r.outcome === 'FAIL' ? '❌' : '➖';
+    const cls = r.realized_pnl >= 0 ? 'pos' : 'neg';
+    const t = r.stopped_at ? new Date(r.stopped_at).toLocaleTimeString('ko', {hour:'2-digit',minute:'2-digit'}) : '?';
+    return `
+      <tr>
+        <td>${icon}</td>
+        <td style="color:#64748b">#${r.id}</td>
+        <td><span class="sym" onclick="openBinanceChart('${r.symbol}')">${r.symbol}</span></td>
+        <td><span class="badge ${r.side==='LONG'?'pattern-A':'pattern-C'}">${r.side}</span></td>
+        <td class="num ${cls}">${r.realized_pnl>=0?'+':''}${fmtNum(r.realized_pnl)}</td>
+        <td style="font-size:10px;color:#94a3b8">${t}</td>
+      </tr>`;
+  }).join('');
+  return `<div class="section">
+    <div class="section-title" style="color:#cbd5e1">📊 성공/실패 기록 24h (${items.length})</div>
+    <table><thead><tr><th></th><th>ID</th><th>심볼</th><th>방향</th><th class="num">P&L</th><th>시간</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+load();
+timer = setInterval(load, 30000);  // 30초마다!
+</script>
+</body>
+</html>
