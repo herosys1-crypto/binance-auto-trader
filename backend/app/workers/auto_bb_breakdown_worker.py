@@ -428,15 +428,17 @@ def _get_worst_learning_keys(db: Session) -> set[str]:
 
 
 def _get_top_learning_keys(db: Session) -> set[str]:
-    """🎓 v188 사장님: 학습 인사이트 = TOP 심볼 (필터 완화!)!
+    """🎓 v188 + v195 사장님: TOP 심볼 (필터 완화!) + 실패 역이용!
 
-    사장님 인사이트 (2026-08-20):
-    - PROMUSDT SHORT = 91% (23건!)
-    - NILUSDT SHORT = 91% (11건!)
-    - CYSUSDT SHORT = 88% (17건!)
-    = TOP 심볼 = 성공률 필터 완화 (0.75!)
+    v188: 학습 인사이트 top 심볼!
+    🌟 v195 (2026-08-20 사장님 지능!):
+    "실패한 차트의 원인을 분석하고 학습해서 다음에 역으로 이용!"
+    - CYSUSDT SHORT 실패 (-165!) → CYSUSDT LONG = **역 기회!**
+    - USUSDT SHORT 실패 (-311!) → USUSDT LONG = **역 기회!**
+    - 시장이 확실히 상승 → SHORT 실패 → LONG 진입!
     """
     top = set()
+    # 1️⃣ v188: 학습 인사이트 top!
     try:
         from app.workers.pattern_learning_worker import get_learning_insights
         insights = get_learning_insights(db) or {}
@@ -447,8 +449,76 @@ def _get_top_learning_keys(db: Session) -> set[str]:
             if t.get("total", 0) >= 5 and t.get("success_rate", 0) >= 0.70:
                 top.add(f"{t['symbol']}:LONG")
     except Exception as e:
-        logger.warning("[v188] top 심볼 로드 실패 (fail-open): %s", e)
+        logger.warning("[v188] top 심볼 로드 실패: %s", e)
+
+    # 🌟 2️⃣ v195: 실패 역이용! (반대 방향 = 기회!)
+    try:
+        inverse_opps = _get_inverse_opportunity_keys(db)
+        top.update(inverse_opps)
+        if inverse_opps:
+            logger.info(
+                "[v195] 실패 역이용 = %d개 (반대 방향 우대!): %s",
+                len(inverse_opps), list(inverse_opps)[:5],
+            )
+    except Exception as e:
+        logger.warning("[v195] 실패 역이용 실패: %s", e)
     return top
+
+
+def _get_inverse_opportunity_keys(db: Session) -> set[str]:
+    """🌟 v195 사장님 실패 역이용!
+
+    사장님 사상 (2026-08-20):
+    "실패한 차트의 원인을 분석하고 학습해서 다음에 역으로 이용할 수 있게!"
+
+    로직:
+    1. 7일 realized_pnl 심볼별 집계!
+    2. SHORT 손실 심볼 → LONG 역기회!
+    3. LONG 손실 심볼 → SHORT 역기회!
+    4. -100 USDT+ 손실 + 2건+ 손실 + 승률 <30%
+       = **반대 방향 = 시장이 확실히 그쪽으로 움직임 = 기회!**
+    """
+    inverse = set()
+    try:
+        from datetime import timedelta as _td
+        from app.core.strategy_status import TERMINAL_STATUSES as _TS
+        cutoff = datetime.now(timezone.utc) - _td(days=7)
+        rows = db.execute(
+            select(StrategyInstance)
+            .where(StrategyInstance.stopped_at >= cutoff)
+            .where(StrategyInstance.status.in_(list(_TS)))
+        ).scalars().all()
+        sym_pnl: dict[str, dict] = {}
+        for s in rows:
+            key = f"{s.symbol}:{s.side}"
+            pnl = float(s.realized_pnl or 0)
+            if key not in sym_pnl:
+                sym_pnl[key] = {"total": 0.0, "wins": 0, "losses": 0}
+            sym_pnl[key]["total"] += pnl
+            if pnl > 0:
+                sym_pnl[key]["wins"] += 1
+            elif pnl < 0:
+                sym_pnl[key]["losses"] += 1
+
+        # 실패 심볼 = 반대 방향 = 역기회!
+        for key, s in sym_pnl.items():
+            total_trades = s["wins"] + s["losses"]
+            if total_trades < 2:
+                continue
+            win_rate = s["wins"] / total_trades if total_trades > 0 else 0
+            # -100 USDT+ 손실 + 승률 <30% = 확실한 실패!
+            if s["total"] <= -100 and win_rate < 0.30:
+                symbol, side = key.rsplit(":", 1)
+                inverse_side = "LONG" if side == "SHORT" else "SHORT"
+                inverse_key = f"{symbol}:{inverse_side}"
+                # 반대 방향이 아직 손실 심볼이 아니면만 추가!
+                inverse_stat = sym_pnl.get(inverse_key)
+                if inverse_stat and inverse_stat["total"] < -50:
+                    continue  # 반대도 이미 손실 = skip!
+                inverse.add(inverse_key)
+    except Exception as e:
+        logger.warning("[v195] 역기회 계산 실패: %s", e)
+    return inverse
 
 
 def _get_recent_loss_symbol_keys(db: Session) -> set[str]:
