@@ -138,9 +138,9 @@ def _analyze_timeframe(bc: BinanceClient, symbol: str, interval: str) -> dict | 
 
 @router.get("/scan")
 def scan_multi_timeframe(
-    max_symbols: int = Query(default=100, ge=10, le=200),
-    min_score: int = Query(default=6, ge=3, le=12,
-                           description="최소 종합 점수 (15m + 1h + 4h 각 최대 4점 = 12!)"),
+    max_symbols: int = Query(default=50, ge=10, le=200),  # v196: 100 → 50
+    min_score: int = Query(default=6, ge=3, le=30,  # v192: 24 → 30 max!
+                           description="최소 종합 점수 (v192: 15m*3+1h*2+4h*1 최대 30!)"),
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> dict[str, Any]:
@@ -160,7 +160,21 @@ def scan_multi_timeframe(
         select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
     ).scalar_one_or_none()
     if not account:
-        return {"symbols": [], "error": "no mainnet account"}
+        return {"symbols": [], "error": "no mainnet account",
+                "counts": {"total": 0, "long": 0, "short": 0},
+                "long_signals": [], "short_signals": [],
+                "scanned": 0, "min_score": min_score}
+
+    # 🚨 v196: API Ban 감지 = 즉시 return! (호출 안 함!)
+    from app.core.api_backoff import is_account_banned
+    if is_account_banned(account.id):
+        return {
+            "counts": {"total": 0, "long": 0, "short": 0},
+            "long_signals": [], "short_signals": [],
+            "scanned": 0, "min_score": min_score,
+            "error": "API Ban 중! Binance IP 차단 - 잠시 대기 필요!",
+            "note": "🚨 v196: API Ban 감지 → 즉시 return! (rate limit 방지!)",
+        }
 
     bc = BinanceClient(
         api_key=decrypt_text(account.api_key_enc),
@@ -171,9 +185,15 @@ def scan_multi_timeframe(
     try:
         tickers = bc.get_24hr_ticker()
         if not isinstance(tickers, list):
-            return {"symbols": [], "error": "ticker 실패"}
+            return {"symbols": [], "error": "ticker 실패",
+                    "counts": {"total": 0, "long": 0, "short": 0},
+                    "long_signals": [], "short_signals": [],
+                    "scanned": 0, "min_score": min_score}
     except Exception as e:
-        return {"symbols": [], "error": str(e)}
+        return {"symbols": [], "error": str(e),
+                "counts": {"total": 0, "long": 0, "short": 0},
+                "long_signals": [], "short_signals": [],
+                "scanned": 0, "min_score": min_score}
 
     usdt = [t for t in tickers if str(t.get("symbol", "")).endswith("USDT")]
     try:

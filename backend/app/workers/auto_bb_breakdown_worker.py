@@ -103,11 +103,12 @@ def run_auto_bb_breakdown() -> dict:
             all_sustained.append({**it, "side": "LONG", "source": "BB_SUSTAINED"})
 
         # 🎯 v190 사장님: MTA (Multi-Timeframe) 소스 추가!
+        # 🚨 v196 (API Ban 사고!): max_symbols 100 → 30 (호출 축소!)
         # 사장님 지시: "MTA 잘 활용해서 자동매매 많이 + 수익 많이 + 포지션 늘리기!"
         try:
             from app.api.v1.multi_timeframe_scan import scan_multi_timeframe
             mta_result = scan_multi_timeframe(
-                max_symbols=100, min_score=18,  # 18/24 = 매우 확실!
+                max_symbols=30, min_score=18,  # v196: 100→30 (API Ban 방지!)
                 db=db, user_id=1,
             )
             for it in (mta_result.get("long_signals") or []):
