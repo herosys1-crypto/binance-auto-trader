@@ -58,13 +58,35 @@ RSI_SAFE_RANGE = {
 }
 
 
+def _is_risky_time_kst() -> tuple[bool, str]:
+    """🚨 v197 사장님 실적 분석 (2026-08-21):
+    KST 20:00/00:00/02:00 = 큰 손실 시간대!
+    - KST 02:00: 8건 -494 USDT (승률 12%!)
+    - KST 20:00: 5건 -461 USDT (승률 0%!)
+    - KST 00:00: 7건 -288 USDT (승률 0%!)
+    - KST 18:00: 2건 -197 USDT (승률 0%!)
+    = 미국 새벽 시장 = 변동성 극대 = 위험!
+    """
+    kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
+    # KST 18:00 ~ KST 03:00 = 위험!
+    if kst_hour >= 18 or kst_hour < 3:
+        return True, f"KST {kst_hour:02d}:00 = 위험 시간대 (미국 시장 변동성!)"
+    return False, ""
+
+
 def run_auto_bb_breakdown() -> dict:
-    """매 4시간 = SUSTAINED 심볼 자동 진입! (v174 완성!)"""
+    """매 4시간 = SUSTAINED 심볼 자동 진입! (v174 완성 + v197 시간대 필터!)"""
     db: Session = SessionLocal()
     entered = 0
     skipped = 0
     results: list[dict] = []
     try:
+        # 🚨 v197 사장님: 위험 시간대 = 자동 진입 skip!
+        risky, reason = _is_risky_time_kst()
+        if risky:
+            logger.info("[auto_bb_breakdown] 🚨 v197 skip: %s", reason)
+            return {"note": f"v197: {reason}", "entered": 0}
+
         # 1. daily_limit 확인!
         limit_row = db.get(SystemSetting, "auto_bb_break_daily_limit")
         daily_limit = int(limit_row.value) if limit_row and limit_row.value else 0
