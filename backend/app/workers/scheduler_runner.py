@@ -298,6 +298,17 @@ def start_scheduler() -> None:
         id="pattern_learning",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🎯 v199 (2026-08-21 사장님!): 실시간 watchlist!
+    # "급등후 급락 / 급락후 급등 / 급등 종목 실시간 모니터링!"
+    def _realtime_watchlist():
+        from app.workers.realtime_watchlist_worker import run_realtime_watchlist
+        run_realtime_watchlist()
+    scheduler.add_job(
+        guarded_job("realtime_watchlist", 600, _realtime_watchlist),
+        trigger=IntervalTrigger(minutes=15),  # 매 15분!
+        id="realtime_watchlist",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 📊 v152 (2026-08-16 사장님!): Chart Pattern Learning Team!
     # 매 6시간 = 1달 4H 캔들 → 패턴 감지 → 저장 + outcome tracking!
     def _chart_pattern_scan():
