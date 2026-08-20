@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 #   v174 (2026-08-18): MIN_SUCCESS_PROBABILITY = 0.85 (BB 자동 진입 시작!)
 #   v176 (2026-08-19): 손실 심볼 24h 블록 + 심볼 성공률 30% 필터!
 #   v179 (2026-08-19): 모든 필터 강화! (사장님 「더 낮춰야」!)
-MIN_SUCCESS_PROBABILITY = 0.90  # 0.85 → 0.90 (5%p 상향!)
+MIN_SUCCESS_PROBABILITY = 0.80  # v179: 0.85→0.90 / v194: 0.90→0.80 (진입 증가!)
 MIN_SYMBOL_SUCCESS_RATE = 0.40  # 0.30 → 0.40 (10%p 상향!)
 LOSS_BLOCKLIST_HOURS = 48  # 24 → 48 (2배 확대!)
 MIN_SUSTAINED_BARS = 5  # 3 → 5 (지속 확실!)
@@ -367,26 +367,63 @@ def _get_active_symbol_keys(db: Session) -> set[str]:
 
 
 def _get_worst_learning_keys(db: Session) -> set[str]:
-    """🎓 v188 사장님: 학습 인사이트 = WORST 심볼 자동 제외!
+    """🎓 v188+v194 사장님: 학습 인사이트 + 실제 손실 = WORST 심볼 자동 제외!
 
-    사장님 인사이트 (2026-08-20):
-    - PAXG/XAUT/XAU (금!) SHORT = 0%!
-    - COIN/RKLB/PLTR/SPCX (주식!) SHORT = 0%!
-    - SOXS/CRCL/INJ = 0%!
-    = 주식/금 파생 = SHORT 완전 실패! 자동 제외!
+    v188: outcome_status 기반 (인사이트!)
+    🚨 v194 (2026-08-20 사장님 실적 -798/24h 분석!):
+    - 인사이트 outcome_status ≠ 실제 PnL! (CYSUSDT 88%인데 실제 -165!)
+    - **실제 realized_pnl 기반 추가!**
+    - 7일 -100 USDT+ 손실 심볼 = 자동 제외!
     """
     worst = set()
+    # 1️⃣ v188: 학습 인사이트 기반!
     try:
         from app.workers.pattern_learning_worker import get_learning_insights
         insights = get_learning_insights(db) or {}
         for w in insights.get("worst_symbols_short", []):
-            if w.get("total", 0) >= 5:  # 표본 5+ 만 신뢰!
+            if w.get("total", 0) >= 5:
                 worst.add(f"{w['symbol']}:SHORT")
         for w in insights.get("worst_symbols_long", []):
             if w.get("total", 0) >= 5:
                 worst.add(f"{w['symbol']}:LONG")
     except Exception as e:
-        logger.warning("[v188] worst 심볼 로드 실패 (fail-open): %s", e)
+        logger.warning("[v188] worst 인사이트 로드 실패: %s", e)
+
+    # 🚨 2️⃣ v194: 실제 realized_pnl 기반! (더 강력!)
+    try:
+        from datetime import timedelta as _td
+        from app.core.strategy_status import TERMINAL_STATUSES as _TS
+        cutoff = datetime.now(timezone.utc) - _td(days=7)
+        rows = db.execute(
+            select(StrategyInstance)
+            .where(StrategyInstance.stopped_at >= cutoff)
+            .where(StrategyInstance.status.in_(list(_TS)))
+        ).scalars().all()
+        sym_pnl: dict[str, dict] = {}
+        for s in rows:
+            key = f"{s.symbol}:{s.side}"
+            pnl = float(s.realized_pnl or 0)
+            if key not in sym_pnl:
+                sym_pnl[key] = {"total": 0.0, "wins": 0, "losses": 0}
+            sym_pnl[key]["total"] += pnl
+            if pnl > 0:
+                sym_pnl[key]["wins"] += 1
+            elif pnl < 0:
+                sym_pnl[key]["losses"] += 1
+        # -100 USDT+ 손실 + 2건+ 손실 + 승률 <30% = worst!
+        for key, s in sym_pnl.items():
+            total_trades = s["wins"] + s["losses"]
+            if total_trades < 2:
+                continue
+            win_rate = s["wins"] / total_trades if total_trades > 0 else 0
+            if s["total"] <= -100 and win_rate < 0.30:
+                worst.add(key)
+                logger.info(
+                    "[v194] worst 추가: %s (%.2f USDT, %d승/%d패)",
+                    key, s["total"], s["wins"], s["losses"],
+                )
+    except Exception as e:
+        logger.warning("[v194] realized_pnl worst 계산 실패: %s", e)
     return worst
 
 
