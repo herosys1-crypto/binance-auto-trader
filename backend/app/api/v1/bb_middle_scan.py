@@ -898,8 +898,24 @@ def scan_bb_reversal(
     account = db.execute(
         select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
     ).scalar_one_or_none()
+    _empty_response = {
+        "counts": {"lower_support": 0, "middle_support": 0,
+                   "middle_resistance": 0, "upper_resistance": 0, "total": 0},
+        "lower_support": [], "middle_support": [],
+        "middle_resistance": [], "upper_resistance": [],
+        "scanned": 0, "interval": interval,
+    }
     if not account:
-        return {"symbols": [], "error": "no mainnet account"}
+        return {**_empty_response, "error": "no mainnet account"}
+
+    # 🚨 v196: API Ban 감지 = 즉시 return!
+    from app.core.api_backoff import is_account_banned
+    if is_account_banned(account.id):
+        return {
+            **_empty_response,
+            "error": "API Ban 중! Binance IP 차단 - 잠시 대기!",
+            "note": "🚨 v196: API Ban 감지 → 즉시 return!",
+        }
 
     bc = BinanceClient(
         api_key=decrypt_text(account.api_key_enc),
@@ -910,9 +926,9 @@ def scan_bb_reversal(
     try:
         tickers = bc.get_24hr_ticker()
         if not isinstance(tickers, list):
-            return {"symbols": [], "error": "ticker 실패"}
+            return {**_empty_response, "error": "ticker 실패"}
     except Exception as e:
-        return {"symbols": [], "error": str(e)}
+        return {**_empty_response, "error": str(e)}
 
     usdt = [t for t in tickers if str(t.get("symbol", "")).endswith("USDT")]
     try:

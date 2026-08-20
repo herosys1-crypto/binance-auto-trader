@@ -275,13 +275,15 @@ def start_scheduler() -> None:
     )
     # 🤖 v162 (2026-08-16 사장님!): BB 이탈 SUSTAINED 자동 진입!
     # 🎯 v190 (2026-08-20 사장님!): 매 1시간! MTA 소스 추가!
+    # 🚨 v196 (2026-08-20 CRITICAL!): API Ban 사고! 매 4시간 복원!
+    # 원인: v190 매 1h + MTA 3 프레임 = Binance IP Ban! (Way too many requests!)
     # (auto_bb_break_daily_limit 옵션에 따라!)
     def _auto_bb_breakdown():
         from app.workers.auto_bb_breakdown_worker import run_auto_bb_breakdown
         run_auto_bb_breakdown()
     scheduler.add_job(
         guarded_job("auto_bb_breakdown", 900, _auto_bb_breakdown),
-        trigger=IntervalTrigger(hours=1),  # v190: 4h → 1h (사장님 「많이!」)
+        trigger=IntervalTrigger(hours=4),  # v196: 1h → 4h (Ban 방지!)
         id="auto_bb_breakdown",
         replace_existing=True, max_instances=1, coalesce=True,
     )
