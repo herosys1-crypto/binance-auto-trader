@@ -882,17 +882,25 @@ def _reset_reentry_count(symbol: str, side: str) -> None:
 
 
 def _calc_reentry_capital(symbol: str, side: str, base_capital: float) -> float | None:
-    """v202: 재진입 자본 = 옛 × 1.5^N!
+    """v202+v204a: 재진입 자본!
 
-    - 0회 (첫 진입) = base_capital 그대로!
-    - 1회 (2차 진입) = base × 1.5 (예: 300 → 450!)
-    - 2회 (3차 진입) = base × 2.25 (예: 300 → 675!)
-    - 3회+ = None (최대 도달! 진입 X!)
+    사장님 사상 (2026-08-21):
+    "실패한 심볼은 모니터링 하다가 다시 진입할 시점에 이전 포지션의 1.5배!
+     2번까지 할수 있는 로직!"
+
+    - counter=0 (실패 후 1차 재진입!) = base × **1.5!** (예: 300 → 450!)
+    - counter=1 (2차 재진입!) = base × **1.5² = 2.25!** (예: 300 → 675!)
+    - counter=2 (최대 도달!) = None (진입 X!)
+
+    🚨 v204a fix (agent 검증!): 옛 로직 = counter=0에서 1.0x 였음!
+    = 사장님 「1.5배」 사상 미적용!
+    = 신 로직: count + 1 = 항상 1.5배 이상!
     """
     count = _get_reentry_count(symbol, side)
     if count >= MAX_REENTRY_COUNT:
         return None  # 최대 도달!
-    multiplier = REENTRY_MULTIPLIER ** count if count > 0 else 1.0
+    # v204a fix: 재진입은 무조건 1.5^(count+1)!
+    multiplier = REENTRY_MULTIPLIER ** (count + 1)
     return base_capital * multiplier
 
 
@@ -1010,7 +1018,13 @@ def _create_auto_bb_strategy(
 
     # 신 template = 1단계만!
     now = datetime.now(timezone.utc)
-    _tpl_name_suffix = f"_REENTRY{strategy_type_suffix.replace('_reentry', '')}" if strategy_type_suffix else ""
+    # v204a fix (agent 검증): _success suffix = "_REENTRY_success" (혼동!) → "_SUCCESS"
+    if strategy_type_suffix == "_success":
+        _tpl_name_suffix = "_SUCCESS"
+    elif strategy_type_suffix and strategy_type_suffix.startswith("_reentry"):
+        _tpl_name_suffix = f"_REENTRY{strategy_type_suffix.replace('_reentry', '')}"
+    else:
+        _tpl_name_suffix = ""
     tpl = StrategyTemplate(
         name=f"AUTO_BB_{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S')}{_tpl_name_suffix}",
         strategy_type=f"auto_bb_break{strategy_type_suffix}",  # 🎯 v203: 재진입 정보!
