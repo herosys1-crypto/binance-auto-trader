@@ -807,66 +807,99 @@ if (typeof window !== 'undefined') {
   window.saveAutoBBLimit = saveAutoBBLimit;  // v162 자동 BB 진입 개수!
   window.loadAutoBBLimit = loadAutoBBLimit;
 
-// 🎯 사장님 (2026-08-22): OBV 자동 진입 세팅 modal!
+// 🎯 사장님 (2026-08-22): OBV 자동 진입 전용 세팅 modal!
 async function openOBVSettingsModal() {
-  let settings;
+  let s;
   try {
-    settings = await api('/strategy-suggestions/obv-settings');
+    s = await api('/strategy-suggestions/obv-settings');
   } catch (e) {
     if (typeof toast === 'function') toast('OBV 세팅 로드 실패: ' + e.message, 'error');
     return;
   }
+  const _inp = (id, val, opts = {}) =>
+    `<input type="number" id="${id}" value="${val}" min="${opts.min ?? 0}" max="${opts.max ?? 999999}" step="${opts.step ?? 1}"
+      style="width:${opts.width || 70}px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:2px 6px;border-radius:4px" />`;
   const html = `
-    <div id="obv-modal-bg" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center" onclick="if(event.target.id==='obv-modal-bg')document.getElementById('obv-modal-bg').remove()">
-      <div style="background:#1e293b;color:#e2e8f0;padding:20px;border-radius:8px;max-width:500px;width:90%;border:2px solid #7c3aed">
-        <h3 style="font-size:16px;font-weight:bold;color:#22d3ee;margin-bottom:12px">🎯 OBV 자동 진입 세팅</h3>
-        <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px;background:rgba(0,0,0,0.3);border-radius:4px">
-          <b>사장님 사상:</b> 신뢰도 매우 높은 심볼만 신중 진입!<br>
-          진입 시 = <b style="color:#22c55e">3단계 (400×3 = 1200 USDT!)</b> +
-          <b style="color:#ef4444">강제 SL 비활성 (오래 버티기!)</b><br>
-          Liquidation까지 = 사장님 수동 개입 가능!
+    <div id="obv-modal-bg" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:center;justify-content:center;overflow-y:auto;padding:20px" onclick="if(event.target.id==='obv-modal-bg')document.getElementById('obv-modal-bg').remove()">
+      <div style="background:#1e293b;color:#e2e8f0;padding:20px;border-radius:8px;max-width:560px;width:95%;border:2px solid #7c3aed;max-height:90vh;overflow-y:auto">
+        <h3 style="font-size:16px;font-weight:bold;color:#22d3ee;margin-bottom:12px">🎯 OBV 자동 진입 전용 세팅</h3>
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px;background:rgba(0,0,0,0.3);border-radius:4px;border-left:3px solid #7c3aed">
+          <b>사장님 사상:</b> 신뢰도 높은 심볼만 신중! + <b style="color:#22c55e">3단계 오래 버티기!</b><br>
+          진입 = <b style="color:#22d3ee">1단계 MARKET</b> → <b style="color:#f59e0b">2단계 (-5%)</b> → <b style="color:#ef4444">3단계 (-10%)</b><br>
+          강제 SL 비활성 = 사장님 수동 개입 (증거금/포지션!)
         </div>
-        <div style="margin-bottom:10px">
-          <label style="display:flex;align-items:center;gap:8px;font-size:12px">
-            <input type="checkbox" id="obv-enabled" ${settings.enabled ? 'checked' : ''} />
-            <b>ON / OFF</b> (사장님 = 신중 판단!)
+
+        <div style="margin-bottom:14px;padding:10px;background:rgba(124,58,237,0.1);border-radius:6px;border-left:3px solid #a78bfa">
+          <div style="font-weight:bold;color:#a78bfa;margin-bottom:8px">📋 활성화 + 안전!</div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:6px">
+            <input type="checkbox" id="obv-enabled" ${s.enabled ? 'checked' : ''} />
+            <b>ON / OFF</b>
           </label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+            <label><b>일 최대 건수</b><br>${_inp('obv-daily-limit', s.daily_limit, {min:0, max:20})} <span style="color:#94a3b8;font-size:10px">건/일</span></label>
+            <label><b>최소 신뢰도</b><br>${_inp('obv-min-conf', s.min_confidence, {min:0.5, max:1.0, step:0.01})} <span style="color:#94a3b8;font-size:10px">(0~1)</span></label>
+          </div>
         </div>
-        <div style="margin-bottom:10px">
-          <label style="font-size:12px">
-            <b>일 최대 건수</b> (신중!)
-            <input type="number" id="obv-daily-limit" value="${settings.daily_limit}" min="0" max="20"
-                   style="width:60px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:2px 6px;border-radius:4px;margin-left:8px" />
-            <span style="color:#94a3b8;font-size:10px">건/일 (default 3!)</span>
-          </label>
+
+        <div style="margin-bottom:14px;padding:10px;background:rgba(34,197,94,0.08);border-radius:6px;border-left:3px solid #22c55e">
+          <div style="font-weight:bold;color:#22c55e;margin-bottom:8px">💰 자본 + 레버리지</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+            <label><b>1단계 자본</b><br>${_inp('obv-capital', s.capital_per_stage, {min:10, max:100000})} <span style="color:#94a3b8;font-size:10px">USDT × 3단계!</span></label>
+            <label><b>레버리지</b><br>${_inp('obv-leverage', s.leverage, {min:1, max:20})} <span style="color:#94a3b8;font-size:10px">x</span></label>
+          </div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:6px">= 총 자본: <b id="obv-total-capital" style="color:#22c55e">${s.capital_per_stage * 3}</b> USDT</div>
         </div>
-        <div style="margin-bottom:16px">
-          <label style="font-size:12px">
-            <b>최소 신뢰도</b>
-            <input type="number" id="obv-min-conf" value="${settings.min_confidence}" min="0.5" max="1.0" step="0.01"
-                   style="width:70px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:2px 6px;border-radius:4px;margin-left:8px" />
-            <span style="color:#94a3b8;font-size:10px">(0.5~1.0, default 0.95 = 95%!)</span>
-          </label>
+
+        <div style="margin-bottom:14px;padding:10px;background:rgba(245,158,11,0.08);border-radius:6px;border-left:3px solid #f59e0b">
+          <div style="font-weight:bold;color:#f59e0b;margin-bottom:8px">🎯 단계 트리거 (반대방향!)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+            <label><b>2단계 트리거</b><br>${_inp('obv-trig2', s.stage2_trigger_pct, {min:-50, max:-0.5, step:0.5})} <span style="color:#94a3b8;font-size:10px">% (반대방향 -5%!)</span></label>
+            <label><b>3단계 트리거</b><br>${_inp('obv-trig3', s.stage3_trigger_pct, {min:-80, max:-1, step:0.5})} <span style="color:#94a3b8;font-size:10px">% (반대방향 -10%!)</span></label>
+          </div>
         </div>
+
+        <div style="margin-bottom:14px;padding:10px;background:rgba(56,189,248,0.08);border-radius:6px;border-left:3px solid #38bdf8">
+          <div style="font-weight:bold;color:#38bdf8;margin-bottom:8px">📈 TP (익절 %)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;font-size:12px">
+            <label><b>TP1</b><br>${_inp('obv-tp1', s.tp1_percent, {min:0.5, max:100, step:0.5, width:55})}%</label>
+            <label><b>TP2</b><br>${_inp('obv-tp2', s.tp2_percent, {min:0.5, max:100, step:0.5, width:55})}%</label>
+            <label><b>TP3</b><br>${_inp('obv-tp3', s.tp3_percent, {min:0.5, max:100, step:0.5, width:55})}%</label>
+            <label><b>TP4</b><br>${_inp('obv-tp4', s.tp4_percent, {min:0.5, max:100, step:0.5, width:55})}%</label>
+          </div>
+        </div>
+
         <div style="display:flex;gap:8px;justify-content:flex-end">
           <button onclick="document.getElementById('obv-modal-bg').remove()"
-                  style="padding:6px 14px;background:#475569;color:#fff;border:0;border-radius:4px;cursor:pointer">취소</button>
+                  style="padding:6px 14px;background:#475569;color:#fff;border:0;border-radius:4px;cursor:pointer">✕ 취소</button>
           <button onclick="saveOBVSettings()"
-                  style="padding:6px 14px;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;border:0;border-radius:4px;cursor:pointer">💾 저장</button>
+                  style="padding:6px 14px;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;border:0;border-radius:4px;cursor:pointer;font-weight:bold">💾 저장</button>
         </div>
       </div>
     </div>`;
   document.body.insertAdjacentHTML('beforeend', html);
+  // 자본×3 자동 갱신!
+  document.getElementById('obv-capital').addEventListener('input', (e) => {
+    document.getElementById('obv-total-capital').textContent = (parseFloat(e.target.value) || 0) * 3;
+  });
 }
 
 async function saveOBVSettings() {
-  const enabled = document.getElementById('obv-enabled').checked ? 1 : 0;
-  const daily_limit = parseInt(document.getElementById('obv-daily-limit').value) || 3;
-  const min_confidence = parseFloat(document.getElementById('obv-min-conf').value) || 0.95;
+  const payload = {
+    enabled: document.getElementById('obv-enabled').checked ? 1 : 0,
+    daily_limit: parseInt(document.getElementById('obv-daily-limit').value) || 3,
+    min_confidence: parseFloat(document.getElementById('obv-min-conf').value) || 0.95,
+    capital_per_stage: parseInt(document.getElementById('obv-capital').value) || 400,
+    leverage: parseInt(document.getElementById('obv-leverage').value) || 2,
+    stage2_trigger_pct: parseFloat(document.getElementById('obv-trig2').value) || -5.0,
+    stage3_trigger_pct: parseFloat(document.getElementById('obv-trig3').value) || -10.0,
+    tp1_percent: parseFloat(document.getElementById('obv-tp1').value) || 10.0,
+    tp2_percent: parseFloat(document.getElementById('obv-tp2').value) || 15.0,
+    tp3_percent: parseFloat(document.getElementById('obv-tp3').value) || 20.0,
+    tp4_percent: parseFloat(document.getElementById('obv-tp4').value) || 25.0,
+  };
   try {
     await api('/strategy-suggestions/obv-settings', {
-      method: 'PUT',
-      body: { enabled, daily_limit, min_confidence },  // api() 헬퍼가 자동 stringify!
+      method: 'PUT', body: payload,
     });
     if (typeof toast === 'function') toast(
       `✅ OBV 세팅 저장! ${enabled ? 'ON' : 'OFF'} · 일 ${daily_limit}건 · 신뢰도 ${(min_confidence*100).toFixed(0)}%+`,
