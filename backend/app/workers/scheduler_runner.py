@@ -346,6 +346,38 @@ def start_scheduler() -> None:
         id="trading_summary",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🔬 v212 (2026-08-21 사장님!): 청산 후 사후 진단 워커!
+    # = 청산 원인 분류 + 반복 손실 패턴 감지 + 텔레그램 알림!
+    def _post_liquidation():
+        from app.workers.post_liquidation_analysis_worker import run_post_liquidation_analysis
+        run_post_liquidation_analysis()
+    scheduler.add_job(
+        guarded_job("post_liquidation", 600, _post_liquidation),
+        trigger=IntervalTrigger(minutes=30),  # 매 30분!
+        id="post_liquidation",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # 📆 v213 (2026-08-21 사장님!): 매주 월요일 KST 08:00 = 지난주 요약!
+    def _weekly_digest():
+        from app.workers.weekly_digest_worker import run_weekly_digest
+        run_weekly_digest()
+    scheduler.add_job(
+        guarded_job("weekly_digest", 300, _weekly_digest),
+        trigger=CronTrigger(day_of_week="sun", hour=23, minute=0),  # UTC 일요일 23:00 = KST 월 08:00!
+        id="weekly_digest",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # 🎯 v214 (2026-08-21 사장님!): 매일 KST 09:30 = 파라미터 튜닝 제안!
+    # ⚠️ 자동 적용 X = 사장님 판단!
+    def _param_tuning():
+        from app.workers.param_tuning_advisor_worker import run_param_tuning_advisor
+        run_param_tuning_advisor()
+    scheduler.add_job(
+        guarded_job("param_tuning_advisor", 300, _param_tuning),
+        trigger=CronTrigger(hour=0, minute=30),  # UTC 00:30 = KST 09:30!
+        id="param_tuning_advisor",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 📊 v152 (2026-08-16 사장님!): Chart Pattern Learning Team!
     # 매 6시간 = 1달 4H 캔들 → 패턴 감지 → 저장 + outcome tracking!
     def _chart_pattern_scan():
