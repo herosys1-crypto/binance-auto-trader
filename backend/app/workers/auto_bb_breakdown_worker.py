@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -1385,11 +1385,16 @@ def _create_auto_bb_strategy(
     db.flush()
 
     # 🎯 사장님 CRITICAL 요구 (2026-08-21): 자동 진입 = MARKET!
-    # 사장님 지적: "포지션 미진입인데 이럴경우 market가격으로 해줘"
-    # = 미진입 6건 (LIMIT 체결 실패!) 발견!
-    # Fix: start_price=None → MARKET 주문! (v130 spec: 시작가 없으면 MARKET!)
+    # 롤백 (2026-08-22): start_price=None → planned_capital=None 오류!
+    # = 현재가 필요 (preview 계산 위해!). MARKET 여부 = start_price로 판정!
     from app.services.strategy_service import StrategyService
     svc = StrategyService(db)
+
+    # 현재가 조회 (preview 계산 필수!)
+    start_price = _get_current_price(symbol)
+    if not start_price or start_price <= 0:
+        logger.warning("[auto_bb_breakdown] %s %s: 현재가 없음 = skip", symbol, side)
+        return None
 
     strategy = svc.create_strategy_instance(
         user_id=1,
@@ -1397,7 +1402,7 @@ def _create_auto_bb_strategy(
         strategy_template_id=tpl.id,
         symbol=symbol,
         side=side,
-        start_price=None,  # 🎯 MARKET 주문! (즉시 체결!)
+        start_price=start_price,  # 필수 (preview 계산!)
         leverage_override=int(cfg.get("leverage", 2)),
         retry_after_liquidation_enabled=bool(cfg.get("retry_after_liquidation_enabled", False)),
         retry_trigger_pct=(
