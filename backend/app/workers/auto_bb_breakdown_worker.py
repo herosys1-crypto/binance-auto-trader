@@ -81,6 +81,26 @@ def run_auto_bb_breakdown() -> dict:
     skipped = 0
     results: list[dict] = []
     try:
+        # 🛡️ v215 사장님: 일일 손실 한도 초과 시 = 즉시 중단!
+        try:
+            from app.workers.drawdown_guardian_worker import is_auto_entry_killed
+            killed, kill_info = is_auto_entry_killed()
+            if killed:
+                logger.info("[auto_bb_breakdown] 🛡️ v215 skip: %s", kill_info)
+                return {"note": f"v215 drawdown killed: {kill_info}", "entered": 0}
+        except Exception as e:
+            logger.debug("[v215] kill switch 체크 실패: %s", e)
+
+        # 🚨 v216 사장님: 시장 이상 감지 시 = 즉시 중단!
+        try:
+            from app.workers.market_emergency_watcher_worker import is_market_emergency
+            emergency, emerg_info = is_market_emergency()
+            if emergency:
+                logger.info("[auto_bb_breakdown] 🚨 v216 skip: %s", emerg_info)
+                return {"note": f"v216 market emergency: {emerg_info}", "entered": 0}
+        except Exception as e:
+            logger.debug("[v216] emergency 체크 실패: %s", e)
+
         # 🚨 v197 사장님: 위험 시간대 = 자동 진입 skip!
         risky, reason = _is_risky_time_kst()
         if risky:
