@@ -172,6 +172,40 @@ def run_auto_bb_breakdown() -> dict:
         except Exception as e:
             logger.warning("[auto_bb_breakdown] v190 MTA 스캔 실패: %s", e)
 
+        # 🎯 사장님 요구 (2026-08-21): PENDING suggestion 85%+ = 자동 진입 통합!
+        # "실시간 모니터링 진입예정 신뢰도 85%/90%+ = 자동 진입!"
+        # = bb 이탈 자동진입 로직으로 같이 처리!
+        try:
+            pending_hc = db.execute(
+                select(StrategySuggestion)
+                .where(StrategySuggestion.status == "PENDING")
+                .where(StrategySuggestion.confidence_score >= Decimal("0.85"))
+                .order_by(StrategySuggestion.confidence_score.desc())
+                .limit(20)
+            ).scalars().all()
+            for ps in pending_hc:
+                _pcfg = ps.strategy_config if isinstance(ps.strategy_config, dict) else {}
+                all_sustained.append({
+                    "symbol": ps.symbol,
+                    "side": ps.side,
+                    "source": "PENDING_HC",  # High Confidence!
+                    "success_probability": float(ps.confidence_score or 0),
+                    "sustained_bars": _pcfg.get("sustained_bars", 5),
+                    "regime": _pcfg.get("regime", "UPTREND" if ps.side == "LONG" else "DOWNTREND_STRONG"),
+                    "rsi": _pcfg.get("rsi", 50),  # default 안전 범위!
+                    "cci": _pcfg.get("cci"),
+                    "obv_slope_pct": _pcfg.get("obv_slope_pct"),
+                    "change_24h": _pcfg.get("change_24h"),
+                    "_pending_suggestion_id": ps.id,  # 진입 후 EXECUTED 갱신용!
+                })
+            if pending_hc:
+                logger.info(
+                    "[auto_bb_breakdown] 🎯 PENDING_HC 통합: %d건 (85%%+!)",
+                    len(pending_hc),
+                )
+        except Exception as e:
+            logger.warning("[auto_bb_breakdown] PENDING_HC 통합 실패: %s", e)
+
         # 중복 제거 (같은 symbol:side!)
         seen_keys = set()
         deduped = []
@@ -428,6 +462,24 @@ def run_auto_bb_breakdown() -> dict:
                     outcome_status="PENDING",
                 )
                 db.add(sugg)
+
+                # 🎯 사장님 요구: PENDING_HC로 진입한 경우 = 원본 suggestion도 EXECUTED로 갱신!
+                _pid = it.get("_pending_suggestion_id")
+                if _pid:
+                    try:
+                        _orig = db.get(StrategySuggestion, _pid)
+                        if _orig and _orig.status == "PENDING":
+                            _orig.status = "EXECUTED"
+                            _orig.execution_mode = "AUTO"
+                            _orig.executed_at = datetime.now(timezone.utc)
+                            _orig.executed_strategy_id = new_strategy.id
+                            logger.info(
+                                "[auto_bb_breakdown] 🎯 PENDING_HC 진입! %s %s (conf=%.0f%%)",
+                                symbol, side, prob * 100,
+                            )
+                    except Exception as _pe:
+                        logger.warning("[PENDING_HC] 원본 갱신 실패: %s", _pe)
+
                 db.commit()
 
                 results.append({
@@ -436,6 +488,7 @@ def run_auto_bb_breakdown() -> dict:
                     "success_probability": prob,
                     "sustained_bars": it.get("sustained_bars"),
                     "regime": it.get("regime"),
+                    "source": it.get("source"),
                     "strategy_id": new_strategy.id,
                 })
                 entered += 1
