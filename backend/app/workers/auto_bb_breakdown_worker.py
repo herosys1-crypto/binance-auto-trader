@@ -82,11 +82,10 @@ def run_auto_bb_breakdown() -> dict:
     skipped = 0
     results: list[dict] = []
     try:
-        # 🚨 v197 사장님: 위험 시간대 = 자동 진입 skip!
-        risky, reason = _is_risky_time_kst()
-        if risky:
-            logger.info("[auto_bb_breakdown] 🚨 v197 skip: %s", reason)
-            return {"note": f"v197: {reason}", "entered": 0}
+        # 🚀 사장님 (2026-08-21): v197 위험 시간대 필터 = 완전 제거!
+        # = 사장님 사상 = 24시간 진입 = 공격적 매매!
+        # (기존 v197: KST 18-03 skip → 지금 X!)
+        # _is_risky_time_kst() = 함수 유지 (다른 곳에서 참조할 수 있음!) but 호출 X!
 
         # 1. daily_limit 확인!
         limit_row = db.get(SystemSetting, "auto_bb_break_daily_limit")
