@@ -308,6 +308,33 @@ def run_auto_bb_breakdown() -> dict:
                     )
                     continue
 
+            # 🚨 사장님 요구 (2026-08-21): 급등/급락 종목 = 반대 방향 진입 금지!
+            # = BOMEUSDT +35% SHORT → -417 USDT 손실 사고!
+            # = ONGUSDT +31% SHORT → -411 USDT 손실 사고!
+            # = 급등 계속 = 물타기 3단계 = 큰 손실!
+            # 로직: 24h 변동 > +15% = SHORT 금지! (급등 계속 위험!)
+            #        24h 변동 < -15% = LONG 금지! (급락 계속 위험!)
+            change_24h = it.get("change_24h")
+            if change_24h is not None:
+                try:
+                    _c = float(change_24h)
+                    if side == "SHORT" and _c > 15.0:
+                        skipped += 1
+                        logger.info(
+                            "[auto_bb_breakdown] 🚨 급등 skip: %s SHORT 24h=+%.2f%% (>15%%!)",
+                            key, _c,
+                        )
+                        continue
+                    if side == "LONG" and _c < -15.0:
+                        skipped += 1
+                        logger.info(
+                            "[auto_bb_breakdown] 🚨 급락 skip: %s LONG 24h=%.2f%% (<-15%%!)",
+                            key, _c,
+                        )
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
             # 🎓 v198 사장님: 조건 매칭 = 실패 조건이면 skip!
             # RSI/CCI/OBV/regime/시간대 = 학습된 실패 조건 매치 시 = skip!
             if _matches_failure_condition(it, side):
