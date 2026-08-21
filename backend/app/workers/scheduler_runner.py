@@ -309,6 +309,20 @@ def start_scheduler() -> None:
         id="realtime_watchlist",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🎯 사장님 사상 (2026-08-21): 실시간 재진입! 매 1분!
+    # "포지션 실패한 심볼은 실시간 모니터링에 넣어서 짧은 시간 계속 모니터링!"
+    # "익절도 마찬가지 = 상승시 다시 진입 + 하락시 -5% 청산!"
+    # = Redis mark_price 조회 = API 부담 X!
+    # 사장님 최종: 매 1분! (매우 짧게!)
+    def _realtime_reentry():
+        from app.workers.realtime_reentry_worker import run_realtime_reentry
+        run_realtime_reentry()
+    scheduler.add_job(
+        guarded_job("realtime_reentry", 50, _realtime_reentry),  # lock TTL 50s (매 1분 실행!)
+        trigger=IntervalTrigger(minutes=1),  # 매 1분!
+        id="realtime_reentry",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 🎼 v206 Phase 4 (2026-08-21 사장님!): 오케스트라 자동 진단 + 자동 fix!
     # "우리 에이전트 팀이 많은데 왜 이런 문제가?
     #  오케스트라 지휘자가 각각의 에이전트팀을 컨트롤!"
