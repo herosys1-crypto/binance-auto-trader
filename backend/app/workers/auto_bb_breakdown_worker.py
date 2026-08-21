@@ -445,21 +445,35 @@ def run_auto_bb_breakdown() -> dict:
 
 
 def _count_used_slots(db: Session) -> int:
-    """v163 로직: 활성 + 손절 = 카운트! (익절 = 제외!)
+    """v163 로직 + v205 KST fix!
+
+    사장님 지적 (2026-08-21):
+    "지금 진입중이고 성패가 나왔는데 여기는 0으로 되어있네!"
+    원인: UTC 자정 기준 = 사장님 KST 관점과 다름!
+    - UTC 2026-08-21 02:08 = KST 2026-08-21 11:08
+    - UTC today = 2026-08-21 00:00 (KST 09:00!)
+    - 사장님 관점 today = KST 00:00 (UTC 8-20 15:00!)
+
+    v205 fix: KST 자정 기준으로 today 계산!
 
     오늘 EXECUTED (execution_mode='AUTO') + suggestion_type='bb4h_auto_entry'
     - 익절 (SUCCESS outcome) = 제외!
     - 활성 or 손절 (PENDING/FAIL outcome) = 카운트!
     """
-    today_start = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0,
-    )
+    # 🌟 v205: KST 기준 today!
+    from datetime import timedelta as _td
+    now_utc = datetime.now(timezone.utc)
+    now_kst = now_utc + _td(hours=9)
+    kst_today_naive = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
+    # KST 자정 → UTC 변환 (KST-9h!)
+    today_start_utc = (kst_today_naive - _td(hours=9)).replace(tzinfo=timezone.utc)
+
     rows = db.execute(
         select(StrategySuggestion)
         .where(StrategySuggestion.status == "EXECUTED")
         .where(StrategySuggestion.execution_mode == "AUTO")
         .where(StrategySuggestion.suggestion_type == "bb4h_auto_entry")
-        .where(StrategySuggestion.executed_at >= today_start)
+        .where(StrategySuggestion.executed_at >= today_start_utc)
     ).scalars().all()
     # 익절 (SUCCESS) 제외!
     return sum(1 for r in rows if r.outcome_status != "SUCCESS")

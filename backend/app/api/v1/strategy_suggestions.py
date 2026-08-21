@@ -128,16 +128,26 @@ def list_suggestions(
 
 
 def _auto_bb_reset_at(db: Session) -> datetime:
-    """리셋 시각 = 사용자 리셋 (v163!) or 오늘 00:00 UTC!"""
+    """리셋 시각 = 사용자 리셋 (v163!) or 오늘 00:00 KST!
+
+    🌟 v205 사장님 지적 (2026-08-21):
+    "지금 진입중이고 성패가 나왔는데 여기는 0으로!"
+    원인: UTC 자정 기준 = KST 아침 9시 = 사장님 관점 어제!
+    Fix: KST 00:00 = UTC 15:00 (전날!) 기준!
+    """
     row = db.get(SystemSetting, "auto_bb_break_reset_at")
     if row and row.value:
         try:
             return datetime.fromisoformat(row.value)
         except Exception:
             pass
-    return datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0,
-    )
+    # 🌟 v205: KST 자정 기준!
+    from datetime import timedelta as _td
+    now_utc = datetime.now(timezone.utc)
+    now_kst = now_utc + _td(hours=9)
+    kst_today_naive = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
+    # KST 자정 → UTC 변환!
+    return (kst_today_naive - _td(hours=9)).replace(tzinfo=timezone.utc)
 
 
 def _count_auto_bb_used(db: Session) -> dict:
