@@ -316,7 +316,10 @@ def run_auto_bb_breakdown() -> dict:
                 # 🎯 v202: 재진입 시 = 자본 1.5배! (마틴게일!)
                 _entry_cfg = dict(cfg)
                 _reentry_capital = None
+                _reentry_count_now = 0  # 이번 진입의 재진입 번호! (0=첫, 1=1차재, 2=2차재!)
                 if _is_reentry:
+                    _prev_count = _get_reentry_count(symbol, side)
+                    _reentry_count_now = _prev_count + 1  # 이번 진입 후 카운트!
                     _base = float(cfg.get("capitals", [500])[0])
                     _reentry_capital = _calc_reentry_capital(symbol, side, _base)
                     if _reentry_capital is None:
@@ -328,10 +331,18 @@ def run_auto_bb_breakdown() -> dict:
                         continue
                     _entry_cfg["capitals"] = [_reentry_capital]
                     logger.info(
-                        "[auto_bb_breakdown] 🎯 v202 재진입: %s 자본 %.0f → %.0f USDT (×%.2f)",
-                        key, _base, _reentry_capital, _reentry_capital / _base,
+                        "[auto_bb_breakdown] 🎯 v202 재진입 %d차: %s 자본 %.0f → %.0f USDT (×%.2f)",
+                        _reentry_count_now, key, _base, _reentry_capital,
+                        _reentry_capital / _base,
                     )
-                new_strategy = _create_auto_bb_strategy(db, symbol, side, _entry_cfg)
+                # 🎯 v203: strategy_type = 재진입 정보 포함!
+                #   - "auto_bb_break"          = 첫 진입!
+                #   - "auto_bb_break_reentry1" = 1차 재진입!
+                #   - "auto_bb_break_reentry2" = 2차 재진입!
+                new_strategy = _create_auto_bb_strategy(
+                    db, symbol, side, _entry_cfg,
+                    strategy_type_suffix=(f"_reentry{_reentry_count_now}" if _reentry_count_now > 0 else ""),
+                )
                 # 🎯 v202: 재진입 카운터 증가!
                 if _is_reentry:
                     _increment_reentry_count(symbol, side)
@@ -920,8 +931,15 @@ def _get_recent_loss_symbol_keys(db: Session) -> set[str]:
 
 def _create_auto_bb_strategy(
     db: Session, symbol: str, side: str, cfg: dict[str, Any],
+    strategy_type_suffix: str = "",
 ) -> StrategyInstance:
-    """사장님 default profile 기반 = template + strategy 자동 생성!"""
+    """사장님 default profile 기반 = template + strategy 자동 생성!
+
+    🎯 v203: strategy_type_suffix (예: "_reentry1") = 재진입 번호!
+    - "" = 첫 진입 (기본!)
+    - "_reentry1" = 1차 재진입!
+    - "_reentry2" = 2차 재진입!
+    """
     # symbol 검증!
     symbol_row = db.execute(
         select(Symbol).where(Symbol.symbol == symbol)
@@ -947,9 +965,10 @@ def _create_auto_bb_strategy(
 
     # 신 template = 1단계만!
     now = datetime.now(timezone.utc)
+    _tpl_name_suffix = f"_REENTRY{strategy_type_suffix.replace('_reentry', '')}" if strategy_type_suffix else ""
     tpl = StrategyTemplate(
-        name=f"AUTO_BB_{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S')}",
-        strategy_type="auto_bb_break",
+        name=f"AUTO_BB_{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S')}{_tpl_name_suffix}",
+        strategy_type=f"auto_bb_break{strategy_type_suffix}",  # 🎯 v203: 재진입 정보!
         side=side,
         leverage=int(cfg.get("leverage", 2)),
         total_capital=Decimal(str(total_capital)),
