@@ -1423,11 +1423,12 @@ def _create_auto_bb_strategy(
         ),
     )
 
-    # 🎯 Agent 검증 fix (2026-08-22): 자동 진입 = 무조건 MARKET!
-    # 사장님: "미진입이 발생하지 않게 시장가로 진입!"
-    # 원인: LIMIT @ start_price = 급변동 시 = 시장이 지나감 = 미체결!
-    # Fix: stage 1 trigger_price=None → execution_service의 v130 MARKET 경로 자동 발동!
-    # 주의: fill 후 = trigger_price 복원 필요! (execution_service line 1007에서!)
+    # 🎯 Agent 검증 fix v2 (2026-08-22): 자동 진입 = 실 주문 발송!
+    # Agent 진단: v162부터 = create_strategy_instance는 DB row만 생성 = 실 주문 X!
+    # = 모든 auto_bb_breakdown "진입"이 = 실은 미진입 상태로만 저장!
+    # Fix (Option A 권장): auto_reentry_worker 패턴 그대로 복제!
+    #   1. stage1.trigger_price=None (MARKET 경로 발동!)
+    #   2. ExecutionService.start_stage1() 호출 (실 주문!)
     try:
         from app.models.strategy_stage_plan import StrategyStagePlan
         _stage1 = db.execute(
@@ -1438,12 +1439,32 @@ def _create_auto_bb_strategy(
         if _stage1:
             _stage1.trigger_price = None  # v130 MARKET 경로 강제!
             db.commit()
-            logger.info(
-                "[auto_bb_breakdown] 🎯 MARKET 강제: %s %s stage1 trigger_price=None!",
-                symbol, side,
-            )
     except Exception as _mkt_e:
-        logger.warning("[auto_bb_breakdown] MARKET 강제 실패 (fail-open): %s", _mkt_e)
+        logger.warning("[auto_bb_breakdown] trigger_price=None 실패 (fail-open): %s", _mkt_e)
+
+    # 실 진입 주문 발송! (Agent 검증 = auto_reentry_worker 패턴!)
+    try:
+        from app.services.execution_service import ExecutionService
+        from app.core.crypto import decrypt_text
+        from app.models.exchange_account import ExchangeAccount
+        _acc = db.get(ExchangeAccount, 1)
+        if _acc:
+            _exec = ExecutionService(
+                db,
+                api_key=decrypt_text(_acc.api_key_enc),
+                api_secret=decrypt_text(_acc.api_secret_enc),
+                is_testnet=_acc.is_testnet,
+            )
+            _exec.start_stage1(strategy.id)
+            logger.info(
+                "[auto_bb_breakdown] 🎯 실 진입 성공: %s %s strategy=%s (MARKET!)",
+                symbol, side, strategy.id,
+            )
+    except Exception as _entry_e:
+        logger.warning(
+            "[auto_bb_breakdown] 실 진입 실패 (fail-open): %s %s: %s",
+            symbol, side, _entry_e,
+        )
 
     return strategy
 
