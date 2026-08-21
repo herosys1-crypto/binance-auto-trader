@@ -309,6 +309,18 @@ def start_scheduler() -> None:
         id="realtime_watchlist",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🎼 v206 Phase 4 (2026-08-21 사장님!): 오케스트라 자동 진단 + 자동 fix!
+    # "우리 에이전트 팀이 많은데 왜 이런 문제가?
+    #  오케스트라 지휘자가 각각의 에이전트팀을 컨트롤!"
+    def _orchestra_health():
+        from app.workers.orchestra_health_worker import run_orchestra_health
+        run_orchestra_health()
+    scheduler.add_job(
+        guarded_job("orchestra_health", 240, _orchestra_health),
+        trigger=IntervalTrigger(minutes=5),  # 매 5분!
+        id="orchestra_health",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 📊 v152 (2026-08-16 사장님!): Chart Pattern Learning Team!
     # 매 6시간 = 1달 4H 캔들 → 패턴 감지 → 저장 + outcome tracking!
     def _chart_pattern_scan():
