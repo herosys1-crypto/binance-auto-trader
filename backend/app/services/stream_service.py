@@ -188,6 +188,23 @@ class StreamService:
                     # ⚠️ exit_snapshot 저장 (사장님 lifecycle 학습!) = StrategyInstance에
                     # strategy_config 필드 없음! → 롤백! 다음 세션에 = 다른 방법 (StrategySuggestion)!
 
+                    # 🎯 Agent 검증 fix (2026-08-22): 마틴게일 재진입 카운터 리셋 훅!
+                    # 사장님 지적: "마틴게일 잘 작동하는지 점검!"
+                    # Agent 진단: TP 익절 시 = _reset_reentry_count 안 됨! (7일 TTL만!)
+                    # = 다음 실패 시 = 잘못된 배수 (2.25x!) 적용 위험!
+                    # Fix: 익절 (realized_pnl > 0) 시 = 카운터 리셋!
+                    try:
+                        _final_pnl = float(strategy.realized_pnl or 0)
+                        if _final_pnl > 0:
+                            from app.workers.auto_bb_breakdown_worker import _reset_reentry_count
+                            _reset_reentry_count(strategy.symbol, strategy.side)
+                            logger.info(
+                                "[reentry_reset] 🎯 익절! 카운터 리셋: %s %s (PnL=%.2f)",
+                                strategy.symbol, strategy.side, _final_pnl,
+                            )
+                    except Exception as _reset_e:
+                        logger.debug("reentry 카운터 리셋 실패 (fail-open): %s", _reset_e)
+
                     # 🎯 사장님 CRITICAL 요구 (2026-08-21): 청산 즉시 = 재진입 판단!
                     # 사장님 지적: "모니터링 1분더 너무 긴것같은데 방법을 찾아줘"
                     # = stream 이벤트 기반 = 초 단위 즉시!
