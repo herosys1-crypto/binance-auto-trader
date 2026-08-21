@@ -1408,6 +1408,29 @@ def _create_auto_bb_strategy(
             if cfg.get("retry_trigger_pct") else None
         ),
     )
+
+    # 🎯 Agent 검증 fix (2026-08-22): 자동 진입 = 무조건 MARKET!
+    # 사장님: "미진입이 발생하지 않게 시장가로 진입!"
+    # 원인: LIMIT @ start_price = 급변동 시 = 시장이 지나감 = 미체결!
+    # Fix: stage 1 trigger_price=None → execution_service의 v130 MARKET 경로 자동 발동!
+    # 주의: fill 후 = trigger_price 복원 필요! (execution_service line 1007에서!)
+    try:
+        from app.models.strategy_stage_plan import StrategyStagePlan
+        _stage1 = db.execute(
+            select(StrategyStagePlan)
+            .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+            .where(StrategyStagePlan.stage_no == 1)
+        ).scalar_one_or_none()
+        if _stage1:
+            _stage1.trigger_price = None  # v130 MARKET 경로 강제!
+            db.commit()
+            logger.info(
+                "[auto_bb_breakdown] 🎯 MARKET 강제: %s %s stage1 trigger_price=None!",
+                symbol, side,
+            )
+    except Exception as _mkt_e:
+        logger.warning("[auto_bb_breakdown] MARKET 강제 실패 (fail-open): %s", _mkt_e)
+
     return strategy
 
 
