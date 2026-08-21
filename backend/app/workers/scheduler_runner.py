@@ -284,7 +284,10 @@ def start_scheduler() -> None:
         run_auto_bb_breakdown()
     scheduler.add_job(
         guarded_job("auto_bb_breakdown", 900, _auto_bb_breakdown),
-        trigger=IntervalTrigger(hours=4),  # v196: 1h → 4h (Ban 방지!)
+        # v218 (2026-08-22 사장님!): 4h → 1h!
+        # 사장님 verbatim: "실시간으로 급등과 급락을 하는 심볼들을 매매하기 때문에 = 빠른 대응 필요!"
+        # 안전: MTA=30 (v196 축소 유지) + scan_bb_breakdown ban 갭 fix (bb_middle_scan.py) 병행!
+        trigger=IntervalTrigger(hours=1),
         id="auto_bb_breakdown",
         replace_existing=True, max_instances=1, coalesce=True,
     )
@@ -322,6 +325,31 @@ def start_scheduler() -> None:
         guarded_job("realtime_reentry", 25, _realtime_reentry),  # lock TTL 25s (매 30초 실행!)
         trigger=IntervalTrigger(seconds=30),  # 사장님 (2026-08-21): 매 1분 → 매 30초 (빠른 시장!)
         id="realtime_reentry",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # 🎯 v218 (2026-08-22 사장님 verbatim!): 성공 피라미딩! 매 30초!
+    # 사장님: "익절 시작하고 우리 로직으로 강력한 포지션 = 초기 시작금액으로 즉시 진입!
+    #         다시 하락하면 -5% 우리 로직에 맞게 청산!"
+    # = 활성 익절중 심볼 = 지속 신호 시 = 원 자본 신 strategy 추가!
+    def _success_pyramiding():
+        from app.workers.success_pyramiding_worker import run_success_pyramiding
+        run_success_pyramiding()
+    scheduler.add_job(
+        guarded_job("success_pyramiding", 25, _success_pyramiding),
+        trigger=IntervalTrigger(seconds=30),
+        id="success_pyramiding",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # 🎯 v218 (2026-08-22 사장님!): PENDING_HC 급속 진입 워커! 매 2분!
+    # 사장님: "실시간으로 급등과 급락을 하는 심볼들을 매매 = 빠른 대응!"
+    # auto_bb_breakdown = 1h (API 부담!) but PENDING_HC 85%+ = DB만 = 즉시 진입!
+    def _pending_hc_fast():
+        from app.workers.pending_hc_fast_worker import run_pending_hc_fast
+        run_pending_hc_fast()
+    scheduler.add_job(
+        guarded_job("pending_hc_fast", 90, _pending_hc_fast),
+        trigger=IntervalTrigger(minutes=2),
+        id="pending_hc_fast",
         replace_existing=True, max_instances=1, coalesce=True,
     )
     # 🎼 v206 Phase 4 (2026-08-21 사장님!): 오케스트라 자동 진단 + 자동 fix!
