@@ -102,7 +102,13 @@ async function load() {
   try {
     let data;
     if (window.opener && !window.opener.closed && typeof window.opener.api === 'function') {
-      data = await window.opener.api('/realtime-monitor/dashboard');
+      // 🎼 v206 P3: 오케스트라 상태도 함께!
+      const [d, o] = await Promise.all([
+        window.opener.api('/realtime-monitor/dashboard'),
+        window.opener.api('/orchestra/status').catch(() => null),
+      ]);
+      data = d;
+      _orchestraData = o;
     } else {
       throw new Error('부모 창 X!');
     }
@@ -110,6 +116,18 @@ async function load() {
   } catch (e) {
     const msg = e.message || String(e);
     document.getElementById('content').innerHTML = `<div class="loading" style="color:#ef4444">❌ ${msg}</div>`;
+  }
+}
+
+let _orchestraData = null;
+
+async function loadOrchestra() {
+  try {
+    if (window.opener && !window.opener.closed && typeof window.opener.api === 'function') {
+      _orchestraData = await window.opener.api('/orchestra/status');
+    }
+  } catch (e) {
+    console.warn('[v206] orchestra 로드 실패:', e);
   }
 }
 
@@ -128,12 +146,48 @@ function render(data) {
       <div class="summary-card"><div class="label">❌ 실패 24h</div><div class="value neg">${r.losses||0}</div></div>
       <div class="summary-card"><div class="label">💰 P&L 24h</div><div class="value ${r.total_pnl>=0?'pos':'neg'}">${r.total_pnl>=0?'+':''}${r.total_pnl||0}</div></div>
     </div>
+    ${renderOrchestra(_orchestraData)}
     ${renderWatchlist(data.watchlist)}
     ${renderActive(data.active)}
     ${renderPending(data.pending)}
     ${renderResults(data.recent_results)}
   `;
   document.getElementById('content').innerHTML = html;
+}
+
+function renderOrchestra(od) {
+  if (!od) return '';
+  const sum = od.summary || {};
+  const teams = od.teams || {};
+  const events = od.recent_events || [];
+  const teamRows = Object.entries(teams).map(([name, t]) => {
+    const status = t.status || '?';
+    const color = status.includes('✅') ? '#22c55e' : status.includes('⚠️') ? '#fbbf24' : status.includes('🚨') ? '#ef4444' : '#94a3b8';
+    let detail = '';
+    if (t.samples !== undefined) detail += `샘플 ${t.samples}`;
+    if (t.count !== undefined) detail += ` 심볼 ${t.count}`;
+    if (t.limit !== undefined) detail += ` ${t.used}/${t.limit}`;
+    if (t.banned_until) detail += ` ${t.banned_until}까지`;
+    if (t.recent_1h !== undefined) detail += ` 1h ${t.recent_1h}건`;
+    return `<div style="padding:4px 8px;background:rgba(0,0,0,0.2);border-radius:4px;margin:2px 0">
+      <span style="color:${color};font-weight:bold">${status}</span>
+      <span style="color:#e2e8f0;margin-left:6px">${name}</span>
+      <span style="color:#94a3b8;font-size:10px;margin-left:8px">${detail}</span>
+    </div>`;
+  }).join('');
+  const evRows = events.slice(0, 5).map(e => {
+    const sc = e.severity === 'CRITICAL' ? '#ef4444' : '#fbbf24';
+    const t = e.created_at ? new Date(e.created_at).toLocaleTimeString('ko',{hour:'2-digit',minute:'2-digit'}) : '?';
+    return `<div style="padding:2px 6px;font-size:10px;color:#94a3b8"><span style="color:${sc}">[${e.severity}]</span> ${t} ${e.title}</div>`;
+  }).join('');
+  return `<div class="section" style="border:2px solid #a78bfa">
+    <div class="section-title" style="color:#a78bfa">🎼 오케스트라 팀 상태 (${sum.healthy||0}/${sum.total_teams||0} 정상) - v206</div>
+    <div style="margin:4px 0">${teamRows}</div>
+    ${events.length ? `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #334155">
+      <div style="font-size:10px;color:#94a3b8;margin-bottom:2px">최근 이벤트 30m (${events.length}):</div>
+      ${evRows}
+    </div>` : ''}
+  </div>`;
 }
 
 function renderWatchlist(items) {
