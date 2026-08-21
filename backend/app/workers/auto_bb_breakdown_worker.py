@@ -282,11 +282,9 @@ def run_auto_bb_breakdown() -> dict:
             # OBV daily_limit 체크!
             _obv_limit_row = db.get(SystemSetting, "auto_obv_daily_limit")
             _obv_daily_limit = int(_obv_limit_row.value) if _obv_limit_row and _obv_limit_row.value else 3
-            # 오늘 OBV 진입 카운트!
+            # 오늘 OBV 진입 카운트! (단순 = reason LIKE 만!)
             _obv_used = db.execute(
                 select(func.count(StrategySuggestion.id))
-                .join(StrategyTemplate,
-                      StrategyTemplate.id == StrategyInstance.strategy_template_id, isouter=True)
                 .where(StrategySuggestion.created_at >= (datetime.now(timezone.utc).replace(hour=15, minute=0, second=0, microsecond=0) - timedelta(days=1)))
                 .where(StrategySuggestion.reason.like("%OBV%"))
             ).scalar() or 0
