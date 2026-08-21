@@ -1215,9 +1215,11 @@ def _apply_obv_hold_settings(db: Session, strategy: StrategyInstance) -> None:
     - 사장님 수동 증거금/포지션 추가 가능!
     - Liquidation까지 = 버티기!
 
-    한계 (현재!):
-    - 1단계 진입 유지 (v177!)
-    - 3단계 확장은 = 다음 세션 (기존 함수 리팩토링 필요!)
+    구성:
+    - 3단계 진입! (각 400 USDT = 총 1200!)
+    - 2단계 트리거 -5% (반대!)
+    - 3단계 트리거 -10%
+    - 강제 SL X = Liquidation까지 버티기!
     """
     try:
         strategy.force_sl_enabled_override = False
@@ -1304,20 +1306,30 @@ def _create_auto_bb_strategy(
         raise ValueError(f"symbol {symbol} not in DB")
 
     # 🌟 v177 사장님 (2026-08-19): 자동 진입 = 1단계만 강제!
-    # v161 spec: "단계는 1단계로만 할꺼야 진입만 하면
-    #            우리 전략인스턴스 설정으로 진행할꺼야"
-    # 사장님 지적: default profile 4단계 → 2단계 이후 자동 차단 알림 발생!
-    # Fix: capitals = [첫 단계 자본만!] = 1단계 강제!
+    # 🎯 사장님 (2026-08-21): OBV_HOLD 예외! = 3단계 + 오래 버티기!
     capitals_full = cfg.get("capitals") or [500, 500, 500, 500]
     stage1_only = float(capitals_full[0]) if capitals_full else 500.0
-    capitals = [stage1_only]  # 🌟 v177: 1단계만!
-    total_capital = stage1_only
 
-    stages_config = {
-        "capitals": capitals,
-        "trigger_percents": [None],  # 1단계 = 즉시 진입!
-        "stages_count": 1,  # 🌟 v177: 1단계 확정!
-    }
+    _is_obv_hold = strategy_type_suffix == "_OBV_HOLD"
+    if _is_obv_hold:
+        # 🎯 OBV = 3단계! 각 400 USDT (총 1200!) + 2/3단계 트리거 -5/-10%!
+        _obv_base = 400.0  # OBV default (사장님 조정 가능!)
+        capitals = [_obv_base, _obv_base, _obv_base]  # 3단계!
+        total_capital = _obv_base * 3
+        stages_config = {
+            "capitals": capitals,
+            "trigger_percents": [None, -5.0, -10.0],  # 반대 방향 -5%/-10%
+            "stages_count": 3,
+        }
+    else:
+        # v177: 1단계 강제!
+        capitals = [stage1_only]
+        total_capital = stage1_only
+        stages_config = {
+            "capitals": capitals,
+            "trigger_percents": [None],
+            "stages_count": 1,
+        }
 
     # 신 template = 1단계만!
     now = datetime.now(timezone.utc)
@@ -1328,6 +1340,12 @@ def _create_auto_bb_strategy(
         _tpl_name_suffix = f"_REENTRY{strategy_type_suffix.replace('_reentry', '')}"
     else:
         _tpl_name_suffix = ""
+    # 🎯 OBV_HOLD = 3단계! 나머지 = 1단계!
+    _stage1_cap = capitals[0]
+    _stage2_cap = capitals[1] if _is_obv_hold else None
+    _stage3_cap = capitals[2] if _is_obv_hold else None
+    _stage2_trig = Decimal("-5") if _is_obv_hold else None
+    _stage3_trig = Decimal("-10") if _is_obv_hold else None
     tpl = StrategyTemplate(
         name=f"AUTO_BB_{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S')}{_tpl_name_suffix}",
         strategy_type=f"auto_bb_break{strategy_type_suffix}",  # 🎯 v203: 재진입 정보!
@@ -1335,12 +1353,12 @@ def _create_auto_bb_strategy(
         leverage=int(cfg.get("leverage", 2)),
         total_capital=Decimal(str(total_capital)),
         stages_config=stages_config,
-        stage1_capital=Decimal(str(stage1_only)),
-        stage2_capital=None,  # 🌟 v177: 2단계 없음!
-        stage3_capital=None,
+        stage1_capital=Decimal(str(_stage1_cap)),
+        stage2_capital=Decimal(str(_stage2_cap)) if _stage2_cap else None,
+        stage3_capital=Decimal(str(_stage3_cap)) if _stage3_cap else None,
         stage4_capital=None,
-        stage2_trigger_percent=None,
-        stage3_trigger_percent=None,
+        stage2_trigger_percent=_stage2_trig,
+        stage3_trigger_percent=_stage3_trig,
         stage4_trigger_percent=None,
         tp1_percent=Decimal(str(cfg.get("tp1_percent", 10))),
         tp2_percent=Decimal(str(cfg.get("tp2_percent", 15))),
