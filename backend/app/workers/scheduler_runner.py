@@ -378,6 +378,28 @@ def start_scheduler() -> None:
         id="param_tuning_advisor",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🛡️ v215 (2026-08-21 사장님!): 일일 손실 한도 감시 (자본 보호!)
+    # -3% = 진입 중단! -5% = CRITICAL! 다음 KST 자정 자동 리셋!
+    def _drawdown_guardian():
+        from app.workers.drawdown_guardian_worker import run_drawdown_guardian
+        run_drawdown_guardian()
+    scheduler.add_job(
+        guarded_job("drawdown_guardian", 300, _drawdown_guardian),
+        trigger=IntervalTrigger(minutes=15),  # 매 15분!
+        id="drawdown_guardian",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # 🚨 v216 (2026-08-21 사장님!): 시장 이상 감지 (BTC/ETH 급락!)
+    # 30분 -3% = 진입 중단! -5% = CRITICAL! 회복 시 자동 재개!
+    def _market_emergency():
+        from app.workers.market_emergency_watcher_worker import run_market_emergency_watcher
+        run_market_emergency_watcher()
+    scheduler.add_job(
+        guarded_job("market_emergency", 120, _market_emergency),
+        trigger=IntervalTrigger(minutes=5),  # 매 5분!
+        id="market_emergency",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 📊 v152 (2026-08-16 사장님!): Chart Pattern Learning Team!
     # 매 6시간 = 1달 4H 캔들 → 패턴 감지 → 저장 + outcome tracking!
     def _chart_pattern_scan():
