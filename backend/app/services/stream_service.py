@@ -187,8 +187,7 @@ class StreamService:
                         _use_retry_flow = False
                         try:
                             if getattr(strategy, "retry_after_liquidation_enabled", False):
-                                # 다음 단계 존재 확인!
-                                from app.models.strategy_stage_plan import StrategyStagePlan
+                                # 다음 단계 존재 확인! (StrategyStagePlan은 모듈 최상단에서 import됨!)
                                 _next_stage_no = int(strategy.current_stage or 0) + 1
                                 _next_plan = self.db.execute(
                                     select(StrategyStagePlan)
