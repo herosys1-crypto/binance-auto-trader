@@ -5,7 +5,11 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db
-from app.workers.pattern_learning_worker import get_learning_insights, run_pattern_learning
+from app.workers.pattern_learning_worker import (
+    get_learning_health_check,
+    get_learning_insights,
+    run_pattern_learning,
+)
 
 router = APIRouter(prefix="/pattern-learning", tags=["pattern-learning"])
 
@@ -30,3 +34,21 @@ def refresh_insights(
     """v187 학습 인사이트 즉시 갱신!"""
     result = run_pattern_learning()
     return {"note": "학습 갱신 완료!", **result}
+
+
+@router.get("/health-check")
+def health_check(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🎓 v208 사장님 (2026-08-21): 학습 축적 상태 헬스 체크!
+
+    확인:
+    - 총 자동 진입 (최근 30일)
+    - entry_snapshot 저장률
+    - outcome 확정률 (SUCCESS+FAIL / total)
+    - 학습 가능 표본 수
+    - 각 조건 필드별 non-null 카운트!
+    - insights 신선도 (age_hours)!
+    """
+    return get_learning_health_check(db)

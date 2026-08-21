@@ -369,3 +369,83 @@ def get_learning_insights(db: Session) -> dict | None:
         return json.loads(row.value)
     except Exception:
         return None
+
+
+def get_learning_health_check(db: Session) -> dict:
+    """🎓 v208 사장님 (2026-08-21): 학습 시스템 축적 상태 헬스 체크!
+
+    사장님 지시: "학습이 잘되고 있는지도 검증!"
+
+    확인:
+    1. 최근 30일 자동 진입 = 총 건수
+    2. entry_snapshot 저장 = 성공/실패 건수 + 저장률
+    3. outcome_status 분포 (SUCCESS/FAIL/STOPPED/CLOSED 등)
+    4. 각 스냅샷 필드별 non-null 카운트!
+    5. 학습 가능 = 표본 건수 (snapshot 있음 + SUCCESS/FAIL)
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    rows_all = db.execute(
+        select(StrategySuggestion)
+        .where(StrategySuggestion.created_at >= cutoff)
+        .where(StrategySuggestion.suggestion_type == "bb4h_auto_entry")
+    ).scalars().all()
+
+    total = len(rows_all)
+    outcome_dist: dict[str, int] = defaultdict(int)
+    with_snap = 0
+    field_counts: dict[str, int] = defaultdict(int)
+    field_names = ["rsi", "cci", "obv_slope_pct", "regime", "sustained_bars",
+                   "change_24h", "source", "kst_hour", "mta_total", "entered_at"]
+    learnable = 0
+
+    for s in rows_all:
+        outcome = s.outcome_status or "NULL"
+        outcome_dist[outcome] += 1
+        snap = None
+        if s.strategy_config and isinstance(s.strategy_config, dict):
+            snap = s.strategy_config.get("entry_snapshot")
+        if snap and isinstance(snap, dict):
+            with_snap += 1
+            for f in field_names:
+                if snap.get(f) is not None:
+                    field_counts[f] += 1
+            if outcome in ("SUCCESS", "FAIL"):
+                learnable += 1
+
+    snap_rate = round(with_snap / total * 100, 1) if total > 0 else 0.0
+    learnable_rate = round(learnable / total * 100, 1) if total > 0 else 0.0
+    settled = outcome_dist.get("SUCCESS", 0) + outcome_dist.get("FAIL", 0)
+    settle_rate = round(settled / total * 100, 1) if total > 0 else 0.0
+
+    insights_row = get_learning_insights(db)
+    insights_age_h = None
+    insights_samples = 0
+    if insights_row:
+        try:
+            gen_at = datetime.fromisoformat(insights_row.get("generated_at", ""))
+            insights_age_h = round((datetime.now(timezone.utc) - gen_at).total_seconds() / 3600, 2)
+            insights_samples = insights_row.get("total_samples", 0)
+        except Exception:
+            pass
+
+    return {
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "window_days": 30,
+        "totals": {
+            "total_auto_entries_30d": total,
+            "with_entry_snapshot": with_snap,
+            "snapshot_save_rate_pct": snap_rate,
+            "settled_success_fail": settled,
+            "settle_rate_pct": settle_rate,
+            "learnable_samples": learnable,
+            "learnable_rate_pct": learnable_rate,
+        },
+        "outcome_distribution": dict(outcome_dist),
+        "snapshot_field_counts": dict(field_counts),
+        "insights_state": {
+            "exists": insights_row is not None,
+            "age_hours": insights_age_h,
+            "samples_in_insights": insights_samples,
+            "stale": insights_age_h is not None and insights_age_h > 3,
+        },
+    }

@@ -379,6 +379,23 @@ def run_auto_bb_breakdown() -> dict:
                     "mta_total": it.get("mta_total"),
                     "entered_at": datetime.now(timezone.utc).isoformat(),
                 }
+                # 🎓 v208 사장님 (2026-08-21): 조건 필드 검증 = 상세 로그!
+                # = 어떤 필드가 없는지 = 학습 손실 원인 파악!
+                _missing = [k for k in ("rsi", "cci", "obv_slope_pct", "regime")
+                            if entry_snapshot.get(k) is None]
+                if _missing:
+                    logger.warning(
+                        "[v208] entry_snapshot 필드 누락 %s: %s = 학습 조건 저하!",
+                        symbol, _missing,
+                    )
+                else:
+                    logger.info(
+                        "[v208] entry_snapshot %s %s 완비: RSI=%s CCI=%s OBV=%s%% regime=%s KST=%02dh",
+                        symbol, side,
+                        entry_snapshot.get("rsi"), entry_snapshot.get("cci"),
+                        entry_snapshot.get("obv_slope_pct"), entry_snapshot.get("regime"),
+                        _kst_hour,
+                    )
                 sugg = StrategySuggestion(
                     symbol=symbol, side=side,
                     suggestion_type="bb4h_auto_entry",

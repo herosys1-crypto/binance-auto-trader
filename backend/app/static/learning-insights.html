@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🎓 학습 인사이트</title>
+<style>
+  body { background: #0f172a; color: #e2e8f0; font-family: -apple-system, sans-serif; padding: 8px; margin: 0; font-size: 12px; }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid #334155; }
+  .title { font-size: 16px; font-weight: bold; color: #22d3ee; }
+  .close-btn { background: #7c3aed; color: #fff; border: 0; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+  .summary {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 4px; margin-bottom: 10px;
+  }
+  .summary-card {
+    background: rgba(30,41,59,0.5); border: 1px solid #334155;
+    border-radius: 6px; padding: 8px 10px; text-align: center;
+  }
+  .summary-card .label { font-size: 10px; color: #94a3b8; }
+  .summary-card .value { font-size: 20px; font-weight: bold; margin: 2px 0; }
+  .section {
+    background: rgba(30,41,59,0.5); border: 1px solid #334155;
+    border-radius: 6px; padding: 10px; margin-bottom: 8px;
+  }
+  .section-title { font-weight: bold; margin-bottom: 6px; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th, td { padding: 4px 8px; text-align: left; border-bottom: 1px solid #1e293b; }
+  th { color: #94a3b8; font-weight: 500; font-size: 10px; }
+  .num { text-align: right; }
+  .bar {
+    display: inline-block; height: 12px; background: linear-gradient(90deg, #ef4444, #f59e0b, #22c55e);
+    border-radius: 2px; vertical-align: middle;
+  }
+  .success { color: #22c55e; }
+  .fail { color: #ef4444; }
+  .neutral { color: #94a3b8; }
+  .loading { text-align: center; color: #94a3b8; padding: 20px; }
+  .col-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="title">🎓 학습 인사이트 (v187+v198)</div>
+    <div style="font-size:10px;color:#94a3b8" id="subtitle">로딩...</div>
+  </div>
+  <button class="close-btn" onclick="window.close()">✕ 닫기</button>
+</div>
+
+<div id="content"><div class="loading">📊 조회 중...</div></div>
+
+<script>
+let timer = null;
+
+async function load() {
+  try {
+    if (!window.opener || !window.opener.closed === false) {
+      document.getElementById('content').innerHTML = '<div class="loading">부모 창 X!</div>';
+      return;
+    }
+    // v207: 학습 인사이트!
+    // v208: 헬스 체크 = 축적 상태!
+    const [insights, health] = await Promise.all([
+      window.opener.api('/pattern-learning/insights').catch(() => null),
+      window.opener.api('/pattern-learning/health-check').catch(() => null),
+    ]);
+    render(insights, health);
+  } catch (e) {
+    document.getElementById('content').innerHTML = `<div class="loading" style="color:#ef4444">❌ ${e.message||e}</div>`;
+  }
+}
+
+function pct(v) { return (Number(v)*100).toFixed(0) + '%'; }
+function bar(rate) {
+  const w = Math.max(2, Math.round(rate * 100));
+  return `<span class="bar" style="width:${w}px"></span>`;
+}
+
+function render(data, health) {
+  const ins = (data && data.insights) || null;
+  if (!ins) {
+    document.getElementById('content').innerHTML = `
+      ${renderHealth(health)}
+      <div class="loading" style="color:#fbbf24">⚠️ 인사이트 없음! 아직 학습 실행 X.</div>
+      <div class="loading" style="font-size:10px">매 1시간 자동 갱신됩니다!</div>`;
+    return;
+  }
+  const genAt = new Date(ins.generated_at).toLocaleString('ko');
+  document.getElementById('subtitle').textContent = `갱신: ${genAt} · 샘플 ${ins.total_samples||0}건`;
+
+  const html = `
+    ${renderHealth(health)}
+    <div class="summary">
+      <div class="summary-card"><div class="label">📊 총 샘플</div><div class="value" style="color:#22d3ee">${ins.total_samples||0}</div></div>
+      <div class="summary-card"><div class="label">🎯 타입 조합</div><div class="value" style="color:#a78bfa">${(ins.type_side_rankings||[]).length}</div></div>
+      <div class="summary-card"><div class="label">🏆 TOP LONG</div><div class="value success">${(ins.top_symbols_long||[]).length}</div></div>
+      <div class="summary-card"><div class="label">🏆 TOP SHORT</div><div class="value success">${(ins.top_symbols_short||[]).length}</div></div>
+      <div class="summary-card"><div class="label">🚨 WORST LONG</div><div class="value fail">${(ins.worst_symbols_long||[]).length}</div></div>
+      <div class="summary-card"><div class="label">🚨 WORST SHORT</div><div class="value fail">${(ins.worst_symbols_short||[]).length}</div></div>
+    </div>
+    ${renderTypeRankings(ins.type_side_rankings || [])}
+    <div class="col-2">
+      ${renderTopSymbols('🏆 TOP LONG 심볼', ins.top_symbols_long || [], 'success')}
+      ${renderTopSymbols('🏆 TOP SHORT 심볼', ins.top_symbols_short || [], 'success')}
+    </div>
+    <div class="col-2">
+      ${renderTopSymbols('🚨 WORST LONG (진입 X!)', ins.worst_symbols_long || [], 'fail')}
+      ${renderTopSymbols('🚨 WORST SHORT (진입 X!)', ins.worst_symbols_short || [], 'fail')}
+    </div>
+    ${renderConditionSummary(ins.snapshot_conditions || {})}
+  `;
+  document.getElementById('content').innerHTML = html;
+}
+
+function renderHealth(h) {
+  if (!h || !h.totals) return '';
+  const t = h.totals || {};
+  const state = h.insights_state || {};
+  const dist = h.outcome_distribution || {};
+  const fields = h.snapshot_field_counts || {};
+
+  // 저장률 색상!
+  const snapCls = t.snapshot_save_rate_pct >= 95 ? 'success' : t.snapshot_save_rate_pct >= 70 ? 'neutral' : 'fail';
+  const settleCls = t.settle_rate_pct >= 60 ? 'success' : t.settle_rate_pct >= 30 ? 'neutral' : 'fail';
+  const ageColor = state.stale ? '#ef4444' : (state.exists ? '#22c55e' : '#94a3b8');
+
+  const distRows = Object.entries(dist).map(([k, v]) =>
+    `<span style="display:inline-block;background:#1e293b;padding:2px 8px;border-radius:10px;margin:2px;font-size:10px">${k}: <b>${v}</b></span>`
+  ).join('');
+
+  const fieldRows = Object.entries(fields).map(([k, v]) => {
+    const rate = t.with_entry_snapshot > 0 ? Math.round(v / t.with_entry_snapshot * 100) : 0;
+    const cls = rate >= 95 ? 'success' : rate >= 70 ? 'neutral' : 'fail';
+    return `<tr><td>${k}</td><td class="num ${cls}">${v}</td><td class="num" style="color:#94a3b8">${rate}%</td></tr>`;
+  }).join('');
+
+  return `<div class="section" style="border-color:#7c3aed;background:rgba(124,58,237,0.08)">
+    <div class="section-title" style="color:#a78bfa">🎓 v208 축적 진행 상황 (최근 30일 자동 진입!)</div>
+    <div class="summary" style="margin-bottom:6px">
+      <div class="summary-card"><div class="label">📊 자동 진입 총</div><div class="value" style="color:#22d3ee">${t.total_auto_entries_30d}</div></div>
+      <div class="summary-card"><div class="label">📸 스냅샷 저장</div><div class="value ${snapCls}">${t.snapshot_save_rate_pct}%</div><div style="font-size:9px;color:#94a3b8">${t.with_entry_snapshot}/${t.total_auto_entries_30d}</div></div>
+      <div class="summary-card"><div class="label">✅ 확정률</div><div class="value ${settleCls}">${t.settle_rate_pct}%</div><div style="font-size:9px;color:#94a3b8">${t.settled_success_fail}/${t.total_auto_entries_30d}</div></div>
+      <div class="summary-card"><div class="label">🎓 학습 표본</div><div class="value" style="color:#22d3ee">${t.learnable_samples}</div><div style="font-size:9px;color:#94a3b8">${t.learnable_rate_pct}%</div></div>
+      <div class="summary-card"><div class="label">⏰ insights 신선도</div><div class="value" style="color:${ageColor};font-size:14px">${state.exists ? (state.age_hours + 'h') : '없음'}</div><div style="font-size:9px;color:#94a3b8">${state.stale ? 'STALE!' : (state.exists ? 'OK' : '학습 X')}</div></div>
+    </div>
+    <div style="margin:4px 0"><b style="font-size:10px;color:#94a3b8">📊 outcome 분포:</b> ${distRows || '<span style="color:#94a3b8">없음</span>'}</div>
+    ${fieldRows ? `<details style="margin-top:6px"><summary style="cursor:pointer;color:#a78bfa;font-size:10px">📝 조건 필드별 저장 카운트 (열어서 확인!)</summary>
+      <table style="margin-top:4px"><thead><tr><th>필드</th><th class="num">개수</th><th class="num">비율</th></tr></thead><tbody>${fieldRows}</tbody></table>
+    </details>` : ''}
+  </div>`;
+}
+
+function renderTypeRankings(rankings) {
+  if (!rankings.length) return '';
+  const rows = rankings.slice(0, 15).map((r, i) => {
+    const cls = r.success_rate >= 0.5 ? 'success' : r.success_rate >= 0.3 ? 'neutral' : 'fail';
+    return `<tr>
+      <td class="num" style="color:#64748b">${i+1}</td>
+      <td>${r.key}</td>
+      <td class="num ${cls}">${pct(r.success_rate)}</td>
+      <td class="num" style="color:#94a3b8">${r.success}/${r.total}</td>
+      <td>${bar(r.success_rate)}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="section">
+    <div class="section-title" style="color:#22d3ee">🎯 시나리오별 성공률 (top 15)</div>
+    <table><thead><tr><th class="num">#</th><th>type:side</th><th class="num">승률</th><th class="num">건수</th><th>그래프</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+function renderTopSymbols(title, items, cls) {
+  if (!items.length) return `<div class="section"><div class="section-title">${title} (0)</div><div class="loading">없음!</div></div>`;
+  const rows = items.slice(0, 10).map((r, i) => `
+    <tr>
+      <td class="num" style="color:#64748b">${i+1}</td>
+      <td>${r.symbol}</td>
+      <td class="num ${cls}">${pct(r.success_rate)}</td>
+      <td class="num" style="color:#94a3b8">${r.success}/${r.total}</td>
+    </tr>`).join('');
+  return `<div class="section">
+    <div class="section-title">${title} (${items.length})</div>
+    <table><thead><tr><th class="num">#</th><th>심볼</th><th class="num">승률</th><th class="num">건수</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+  </div>`;
+}
+
+function renderConditionSummary(snap) {
+  const kinds = [
+    ['rsi_conditions', '📊 RSI 조건'],
+    ['cci_conditions', '📊 CCI 조건'],
+    ['obv_conditions', '📊 OBV 조건'],
+    ['regime_conditions', '🎯 regime 조건'],
+    ['hour_conditions', '⏰ KST 시간대'],
+  ];
+  const parts = kinds.map(([k, label]) => {
+    const items = (snap[k] || []).slice(0, 10);
+    if (!items.length) return `<div class="section"><div class="section-title">${label} (학습 X)</div><div class="loading">데이터 없음! entry_snapshot 저장 후 축적!</div></div>`;
+    const rows = items.map((r, i) => {
+      const cls = r.success_rate >= 0.5 ? 'success' : r.success_rate >= 0.3 ? 'neutral' : 'fail';
+      return `<tr>
+        <td class="num" style="color:#64748b">${i+1}</td>
+        <td>${r.key}</td>
+        <td class="num ${cls}">${pct(r.success_rate)}</td>
+        <td class="num" style="color:#94a3b8">${r.success}/${r.total}</td>
+      </tr>`;
+    }).join('');
+    return `<div class="section">
+      <div class="section-title">${label} (${items.length})</div>
+      <table><thead><tr><th class="num">#</th><th>조건:side</th><th class="num">승률</th><th class="num">건수</th></tr></thead>
+      <tbody>${rows}</tbody></table>
+    </div>`;
+  });
+  return parts.join('');
+}
+
+load();
+timer = setInterval(load, 60000);  // 1분마다!
+</script>
+</body>
+</html>
