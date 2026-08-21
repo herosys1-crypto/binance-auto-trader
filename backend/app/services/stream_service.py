@@ -14,6 +14,21 @@ from app.services.mark_price_cache import get_mark_price
 logger = logging.getLogger(__name__)
 
 
+def _trigger_realtime_reentry_async() -> None:
+    """🎯 사장님 사상 (2026-08-21): 청산 즉시 = 재진입 판단!
+
+    stream_service의 청산 처리 → 비동기 thread → realtime_reentry!
+    = 초 단위 반응! (매 1분 워커 = fallback!)
+    """
+    try:
+        from app.workers.realtime_reentry_worker import run_realtime_reentry
+        result = run_realtime_reentry()
+        if result.get("entered_fail_reentry", 0) + result.get("entered_success_reentry", 0) > 0:
+            logger.info("[stream→RT_REENTRY] 진입: %s", result)
+    except Exception as e:
+        logger.warning("[stream→RT_REENTRY] 실패 (fail-open): %s", e)
+
+
 class StreamService:
     def __init__(self, db) -> None:
         self.db = db
@@ -197,6 +212,20 @@ class StreamService:
                             flag_modified(strategy, "strategy_config")
                     except Exception as _snap_e:
                         logger.debug("exit_snapshot 저장 실패 (fail-open): %s", _snap_e)
+
+                    # 🎯 사장님 CRITICAL 요구 (2026-08-21): 청산 즉시 = 재진입 판단!
+                    # 사장님 지적: "모니터링 1분더 너무 긴것같은데 방법을 찾아줘"
+                    # = stream 이벤트 기반 = 초 단위 즉시!
+                    # 비동기 (thread!) = stream 처리 지연 X!
+                    try:
+                        import threading
+                        threading.Thread(
+                            target=_trigger_realtime_reentry_async,
+                            daemon=True,
+                            name=f"rt-reentry-{strategy.symbol}",
+                        ).start()
+                    except Exception as _rte:
+                        logger.debug("realtime reentry trigger 실패 (fail-open): %s", _rte)
                     # status 전환:
                     #   COMPLETED  : _execute_take_profit 가 이미 마킹 → 보존
                     #   STOPPING   : 사용자 「수동 정지」 → STOPPED (좀비 방지)
