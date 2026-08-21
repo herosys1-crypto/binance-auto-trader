@@ -1162,3 +1162,24 @@ async function openStageDetailModal(strategyId, symbol, side) {
   }
 }
 
+// 🚨 사장님 요구 (2026-08-21): 「단가 실시간 반영 안 됨」 fix!
+// = 활성 전략 목록 = 매 5초 자동 새로고침!
+// = unrealized_pnl / mark_price 실시간 표시!
+// = document.hidden = 백그라운드 탭 = skip (API 부담 절약!)
+(function _autoRefreshStrategiesRealtime() {
+  let _refreshing = false;
+  setInterval(async () => {
+    if (document.hidden) return;
+    if (_refreshing) return;  // 이전 fetch 아직 실행 중 = skip!
+    if (typeof refreshStrategies !== 'function') return;
+    _refreshing = true;
+    try {
+      await refreshStrategies();
+    } catch (e) {
+      // silent fail (network 순간 오류 등 = 다음 5s에 다시 시도!)
+    } finally {
+      _refreshing = false;
+    }
+  }, 5000);  // 5초!
+})();
+
