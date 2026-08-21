@@ -806,6 +806,93 @@ if (typeof window !== 'undefined') {
   window.dismissLowConfidence = dismissLowConfidence;  // v155 85%↓ 초기화!
   window.saveAutoBBLimit = saveAutoBBLimit;  // v162 자동 BB 진입 개수!
   window.loadAutoBBLimit = loadAutoBBLimit;
+
+// 🎯 사장님 (2026-08-22): OBV 자동 진입 세팅 modal!
+async function openOBVSettingsModal() {
+  let settings;
+  try {
+    settings = await api('/strategy-suggestions/obv-settings');
+  } catch (e) {
+    if (typeof toast === 'function') toast('OBV 세팅 로드 실패: ' + e.message, 'error');
+    return;
+  }
+  const html = `
+    <div id="obv-modal-bg" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center" onclick="if(event.target.id==='obv-modal-bg')document.getElementById('obv-modal-bg').remove()">
+      <div style="background:#1e293b;color:#e2e8f0;padding:20px;border-radius:8px;max-width:500px;width:90%;border:2px solid #7c3aed">
+        <h3 style="font-size:16px;font-weight:bold;color:#22d3ee;margin-bottom:12px">🎯 OBV 자동 진입 세팅</h3>
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:12px;padding:8px;background:rgba(0,0,0,0.3);border-radius:4px">
+          <b>사장님 사상:</b> 신뢰도 매우 높은 심볼만 신중 진입!<br>
+          진입 시 = <b style="color:#22c55e">3단계 (400×3 = 1200 USDT!)</b> +
+          <b style="color:#ef4444">강제 SL 비활성 (오래 버티기!)</b><br>
+          Liquidation까지 = 사장님 수동 개입 가능!
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px">
+            <input type="checkbox" id="obv-enabled" ${settings.enabled ? 'checked' : ''} />
+            <b>ON / OFF</b> (사장님 = 신중 판단!)
+          </label>
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:12px">
+            <b>일 최대 건수</b> (신중!)
+            <input type="number" id="obv-daily-limit" value="${settings.daily_limit}" min="0" max="20"
+                   style="width:60px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:2px 6px;border-radius:4px;margin-left:8px" />
+            <span style="color:#94a3b8;font-size:10px">건/일 (default 3!)</span>
+          </label>
+        </div>
+        <div style="margin-bottom:16px">
+          <label style="font-size:12px">
+            <b>최소 신뢰도</b>
+            <input type="number" id="obv-min-conf" value="${settings.min_confidence}" min="0.5" max="1.0" step="0.01"
+                   style="width:70px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:2px 6px;border-radius:4px;margin-left:8px" />
+            <span style="color:#94a3b8;font-size:10px">(0.5~1.0, default 0.95 = 95%!)</span>
+          </label>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button onclick="document.getElementById('obv-modal-bg').remove()"
+                  style="padding:6px 14px;background:#475569;color:#fff;border:0;border-radius:4px;cursor:pointer">취소</button>
+          <button onclick="saveOBVSettings()"
+                  style="padding:6px 14px;background:linear-gradient(135deg,#0891b2,#7c3aed);color:#fff;border:0;border-radius:4px;cursor:pointer">💾 저장</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function saveOBVSettings() {
+  const enabled = document.getElementById('obv-enabled').checked ? 1 : 0;
+  const daily_limit = parseInt(document.getElementById('obv-daily-limit').value) || 3;
+  const min_confidence = parseFloat(document.getElementById('obv-min-conf').value) || 0.95;
+  try {
+    await api('/strategy-suggestions/obv-settings', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled, daily_limit, min_confidence }),
+    });
+    if (typeof toast === 'function') toast(
+      `✅ OBV 세팅 저장! ${enabled ? 'ON' : 'OFF'} · 일 ${daily_limit}건 · 신뢰도 ${(min_confidence*100).toFixed(0)}%+`,
+      'success'
+    );
+    document.getElementById('obv-modal-bg').remove();
+    loadOBVStatus();  // 상태 갱신!
+  } catch (e) {
+    if (typeof toast === 'function') toast('❌ 저장 실패: ' + e.message, 'error');
+  }
+}
+
+async function loadOBVStatus() {
+  try {
+    const s = await api('/strategy-suggestions/obv-settings');
+    const el = document.getElementById('obv-status');
+    if (el) {
+      el.textContent = ` (${s.enabled ? 'ON' : 'OFF'}·일${s.daily_limit}·${(s.min_confidence*100).toFixed(0)}%+)`;
+    }
+  } catch (e) {}
+}
+window.openOBVSettingsModal = openOBVSettingsModal;
+window.saveOBVSettings = saveOBVSettings;
+window.loadOBVStatus = loadOBVStatus;
+setTimeout(loadOBVStatus, 800);
+setInterval(loadOBVStatus, 60000);
   window.resetAutoBBCounter = resetAutoBBCounter;  // 🔄 v163 리셋!
   document.addEventListener('DOMContentLoaded', () => {
     // 🌟 v182 사장님 「세팅 유지!」: 즉시 backup 복원! (사장님 「끔」 보임 방지!)

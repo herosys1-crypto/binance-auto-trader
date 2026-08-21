@@ -245,6 +245,52 @@ def set_auto_bb_limit(
     return {"limit": limit, "note": "0=수동, 1~10=하루 자동 개수!"}
 
 
+@router.get("/obv-settings")
+def get_obv_settings(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🎯 사장님 (2026-08-22): OBV 자동 진입 세팅 조회!"""
+    enabled_row = db.get(SystemSetting, "auto_obv_enabled")
+    limit_row = db.get(SystemSetting, "auto_obv_daily_limit")
+    conf_row = db.get(SystemSetting, "auto_obv_min_confidence")
+    return {
+        "enabled": int(enabled_row.value) if enabled_row and enabled_row.value else 0,
+        "daily_limit": int(limit_row.value) if limit_row and limit_row.value else 3,
+        "min_confidence": float(conf_row.value) if conf_row and conf_row.value else 0.95,
+    }
+
+
+@router.put("/obv-settings")
+def set_obv_settings(
+    payload: dict,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🎯 사장님 (2026-08-22): OBV 자동 진입 세팅 저장!"""
+    enabled = int(payload.get("enabled", 0))
+    daily_limit = int(payload.get("daily_limit", 3))
+    min_confidence = float(payload.get("min_confidence", 0.95))
+    if enabled not in (0, 1):
+        raise HTTPException(status_code=400, detail="enabled는 0 or 1!")
+    if daily_limit < 0 or daily_limit > 20:
+        raise HTTPException(status_code=400, detail="daily_limit은 0~20!")
+    if min_confidence < 0.5 or min_confidence > 1.0:
+        raise HTTPException(status_code=400, detail="min_confidence는 0.5~1.0!")
+    for k, v, desc in [
+        ("auto_obv_enabled", str(enabled), "OBV 자동 진입 ON/OFF"),
+        ("auto_obv_daily_limit", str(daily_limit), "OBV 일 최대 건수 (신중!)"),
+        ("auto_obv_min_confidence", str(min_confidence), "OBV 최소 신뢰도"),
+    ]:
+        row = db.get(SystemSetting, k)
+        if row:
+            row.value = v
+        else:
+            db.add(SystemSetting(key=k, value=v, description=desc))
+    db.commit()
+    return {"enabled": enabled, "daily_limit": daily_limit, "min_confidence": min_confidence}
+
+
 @router.post("/auto-bb-reset")
 def reset_auto_bb_counter(
     db: Session = Depends(get_db),
