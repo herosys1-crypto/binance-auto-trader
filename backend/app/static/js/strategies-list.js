@@ -800,10 +800,19 @@ async function refreshStrategies() {
             <button onclick="event.stopPropagation(); if(window.openSymbolTradingModal) window.openSymbolTradingModal('${s.symbol}');"
                     title="📊 ${s.symbol} 차트 + Order Book (내장 모달)"
                     style="background:#1e3a5f;color:#7dd3fc;border:0;border-radius:3px;padding:1px 5px;font-size:10px;cursor:pointer;margin-left:3px;">📊</button>
-            ${s.strategy_type === 'auto_bb_break'
-              ? (s.side === 'LONG'
-                  ? '<span style="display:inline-block;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(34,197,94,0.7)" title="🤖 v174 BB 자동 진입 LONG!">🤖 BB LONG</span>'
-                  : '<span style="display:inline-block;background:linear-gradient(135deg,#dc2626,#f97316);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(220,38,38,0.7)" title="🤖 v174 BB 자동 진입 SHORT!">🤖 BB SHORT</span>')
+            ${(s.strategy_type || '').startsWith('auto_bb_break')
+              ? ((s.strategy_type || '').includes('_reentry')
+                  ? (function() {
+                      const cnt = ((s.strategy_type || '').match(/_reentry(\d+)/) || [])[1] || '?';
+                      const emojis = cnt === '1' ? '🔁' : cnt === '2' ? '🔁🔁' : '🔁';
+                      const bg = s.side === 'LONG'
+                        ? 'linear-gradient(135deg,#eab308,#22c55e)'
+                        : 'linear-gradient(135deg,#eab308,#dc2626)';
+                      return `<span style="display:inline-block;background:${bg};color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(234,179,8,0.8)" title="🎯 v202 재진입 ${cnt}차 = 자본 ${cnt==='1'?'1.5':'2.25'}배!">${emojis} ${cnt}차재진입 ${s.side}</span>`;
+                    })()
+                  : (s.side === 'LONG'
+                      ? '<span style="display:inline-block;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(34,197,94,0.7)" title="🤖 v174 BB 자동 진입 LONG!">🤖 BB LONG</span>'
+                      : '<span style="display:inline-block;background:linear-gradient(135deg,#dc2626,#f97316);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(220,38,38,0.7)" title="🤖 v174 BB 자동 진입 SHORT!">🤖 BB SHORT</span>'))
               : ''
             }${s.trigger_mode === 'OBV_REVERSE'
               ? '<span style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 6px rgba(124,58,237,0.6)" title="📊 신 OBV 자동 재진입 전략! (기존과 다른 자동 재진입 로직!)">📊 OBV</span>'
