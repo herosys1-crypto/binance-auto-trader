@@ -208,6 +208,61 @@ def run_auto_bb_breakdown() -> dict:
         except Exception as e:
             logger.warning("[auto_bb_breakdown] PENDING_HC 통합 실패: %s", e)
 
+        # 🎯 사장님 요구 (2026-08-21): 청산된 자동 진입 심볼 = 즉시 재진입 스캔!
+        # 사장님 지적: "다시 진입하는 조건은 바로 나올것 같은데 로직 점검!"
+        # = BB SUSTAINED 재감지 (20h!) 대기 X = 청산 즉시 재진입 후보!
+        # 조건:
+        # - _is_reentry_candidate = True (실패 있음 + 재진입 카운터 <2!)
+        # - 급등/급락 필터 등 = 그대로 적용!
+        try:
+            from datetime import timedelta as _td_r
+            from app.core.strategy_status import TERMINAL_STATUSES as _TS_r
+            cutoff_r = datetime.now(timezone.utc) - _td_r(hours=24)
+            _closed_auto = db.execute(
+                select(StrategyInstance)
+                .join(StrategyTemplate,
+                      StrategyInstance.strategy_template_id == StrategyTemplate.id)
+                .where(StrategyInstance.stopped_at >= cutoff_r)
+                .where(StrategyInstance.status.in_(list(_TS_r)))
+                .where(StrategyTemplate.strategy_type.like('auto_bb_break%'))
+            ).scalars().all()
+
+            _reentry_added = 0
+            _reentry_seen = set()  # (symbol, side) 중복 방지!
+            for _si in _closed_auto:
+                _pnl = float(_si.realized_pnl or 0)
+                if _pnl >= 0:
+                    continue  # 익절 = skip (성공!)
+                _key_r = (_si.symbol, _si.side)
+                if _key_r in _reentry_seen:
+                    continue
+                _reentry_seen.add(_key_r)
+                # 재진입 카운터 확인!
+                if _get_reentry_count(_si.symbol, _si.side) >= MAX_REENTRY_COUNT:
+                    continue
+                # 재진입 후보로 강제 추가!
+                all_sustained.append({
+                    "symbol": _si.symbol,
+                    "side": _si.side,
+                    "source": "REENTRY_QUEUE",  # 신 소스!
+                    "success_probability": 0.65,  # 재진입 default!
+                    "sustained_bars": MIN_SUSTAINED_BARS,  # 필터 통과!
+                    "regime": ("UPTREND" if _si.side == "LONG"
+                               else "DOWNTREND_STRONG"),
+                    "rsi": 50,  # 안전 범위!
+                    "cci": None, "obv_slope_pct": None,
+                    "change_24h": None,
+                    "mta_total": None,
+                })
+                _reentry_added += 1
+            if _reentry_added:
+                logger.info(
+                    "[auto_bb_breakdown] 🎯 REENTRY_QUEUE: %d건 청산 실패 심볼 재진입 스캔 추가!",
+                    _reentry_added,
+                )
+        except Exception as e:
+            logger.warning("[auto_bb_breakdown] REENTRY_QUEUE 실패: %s", e)
+
         # 중복 제거 (같은 symbol:side!)
         seen_keys = set()
         deduped = []
