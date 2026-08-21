@@ -902,7 +902,7 @@ async function saveOBVSettings() {
       method: 'PUT', body: payload,
     });
     if (typeof toast === 'function') toast(
-      `✅ OBV 세팅 저장! ${enabled ? 'ON' : 'OFF'} · 일 ${daily_limit}건 · 신뢰도 ${(min_confidence*100).toFixed(0)}%+`,
+      `✅ OBV 세팅 저장! ${payload.enabled ? 'ON' : 'OFF'} · 일 ${payload.daily_limit}건 · 신뢰도 ${(payload.min_confidence*100).toFixed(0)}%+`,
       'success'
     );
     document.getElementById('obv-modal-bg').remove();
