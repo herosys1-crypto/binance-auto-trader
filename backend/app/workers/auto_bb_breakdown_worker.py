@@ -176,11 +176,13 @@ def run_auto_bb_breakdown() -> dict:
         # "실시간 모니터링 진입예정 신뢰도 85%/90%+ = 자동 진입!"
         # = bb 이탈 자동진입 로직으로 같이 처리!
         try:
-            # 사장님 (2026-08-21): 공격적 조정 = 0.85 → 0.75!
+            # 🚨 Agent 검증 fix 1 (2026-08-22): 0.75 → 0.85 복원!
+            # Agent 진단: 0.75 = 손익분기 미달 = 구조적 마이너스!
+            # 사장님 (2026-08-21): 공격적 조정 = 0.85 → 0.75! (실패!)
             pending_hc = db.execute(
                 select(StrategySuggestion)
                 .where(StrategySuggestion.status == "PENDING")
-                .where(StrategySuggestion.confidence_score >= Decimal("0.75"))
+                .where(StrategySuggestion.confidence_score >= Decimal("0.85"))
                 .order_by(StrategySuggestion.confidence_score.desc())
                 .limit(20)
             ).scalars().all()
@@ -247,27 +249,24 @@ def run_auto_bb_breakdown() -> dict:
                     float(x.realized_pnl or 0) for x in _closed_auto
                     if x.symbol == _si.symbol and x.side == _si.side
                 )
-                if _recent_pnl <= -50.0:
+                # 🚨 Agent 검증 fix 2 (2026-08-22): PnL 게이트 강화 -50 → -30!
+                # Agent 진단: -50까지 통과 = 첫 -30 손실 후 재진입 → 두 번째 -70 = -100 폭탄!
+                if _recent_pnl <= -30.0:
                     logger.info(
-                        "[auto_bb_breakdown] 🚨 REENTRY_QUEUE PnL 게이트: %s %s 24h 누적 %.2f USDT ≤ -50 = skip!",
+                        "[auto_bb_breakdown] 🚨 REENTRY_QUEUE PnL 게이트: %s %s 24h 누적 %.2f USDT ≤ -30 = skip!",
                         _si.symbol, _si.side, _recent_pnl,
                     )
                     continue
-                # 재진입 후보로 강제 추가!
-                all_sustained.append({
-                    "symbol": _si.symbol,
-                    "side": _si.side,
-                    "source": "REENTRY_QUEUE",  # 신 소스!
-                    "success_probability": 0.65,  # 재진입 default!
-                    "sustained_bars": MIN_SUSTAINED_BARS,  # 필터 통과!
-                    "regime": ("UPTREND" if _si.side == "LONG"
-                               else "DOWNTREND_STRONG"),
-                    "rsi": 50,  # 안전 범위!
-                    "cci": None, "obv_slope_pct": None,
-                    "change_24h": None,
-                    "mta_total": None,
-                })
-                _reentry_added += 1
+                # 🚨 Agent 검증 fix 3 (2026-08-22): 하드코딩 필터 우회 제거!
+                # Agent 진단: rsi=50/regime 하드코딩 → 급등/RSI 필터 우회 = 마틴게일 폭탄!
+                # Fix: 실 지표 없으면 skip! (안전 우선!)
+                # = BB SUSTAINED가 = 다시 신호 감지할 때만 재진입 진행!
+                logger.info(
+                    "[auto_bb_breakdown] 🚨 REENTRY_QUEUE: %s %s = 실 지표 없음 = skip (BB 재감지 대기!)",
+                    _si.symbol, _si.side,
+                )
+                _reentry_seen.discard(_key_r)  # skip 이니 = 재검토 가능하게!
+                continue
             if _reentry_added:
                 logger.info(
                     "[auto_bb_breakdown] 🎯 REENTRY_QUEUE: %d건 청산 실패 심볼 재진입 스캔 추가!",
