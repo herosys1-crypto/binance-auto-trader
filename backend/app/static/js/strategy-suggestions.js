@@ -866,7 +866,7 @@ async function saveOBVSettings() {
   try {
     await api('/strategy-suggestions/obv-settings', {
       method: 'PUT',
-      body: JSON.stringify({ enabled, daily_limit, min_confidence }),
+      body: { enabled, daily_limit, min_confidence },  // api() 헬퍼가 자동 stringify!
     });
     if (typeof toast === 'function') toast(
       `✅ OBV 세팅 저장! ${enabled ? 'ON' : 'OFF'} · 일 ${daily_limit}건 · 신뢰도 ${(min_confidence*100).toFixed(0)}%+`,
