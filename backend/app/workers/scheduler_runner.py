@@ -156,7 +156,8 @@ def start_scheduler() -> None:
         from app.core.crypto import decrypt_text as _dec
         with SessionLocal() as _db:
             run_reentry_alert_watcher(_db, _dec)
-    scheduler.add_job(guarded_job("reentry_alert", 240, _reentry_alert_wrap), trigger=IntervalTrigger(minutes=5), id="reentry_alert", replace_existing=True, max_instances=1, coalesce=True)
+    # 사장님 (2026-08-21): 매 5분 → 매 2분! (빠른 시장 = 실시간 감지!)
+    scheduler.add_job(guarded_job("reentry_alert", 100, _reentry_alert_wrap), trigger=IntervalTrigger(minutes=2), id="reentry_alert", replace_existing=True, max_instances=1, coalesce=True)
     # 🌟 2026-08-09 v131 신: pump_bb_middle_watcher (= 사장님 요구!)
     # 급등 top 50 종목 = 4H 최고점 = BB중단(20MA!) ±5% 근접 = 알람!
     # 10분마다 실행 (자원 절약!)
@@ -318,8 +319,8 @@ def start_scheduler() -> None:
         from app.workers.realtime_reentry_worker import run_realtime_reentry
         run_realtime_reentry()
     scheduler.add_job(
-        guarded_job("realtime_reentry", 50, _realtime_reentry),  # lock TTL 50s (매 1분 실행!)
-        trigger=IntervalTrigger(minutes=1),  # 매 1분!
+        guarded_job("realtime_reentry", 25, _realtime_reentry),  # lock TTL 25s (매 30초 실행!)
+        trigger=IntervalTrigger(seconds=30),  # 사장님 (2026-08-21): 매 1분 → 매 30초 (빠른 시장!)
         id="realtime_reentry",
         replace_existing=True, max_instances=1, coalesce=True,
     )
