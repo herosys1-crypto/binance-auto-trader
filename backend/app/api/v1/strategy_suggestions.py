@@ -250,14 +250,31 @@ def get_obv_settings(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> dict:
-    """🎯 사장님 (2026-08-22): OBV 자동 진입 세팅 조회!"""
-    enabled_row = db.get(SystemSetting, "auto_obv_enabled")
-    limit_row = db.get(SystemSetting, "auto_obv_daily_limit")
-    conf_row = db.get(SystemSetting, "auto_obv_min_confidence")
+    """🎯 사장님 (2026-08-22): OBV 자동 진입 세팅 조회! (전용!)"""
+    def _get(key: str, default):
+        row = db.get(SystemSetting, key)
+        if not row or not row.value:
+            return default
+        try:
+            if isinstance(default, int):
+                return int(row.value)
+            if isinstance(default, float):
+                return float(row.value)
+            return row.value
+        except (ValueError, TypeError):
+            return default
     return {
-        "enabled": int(enabled_row.value) if enabled_row and enabled_row.value else 0,
-        "daily_limit": int(limit_row.value) if limit_row and limit_row.value else 3,
-        "min_confidence": float(conf_row.value) if conf_row and conf_row.value else 0.95,
+        "enabled": _get("auto_obv_enabled", 0),
+        "daily_limit": _get("auto_obv_daily_limit", 3),
+        "min_confidence": _get("auto_obv_min_confidence", 0.95),
+        "capital_per_stage": _get("auto_obv_capital_per_stage", 400),  # 각 단계 자본!
+        "leverage": _get("auto_obv_leverage", 2),
+        "stage2_trigger_pct": _get("auto_obv_stage2_trigger", -5.0),   # -5%!
+        "stage3_trigger_pct": _get("auto_obv_stage3_trigger", -10.0),  # -10%!
+        "tp1_percent": _get("auto_obv_tp1", 10.0),
+        "tp2_percent": _get("auto_obv_tp2", 15.0),
+        "tp3_percent": _get("auto_obv_tp3", 20.0),
+        "tp4_percent": _get("auto_obv_tp4", 25.0),
     }
 
 
@@ -268,27 +285,46 @@ def set_obv_settings(
     user_id: int = Depends(get_current_user_id),
 ) -> dict:
     """🎯 사장님 (2026-08-22): OBV 자동 진입 세팅 저장!"""
-    enabled = int(payload.get("enabled", 0))
-    daily_limit = int(payload.get("daily_limit", 3))
-    min_confidence = float(payload.get("min_confidence", 0.95))
-    if enabled not in (0, 1):
-        raise HTTPException(status_code=400, detail="enabled는 0 or 1!")
-    if daily_limit < 0 or daily_limit > 20:
-        raise HTTPException(status_code=400, detail="daily_limit은 0~20!")
-    if min_confidence < 0.5 or min_confidence > 1.0:
-        raise HTTPException(status_code=400, detail="min_confidence는 0.5~1.0!")
-    for k, v, desc in [
-        ("auto_obv_enabled", str(enabled), "OBV 자동 진입 ON/OFF"),
-        ("auto_obv_daily_limit", str(daily_limit), "OBV 일 최대 건수 (신중!)"),
-        ("auto_obv_min_confidence", str(min_confidence), "OBV 최소 신뢰도"),
-    ]:
-        row = db.get(SystemSetting, k)
+    fields = {
+        "auto_obv_enabled": (int, payload.get("enabled", 0), 0, 1),
+        "auto_obv_daily_limit": (int, payload.get("daily_limit", 3), 0, 20),
+        "auto_obv_min_confidence": (float, payload.get("min_confidence", 0.95), 0.5, 1.0),
+        "auto_obv_capital_per_stage": (int, payload.get("capital_per_stage", 400), 10, 100000),
+        "auto_obv_leverage": (int, payload.get("leverage", 2), 1, 20),
+        "auto_obv_stage2_trigger": (float, payload.get("stage2_trigger_pct", -5.0), -50.0, -0.5),
+        "auto_obv_stage3_trigger": (float, payload.get("stage3_trigger_pct", -10.0), -80.0, -1.0),
+        "auto_obv_tp1": (float, payload.get("tp1_percent", 10.0), 0.5, 100.0),
+        "auto_obv_tp2": (float, payload.get("tp2_percent", 15.0), 0.5, 100.0),
+        "auto_obv_tp3": (float, payload.get("tp3_percent", 20.0), 0.5, 100.0),
+        "auto_obv_tp4": (float, payload.get("tp4_percent", 25.0), 0.5, 100.0),
+    }
+    result = {}
+    for key, (dtype, raw, lo, hi) in fields.items():
+        try:
+            val = dtype(raw)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail=f"{key}: 잘못된 값!")
+        if val < lo or val > hi:
+            raise HTTPException(status_code=400, detail=f"{key}: {lo}~{hi} 허용!")
+        row = db.get(SystemSetting, key)
         if row:
-            row.value = v
+            row.value = str(val)
         else:
-            db.add(SystemSetting(key=k, value=v, description=desc))
+            db.add(SystemSetting(key=key, value=str(val), description=f"OBV 자동 진입: {key}"))
+        # UI 키로 매핑!
+        _ui_key = key.replace("auto_obv_", "")
+        if _ui_key in ("enabled", "daily_limit", "leverage", "capital_per_stage"):
+            result[_ui_key if _ui_key != "capital_per_stage" else "capital_per_stage"] = val
+        elif _ui_key == "min_confidence":
+            result["min_confidence"] = val
+        elif _ui_key == "stage2_trigger":
+            result["stage2_trigger_pct"] = val
+        elif _ui_key == "stage3_trigger":
+            result["stage3_trigger_pct"] = val
+        elif _ui_key.startswith("tp"):
+            result[f"{_ui_key}_percent"] = val
     db.commit()
-    return {"enabled": enabled, "daily_limit": daily_limit, "min_confidence": min_confidence}
+    return result
 
 
 @router.post("/auto-bb-reset")

@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -1312,13 +1312,23 @@ def _create_auto_bb_strategy(
 
     _is_obv_hold = strategy_type_suffix == "_OBV_HOLD"
     if _is_obv_hold:
-        # 🎯 OBV = 3단계! 각 400 USDT (총 1200!) + 2/3단계 트리거 -5/-10%!
-        _obv_base = 400.0  # OBV default (사장님 조정 가능!)
-        capitals = [_obv_base, _obv_base, _obv_base]  # 3단계!
+        # 🎯 사장님 세팅! (system_settings에서 조회!)
+        def _get_obv(k, default):
+            row = db.get(SystemSetting, f"auto_obv_{k}")
+            if row and row.value:
+                try:
+                    return float(row.value) if isinstance(default, float) else int(row.value)
+                except (ValueError, TypeError):
+                    return default
+            return default
+        _obv_base = float(_get_obv("capital_per_stage", 400))
+        _obv_trig2 = _get_obv("stage2_trigger", -5.0)
+        _obv_trig3 = _get_obv("stage3_trigger", -10.0)
+        capitals = [_obv_base, _obv_base, _obv_base]
         total_capital = _obv_base * 3
         stages_config = {
             "capitals": capitals,
-            "trigger_percents": [None, -5.0, -10.0],  # 반대 방향 -5%/-10%
+            "trigger_percents": [None, _obv_trig2, _obv_trig3],
             "stages_count": 3,
         }
     else:
@@ -1344,8 +1354,8 @@ def _create_auto_bb_strategy(
     _stage1_cap = capitals[0]
     _stage2_cap = capitals[1] if _is_obv_hold else None
     _stage3_cap = capitals[2] if _is_obv_hold else None
-    _stage2_trig = Decimal("-5") if _is_obv_hold else None
-    _stage3_trig = Decimal("-10") if _is_obv_hold else None
+    _stage2_trig = Decimal(str(_obv_trig2)) if _is_obv_hold else None
+    _stage3_trig = Decimal(str(_obv_trig3)) if _is_obv_hold else None
     tpl = StrategyTemplate(
         name=f"AUTO_BB_{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S')}{_tpl_name_suffix}",
         strategy_type=f"auto_bb_break{strategy_type_suffix}",  # 🎯 v203: 재진입 정보!
@@ -1375,11 +1385,16 @@ def _create_auto_bb_strategy(
     db.flush()
 
     # 🎯 사장님 CRITICAL 요구 (2026-08-21): 자동 진입 = MARKET!
-    # 사장님 지적: "포지션 미진입인데 이럴경우 market가격으로 해줘"
-    # = 미진입 6건 (LIMIT 체결 실패!) 발견!
-    # Fix: start_price=None → MARKET 주문! (v130 spec: 시작가 없으면 MARKET!)
+    # 롤백 (2026-08-22): start_price=None → planned_capital=None 오류!
+    # = 현재가 필요 (preview 계산 위해!). MARKET 여부 = start_price로 판정!
     from app.services.strategy_service import StrategyService
     svc = StrategyService(db)
+
+    # 현재가 조회 (preview 계산 필수!)
+    start_price = _get_current_price(symbol)
+    if not start_price or start_price <= 0:
+        logger.warning("[auto_bb_breakdown] %s %s: 현재가 없음 = skip", symbol, side)
+        return None
 
     strategy = svc.create_strategy_instance(
         user_id=1,
@@ -1387,7 +1402,7 @@ def _create_auto_bb_strategy(
         strategy_template_id=tpl.id,
         symbol=symbol,
         side=side,
-        start_price=None,  # 🎯 MARKET 주문! (즉시 체결!)
+        start_price=start_price,  # 필수 (preview 계산!)
         leverage_override=int(cfg.get("leverage", 2)),
         retry_after_liquidation_enabled=bool(cfg.get("retry_after_liquidation_enabled", False)),
         retry_trigger_pct=(
