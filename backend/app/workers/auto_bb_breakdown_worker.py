@@ -256,6 +256,17 @@ def run_auto_bb_breakdown() -> dict:
             required_prob = MIN_SUCCESS_PROBABILITY  # 0.70 (v201!)
             reason_bonus = ""
             _is_success_reentry = _is_success_reentry_candidate(db, symbol, side)
+
+            # 🚨 v211: 학습된 실패 조건 매치 = 진입 skip!
+            _fail_skip, _fail_reasons = _matches_failure_condition(it, side)
+            if _fail_skip:
+                skipped += 1
+                logger.info(
+                    "[v211] %s skip: 실패 조건 %d개 매치 [%s]!",
+                    key, len(_fail_reasons), ", ".join(_fail_reasons),
+                )
+                continue
+
             if _is_success_reentry:
                 # 🚀 v204: 성공 후 재진입 = 강력 우선!
                 required_prob = 0.50
@@ -586,13 +597,14 @@ def _load_failure_conditions(db: Session) -> dict:
 
 
 # 🌟 v201 사장님: 학습 성공 조건 캐시!
-_SUCCESS_CONDITIONS_CACHE: dict = {"loaded_at": None, "conditions": {}}
+_SUCCESS_CONDITIONS_CACHE: dict = {"loaded_at": None, "conditions": {}, "failures": {}}
 
 
 def _load_success_conditions(db: Session) -> dict:
     """🌟 v201 사장님 「적극 매매」: 학습 인사이트에서 = 성공 조건 로드!
 
     - 성공률 60%+ + 표본 5+ = 성공 조건!
+    - 🆕 v211 (2026-08-21): 실패 조건도! = 30% 이하 + 표본 5+ = 진입 skip!
     - RSI/CCI/OBV/regime/시간대별!
     """
     from datetime import timedelta as _td
@@ -603,6 +615,9 @@ def _load_success_conditions(db: Session) -> dict:
 
     successes = {"rsi_side": set(), "cci_side": set(), "obv_side": set(),
                  "regime_side": set(), "hour_side": set()}
+    # v211: 실패 조건 = 진입 skip 대상!
+    failures = {"rsi_side": set(), "cci_side": set(), "obv_side": set(),
+                "regime_side": set(), "hour_side": set()}
     try:
         from app.workers.pattern_learning_worker import get_learning_insights
         insights = get_learning_insights(db) or {}
@@ -615,13 +630,19 @@ def _load_success_conditions(db: Session) -> dict:
             ("hour_conditions", "hour_side"),
         ]:
             for row in snap.get(key_name, []):
-                if row.get("total", 0) >= 5 and row.get("success_rate", 0) >= 0.60:
+                total = row.get("total", 0)
+                rate = row.get("success_rate", 0)
+                if total >= 5 and rate >= 0.60:
                     successes[out_key].add(row["key"])
+                # v211: 실패 조건! (표본 5+ + 성공률 30% 이하!)
+                if total >= 5 and rate <= 0.30:
+                    failures[out_key].add(row["key"])
     except Exception as e:
         logger.warning("[v201] 성공 조건 로드 실패: %s", e)
 
     _SUCCESS_CONDITIONS_CACHE["loaded_at"] = now
     _SUCCESS_CONDITIONS_CACHE["conditions"] = successes
+    _SUCCESS_CONDITIONS_CACHE["failures"] = failures  # v211!
     return successes
 
 
@@ -667,6 +688,59 @@ def _matches_success_condition(it: dict, side: str) -> bool:
 
     # 5개 중 2개 이상 매치 = 성공 조건!
     return match_count >= 2
+
+
+def _matches_failure_condition(it: dict, side: str) -> tuple[bool, list[str]]:
+    """🚨 v211 사장님 (2026-08-21): 실패 조건 = 진입 skip!
+
+    학습된 실패 조건 (성공률 30% 이하 + 표본 5+)에 매치되면:
+    - 2개 이상 매치 = 진입 skip!
+    - 1개 매치 = 로그만!
+
+    반환: (skip 여부, 매치 사유 리스트)
+    """
+    from app.core.database import SessionLocal as _SL
+    _db = _SL()
+    try:
+        _load_success_conditions(_db)  # failures 캐시 갱신!
+        failures = _SUCCESS_CONDITIONS_CACHE.get("failures", {}) or {}
+    finally:
+        _db.close()
+
+    if not failures:
+        return False, []
+
+    match_reasons: list[str] = []
+
+    rsi = it.get("rsi")
+    if rsi is not None:
+        rsi_bucket = _rsi_bucket_local(rsi)
+        if f"{rsi_bucket}:{side}" in failures.get("rsi_side", set()):
+            match_reasons.append(f"RSI={rsi_bucket}")
+
+    cci = it.get("cci")
+    if cci is not None:
+        cci_bucket = _cci_bucket_local(cci)
+        if f"{cci_bucket}:{side}" in failures.get("cci_side", set()):
+            match_reasons.append(f"CCI={cci_bucket}")
+
+    obv = it.get("obv_slope_pct")
+    if obv is not None:
+        obv_bucket = _obv_bucket_local(obv)
+        if f"{obv_bucket}:{side}" in failures.get("obv_side", set()):
+            match_reasons.append(f"OBV={obv_bucket}")
+
+    regime = it.get("regime", "NEUTRAL")
+    if f"{regime}:{side}" in failures.get("regime_side", set()):
+        match_reasons.append(f"regime={regime}")
+
+    kst_h = (datetime.now(timezone.utc).hour + 9) % 24
+    if f"KST{kst_h:02d}:{side}" in failures.get("hour_side", set()):
+        match_reasons.append(f"KST{kst_h:02d}h")
+
+    # 2개 이상 매치 = 실패 조건 = skip!
+    should_skip = len(match_reasons) >= 2
+    return should_skip, match_reasons
 
 
 def _matches_failure_condition(it: dict, side: str) -> bool:

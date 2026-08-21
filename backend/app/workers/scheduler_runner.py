@@ -321,6 +321,31 @@ def start_scheduler() -> None:
         id="orchestra_health",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🎓 v209 (2026-08-21 사장님!): 자동 진입 실 outcome 자동 확정!
+    # "학습이 잘되고 있는지도 검증!" = 실제 매매 결과 → 학습 반영!
+    # = 학습 표본 대폭 증가 (설정 40% → 90%+ 예상!)
+    def _entry_outcome():
+        from app.workers.entry_outcome_worker import run_entry_outcome
+        run_entry_outcome()
+    scheduler.add_job(
+        guarded_job("entry_outcome", 600, _entry_outcome),
+        trigger=IntervalTrigger(minutes=15),  # 매 15분!
+        id="entry_outcome",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # 📊 v210 (2026-08-21 사장님!): 매일 KST 08:00 = 어제 매매 요약 발송!
+    # ⚠️ daily_report_worker (Layer 3 운영 요약, KST 09:00) 별개!
+    # = 이 워커 = 매매 데이터 요약 전용! (KST 08:00 = 별도!)
+    # = 사장님 관찰 완전 자율화!
+    def _trading_summary():
+        from app.workers.trading_summary_worker import run_trading_summary
+        run_trading_summary()
+    scheduler.add_job(
+        guarded_job("trading_summary", 300, _trading_summary),
+        trigger=CronTrigger(hour=23, minute=0),  # UTC 23:00 = KST 08:00!
+        id="trading_summary",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 📊 v152 (2026-08-16 사장님!): Chart Pattern Learning Team!
     # 매 6시간 = 1달 4H 캔들 → 패턴 감지 → 저장 + outcome tracking!
     def _chart_pattern_scan():
