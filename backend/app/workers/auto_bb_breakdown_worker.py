@@ -239,6 +239,20 @@ def run_auto_bb_breakdown() -> dict:
                 # 재진입 카운터 확인!
                 if _get_reentry_count(_si.symbol, _si.side) >= MAX_REENTRY_COUNT:
                     continue
+                # 🎯 Agent 검증 fix (2026-08-22): REENTRY_QUEUE PnL 게이트!
+                # 사장님 지적: "실패 5건 = 마틴게일 폭발 위험!"
+                # = 같은 심볼+방향 = 24h 누적 손실 -50 USDT+ = 재진입 STOP!
+                # = BOMEUSDT -417 / ONGUSDT -411 사고 재발 방지!
+                _recent_pnl = sum(
+                    float(x.realized_pnl or 0) for x in _closed_auto
+                    if x.symbol == _si.symbol and x.side == _si.side
+                )
+                if _recent_pnl <= -50.0:
+                    logger.info(
+                        "[auto_bb_breakdown] 🚨 REENTRY_QUEUE PnL 게이트: %s %s 24h 누적 %.2f USDT ≤ -50 = skip!",
+                        _si.symbol, _si.side, _recent_pnl,
+                    )
+                    continue
                 # 재진입 후보로 강제 추가!
                 all_sustained.append({
                     "symbol": _si.symbol,
