@@ -523,10 +523,19 @@ def run_auto_bb_breakdown() -> dict:
                     _type_suffix = f"_reentry{_reentry_count_now}"
                 elif _is_success_reentry:
                     _type_suffix = "_success"  # 🚀 v204!
+                # 🎯 사장님 사상 (2026-08-21): OBV 소스 = 오래 버티기 전략!
+                # "OBV 전략은 실패하면 큰 손실이 나올꺼야 이전략은 청산될때까지 운영할수있게!"
+                # = 강제 SL 비활성 + 수동 증거금/포지션 추가 가능!
+                # (3단계 확장은 다음 세션 = 지금은 1단계 + 강제SL X!)
+                _is_obv = it.get("source") == "OBV_REVERSE"
+                _final_suffix = "_OBV_HOLD" if _is_obv else _type_suffix
                 new_strategy = _create_auto_bb_strategy(
                     db, symbol, side, _entry_cfg,
-                    strategy_type_suffix=_type_suffix,
+                    strategy_type_suffix=_final_suffix,
                 )
+                # OBV 소스 = 강제 SL 비활성 = 오래 버티기!
+                if _is_obv and new_strategy:
+                    _apply_obv_hold_settings(db, new_strategy)
                 # 🎯 v202: 재진입 카운터 증가!
                 if _is_reentry:
                     _increment_reentry_count(symbol, side)
@@ -1158,6 +1167,33 @@ def _is_reentry_candidate(db: Session, symbol: str, side: str) -> bool:
         return any(float(s.realized_pnl or 0) < 0 for s in rows)
     except Exception:
         return False
+
+
+def _apply_obv_hold_settings(db: Session, strategy: StrategyInstance) -> None:
+    """🎯 사장님 사상 (2026-08-21): OBV 전용 = 오래 버티기 설정!
+
+    사장님 verbatim:
+    "OBV 전략은 실패하면 큰 손실이 나올꺼야 이전략은 청산될때까지 운영할수있게 해줘
+    중간에 증거금이나 포지션 수동진입해서 최대한 오래 버티게 할수 있는 구조!"
+
+    설정:
+    - 강제 SL 비활성 (force_sl_enabled_override=False!)
+    - 사장님 수동 증거금/포지션 추가 가능!
+    - Liquidation까지 = 버티기!
+
+    한계 (현재!):
+    - 1단계 진입 유지 (v177!)
+    - 3단계 확장은 = 다음 세션 (기존 함수 리팩토링 필요!)
+    """
+    try:
+        strategy.force_sl_enabled_override = False
+        db.commit()
+        logger.info(
+            "[auto_obv_hold] 🎯 OBV 전략 설정: strategy=%s force_sl=X (오래 버티기!)",
+            strategy.id,
+        )
+    except Exception as e:
+        logger.warning("[auto_obv_hold] 설정 실패: %s", e)
 
 
 def _is_success_reentry_candidate(db: Session, symbol: str, side: str) -> bool:
