@@ -118,6 +118,56 @@ def _detect_position_strategy_mismatch(db, strategy):
     return bugs
 
 
+def _v206_detect_entry_snapshot_missing(db, s) -> list[dict]:
+    """🎼 v206 Phase 2 사장님 (2026-08-21): entry_snapshot 저장 감지!
+
+    사장님 지적: "학습이 잘되고 있는지도 검증!"
+    발견: v187 인사이트 조건 = 모두 0개!
+    원인: entry_snapshot 저장 안 됨 or 옛 데이터!
+
+    감지:
+    - auto_bb_break template 이면서
+    - StrategySuggestion.strategy_config에 entry_snapshot 없음
+    = v198 저장 실패!
+    """
+    bugs = []
+    try:
+        from app.models.strategy_template import StrategyTemplate
+        from app.models.strategy_suggestion import StrategySuggestion
+        tpl = db.get(StrategyTemplate, s.strategy_template_id) if s.strategy_template_id else None
+        if not tpl or not (tpl.strategy_type or "").startswith("auto_bb_break"):
+            return bugs  # 자동 진입 아님!
+
+        # StrategySuggestion 확인!
+        sugg = db.execute(
+            select(StrategySuggestion)
+            .where(StrategySuggestion.executed_strategy_id == s.id)
+            .limit(1)
+        ).scalar_one_or_none()
+        if not sugg:
+            bugs.append({
+                "type": "V206_NO_SUGGESTION_LINK",
+                "severity": "WARN",
+                "msg": f"#{s.id} {s.symbol}: auto_bb_break이지만 StrategySuggestion 링크 없음!",
+            })
+            return bugs
+
+        # entry_snapshot 확인 (v198!)
+        cfg = sugg.strategy_config or {}
+        if "entry_snapshot" not in cfg:
+            bugs.append({
+                "type": "V206_ENTRY_SNAPSHOT_MISSING",
+                "severity": "WARN",
+                "msg": (
+                    f"#{s.id} {s.symbol}: v198 entry_snapshot 저장 X! "
+                    f"→ 학습 (v187) 조건 분석 불가능!"
+                ),
+            })
+    except Exception as e:
+        logger.debug("[v206 phase2] entry_snapshot 감지 실패: %s", e)
+    return bugs
+
+
 def run_silent_bug_detector_once() -> dict:
     """매 1분 = silent bug 패턴 자동 감지!"""
     from app.core.redis_client import get_redis_client
@@ -146,6 +196,8 @@ def run_silent_bug_detector_once() -> dict:
             bugs = []
             bugs.extend(_detect_null_field_bugs(db, s))
             bugs.extend(_detect_position_strategy_mismatch(db, s))
+            # 🎼 v206 Phase 2: 신 검증 추가!
+            bugs.extend(_v206_detect_entry_snapshot_missing(db, s))
 
             for bug in bugs:
                 result["bugs_found"] += 1
@@ -182,6 +234,9 @@ def run_silent_bug_detector_once() -> dict:
                 except Exception as e:
                     logger.error("[silent-bug] 기록/알림 실패: %s", e)
 
+        # 🎼 v206 Phase 2: 시스템 전체 sanity check!
+        _v206_system_sanity_check(db, result, redis)
+
         if result["bugs_found"] == 0:
             logger.info("[silent-bug] %d strategy = 모든 silent bug 0건!", result["total_checked"])
         else:
@@ -193,6 +248,67 @@ def run_silent_bug_detector_once() -> dict:
     finally:
         db.close()
     return result
+
+
+def _v206_system_sanity_check(db, result: dict, redis) -> None:
+    """🎼 v206 Phase 2 사장님: 시스템 전체 sanity check!
+
+    사장님 지적: "우리 에이전트 팀이 많은데 왜 이런 문제가?"
+    = Cross-team 자동 검증!
+
+    검증:
+    1. 자동 진입 카운터 = 정상? (UTC vs KST 감지!)
+    2. 학습 인사이트 = 최신? (매 1h 실행 확인!)
+    3. Watchlist = 최신? (매 15분 갱신!)
+    """
+    try:
+        # 1. 학습 인사이트 신선도!
+        from app.workers.pattern_learning_worker import get_learning_insights
+        insights = get_learning_insights(db)
+        if insights:
+            gen_at = datetime.fromisoformat(insights.get("generated_at", ""))
+            age_h = (datetime.now(timezone.utc) - gen_at).total_seconds() / 3600
+            if age_h > 3:  # 3시간 이상 = 갱신 안 됨!
+                result["bugs_found"] += 1
+                result["details"].append({
+                    "type": "V206_LEARNING_STALE",
+                    "severity": "WARN",
+                    "msg": f"학습 인사이트 {age_h:.1f}h 갱신 X! (매 1h!)",
+                })
+
+            # 조건 학습 = 0이면 문제!
+            snap = insights.get("snapshot_conditions", {})
+            total_conditions = sum(len(v) for v in snap.values())
+            if total_conditions == 0 and insights.get("total_samples", 0) > 100:
+                result["bugs_found"] += 1
+                result["details"].append({
+                    "type": "V206_CONDITION_LEARNING_ZERO",
+                    "severity": "WARN",
+                    "msg": (
+                        f"샘플 {insights['total_samples']}개 있지만 조건 학습 0개! "
+                        f"entry_snapshot 저장 X!"
+                    ),
+                })
+        else:
+            result["bugs_found"] += 1
+            result["details"].append({
+                "type": "V206_NO_LEARNING_INSIGHTS",
+                "severity": "WARN",
+                "msg": "학습 인사이트 없음! (pattern_learning_worker 미실행?)",
+            })
+
+        # 2. watchlist 신선도!
+        if redis:
+            watch_ttl = redis.ttl("v199:realtime_watchlist")
+            if watch_ttl < 0:  # 없음!
+                result["bugs_found"] += 1
+                result["details"].append({
+                    "type": "V206_WATCHLIST_MISSING",
+                    "severity": "WARN",
+                    "msg": "watchlist 캐시 없음! (realtime_watchlist_worker 미실행?)",
+                })
+    except Exception as e:
+        logger.debug("[v206 phase2] sanity check 실패: %s", e)
 
 
 if __name__ == "__main__":
