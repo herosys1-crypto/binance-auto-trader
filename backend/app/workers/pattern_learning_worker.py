@@ -121,6 +121,20 @@ def run_pattern_learning() -> dict:
             "[pattern_learning] v187 학습 완료: %d 샘플, %d 타입/방향 조합",
             len(rows), len(type_side_stats),
         )
+
+        # 🎼 v206 사장님: 오케스트라 통합 = EventBus 발신!
+        try:
+            from app.agents.orchestrator.event_bus import get_event_bus
+            from app.agents.orchestrator.event_types import EventType
+            get_event_bus().publish(EventType.PATTERN_LEARNING_DONE, {
+                "samples": len(rows),
+                "types_analyzed": len(type_side_stats),
+                "symbols_analyzed": len(symbol_side_stats),
+                "generated_at": insights.get("generated_at"),
+            })
+        except Exception as e:
+            logger.debug("[v206] EventBus publish 실패 (fail-open): %s", e)
+
         return {
             "samples": len(rows),
             "types_analyzed": len(type_side_stats),

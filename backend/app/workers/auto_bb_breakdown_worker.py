@@ -420,6 +420,35 @@ def run_auto_bb_breakdown() -> dict:
                     "[auto_bb_breakdown] ✅ 자동 진입: #%d %s %s (prob=%.0f%%)",
                     new_strategy.id, symbol, side, prob * 100,
                 )
+                # 🎼 v206 사장님: 오케스트라 통합 = EventBus 발신!
+                try:
+                    from app.agents.orchestrator.event_bus import get_event_bus
+                    from app.agents.orchestrator.event_types import EventType
+                    _bus = get_event_bus()
+                    if _reentry_count_now > 0:
+                        _bus.publish(EventType.REENTRY_TRIGGERED, {
+                            "strategy_id": new_strategy.id,
+                            "symbol": symbol, "side": side,
+                            "count": _reentry_count_now,
+                            "capital": float(_reentry_capital or 0),
+                            "prob": prob,
+                        })
+                    elif _is_success_reentry:
+                        _bus.publish(EventType.SUCCESS_REENTRY_TRIGGERED, {
+                            "strategy_id": new_strategy.id,
+                            "symbol": symbol, "side": side,
+                            "prob": prob,
+                        })
+                    else:
+                        _bus.publish(EventType.AUTO_ENTRY_TRIGGERED, {
+                            "strategy_id": new_strategy.id,
+                            "symbol": symbol, "side": side,
+                            "prob": prob,
+                            "regime": it.get("regime"),
+                            "source": it.get("source", "BB_SUSTAINED"),
+                        })
+                except Exception as e:
+                    logger.debug("[v206] EventBus 실패 (fail-open): %s", e)
             except Exception as e:
                 logger.warning(
                     "[auto_bb_breakdown] ❌ %s %s 진입 실패: %s", symbol, side, e,

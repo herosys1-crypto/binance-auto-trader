@@ -70,6 +70,17 @@ class EventType(str, Enum):
     SILENT_BUG_DETECTED = "silent_bug.detected"        # Silent bug!
     SPEC_DRIFT_DETECTED = "spec.drift_detected"        # spec drift!
 
+    # ===== v206 사장님 오케스트라 통합 (2026-08-21!) =====
+    # 사장님 지적: "우리 에이전트 팀이 많은데 왜 이런 문제가?"
+    # = 신 워커 통합!
+    PATTERN_LEARNING_DONE = "pattern_learning.done"          # v187 학습 완료!
+    WATCHLIST_UPDATED = "watchlist.updated"                  # v199 watchlist 갱신!
+    AUTO_ENTRY_TRIGGERED = "auto_entry.triggered"            # v174 자동 진입!
+    AUTO_ENTRY_SKIPPED = "auto_entry.skipped"                # 자동 진입 skip! (필터!)
+    REENTRY_TRIGGERED = "reentry.triggered"                  # v202 재진입!
+    SUCCESS_REENTRY_TRIGGERED = "success_reentry.triggered"  # v204 성공 재진입!
+    ORCHESTRA_HEALTH_CHECK = "orchestra.health_check"        # v206 자동 진단!
+
     # ===== System (최우선!) =====
     SYSTEM_STARTED = "system.started"
     SYSTEM_STOPPING = "system.stopping"
