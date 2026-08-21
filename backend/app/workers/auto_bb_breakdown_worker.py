@@ -42,14 +42,15 @@ logger = logging.getLogger(__name__)
 #   v174 (2026-08-18): MIN_SUCCESS_PROBABILITY = 0.85 (BB 자동 진입 시작!)
 #   v176 (2026-08-19): 손실 심볼 24h 블록 + 심볼 성공률 30% 필터!
 #   v179 (2026-08-19): 모든 필터 강화! (사장님 「더 낮춰야」!)
-MIN_SUCCESS_PROBABILITY = 0.70  # v179: 0.85→0.90 / v194: 0.90→0.80 / v201: 0.80→0.70 (사장님 「적극」!)
+MIN_SUCCESS_PROBABILITY = 0.60  # v179: 0.85→0.90 / v194: 0.90→0.80 / v201: 0.80→0.70 / 사장님 (2026-08-21): 0.70→0.60 (짧은 손절 + 재도전 = 공격적!)
 MIN_SYMBOL_SUCCESS_RATE = 0.40  # 0.30 → 0.40 (10%p 상향!)
 LOSS_BLOCKLIST_HOURS = 48  # 24 → 48 (2배 확대!)
 MIN_SUSTAINED_BARS = 5  # 3 → 5 (지속 확실!)
 # v179 신: regime 필수!
+# 사장님 (2026-08-21): 공격적 조정 = NEUTRAL/DOWNTREND도 허용!
 REQUIRED_REGIMES = {
-    "SHORT": {"DOWNTREND_STRONG"},  # SHORT = 확실한 하락만!
-    "LONG": {"UPTREND"},  # LONG = 확실한 상승만!
+    "SHORT": {"DOWNTREND_STRONG", "DOWNTREND"},  # SHORT = 하락 계열 모두!
+    "LONG": {"UPTREND", "NEUTRAL"},  # LONG = 상승 + 중립!
 }
 # v179 신: RSI 안전 범위!
 RSI_SAFE_RANGE = {
@@ -176,10 +177,11 @@ def run_auto_bb_breakdown() -> dict:
         # "실시간 모니터링 진입예정 신뢰도 85%/90%+ = 자동 진입!"
         # = bb 이탈 자동진입 로직으로 같이 처리!
         try:
+            # 사장님 (2026-08-21): 공격적 조정 = 0.85 → 0.75!
             pending_hc = db.execute(
                 select(StrategySuggestion)
                 .where(StrategySuggestion.status == "PENDING")
-                .where(StrategySuggestion.confidence_score >= Decimal("0.85"))
+                .where(StrategySuggestion.confidence_score >= Decimal("0.75"))
                 .order_by(StrategySuggestion.confidence_score.desc())
                 .limit(20)
             ).scalars().all()
