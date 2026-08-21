@@ -262,6 +262,60 @@ def run_auto_bb_breakdown() -> dict:
         except Exception as e:
             logger.warning("[auto_bb_breakdown] REENTRY_QUEUE 실패: %s", e)
 
+        # 🎯 사장님 요구 (2026-08-21): OBV 신호 = 자동 진입 소스 통합!
+        # 사장님 verbatim: "B: auto_bb_breakdown에 = OBV 소스 통합!"
+        # = reentry_alert_watcher(매 5분!)가 저장한 OBV+RSI+10% 신호 = 즉시 자동 진입!
+        # = Redis에서 조회 = API 부담 X!
+        try:
+            from app.core.redis_client import get_redis_client
+            import json as _json
+            _r = get_redis_client()
+            _alert_ids = _r.zrange("reentry_alerts:v1", 0, -1)
+            _obv_added = 0
+            for _aid in _alert_ids:
+                _aid_str = _aid.decode() if isinstance(_aid, bytes) else _aid
+                _alert_raw = _r.get(_aid_str)
+                if not _alert_raw:
+                    continue
+                try:
+                    _alert = _json.loads(
+                        _alert_raw.decode() if isinstance(_alert_raw, bytes) else _alert_raw
+                    )
+                    _sym = _alert.get("symbol")
+                    _side = _alert.get("side")
+                    if not _sym or not _side:
+                        continue
+                    # 중복 방지! (같은 symbol:side 이미 있으면 skip!)
+                    _dup = any(
+                        it["symbol"] == _sym and it["side"] == _side
+                        for it in all_sustained
+                    )
+                    if _dup:
+                        continue
+                    all_sustained.append({
+                        "symbol": _sym,
+                        "side": _side,
+                        "source": "OBV_REVERSE",  # v130 OBV+RSI+10% 신호!
+                        "success_probability": 0.75,  # OBV 신호 = 신뢰!
+                        "sustained_bars": MIN_SUSTAINED_BARS,
+                        "regime": ("UPTREND" if _side == "LONG"
+                                   else "DOWNTREND_STRONG"),
+                        "rsi": 50,
+                        "cci": None, "obv_slope_pct": None,
+                        "change_24h": None,
+                        "mta_total": None,
+                    })
+                    _obv_added += 1
+                except Exception:
+                    continue
+            if _obv_added:
+                logger.info(
+                    "[auto_bb_breakdown] 🎯 OBV_REVERSE: %d건 알람 소스 추가!",
+                    _obv_added,
+                )
+        except Exception as e:
+            logger.warning("[auto_bb_breakdown] OBV_REVERSE 통합 실패: %s", e)
+
         # 중복 제거 (같은 symbol:side!)
         seen_keys = set()
         deduped = []
