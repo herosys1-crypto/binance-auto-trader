@@ -216,8 +216,9 @@ def run_auto_bb_breakdown() -> dict:
                 continue
 
             # 🎓 v188 사장님 (2026-08-20): 학습 인사이트 = WORST 심볼 자동 제외!
-            # 사장님 인사이트: PAXG/XAUT/COIN/PLTR 등 주식/금 SHORT = 0%!
-            if key in worst_learning_keys:
+            # 🎯 v202 예외: 재진입 후보 (마틴게일!)면 = 진입 허용!
+            _is_reentry = _is_reentry_candidate(db, symbol, side)
+            if key in worst_learning_keys and not _is_reentry:
                 skipped += 1
                 logger.info(
                     "[auto_bb_breakdown] 🎓 v188 skip: %s (학습 실패 심볼 = 0%%!)", key,
@@ -225,7 +226,8 @@ def run_auto_bb_breakdown() -> dict:
                 continue
 
             # 🚨 v179: 최근 48h 손실 심볼 = skip! (24h → 48h!)
-            if key in recent_loss_keys:
+            # 🎯 v202 예외: 재진입 후보면 진입 허용!
+            if key in recent_loss_keys and not _is_reentry:
                 skipped += 1
                 logger.info(
                     "[auto_bb_breakdown] 🚨 v179 skip: %s (최근 48h 손실 심볼!)", key,
@@ -311,7 +313,28 @@ def run_auto_bb_breakdown() -> dict:
 
             # 6c. 실 진입!
             try:
-                new_strategy = _create_auto_bb_strategy(db, symbol, side, cfg)
+                # 🎯 v202: 재진입 시 = 자본 1.5배! (마틴게일!)
+                _entry_cfg = dict(cfg)
+                _reentry_capital = None
+                if _is_reentry:
+                    _base = float(cfg.get("capitals", [500])[0])
+                    _reentry_capital = _calc_reentry_capital(symbol, side, _base)
+                    if _reentry_capital is None:
+                        skipped += 1
+                        logger.info(
+                            "[auto_bb_breakdown] 🎯 v202 skip: %s (최대 재진입 %d회 도달!)",
+                            key, MAX_REENTRY_COUNT,
+                        )
+                        continue
+                    _entry_cfg["capitals"] = [_reentry_capital]
+                    logger.info(
+                        "[auto_bb_breakdown] 🎯 v202 재진입: %s 자본 %.0f → %.0f USDT (×%.2f)",
+                        key, _base, _reentry_capital, _reentry_capital / _base,
+                    )
+                new_strategy = _create_auto_bb_strategy(db, symbol, side, _entry_cfg)
+                # 🎯 v202: 재진입 카운터 증가!
+                if _is_reentry:
+                    _increment_reentry_count(symbol, side)
                 # StrategySuggestion 저장 (자동 진입 표시!)
                 # 🎓 v198 사장님 (2026-08-21): 진입 시점 지표 스냅샷 저장!
                 # 사장님 지시: "실패한 차트 분석해서 다음에 대처하는 학습!"
@@ -785,6 +808,88 @@ def _get_inverse_opportunity_keys(db: Session) -> set[str]:
     except Exception as e:
         logger.warning("[v195] 역기회 계산 실패: %s", e)
     return inverse
+
+
+# 🎯 v202 사장님 (2026-08-21): 재진입 마틴게일!
+# 사장님 지시: "실패 심볼 재진입 시 = 옛 자본 × 1.5배! 최대 2번!"
+REENTRY_MULTIPLIER = 1.5
+MAX_REENTRY_COUNT = 2  # 최대 2번 재진입!
+REENTRY_COUNT_TTL_DAYS = 7  # 7일 후 리셋!
+
+
+def _get_reentry_count(symbol: str, side: str) -> int:
+    """v202: 심볼:side의 재진입 카운터 (Redis!)"""
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+        val = r.get(f"reentry_count:{symbol}:{side}")
+        return int(val) if val else 0
+    except Exception:
+        return 0
+
+
+def _increment_reentry_count(symbol: str, side: str) -> int:
+    """v202: 재진입 카운터 +1!"""
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+        new_count = _get_reentry_count(symbol, side) + 1
+        r.setex(
+            f"reentry_count:{symbol}:{side}",
+            REENTRY_COUNT_TTL_DAYS * 86400,
+            str(new_count),
+        )
+        return new_count
+    except Exception:
+        return 0
+
+
+def _reset_reentry_count(symbol: str, side: str) -> None:
+    """v202: 익절 성공 시 = 카운터 리셋!"""
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+        r.delete(f"reentry_count:{symbol}:{side}")
+    except Exception:
+        pass
+
+
+def _calc_reentry_capital(symbol: str, side: str, base_capital: float) -> float | None:
+    """v202: 재진입 자본 = 옛 × 1.5^N!
+
+    - 0회 (첫 진입) = base_capital 그대로!
+    - 1회 (2차 진입) = base × 1.5 (예: 300 → 450!)
+    - 2회 (3차 진입) = base × 2.25 (예: 300 → 675!)
+    - 3회+ = None (최대 도달! 진입 X!)
+    """
+    count = _get_reentry_count(symbol, side)
+    if count >= MAX_REENTRY_COUNT:
+        return None  # 최대 도달!
+    multiplier = REENTRY_MULTIPLIER ** count if count > 0 else 1.0
+    return base_capital * multiplier
+
+
+def _is_reentry_candidate(db: Session, symbol: str, side: str) -> bool:
+    """v202: 이 심볼:side가 = 재진입 후보?
+    (최근 24h 손실 있고 = 카운터 <2)
+    """
+    if _get_reentry_count(symbol, side) >= MAX_REENTRY_COUNT:
+        return False
+    # 최근 24h 이 심볼 실패 있으면 = 재진입 후보!
+    try:
+        from app.core.strategy_status import TERMINAL_STATUSES as _TS
+        from datetime import timedelta as _td
+        cutoff = datetime.now(timezone.utc) - _td(hours=24)
+        rows = db.execute(
+            select(StrategyInstance)
+            .where(StrategyInstance.symbol == symbol)
+            .where(StrategyInstance.side == side)
+            .where(StrategyInstance.stopped_at >= cutoff)
+            .where(StrategyInstance.status.in_(list(_TS)))
+        ).scalars().all()
+        return any(float(s.realized_pnl or 0) < 0 for s in rows)
+    except Exception:
+        return False
 
 
 def _get_recent_loss_symbol_keys(db: Session) -> set[str]:
