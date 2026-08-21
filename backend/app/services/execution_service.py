@@ -1006,6 +1006,17 @@ class ExecutionService:
             response = adapter.place_order(payload)
             order = Order(strategy_instance_id=strategy.id, stage_no=stage_plan.stage_no, purpose="ENTRY", symbol=strategy.symbol, side=side, position_side=position_side, order_type="MARKET", client_order_id=client_order_id, exchange_order_id=response.get("orderId"), trigger_price=None, price=None, orig_qty=stage_plan.planned_qty, executed_qty=Decimal(str(response.get("executedQty", "0"))), avg_price=Decimal(str(response.get("avgPrice"))) if response.get("avgPrice") else None, status=response.get("status", "NEW"), raw_request=payload, raw_response=response)
             self.order_repo.create(order)
+            # 🎯 Agent 검증 fix (2026-08-22): self_check 무결성 = trigger_price 복원!
+            # auto_bb_breakdown에서 stage1.trigger_price=None으로 MARKET 강제한 경우!
+            # self_check_worker line 110-118: is_triggered=True AND trigger_price=None → alert!
+            # Fix: fill 후 = trigger_price를 avg_price (or current)로 복원!
+            try:
+                _fill = response.get("avgPrice") or current_price
+                if _fill and stage_plan.trigger_price is None:
+                    stage_plan.trigger_price = Decimal(str(_fill))
+                    self.db.commit()
+            except Exception as _restore_e:
+                logger.debug("trigger_price 복원 실패 (fail-open): %s", _restore_e)
             logger.info("[stage_entry v130] MARKET 진입 완료: strategy=%s stage=%s qty=%s @ current=%s", strategy.id, stage_plan.stage_no, stage_plan.planned_qty, current_price)
             return order
         # trigger_price 있음 = 기존 LIMIT 로직!
