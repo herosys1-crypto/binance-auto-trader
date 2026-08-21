@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
@@ -264,9 +264,40 @@ def run_auto_bb_breakdown() -> dict:
 
         # 🎯 사장님 요구 (2026-08-21): OBV 신호 = 자동 진입 소스 통합!
         # 사장님 verbatim: "B: auto_bb_breakdown에 = OBV 소스 통합!"
+        # + "OBV 전략 = 신중해야 하니까 신뢰도 높은 심볼로!"
         # = reentry_alert_watcher(매 5분!)가 저장한 OBV+RSI+10% 신호 = 즉시 자동 진입!
         # = Redis에서 조회 = API 부담 X!
+        # 🎯 사장님 신 설정 3개 (system_settings!):
+        #   - auto_obv_enabled (0/1, default 0 = OFF!)
+        #   - auto_obv_daily_limit (default 3 = 신중!)
+        #   - auto_obv_min_confidence (default 0.95 = 매우 높은!)
         try:
+            # OBV enabled 체크!
+            _obv_enabled_row = db.get(SystemSetting, "auto_obv_enabled")
+            _obv_enabled = int(_obv_enabled_row.value) if _obv_enabled_row and _obv_enabled_row.value else 0
+            if not _obv_enabled:
+                logger.debug("[auto_bb_breakdown] OBV_REVERSE OFF (auto_obv_enabled=0!)")
+                raise StopIteration  # skip OBV block!
+
+            # OBV daily_limit 체크!
+            _obv_limit_row = db.get(SystemSetting, "auto_obv_daily_limit")
+            _obv_daily_limit = int(_obv_limit_row.value) if _obv_limit_row and _obv_limit_row.value else 3
+            # 오늘 OBV 진입 카운트!
+            _obv_used = db.execute(
+                select(func.count(StrategySuggestion.id))
+                .join(StrategyTemplate,
+                      StrategyTemplate.id == StrategyInstance.strategy_template_id, isouter=True)
+                .where(StrategySuggestion.created_at >= (datetime.now(timezone.utc).replace(hour=15, minute=0, second=0, microsecond=0) - timedelta(days=1)))
+                .where(StrategySuggestion.reason.like("%OBV%"))
+            ).scalar() or 0
+            if _obv_used >= _obv_daily_limit:
+                logger.info("[auto_bb_breakdown] OBV daily {%d/%d} skip!", _obv_used, _obv_daily_limit)
+                raise StopIteration
+
+            # OBV 최소 신뢰도!
+            _obv_min_conf_row = db.get(SystemSetting, "auto_obv_min_confidence")
+            _obv_min_confidence = float(_obv_min_conf_row.value) if _obv_min_conf_row and _obv_min_conf_row.value else 0.95
+
             from app.core.redis_client import get_redis_client
             import json as _json
             _r = get_redis_client()
@@ -292,11 +323,12 @@ def run_auto_bb_breakdown() -> dict:
                     )
                     if _dup:
                         continue
+                    # 🎯 사장님 신중 원칙: 신뢰도 min_confidence (0.95!) 이상만!
                     all_sustained.append({
                         "symbol": _sym,
                         "side": _side,
                         "source": "OBV_REVERSE",  # v130 OBV+RSI+10% 신호!
-                        "success_probability": 0.75,  # OBV 신호 = 신뢰!
+                        "success_probability": _obv_min_confidence,  # 사장님 세팅!
                         "sustained_bars": MIN_SUSTAINED_BARS,
                         "regime": ("UPTREND" if _side == "LONG"
                                    else "DOWNTREND_STRONG"),
@@ -310,9 +342,11 @@ def run_auto_bb_breakdown() -> dict:
                     continue
             if _obv_added:
                 logger.info(
-                    "[auto_bb_breakdown] 🎯 OBV_REVERSE: %d건 알람 소스 추가!",
-                    _obv_added,
+                    "[auto_bb_breakdown] 🎯 OBV_REVERSE: %d건 알람 소스 추가! (신중=신뢰도 %.2f+, 일 %d건 max!)",
+                    _obv_added, _obv_min_confidence, _obv_daily_limit,
                 )
+        except StopIteration:
+            pass  # OBV OFF or daily 초과 = skip 정상!
         except Exception as e:
             logger.warning("[auto_bb_breakdown] OBV_REVERSE 통합 실패: %s", e)
 
@@ -1322,12 +1356,12 @@ def _create_auto_bb_strategy(
     db.add(tpl)
     db.flush()
 
-    # strategy_instance 생성 (start_price=None = MARKET!)!
+    # 🎯 사장님 CRITICAL 요구 (2026-08-21): 자동 진입 = MARKET!
+    # 사장님 지적: "포지션 미진입인데 이럴경우 market가격으로 해줘"
+    # = 미진입 6건 (LIMIT 체결 실패!) 발견!
+    # Fix: start_price=None → MARKET 주문! (v130 spec: 시작가 없으면 MARKET!)
     from app.services.strategy_service import StrategyService
     svc = StrategyService(db)
-
-    # 현재가 조회 = start_price!
-    start_price = _get_current_price(symbol)
 
     strategy = svc.create_strategy_instance(
         user_id=1,
@@ -1335,7 +1369,7 @@ def _create_auto_bb_strategy(
         strategy_template_id=tpl.id,
         symbol=symbol,
         side=side,
-        start_price=start_price,
+        start_price=None,  # 🎯 MARKET 주문! (즉시 체결!)
         leverage_override=int(cfg.get("leverage", 2)),
         retry_after_liquidation_enabled=bool(cfg.get("retry_after_liquidation_enabled", False)),
         retry_trigger_pct=(
