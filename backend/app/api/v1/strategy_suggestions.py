@@ -103,12 +103,13 @@ def list_suggestions(
     # 🌟 v155 사장님: 활성 포지션 심볼 = 완전 제외!
     if exclude_active:
         from app.models.strategy_instance import StrategyInstance
-        open_statuses = [
-            "STAGE_1_OPEN", "STAGE_2_OPEN", "STAGE_3_OPEN",
-            "STAGE_4_OPEN", "STAGE_5_OPEN", "STAGE_6_OPEN",
-            "STAGE_7_OPEN", "STAGE_8_OPEN", "STAGE_9_OPEN",
-            "STAGE_10_OPEN",
-        ]
+        # 🚨 v218 CRITICAL fix (2026-08-22 사장님 지적!):
+        # 실제 status = "STAGE1_OPEN" (언더스코어 X!) but 코드 = "STAGE_1_OPEN" (오타!)
+        # = 활성 5건 (HOODUSDT/BTWUSDT/MUUSDT/WLDUSDT/SKHYUSDT) 인식 실패!
+        # 사장님 UI = "활성 0" 오분류!
+        # 신: ACTIVE_LIKE 재사용 = 단일 진실 (헌법 6!) = STAGE_PENDING/LIQUIDATED_WAITING_RETRY 포함!
+        from app.core.strategy_status import ACTIVE_LIKE
+        open_statuses = list(ACTIVE_LIKE)
         active_symbols = db.execute(
             select(StrategyInstance.symbol)
             .where(StrategyInstance.status.in_(open_statuses))
@@ -173,12 +174,13 @@ def _count_auto_bb_used(db: Session) -> dict:
         if not strategy:
             continue
         # 활성 상태!
-        open_statuses = [
-            "STAGE_1_OPEN", "STAGE_2_OPEN", "STAGE_3_OPEN",
-            "STAGE_4_OPEN", "STAGE_5_OPEN", "STAGE_6_OPEN",
-            "STAGE_7_OPEN", "STAGE_8_OPEN", "STAGE_9_OPEN",
-            "STAGE_10_OPEN",
-        ]
+        # 🚨 v218 CRITICAL fix (2026-08-22 사장님 지적!):
+        # 실제 status = "STAGE1_OPEN" (언더스코어 X!) but 코드 = "STAGE_1_OPEN" (오타!)
+        # = 활성 5건 (HOODUSDT/BTWUSDT/MUUSDT/WLDUSDT/SKHYUSDT) 인식 실패!
+        # 사장님 UI = "활성 0" 오분류!
+        # 신: ACTIVE_LIKE 재사용 = 단일 진실 (헌법 6!) = STAGE_PENDING/LIQUIDATED_WAITING_RETRY 포함!
+        from app.core.strategy_status import ACTIVE_LIKE
+        open_statuses = list(ACTIVE_LIKE)
         if strategy.status in open_statuses:
             active += 1
             continue

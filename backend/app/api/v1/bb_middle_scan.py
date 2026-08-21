@@ -669,6 +669,13 @@ def scan_bb_breakdown(
     if not account:
         return {"symbols": [], "error": "no mainnet account"}
 
+    # 🚨 v218 사장님 (2026-08-22): API Ban 갭 fix! (v196 사고 재발 방지!)
+    # scan_multi_timeframe에는 있었지만 scan_bb_breakdown에 없음 = ban 중에도 200 klines burst!
+    from app.core.api_backoff import is_account_banned
+    if is_account_banned(account.id):
+        return {"symbols": [], "sustained": [], "started": [], "pending": [],
+                "error": "API Ban 중! 잠시 대기!"}
+
     bc = BinanceClient(
         api_key=decrypt_text(account.api_key_enc),
         api_secret=decrypt_text(account.api_secret_enc),

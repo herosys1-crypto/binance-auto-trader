@@ -188,14 +188,18 @@ def run_auto_bb_breakdown() -> dict:
             ).scalars().all()
             for ps in pending_hc:
                 _pcfg = ps.strategy_config if isinstance(ps.strategy_config, dict) else {}
+                # 🎯 v218 fix (2026-08-22): 하드코딩 default 제거!
+                # 이전: rsi=50 default = 실 값 없음에도 = 학습 필터가 "중립 = 진입 OK" 판정!
+                # 신: None = 학습 필터 skip! (엔진에 실 값 없으면 필터 통과 = 정확!)
+                # entry_snapshot에도 원본 값 그대로 저장 = 학습 정확도 개선!
                 all_sustained.append({
                     "symbol": ps.symbol,
                     "side": ps.side,
                     "source": "PENDING_HC",  # High Confidence!
                     "success_probability": float(ps.confidence_score or 0),
                     "sustained_bars": _pcfg.get("sustained_bars", 5),
-                    "regime": _pcfg.get("regime", "UPTREND" if ps.side == "LONG" else "DOWNTREND_STRONG"),
-                    "rsi": _pcfg.get("rsi", 50),  # default 안전 범위!
+                    "regime": _pcfg.get("regime", "NEUTRAL"),
+                    "rsi": _pcfg.get("rsi"),  # None 허용 = 학습 필터 skip!
                     "cci": _pcfg.get("cci"),
                     "obv_slope_pct": _pcfg.get("obv_slope_pct"),
                     "change_24h": _pcfg.get("change_24h"),
@@ -335,15 +339,18 @@ def run_auto_bb_breakdown() -> dict:
                     if _dup:
                         continue
                     # 🎯 사장님 신중 원칙: 신뢰도 min_confidence (0.95!) 이상만!
+                    # 🎯 v218 fix (2026-08-22): 하드코딩 rsi=50 제거! (Agent 1 발견!)
+                    # OBV_REVERSE = 알람 기반 = 실시간 지표 계산 안 함!
+                    # None = 학습 필터 skip (부정확 매칭 방지!)
+                    # regime도 NEUTRAL (실 지표 없음 = 방향 판정 X!)
                     all_sustained.append({
                         "symbol": _sym,
                         "side": _side,
                         "source": "OBV_REVERSE",  # v130 OBV+RSI+10% 신호!
                         "success_probability": _obv_min_confidence,  # 사장님 세팅!
                         "sustained_bars": MIN_SUSTAINED_BARS,
-                        "regime": ("UPTREND" if _side == "LONG"
-                                   else "DOWNTREND_STRONG"),
-                        "rsi": 50,
+                        "regime": "NEUTRAL",  # 실 지표 없음 = NEUTRAL!
+                        "rsi": None,
                         "cci": None, "obv_slope_pct": None,
                         "change_24h": None,
                         "mta_total": None,
@@ -578,6 +585,18 @@ def run_auto_bb_breakdown() -> dict:
                     db, symbol, side, _entry_cfg,
                     strategy_type_suffix=_final_suffix,
                 )
+                # 🚨 v218 fix (2026-08-22): 진입 실패 = suggestion 저장 X + slot 보존!
+                # 사장님 사상: "실패는 재시도!" = PENDING_HC/BB_SUSTAINED = 다음 사이클 자동 재시도!
+                if not new_strategy:
+                    skipped += 1
+                    logger.info(
+                        "[auto_bb_breakdown] ❌ v218 %s %s 진입 실패 = skip (slot 보존!)",
+                        symbol, side,
+                    )
+                    _pid = it.get("_pending_suggestion_id")
+                    if _pid:
+                        logger.info("[PENDING_HC] 원본 %s PENDING 유지 (재시도!)", _pid)
+                    continue
                 # OBV 소스 = 강제 SL 비활성 = 오래 버티기!
                 if _is_obv and new_strategy:
                     _apply_obv_hold_settings(db, new_strategy)
@@ -718,28 +737,23 @@ def run_auto_bb_breakdown() -> dict:
 
 
 def _count_used_slots(db: Session) -> int:
-    """v163 로직 + v205 KST fix!
+    """v218 fix (2026-08-22): 사장님 리셋 존중 = 단일 진실 (헌법 6!)
 
-    사장님 지적 (2026-08-21):
-    "지금 진입중이고 성패가 나왔는데 여기는 0으로 되어있네!"
-    원인: UTC 자정 기준 = 사장님 KST 관점과 다름!
-    - UTC 2026-08-21 02:08 = KST 2026-08-21 11:08
-    - UTC today = 2026-08-21 00:00 (KST 09:00!)
-    - 사장님 관점 today = KST 00:00 (UTC 8-20 15:00!)
+    사장님 지적 (2026-08-22): "18/20 리셋했는데 왜 자꾸 이런걸 실수 하지"
+    원인: 두 카운트 함수가 다른 로직!
+    - _count_auto_bb_used (UI) = _auto_bb_reset_at 사용 = 리셋 반영!
+    - _count_used_slots (worker) = KST 자정만 = 리셋 무시!
+    = 사장님 리셋 → UI 0/20 → but worker 18/20 → 진입 안 됨!
 
-    v205 fix: KST 자정 기준으로 today 계산!
+    fix: API와 같은 _auto_bb_reset_at 재사용!
+    보너스: realtime_reentry_worker.py:71도 자동 fix!
 
     오늘 EXECUTED (execution_mode='AUTO') + suggestion_type='bb4h_auto_entry'
     - 익절 (SUCCESS outcome) = 제외!
     - 활성 or 손절 (PENDING/FAIL outcome) = 카운트!
     """
-    # 🌟 v205: KST 기준 today!
-    from datetime import timedelta as _td
-    now_utc = datetime.now(timezone.utc)
-    now_kst = now_utc + _td(hours=9)
-    kst_today_naive = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
-    # KST 자정 → UTC 변환 (KST-9h!)
-    today_start_utc = (kst_today_naive - _td(hours=9)).replace(tzinfo=timezone.utc)
+    from app.api.v1.strategy_suggestions import _auto_bb_reset_at
+    today_start_utc = _auto_bb_reset_at(db)
 
     rows = db.execute(
         select(StrategySuggestion)
@@ -1441,13 +1455,18 @@ def _create_auto_bb_strategy(
     except Exception as _mkt_e:
         logger.warning("[auto_bb_breakdown] trigger_price=None 실패 (fail-open): %s", _mkt_e)
 
-    # 실 진입 주문 발송! (Agent 검증 = auto_reentry_worker 패턴!)
+    # 🎯 v218 fix (2026-08-22 사장님!): 실 진입 실패 시 = 좀비 정리 + None 반환!
+    # 이전: fail-open = strategy 반환 + caller가 EXECUTED 마킹 = 가짜 진입 = slot 소모!
+    # 사장님 사상: "실패는 재시도!" = suggestion PENDING 유지 = 다음 사이클 재도전!
+    _entry_success = False
     try:
         from app.services.execution_service import ExecutionService
         from app.core.crypto import decrypt_text
         from app.models.exchange_account import ExchangeAccount
         _acc = db.get(ExchangeAccount, 1)
-        if _acc:
+        if not _acc:
+            logger.warning("[auto_bb_breakdown] ExchangeAccount id=1 없음!")
+        else:
             _exec = ExecutionService(
                 db,
                 api_key=decrypt_text(_acc.api_key_enc),
@@ -1455,15 +1474,37 @@ def _create_auto_bb_strategy(
                 is_testnet=_acc.is_testnet,
             )
             _exec.start_stage1(strategy.id)
+            _entry_success = True
             logger.info(
                 "[auto_bb_breakdown] 🎯 실 진입 성공: %s %s strategy=%s (MARKET!)",
                 symbol, side, strategy.id,
             )
     except Exception as _entry_e:
         logger.warning(
-            "[auto_bb_breakdown] 실 진입 실패 (fail-open): %s %s: %s",
+            "[auto_bb_breakdown] ❌ 실 진입 실패 (좀비 정리!): %s %s: %s",
             symbol, side, _entry_e,
         )
+
+    if not _entry_success:
+        # 🚨 v218: 좀비 방지 = strategy + template + stage_plans 삭제!
+        try:
+            db.rollback()
+            _sid = strategy.id
+            _tid = tpl.id
+            db.delete(strategy)
+            db.commit()
+            _tpl_row = db.get(StrategyTemplate, _tid)
+            if _tpl_row:
+                db.delete(_tpl_row)
+                db.commit()
+            logger.info(
+                "[auto_bb_breakdown] 🧹 v218 좀비 정리: strategy=%s template=%s 삭제!",
+                _sid, _tid,
+            )
+        except Exception as _cleanup_e:
+            logger.warning("[auto_bb_breakdown] 좀비 정리 실패: %s", _cleanup_e)
+            db.rollback()
+        return None  # caller가 skip 판단!
 
     return strategy
 

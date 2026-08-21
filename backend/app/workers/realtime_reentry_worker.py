@@ -48,6 +48,33 @@ REBOUND_PCT_FOR_REENTRY = 3.0  # SL/익절 대비 3% 반등 시!
 MAX_HOURLY_REENTRIES = 5        # 1h 최대 5건 (남발 방지!)
 
 
+def _get_base_capital_from_instance(si: StrategyInstance) -> float:
+    """v218 (2026-08-22): 청산된 원 전략의 base capital 조회!
+
+    사장님 사상: 마틴게일 = 이전 포지션 대비 1.5배!
+    → 이전 포지션의 원 자본 = 정확한 base 필요!
+
+    조회 순서:
+    1. template.stages_config['capitals'][0] (JSONB 구조!)
+    2. template.stage1_capital (Decimal fallback!)
+    3. template.total_capital (Decimal fallback!)
+    4. 500.0 (최종 fallback!)
+    """
+    try:
+        tmpl = si.strategy_template
+        if tmpl and getattr(tmpl, "stages_config", None):
+            caps = tmpl.stages_config.get("capitals", []) if isinstance(tmpl.stages_config, dict) else []
+            if caps and len(caps) > 0:
+                return float(caps[0])
+        if tmpl and getattr(tmpl, "stage1_capital", None):
+            return float(tmpl.stage1_capital)
+        if tmpl and getattr(tmpl, "total_capital", None):
+            return float(tmpl.total_capital)
+    except Exception:
+        pass
+    return 500.0
+
+
 def run_realtime_reentry() -> dict:
     """매 15분 = 실시간 재진입 감지!"""
     db: Session = SessionLocal()
@@ -140,8 +167,10 @@ def run_realtime_reentry() -> dict:
             except Exception:
                 continue
 
-            # 청산 시 가격 vs 현재!
-            _stop_price = float(si.avg_entry_price or 0)  # 평단!
+            # 🎯 v218 fix (2026-08-22): 청산가 우선 = 평단 fallback!
+            # 이전 = 평단 = 실 청산가와 다름 = 3% 반등 판정 부정확!
+            # last_liquidation_price = SL 발동가! = 반등 시작점 정확!
+            _stop_price = float(si.last_liquidation_price or si.avg_entry_price or 0)
             if _stop_price <= 0:
                 continue
 
@@ -191,7 +220,32 @@ def run_realtime_reentry() -> dict:
 
             # 진입 실행!
             try:
-                cfg = {"capitals": [500], "leverage": 2}
+                # 🎯 v218 사장님 verbatim (2026-08-21):
+                # "실패한 심볼은... 다시 진입할 시점에 이전 포지션의 1.5배로 해줘 2번까지"
+                # = 실패 재진입 = 1.5x/2.25x 마틴게일! Success 재진입 = 원 자본!
+                _base_capital = _get_base_capital_from_instance(si)
+                if _use_success_reentry:
+                    # 사장님: 익절 후 재진입 = 초기 시작금액!
+                    _entry_capital = _base_capital
+                    _mult_label = ""
+                else:
+                    # 사장님: 실패 후 재진입 = 1.5^(count+1) 마틴게일!
+                    _entry_capital = _calc_reentry_capital(symbol, side, _base_capital)
+                    if _entry_capital is None:
+                        skipped += 1
+                        logger.info(
+                            "[RT_REENTRY] v218 skip: %s %s MAX %d회 도달!",
+                            symbol, side, MAX_REENTRY_COUNT,
+                        )
+                        continue
+                    _mult = _entry_capital / _base_capital
+                    _mult_label = f" ×{_mult:.2f}"
+                    logger.info(
+                        "[RT_REENTRY] v218 마틴게일: %s %s 자본 %.0f → %.0f USDT (×%.2f)",
+                        symbol, side, _base_capital, _entry_capital, _mult,
+                    )
+                cfg = {"capitals": [_entry_capital], "leverage": 2}
+                _reason_suffix += _mult_label  # UI 배지에 ×1.50 표시!
                 _suffix = "_success" if _use_success_reentry else f"_reentry{re_count + 1}"
                 new_strategy = _create_auto_bb_strategy(
                     db, symbol, side, cfg,
