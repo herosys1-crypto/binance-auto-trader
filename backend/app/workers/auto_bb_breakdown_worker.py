@@ -188,21 +188,25 @@ def run_auto_bb_breakdown() -> dict:
             ).scalars().all()
             for ps in pending_hc:
                 _pcfg = ps.strategy_config if isinstance(ps.strategy_config, dict) else {}
-                # 🎯 v218 fix (2026-08-22): 하드코딩 default 제거!
-                # 이전: rsi=50 default = 실 값 없음에도 = 학습 필터가 "중립 = 진입 OK" 판정!
-                # 신: None = 학습 필터 skip! (엔진에 실 값 없으면 필터 통과 = 정확!)
-                # entry_snapshot에도 원본 값 그대로 저장 = 학습 정확도 개선!
+                # 🎓 v218 Fix 13 (2026-08-22 사장님 C!): entry_snapshot 재사용 = 학습 필터 반영!
+                # Fix 12 (strategy_suggestion_generator.py!) 이후 = 모든 신 suggestion = 지표 저장!
+                # PENDING_HC = 원본 suggestion → entry_snapshot 재사용 = 학습 필터 100% 활용!
+                # 옛 suggestion (Fix 12 이전) = snapshot 없음 = _pcfg.get() fallback = 안전!
+                # 주의: None vs 0.0 구분 = `is not None` 사용! (rsi=0.0 유효값!)
+                _snap = _pcfg.get("entry_snapshot") or {}
+                if not isinstance(_snap, dict):
+                    _snap = {}
                 all_sustained.append({
                     "symbol": ps.symbol,
                     "side": ps.side,
                     "source": "PENDING_HC",  # High Confidence!
                     "success_probability": float(ps.confidence_score or 0),
-                    "sustained_bars": _pcfg.get("sustained_bars", 5),
-                    "regime": _pcfg.get("regime", "NEUTRAL"),
-                    "rsi": _pcfg.get("rsi"),  # None 허용 = 학습 필터 skip!
-                    "cci": _pcfg.get("cci"),
-                    "obv_slope_pct": _pcfg.get("obv_slope_pct"),
-                    "change_24h": _pcfg.get("change_24h"),
+                    "sustained_bars": _snap.get("sustained_bars") or _pcfg.get("sustained_bars", 5),
+                    "regime": _snap.get("regime") or _pcfg.get("regime") or "NEUTRAL",
+                    "rsi": _snap.get("rsi") if _snap.get("rsi") is not None else _pcfg.get("rsi"),
+                    "cci": _snap.get("cci") if _snap.get("cci") is not None else _pcfg.get("cci"),
+                    "obv_slope_pct": _snap.get("obv_slope_pct") if _snap.get("obv_slope_pct") is not None else _pcfg.get("obv_slope_pct"),
+                    "change_24h": _snap.get("change_24h") if _snap.get("change_24h") is not None else _pcfg.get("change_24h"),
                     "_pending_suggestion_id": ps.id,  # 진입 후 EXECUTED 갱신용!
                 })
             if pending_hc:
@@ -338,20 +342,26 @@ def run_auto_bb_breakdown() -> dict:
                     )
                     if _dup:
                         continue
-                    # 🎯 사장님 신중 원칙: 신뢰도 min_confidence (0.95!) 이상만!
-                    # 🎯 v218 fix (2026-08-22): 하드코딩 rsi=50 제거! (Agent 1 발견!)
-                    # OBV_REVERSE = 알람 기반 = 실시간 지표 계산 안 함!
-                    # None = 학습 필터 skip (부정확 매칭 방지!)
-                    # regime도 NEUTRAL (실 지표 없음 = 방향 판정 X!)
+                    # 🎓 v218 Fix 13-B (2026-08-22 사장님 C!): 알람 저장 지표 재사용!
+                    # reentry_alert_watcher가 이미 detail.rsi_last 저장!
+                    # 학습 RSI 필터 반영 = 0% → ~25%!
+                    _det = _alert.get("detail") or {}
+                    if not isinstance(_det, dict):
+                        _det = {}
+                    try:
+                        _rsi_v = float(_det.get("rsi_last")) if _det.get("rsi_last") is not None else None
+                    except Exception:
+                        _rsi_v = None
                     all_sustained.append({
                         "symbol": _sym,
                         "side": _side,
                         "source": "OBV_REVERSE",  # v130 OBV+RSI+10% 신호!
                         "success_probability": _obv_min_confidence,  # 사장님 세팅!
                         "sustained_bars": MIN_SUSTAINED_BARS,
-                        "regime": "NEUTRAL",  # 실 지표 없음 = NEUTRAL!
-                        "rsi": None,
-                        "cci": None, "obv_slope_pct": None,
+                        "regime": "NEUTRAL",  # 4H OBV 반전 = 방향 판정 신뢰 X = NEUTRAL 유지!
+                        "rsi": _rsi_v,  # 🎓 Fix 13: 알람 저장 값 재사용!
+                        "cci": None,  # 알람 미저장 = None (학습 필터 skip)
+                        "obv_slope_pct": None,  # 반전만 확인 = slope% 아님 = None
                         "change_24h": None,
                         "mta_total": None,
                     })
