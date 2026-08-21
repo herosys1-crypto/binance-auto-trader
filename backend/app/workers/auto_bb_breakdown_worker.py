@@ -251,10 +251,16 @@ def run_auto_bb_breakdown() -> dict:
             # 6b. 성공률 필터! (v201 사장님 「적극」!)
             # 🎓 v188: TOP 학습 심볼 = 완화 필터 (0.65!)
             # 🌟 v201: 학습 성공 조건 매치 시 = 대폭 완화 (0.55!)
+            # 🚀 v204: 성공 재진입 후보 = 최대 완화 (0.50!)
             prob = float(it.get("success_probability") or 0)
             required_prob = MIN_SUCCESS_PROBABILITY  # 0.70 (v201!)
             reason_bonus = ""
-            if key in top_learning_keys:
+            _is_success_reentry = _is_success_reentry_candidate(db, symbol, side)
+            if _is_success_reentry:
+                # 🚀 v204: 성공 후 재진입 = 강력 우선!
+                required_prob = 0.50
+                reason_bonus = " (🚀 성공 재진입! 최근 24h 익절 성공!)"
+            elif key in top_learning_keys:
                 required_prob = 0.65
                 reason_bonus = " (TOP 심볼!)"
             elif _matches_success_condition(it, side):
@@ -265,7 +271,7 @@ def run_auto_bb_breakdown() -> dict:
                 continue
             if reason_bonus:
                 logger.info(
-                    "[auto_bb_breakdown] 🌟 v201 우대: %s%s (%.0f%% >= %.0f%%)",
+                    "[auto_bb_breakdown] 🌟 우대: %s%s (%.0f%% >= %.0f%%)",
                     key, reason_bonus, prob*100, required_prob*100,
                 )
 
@@ -336,16 +342,26 @@ def run_auto_bb_breakdown() -> dict:
                         _reentry_capital / _base,
                     )
                 # 🎯 v203: strategy_type = 재진입 정보 포함!
+                # 🚀 v204: 성공 재진입 표시 추가!
                 #   - "auto_bb_break"          = 첫 진입!
-                #   - "auto_bb_break_reentry1" = 1차 재진입!
-                #   - "auto_bb_break_reentry2" = 2차 재진입!
+                #   - "auto_bb_break_reentry1" = 1차 재진입 (실패 후 마틴게일!)
+                #   - "auto_bb_break_reentry2" = 2차 재진입 (실패 후 마틴게일!)
+                #   - "auto_bb_break_success"  = 성공 재진입 (초기 자본, 수익 누적!)
+                _type_suffix = ""
+                if _reentry_count_now > 0:
+                    _type_suffix = f"_reentry{_reentry_count_now}"
+                elif _is_success_reentry:
+                    _type_suffix = "_success"  # 🚀 v204!
                 new_strategy = _create_auto_bb_strategy(
                     db, symbol, side, _entry_cfg,
-                    strategy_type_suffix=(f"_reentry{_reentry_count_now}" if _reentry_count_now > 0 else ""),
+                    strategy_type_suffix=_type_suffix,
                 )
                 # 🎯 v202: 재진입 카운터 증가!
                 if _is_reentry:
                     _increment_reentry_count(symbol, side)
+                # 🚀 v204: 성공 재진입 = 카운터 리셋! (사이클 갱신!)
+                if _is_success_reentry:
+                    _reset_reentry_count(symbol, side)
                 # StrategySuggestion 저장 (자동 진입 표시!)
                 # 🎓 v198 사장님 (2026-08-21): 진입 시점 지표 스냅샷 저장!
                 # 사장님 지시: "실패한 차트 분석해서 다음에 대처하는 학습!"
@@ -899,6 +915,35 @@ def _is_reentry_candidate(db: Session, symbol: str, side: str) -> bool:
             .where(StrategyInstance.status.in_(list(_TS)))
         ).scalars().all()
         return any(float(s.realized_pnl or 0) < 0 for s in rows)
+    except Exception:
+        return False
+
+
+def _is_success_reentry_candidate(db: Session, symbol: str, side: str) -> bool:
+    """🚀 v204 사장님 (2026-08-21): 성공 후 재진입 후보!
+
+    사장님 사상: "익절 시작하고 우리 로직으로 강력한 포지션 진입일 경우
+                초기 시작금액으로 즉시 포지션 진입해서 수익을 더해가고
+                다시 하락하면 -5% 청산!"
+
+    조건:
+    - 최근 24h 이 심볼:side 익절 완료 있음! (realized_pnl > 0!)
+    - 지금 활성 X! (진입 안 함!)
+    - 자본 = 초기 (v202 마틴게일 X - 무제한 사이클!)
+    """
+    try:
+        from app.core.strategy_status import TERMINAL_STATUSES as _TS
+        from datetime import timedelta as _td
+        cutoff = datetime.now(timezone.utc) - _td(hours=24)
+        rows = db.execute(
+            select(StrategyInstance)
+            .where(StrategyInstance.symbol == symbol)
+            .where(StrategyInstance.side == side)
+            .where(StrategyInstance.stopped_at >= cutoff)
+            .where(StrategyInstance.status.in_(list(_TS)))
+        ).scalars().all()
+        # 최근 24h = 이익 있으면 = 성공 재진입 후보!
+        return any(float(s.realized_pnl or 0) > 0 for s in rows)
     except Exception:
         return False
 
