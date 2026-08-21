@@ -1322,12 +1322,12 @@ def _create_auto_bb_strategy(
     db.add(tpl)
     db.flush()
 
-    # strategy_instance 생성 (start_price=None = MARKET!)!
+    # 🎯 사장님 CRITICAL 요구 (2026-08-21): 자동 진입 = MARKET!
+    # 사장님 지적: "포지션 미진입인데 이럴경우 market가격으로 해줘"
+    # = 미진입 6건 (LIMIT 체결 실패!) 발견!
+    # Fix: start_price=None → MARKET 주문! (v130 spec: 시작가 없으면 MARKET!)
     from app.services.strategy_service import StrategyService
     svc = StrategyService(db)
-
-    # 현재가 조회 = start_price!
-    start_price = _get_current_price(symbol)
 
     strategy = svc.create_strategy_instance(
         user_id=1,
@@ -1335,7 +1335,7 @@ def _create_auto_bb_strategy(
         strategy_template_id=tpl.id,
         symbol=symbol,
         side=side,
-        start_price=start_price,
+        start_price=None,  # 🎯 MARKET 주문! (즉시 체결!)
         leverage_override=int(cfg.get("leverage", 2)),
         retry_after_liquidation_enabled=bool(cfg.get("retry_after_liquidation_enabled", False)),
         retry_trigger_pct=(
