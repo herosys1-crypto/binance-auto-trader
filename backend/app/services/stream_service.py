@@ -185,33 +185,8 @@ class StreamService:
                     strategy.current_position_qty = Decimal("0")
                     strategy.unrealized_pnl = Decimal("0")
 
-                    # 🎓 사장님 요구 (2026-08-21): "청산 시점 = 지표 학습!"
-                    # = 진입 스냅샷(entry_snapshot v198) + 청산 스냅샷 = 성공/실패 패턴 학습!
-                    # 안전: strategy_config가 dict일 때만! (기존 데이터 보존!)
-                    try:
-                        _cfg = strategy.strategy_config
-                        if isinstance(_cfg, dict):
-                            _entry_price = float(strategy.avg_entry_price or 0)
-                            _exit_price = float(order.avg_price or 0)
-                            _pnl_pct = 0.0
-                            if _entry_price > 0 and _exit_price > 0:
-                                if (strategy.side or "").upper() == "LONG":
-                                    _pnl_pct = (_exit_price - _entry_price) / _entry_price * 100
-                                else:  # SHORT
-                                    _pnl_pct = (_entry_price - _exit_price) / _entry_price * 100
-                            _cfg["exit_snapshot"] = {
-                                "exit_price": _exit_price,
-                                "exit_time": datetime.now(timezone.utc).isoformat(),
-                                "pnl_pct": round(_pnl_pct, 4),
-                                "realized_pnl": float(strategy.realized_pnl or 0),
-                                "exit_stage": int(strategy.current_stage or 0),
-                                "exit_status_before": strategy.status,
-                            }
-                            # SQLAlchemy JSONB 변경 감지 = flag_modified 필요!
-                            from sqlalchemy.orm.attributes import flag_modified
-                            flag_modified(strategy, "strategy_config")
-                    except Exception as _snap_e:
-                        logger.debug("exit_snapshot 저장 실패 (fail-open): %s", _snap_e)
+                    # ⚠️ exit_snapshot 저장 (사장님 lifecycle 학습!) = StrategyInstance에
+                    # strategy_config 필드 없음! → 롤백! 다음 세션에 = 다른 방법 (StrategySuggestion)!
 
                     # 🎯 사장님 CRITICAL 요구 (2026-08-21): 청산 즉시 = 재진입 판단!
                     # 사장님 지적: "모니터링 1분더 너무 긴것같은데 방법을 찾아줘"
