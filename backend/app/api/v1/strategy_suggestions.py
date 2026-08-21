@@ -203,6 +203,101 @@ def _count_auto_bb_used(db: Session) -> dict:
     }
 
 
+@router.get("/recent-auto")
+def recent_auto_outcomes(
+    hours: int = 24,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🎯 v218 사장님 (2026-08-22): 자동 제안 = 활성/손절/익절 표시!
+
+    사장님 verbatim: "자동 제안도 활성 손절 익절을 알수 있게 해주고
+                    지금 상태를 파악해줘 손실이 좀 있는것 같아"
+
+    - 최근 N시간 자동 진입 (executed_at 기준!)
+    - 각 항목 = ACTIVE / TAKE_PROFIT / STOP_LOSS / PENDING 분류!
+    - 요약 = 활성 X + 손절 Y (총 -$Z) + 익절 W (총 +$V)
+    - 손실 심볼 = 리스트 (사장님 즉시 파악!)
+    """
+    from datetime import timedelta as _td
+    from app.models.strategy_instance import StrategyInstance
+    from app.core.strategy_status import ACTIVE_LIKE
+
+    since = datetime.now(timezone.utc) - _td(hours=hours)
+    rows = db.execute(
+        select(StrategySuggestion)
+        .where(StrategySuggestion.execution_mode == "AUTO")
+        .where(StrategySuggestion.executed_at >= since)
+        .order_by(StrategySuggestion.executed_at.desc())
+        .limit(50)
+    ).scalars().all()
+
+    items: list[dict] = []
+    active_cnt = sl_cnt = tp_cnt = 0
+    active_pnl_sum = sl_pnl_sum = tp_pnl_sum = 0.0
+    losses: list[dict] = []
+
+    for s in rows:
+        strat = db.get(StrategyInstance, s.executed_strategy_id) if s.executed_strategy_id else None
+        outcome = "PENDING"
+        r_pnl = None
+        u_pnl = None
+
+        if strat:
+            if strat.status in ACTIVE_LIKE:
+                outcome = "ACTIVE"
+                u_pnl = float(strat.unrealized_pnl or 0)
+                active_cnt += 1
+                active_pnl_sum += u_pnl
+            else:
+                r = float(strat.realized_pnl or 0)
+                r_pnl = r
+                if r > 0:
+                    outcome = "TAKE_PROFIT"
+                    tp_cnt += 1
+                    tp_pnl_sum += r
+                else:
+                    outcome = "STOP_LOSS"
+                    sl_cnt += 1
+                    sl_pnl_sum += r
+                    losses.append({
+                        "symbol": s.symbol,
+                        "side": s.side,
+                        "pnl": r,
+                        "executed_at": s.executed_at.isoformat() if s.executed_at else None,
+                    })
+
+        items.append({
+            "id": s.id,
+            "symbol": s.symbol,
+            "side": s.side,
+            "suggestion_type": s.suggestion_type,
+            "confidence_score": float(s.confidence_score or 0),
+            "executed_at": s.executed_at.isoformat() if s.executed_at else None,
+            "outcome_status": outcome,
+            "strategy_id": s.executed_strategy_id,
+            "strategy_status": strat.status if strat else None,
+            "realized_pnl": r_pnl,
+            "unrealized_pnl": u_pnl,
+        })
+
+    return {
+        "items": items,
+        "summary": {
+            "total": len(rows),
+            "active": active_cnt,
+            "stop_loss": sl_cnt,
+            "take_profit": tp_cnt,
+            "active_pnl_sum": round(active_pnl_sum, 2),
+            "loss_sum": round(sl_pnl_sum, 2),
+            "profit_sum": round(tp_pnl_sum, 2),
+            "net_pnl": round(active_pnl_sum + sl_pnl_sum + tp_pnl_sum, 2),
+        },
+        "losses": losses,
+        "hours": hours,
+    }
+
+
 @router.get("/auto-bb-limit")
 def get_auto_bb_limit(
     db: Session = Depends(get_db),

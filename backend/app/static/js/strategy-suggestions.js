@@ -82,6 +82,77 @@ async function loadAutoBBLimit() {
   }
 }
 
+// 🎯 v218 사장님 (2026-08-22): 최근 자동 진입 outcome 렌더!
+// 사장님 verbatim: "자동 제안도 활성 손절 익절을 알수 있게 해주고
+//                  지금 상태를 파악해줘 손실이 좀 있는것 같아"
+async function loadRecentAutoOutcomes() {
+  try {
+    const r = await api('/strategy-suggestions/recent-auto?hours=24');
+    const el = document.getElementById('auto-recent-outcomes');
+    if (!el) return;
+    const s = r.summary || {};
+    const items = r.items || [];
+    const losses = r.losses || [];
+
+    // 요약 배지 (사장님 즉시 파악!)
+    const summaryHtml = `
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin:6px 0; font-size:11px;">
+        <span style="background:#10b981; color:#000; padding:2px 8px; border-radius:8px;">
+          🟢 활성 ${s.active || 0} (${(s.active_pnl_sum >= 0 ? '+' : '') + (s.active_pnl_sum || 0).toFixed(2)})
+        </span>
+        <span style="background:#ef4444; color:#fff; padding:2px 8px; border-radius:8px;">
+          🔴 손절 ${s.stop_loss || 0} (${(s.loss_sum || 0).toFixed(2)})
+        </span>
+        <span style="background:#a78bfa; color:#000; padding:2px 8px; border-radius:8px;">
+          ✅ 익절 ${s.take_profit || 0} (+${(s.profit_sum || 0).toFixed(2)})
+        </span>
+        <span style="background:${(s.net_pnl || 0) >= 0 ? '#10b981' : '#ef4444'}; color:${(s.net_pnl || 0) >= 0 ? '#000' : '#fff'}; padding:2px 8px; border-radius:8px; font-weight:bold;">
+          💰 순 ${(s.net_pnl || 0) >= 0 ? '+' : ''}${(s.net_pnl || 0).toFixed(2)} USDT
+        </span>
+      </div>`;
+
+    // 손실 심볼 리스트 (사장님 즉시 파악!)
+    let lossesHtml = '';
+    if (losses.length > 0) {
+      lossesHtml = `
+        <div style="background:#7f1d1d; padding:6px 8px; border-radius:6px; margin:4px 0; font-size:11px;">
+          <div style="font-weight:bold; color:#fca5a5; margin-bottom:2px;">🚨 손실 심볼 ${losses.length}건:</div>
+          ${losses.map(l => `
+            <div style="color:#fecaca; margin-left:8px;">
+              🔴 ${l.symbol} ${l.side} = ${l.pnl.toFixed(2)} USDT
+            </div>`).join('')}
+        </div>`;
+    }
+
+    // 최근 진입 결과 리스트!
+    let itemsHtml = '';
+    if (items.length > 0) {
+      itemsHtml = `
+        <details style="margin-top:6px; font-size:11px;">
+          <summary style="cursor:pointer; color:#a78bfa;">📋 최근 24h 자동 진입 ${items.length}건 (클릭 확장!)</summary>
+          <div style="max-height:200px; overflow-y:auto; margin-top:4px; padding:4px; background:#1e293b; border-radius:4px;">
+            ${items.map(i => {
+              const icon = i.outcome_status === 'ACTIVE' ? '🟢' :
+                           i.outcome_status === 'TAKE_PROFIT' ? '✅' :
+                           i.outcome_status === 'STOP_LOSS' ? '🔴' : '⏳';
+              const pnl = i.realized_pnl != null ? ` = ${i.realized_pnl.toFixed(2)}` :
+                          i.unrealized_pnl != null ? ` (활성 ${i.unrealized_pnl >= 0 ? '+' : ''}${i.unrealized_pnl.toFixed(2)})` : '';
+              const pnlColor = (i.realized_pnl || i.unrealized_pnl || 0) >= 0 ? '#10b981' : '#ef4444';
+              const time = i.executed_at ? new Date(i.executed_at).toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'}) : '';
+              return `<div style="color:${pnlColor}; padding:1px 4px;">
+                ${icon} ${time} ${i.symbol} ${i.side}${pnl}
+              </div>`;
+            }).join('')}
+          </div>
+        </details>`;
+    }
+
+    el.innerHTML = summaryHtml + lossesHtml + itemsHtml;
+  } catch (e) {
+    console.warn('[loadRecentAutoOutcomes] 실패:', e && e.message);
+  }
+}
+
 // 🔄 v163 사장님: 자동 진입 카운터 리셋!
 async function resetAutoBBCounter() {
   if (!confirm('🔄 자동 진입 카운터 리셋?\n\n= 지금 이후 진입만 = 카운트!\n= 이전 활성/손절 = 카운트 X!')) return;
@@ -947,8 +1018,13 @@ setInterval(loadOBVStatus, 60000);
   window.closeSuggestionsSettingsModal = closeSuggestionsSettingsModal;
   window.saveSuggestionsSettings = saveSuggestionsSettings;
   window.openSuggestionAnalysis = openSuggestionAnalysis;  // 🌟 v133c!
+  // 🎯 v218 사장님 (2026-08-22): 자동 제안 outcome 함수 전역 노출!
+  window.loadRecentAutoOutcomes = loadRecentAutoOutcomes;
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(loadStrategySuggestions, 1200);
     setInterval(loadStrategySuggestions, 30000);  // 30초 polling
+    // 🎯 v218: 자동 제안 outcome 표시! (매 30초 갱신!)
+    setTimeout(loadRecentAutoOutcomes, 1500);
+    setInterval(loadRecentAutoOutcomes, 30000);
   });
 }
