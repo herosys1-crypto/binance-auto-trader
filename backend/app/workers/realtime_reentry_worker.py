@@ -255,6 +255,20 @@ def run_realtime_reentry() -> dict:
                     skipped += 1
                     continue
 
+                # 🎓 v218 fix (2026-08-22 사장님!): entry_snapshot 저장 = 학습 데이터!
+                _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
+                _rt_entry_snapshot = {
+                    "rsi": None,  # 실시간 재진입 = 지표 조회 안 함!
+                    "cci": None,
+                    "obv_slope_pct": None,
+                    "regime": "NEUTRAL",
+                    "source": "RT_REENTRY_SUCCESS" if _use_success_reentry else "RT_REENTRY_FAIL",
+                    "kst_hour": _kst_hour,
+                    "rt_reentry_price": mp,
+                    "prev_stop_price": _stop_price,
+                    "reentry_count": re_count + 1 if not _use_success_reentry else 0,
+                    "entered_at": datetime.now(timezone.utc).isoformat(),
+                }
                 # StrategySuggestion 기록!
                 sugg = StrategySuggestion(
                     symbol=symbol, side=side,
@@ -265,6 +279,7 @@ def run_realtime_reentry() -> dict:
                         "rt_reentry": True,
                         "rt_reentry_price": mp,
                         "prev_stop_price": _stop_price,
+                        "entry_snapshot": _rt_entry_snapshot,  # 🎓 v218!
                     },
                     confidence_score=Decimal("0.65"),
                     reason=_reason_suffix,

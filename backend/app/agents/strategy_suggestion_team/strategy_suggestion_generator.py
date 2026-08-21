@@ -84,6 +84,25 @@ class StrategySuggestionGenerator(BaseAgent):
             side = p.get("side") or self._infer_side(p["type"])
             config = self._build_config(symbol, side, db=db)  # 프로필 참조!
 
+            # 🎓 v218 fix (2026-08-22 사장님!): entry_snapshot 저장!
+            # 사장님 요구: 학습 인사이트 = RSI/CCI/OBV/regime/KST 조건 = 데이터 축적!
+            # 이전: auto_bb_breakdown_worker에만 저장 = 대부분 rows에 없음!
+            # 신: 여기(가장 많은 rows!)에도 저장 = 학습 데이터 폭발적 증가!
+            _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
+            entry_snapshot = {
+                "rsi": p.get("rsi"),
+                "cci": p.get("cci"),
+                "obv_slope_pct": p.get("obv_slope_pct"),
+                "regime": p.get("regime", "NEUTRAL"),
+                "sustained_bars": p.get("sustained_bars", 0),
+                "change_24h": p.get("change_24h"),
+                "source": p.get("type", "PREDICTION"),
+                "kst_hour": _kst_hour,
+                "mta_total": p.get("mta_total"),
+                "entered_at": datetime.now(timezone.utc).isoformat(),
+            }
+            config = {**config, "entry_snapshot": entry_snapshot}
+
             # 🎓 v135: 심볼 성공률 반영 = confidence 조정!
             # 🎯 v172 (2026-08-17 사장님!): 신 심볼 우대 + 조정 완화!
             # 사장님 지적: "신뢰도 85% 이상 없을수 없는데 로직에 문제!"

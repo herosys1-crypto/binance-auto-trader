@@ -277,6 +277,21 @@ def run_success_pyramiding() -> dict:
 
                 # StrategySuggestion 기록!
                 from app.models.strategy_suggestion import StrategySuggestion
+                # 🎓 v218 fix (2026-08-22 사장님!): entry_snapshot 저장 = 학습 데이터!
+                _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
+                _pyr_entry_snapshot = {
+                    "rsi": None,
+                    "cci": None,
+                    "obv_slope_pct": None,
+                    "regime": "NEUTRAL",
+                    "source": "SUCCESS_PYRAMID",
+                    "kst_hour": _kst_hour,
+                    "parent_strategy_id": si.id,
+                    "pyramid_seq": pyr_count + 1,
+                    "roi_pct_at_entry": roi_pct,
+                    "entry_price": mp,
+                    "entered_at": datetime.now(timezone.utc).isoformat(),
+                }
                 sugg = StrategySuggestion(
                     symbol=si.symbol, side=si.side,
                     suggestion_type="bb4h_auto_entry",
@@ -288,6 +303,7 @@ def run_success_pyramiding() -> dict:
                         "parent_strategy_id": si.id,
                         "entry_price": mp,
                         "roi_pct_at_entry": roi_pct,
+                        "entry_snapshot": _pyr_entry_snapshot,  # 🎓 v218!
                     },
                     confidence_score=Decimal("0.7"),
                     reason=f"SUCCESS_PYRAMID#{pyr_count + 1}: {si.side} ROI+{roi_pct:.2f}% peak-retrace {retrace_pct:.2f}%!",
