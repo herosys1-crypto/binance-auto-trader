@@ -91,6 +91,11 @@ def run_pattern_learning() -> dict:
         # 사장님 지시: "실패한 차트 분석해서 다음에 대처하는 학습!"
         snapshot_condition_stats = _analyze_entry_snapshots(rows)
 
+        # 🎓 사장님 요구 (2026-08-21): entry_snapshot + exit_snapshot = lifecycle 학습!
+        # = 진입 지표 → 청산 결과 = 성공/실패 패턴 분석!
+        # = strategy_instance에서 executed_strategy_id로 조회!
+        lifecycle_stats = _analyze_lifecycle_patterns(db, rows)
+
         # 4. 결과 정리 = 성공률 계산!
         insights = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -103,6 +108,8 @@ def run_pattern_learning() -> dict:
             "change_bucket_insights": _change_bucket_summary(change_bucket_stats),
             # 🎓 v198: 조건별 성공률!
             "snapshot_conditions": snapshot_condition_stats,
+            # 🎓 사장님 요구 (2026-08-21): lifecycle 분석!
+            "lifecycle_stats": lifecycle_stats,
         }
 
         # 5. system_settings 저장!
@@ -327,6 +334,120 @@ def _analyze_entry_snapshots(rows: list) -> dict:
         "regime_conditions": _rank_by_success_rate(regime_side_stats),
         "hour_conditions": _rank_by_success_rate(hour_side_stats),
         "source_conditions": _rank_by_success_rate(source_side_stats),
+    }
+
+
+def _analyze_lifecycle_patterns(db: Session, rows: list) -> dict:
+    """🎓 사장님 요구 (2026-08-21): entry_snapshot + exit_snapshot = 완전한 lifecycle 학습!
+
+    사장님 지시:
+    "모든 거래 + 성공/실패 차트 변화 학습 → 메모리 → 매매 로직 활용!"
+
+    로직:
+    1. rows (StrategySuggestion) → executed_strategy_id로 StrategyInstance 조회!
+    2. StrategyInstance.strategy_config = entry_snapshot + exit_snapshot!
+    3. 성공 vs 실패 = 지표 변화 패턴 분석!
+    4. exit_stage 분포 = 몇 단계에서 청산?
+    5. pnl_pct 분포 = 익절/손절 폭!
+
+    반환:
+    - success_avg_pnl_pct: 성공 시 평균 % 익절!
+    - fail_avg_pnl_pct: 실패 시 평균 % 손절!
+    - success_avg_exit_stage: 성공 시 평균 청산 stage!
+    - fail_avg_exit_stage: 실패 시 평균 청산 stage!
+    - success_entry_indicators: 성공 진입 시 지표 평균 (RSI/CCI/OBV)!
+    - fail_entry_indicators: 실패 진입 시 지표 평균!
+    - stage_distribution: stage별 분포 (성공/실패!)
+    - side_lifecycle: LONG/SHORT별 lifecycle 분석!
+    """
+    from app.models.strategy_instance import StrategyInstance
+
+    success_pnls: list[float] = []
+    fail_pnls: list[float] = []
+    success_stages: list[int] = []
+    fail_stages: list[int] = []
+    success_indicators: dict[str, list[float]] = defaultdict(list)
+    fail_indicators: dict[str, list[float]] = defaultdict(list)
+    stage_dist_success: dict[int, int] = defaultdict(int)
+    stage_dist_fail: dict[int, int] = defaultdict(int)
+    side_lifecycle: dict[str, dict] = defaultdict(
+        lambda: {"success": 0, "fail": 0, "success_pnl": 0.0, "fail_pnl": 0.0}
+    )
+    total_analyzed = 0
+
+    for s in rows:
+        if not s.executed_strategy_id:
+            continue
+        si = db.get(StrategyInstance, s.executed_strategy_id)
+        if not si:
+            continue
+        cfg = si.strategy_config or {}
+        if not isinstance(cfg, dict):
+            continue
+        entry_snap = cfg.get("entry_snapshot")
+        exit_snap = cfg.get("exit_snapshot")
+        if not entry_snap or not exit_snap:
+            continue
+
+        outcome = s.outcome_status
+        if outcome not in ("SUCCESS", "FAIL"):
+            continue
+
+        total_analyzed += 1
+        pnl_pct = float(exit_snap.get("pnl_pct", 0))
+        exit_stage = int(exit_snap.get("exit_stage", 0))
+        side = s.side or "?"
+
+        if outcome == "SUCCESS":
+            success_pnls.append(pnl_pct)
+            success_stages.append(exit_stage)
+            stage_dist_success[exit_stage] += 1
+            side_lifecycle[side]["success"] += 1
+            side_lifecycle[side]["success_pnl"] += pnl_pct
+            for k in ("rsi", "cci", "obv_slope_pct"):
+                v = entry_snap.get(k)
+                if v is not None:
+                    try:
+                        success_indicators[k].append(float(v))
+                    except (ValueError, TypeError):
+                        pass
+        else:  # FAIL
+            fail_pnls.append(pnl_pct)
+            fail_stages.append(exit_stage)
+            stage_dist_fail[exit_stage] += 1
+            side_lifecycle[side]["fail"] += 1
+            side_lifecycle[side]["fail_pnl"] += pnl_pct
+            for k in ("rsi", "cci", "obv_slope_pct"):
+                v = entry_snap.get(k)
+                if v is not None:
+                    try:
+                        fail_indicators[k].append(float(v))
+                    except (ValueError, TypeError):
+                        pass
+
+    def _avg(lst: list[float]) -> float | None:
+        return round(sum(lst) / len(lst), 2) if lst else None
+
+    def _avg_dict(d: dict[str, list[float]]) -> dict[str, float | None]:
+        return {k: _avg(v) for k, v in d.items()}
+
+    return {
+        "total_analyzed": total_analyzed,
+        "success_count": len(success_pnls),
+        "fail_count": len(fail_pnls),
+        "success_avg_pnl_pct": _avg(success_pnls),
+        "fail_avg_pnl_pct": _avg(fail_pnls),
+        "success_avg_exit_stage": _avg(success_stages),
+        "fail_avg_exit_stage": _avg(fail_stages),
+        "success_entry_indicators_avg": _avg_dict(success_indicators),
+        "fail_entry_indicators_avg": _avg_dict(fail_indicators),
+        "stage_distribution_success": dict(stage_dist_success),
+        "stage_distribution_fail": dict(stage_dist_fail),
+        "side_lifecycle": {
+            k: {**v, "success_pnl": round(v["success_pnl"], 2),
+                     "fail_pnl": round(v["fail_pnl"], 2)}
+            for k, v in side_lifecycle.items()
+        },
     }
 
 
