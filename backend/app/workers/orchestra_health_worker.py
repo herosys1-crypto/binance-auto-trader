@@ -162,7 +162,7 @@ def _check_api_ban(db, checks, alerts):
 
 
 def _check_entry_snapshot_saving(db, checks, alerts):
-    """entry_snapshot 저장 실패 감지 (알림만!) — v208 사장님: 필드별 상세!"""
+    """entry_snapshot 저장 실패 감지 (알림만!)"""
     try:
         from app.models.strategy_suggestion import StrategySuggestion
         from sqlalchemy import select
@@ -173,39 +173,21 @@ def _check_entry_snapshot_saving(db, checks, alerts):
             .where(StrategySuggestion.suggestion_type == "bb4h_auto_entry")
         ).scalars().all()
         total = len(rows)
-        with_snapshot = 0
-        # v208: 필드별 누락 카운트!
-        field_missing = {"rsi": 0, "cci": 0, "obv_slope_pct": 0, "regime": 0}
-        for r in rows:
-            cfg = r.strategy_config or {}
-            snap = cfg.get("entry_snapshot") if isinstance(cfg, dict) else None
-            if snap and isinstance(snap, dict):
-                with_snapshot += 1
-                for f in field_missing:
-                    if snap.get(f) is None:
-                        field_missing[f] += 1
-
+        with_snapshot = sum(
+            1 for r in rows
+            if r.strategy_config and "entry_snapshot" in (r.strategy_config or {})
+        )
         checks.append({
             "team": "entry_snapshot",
             "status": "OK" if with_snapshot == total else "PARTIAL",
             "total_6h": total,
             "with_snapshot": with_snapshot,
-            "field_missing_6h": field_missing,
         })
-
         if total > 0 and with_snapshot < total / 2 and _can_attempt_fix("snapshot_missing"):
             alerts.append(
                 f"⚠️ entry_snapshot: {with_snapshot}/{total} 저장! "
                 f"(학습 조건 분석 저하!)"
             )
-        # v208: 필드 누락 알림!
-        if with_snapshot > 0:
-            severe = [f"{k}={v}" for k, v in field_missing.items() if v > with_snapshot * 0.3]
-            if severe and _can_attempt_fix("snapshot_field_missing"):
-                alerts.append(
-                    f"⚠️ [v208] entry_snapshot 필드 누락 {with_snapshot}건 중 "
-                    f"{', '.join(severe)} 결측! 학습 손실!"
-                )
     except Exception as e:
         logger.warning("[v206 P4] snapshot check 실패: %s", e)
 
