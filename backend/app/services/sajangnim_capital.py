@@ -7,16 +7,19 @@
 🌟 사장님 신 명확 규정 (2026-08-22 저녁!):
 "전체자산에 대해서는 시스템에서 고려 대상이 아니야
  초기 금액과 다음 2배 그리고 다음은 투자금 전체의 2배야"
+"300 600 이거네"
+
+🚨 사장님 최종 결정 (2026-08-22 저녁 v219 최종!):
+"2단계에서 끝이나야하고 3단계는 가지 않아야 합니다."
 
 = 시스템 = 전체 자산 무관! (사장님 판단!)
-= 마틴게일:
+= 마틴게일 (STRICT!):
   - 1단계 = 초기 금액 (default 300 USDT, 사장님 조정!)
   - 2단계 = 이전 진입금액 × 2 (예: 300 × 2 = 600)
-  - 3단계+ = **투자금 전체 × 2!** (예: (300+600) × 2 = 1800)
+  - **3단계 = 금지!** (2단계에서 STOP!) ⭐ 손실 폭발 방지!
 
-= 4단계 = (300+600+1800) × 2 = 5400
-= 5단계 = (300+600+1800+5400) × 2 = 16200
-= 사장님 사상 = 손실 확대 대응 = 강력한 반전!
+= MAX_REENTRY_COUNT = 1! (v202 = 2에서 → 1로!)
+= 사장님 자본 보호 최우선!
 """
 from __future__ import annotations
 
@@ -64,46 +67,46 @@ def compute_stage1_capital(bc, db) -> Decimal:
     return default_cap.quantize(Decimal("0.01"))
 
 
-def compute_reentry_capital(stage: int, previous_capitals: list[Decimal] | list[float]) -> Decimal:
-    """🎯 사장님 신 마틴게일 (v219 최종 규정!)
+MAX_REENTRY_STAGE = 2  # 🚨 사장님 최종 (2026-08-22): 2단계에서 STOP! (3단계 X!)
 
-    사장님 verbatim (2026-08-22 저녁!):
-    "초기 금액과 다음 2배 그리고 다음은 투자금 전체의 2배야"
+
+def compute_reentry_capital(stage: int, previous_capitals: list[Decimal] | list[float]) -> Decimal | None:
+    """🎯 사장님 신 마틴게일 (v219 최종 확정!)
+
+    사장님 최종 규정 (2026-08-22 저녁!):
+    "2단계에서 끝이나야하고 3단계는 가지 않아야 합니다."
 
     - stage=1 (초기!): 이 함수 호출 X = compute_stage1_capital 사용!
-    - stage=2: 이전 진입 × 2 (예: 300 × 2 = 600)
-    - stage=3+: 투자금 전체 × 2! (예: (300+600) × 2 = 1800)
-      = (300+600+1800) × 2 = 5400
-      = 사장님 사상 = 강력한 반전 대응!
+    - stage=2: 이전 진입 × 2 (예: 300 × 2 = 600!)
+    - stage>=3: **None 반환!** (사장님 STOP!)
 
     Args:
-        stage: 다음 진입 단계 번호 (2, 3, 4, ...)
-        previous_capitals: 이전까지 실 진입한 자본 리스트 (1단계, 2단계, ...)
+        stage: 다음 진입 단계 번호 (2만 유효!)
+        previous_capitals: 이전까지 실 진입한 자본 리스트 (1단계!)
 
     Returns:
-        Decimal: 이번 진입 자본 USDT
+        Decimal: stage=2 시 자본 (600 USDT!)
+        None: stage>=3 = STOP! (사장님 규정!)
     """
     if stage <= 1:
         raise ValueError(f"compute_reentry_capital = stage >= 2! (got {stage})")
     if not previous_capitals:
         raise ValueError("compute_reentry_capital = previous_capitals 필수!")
 
+    if stage > MAX_REENTRY_STAGE:
+        logger.info(
+            "[sajangnim_capital] 🚨 사장님 STOP! stage=%d > MAX=%d (2단계에서 끝!)",
+            stage, MAX_REENTRY_STAGE,
+        )
+        return None
+
     _prev = [Decimal(str(c)) for c in previous_capitals]
 
-    if stage == 2:
-        # 2단계 = 이전 진입 × 2!
-        result = _prev[-1] * Decimal("2")
-        logger.info(
-            "[sajangnim_capital] 🎯 2단계: 이전 %.2f × 2 = %.2f USDT",
-            float(_prev[-1]), float(result),
-        )
-    else:
-        # 3단계+ = 투자금 전체 × 2! (사장님 강력 반전!)
-        total = sum(_prev)
-        result = total * Decimal("2")
-        logger.info(
-            "[sajangnim_capital] 🎯 %d단계: 투자금 전체 %.2f × 2 = %.2f USDT",
-            stage, float(total), float(result),
-        )
+    # stage=2 = 이전 진입 × 2!
+    result = _prev[-1] * Decimal("2")
+    logger.info(
+        "[sajangnim_capital] 🎯 2단계 (마지막!): 이전 %.2f × 2 = %.2f USDT",
+        float(_prev[-1]), float(result),
+    )
 
     return result.quantize(Decimal("0.01"))

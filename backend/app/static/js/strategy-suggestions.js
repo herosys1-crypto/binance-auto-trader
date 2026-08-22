@@ -1017,14 +1017,14 @@ async function openSajangnimSettingsModal() {
           <div style="font-size:10px;color:#64748b;">사장님 default = 300 USDT / 운영하면서 조정!</div>
         </div>
         <div style="margin-bottom:12px;padding:10px;background:#1e293b;border-left:3px solid #ec4899;border-radius:4px;">
-          <div style="font-size:11px;color:#f472b6;font-weight:bold;margin-bottom:4px;">🎯 사장님 마틴게일 (v219 신 규정!):</div>
+          <div style="font-size:11px;color:#f472b6;font-weight:bold;margin-bottom:4px;">🎯 사장님 마틴게일 (v219 최종 확정!):</div>
           <div style="font-size:11px;color:#e2e8f0;line-height:1.6;">
             <b>1단계</b> = 초기 (예: <b>${s.default_capital ?? 300} USDT</b>)<br>
-            <b>2단계</b> = 이전 × 2 (예: <b>${(s.default_capital ?? 300) * 2} USDT</b>)<br>
-            <b>3단계+</b> = 투자금 전체 × 2 (예: <b>${(s.default_capital ?? 300) * 6} USDT</b>!)
+            <b>2단계</b> = 이전 × 2 (예: <b>${(s.default_capital ?? 300) * 2} USDT</b>) ← <b style="color:#ef4444;">마지막!</b><br>
+            <b style="color:#94a3b8;">🚨 3단계 = 금지! (사장님 STOP 규정!)</b>
           </div>
           <div style="font-size:10px;color:#94a3b8;margin-top:6px;">
-            💡 전체 자산 무관 = 사장님 판단! 손실 확대 시 = 강력 반전!
+            💡 전체 자산 무관 = 사장님 판단! 2단계에서 끝 = 손실 폭발 방지!
           </div>
         </div>
         <div style="margin-bottom:14px;padding:8px;background:#1e293b;border-left:3px solid #f59e0b;border-radius:4px;">
