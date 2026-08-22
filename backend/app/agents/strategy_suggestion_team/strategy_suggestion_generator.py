@@ -84,18 +84,33 @@ class StrategySuggestionGenerator(BaseAgent):
             side = p.get("side") or self._infer_side(p["type"])
             config = self._build_config(symbol, side, db=db)  # 프로필 참조!
 
-            # 🎓 v218 fix (2026-08-22 사장님!): entry_snapshot 저장!
-            # 사장님 요구: 학습 인사이트 = RSI/CCI/OBV/regime/KST 조건 = 데이터 축적!
-            # 이전: auto_bb_breakdown_worker에만 저장 = 대부분 rows에 없음!
-            # 신: 여기(가장 많은 rows!)에도 저장 = 학습 데이터 폭발적 증가!
+            # 🎓 v220 Fix 20 (2026-08-23 사장님!):
+            # Fix 12 검증 = "13/13 저장!"은 함정 (key만 존재 / value 전부 None!)
+            # 원인: pump_dump_predictor 는 rsi/cci/obv/regime/mta 전부 미세팅 =>
+            #      snapshot 이 있어도 pattern_learning._analyze_entry_snapshots 가
+            #      `if rsi is not None: ...` 에서 전부 skip => RSI/CCI/OBV/regime/KST
+            #      학습 데이터가 계속 0건!
+            # 신: 여기서 직접 kline 조회하여 결측 지표 계산 후 채워넣음 (fail-open!)
             _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
+            _rsi_val = p.get("rsi")
+            _cci_val = p.get("cci")
+            _obv_slope_val = p.get("obv_slope_pct")
+            if _rsi_val is None or _cci_val is None or _obv_slope_val is None:
+                _r, _c, _o = self._compute_missing_indicators(db, symbol)
+                if _rsi_val is None:
+                    _rsi_val = _r
+                if _cci_val is None:
+                    _cci_val = _c
+                if _obv_slope_val is None:
+                    _obv_slope_val = _o
             entry_snapshot = {
-                "rsi": p.get("rsi"),
-                "cci": p.get("cci"),
-                "obv_slope_pct": p.get("obv_slope_pct"),
+                "rsi": _rsi_val,
+                "cci": _cci_val,
+                "obv_slope_pct": _obv_slope_val,
                 "regime": p.get("regime", "NEUTRAL"),
                 "sustained_bars": p.get("sustained_bars", 0),
-                "change_24h": p.get("change_24h"),
+                # 🚨 Fix 20: predictor 는 change_pct 키를 씀! (change_24h 는 항상 None!)
+                "change_24h": p.get("change_24h") or p.get("change_pct"),
                 "source": p.get("type", "PREDICTION"),
                 "kst_hour": _kst_hour,
                 "mta_total": p.get("mta_total"),
@@ -172,6 +187,67 @@ class StrategySuggestionGenerator(BaseAgent):
         db.commit()
         logger.info("[%s] 생성 완료: %d", self.AGENT_NAME, len(created_ids))
         return {"created": len(created_ids), "created_ids": created_ids}
+
+    # 🎓 Fix 20 (2026-08-23): 심볼당 1회 조회 캐시 (사이클 내 재사용!)
+    _INDICATOR_CACHE: dict[str, tuple[float | None, float | None, float | None]] = {}
+
+    def _compute_missing_indicators(
+        self, db, symbol: str,
+    ) -> tuple[float | None, float | None, float | None]:
+        """RSI(14) / CCI(20) / OBV slope(%, 최근 10봉) — 15m 캔들 기준.
+
+        predictor(pump_dump_predictor 등)가 지표를 안 넘길 때 여기서 직접 계산.
+        실패 시 모두 (None, None, None) 반환 = pattern_learning 이 조용히 skip!
+        """
+        cached = self._INDICATOR_CACHE.get(symbol)
+        if cached is not None:
+            return cached
+        try:
+            from app.core.crypto import decrypt_text
+            from app.integrations.binance.client import BinanceClient
+            from app.models.exchange_account import ExchangeAccount
+            from app.services.chart_analyzer import ChartAnalyzer
+            from app.services.bb_top_analyzer import BBTopAnalyzer
+            from sqlalchemy import select as _sel
+
+            account = db.execute(
+                _sel(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
+            ).scalar_one_or_none()
+            if not account:
+                self._INDICATOR_CACHE[symbol] = (None, None, None)
+                return (None, None, None)
+            bc = BinanceClient(
+                api_key=decrypt_text(account.api_key_enc),
+                api_secret=decrypt_text(account.api_secret_enc),
+                is_testnet=False,
+            )
+            kl = bc.get_klines(symbol=symbol, interval="15m", limit=60) or []
+            if len(kl) < 20:
+                self._INDICATOR_CACHE[symbol] = (None, None, None)
+                return (None, None, None)
+            closes = [float(k[4]) for k in kl]
+            rsi_series = BBTopAnalyzer.rsi(closes)
+            rsi_v = rsi_series[-1] if rsi_series and rsi_series[-1] is not None else None
+            cci_series = ChartAnalyzer.compute_cci(kl, period=20)
+            cci_v = cci_series[-1] if cci_series else None
+            obv_series = ChartAnalyzer.compute_obv(kl)
+            obv_slope_v: float | None = None
+            if len(obv_series) >= 10:
+                _o0 = float(obv_series[-10])
+                _o1 = float(obv_series[-1])
+                if _o0 != 0:
+                    obv_slope_v = round((_o1 - _o0) / abs(_o0) * 100, 2)
+            result = (
+                round(float(rsi_v), 2) if rsi_v is not None else None,
+                round(float(cci_v), 2) if cci_v is not None else None,
+                obv_slope_v,
+            )
+            self._INDICATOR_CACHE[symbol] = result
+            return result
+        except Exception as e:
+            logger.debug("[%s] 지표 계산 실패 %s: %s", self.AGENT_NAME, symbol, e)
+            self._INDICATOR_CACHE[symbol] = (None, None, None)
+            return (None, None, None)
 
     def _infer_side(self, suggestion_type: str) -> str:
         """suggestion_type → side 유추 (fallback!). v132에서는 predictor가 side 명시!
