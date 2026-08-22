@@ -44,52 +44,145 @@ from app.models.strategy_template import StrategyTemplate
 
 logger = logging.getLogger(__name__)
 
-REBOUND_PCT_FOR_REENTRY = 2.0  # 🎯 v220 Fix 23 (2026-08-23): 3% → 2% (더 빨리 진입!)
+# 🎯 v221 사장님 재설계 (2026-08-23): 지표 반전 = MAIN gate!
+# 사장님 verbatim: "차트와 보조지표가 다시 롱이나 숏으로 진행할수 있는 지표가 필요"
+# = 반등 % 는 최소 안전선만! (0.5%!) → 지표 반전 = 진짜 조건!
+REBOUND_PCT_MIN_SAFETY = 0.5    # 최소 안전선 (역방향 폭주 방지!)
 MAX_HOURLY_REENTRIES = 5        # 1h 최대 5건 (남발 방지!)
-STAGE3_MIN_WAIT_HOURS = 4.0     # 🎯 v220 사장님: "충분히 대기" = 최소 4h!
+STAGE3_MIN_WAIT_HOURS = 4.0     # 3단계 = 충분히 대기!
+MIN_LEARNING_SUCCESS_RATE = 0.30  # 학습 성공률 30%+ 심볼만!
 
 
-def _verify_stage_indicators(bc, symbol: str, side: str) -> tuple[bool, str]:
-    """🎯 v220 사장님 (2026-08-22): 2/3단계 진입 = 15m 지표 재확인!
+def _check_indicator_reversal_for_reentry(
+    bc, symbol: str, side: str, use_4h: bool = True
+) -> tuple[bool, str, dict]:
+    """🎯 v221 사장님 재설계 (2026-08-23): 지표 반전 = 재진입 진짜 조건!
 
-    사장님 verbatim: "이제 하락할것 같은 차트와 보조지표가 나오면 진입"
+    사장님 verbatim: "차트와 보조지표가 다시 롱이나 숏으로 진행할수 있는 지표"
 
-    🎯 v220 Fix 22 (2026-08-23 사장님 지적!): 지표 완화!
-    사장님 지적: "손실 18건인데 재진입 1건!" = 조건 너무 엄격 = 대부분 skip!
-    이전: LONG RSI≤35 (매우 엄격!) / SHORT RSI≥65
-    신: LONG RSI≤45 (완화!) OR MACD hist 반전 (OR 조건!) / SHORT RSI≥55 OR MACD 반전
-    = 사장님 재진입 사상 = 반등 신호만 있어도 진입!
+    로직 (3중 = 최소 2/3 통과!):
+    - 15m RSI 반전  (LONG: 상승 반전 / SHORT: 하락 반전)
+    - 15m MACD hist 반전
+    - 15m OBV slope 반전 (지속!)
+    - 4h RSI 방향 확인 (option = use_4h)
+
+    Return: (통과, 사유, 스냅샷)
     """
+    from app.services.bb_4h_band_analyzer import BB4HBandAnalyzer as BB
+
+    snapshot: dict = {"tf": "15m+4h" if use_4h else "15m"}
     try:
         kl = bc.get_klines(symbol=symbol, interval="15m", limit=60)
         if not isinstance(kl, list) or len(kl) < 35:
-            return False, "kline 부족"
+            return False, "kline 부족", snapshot
         closes = [float(k[4]) for k in kl]
-        from app.services.bb_4h_band_analyzer import BB4HBandAnalyzer
-        rsi = BB4HBandAnalyzer._calc_rsi(closes)
-        rsi_prev = BB4HBandAnalyzer._calc_rsi(closes[:-1])
-        if rsi is None or rsi_prev is None:
-            return False, "rsi 계산 실패"
-        ema12 = BB4HBandAnalyzer._calc_ema(closes, 12)
-        ema26 = BB4HBandAnalyzer._calc_ema(closes, 26)
+        vols = [float(k[5]) for k in kl]
+
+        # 1) RSI 반전 (직전 대비 방향 전환)
+        rsi_now = BB._calc_rsi(closes)
+        rsi_prev = BB._calc_rsi(closes[:-3])  # 3봉 전!
+        if rsi_now is None or rsi_prev is None:
+            return False, "RSI 계산 실패", snapshot
+        snapshot["rsi"] = rsi_now
+        snapshot["rsi_prev"] = rsi_prev
+        rsi_rev = (rsi_now > rsi_prev + 1) if side == "LONG" else (rsi_now < rsi_prev - 1)
+
+        # 2) MACD hist 반전
+        ema12 = BB._calc_ema(closes, 12)
+        ema26 = BB._calc_ema(closes, 26)
+        if not ema12 or not ema26:
+            return False, "EMA 계산 실패", snapshot
         macd_line = [a - b for a, b in zip(ema12[14:], ema26)]
-        sig = BB4HBandAnalyzer._calc_ema(macd_line, 9)
+        sig = BB._calc_ema(macd_line, 9)
         if not sig or len(sig) < 3:
-            return False, "macd 부족"
+            return False, "MACD 부족", snapshot
         hist = [m - s for m, s in zip(macd_line[-len(sig):], sig)]
         if len(hist) < 3:
-            return False, "hist 부족"
-        # 🎯 v220 Fix 22: OR 조건 = 완화! (RSI or MACD 하나만 만족!)
-        macd_reversal = hist[-1] > hist[-2] if side == "LONG" else hist[-1] < hist[-2]
-        if side == "LONG":
-            rsi_ok = rsi <= 45 and rsi > rsi_prev  # 45 (기존 35 완화!)
-            ok = rsi_ok or macd_reversal  # OR 조건!
-        else:
-            rsi_ok = rsi >= 55 and rsi < rsi_prev  # 55 (기존 65 완화!)
-            ok = rsi_ok or macd_reversal
-        return ok, f"RSI={rsi:.1f}({'OK' if rsi_ok else 'X'}) hist={hist[-1]:.4f}({'REV' if macd_reversal else 'X'})"
+            return False, "hist 부족", snapshot
+        snapshot["macd_hist"] = hist[-1]
+        macd_rev = (hist[-1] > hist[-2]) if side == "LONG" else (hist[-1] < hist[-2])
+
+        # 3) OBV slope (2봉 지속 반전)
+        obv = [0.0]
+        for i in range(1, len(closes)):
+            v = vols[i]
+            if closes[i] > closes[i - 1]:
+                obv.append(obv[-1] + v)
+            elif closes[i] < closes[i - 1]:
+                obv.append(obv[-1] - v)
+            else:
+                obv.append(obv[-1])
+        obv_slope_now = obv[-1] - obv[-4] if len(obv) >= 4 else 0
+        obv_slope_prev = obv[-4] - obv[-7] if len(obv) >= 7 else 0
+        snapshot["obv_slope"] = obv_slope_now
+        obv_rev = (
+            (obv_slope_now > 0 and obv_slope_now > obv_slope_prev)
+            if side == "LONG"
+            else (obv_slope_now < 0 and obv_slope_now < obv_slope_prev)
+        )
+
+        # 15m 3중 = 최소 2/3 통과!
+        passes = int(rsi_rev) + int(macd_rev) + int(obv_rev)
+        snapshot["passes_15m"] = f"{passes}/3"
+
+        # 4) 4h 방향 확인 (option — 큰 흐름 상충 시 skip!)
+        if use_4h:
+            try:
+                kl4 = bc.get_klines(symbol=symbol, interval="4h", limit=40)
+                if isinstance(kl4, list) and len(kl4) >= 20:
+                    c4 = [float(k[4]) for k in kl4]
+                    rsi4_now = BB._calc_rsi(c4)
+                    rsi4_prev = BB._calc_rsi(c4[:-2])
+                    if rsi4_now is not None and rsi4_prev is not None:
+                        snapshot["rsi_4h"] = rsi4_now
+                        # 4h가 강한 역방향이면 = 재진입 금지!
+                        # LONG: 4h RSI < 30 극과매도는 반등 대기 → OK
+                        #       BUT 4h RSI 급락 중 (rsi4_now < rsi4_prev - 3) = 하락 지속 → 금지
+                        # SHORT: 4h RSI > 70 극과매수 → OK
+                        #        4h RSI 급등 중 = 금지
+                        contradicts_4h = (
+                            (side == "LONG" and rsi4_now < rsi4_prev - 3 and rsi4_now < 40)
+                            or (side == "SHORT" and rsi4_now > rsi4_prev + 3 and rsi4_now > 60)
+                        )
+                        if contradicts_4h:
+                            return False, f"4h 역방향 지속 (RSI4={rsi4_now:.1f})", snapshot
+            except Exception:
+                pass  # 4h 실패 시 = 15m만 신뢰!
+
+        ok = passes >= 2
+        return (
+            ok,
+            f"15m {passes}/3 (RSI={rsi_rev} MACD={macd_rev} OBV={obv_rev})",
+            snapshot,
+        )
     except Exception as e:
-        return False, f"err={e}"
+        return False, f"err={e}", snapshot
+
+
+def _is_symbol_learning_ok(db: Session, symbol: str, side: str) -> tuple[bool, str]:
+    """🎓 v221 (2026-08-23): 학습 인사이트 활용 = 심볼 성공률 gate!
+
+    사장님: "학습 시스템 활용!" (이미 만들어져 있음!)
+    - top_symbols_long/short = 성공률 50%+ 심볼!
+    - worst_symbols_long/short = 30% 미만 = 진입 금지!
+
+    표본이 없으면 = 허용 (초기 데이터 부족 대응!)
+    """
+    try:
+        from app.workers.pattern_learning_worker import get_learning_insights
+        ins = get_learning_insights(db) or {}
+        worst_key = f"worst_symbols_{side.lower()}"
+        for row in ins.get(worst_key, []) or []:
+            if row.get("symbol") == symbol:
+                return False, f"학습 worst {row.get('success_rate', 0):.1%}"
+        # top 심볼 = boost 표시! (skip X, 통과!)
+        top_key = f"top_symbols_{side.lower()}"
+        for row in ins.get(top_key, []) or []:
+            if row.get("symbol") == symbol:
+                return True, f"학습 top {row.get('success_rate', 0):.1%}"
+        return True, "학습 데이터 없음(허용)"
+    except Exception as e:
+        return True, f"학습 조회 실패:{e} (허용)"
 
 
 def _get_base_capital_from_instance(si: StrategyInstance) -> float:
@@ -226,100 +319,84 @@ def run_realtime_reentry() -> dict:
             # 급등/급락 필터 = 24h 변동 조회 (안전!)
             # 여기선 skip 판정만 = 근사치!
 
-            _should_enter = False
-            _reason_suffix = ""
-            _use_success_reentry = False
+            # 🎯 v221 사장님 재설계 (2026-08-23): 지표 반전 = MAIN gate!
+            # 반등 % 는 최소 안전선(0.5%) — 진짜 진입 조건 = 지표 3중 반전!
+            _use_success_reentry = _is_success
+            if side == "LONG":
+                _rebound_pct = (mp - _stop_price) / _stop_price * 100
+            else:
+                _rebound_pct = (_stop_price - mp) / _stop_price * 100
 
-            if _is_fail:
-                # 실패 심볼: side 방향으로 반등!
-                if side == "LONG":
-                    # LONG 실패 = 하락 → 반등 시 재진입!
-                    # 청산가 대비 현재가 상승!
-                    pct = (mp - _stop_price) / _stop_price * 100
-                    if pct >= REBOUND_PCT_FOR_REENTRY:
-                        _should_enter = True
-                        _reason_suffix = f"RT_REENTRY: LONG 실패 후 +{pct:.2f}% 반등!"
-                else:  # SHORT
-                    pct = (_stop_price - mp) / _stop_price * 100
-                    if pct >= REBOUND_PCT_FOR_REENTRY:
-                        _should_enter = True
-                        _reason_suffix = f"RT_REENTRY: SHORT 실패 후 -{pct:.2f}% 하락!"
-            elif _is_success:
-                # 익절 심볼: side 방향 계속 진행!
-                if side == "LONG":
-                    pct = (mp - _stop_price) / _stop_price * 100
-                    if pct >= REBOUND_PCT_FOR_REENTRY:
-                        _should_enter = True
-                        _use_success_reentry = True
-                        _reason_suffix = f"RT_REENTRY_SUCCESS: LONG 익절 후 +{pct:.2f}% 추가 상승!"
-                else:  # SHORT
-                    pct = (_stop_price - mp) / _stop_price * 100
-                    if pct >= REBOUND_PCT_FOR_REENTRY:
-                        _should_enter = True
-                        _use_success_reentry = True
-                        _reason_suffix = f"RT_REENTRY_SUCCESS: SHORT 익절 후 -{pct:.2f}% 추가 하락!"
-
-            if not _should_enter:
+            # (a) 최소 안전선 = 역방향 폭주 방지 (0.5% 만!)
+            if _rebound_pct < REBOUND_PCT_MIN_SAFETY:
                 skipped += 1
-                # 🎯 v220 Fix 23 상세 로그: 어떤 조건 미달?
-                _cur_pct = 0.0
-                if side == "LONG":
-                    _cur_pct = (mp - _stop_price) / _stop_price * 100 if _stop_price > 0 else 0
-                else:
-                    _cur_pct = (_stop_price - mp) / _stop_price * 100 if _stop_price > 0 else 0
                 logger.info(
-                    "[RT_REENTRY] skip: %s %s (%s) 반등 %.2f%% < %.1f%% 미달 (mp=%.4f stop=%.4f pnl=%.2f)",
-                    symbol, side,
-                    "실패" if _is_fail else ("익절" if _is_success else "무손익"),
-                    _cur_pct, REBOUND_PCT_FOR_REENTRY, mp, _stop_price, pnl,
+                    "[RT_REENTRY] skip: %s %s 역방향 진행 중 (%.2f%% < %.1f%%)",
+                    symbol, side, _rebound_pct, REBOUND_PCT_MIN_SAFETY,
                 )
                 continue
 
-            # 🎯 v220 사장님 사상 (2026-08-22): 2/3단계 = 지표 재확인 + 대기!
-            # 사장님 verbatim: "이제 하락할것 같은 차트와 보조지표가 나오면 진입"
-            # "다시 하락과 상승하면 충분히 대기하고 다시 하락이나 상승이 진행되면 3단계"
-            if not _use_success_reentry:
-                _stage_no = re_count + 2  # count=0 → 2단계, count=1 → 3단계
-                # BinanceClient 준비!
-                try:
-                    from app.integrations.binance.client import BinanceClient
-                    from app.core.crypto import decrypt_text
-                    from app.models.exchange_account import ExchangeAccount
-                    _acc = db.execute(
-                        select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
-                    ).scalar_one_or_none()
-                    if not _acc:
-                        skipped += 1
-                        continue
-                    _bc_v220 = BinanceClient(
-                        api_key=decrypt_text(_acc.api_key_enc),
-                        api_secret=decrypt_text(_acc.api_secret_enc),
-                        is_testnet=False,
-                    )
-                    # 15m 지표 재확인!
-                    _ind_ok, _ind_msg = _verify_stage_indicators(_bc_v220, symbol, side)
-                    if not _ind_ok:
-                        skipped += 1
-                        logger.info(
-                            "[RT_REENTRY] 🎯 v220 stage %d skip: %s %s 지표 미확인 (%s)",
-                            _stage_no, symbol, side, _ind_msg,
-                        )
-                        continue
-                    _reason_suffix += f" [지표 OK: {_ind_msg}]"
-                    # 3단계 = "충분히 대기" = 최소 4h!
-                    if _stage_no == 3 and si.stopped_at:
-                        _elapsed_h = (datetime.now(timezone.utc) - si.stopped_at).total_seconds() / 3600
-                        if _elapsed_h < STAGE3_MIN_WAIT_HOURS:
-                            skipped += 1
-                            logger.info(
-                                "[RT_REENTRY] 🎯 v220 stage 3 skip: %s 대기 부족 (%.1fh < %.1fh)",
-                                symbol, _elapsed_h, STAGE3_MIN_WAIT_HOURS,
-                            )
-                            continue
-                except Exception as _ve:
-                    logger.warning("[RT_REENTRY] v220 지표 재확인 실패 = skip 안전: %s", _ve)
+            # (b) 학습 인사이트 = worst 심볼 gate
+            _learn_ok, _learn_msg = _is_symbol_learning_ok(db, symbol, side)
+            if not _learn_ok:
+                skipped += 1
+                logger.info(
+                    "[RT_REENTRY] skip: %s %s 학습 실패 심볼 (%s)",
+                    symbol, side, _learn_msg,
+                )
+                continue
+
+            # (c) 지표 반전 확인 = 핵심 gate! (실패/익절 모두!)
+            try:
+                from app.integrations.binance.client import BinanceClient
+                from app.core.crypto import decrypt_text
+                from app.models.exchange_account import ExchangeAccount
+                _acc = db.execute(
+                    select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
+                ).scalar_one_or_none()
+                if not _acc:
                     skipped += 1
                     continue
+                _bc = BinanceClient(
+                    api_key=decrypt_text(_acc.api_key_enc),
+                    api_secret=decrypt_text(_acc.api_secret_enc),
+                    is_testnet=False,
+                )
+                _ind_ok, _ind_msg, _ind_snap = _check_indicator_reversal_for_reentry(
+                    _bc, symbol, side, use_4h=True,
+                )
+            except Exception as _ve:
+                logger.warning("[RT_REENTRY] 지표 조회 실패 = skip 안전: %s", _ve)
+                skipped += 1
+                continue
+
+            if not _ind_ok:
+                skipped += 1
+                logger.info(
+                    "[RT_REENTRY] skip: %s %s 지표 반전 미확인 (%s) [rebound=%.2f%%]",
+                    symbol, side, _ind_msg, _rebound_pct,
+                )
+                continue
+
+            # 통과 → 진입!
+            _kind = "RT_REENTRY_SUCCESS" if _use_success_reentry else "RT_REENTRY"
+            _reason_suffix = (
+                f"{_kind}: {side} {'익절' if _is_success else '실패'} 후 "
+                f"지표 반전 [{_ind_msg}] rebound={_rebound_pct:.2f}% [{_learn_msg}]"
+            )
+
+            # 3단계 = "충분히 대기" = 최소 4h!
+            if not _use_success_reentry:
+                _stage_no = re_count + 2
+                if _stage_no == 3 and si.stopped_at:
+                    _elapsed_h = (datetime.now(timezone.utc) - si.stopped_at).total_seconds() / 3600
+                    if _elapsed_h < STAGE3_MIN_WAIT_HOURS:
+                        skipped += 1
+                        logger.info(
+                            "[RT_REENTRY] stage 3 skip: %s 대기 부족 (%.1fh < %.1fh)",
+                            symbol, _elapsed_h, STAGE3_MIN_WAIT_HOURS,
+                        )
+                        continue
 
             # 진입 실행!
             try:
@@ -372,15 +449,21 @@ def run_realtime_reentry() -> dict:
 
                 # 🎓 v218 fix (2026-08-22 사장님!): entry_snapshot 저장 = 학습 데이터!
                 _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
+                # 🎯 v221: 실제 지표 값 저장 = 학습 사이클 완성!
                 _rt_entry_snapshot = {
-                    "rsi": None,  # 실시간 재진입 = 지표 조회 안 함!
-                    "cci": None,
-                    "obv_slope_pct": None,
-                    "regime": "NEUTRAL",
+                    "rsi": _ind_snap.get("rsi"),
+                    "cci": None,  # 이 워커는 CCI 미측정 (BB4H와 대칭 X)
+                    "obv_slope_pct": _ind_snap.get("obv_slope"),
+                    "macd_hist": _ind_snap.get("macd_hist"),
+                    "rsi_4h": _ind_snap.get("rsi_4h"),
+                    "regime": "REVERSAL_LONG" if side == "LONG" else "REVERSAL_SHORT",
                     "source": "RT_REENTRY_SUCCESS" if _use_success_reentry else "RT_REENTRY_FAIL",
                     "kst_hour": _kst_hour,
                     "rt_reentry_price": mp,
                     "prev_stop_price": _stop_price,
+                    "rebound_pct": round(_rebound_pct, 4),
+                    "indicator_msg": _ind_msg,
+                    "learning_msg": _learn_msg,
                     "reentry_count": re_count + 1 if not _use_success_reentry else 0,
                     "entered_at": datetime.now(timezone.utc).isoformat(),
                 }
