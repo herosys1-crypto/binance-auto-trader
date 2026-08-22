@@ -220,29 +220,41 @@ def run_realtime_reentry() -> dict:
 
             # 진입 실행!
             try:
-                # 🎯 v218 사장님 verbatim (2026-08-21):
-                # "실패한 심볼은... 다시 진입할 시점에 이전 포지션의 1.5배로 해줘 2번까지"
-                # = 실패 재진입 = 1.5x/2.25x 마틴게일! Success 재진입 = 원 자본!
+                # 🎯 v219 사장님 최종 마틴게일 (2026-08-22!):
+                # "300 600 1800" = 1단계 초기 / 2단계 이전×2 / 3단계 투자금전체×2
+                # "3단계까지 갈수 있다야 가능하면 가지않는 관리가 필요"
                 _base_capital = _get_base_capital_from_instance(si)
                 if _use_success_reentry:
                     # 사장님: 익절 후 재진입 = 초기 시작금액!
-                    _entry_capital = _base_capital
+                    _entry_capital = float(_base_capital)
                     _mult_label = ""
                 else:
-                    # 사장님: 실패 후 재진입 = 1.5^(count+1) 마틴게일!
-                    _entry_capital = _calc_reentry_capital(symbol, side, _base_capital)
-                    if _entry_capital is None:
+                    # 🎯 v219 사장님 신 마틴게일 (300/600/1800!)
+                    from decimal import Decimal as _D
+                    from app.services.sajangnim_capital import compute_reentry_capital, MAX_REENTRY_STAGE
+                    _stage = re_count + 2  # count=0 → 2단계, count=1 → 3단계
+                    if _stage > MAX_REENTRY_STAGE:
                         skipped += 1
                         logger.info(
-                            "[RT_REENTRY] v218 skip: %s %s MAX %d회 도달!",
-                            symbol, side, MAX_REENTRY_COUNT,
+                            "[RT_REENTRY] v219 STOP: %s %s stage=%d > MAX=%d (3단계까지!)",
+                            symbol, side, _stage, MAX_REENTRY_STAGE,
                         )
                         continue
-                    _mult = _entry_capital / _base_capital
-                    _mult_label = f" ×{_mult:.2f}"
+                    # 이전 진입 자본 리스트 구성!
+                    _prev_caps = [_D(str(_base_capital))]
+                    if _stage == 3:
+                        # 2단계 자본 = base × 2 (실 이력 없이 규정 기반 재구성!)
+                        _prev_caps.append(_D(str(_base_capital)) * _D("2"))
+                    _entry_capital_dec = compute_reentry_capital(_stage, _prev_caps)
+                    if _entry_capital_dec is None:
+                        skipped += 1
+                        continue
+                    _entry_capital = float(_entry_capital_dec)
+                    _mult = _entry_capital / float(_base_capital)
+                    _mult_label = f" ×{_mult:.2f} ({_stage}단계)"
                     logger.info(
-                        "[RT_REENTRY] v218 마틴게일: %s %s 자본 %.0f → %.0f USDT (×%.2f)",
-                        symbol, side, _base_capital, _entry_capital, _mult,
+                        "[RT_REENTRY] 🎯 v219 마틴게일 %d단계: %s %s base=%.0f → %.0f USDT (×%.2f)",
+                        _stage, symbol, side, float(_base_capital), _entry_capital, _mult,
                     )
                 cfg = {"capitals": [_entry_capital], "leverage": 2}
                 _reason_suffix += _mult_label  # UI 배지에 ×1.50 표시!

@@ -265,16 +265,33 @@ def run_auto_bb_breakdown() -> dict:
                         _si.symbol, _si.side, _recent_pnl,
                     )
                     continue
-                # 🚨 Agent 검증 fix 3 (2026-08-22): 하드코딩 필터 우회 제거!
-                # Agent 진단: rsi=50/regime 하드코딩 → 급등/RSI 필터 우회 = 마틴게일 폭탄!
-                # Fix: 실 지표 없으면 skip! (안전 우선!)
-                # = BB SUSTAINED가 = 다시 신호 감지할 때만 재진입 진행!
+                # 🎯 v219 REENTRY_QUEUE 부활! (2026-08-22 사장님 지적!)
+                # 사장님: "GALAUSDT -21.37 손실인데 재진입로직은 없는건가?"
+                # 이전: 실 지표 없음 = 완전 skip = REENTRY_QUEUE 사장(死藏)!
+                # 신: entry_snapshot 없이도 = 신 마틴게일 스캔 리스트에 추가!
+                # = 학습 필터는 skip (rsi=None → _matches_failure_condition = skip 안전!)
+                # = 사장님 신 마틴게일 (300/600/1800) = _create_auto_bb_strategy에서 적용!
+                all_sustained.append({
+                    "symbol": _si.symbol,
+                    "side": _si.side,
+                    "source": "REENTRY_QUEUE",
+                    "success_probability": 0.70,  # 재진입 = 신뢰도 중간!
+                    "sustained_bars": MIN_SUSTAINED_BARS,
+                    "regime": "NEUTRAL",
+                    "rsi": None, "cci": None, "obv_slope_pct": None,
+                    "change_24h": None,
+                    "mta_total": None,
+                    "_reentry_stage": _get_reentry_count(_si.symbol, _si.side) + 2,  # 2단계 or 3단계!
+                    "_base_capital": float(_si.total_capital or 300),
+                    "_prev_pnl": _pnl,
+                })
+                _reentry_added += 1
                 logger.info(
-                    "[auto_bb_breakdown] 🚨 REENTRY_QUEUE: %s %s = 실 지표 없음 = skip (BB 재감지 대기!)",
+                    "[auto_bb_breakdown] 🎯 v219 REENTRY_QUEUE: %s %s (stage=%d, pnl=%.2f, base=%.0f)",
                     _si.symbol, _si.side,
+                    _get_reentry_count(_si.symbol, _si.side) + 2,
+                    _pnl, float(_si.total_capital or 300),
                 )
-                _reentry_seen.discard(_key_r)  # skip 이니 = 재검토 가능하게!
-                continue
             if _reentry_added:
                 logger.info(
                     "[auto_bb_breakdown] 🎯 REENTRY_QUEUE: %d건 청산 실패 심볼 재진입 스캔 추가!",
