@@ -108,7 +108,8 @@ def run_auto_short_at_top() -> dict:
             is_testnet=False,
         )
 
-        # 5. 자본 계산 (사장님 1-2%!)
+        # 5. 자본 계산 (사장님 초기 금액 = default 300 USDT!)
+        # 사장님 규정: 전체 자산 무관! 1단계 = 초기 금액!
         from app.services.sajangnim_capital import compute_stage1_capital
         base_capital = compute_stage1_capital(bc, db)
         capital_float = float(base_capital)

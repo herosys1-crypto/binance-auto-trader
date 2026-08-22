@@ -1011,29 +1011,20 @@ async function openSajangnimSettingsModal() {
           "급등하는 심볼 4시간봉 최상단 볼밴 최상단밖 obv 최고점 macd rsi cci 모든 지표가 최고점일때 진입"
         </div>
         <div style="margin-bottom:10px;">
-          <label style="display:block;font-size:12px;color:#c4b5fd;margin-bottom:2px;">💰 진입 자본 (USDT!):</label>
+          <label style="display:block;font-size:12px;color:#c4b5fd;margin-bottom:2px;">💰 초기 진입 자본 (1단계 USDT!):</label>
           <input id="sn-default-capital" type="number" step="50" min="50" max="100000" value="${s.default_capital ?? 300}"
                  style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
           <div style="font-size:10px;color:#64748b;">사장님 default = 300 USDT / 운영하면서 조정!</div>
         </div>
-        <div style="margin-bottom:10px;">
-          <label style="display:block;font-size:12px;color:#c4b5fd;margin-bottom:2px;">📊 자본 모드:</label>
-          <select id="sn-capital-mode" onchange="_snToggleModeUI()" style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
-            <option value="fixed" ${(s.capital_mode||'fixed')==='fixed'?'selected':''}>💵 고정 (기본 = 300 USDT 사용!)</option>
-            <option value="percent" ${(s.capital_mode||'fixed')==='percent'?'selected':''}>📊 전체 자산 % (아래 자산% 사용!)</option>
-          </select>
-          <div style="font-size:10px;color:#64748b;margin-top:2px;">
-            💡 고정 = 위 「진입 자본」만 사용! 자산 % = 아래 값 × 전체 자산!
+        <div style="margin-bottom:12px;padding:10px;background:#1e293b;border-left:3px solid #ec4899;border-radius:4px;">
+          <div style="font-size:11px;color:#f472b6;font-weight:bold;margin-bottom:4px;">🎯 사장님 마틴게일 (v219 신 규정!):</div>
+          <div style="font-size:11px;color:#e2e8f0;line-height:1.6;">
+            <b>1단계</b> = 초기 (예: <b>${s.default_capital ?? 300} USDT</b>)<br>
+            <b>2단계</b> = 이전 × 2 (예: <b>${(s.default_capital ?? 300) * 2} USDT</b>)<br>
+            <b>3단계+</b> = 투자금 전체 × 2 (예: <b>${(s.default_capital ?? 300) * 6} USDT</b>!)
           </div>
-        </div>
-        <div id="sn-pct-box" style="margin-bottom:10px;opacity:${(s.capital_mode||'fixed')==='fixed'?'0.4':'1'};">
-          <label style="display:block;font-size:12px;color:#c4b5fd;margin-bottom:2px;">📈 자산 % (percent 모드 시!):</label>
-          <input id="sn-entry-pct" type="number" step="0.001" min="0.001" max="0.02" value="${s.entry_pct ?? 0.01}"
-                 ${(s.capital_mode||'fixed')==='fixed'?'disabled':''}
-                 style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
-          <div style="font-size:10px;color:#64748b;">
-            💡 예: 자산 30000 USDT × 0.01 = 300 USDT 진입! (자산 증가 시 자동 확대!)<br>
-            1% = 0.01, 2% = 0.02 (max = 사장님 상한!)
+          <div style="font-size:10px;color:#94a3b8;margin-top:6px;">
+            💡 전체 자산 무관 = 사장님 판단! 손실 확대 시 = 강력 반전!
           </div>
         </div>
         <div style="margin-bottom:14px;padding:8px;background:#1e293b;border-left:3px solid #f59e0b;border-radius:4px;">
@@ -1061,9 +1052,6 @@ function closeSajangnimSettingsModal() {
 async function saveSajangnimSettings() {
   const payload = {
     default_capital: parseFloat(document.getElementById('sn-default-capital').value || 300),
-    capital_mode: document.getElementById('sn-capital-mode').value || 'fixed',
-    entry_pct: parseFloat(document.getElementById('sn-entry-pct').value || 0.01),
-    daily_limit: parseInt(document.getElementById('sn-daily-limit').value || 1, 10),
   };
   try {
     const r = await api('/strategy-suggestions/sajangnim-settings', {method: 'PUT', body: JSON.stringify(payload)});
