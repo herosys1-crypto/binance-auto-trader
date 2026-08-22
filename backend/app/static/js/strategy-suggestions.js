@@ -1018,16 +1018,23 @@ async function openSajangnimSettingsModal() {
         </div>
         <div style="margin-bottom:10px;">
           <label style="display:block;font-size:12px;color:#c4b5fd;margin-bottom:2px;">📊 자본 모드:</label>
-          <select id="sn-capital-mode" style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
-            <option value="fixed" ${(s.capital_mode||'fixed')==='fixed'?'selected':''}>고정 (기본 = 300 USDT!)</option>
-            <option value="percent" ${(s.capital_mode||'fixed')==='percent'?'selected':''}>전체 자산 %</option>
+          <select id="sn-capital-mode" onchange="_snToggleModeUI()" style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
+            <option value="fixed" ${(s.capital_mode||'fixed')==='fixed'?'selected':''}>💵 고정 (기본 = 300 USDT 사용!)</option>
+            <option value="percent" ${(s.capital_mode||'fixed')==='percent'?'selected':''}>📊 전체 자산 % (아래 자산% 사용!)</option>
           </select>
+          <div style="font-size:10px;color:#64748b;margin-top:2px;">
+            💡 고정 = 위 「진입 자본」만 사용! 자산 % = 아래 값 × 전체 자산!
+          </div>
         </div>
-        <div style="margin-bottom:10px;">
-          <label style="display:block;font-size:12px;color:#c4b5fd;margin-bottom:2px;">📈 자산 % (percent 모드 시):</label>
+        <div id="sn-pct-box" style="margin-bottom:10px;opacity:${(s.capital_mode||'fixed')==='fixed'?'0.4':'1'};">
+          <label style="display:block;font-size:12px;color:#c4b5fd;margin-bottom:2px;">📈 자산 % (percent 모드 시!):</label>
           <input id="sn-entry-pct" type="number" step="0.001" min="0.001" max="0.02" value="${s.entry_pct ?? 0.01}"
+                 ${(s.capital_mode||'fixed')==='fixed'?'disabled':''}
                  style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
-          <div style="font-size:10px;color:#64748b;">1% = 0.01, 2% = 0.02 (max!)</div>
+          <div style="font-size:10px;color:#64748b;">
+            💡 예: 자산 30000 USDT × 0.01 = 300 USDT 진입! (자산 증가 시 자동 확대!)<br>
+            1% = 0.01, 2% = 0.02 (max = 사장님 상한!)
+          </div>
         </div>
         <div style="margin-bottom:14px;padding:8px;background:#1e293b;border-left:3px solid #f59e0b;border-radius:4px;">
           <div style="font-size:11px;color:#fbbf24;font-weight:bold;">📅 일 자동 진입 = 급등락 실시간과 공유!</div>
@@ -1070,10 +1077,19 @@ async function saveSajangnimSettings() {
     if (typeof toast === 'function') toast('❌ 저장 실패: ' + e.message, 'error');
   }
 }
+// 🎯 v219 UI 개선: 모드 변경 = 자산% 필드 활성/비활성 토글!
+function _snToggleModeUI() {
+  const mode = document.getElementById('sn-capital-mode').value;
+  const box = document.getElementById('sn-pct-box');
+  const input = document.getElementById('sn-entry-pct');
+  if (box) box.style.opacity = (mode === 'fixed') ? '0.4' : '1';
+  if (input) input.disabled = (mode === 'fixed');
+}
 if (typeof window !== 'undefined') {
   window.openSajangnimSettingsModal = openSajangnimSettingsModal;
   window.closeSajangnimSettingsModal = closeSajangnimSettingsModal;
   window.saveSajangnimSettings = saveSajangnimSettings;
+  window._snToggleModeUI = _snToggleModeUI;
 }
   window.resetAutoBBCounter = resetAutoBBCounter;  // 🔄 v163 리셋!
   document.addEventListener('DOMContentLoaded', () => {
