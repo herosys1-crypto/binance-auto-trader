@@ -997,6 +997,83 @@ window.saveOBVSettings = saveOBVSettings;
 window.loadOBVStatus = loadOBVStatus;
 setTimeout(loadOBVStatus, 800);
 setInterval(loadOBVStatus, 60000);
+
+// 🎯 v219 (2026-08-22 사장님!): 사장님 정점 SHORT 세팅 모달!
+async function openSajangnimSettingsModal() {
+  let s = {};
+  try { s = await api('/strategy-suggestions/sajangnim-settings'); } catch(e) {}
+  const html = `
+    <div class="modal-overlay" onclick="closeSajangnimSettingsModal()"
+         style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;">
+      <div onclick="event.stopPropagation()" style="background:#1e293b;padding:20px;border-radius:12px;max-width:480px;width:90%;color:#e2e8f0;border:2px solid #a78bfa;">
+        <h3 style="color:#a78bfa;margin:0 0 12px 0;font-size:18px;">🎯 사장님 정점 SHORT 세팅 (v219)</h3>
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:14px;">
+          "급등하는 심볼 4시간봉 최상단 볼밴 최상단밖 obv 최고점 macd rsi cci 모든 지표가 최고점일때 진입"
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="display:block;font-size:12px;color:#c4b5fd;margin-bottom:2px;">💰 진입 자본 (USDT!):</label>
+          <input id="sn-default-capital" type="number" step="50" min="50" max="100000" value="${s.default_capital ?? 300}"
+                 style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
+          <div style="font-size:10px;color:#64748b;">사장님 default = 300 USDT / 운영하면서 조정!</div>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="display:block;font-size:12px;color:#c4b5fd;margin-bottom:2px;">📊 자본 모드:</label>
+          <select id="sn-capital-mode" style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
+            <option value="fixed" ${(s.capital_mode||'fixed')==='fixed'?'selected':''}>고정 (기본 = 300 USDT!)</option>
+            <option value="percent" ${(s.capital_mode||'fixed')==='percent'?'selected':''}>전체 자산 %</option>
+          </select>
+        </div>
+        <div style="margin-bottom:10px;">
+          <label style="display:block;font-size:12px;color:#c4b5fd;margin-bottom:2px;">📈 자산 % (percent 모드 시):</label>
+          <input id="sn-entry-pct" type="number" step="0.001" min="0.001" max="0.02" value="${s.entry_pct ?? 0.01}"
+                 style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
+          <div style="font-size:10px;color:#64748b;">1% = 0.01, 2% = 0.02 (max!)</div>
+        </div>
+        <div style="margin-bottom:14px;">
+          <label style="display:block;font-size:12px;color:#c4b5fd;margin-bottom:2px;">📅 일 자동 진입 (건!):</label>
+          <input id="sn-daily-limit" type="number" step="1" min="0" max="10" value="${s.daily_limit ?? 1}"
+                 style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
+          <div style="font-size:10px;color:#64748b;">사장님 default = 1건 (매우 신중!) / 0 = OFF!</div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button onclick="closeSajangnimSettingsModal()" style="padding:6px 14px;background:#475569;color:#fff;border:none;border-radius:4px;cursor:pointer;">취소</button>
+          <button onclick="saveSajangnimSettings()" style="padding:6px 14px;background:#a78bfa;color:#000;border:none;border-radius:4px;cursor:pointer;font-weight:bold;">✅ 저장</button>
+        </div>
+      </div>
+    </div>`;
+  const div = document.createElement('div');
+  div.id = 'sajangnim-modal';
+  div.innerHTML = html;
+  document.body.appendChild(div);
+}
+function closeSajangnimSettingsModal() {
+  const el = document.getElementById('sajangnim-modal');
+  if (el) el.remove();
+}
+async function saveSajangnimSettings() {
+  const payload = {
+    default_capital: parseFloat(document.getElementById('sn-default-capital').value || 300),
+    capital_mode: document.getElementById('sn-capital-mode').value || 'fixed',
+    entry_pct: parseFloat(document.getElementById('sn-entry-pct').value || 0.01),
+    daily_limit: parseInt(document.getElementById('sn-daily-limit').value || 1, 10),
+  };
+  try {
+    const r = await api('/strategy-suggestions/sajangnim-settings', {method: 'PUT', body: JSON.stringify(payload)});
+    if (r.ok) {
+      if (typeof toast === 'function') toast('✅ 사장님 정점 세팅 저장!', 'success');
+      closeSajangnimSettingsModal();
+    } else {
+      if (typeof toast === 'function') toast('❌ ' + (r.error || '저장 실패'), 'error');
+    }
+  } catch (e) {
+    if (typeof toast === 'function') toast('❌ 저장 실패: ' + e.message, 'error');
+  }
+}
+if (typeof window !== 'undefined') {
+  window.openSajangnimSettingsModal = openSajangnimSettingsModal;
+  window.closeSajangnimSettingsModal = closeSajangnimSettingsModal;
+  window.saveSajangnimSettings = saveSajangnimSettings;
+}
   window.resetAutoBBCounter = resetAutoBBCounter;  // 🔄 v163 리셋!
   document.addEventListener('DOMContentLoaded', () => {
     // 🌟 v182 사장님 「세팅 유지!」: 즉시 backup 복원! (사장님 「끔」 보임 방지!)

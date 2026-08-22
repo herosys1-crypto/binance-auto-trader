@@ -203,6 +203,60 @@ def _count_auto_bb_used(db: Session) -> dict:
     }
 
 
+@router.get("/sajangnim-settings")
+def get_sajangnim_settings(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🎯 v219 (2026-08-22 사장님!): 사장님 실 성공 로직 세팅 조회!
+
+    사장님 verbatim: "지금 300usdt로 변경해주고 운영하면서 초기값을 조정할수 있게 만들어줘"
+    """
+    default_cap_row = db.get(SystemSetting, "sajangnim_default_capital")
+    mode_row = db.get(SystemSetting, "sajangnim_capital_mode")
+    pct_row = db.get(SystemSetting, "sajangnim_entry_pct")
+    daily_limit_row = db.get(SystemSetting, "sajangnim_daily_limit")
+
+    return {
+        "default_capital": float(default_cap_row.value) if default_cap_row and default_cap_row.value else 300.0,
+        "capital_mode": (mode_row.value if mode_row and mode_row.value else "fixed"),
+        "entry_pct": float(pct_row.value) if pct_row and pct_row.value else 0.01,
+        "daily_limit": int(daily_limit_row.value) if daily_limit_row and daily_limit_row.value else 1,
+    }
+
+
+@router.put("/sajangnim-settings")
+def set_sajangnim_settings(
+    payload: dict,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🎯 v219: 사장님 실 성공 로직 세팅 저장!"""
+    fields = {
+        "sajangnim_default_capital": ("default_capital", lambda v: str(max(50.0, min(100000.0, float(v))))),
+        "sajangnim_capital_mode": ("capital_mode", lambda v: str(v).lower() if str(v).lower() in ("fixed", "percent") else "fixed"),
+        "sajangnim_entry_pct": ("entry_pct", lambda v: str(max(0.001, min(0.02, float(v))))),
+        "sajangnim_daily_limit": ("daily_limit", lambda v: str(max(0, min(10, int(v))))),
+    }
+    updated = {}
+    for key, (payload_key, sanitizer) in fields.items():
+        if payload_key not in payload:
+            continue
+        try:
+            new_val = sanitizer(payload[payload_key])
+            row = db.get(SystemSetting, key)
+            if row:
+                row.value = new_val
+            else:
+                row = SystemSetting(key=key, value=new_val)
+                db.add(row)
+            updated[payload_key] = new_val
+        except Exception as e:
+            return {"error": f"{payload_key}: {e}"}
+    db.commit()
+    return {"updated": updated, "ok": True}
+
+
 @router.get("/recent-auto")
 def recent_auto_outcomes(
     hours: int = 24,
