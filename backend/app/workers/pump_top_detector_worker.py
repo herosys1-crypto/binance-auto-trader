@@ -243,20 +243,29 @@ def run_pump_top_detector() -> dict:
                     symbol, result["confidence"], result["change_24h"],
                 )
 
-                # 텔레그램 알림!
+                # 텔레그램 알림! (fix: NotificationService 사용!)
                 try:
-                    from app.services.telegram_service import send_message
-                    _msg = (
-                        f"🎯 <b>사장님 정점 감지!</b> (v219)\n"
-                        f"심볼: <code>{symbol}</code> SHORT\n"
-                        f"신뢰도: <b>{result['confidence']*100:.0f}%</b>\n"
+                    from app.services.notification_service import NotificationService
+                    _db_n = SessionLocal()
+                    _ns = NotificationService(_db_n)
+                    _body = (
+                        f"🎯 사장님 정점 감지! (v219)\n"
+                        f"심볼: {symbol} SHORT\n"
+                        f"신뢰도: {result['confidence']*100:.0f}%\n"
                         f"24h: +{result['change_24h']:.1f}%\n"
                         f"RSI: {result['rsi']:.1f} / CCI: {result['cci_last']:.0f}\n"
                         f"7중 확인 통과! 자동 SHORT 진입 대기!"
                     )
-                    send_message(_msg)
-                except Exception:
-                    pass
+                    _ns.send_system_alert(
+                        title=f"🎯 [v219 정점] {symbol} SHORT ({result['confidence']*100:.0f}%)",
+                        body=_body,
+                    )
+                    try:
+                        _db_n.close()
+                    except Exception:
+                        pass
+                except Exception as _te:
+                    logger.warning("[pump_top_v219] telegram 실패: %s", _te)
 
             except Exception as e:
                 logger.warning("[pump_top_v219] %s 스캔 실패: %s", symbol, e)

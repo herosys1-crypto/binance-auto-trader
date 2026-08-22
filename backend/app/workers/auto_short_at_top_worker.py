@@ -225,18 +225,27 @@ def run_auto_short_at_top() -> dict:
                     symbol, capital_float, confidence, new_strategy.id,
                 )
 
-                # 텔레그램!
+                # 텔레그램! (fix: NotificationService!)
                 try:
-                    from app.services.telegram_service import send_message
-                    send_message(
-                        f"✅ <b>사장님 정점 자동 진입!</b> (v219)\n"
-                        f"심볼: <code>{symbol}</code> SHORT\n"
-                        f"자본: {capital_float:.2f} USDT × 2x\n"
-                        f"신뢰도: {confidence*100:.0f}%\n"
-                        f"오늘 {daily_limit - remaining}/{daily_limit}"
+                    from app.services.notification_service import NotificationService
+                    _db_n = SessionLocal()
+                    _ns = NotificationService(_db_n)
+                    _ns.send_system_alert(
+                        title=f"✅ [v219 자동] {symbol} SHORT 진입! ({confidence*100:.0f}%)",
+                        body=(
+                            f"✅ 사장님 정점 자동 진입! (v219)\n"
+                            f"심볼: {symbol} SHORT\n"
+                            f"자본: {capital_float:.2f} USDT × 2x\n"
+                            f"신뢰도: {confidence*100:.0f}%\n"
+                            f"오늘 {daily_limit - remaining}/{daily_limit}"
+                        ),
                     )
-                except Exception:
-                    pass
+                    try:
+                        _db_n.close()
+                    except Exception:
+                        pass
+                except Exception as _te:
+                    logger.warning("[sajangnim_top_v219] telegram 실패: %s", _te)
 
             except Exception as e:
                 logger.warning("[sajangnim_top_v219] %s 처리 실패: %s", key_str, e)
