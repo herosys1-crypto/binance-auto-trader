@@ -37,9 +37,12 @@ logger = logging.getLogger(__name__)
 
 LOOKBACK = 20        # 최고점 판정 창!
 MAX_SYMBOLS = 60     # 스캔 상한 (API 부담!)
-MIN_24H_CHANGE = 15.0  # 급등 필터 (사장님 verbatim!)
+# 🎯 v220 사장님 신 사상 (2026-08-22):
+# "급등락이 10 20 30 40 등등 상관없어 차트가 하락으로 시작할수 있는 타이핑에!"
+# = 크기 무관! but API pre-filter 최소치 5% (완전 제거 X = 하락 종목 필터!)
+MIN_24H_CHANGE = 5.0   # 15→5 = 사장님 사상 반영! (7중 지표만 중심!)
 ALERT_TTL_SEC = 1800   # 알람 유효 30분!
-MIN_CONFIDENCE = 0.85  # 최소 신뢰도!
+MIN_CONFIDENCE = 0.85  # 최소 신뢰도 (7/7 통과 = 남발 차단!)
 
 
 class PumpTopDetector:
@@ -86,9 +89,11 @@ class PumpTopDetector:
             # 6. 동시 최고점 (2~5 모두!)
             c6 = c2 and c3 and c4 and c5
 
-            # 7. 급등 후 정점!
+            # 🎯 v220 사장님 사상 (2026-08-22): 크기 무관! 최고점 반전만!
+            # 이전: chg24 ≥ 15% 강제 (10/20% 놓침!)
+            # 신: high 최고점 = 반전 후보 판정만!
             chg24 = float(ticker_24h.get("priceChangePercent", 0) or 0)
-            c7 = (chg24 >= MIN_24H_CHANGE and len(highs) >= LOOKBACK
+            c7 = (len(highs) >= LOOKBACK
                   and highs[-1] >= max(highs[-LOOKBACK:]))
 
             passed = sum([c1, c2, c3, c4, c5, c6, c7])

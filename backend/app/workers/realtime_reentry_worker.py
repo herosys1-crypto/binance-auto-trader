@@ -46,6 +46,43 @@ logger = logging.getLogger(__name__)
 
 REBOUND_PCT_FOR_REENTRY = 3.0  # SL/익절 대비 3% 반등 시!
 MAX_HOURLY_REENTRIES = 5        # 1h 최대 5건 (남발 방지!)
+STAGE3_MIN_WAIT_HOURS = 4.0     # 🎯 v220 사장님: "충분히 대기" = 최소 4h!
+
+
+def _verify_stage_indicators(bc, symbol: str, side: str) -> tuple[bool, str]:
+    """🎯 v220 사장님 (2026-08-22): 2/3단계 진입 = 15m 지표 재확인!
+
+    사장님 verbatim: "이제 하락할것 같은 차트와 보조지표가 나오면 진입"
+
+    LONG: RSI ≤35 + MACD hist 상승 꺾임 (하락 종료 → 상승!)
+    SHORT: RSI ≥65 + MACD hist 하락 꺾임 (상승 종료 → 하락!)
+    """
+    try:
+        kl = bc.get_klines(symbol=symbol, interval="15m", limit=60)
+        if not isinstance(kl, list) or len(kl) < 35:
+            return False, "kline 부족"
+        closes = [float(k[4]) for k in kl]
+        from app.services.bb_4h_band_analyzer import BB4HBandAnalyzer
+        rsi = BB4HBandAnalyzer._calc_rsi(closes)
+        rsi_prev = BB4HBandAnalyzer._calc_rsi(closes[:-1])
+        if rsi is None or rsi_prev is None:
+            return False, "rsi 계산 실패"
+        ema12 = BB4HBandAnalyzer._calc_ema(closes, 12)
+        ema26 = BB4HBandAnalyzer._calc_ema(closes, 26)
+        macd_line = [a - b for a, b in zip(ema12[14:], ema26)]
+        sig = BB4HBandAnalyzer._calc_ema(macd_line, 9)
+        if not sig or len(sig) < 3:
+            return False, "macd 부족"
+        hist = [m - s for m, s in zip(macd_line[-len(sig):], sig)]
+        if len(hist) < 3:
+            return False, "hist 부족"
+        if side == "LONG":  # 반전 상승!
+            ok = rsi <= 35 and rsi > rsi_prev and hist[-1] > hist[-2]
+        else:  # SHORT 반전 하락!
+            ok = rsi >= 65 and rsi < rsi_prev and hist[-1] < hist[-2]
+        return ok, f"RSI={rsi:.1f} hist={hist[-1]:.4f}"
+    except Exception as e:
+        return False, f"err={e}"
 
 
 def _get_base_capital_from_instance(si: StrategyInstance) -> float:
@@ -217,6 +254,52 @@ def run_realtime_reentry() -> dict:
             if not _should_enter:
                 skipped += 1
                 continue
+
+            # 🎯 v220 사장님 사상 (2026-08-22): 2/3단계 = 지표 재확인 + 대기!
+            # 사장님 verbatim: "이제 하락할것 같은 차트와 보조지표가 나오면 진입"
+            # "다시 하락과 상승하면 충분히 대기하고 다시 하락이나 상승이 진행되면 3단계"
+            if not _use_success_reentry:
+                _stage_no = re_count + 2  # count=0 → 2단계, count=1 → 3단계
+                # BinanceClient 준비!
+                try:
+                    from app.integrations.binance.client import BinanceClient
+                    from app.core.crypto import decrypt_text
+                    from app.models.exchange_account import ExchangeAccount
+                    _acc = db.execute(
+                        select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
+                    ).scalar_one_or_none()
+                    if not _acc:
+                        skipped += 1
+                        continue
+                    _bc_v220 = BinanceClient(
+                        api_key=decrypt_text(_acc.api_key_enc),
+                        api_secret=decrypt_text(_acc.api_secret_enc),
+                        is_testnet=False,
+                    )
+                    # 15m 지표 재확인!
+                    _ind_ok, _ind_msg = _verify_stage_indicators(_bc_v220, symbol, side)
+                    if not _ind_ok:
+                        skipped += 1
+                        logger.info(
+                            "[RT_REENTRY] 🎯 v220 stage %d skip: %s %s 지표 미확인 (%s)",
+                            _stage_no, symbol, side, _ind_msg,
+                        )
+                        continue
+                    _reason_suffix += f" [지표 OK: {_ind_msg}]"
+                    # 3단계 = "충분히 대기" = 최소 4h!
+                    if _stage_no == 3 and si.stopped_at:
+                        _elapsed_h = (datetime.now(timezone.utc) - si.stopped_at).total_seconds() / 3600
+                        if _elapsed_h < STAGE3_MIN_WAIT_HOURS:
+                            skipped += 1
+                            logger.info(
+                                "[RT_REENTRY] 🎯 v220 stage 3 skip: %s 대기 부족 (%.1fh < %.1fh)",
+                                symbol, _elapsed_h, STAGE3_MIN_WAIT_HOURS,
+                            )
+                            continue
+                except Exception as _ve:
+                    logger.warning("[RT_REENTRY] v220 지표 재확인 실패 = skip 안전: %s", _ve)
+                    skipped += 1
+                    continue
 
             # 진입 실행!
             try:
