@@ -46,12 +46,19 @@ MIN_SUCCESS_PROBABILITY = 0.60  # v179: 0.85→0.90 / v194: 0.90→0.80 / v201: 
 MIN_SYMBOL_SUCCESS_RATE = 0.40  # 0.30 → 0.40 (10%p 상향!)
 LOSS_BLOCKLIST_HOURS = 48  # 24 → 48 (2배 확대!)
 MIN_SUSTAINED_BARS = 5  # 3 → 5 (지속 확실!)
-# v179 신: regime 필수!
-# 사장님 (2026-08-21): 공격적 조정 = NEUTRAL/DOWNTREND도 허용!
+# 🚨 v220 사장님 (2026-08-22): 손실 -400 USDT 사고!
+# 사장님 지적: "손절이 너무 많이 문제를 찾아서 분석하고 학습해 이런 경우는 없게 해줘"
+# 원인: LONG "NEUTRAL" 허용 → 애매장 LONG 진입 → 39건 손실!
+# fix: LONG = UPTREND만! (NEUTRAL 제거!) SHORT도 좁힘!
 REQUIRED_REGIMES = {
-    "SHORT": {"DOWNTREND_STRONG", "DOWNTREND"},  # SHORT = 하락 계열 모두!
-    "LONG": {"UPTREND", "NEUTRAL"},  # LONG = 상승 + 중립!
+    "SHORT": {"DOWNTREND_STRONG", "DOWNTREND"},  # SHORT = 하락 계열!
+    "LONG": {"UPTREND"},  # 🚨 v220 사장님: NEUTRAL 제거! (하락장 LONG 방지!)
 }
+# 🚨 v220: WORST 시나리오 blocklist! (성공률 <20% + 표본 8+!)
+WORST_SCENARIO_MIN_TOTAL = 8      # 표본 8건+!
+WORST_SCENARIO_MAX_RATE = 0.20   # 성공률 20% 미만!
+# 🚨 v220: BTC 방향 필터! (하락 3%+ = LONG 금지, 상승 3%+ = SHORT 금지!)
+BTC_DIRECTION_THRESHOLD = 3.0    # BTC 24h ±3% 이상 = 반대 방향 skip!
 # v179 신: RSI 안전 범위!
 RSI_SAFE_RANGE = {
     "SHORT": (30, 70),  # SHORT: RSI 30~70 (과매도 반등 X, 과매수는 진입 시점!)
@@ -949,11 +956,80 @@ def _matches_success_condition(it: dict, side: str) -> bool:
     return match_count >= 2
 
 
+def _get_btc_change_24h() -> float | None:
+    """🚨 v220 사장님 (2026-08-22): BTC 24h 변동 조회 = 시장 방향!"""
+    try:
+        from app.core.redis_client import get_redis_client
+        import json as _j
+        r = get_redis_client()
+        _raw = r.get("ticker_24h:BTCUSDT")
+        if _raw:
+            _data = _j.loads(_raw.decode() if isinstance(_raw, bytes) else _raw)
+            return float(_data.get("priceChangePercent", 0) or 0)
+    except Exception:
+        pass
+    return None
+
+
+def _matches_worst_scenario(it: dict, side: str) -> bool:
+    """🚨 v220 사장님 (2026-08-22): WORST 시나리오 blocklist!
+    사장님 지적: 손절 39건 -400 USDT = 학습된 최악 시나리오 진입!
+    - suggestion_type:side 성공률 <20% + 표본 8건+ = blocklist!
+    - bb4h_bottom_reversal:LONG (0%!), bb4h_top_reversal:SHORT (0%!) 자동 skip!
+    """
+    _stype = it.get("suggestion_type") or it.get("source", "")
+    if not _stype:
+        return False
+    _key = f"{_stype}:{side}"
+    try:
+        from app.workers.pattern_learning_worker import get_learning_insights
+        from app.core.database import SessionLocal as _SL
+        _db2 = _SL()
+        try:
+            _insights = get_learning_insights(_db2) or {}
+        finally:
+            _db2.close()
+        # type_side_rankings 조회!
+        for r in _insights.get("type_side_rankings", []):
+            if r.get("key") == _key and r.get("total", 0) >= WORST_SCENARIO_MIN_TOTAL:
+                _rate = r.get("success_rate", 1.0)
+                if _rate < WORST_SCENARIO_MAX_RATE:
+                    return True  # WORST 시나리오 = skip!
+    except Exception:
+        pass
+    return False
+
+
+def _matches_btc_direction_conflict(side: str) -> bool:
+    """🚨 v220 사장님 (2026-08-22): BTC 24h 방향 반대 = 진입 금지!
+    - BTC 하락 3%+ = LONG 금지!
+    - BTC 상승 3%+ = SHORT 금지!
+    """
+    _btc = _get_btc_change_24h()
+    if _btc is None:
+        return False  # BTC 데이터 없으면 = 통과!
+    if side == "LONG" and _btc < -BTC_DIRECTION_THRESHOLD:
+        return True  # BTC 하락 = LONG skip!
+    if side == "SHORT" and _btc > BTC_DIRECTION_THRESHOLD:
+        return True  # BTC 상승 = SHORT skip!
+    return False
+
+
 def _matches_failure_condition(it: dict, side: str) -> bool:
     """🎓 v198: 진입 조건 = 학습된 실패 조건 매치?
 
     True 반환 = 실패 조건! = 자동 진입 skip!
+
+    🚨 v220 사장님 (2026-08-22): 손실 -400 USDT 방지 = 신 필터 통합!
+    - WORST 시나리오 blocklist (성공률 <20%!)
+    - BTC 방향 반대 (LONG 시 BTC 하락!)
     """
+    # 🚨 v220 신 필터 우선! (사장님 자본 보호!)
+    if _matches_worst_scenario(it, side):
+        return True
+    if _matches_btc_direction_conflict(side):
+        return True
+
     from app.core.database import SessionLocal as _SL
     _db = _SL()
     try:
