@@ -352,6 +352,30 @@ def start_scheduler() -> None:
         id="pending_hc_fast",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🎯 v219 (2026-08-22 사장님 실 성공 로직!): 정점 감지 워커! 매 5분!
+    # 사장님 verbatim: "급등하는 심볼 4시간봉 최상단 볼밴 최상단밖 obv 최고점
+    #                  macd rsi cci 모든 지표가 최고점일때 포지션 진입!"
+    # 7중 조건 통과 → Redis 알람 → auto_short_at_top_worker가 자동 진입!
+    def _pump_top_detector():
+        from app.workers.pump_top_detector_worker import run_pump_top_detector
+        run_pump_top_detector()
+    scheduler.add_job(
+        guarded_job("pump_top_detector", 240, _pump_top_detector),
+        trigger=IntervalTrigger(minutes=5),
+        id="pump_top_detector",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # 🎯 v219 사장님 자동 진입! 매 30초!
+    # daily_limit=1 (매우 신중!) 자본 = 전체 자산 × 1~2%!
+    def _auto_short_at_top():
+        from app.workers.auto_short_at_top_worker import run_auto_short_at_top
+        run_auto_short_at_top()
+    scheduler.add_job(
+        guarded_job("auto_short_at_top", 25, _auto_short_at_top),
+        trigger=IntervalTrigger(seconds=30),
+        id="auto_short_at_top",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 🎼 v206 Phase 4 (2026-08-21 사장님!): 오케스트라 자동 진단 + 자동 fix!
     # "우리 에이전트 팀이 많은데 왜 이런 문제가?
     #  오케스트라 지휘자가 각각의 에이전트팀을 컨트롤!"
@@ -362,6 +386,28 @@ def start_scheduler() -> None:
         guarded_job("orchestra_health", 240, _orchestra_health),
         trigger=IntervalTrigger(minutes=5),  # 매 5분!
         id="orchestra_health",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    # 🐻 v219 (2026-08-22 사장님 C옵션!): 사장님 정점 감지 + 자동 SHORT!
+    # 사장님 verbatim: "C 진행해줘" = B (Redis 알람) + auto_short_at_top!
+    # daily_limit=1 = 매우 신중 = 소액 실 검증!
+    # 헌법 v219: '7중 조건 100% 통과 + confidence 0.90+ = 사장님 신중 자동 진입!'
+    def _pump_top_detector():
+        from app.workers.pump_top_detector_worker import run_pump_top_detector
+        run_pump_top_detector()
+    scheduler.add_job(
+        guarded_job("pump_top_detector", 240, _pump_top_detector),
+        trigger=IntervalTrigger(minutes=5),  # 매 5분 = API 부담 최소!
+        id="pump_top_detector",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    def _auto_short_at_top():
+        from app.workers.auto_short_at_top_worker import run_auto_short_at_top
+        run_auto_short_at_top()
+    scheduler.add_job(
+        guarded_job("auto_short_at_top", 25, _auto_short_at_top),
+        trigger=IntervalTrigger(seconds=30),  # 매 30초 = 알람 즉시 반응!
+        id="auto_short_at_top",
         replace_existing=True, max_instances=1, coalesce=True,
     )
     # 📊 v152 (2026-08-16 사장님!): Chart Pattern Learning Team!

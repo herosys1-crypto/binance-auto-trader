@@ -32,6 +32,47 @@ class ChartAnalyzer:
         self.client = binance_client
 
     @staticmethod
+    def compute_cci(klines: list, period: int = 20) -> list[float]:
+        """kline 리스트 → CCI (Commodity Channel Index) 리스트 (v219 사장님 정점 감지!).
+
+        공식:
+          Typical Price (TP) = (High + Low + Close) / 3
+          SMA_TP = TP 의 period 이동 평균
+          Mean Deviation (MD) = mean(|TP - SMA_TP|)  # period 창 안!
+          CCI = (TP - SMA_TP) / (0.015 * MD)
+
+        CCI 값 해석:
+          +200 이상 = 매우 강한 상승 (정점 근접 = SHORT 진입 근거!)
+          -200 이하 = 매우 강한 하락
+          -100 ~ +100 = 정상 범위
+
+        Returns:
+            list[float] — 각 봉의 CCI. 초기 period-1 개는 0.0 (계산 불가).
+        """
+        if not klines or len(klines) < period:
+            return [0.0] * len(klines) if klines else []
+        try:
+            tps: list[float] = []
+            for kl in klines:
+                h = float(kl[2])
+                l = float(kl[3])
+                c = float(kl[4])
+                tps.append((h + l + c) / 3.0)
+        except (ValueError, TypeError, IndexError):
+            return [0.0] * len(klines)
+
+        cci: list[float] = [0.0] * len(klines)
+        for i in range(period - 1, len(tps)):
+            window = tps[i - period + 1 : i + 1]
+            sma = sum(window) / period
+            md = sum(abs(x - sma) for x in window) / period
+            if md == 0:
+                cci[i] = 0.0
+                continue
+            cci[i] = (tps[i] - sma) / (0.015 * md)
+        return cci
+
+    @staticmethod
     def compute_obv(klines: list) -> list[Decimal]:
         """kline 리스트 → OBV 리스트.
 

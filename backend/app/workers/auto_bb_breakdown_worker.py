@@ -520,8 +520,17 @@ def run_auto_bb_breakdown() -> dict:
             # = 급등 계속 = 물타기 3단계 = 큰 손실!
             # 로직: 24h 변동 > +15% = SHORT 금지! (급등 계속 위험!)
             #        24h 변동 < -15% = LONG 금지! (급락 계속 위험!)
+            # 🐻 v219 사장님 C옵션 예외 (2026-08-22): sajangnim_top_short = bypass!
+            #   = 급등이 곧 진입 근거 (정점 반전 SHORT!) = 사장님 명시 요구!
+            _entry_reason = str(it.get("entry_reason") or "")
+            _sugg_type = str(it.get("suggestion_type") or "")
+            _bypass_pump_filter = (
+                _sugg_type == "sajangnim_top_short"
+                or _entry_reason == "pump_top_v219"
+                or str(it.get("source") or "") == "SAJANGNIM_TOP"
+            )
             change_24h = it.get("change_24h")
-            if change_24h is not None:
+            if not _bypass_pump_filter and change_24h is not None:
                 try:
                     _c = float(change_24h)
                     if side == "SHORT" and _c > 15.0:
