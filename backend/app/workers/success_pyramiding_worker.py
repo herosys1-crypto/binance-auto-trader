@@ -37,13 +37,28 @@ from app.models.strategy_template import StrategyTemplate
 
 logger = logging.getLogger(__name__)
 
-# 사장님 사상: 강한 지속 신호 = 익절 상태에서 peak 대비 미미한 되돌림!
-MIN_UNREALIZED_PNL_PCT = 3.0       # 최소 미실현 ROI +3% (익절중 판정!)
-MIN_SUSTAIN_PCT = 1.0              # 시작가 대비 방향 지속 최소 1%
-PEAK_HOLD_TOLERANCE_PCT = 1.5      # peak 대비 되돌림 ≤1.5% = 지속 강함!
-MAX_PYRAMID_COUNT = 5              # 헌법 47: 최대 5회!
+# 🚨 v220 사장님 (2026-08-22): 조건 완화 = 미발동 fix!
+# 사장님 지적: "익절중인 심볼들의 추가 포지션에 들어가지 못한 원인 파악!"
+MIN_UNREALIZED_PNL_PCT = 2.0       # v220: 3.0 → 2.0 (raw price, 레버리지 무시!)
+MIN_SUSTAIN_PCT = 0.5              # v220: 1.0 → 0.5 (더 빨리 발동!)
+PEAK_HOLD_TOLERANCE_PCT = 2.5      # v220: 1.5 → 2.5 (변동성 관대!)
 COOLDOWN_SECONDS = 300             # 심볼:side 단위 5분 cooldown!
 PYRAMID_COUNT_TTL_DAYS = 7         # 카운터 7일 후 리셋!
+
+# 🎯 v220 사장님 신 마틴게일 (300/600/1800 규정!)
+# 사장님 verbatim: "3단계까지 갈수 있다야 가능하면 가지않는 관리가 필요"
+MAX_PYRAMID_COUNT = 3              # 5 → 3 (사장님 상한!)
+MARTINGALE_MULT = [1.0, 2.0, 6.0]  # 1단계=원, 2단계=×2, 3단계=투자금 전체×2
+
+# 🚨 v220 사장님: 원본 필터 확장! (사장님 지적 root cause!)
+# 이전: auto_bb_break* 만 → sajangnim_top_short/realtime_reentry = skip!
+# 신: 모든 자동 진입 소스 = 익절중 pyramid 가능!
+AUTO_ENTRY_TYPES_PYRAMID = (
+    "auto_bb_break",        # BB SUSTAINED / PENDING_HC / OBV_REVERSE / REENTRY_QUEUE
+    "sajangnim_top",        # v219 정점 SHORT!
+    "realtime_reentry",     # 실시간 재진입!
+    "chart_pattern",        # 차트 패턴!
+)
 
 
 def _redis():
@@ -173,8 +188,10 @@ def run_success_pyramiding() -> dict:
                 skipped += 1
                 continue
 
-            # 자동 진입 원본만 대상 (사장님 사상 = 자동 로직!)
-            if not stype.startswith("auto_bb_break"):
+            # 🚨 v220 사장님 (2026-08-22): 자동 진입 소스 확장! (root cause fix!)
+            # 이전: auto_bb_break* 만 = sajangnim_top_short 등 = 100% skip!
+            # 신: 모든 자동 진입 소스 = pyramid 가능!
+            if not any(stype.startswith(t) for t in AUTO_ENTRY_TYPES_PYRAMID):
                 skipped += 1
                 continue
 
@@ -255,10 +272,23 @@ def run_success_pyramiding() -> dict:
             except Exception:
                 pass  # ticker 실패 = 조용히 통과 (Redis mark_price는 이미 확보!)
 
-            # 원 자본 (부모 total_capital) 재사용
-            base_capital = float(si.total_capital or 0)
-            if base_capital <= 0:
+            # 🎯 v220 사장님 신 마틴게일! (300/600/1800 사상 적용!)
+            # 1단계=원, 2단계=×2, 3단계=투자금 전체×2
+            # 이전: base_capital 그대로 재사용!
+            # 신: pyramid 단계별 × MARTINGALE_MULT!
+            _parent_capital = float(si.total_capital or 0)
+            if _parent_capital <= 0:
                 continue
+            _seq = pyr_count + 1  # 1, 2, 3
+            if _seq > MAX_PYRAMID_COUNT:
+                skipped += 1
+                continue
+            _mult = MARTINGALE_MULT[_seq - 1]
+            base_capital = _parent_capital * _mult
+            logger.info(
+                "[SUCCESS_PYRAMID] 🎯 v220 마틴게일 #%d: %s %s 부모=%.0f × %.1fx = %.0f USDT",
+                _seq, si.symbol, si.side, _parent_capital, _mult, base_capital,
+            )
 
             # 신 pyramid strategy 생성
             try:
