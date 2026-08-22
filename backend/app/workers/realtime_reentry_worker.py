@@ -54,8 +54,11 @@ def _verify_stage_indicators(bc, symbol: str, side: str) -> tuple[bool, str]:
 
     사장님 verbatim: "이제 하락할것 같은 차트와 보조지표가 나오면 진입"
 
-    LONG: RSI ≤35 + MACD hist 상승 꺾임 (하락 종료 → 상승!)
-    SHORT: RSI ≥65 + MACD hist 하락 꺾임 (상승 종료 → 하락!)
+    🎯 v220 Fix 22 (2026-08-23 사장님 지적!): 지표 완화!
+    사장님 지적: "손실 18건인데 재진입 1건!" = 조건 너무 엄격 = 대부분 skip!
+    이전: LONG RSI≤35 (매우 엄격!) / SHORT RSI≥65
+    신: LONG RSI≤45 (완화!) OR MACD hist 반전 (OR 조건!) / SHORT RSI≥55 OR MACD 반전
+    = 사장님 재진입 사상 = 반등 신호만 있어도 진입!
     """
     try:
         kl = bc.get_klines(symbol=symbol, interval="15m", limit=60)
@@ -76,11 +79,15 @@ def _verify_stage_indicators(bc, symbol: str, side: str) -> tuple[bool, str]:
         hist = [m - s for m, s in zip(macd_line[-len(sig):], sig)]
         if len(hist) < 3:
             return False, "hist 부족"
-        if side == "LONG":  # 반전 상승!
-            ok = rsi <= 35 and rsi > rsi_prev and hist[-1] > hist[-2]
-        else:  # SHORT 반전 하락!
-            ok = rsi >= 65 and rsi < rsi_prev and hist[-1] < hist[-2]
-        return ok, f"RSI={rsi:.1f} hist={hist[-1]:.4f}"
+        # 🎯 v220 Fix 22: OR 조건 = 완화! (RSI or MACD 하나만 만족!)
+        macd_reversal = hist[-1] > hist[-2] if side == "LONG" else hist[-1] < hist[-2]
+        if side == "LONG":
+            rsi_ok = rsi <= 45 and rsi > rsi_prev  # 45 (기존 35 완화!)
+            ok = rsi_ok or macd_reversal  # OR 조건!
+        else:
+            rsi_ok = rsi >= 55 and rsi < rsi_prev  # 55 (기존 65 완화!)
+            ok = rsi_ok or macd_reversal
+        return ok, f"RSI={rsi:.1f}({'OK' if rsi_ok else 'X'}) hist={hist[-1]:.4f}({'REV' if macd_reversal else 'X'})"
     except Exception as e:
         return False, f"err={e}"
 

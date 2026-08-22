@@ -2834,16 +2834,24 @@ async function loadLiveStatus() {
     const losses = recentAuto.losses || [];
     const pnlColor = totalPnl >= 0 ? '#10b981' : '#ef4444';
     const netColor = (summary.net_pnl || 0) >= 0 ? '#10b981' : '#ef4444';
+    // 🎯 2026-08-23 사장님: 배지 클릭 = 상세 modal! (활성/손절/익절/전체 미실현!)
+    // recentAuto.items = 자동 진입 상세 / activeList = 전체 활성 (수동 포함!)
+    window.__liveStatusCache = {
+      items: recentAuto.items || [],
+      losses,
+      activeList,
+      summary,
+    };
 
     el.innerHTML = `
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-        <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;">
-          <div style="font-size:10px;color:#94a3b8;">💼 활성 전략</div>
+        <div onclick="openLiveDetailModal('active_all')" style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;cursor:pointer;" title="클릭 = 전체 활성 심볼 리스트!">
+          <div style="font-size:10px;color:#94a3b8;">💼 활성 전략 🔍</div>
           <div style="font-size:16px;font-weight:bold;color:#fff;">${activeList.length}건</div>
           <div style="font-size:10px;color:#94a3b8;">🐂 ${longCnt} · 🐻 ${shortCnt}</div>
         </div>
-        <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;">
-          <div style="font-size:10px;color:#94a3b8;">💰 미실현 PnL</div>
+        <div onclick="openLiveDetailModal('unrealized')" style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;cursor:pointer;" title="클릭 = 심볼별 미실현 PnL!">
+          <div style="font-size:10px;color:#94a3b8;">💰 미실현 PnL 🔍</div>
           <div style="font-size:16px;font-weight:bold;color:${pnlColor};">${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}</div>
           <div style="font-size:10px;color:#94a3b8;">🟢 ${profitCnt} · 🔴 ${lossCnt}</div>
         </div>
@@ -2854,9 +2862,9 @@ async function loadLiveStatus() {
           <div style="font-size:14px;font-weight:bold;color:#fbbf24;">${autoBb.daily_used || 0}/${autoBb.limit || 0}</div>
         </div>
         <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;text-align:center;">
-          <div style="font-size:10px;color:#94a3b8;">🎯 자동 활성/손절/익절</div>
+          <div style="font-size:10px;color:#94a3b8;">🎯 자동 활성/손절/익절 🔍</div>
           <div style="font-size:12px;font-weight:bold;">
-            <span style="color:#10b981;">${summary.active||0}</span>/<span style="color:#ef4444;">${summary.stop_loss||0}</span>/<span style="color:#a78bfa;">${summary.take_profit||0}</span>
+            <span onclick="openLiveDetailModal('auto_active')" style="color:#10b981;cursor:pointer;text-decoration:underline;" title="자동 진입 활성 상세!">${summary.active||0}</span>/<span onclick="openLiveDetailModal('auto_loss')" style="color:#ef4444;cursor:pointer;text-decoration:underline;" title="자동 진입 손절 상세!">${summary.stop_loss||0}</span>/<span onclick="openLiveDetailModal('auto_profit')" style="color:#a78bfa;cursor:pointer;text-decoration:underline;" title="자동 진입 익절 상세!">${summary.take_profit||0}</span>
           </div>
         </div>
         <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;text-align:center;">
@@ -2879,6 +2887,92 @@ async function loadLiveStatus() {
 }
 window.loadLiveStatus = loadLiveStatus;
 window.toggleV219Card = toggleV219Card;
+
+// 🎯 2026-08-23 사장님: 지금 운영 상태 배지 클릭 = 상세 리스트!
+// mode = 'active_all' / 'unrealized' / 'auto_active' / 'auto_loss' / 'auto_profit'
+function openLiveDetailModal(mode) {
+  const cache = window.__liveStatusCache || {items:[], losses:[], activeList:[], summary:{}};
+  let title = '', rows = [], colorFn = (v) => v >= 0 ? '#10b981' : '#ef4444';
+  const fmtPnl = (v) => (v == null) ? '-' : ((v >= 0 ? '+' : '') + v.toFixed(2));
+
+  if (mode === 'active_all') {
+    title = `💼 전체 활성 전략 (${cache.activeList.length}건)`;
+    rows = cache.activeList
+      .map(s => ({
+        symbol: s.symbol, side: s.side, pnl: parseFloat(s.unrealized_pnl || 0),
+        status: s.status, id: s.id, sub: `#${s.id} · ${s.status||''}`,
+      }))
+      .sort((a, b) => a.pnl - b.pnl);
+  } else if (mode === 'unrealized') {
+    title = `💰 미실현 PnL (심볼별)`;
+    rows = cache.activeList
+      .map(s => ({
+        symbol: s.symbol, side: s.side, pnl: parseFloat(s.unrealized_pnl || 0),
+        status: s.status, id: s.id, sub: `#${s.id} · ${s.status||''}`,
+      }))
+      .sort((a, b) => a.pnl - b.pnl);
+  } else if (mode === 'auto_active') {
+    title = `🎯 자동 진입 - 활성 (${cache.summary.active||0}건)`;
+    rows = cache.items.filter(x => x.outcome_status === 'ACTIVE').map(x => ({
+      symbol: x.symbol, side: x.side,
+      pnl: parseFloat(x.unrealized_pnl || 0),
+      status: x.strategy_status, id: x.strategy_id,
+      sub: `${x.suggestion_type} · ${x.strategy_status||''} · ${x.executed_at ? new Date(x.executed_at).toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : ''}`,
+    })).sort((a, b) => a.pnl - b.pnl);
+  } else if (mode === 'auto_loss') {
+    title = `🔴 자동 진입 - 손절 (${cache.summary.stop_loss||0}건, 총 ${fmtPnl(cache.summary.loss_sum)})`;
+    rows = cache.items.filter(x => x.outcome_status === 'STOP_LOSS').map(x => ({
+      symbol: x.symbol, side: x.side,
+      pnl: parseFloat(x.realized_pnl || 0),
+      status: 'SL', id: x.strategy_id,
+      sub: `${x.suggestion_type} · ${x.executed_at ? new Date(x.executed_at).toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : ''}`,
+    })).sort((a, b) => a.pnl - b.pnl);
+  } else if (mode === 'auto_profit') {
+    title = `✅ 자동 진입 - 익절 (${cache.summary.take_profit||0}건, 총 ${fmtPnl(cache.summary.profit_sum)})`;
+    rows = cache.items.filter(x => x.outcome_status === 'TAKE_PROFIT').map(x => ({
+      symbol: x.symbol, side: x.side,
+      pnl: parseFloat(x.realized_pnl || 0),
+      status: 'TP', id: x.strategy_id,
+      sub: `${x.suggestion_type} · ${x.executed_at ? new Date(x.executed_at).toLocaleString('ko-KR',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : ''}`,
+    })).sort((a, b) => b.pnl - a.pnl);
+  }
+
+  const bg = document.createElement('div');
+  bg.id = 'live-detail-modal-bg';
+  bg.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;';
+  bg.onclick = (e) => { if (e.target === bg) bg.remove(); };
+
+  const rowsHtml = rows.length === 0
+    ? '<div style="padding:16px;color:#94a3b8;text-align:center;">해당 항목 없음</div>'
+    : rows.map(r => `
+      <div style="display:grid;grid-template-columns:auto 1fr auto;gap:8px;padding:6px 8px;border-bottom:1px solid rgba(148,163,184,0.15);align-items:center;">
+        <div><span style="background:${r.side==='LONG'?'#065f46':'#7f1d1d'};color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;">${r.side||'?'}</span></div>
+        <div>
+          <div style="font-weight:bold;color:#e2e8f0;">${r.symbol}</div>
+          <div style="font-size:10px;color:#94a3b8;">${r.sub||''}</div>
+        </div>
+        <div style="font-family:monospace;font-weight:bold;color:${colorFn(r.pnl)};text-align:right;">${fmtPnl(r.pnl)}</div>
+      </div>
+    `).join('');
+
+  const total = rows.reduce((a, b) => a + (b.pnl || 0), 0);
+
+  bg.innerHTML = `
+    <div style="background:#0f172a;border:1px solid rgba(148,163,184,0.3);border-radius:10px;max-width:560px;width:100%;max-height:80vh;display:flex;flex-direction:column;">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid rgba(148,163,184,0.2);">
+        <div style="font-weight:bold;color:#e2e8f0;font-size:14px;">${title}</div>
+        <button onclick="document.getElementById('live-detail-modal-bg').remove()" style="background:#334155;color:#fff;border:none;padding:4px 10px;border-radius:4px;cursor:pointer;">✕</button>
+      </div>
+      <div style="padding:0;overflow-y:auto;flex:1;">${rowsHtml}</div>
+      <div style="padding:8px 12px;border-top:1px solid rgba(148,163,184,0.2);display:flex;justify-content:space-between;font-size:12px;">
+        <span style="color:#94a3b8;">${rows.length} 건</span>
+        <span style="font-family:monospace;font-weight:bold;color:${colorFn(total)};">합계: ${fmtPnl(total)}</span>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(bg);
+}
+window.openLiveDetailModal = openLiveDetailModal;
 // 자동 갱신 = 10초!
 setTimeout(loadLiveStatus, 800);
 setInterval(loadLiveStatus, 10000);

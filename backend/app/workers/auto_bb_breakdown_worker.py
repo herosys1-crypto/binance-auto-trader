@@ -808,8 +808,12 @@ def _count_used_slots(db: Session) -> int:
         .where(StrategySuggestion.suggestion_type.in_(_auto_types))
         .where(StrategySuggestion.executed_at >= today_start_utc)
     ).scalars().all()
-    # 익절 (SUCCESS) 제외!
-    return sum(1 for r in rows if r.outcome_status != "SUCCESS")
+    # 🎯 v220 Fix 22 (2026-08-23 사장님 지적!): 활성만 카운트!
+    # 사장님 지적: "손실 18건인데 재진입 1건만!" = 손절이 slot 소진!
+    # 사장님 사상: 손절 → 재진입 = 같은 심볼 재도전 = 신 slot 소비 X!
+    # 신: 활성 (PENDING)만 카운트 = SUCCESS(익절) + FAIL(손절) 모두 제외!
+    # → 재진입 = daily_limit 무관 = 자유롭게 진입!
+    return sum(1 for r in rows if r.outcome_status == "PENDING")
 
 
 def _get_active_symbol_keys(db: Session) -> set[str]:
