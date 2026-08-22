@@ -1163,7 +1163,7 @@ def _get_inverse_opportunity_keys(db: Session) -> set[str]:
 # 🎯 v202 사장님 (2026-08-21): 재진입 마틴게일!
 # 사장님 지시: "실패 심볼 재진입 시 = 옛 자본 × 1.5배! 최대 2번!"
 REENTRY_MULTIPLIER = 1.5
-MAX_REENTRY_COUNT = 1  # 🚨 v219 사장님 최종 (2026-08-22): 1번 재진입만! (2단계에서 STOP!)
+MAX_REENTRY_COUNT = 2  # 🎯 v219 사장님 최종 (2026-08-22): 재진입 2번 = 3단계까지! (3단계 = 가급적 피해야!)
 REENTRY_COUNT_TTL_DAYS = 7  # 7일 후 리셋!
 
 
