@@ -376,6 +376,20 @@ def start_scheduler() -> None:
         id="auto_short_at_top",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🚨 v220 (2026-08-22 사장님 verbatim!): 자동 증거금 추가!
+    # 사장님: "2단계 진입후 손실 30% 넘어가면 초기금액으로 증거금 추가
+    #         3단계 진입전에 청산가를 높이고 심볼차트가 하락이 시작하면 3단계 진입
+    #         최종청산가는 -80% 손실일때 청산"
+    # 매 15초 = ROI < -30% 감지 → add_position_margin 자동 호출!
+    def _auto_add_margin():
+        from app.workers.auto_add_margin_worker import run_auto_add_margin
+        run_auto_add_margin()
+    scheduler.add_job(
+        guarded_job("auto_add_margin", 12, _auto_add_margin),
+        trigger=IntervalTrigger(seconds=15),
+        id="auto_add_margin",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 🎼 v206 Phase 4 (2026-08-21 사장님!): 오케스트라 자동 진단 + 자동 fix!
     # "우리 에이전트 팀이 많은데 왜 이런 문제가?
     #  오케스트라 지휘자가 각각의 에이전트팀을 컨트롤!"
@@ -388,28 +402,20 @@ def start_scheduler() -> None:
         id="orchestra_health",
         replace_existing=True, max_instances=1, coalesce=True,
     )
-    # 🐻 v219 (2026-08-22 사장님 C옵션!): 사장님 정점 감지 + 자동 SHORT!
-    # 사장님 verbatim: "C 진행해줘" = B (Redis 알람) + auto_short_at_top!
-    # daily_limit=1 = 매우 신중 = 소액 실 검증!
-    # 헌법 v219: '7중 조건 100% 통과 + confidence 0.90+ = 사장님 신중 자동 진입!'
-    def _pump_top_detector():
-        from app.workers.pump_top_detector_worker import run_pump_top_detector
-        run_pump_top_detector()
+    # 💉 v220 (2026-08-22 사장님 verbatim!): 2단계 후 자동 증거금 추가! 매 15초!
+    # "2단계 진입후 손실 30% 넘으면 초기금액으로 증거금을 추가해줘 3단계 진입전에 청산가를 높이고
+    #  심볼차트가 하락이 시작하면 3단계 진입 / 최종청산가는 -80% 손실일때 청산"
+    # → 이 워커 = 증거금 추가만! 3단계 진입 = stage_trigger / -80% SL = evaluate_stop_loss.
+    def _auto_add_margin():
+        from app.workers.auto_add_margin_worker import run_auto_add_margin_once
+        run_auto_add_margin_once()
     scheduler.add_job(
-        guarded_job("pump_top_detector", 240, _pump_top_detector),
-        trigger=IntervalTrigger(minutes=5),  # 매 5분 = API 부담 최소!
-        id="pump_top_detector",
+        guarded_job("auto_add_margin", 12, _auto_add_margin),
+        trigger=IntervalTrigger(seconds=15),
+        id="auto_add_margin",
         replace_existing=True, max_instances=1, coalesce=True,
     )
-    def _auto_short_at_top():
-        from app.workers.auto_short_at_top_worker import run_auto_short_at_top
-        run_auto_short_at_top()
-    scheduler.add_job(
-        guarded_job("auto_short_at_top", 25, _auto_short_at_top),
-        trigger=IntervalTrigger(seconds=30),  # 매 30초 = 알람 즉시 반응!
-        id="auto_short_at_top",
-        replace_existing=True, max_instances=1, coalesce=True,
-    )
+    # (v219 pump_top_detector + auto_short_at_top = 위에 이미 등록됨! 중복 제거 2026-08-22.)
     # 📊 v152 (2026-08-16 사장님!): Chart Pattern Learning Team!
     # 매 6시간 = 1달 4H 캔들 → 패턴 감지 → 저장 + outcome tracking!
     def _chart_pattern_scan():
