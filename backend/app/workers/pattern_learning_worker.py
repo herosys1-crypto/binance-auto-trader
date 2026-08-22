@@ -381,7 +381,10 @@ def _analyze_lifecycle_patterns(db: Session, rows: list) -> dict:
         si = db.get(StrategyInstance, s.executed_strategy_id)
         if not si:
             continue
-        cfg = si.strategy_config or {}
+        # 🚨 v220 Fix 21 (2026-08-23 사장님!): si.strategy_config → s.strategy_config!
+        # StrategyInstance에는 strategy_config 필드 없음!
+        # entry_snapshot은 = StrategySuggestion.strategy_config에 저장됨!
+        cfg = s.strategy_config or {}
         if not isinstance(cfg, dict):
             continue
         entry_snap = cfg.get("entry_snapshot")
