@@ -774,11 +774,14 @@ def _count_used_slots(db: Session) -> int:
     from app.api.v1.strategy_suggestions import _auto_bb_reset_at
     today_start_utc = _auto_bb_reset_at(db)
 
+    # 🎯 v219 통합 (2026-08-22 사장님!): 사장님 정점 SHORT도 포함!
+    # 사장님 요구: "일 진입수는 급등락 실시간과 같이 세팅"
+    _auto_types = ["bb4h_auto_entry", "sajangnim_top_short"]
     rows = db.execute(
         select(StrategySuggestion)
         .where(StrategySuggestion.status == "EXECUTED")
         .where(StrategySuggestion.execution_mode == "AUTO")
-        .where(StrategySuggestion.suggestion_type == "bb4h_auto_entry")
+        .where(StrategySuggestion.suggestion_type.in_(_auto_types))
         .where(StrategySuggestion.executed_at >= today_start_utc)
     ).scalars().all()
     # 익절 (SUCCESS) 제외!

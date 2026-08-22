@@ -1029,11 +1029,12 @@ async function openSajangnimSettingsModal() {
                  style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
           <div style="font-size:10px;color:#64748b;">1% = 0.01, 2% = 0.02 (max!)</div>
         </div>
-        <div style="margin-bottom:14px;">
-          <label style="display:block;font-size:12px;color:#c4b5fd;margin-bottom:2px;">📅 일 자동 진입 (건!):</label>
-          <input id="sn-daily-limit" type="number" step="1" min="0" max="10" value="${s.daily_limit ?? 1}"
-                 style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
-          <div style="font-size:10px;color:#64748b;">사장님 default = 1건 (매우 신중!) / 0 = OFF!</div>
+        <div style="margin-bottom:14px;padding:8px;background:#1e293b;border-left:3px solid #f59e0b;border-radius:4px;">
+          <div style="font-size:11px;color:#fbbf24;font-weight:bold;">📅 일 자동 진입 = 급등락 실시간과 공유!</div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:4px;">
+            → 위 카드 「BB 이탈 자동 진입」 슬라이더에서 조정!<br>
+            → v219 정점 SHORT = 여기에 통합됨! (별도 X!)
+          </div>
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;">
           <button onclick="closeSajangnimSettingsModal()" style="padding:6px 14px;background:#475569;color:#fff;border:none;border-radius:4px;cursor:pointer;">취소</button>

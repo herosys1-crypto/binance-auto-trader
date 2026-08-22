@@ -38,39 +38,22 @@ from app.models.system_setting import SystemSetting
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DAILY_LIMIT = 1  # 사장님 매우 신중!
 DEFAULT_LEVERAGE = 2      # 사장님 default!
 ALERT_PATTERN = "pump_top:alert:*"
 
 
 def _get_daily_limit(db) -> int:
-    """SystemSetting daily_limit 조회 (default 1!)."""
+    """🎯 v219 통합 (2026-08-22 사장님!):
+    급등락 실시간과 같은 daily_limit 공유 = auto_bb_break_daily_limit!
+    사장님 요구: "일 진입수는 급등락 실시간과 같이 세팅"
+    """
     try:
-        row = db.get(SystemSetting, "sajangnim_daily_limit")
+        row = db.get(SystemSetting, "auto_bb_break_daily_limit")
         if row and row.value:
             return max(0, int(row.value))
     except Exception:
         pass
-    return DEFAULT_DAILY_LIMIT
-
-
-def _count_today_entries(db) -> int:
-    """오늘 (KST!) 진입 수!"""
-    try:
-        from datetime import timedelta as _td
-        now_utc = datetime.now(timezone.utc)
-        now_kst = now_utc + _td(hours=9)
-        kst_today = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_start_utc = (kst_today - _td(hours=9)).replace(tzinfo=timezone.utc)
-        rows = db.execute(
-            select(StrategySuggestion)
-            .where(StrategySuggestion.suggestion_type == "sajangnim_top_short")
-            .where(StrategySuggestion.execution_mode == "AUTO")
-            .where(StrategySuggestion.executed_at >= today_start_utc)
-        ).scalars().all()
-        return len(rows)
-    except Exception:
-        return 0
+    return 0
 
 
 def run_auto_short_at_top() -> dict:
@@ -80,15 +63,17 @@ def run_auto_short_at_top() -> dict:
     skipped = 0
     results: list[dict] = []
     try:
-        # 1. daily_limit 체크!
+        # 1. daily_limit 체크! (v219 통합 = auto_bb_break_daily_limit 공유!)
         daily_limit = _get_daily_limit(db)
         if daily_limit <= 0:
             return {"note": "daily_limit=0 (OFF!)", "entered": 0}
 
-        used = _count_today_entries(db)
+        # 통합 카운트 = 모든 자동 진입 (BB + PENDING_HC + OBV + v219 정점!) 포함!
+        from app.workers.auto_bb_breakdown_worker import _count_used_slots
+        used = _count_used_slots(db)
         remaining = daily_limit - used
         if remaining <= 0:
-            return {"note": f"daily {used}/{daily_limit}", "entered": 0}
+            return {"note": f"daily {used}/{daily_limit} (통합!)", "entered": 0}
 
         # 2. Redis 알람 조회!
         from app.core.redis_client import get_redis_client
