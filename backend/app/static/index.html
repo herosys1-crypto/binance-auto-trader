@@ -1048,13 +1048,27 @@
         <button class="btn-ghost btn text-xs" style="padding:8px 12px;min-height:36px" onclick="exportCsv('orders')">📥 주문 CSV</button>
       </div>
 
-      <!-- 🧠 v136 신 (2026-08-13 사장님!): 학습 인사이트 카드! -->
-      <div id="learning-insights-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(236,72,153,0.15),rgba(168,85,247,0.15));border:1px solid rgba(236,72,153,0.4)">
-        <div class="flex items-center justify-between mb-2 flex-wrap gap-1">
-          <span class="text-sm font-bold" style="color:#f9a8d4">
-            🧠 학습 인사이트 <span id="learning-badge" style="background:#ec4899;color:#fff;padding:1px 6px;border-radius:8px;font-size:11px">-</span>
+      <!-- 🎯 v219 (2026-08-22 사장님!): 「지금 운영 상태」 요약 카드! (최상단!) -->
+      <div id="live-status-card" class="card rounded-lg" style="padding:10px 12px;background:linear-gradient(135deg,rgba(34,197,94,0.2),rgba(59,130,246,0.2));border:2px solid rgba(34,197,94,0.5);">
+        <div class="flex items-center justify-between mb-1 flex-wrap gap-1">
+          <span class="text-sm font-bold" style="color:#86efac">
+            📊 지금 운영 상태 <span id="live-status-time" class="text-xs" style="color:#94a3b8;font-weight:normal;"></span>
           </span>
-          <div class="flex items-center gap-1">
+          <button onclick="loadLiveStatus()" class="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded">🔄</button>
+        </div>
+        <div id="live-status-body" style="font-size:12px;">
+          <div class="text-slate-400 text-center py-2">📊 로딩...</div>
+        </div>
+      </div>
+
+      <!-- 🧠 v136 신 (2026-08-13 사장님!): 학습 인사이트 카드! -->
+      <!-- 🎯 v219 (2026-08-22 사장님!): 접기/펴기! (default 접힘!) -->
+      <div id="learning-insights-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(236,72,153,0.15),rgba(168,85,247,0.15));border:1px solid rgba(236,72,153,0.4)">
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-1" onclick="toggleV219Card('learn-body', this)" style="cursor:pointer;">
+          <span class="text-sm font-bold" style="color:#f9a8d4">
+            <span class="v219-arrow">▶</span> 🧠 학습 인사이트 <span id="learning-badge" style="background:#ec4899;color:#fff;padding:1px 6px;border-radius:8px;font-size:11px">-</span>
+          </span>
+          <div class="flex items-center gap-1" onclick="event.stopPropagation()">
             <button onclick="runLearningCycleNow()"
                     class="text-xs bg-pink-600 hover:bg-pink-500 text-white px-2 py-1 rounded font-bold"
                     title="지금 즉시 = 학습 사이클 실행!">🎓 지금 학습</button>
@@ -1062,21 +1076,23 @@
                     class="text-xs bg-slate-700 hover:bg-slate-600 text-white px-2 py-1 rounded">🔄</button>
           </div>
         </div>
-        <div class="text-xs text-slate-400 mb-2">
-          Learning Team 자동 사이클 (매 4시간!) - 거래+예측+관찰 = 패턴 학습!
-        </div>
-        <div id="learning-insights-content" class="text-xs">
-          <div class="text-slate-400 text-center py-3">📊 로딩...</div>
+        <div id="learn-body" style="display:none;">
+          <div class="text-xs text-slate-400 mb-2">
+            Learning Team 자동 사이클 (매 4시간!) - 거래+예측+관찰 = 패턴 학습!
+          </div>
+          <div id="learning-insights-content" class="text-xs">
+            <div class="text-slate-400 text-center py-3">📊 로딩...</div>
+          </div>
         </div>
       </div>
 
       <!-- 🎓 v135 신 (2026-08-13 사장님!): 예측 학습 통계 카드! -->
       <div id="prediction-stats-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(168,85,247,0.15),rgba(59,130,246,0.15));border:1px solid rgba(168,85,247,0.4)">
-        <div class="flex items-center justify-between mb-2 flex-wrap gap-1">
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-1" onclick="toggleV219Card('pred-body', this)" style="cursor:pointer;">
           <span class="text-sm font-bold" style="color:#c4b5fd">
-            🎓 예측 학습 통계 <span id="pred-stats-badge" style="background:#a855f7;color:#fff;padding:1px 6px;border-radius:8px;font-size:11px">-</span>
+            <span class="v219-arrow">▶</span> 🎓 예측 학습 통계 <span id="pred-stats-badge" style="background:#a855f7;color:#fff;padding:1px 6px;border-radius:8px;font-size:11px">-</span>
           </span>
-          <div class="flex items-center gap-1">
+          <div class="flex items-center gap-1" onclick="event.stopPropagation()">
             <button onclick="runOutcomeNow()"
                     class="text-xs bg-purple-600 hover:bg-purple-500 text-white px-2 py-1 rounded font-bold"
                     title="지금 즉시 = 예측 outcome 확인!">🔄 지금 확인</button>
@@ -1085,54 +1101,58 @@
                     title="통계 새로고침">🎓 새로고침</button>
           </div>
         </div>
-        <div class="text-xs text-slate-400 mb-2">
-          예측 후 = 실제 시장 변동 학습 → 심볼별 성공률 = 다음 예측 confidence 조정!
-        </div>
-        <div id="pred-stats-content" class="text-xs">
-          <div class="text-slate-400 text-center py-3">📊 로딩...</div>
+        <div id="pred-body" style="display:none;">
+          <div class="text-xs text-slate-400 mb-2">
+            예측 후 = 실제 시장 변동 학습 → 심볼별 성공률 = 다음 예측 confidence 조정!
+          </div>
+          <div id="pred-stats-content" class="text-xs">
+            <div class="text-slate-400 text-center py-3">📊 로딩...</div>
+          </div>
         </div>
       </div>
 
       <!-- 🔎 v134a 신 (2026-08-13 사장님!): 심볼 분석기 카드! -->
       <div id="symbol-analyzer-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(6,182,212,0.15),rgba(59,130,246,0.15));border:1px solid rgba(6,182,212,0.4)">
-        <div class="flex items-center justify-between mb-2 flex-wrap gap-1">
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-1" onclick="toggleV219Card('sym-body', this)" style="cursor:pointer;">
           <span class="text-sm font-bold" style="color:#67e8f9">
-            🔎 심볼 분석기
+            <span class="v219-arrow">▶</span> 🔎 심볼 분석기
           </span>
         </div>
-        <div class="text-xs text-slate-400 mb-2">
-          어떤 심볼이든 = 즉시 분석! (RSI, BB, 다중 시간대, 진입 판단!)
-        </div>
+        <div id="sym-body" style="display:none;">
+          <div class="text-xs text-slate-400 mb-2">
+            어떤 심볼이든 = 즉시 분석! (RSI, BB, 다중 시간대, 진입 판단!)
+          </div>
 
-        <!-- 수동 입력 폼! -->
-        <div class="flex gap-1 items-center mb-2 flex-wrap">
-          <input type="text" id="sym-analyze-input" placeholder="예: BTCUSDT"
-                 style="background:#1e293b;border:1px solid #475569;color:#fff;padding:4px 8px;border-radius:4px;font-size:12px;min-width:120px;flex:1"
-                 onkeydown="if(event.key==='Enter'){analyzeSymbolNow()}">
-          <select id="sym-analyze-side"
-                  style="background:#1e293b;border:1px solid #475569;color:#fff;padding:4px 8px;border-radius:4px;font-size:12px">
-            <option value="LONG">🐂 LONG</option>
-            <option value="SHORT">🐻 SHORT</option>
-          </select>
-          <button onclick="analyzeSymbolNow()"
-                  class="text-xs font-bold px-3 py-1 rounded"
-                  style="background:linear-gradient(135deg,#0891b2,#3b82f6);color:#fff;border:0;cursor:pointer;white-space:nowrap">
-            📊 분석 열기
-          </button>
-        </div>
+          <!-- 수동 입력 폼! -->
+          <div class="flex gap-1 items-center mb-2 flex-wrap">
+            <input type="text" id="sym-analyze-input" placeholder="예: BTCUSDT"
+                   style="background:#1e293b;border:1px solid #475569;color:#fff;padding:4px 8px;border-radius:4px;font-size:12px;min-width:120px;flex:1"
+                   onkeydown="if(event.key==='Enter'){analyzeSymbolNow()}">
+            <select id="sym-analyze-side"
+                    style="background:#1e293b;border:1px solid #475569;color:#fff;padding:4px 8px;border-radius:4px;font-size:12px">
+              <option value="LONG">🐂 LONG</option>
+              <option value="SHORT">🐻 SHORT</option>
+            </select>
+            <button onclick="analyzeSymbolNow()"
+                    class="text-xs font-bold px-3 py-1 rounded"
+                    style="background:linear-gradient(135deg,#0891b2,#3b82f6);color:#fff;border:0;cursor:pointer;white-space:nowrap">
+              📊 분석 열기
+            </button>
+          </div>
 
-        <!-- 활성 심볼 quick 버튼! -->
-        <div class="text-xs text-slate-400 mb-1">💼 활성 포지션 (클릭 = 분석!):</div>
-        <div id="sym-active-list" class="flex flex-wrap gap-1" style="max-height:120px;overflow-y:auto;padding-right:4px"></div>
+          <!-- 활성 심볼 quick 버튼! -->
+          <div class="text-xs text-slate-400 mb-1">💼 활성 포지션 (클릭 = 분석!):</div>
+          <div id="sym-active-list" class="flex flex-wrap gap-1" style="max-height:120px;overflow-y:auto;padding-right:4px"></div>
+        </div>
       </div>
 
       <!-- 🎓 v134 신 (2026-08-13 사장님!): TP/SL 조정 제안 카드! -->
       <div id="tp-sl-advisor-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(59,130,246,0.15),rgba(139,92,246,0.15));border:1px solid rgba(59,130,246,0.4)">
-        <div class="flex items-center justify-between mb-2 flex-wrap gap-1">
+        <div class="flex items-center justify-between mb-2 flex-wrap gap-1" onclick="toggleV219Card('tpsl-body', this)" style="cursor:pointer;">
           <span class="text-sm font-bold" style="color:#93c5fd">
-            🎯 TP/SL 조정 제안 <span id="tp-sl-adv-count" style="background:#3b82f6;color:#fff;padding:1px 6px;border-radius:8px;font-size:11px">0</span>
+            <span class="v219-arrow">▶</span> 🎯 TP/SL 조정 제안 <span id="tp-sl-adv-count" style="background:#3b82f6;color:#fff;padding:1px 6px;border-radius:8px;font-size:11px">0</span>
           </span>
-          <div class="flex items-center gap-1 flex-wrap">
+          <div class="flex items-center gap-1 flex-wrap" onclick="event.stopPropagation()">
             <button onclick="scanTpSlAdvisor()"
                     class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-2 py-1 rounded font-bold"
                     title="지금 즉시 스캔!">🔍 지금 스캔</button>
@@ -1141,11 +1161,13 @@
                     title="학습 통계!">🎓 학습 통계</button>
           </div>
         </div>
-        <div class="text-xs text-slate-400 mb-2">
-          활성 포지션 = 심볼 흐름 분석 → 조정 제안! 사장님이 선택! (차후 자동!)
+        <div id="tpsl-body" style="display:none;">
+          <div class="text-xs text-slate-400 mb-2">
+            활성 포지션 = 심볼 흐름 분석 → 조정 제안! 사장님이 선택! (차후 자동!)
+          </div>
+          <div id="tp-sl-adv-list" class="space-y-2" style="max-height:400px;overflow-y:auto;padding-right:4px"></div>
+          <div id="learning-summary" class="mt-2 text-xs text-slate-400" style="display:none"></div>
         </div>
-        <div id="tp-sl-adv-list" class="space-y-2" style="max-height:400px;overflow-y:auto;padding-right:4px"></div>
-        <div id="learning-summary" class="mt-2 text-xs text-slate-400" style="display:none"></div>
       </div>
 
       <!-- 🚀 v133d 신 (2026-08-13 사장님!): 급등락 실시간 진입 카드! -->
@@ -2750,6 +2772,116 @@ function openBBMiddleRanking(direction) {
 // 「💾 템플릿으로 저장」 + openCreateModalForBatch + _parseBatchSymbols 는
 // /static/js/template-save.js 로 분리 (Phase 3 추가).
 
+
+// 🎯 v219 (2026-08-22 사장님!): 카드 접기/펴기 + localStorage 저장!
+function toggleV219Card(bodyId, headerEl) {
+  const body = document.getElementById(bodyId);
+  if (!body) return;
+  const isHidden = body.style.display === 'none';
+  body.style.display = isHidden ? 'block' : 'none';
+  // 화살표 갱신!
+  const arrow = headerEl.querySelector('.v219-arrow');
+  if (arrow) arrow.textContent = isHidden ? '▼' : '▶';
+  // localStorage 저장!
+  try { localStorage.setItem('v219-card-' + bodyId, isHidden ? 'open' : 'closed'); } catch (_) {}
+}
+// 페이지 로드 시 = localStorage 복원!
+document.addEventListener('DOMContentLoaded', () => {
+  ['learn-body','pred-body','sym-body','tpsl-body'].forEach(bid => {
+    try {
+      const saved = localStorage.getItem('v219-card-' + bid);
+      if (saved === 'open') {
+        const body = document.getElementById(bid);
+        if (body) {
+          body.style.display = 'block';
+          // 화살표도!
+          const card = body.closest('.card');
+          if (card) {
+            const arrow = card.querySelector('.v219-arrow');
+            if (arrow) arrow.textContent = '▼';
+          }
+        }
+      }
+    } catch (_) {}
+  });
+});
+
+// 🎯 v219 (2026-08-22 사장님!): 「지금 운영 상태」 요약 카드!
+async function loadLiveStatus() {
+  const el = document.getElementById('live-status-body');
+  const timeEl = document.getElementById('live-status-time');
+  if (!el) return;
+  try {
+    // 병렬 조회!
+    const [suggestions, recentAuto, autoBb] = await Promise.all([
+      api('/strategies?limit=200').catch(() => []),
+      api('/strategy-suggestions/recent-auto?hours=24').catch(() => ({items:[], summary:{}, losses:[]})),
+      api('/strategy-suggestions/auto-bb-limit').catch(() => ({limit:0, daily_used:0, active:0, stopped_loss:0, stopped_profit:0, remaining:0})),
+    ]);
+
+    // 활성 전략 필터!
+    const activeStatuses = ['STAGE1_OPEN','STAGE2_OPEN','STAGE3_OPEN','STAGE4_OPEN','STAGE5_OPEN','STAGE6_OPEN','STAGE7_OPEN','STAGE8_OPEN','STAGE9_OPEN','STAGE10_OPEN','TRAILING_ARMED','STOPPING','CRISIS_TP1_DONE','LIQUIDATED_WAITING_RETRY','TP1_DONE_PARTIAL','TP2_DONE_PARTIAL','TP3_DONE_PARTIAL','TP4_DONE_PARTIAL','TP5_DONE_PARTIAL','TP6_DONE_PARTIAL','TP7_DONE_PARTIAL','TP8_DONE_PARTIAL','TP9_DONE_PARTIAL','TP10_DONE_PARTIAL','STAGE1_OPEN_PENDING','STAGE2_OPEN_PENDING','STAGE3_OPEN_PENDING','STAGE4_OPEN_PENDING','STAGE5_OPEN_PENDING'];
+    const activeList = (suggestions||[]).filter(s => activeStatuses.includes(s.status));
+    let totalPnl = 0, longCnt = 0, shortCnt = 0, lossCnt = 0, profitCnt = 0;
+    activeList.forEach(s => {
+      const p = parseFloat(s.unrealized_pnl || 0);
+      totalPnl += p;
+      if (s.side === 'LONG') longCnt++; else shortCnt++;
+      if (p > 0) profitCnt++; else if (p < 0) lossCnt++;
+    });
+
+    const summary = recentAuto.summary || {};
+    const losses = recentAuto.losses || [];
+    const pnlColor = totalPnl >= 0 ? '#10b981' : '#ef4444';
+    const netColor = (summary.net_pnl || 0) >= 0 ? '#10b981' : '#ef4444';
+
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+        <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;">
+          <div style="font-size:10px;color:#94a3b8;">💼 활성 전략</div>
+          <div style="font-size:16px;font-weight:bold;color:#fff;">${activeList.length}건</div>
+          <div style="font-size:10px;color:#94a3b8;">🐂 ${longCnt} · 🐻 ${shortCnt}</div>
+        </div>
+        <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;">
+          <div style="font-size:10px;color:#94a3b8;">💰 미실현 PnL</div>
+          <div style="font-size:16px;font-weight:bold;color:${pnlColor};">${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}</div>
+          <div style="font-size:10px;color:#94a3b8;">🟢 ${profitCnt} · 🔴 ${lossCnt}</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px;">
+        <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;text-align:center;">
+          <div style="font-size:10px;color:#94a3b8;">📅 오늘 자동 진입</div>
+          <div style="font-size:14px;font-weight:bold;color:#fbbf24;">${autoBb.daily_used || 0}/${autoBb.limit || 0}</div>
+        </div>
+        <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;text-align:center;">
+          <div style="font-size:10px;color:#94a3b8;">🎯 자동 활성/손절/익절</div>
+          <div style="font-size:12px;font-weight:bold;">
+            <span style="color:#10b981;">${summary.active||0}</span>/<span style="color:#ef4444;">${summary.stop_loss||0}</span>/<span style="color:#a78bfa;">${summary.take_profit||0}</span>
+          </div>
+        </div>
+        <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;text-align:center;">
+          <div style="font-size:10px;color:#94a3b8;">💰 자동 순 PnL</div>
+          <div style="font-size:14px;font-weight:bold;color:${netColor};">${(summary.net_pnl||0) >= 0 ? '+' : ''}${(summary.net_pnl||0).toFixed(2)}</div>
+        </div>
+      </div>
+      ${losses.length > 0 ? `
+        <div style="background:rgba(127,29,29,0.5);padding:6px 8px;border-radius:6px;margin-top:6px;font-size:11px;">
+          🚨 <b style="color:#fca5a5;">손실 심볼 ${losses.length}건:</b>
+          ${losses.slice(0,3).map(l => `<span style="color:#fecaca;margin-left:6px;">${l.symbol} ${l.pnl.toFixed(2)}</span>`).join('')}
+          ${losses.length > 3 ? `<span style="color:#94a3b8;"> +${losses.length - 3} 개</span>` : ''}
+        </div>
+      ` : ''}
+    `;
+    if (timeEl) timeEl.textContent = ` (갱신: ${new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})})`;
+  } catch (e) {
+    el.innerHTML = `<div style="color:#ef4444;padding:4px;">❌ 로드 실패: ${e.message||e}</div>`;
+  }
+}
+window.loadLiveStatus = loadLiveStatus;
+window.toggleV219Card = toggleV219Card;
+// 자동 갱신 = 10초!
+setTimeout(loadLiveStatus, 800);
+setInterval(loadLiveStatus, 10000);
 
 </script>
 </body>
