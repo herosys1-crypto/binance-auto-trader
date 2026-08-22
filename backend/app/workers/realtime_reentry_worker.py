@@ -44,7 +44,7 @@ from app.models.strategy_template import StrategyTemplate
 
 logger = logging.getLogger(__name__)
 
-REBOUND_PCT_FOR_REENTRY = 3.0  # SL/익절 대비 3% 반등 시!
+REBOUND_PCT_FOR_REENTRY = 2.0  # 🎯 v220 Fix 23 (2026-08-23): 3% → 2% (더 빨리 진입!)
 MAX_HOURLY_REENTRIES = 5        # 1h 최대 5건 (남발 방지!)
 STAGE3_MIN_WAIT_HOURS = 4.0     # 🎯 v220 사장님: "충분히 대기" = 최소 4h!
 
@@ -198,6 +198,7 @@ def run_realtime_reentry() -> dict:
             re_count = _get_reentry_count(symbol, side)
             if re_count >= MAX_REENTRY_COUNT:
                 skipped += 1
+                logger.info("[RT_REENTRY] skip: %s %s MAX 재진입 %d회 도달!", symbol, side, re_count)
                 continue
 
             # mark_price 조회!
@@ -260,6 +261,18 @@ def run_realtime_reentry() -> dict:
 
             if not _should_enter:
                 skipped += 1
+                # 🎯 v220 Fix 23 상세 로그: 어떤 조건 미달?
+                _cur_pct = 0.0
+                if side == "LONG":
+                    _cur_pct = (mp - _stop_price) / _stop_price * 100 if _stop_price > 0 else 0
+                else:
+                    _cur_pct = (_stop_price - mp) / _stop_price * 100 if _stop_price > 0 else 0
+                logger.info(
+                    "[RT_REENTRY] skip: %s %s (%s) 반등 %.2f%% < %.1f%% 미달 (mp=%.4f stop=%.4f pnl=%.2f)",
+                    symbol, side,
+                    "실패" if _is_fail else ("익절" if _is_success else "무손익"),
+                    _cur_pct, REBOUND_PCT_FOR_REENTRY, mp, _stop_price, pnl,
+                )
                 continue
 
             # 🎯 v220 사장님 사상 (2026-08-22): 2/3단계 = 지표 재확인 + 대기!
