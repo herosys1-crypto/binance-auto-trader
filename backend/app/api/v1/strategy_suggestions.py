@@ -155,12 +155,19 @@ def _count_auto_bb_used(db: Session) -> dict:
     """🎯 v163 사장님: 자동 진입 카운트!
     - 포함: 활성 + 손절!
     - 제외: 익절! (성공 = 재도전 가능!)
+
+    🎯 v219 통합 fix (2026-08-22 사장님!):
+    사장님 요구: "일 진입수는 급등락 실시간과 같이 세팅"
+    UI 카운트 = Worker _count_used_slots와 통일 (헌법 6 단일 진실!)
+    suggestion_type 필터 = ["bb4h_auto_entry", "sajangnim_top_short"] 통합!
     """
     from app.models.strategy_instance import StrategyInstance
     reset_at = _auto_bb_reset_at(db)
+    _auto_types = ["bb4h_auto_entry", "sajangnim_top_short"]
     suggestions = db.execute(
         select(StrategySuggestion)
         .where(StrategySuggestion.execution_mode == "AUTO")
+        .where(StrategySuggestion.suggestion_type.in_(_auto_types))
         .where(StrategySuggestion.executed_at >= reset_at)
     ).scalars().all()
 
