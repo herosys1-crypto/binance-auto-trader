@@ -249,6 +249,11 @@ def run_realtime_reentry() -> dict:
             return {"note": f"1h {len(recent_re)}건 (max {MAX_HOURLY_REENTRIES}!)", "entered": 0}
 
         # 3. 최근 24h 청산된 자동 진입 심볼 조회!
+        # 🚨 v221 Fix 25 (2026-08-23 사장님 지적!): strategy_type 필터 확장!
+        # 이전: 'auto_bb_break%'만! → sajangnim_top_short 등 = 모두 skip!
+        # 신: 모든 자동 진입 소스 = 재진입 대상!
+        # 사장님 확인: 24h 청산 20건 중 = 이전 필터 = 1건만 통과!
+        from sqlalchemy import or_
         cutoff_24h = datetime.now(timezone.utc) - timedelta(hours=24)
         closed = db.execute(
             select(StrategyInstance)
@@ -256,8 +261,16 @@ def run_realtime_reentry() -> dict:
                   StrategyInstance.strategy_template_id == StrategyTemplate.id)
             .where(StrategyInstance.stopped_at >= cutoff_24h)
             .where(StrategyInstance.status.in_(list(TERMINAL_STATUSES)))
-            .where(StrategyTemplate.strategy_type.like('auto_bb_break%'))
+            .where(
+                or_(
+                    StrategyTemplate.strategy_type.like('auto_bb_break%'),
+                    StrategyTemplate.strategy_type.like('sajangnim_top%'),
+                    StrategyTemplate.strategy_type.like('realtime_reentry%'),
+                    StrategyTemplate.strategy_type.like('chart_pattern%'),
+                )
+            )
         ).scalars().all()
+        logger.info("[RT_REENTRY] 24h 청산 자동 진입 = %d건 (필터 확장!)", len(closed))
 
         # 4. 활성 심볼 skip!
         active = db.execute(
