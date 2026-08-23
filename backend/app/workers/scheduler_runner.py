@@ -404,8 +404,8 @@ def start_scheduler() -> None:
     #  심볼차트가 하락이 시작하면 3단계 진입 / 최종청산가는 -80% 손실일때 청산"
     # → 이 워커 = 증거금 추가만! 3단계 진입 = stage_trigger / -80% SL = evaluate_stop_loss.
     def _auto_add_margin():
-        from app.workers.auto_add_margin_worker import run_auto_add_margin_once
-        run_auto_add_margin_once()
+        from app.workers.auto_add_margin_worker import run_auto_add_margin
+        run_auto_add_margin()
     scheduler.add_job(
         guarded_job("auto_add_margin", 12, _auto_add_margin),
         trigger=IntervalTrigger(seconds=15),
@@ -500,6 +500,21 @@ def start_scheduler() -> None:
             guarded_job('resistance_reversal', 25, _resistance_reversal),
             trigger=IntervalTrigger(seconds=30),
             id='resistance_reversal',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
+
+        # Fix 31 v230 (2026-08-23): 4h + 반대 신뢰도 청산!
+        def _time_reverse_exit():
+            from app.workers.time_reverse_exit_worker import run_time_reverse_exit_once
+            run_time_reverse_exit_once()
+
+        scheduler.add_job(
+            guarded_job('time_reverse_exit', 240, _time_reverse_exit),
+            trigger=IntervalTrigger(minutes=5),
+            id='time_reverse_exit',
             replace_existing=True,
             max_instances=1,
             coalesce=True,

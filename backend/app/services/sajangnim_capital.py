@@ -130,3 +130,51 @@ def compute_reentry_capital(stage: int, previous_capitals: list[Decimal] | list[
         )
 
     return result.quantize(Decimal("0.01"))
+
+
+# ============================================================
+# Fix 31 v230 (2026-08-23): 마틴게일 max_stage 통합!
+# 사장님 verbatim: "마틴게일도 지금 3단계인데 조정가능하게, 지금은 2단계로"
+# SystemSetting = "sajangnim_max_stage" (range [1, 2, 3], default=2)
+# ============================================================
+
+DEFAULT_MAX_STAGE = 2  # 사장님 신 default (2026-08-23!)
+
+
+def get_max_stage(db) -> int:
+    """사장님 max_stage (default 2, range [1, 2, 3])"""
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, "sajangnim_max_stage")
+        if row and row.value is not None:
+            val = int(str(row.value))
+            if val < 1: val = 1
+            elif val > MAX_REENTRY_STAGE: val = MAX_REENTRY_STAGE
+            return val
+    except Exception as e:
+        logger.warning(f"[sajangnim_capital] get_max_stage 실패 (default={DEFAULT_MAX_STAGE}): {e}")
+    return DEFAULT_MAX_STAGE
+
+
+def get_stage_capital(db, stage: int):
+    """단계별 자본 (v219: base × [1, 2, 6])"""
+    if stage < 1: return None
+    max_stage = get_max_stage(db)
+    if stage > max_stage:
+        logger.info(f"[sajangnim_capital] max_stage 상한! stage={stage} > max={max_stage}")
+        return None
+    base = _get_default_capital(db)
+    if stage == 1:
+        result = base
+    elif stage == 2:
+        result = base * Decimal("2")
+    elif stage == 3:
+        result = base * Decimal("6")
+    else:
+        return None
+    return result.quantize(Decimal("0.01"))
+
+
+def get_martingale_multipliers(db) -> list:
+    """마틴게일 배수 (max_stage 통합!)"""
+    return [1.0, 2.0, 6.0][:get_max_stage(db)]
