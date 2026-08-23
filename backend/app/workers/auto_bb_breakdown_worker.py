@@ -1555,6 +1555,24 @@ def _create_auto_bb_strategy(
         ),
     )
 
+    # 🌟 v225 사장님 v219 사상 (2026-08-23): 신 자동 진입 = SL 강제 -80%!
+    # 사장님 verbatim: "최종청산가는 -80%!"
+    # = 전역 기본 (롱 -5%/숏 OFF) 무시 = 전략별 override로 -80% 강제!
+    # SHORT도 강제 ON (전역 SHORT default=OFF 무시!)
+    # ⚠️ OBV_HOLD 예외 = 오래 버티기 = 강제 SL 비활성 (기존 로직 존중!)
+    if not _is_obv_hold:
+        try:
+            strategy.force_sl_enabled_override = True
+            strategy.force_sl_roi_override = Decimal("80")  # ROI <= -80% 시 발동!
+            db.commit()
+            logger.info(
+                "[auto_bb_breakdown] 🎯 v225 SL 강제 -80%%: strategy=%s %s %s",
+                strategy.id, symbol, side,
+            )
+        except Exception as _sl_e:
+            logger.warning("[auto_bb_breakdown] v225 SL -80%% 세팅 실패 (fail-open): %s", _sl_e)
+            db.rollback()
+
     # 🎯 Agent 검증 fix v2 (2026-08-22): 자동 진입 = 실 주문 발송!
     # Agent 진단: v162부터 = create_strategy_instance는 DB row만 생성 = 실 주문 X!
     # = 모든 auto_bb_breakdown "진입"이 = 실은 미진입 상태로만 저장!
