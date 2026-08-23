@@ -416,6 +416,20 @@ def start_scheduler() -> None:
         replace_existing=True, max_instances=1, coalesce=True,
     )
     # (v219 pump_top_detector + auto_short_at_top = 위에 이미 등록됨! 중복 제거 2026-08-22.)
+    # 🌟 v224 (2026-08-23 사장님 통합 요구!): 15m 급등/급락 = 유일한 진입!
+    # 사장님 verbatim: "지금까지 모든 자동매매는 오늘 15분 차트 급등과 급락한 심볼만
+    #                  자동매매를 하는걸로 통합해서 운영할수 있게 하나도 통합정리해줘"
+    # 매 30초 = 상위 심볼 15m 급등/급락 감지 → v223 지표 확인 → 자동 진입!
+    # SystemSetting "unified_entry_enabled" = 1 시만 실 진입!
+    def _unified_15m_entry():
+        from app.workers.unified_15m_entry_worker import run_unified_15m_entry
+        run_unified_15m_entry()
+    scheduler.add_job(
+        guarded_job("unified_15m_entry", 25, _unified_15m_entry),
+        trigger=IntervalTrigger(seconds=30),
+        id="unified_15m_entry",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 📊 v152 (2026-08-16 사장님!): Chart Pattern Learning Team!
     # 매 6시간 = 1달 4H 캔들 → 패턴 감지 → 저장 + outcome tracking!
     def _chart_pattern_scan():
