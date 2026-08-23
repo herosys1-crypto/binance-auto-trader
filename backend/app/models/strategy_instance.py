@@ -90,6 +90,15 @@ class StrategyInstance(Base):
     # 마지막 청산가 - 다음 단계 트리거 기준!
     last_liquidation_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
 
+    # ─────────── 저항 반전 SHORT (alembic 0032, 2026-08-23 v228 Fix 29) ───────────
+    # 사장님 verbatim: "전고점 13354가 최대 저항 = 돌파 후 하락 시 2단계 진입"
+    # 사용자 지정 우선 (source='user') / 없으면 7일 15m 최고가 자동 감지 (source='auto_7d_15m')
+    # spec: docs/RESISTANCE_REVERSAL_SHORT_SPEC_v1.md
+    resistance_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    resistance_source: Mapped[str | None] = mapped_column(String(20), nullable=True)  # 'user' | 'auto_7d_15m'
+    resistance_detected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # 24h TTL
+    resistance_reversal_triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # idempotency
+
     # ─────────── Soft delete (alembic 0011, 2026-05-06) ───────────
     # DELETE endpoint 와 cleanup 스크립트가 row 자체를 삭제하면 realized_pnl 이
     # 통계 합계에서 영구 누락 (#96 +867 USDT 사례). 삭제 대신 archived 마킹.
