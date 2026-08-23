@@ -540,6 +540,18 @@ def start_scheduler() -> None:
         )
 
 
+        # Fix 41 (2026-08-23 사장님!): 전고점 돌파 후 반전 마틴게일!
+        def _peak_break_reversal():
+            from app.workers.peak_break_reversal_worker import run_peak_break_reversal_once
+            run_peak_break_reversal_once()
+        scheduler.add_job(
+            guarded_job('peak_break_reversal', 25, _peak_break_reversal),
+            trigger=IntervalTrigger(seconds=30),
+            id='peak_break_reversal',
+            replace_existing=True, max_instances=1, coalesce=True,
+        )
+
+
         scheduler.start()
 
 if __name__ == "__main__":
