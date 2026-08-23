@@ -61,6 +61,67 @@ MULTI_TF_ENABLED = True
 MULTI_TF_LONG_ENABLED = True  # 사장님 "하락 시작 타이밍" = LONG 대칭!
 
 
+
+
+# ============================================================
+# Fix 44 (2026-08-24 사장님!): 트렌드 강도 필터
+# 사장님 verbatim: "강한 상승 트렌드 (3-5일 60-85%!) = SHORT 매우 위험!"
+# 사례: ENAUSDT/STXUSDT/PENGUUSDT 모두 실패!
+# ============================================================
+TREND_EXTREME_BULL_PCT = 80.0
+TREND_STRONG_BULL_PCT = 50.0
+TREND_BEAR_PCT = -20.0
+TREND_CONFIDENCE_PENALTY = 0.05
+
+
+def _check_trend_strength(bc, symbol):
+    """Fix 44: 트렌드 강도 판정!"""
+    try:
+        kl_4h = bc.get_klines(symbol=symbol, interval="4h", limit=20)
+        if not kl_4h or len(kl_4h) < 18:
+            return "unknown"
+        closes = [float(k[4]) for k in kl_4h]
+        lows = [float(k[3]) for k in kl_4h]
+        
+        # 1. 3일 상승률
+        close_now = closes[-1]
+        close_3d_ago = closes[-18]
+        if close_3d_ago <= 0: return "unknown"
+        up_pct = (close_now - close_3d_ago) / close_3d_ago * 100
+        
+        # 2. OBV 3일 상승 (Fix 48!)
+        obv_up = False
+        try:
+            from app.services.chart_analyzer import ChartAnalyzer
+            obv = list(ChartAnalyzer.compute_obv(kl_4h) or [])
+            if len(obv) >= 18:
+                obv_up = float(obv[-1]) > float(obv[-18])
+        except Exception: pass
+        
+        # 3. 조정 깊이 (BB 중단!)
+        deep_pullback = False
+        try:
+            from app.services.bb_4h_band_analyzer import BB4HBandAnalyzer
+            mid, up, lo = BB4HBandAnalyzer.bollinger(closes)
+            if mid and len(mid) >= 10:
+                recent_low = min(lows[-10:])
+                recent_mid = float(mid[-5])
+                deep_pullback = recent_low < recent_mid
+        except Exception: pass
+        
+        # 판정!
+        if up_pct > TREND_EXTREME_BULL_PCT and obv_up and not deep_pullback:
+            return "extreme_bull"
+        elif up_pct > TREND_STRONG_BULL_PCT and obv_up:
+            return "strong_bull"
+        elif up_pct < TREND_BEAR_PCT:
+            return "bear"
+        return "normal"
+    except Exception as e:
+        logger.warning(f"[Fix44] trend_strength {symbol}: {e}")
+        return "unknown"
+
+
 class PumpTopDetector:
     """7중 정점 감지 (사장님 실 성공 로직 v219!) + v222 다중 시간대 + v223 15m MAIN!"""
 
@@ -321,6 +382,14 @@ def run_pump_top_detector() -> dict:
                 chg24 = float(t.get("priceChangePercent", 0) or 0)
 
                 # 방향 결정: chg24 부호 = 우선 후보!
+                # Fix 44 적용: 트렌드 강도 판정!
+                trend = _check_trend_strength(bc, symbol)
+                if trend == "extreme_bull":
+                    logger.info(f"[Fix44] {symbol} 트렌드 극강 (3일 +80%+!) = SHORT skip!")
+                    continue
+                if trend == "strong_bull":
+                    logger.info(f"[Fix44] {symbol} 강세 트렌드 = 신중 진입!")
+                
                 sides_to_test = []
                 if chg24 >= MIN_24H_CHANGE:
                     sides_to_test.append("SHORT")  # 급등 = 정점 SHORT!

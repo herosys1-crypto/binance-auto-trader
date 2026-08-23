@@ -428,8 +428,8 @@ def start_scheduler() -> None:
     #  심볼차트가 하락이 시작하면 3단계 진입 / 최종청산가는 -80% 손실일때 청산"
     # → 이 워커 = 증거금 추가만! 3단계 진입 = stage_trigger / -80% SL = evaluate_stop_loss.
     def _auto_add_margin():
-        from app.workers.auto_add_margin_worker import run_auto_add_margin_once
-        run_auto_add_margin_once()
+        from app.workers.auto_add_margin_worker import run_auto_add_margin
+        run_auto_add_margin()
     scheduler.add_job(
         guarded_job("auto_add_margin", 12, _auto_add_margin),
         trigger=IntervalTrigger(seconds=15),
@@ -516,18 +516,68 @@ def start_scheduler() -> None:
             id="daily_report", replace_existing=True, max_instances=1, coalesce=True,
         )
 
-    def _peak_break_reversal():
-        from app.workers.peak_break_reversal_worker import run_peak_break_reversal_once
-        run_peak_break_reversal_once()
+    # ─────────── Fix 29 v228 (2026-08-23): 저항 반전 SHORT 2단계 자동 진입 ───────────
+    def _resistance_reversal():
+        from app.workers.resistance_reversal_worker import run_resistance_reversal_once
+        run_resistance_reversal_once()
 
     scheduler.add_job(
-        guarded_job("peak_break_reversal", 25, _peak_break_reversal),
+        guarded_job("resistance_reversal", 25, _resistance_reversal),
         trigger=IntervalTrigger(seconds=30),
-        id="peak_break_reversal",
+        id="resistance_reversal",
         replace_existing=True,
         max_instances=1,
         coalesce=True,
     )
+
+    # Fix 31 v230 (2026-08-23): 4h + 반대 신뢰도 청산!
+    def _time_reverse_exit():
+        from app.workers.time_reverse_exit_worker import run_time_reverse_exit_once
+        run_time_reverse_exit_once()
+
+    scheduler.add_job(
+        guarded_job("time_reverse_exit", 240, _time_reverse_exit),
+        trigger=IntervalTrigger(minutes=5),
+        id="time_reverse_exit",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Fix 42 (2026-08-23 사장님!): v219 재등록! (auto_short_at_top + pump_top_detector)
+    # 위쪽 v224 통합 주석에서 비활성 처리됐던 워커 = 사장님 v219 유지 요구로 재등록.
+    def _auto_short_at_top_v219():
+        from app.workers.auto_short_at_top_worker import run_auto_short_at_top
+        run_auto_short_at_top()
+    scheduler.add_job(
+        guarded_job("auto_short_at_top", 25, _auto_short_at_top_v219),
+        trigger=IntervalTrigger(seconds=30),
+        id="auto_short_at_top", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
+    def _pump_top_detector_v219():
+        from app.workers.pump_top_detector_worker import run_pump_top_detector
+        run_pump_top_detector()
+    scheduler.add_job(
+        guarded_job("pump_top_detector", 240, _pump_top_detector_v219),
+        trigger=IntervalTrigger(minutes=5),
+        id="pump_top_detector", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
+    # Fix 41 (2026-08-23 사장님!): 전고점 돌파 후 반전 마틴게일!
+    def _peak_break_reversal():
+        from app.workers.peak_break_reversal_worker import run_peak_break_reversal_once
+        run_peak_break_reversal_once()
+    scheduler.add_job(
+        guarded_job("peak_break_reversal", 25, _peak_break_reversal),
+        trigger=IntervalTrigger(seconds=30),
+        id="peak_break_reversal",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+
+    # Fix 47 LONG 시스템 (long_bottom_detector + auto_long_at_bottom) =
+    # 위쪽 (line ~382-399) 에서 이미 등록됨. 중복 등록 방지 = 여기서는 재등록 안 함.
+
     scheduler.start()
 
 if __name__ == "__main__":

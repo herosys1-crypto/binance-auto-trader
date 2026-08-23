@@ -486,9 +486,11 @@ class RiskService:
         #   4. peak - retrace 하락 시 = 강제 청산!
         # = 사장님: '첫 익절 실행된후에 최고가 대비 하락하면 청산'
         _tp1_override_val = strategy.tp1_pct_override
-        _tp1_is_20plus = (
+        # Fix 31 v230 (2026-08-23): TP1 값 무관 트레일링!
+        # 사장님 verbatim: "tp1 실행후 -5% 회기하면 청산" (값 무관!)
+        _tp1_active = (
             _tp1_override_val is not None
-            and Decimal(str(_tp1_override_val)) >= Decimal("20")
+            and Decimal(str(_tp1_override_val)) > Decimal("0")
         )
         # 첫 TP 발동 status (TP1~TP10)
         _TP_ANY_TRIGGERED = (
@@ -497,14 +499,14 @@ class RiskService:
         )
         _any_tp_triggered = (strategy.status or "").upper() in _TP_ANY_TRIGGERED
         if (
-            _tp1_is_20plus  # 사장님 옵션 20% 이상!
+            _tp1_active  # 사장님 옵션 20% 이상!
             and _any_tp_triggered  # 첫 익절 발동 확인!
             and peak >= Decimal(str(_tp1_override_val))  # peak >= 사장님 옵션 값!
             and pnl_ratio <= (peak - _strategy_retrace)
             and pnl_ratio < peak
         ):
             logger.info(
-                "[trailing v131] 사장님 요구 정확: TP1_override=%.2f%% (>=20) + "
+                "[trailing Fix31] TP1_override=%.2f%% (Fix 31 값 무관!) + "
                 "첫 TP 발동 (%s) + peak=%.2f%% → 회귀 청산! "
                 "(pnl=%.2f%% <= peak - retrace %.2f%%)",
                 _tp1_override_val, strategy.status, peak, pnl_ratio, _strategy_retrace,
