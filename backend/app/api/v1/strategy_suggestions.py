@@ -1035,3 +1035,142 @@ def get_v219_monitoring(
 
 # 🚨 v132 fix: /trigger-now, /briefing-now, /settings routes = 위로 이동!
 # (specific routes MUST come BEFORE parametric routes!)
+
+@router.get("/v219-monitoring")
+def get_v219_monitoring(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """v219 정점 SHORT 감시 데이터!"""
+    import json as _json
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    
+    pump_top_alerts = []
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+        if r:
+            for key in r.scan_iter(match="pump_top:alert:*", count=100):
+                try:
+                    raw = r.get(key)
+                    if not raw: continue
+                    if isinstance(raw, bytes): raw = raw.decode("utf-8", errors="ignore")
+                    data = _json.loads(raw)
+                    pump_top_alerts.append({
+                        "symbol": data.get("symbol"),
+                        "side": data.get("side"),
+                        "confidence": data.get("confidence"),
+                        "change_24h": data.get("change_24h"),
+                    })
+                except Exception: continue
+    except Exception as e:
+        logger.warning(f"[v219-mon] redis: {e}")
+    
+    active_shorts = []
+    try:
+        from app.models.strategy_instance import StrategyInstance
+        from app.core.strategy_status import ACTIVE_LIKE
+        rows = db.execute(
+            select(StrategyInstance)
+            .where(StrategyInstance.user_id == user_id)
+            .where(StrategyInstance.side == "SHORT")
+            .where(StrategyInstance.status.in_(tuple(ACTIVE_LIKE)))
+        ).scalars().all()
+        for si in rows:
+            active_shorts.append({
+                "id": si.id, "symbol": si.symbol,
+                "stage": si.current_stage,
+                "avg_price": str(si.avg_entry_price) if si.avg_entry_price else "0",
+                "unrealized_pnl": str(si.unrealized_pnl) if si.unrealized_pnl else "0",
+            })
+    except Exception as e:
+        logger.warning(f"[v219-mon] active: {e}")
+    
+    daily_limit = 5
+    daily_used = 0
+    try:
+        row = db.get(SystemSetting, "sajangnim_top_short_daily_limit")
+        if row and row.value: daily_limit = int(row.value)
+        now_utc = _dt.now(_tz.utc)
+        kst_now = now_utc + _td(hours=9)
+        kst_midnight = (kst_now.replace(hour=0, minute=0, second=0, microsecond=0) - _td(hours=9))
+        cnt = db.execute(
+            select(StrategySuggestion).where(
+                StrategySuggestion.suggestion_type == "sajangnim_top_short",
+                StrategySuggestion.executed_at.is_not(None),
+                StrategySuggestion.executed_at >= kst_midnight,
+            )
+        ).scalars().all()
+        daily_used = len(cnt)
+    except Exception as e:
+        logger.warning(f"[v219-mon] limit: {e}")
+    
+    # ─── 신 추가: monitoring_symbols (v219 감시 대상!) ───
+    monitoring_symbols = []
+    try:
+        from app.core.redis_client import get_redis_client
+        r2 = get_redis_client()
+        cached = r2.get("pump_top:scanned") if r2 else None
+        if cached:
+            if isinstance(cached, bytes): cached = cached.decode("utf-8", errors="ignore")
+            data = _json.loads(cached)
+            monitoring_symbols = data.get("symbols", [])[:20]
+        else:
+            # Redis 캐시 없으면 = Binance ticker 직접!
+            from app.core.crypto import decrypt_text
+            from app.integrations.binance.client import BinanceClient
+            from app.models.exchange_account import ExchangeAccount
+            acc = db.query(ExchangeAccount).filter(ExchangeAccount.is_testnet == False).first()
+            if acc:
+                bc = BinanceClient(api_key=decrypt_text(acc.api_key_enc), api_secret=decrypt_text(acc.api_secret_enc))
+                tickers = bc.get_24hr_ticker()
+                usdt_tickers = [t for t in (tickers or []) if str(t.get("symbol", "")).endswith("USDT")]
+                usdt_tickers.sort(key=lambda t: float(t.get("quoteVolume", 0) or 0), reverse=True)
+                for t in usdt_tickers[:30]:
+                    chg = float(t.get("priceChangePercent", 0) or 0)
+                    if abs(chg) >= 5:
+                        monitoring_symbols.append({
+                            "symbol": t.get("symbol"),
+                            "change_24h": round(chg, 2),
+                            "side": "SHORT" if chg >= 15 else ("LONG" if chg <= -15 else "감시"),
+                            "passed_v219": chg >= 15,
+                            "volume_24h_m": round(float(t.get("quoteVolume", 0) or 0)/1e6, 1),
+                        })
+                monitoring_symbols = monitoring_symbols[:20]
+    except Exception as e:
+        logger.warning(f"[v219-mon] monitoring: {e}")
+    
+    # ─── 신 추가: reentry_watch (24h 청산!) ───
+    reentry_watch = []
+    try:
+        from app.core.strategy_status import TERMINAL_STATUSES
+        rows = db.execute(
+            select(StrategyInstance)
+            .where(StrategyInstance.user_id == user_id)
+            .where(StrategyInstance.side == "SHORT")
+            .where(StrategyInstance.status.in_(tuple(TERMINAL_STATUSES)))
+            .where(StrategyInstance.stopped_at.is_not(None))
+            .where(StrategyInstance.stopped_at >= _dt.now(_tz.utc) - _td(hours=24))
+            .order_by(StrategyInstance.stopped_at.desc())
+            .limit(15)
+        ).scalars().all()
+        for si in rows:
+            reentry_watch.append({
+                "symbol": si.symbol, "side": si.side,
+                "closed_at": si.stopped_at.isoformat() if si.stopped_at else None,
+                "realized_pnl": str(si.realized_pnl) if si.realized_pnl else "0",
+                "status": si.status,
+            })
+    except Exception as e:
+        logger.warning(f"[v219-mon] reentry: {e}")
+    
+    return {
+        "pump_top_alerts": pump_top_alerts,
+        "active_shorts": active_shorts,
+        "active_count": len(active_shorts),
+        "monitoring_symbols": monitoring_symbols,
+        "reentry_watch": reentry_watch,
+        "daily_used": daily_used,
+        "daily_limit": daily_limit,
+        "remaining": max(0, daily_limit - daily_used),
+    }

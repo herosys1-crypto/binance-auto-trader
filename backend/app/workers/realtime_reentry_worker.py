@@ -222,7 +222,7 @@ def run_realtime_reentry() -> dict:
     try:
         # 1. daily_limit 체크!
         from app.models.system_setting import SystemSetting
-        limit_row = db.get(SystemSetting, "auto_bb_break_daily_limit")
+        limit_row = db.get(SystemSetting, "sajangnim_top_short_daily_limit")
         daily_limit = int(limit_row.value) if limit_row and limit_row.value else 0
         if daily_limit <= 0:
             return {"note": "daily_limit=0 (OFF!)", "entered": 0}
