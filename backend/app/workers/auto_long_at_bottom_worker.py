@@ -105,6 +105,15 @@ def run_auto_long_at_bottom_once():
                 )
                 if new_strategy:
                     result["entered"] += 1
+                    # Fix 49: 신 사상 = -5% 짧은 손절!
+                    try:
+                        new_strategy.force_sl_enabled_override = True
+                        new_strategy.force_sl_roi_override = Decimal("5")
+                        db.commit()
+                        logger.warning(f"[Fix49] {symbol} SL -5% 세팅! (신 LONG!)")
+                    except Exception as _e:
+                        logger.warning(f"[Fix49] SL 세팅 실패: {_e}")
+                        db.rollback()
                     active_syms.add(symbol)
                     
                     # StrategySuggestion 저장!
