@@ -18,7 +18,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db
@@ -223,12 +223,21 @@ def get_sajangnim_settings(
     mode_row = db.get(SystemSetting, "sajangnim_capital_mode")
     pct_row = db.get(SystemSetting, "sajangnim_entry_pct")
     daily_limit_row = db.get(SystemSetting, "sajangnim_daily_limit")
+    # 🎯 v219+ (2026-08-23 사장님!): 마틴게일 최대 단계 상한!
+    # 사장님 verbatim: "3단계까지 갈수 있다야 가능하면 가지않는 관리가 필요"
+    # 1 = 재진입 X (1단계에서 종료) / 2 = 1→2단계까지 (사장님 추천!) / 3 = 1→2→3단계까지 (매우 신중!)
+    max_stage_row = db.get(SystemSetting, "sajangnim_max_stage")
+    # 🎯 v219 (2026-08-23 사장님!): 7중 정점 SHORT 일일 한도 (auto_short_at_top 워커!)
+    # 0 = 자동 SHORT 비활성 / 30 = 최대 (auto_bb_break_daily_limit 와 공유 슬롯!)
+    top_short_daily_limit_row = db.get(SystemSetting, "sajangnim_top_short_daily_limit")
 
     return {
         "default_capital": float(default_cap_row.value) if default_cap_row and default_cap_row.value else 300.0,
         "capital_mode": (mode_row.value if mode_row and mode_row.value else "fixed"),
         "entry_pct": float(pct_row.value) if pct_row and pct_row.value else 0.01,
         "daily_limit": int(daily_limit_row.value) if daily_limit_row and daily_limit_row.value else 1,
+        "max_stage": int(max_stage_row.value) if max_stage_row and max_stage_row.value else 2,
+        "top_short_daily_limit": int(top_short_daily_limit_row.value) if top_short_daily_limit_row and top_short_daily_limit_row.value else 0,
     }
 
 
@@ -244,6 +253,10 @@ def set_sajangnim_settings(
         "sajangnim_capital_mode": ("capital_mode", lambda v: str(v).lower() if str(v).lower() in ("fixed", "percent") else "fixed"),
         "sajangnim_entry_pct": ("entry_pct", lambda v: str(max(0.001, min(0.02, float(v))))),
         "sajangnim_daily_limit": ("daily_limit", lambda v: str(max(0, min(10, int(v))))),
+        # 🎯 v219+ (2026-08-23 사장님!): 마틴게일 최대 단계 = 1~3 clamp!
+        "sajangnim_max_stage": ("max_stage", lambda v: str(max(1, min(3, int(v))))),
+        # 🎯 v219 (2026-08-23 사장님!): 7중 정점 SHORT 일일 한도 = 0~30 clamp!
+        "sajangnim_top_short_daily_limit": ("top_short_daily_limit", lambda v: str(max(0, min(30, int(v))))),
     }
     updated = {}
     for key, (payload_key, sanitizer) in fields.items():
@@ -742,6 +755,281 @@ def execute_suggestion(
         "symbol": _suggestion.symbol,
         "side": _suggestion.side,
         "note": "MVP 상태 - 실 전략 생성 = 다음 세션 완성!",
+    }
+
+
+@router.get("/v219-monitoring")
+def get_v219_monitoring(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🌟 v219 (2026-08-23 사장님!): 7중 정점 SHORT 감시 데이터!
+
+    반환:
+      - pump_top_alerts: Redis pump_top:alert:* (7중 정점 감지 후보 = 진입 대상!)
+      - monitoring_symbols: Redis pump_top:scanned:* (감시 중 = v219 통과 여부/스코어!)
+      - reentry_watch: 최근 24h 내 청산된 SHORT 심볼 (재진입 후보!)
+      - active_count: DB 활성 SHORT 개수 (사장님 요청 = 개수만!)
+      - daily_used: v219 오늘 사용 개수!
+      - daily_limit: SystemSetting sajangnim_top_short_daily_limit!
+    """
+    import json as _json
+    from datetime import datetime as _dt, timedelta as _td
+
+    # ─── 1) pump_top:alert:* 스캔 (감지 후보!) ───
+    pump_top_alerts: list[dict] = []
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+        for key in r.scan_iter(match="pump_top:alert:*", count=200):
+            try:
+                raw = r.get(key)
+                if not raw:
+                    continue
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="ignore")
+                data = _json.loads(raw)
+                pump_top_alerts.append({
+                    "symbol": data.get("symbol"),
+                    "side": data.get("side"),
+                    "confidence": data.get("confidence"),
+                    "change_24h": data.get("change_24h"),
+                })
+            except Exception as _e:
+                logger.debug("[v219-monitoring] alert parse skip %s: %s", key, _e)
+                continue
+    except Exception as e:
+        logger.warning("[v219-monitoring] redis scan 실패: %s", e)
+        r = None
+
+    # ─── 1b) pump_top:scanned:* (감시 중 심볼!) ───
+    monitoring_symbols: list[dict] = []
+    try:
+        if r is None:
+            from app.core.redis_client import get_redis_client
+            r = get_redis_client()
+        for key in r.scan_iter(match="pump_top:scanned:*", count=500):
+            try:
+                raw = r.get(key)
+                if not raw:
+                    continue
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="ignore")
+                data = _json.loads(raw)
+                monitoring_symbols.append({
+                    "symbol": data.get("symbol"),
+                    "change_24h": data.get("change_24h"),
+                    "passed_v219": bool(data.get("passed_v219", False)),
+                    "confidence": data.get("confidence"),
+                    "scores": data.get("scores") or {
+                        "score_15m": data.get("score_15m"),
+                        "score_1h": data.get("score_1h"),
+                        "score_4h": data.get("score_4h"),
+                    },
+                })
+            except Exception as _e:
+                logger.debug("[v219-monitoring] scanned parse skip %s: %s", key, _e)
+                continue
+        # 정렬 = 통과 > 24h 변동 내림차순 → 최대 20개!
+        monitoring_symbols.sort(
+            key=lambda x: (
+                1 if x.get("passed_v219") else 0,
+                float(x.get("change_24h") or 0),
+            ),
+            reverse=True,
+        )
+        monitoring_symbols = monitoring_symbols[:20]
+    except Exception as e:
+        logger.warning("[v219-monitoring] scanned scan 실패: %s", e)
+
+    # ─── 1c) sajangnim:bottom_long:alert:* (LONG 저점 감지!) ───
+    long_bottom_alerts: list[dict] = []
+    try:
+        if r is None:
+            from app.core.redis_client import get_redis_client
+            r = get_redis_client()
+        for key in r.scan_iter(match="sajangnim:bottom_long:*", count=200):
+            try:
+                raw = r.get(key)
+                if not raw:
+                    continue
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="ignore")
+                data = _json.loads(raw)
+                long_bottom_alerts.append({
+                    "symbol": data.get("symbol"),
+                    "side": data.get("side") or "LONG",
+                    "confidence": data.get("confidence"),
+                    "change_24h": data.get("change_24h"),
+                    "scores": data.get("scores"),
+                    "passed_v219": bool(data.get("passed_v219", False)),
+                })
+            except Exception as _e:
+                logger.debug("[v219-monitoring] bottom_long parse skip %s: %s", key, _e)
+                continue
+    except Exception as e:
+        logger.warning("[v219-monitoring] bottom_long scan 실패: %s", e)
+
+    # ─── 1d) LONG 저점 감시 심볼 (passed_v219 아닌 것 포함, 상위 20개!) ───
+    monitoring_symbols_long: list[dict] = []
+    try:
+        # long_bottom_alerts 재활용: 24h 하락 심한 순으로 정렬
+        _lst = list(long_bottom_alerts)
+        _lst.sort(
+            key=lambda x: (
+                1 if x.get("passed_v219") else 0,
+                -float(x.get("change_24h") or 0),  # 하락 클수록 앞!
+            ),
+            reverse=True,
+        )
+        monitoring_symbols_long = _lst[:20]
+    except Exception as e:
+        logger.warning("[v219-monitoring] monitoring_symbols_long 정렬 실패: %s", e)
+
+    # ─── 2) 활성 SHORT (ACTIVE_LIKE) = 개수만! ───
+    active_count = 0
+    try:
+        from app.models.strategy_instance import StrategyInstance
+        from app.core.strategy_status import ACTIVE_LIKE, TERMINAL_STATUSES
+        active_count = int(db.execute(
+            select(func.count(StrategyInstance.id))
+            .where(StrategyInstance.user_id == user_id)
+            .where(StrategyInstance.side == "SHORT")
+            .where(StrategyInstance.status.in_(tuple(ACTIVE_LIKE)))
+        ).scalar() or 0)
+    except Exception as e:
+        logger.warning("[v219-monitoring] active SHORT count 실패: %s", e)
+
+    # ─── 2a) 활성 LONG (sajangnim_bottom 전략) = 목록! ───
+    active_longs: list[dict] = []
+    try:
+        from app.models.strategy_instance import StrategyInstance
+        from app.core.strategy_status import ACTIVE_LIKE
+        rows_long = db.execute(
+            select(StrategyInstance)
+            .where(StrategyInstance.user_id == user_id)
+            .where(StrategyInstance.side == "LONG")
+            .where(StrategyInstance.status.in_(tuple(ACTIVE_LIKE)))
+            .where(StrategyInstance.strategy_type.ilike("%sajangnim_bottom%"))
+            .order_by(StrategyInstance.created_at.desc())
+            .limit(30)
+        ).scalars().all()
+        for si in rows_long:
+            active_longs.append({
+                "id": si.id,
+                "symbol": si.symbol,
+                "side": si.side,
+                "status": si.status,
+                "strategy_type": si.strategy_type,
+                "created_at": si.created_at.isoformat() if si.created_at else None,
+            })
+    except Exception as e:
+        logger.warning("[v219-monitoring] active_longs 조회 실패: %s", e)
+
+    # ─── 2b) reentry_watch (최근 24h 청산 SHORT = 재진입 후보!) ───
+    reentry_watch: list[dict] = []
+    try:
+        from app.models.strategy_instance import StrategyInstance
+        from app.core.strategy_status import TERMINAL_STATUSES
+        cutoff = _dt.now(timezone.utc) - _td(hours=24)
+        rows = db.execute(
+            select(StrategyInstance)
+            .where(StrategyInstance.user_id == user_id)
+            .where(StrategyInstance.side == "SHORT")
+            .where(StrategyInstance.status.in_(tuple(TERMINAL_STATUSES)))
+            .where(StrategyInstance.stopped_at.is_not(None))
+            .where(StrategyInstance.stopped_at >= cutoff)
+            .order_by(StrategyInstance.stopped_at.desc())
+            .limit(15)
+        ).scalars().all()
+        for si in rows:
+            reentry_watch.append({
+                "symbol": si.symbol,
+                "side": si.side,
+                "closed_at": si.stopped_at.isoformat() if si.stopped_at else None,
+                "realized_pnl": (
+                    str(si.realized_pnl) if si.realized_pnl is not None else "0"
+                ),
+                "reason": si.status,
+            })
+    except Exception as e:
+        logger.warning("[v219-monitoring] reentry_watch 조회 실패: %s", e)
+
+    # ─── 2c) reentry_watch_long (최근 24h 청산 LONG sajangnim_bottom 재진입 후보!) ───
+    reentry_watch_long: list[dict] = []
+    try:
+        from app.models.strategy_instance import StrategyInstance
+        from app.core.strategy_status import TERMINAL_STATUSES
+        cutoff_l = _dt.now(timezone.utc) - _td(hours=24)
+        rows_l = db.execute(
+            select(StrategyInstance)
+            .where(StrategyInstance.user_id == user_id)
+            .where(StrategyInstance.side == "LONG")
+            .where(StrategyInstance.status.in_(tuple(TERMINAL_STATUSES)))
+            .where(StrategyInstance.strategy_type.ilike("%sajangnim_bottom%"))
+            .where(StrategyInstance.stopped_at.is_not(None))
+            .where(StrategyInstance.stopped_at >= cutoff_l)
+            .order_by(StrategyInstance.stopped_at.desc())
+            .limit(15)
+        ).scalars().all()
+        for si in rows_l:
+            reentry_watch_long.append({
+                "symbol": si.symbol,
+                "side": si.side,
+                "closed_at": si.stopped_at.isoformat() if si.stopped_at else None,
+                "realized_pnl": (
+                    str(si.realized_pnl) if si.realized_pnl is not None else "0"
+                ),
+                "reason": si.status,
+            })
+    except Exception as e:
+        logger.warning("[v219-monitoring] reentry_watch_long 조회 실패: %s", e)
+
+    # ─── 3) daily_limit (SystemSetting) ───
+    daily_limit = 0
+    try:
+        row = db.get(SystemSetting, "sajangnim_top_short_daily_limit")
+        if row and row.value:
+            daily_limit = int(row.value)
+    except Exception as e:
+        logger.warning("[v219-monitoring] daily_limit 조회 실패: %s", e)
+
+    # ─── 4) daily_used (오늘 v219 실행 개수 = KST 기준!) ───
+    #    suggestion_type = "sajangnim_top_short" + executed_at 오늘 (KST)!
+    daily_used = 0
+    try:
+        from datetime import timedelta as _td
+        now_utc = _dt.now(timezone.utc)
+        # KST 자정 = UTC 15:00 (전일)
+        kst_now = now_utc + _td(hours=9)
+        kst_midnight_utc = (
+            kst_now.replace(hour=0, minute=0, second=0, microsecond=0) - _td(hours=9)
+        )
+        cnt_row = db.execute(
+            select(StrategySuggestion).where(
+                StrategySuggestion.suggestion_type == "sajangnim_top_short",
+                StrategySuggestion.executed_at.is_not(None),
+                StrategySuggestion.executed_at >= kst_midnight_utc,
+            )
+        ).scalars().all()
+        daily_used = len(cnt_row)
+    except Exception as e:
+        logger.warning("[v219-monitoring] daily_used 집계 실패: %s", e)
+
+    return {
+        # ─── SHORT (기존, 호환성 유지!) ───
+        "pump_top_alerts": pump_top_alerts,
+        "monitoring_symbols": monitoring_symbols,
+        "reentry_watch": reentry_watch,
+        "active_count": active_count,
+        "daily_used": daily_used,
+        "daily_limit": daily_limit,
+        "remaining": max(0, daily_limit - daily_used),
+        # ─── LONG (신규, 사장님 신 사상!) ───
+        "long_bottom_alerts": long_bottom_alerts,
+        "monitoring_symbols_long": monitoring_symbols_long,
+        "active_longs": active_longs,
+        "reentry_watch_long": reentry_watch_long,
     }
 
 

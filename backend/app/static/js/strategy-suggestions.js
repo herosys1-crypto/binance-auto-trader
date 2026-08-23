@@ -1015,6 +1015,17 @@ async function openSajangnimSettingsModal() {
                  style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
           <div style="font-size:10px;color:#64748b;">사장님 default = 300 USDT / 운영하면서 조정!</div>
         </div>
+        <div style="margin-bottom:10px;">
+          <label style="display:block;font-size:12px;color:#c4b5fd;margin-bottom:2px;">🎯 마틴게일 최대 단계:</label>
+          <select id="sn-max-stage" style="width:100%;background:#334155;color:#e2e8f0;border:1px solid #475569;padding:6px;border-radius:4px;">
+            <option value="1" ${(s.max_stage ?? 2) === 1 ? 'selected' : ''}>1 = 재진입 X (1단계에서 종료)</option>
+            <option value="2" ${(s.max_stage ?? 2) === 2 ? 'selected' : ''}>2 = 1→2단계까지 (사장님 추천!)</option>
+            <option value="3" ${(s.max_stage ?? 2) === 3 ? 'selected' : ''}>3 = 1→2→3단계까지 (매우 신중!)</option>
+          </select>
+          <div style="font-size:10px;color:#64748b;line-height:1.5;margin-top:3px;">
+            💡 1=재진입 X / 2=1→2단계까지 (사장님 추천!) / 3=1→2→3단계까지 (매우 신중!)
+          </div>
+        </div>
         <div style="margin-bottom:12px;padding:10px;background:#1e293b;border-left:3px solid #ec4899;border-radius:4px;">
           <div style="font-size:11px;color:#f472b6;font-weight:bold;margin-bottom:4px;">🎯 사장님 마틴게일 (v219 최종 확정!):</div>
           <div style="font-size:11px;color:#e2e8f0;line-height:1.6;">
@@ -1051,13 +1062,19 @@ function closeSajangnimSettingsModal() {
   if (el) el.remove();
 }
 async function saveSajangnimSettings() {
+  // 🎯 v219+ (2026-08-23): max_stage 신 필드! (1~3 clamp = 백엔드에서 재검증!)
+  const maxStageRaw = parseInt(document.getElementById('sn-max-stage')?.value || 2);
+  const maxStage = Math.max(1, Math.min(3, isNaN(maxStageRaw) ? 2 : maxStageRaw));
   const payload = {
     default_capital: parseFloat(document.getElementById('sn-default-capital').value || 300),
+    max_stage: maxStage,
   };
+  // localStorage 백업 = 서버 실패 시에도 UI 유지!
+  try { localStorage.setItem('sajangnim_settings_backup', JSON.stringify(payload)); } catch(_) {}
   try {
     const r = await api('/strategy-suggestions/sajangnim-settings', {method: 'PUT', body: JSON.stringify(payload)});
     if (r.ok) {
-      if (typeof toast === 'function') toast('✅ 사장님 정점 세팅 저장!', 'success');
+      if (typeof toast === 'function') toast('✅ 사장님 정점 세팅 저장! (마틴게일 최대 ' + maxStage + '단계)', 'success');
       closeSajangnimSettingsModal();
     } else {
       if (typeof toast === 'function') toast('❌ ' + (r.error || '저장 실패'), 'error');
@@ -1079,6 +1096,77 @@ if (typeof window !== 'undefined') {
   window.closeSajangnimSettingsModal = closeSajangnimSettingsModal;
   window.saveSajangnimSettings = saveSajangnimSettings;
   window._snToggleModeUI = _snToggleModeUI;
+}
+
+// 🎯 v219 (2026-08-23): 카드형 세팅 UI (v219-daily-limit / v219-capital / v219-max-stage 필드!)
+async function saveV219Settings() {
+  const limitEl = document.getElementById('v219-daily-limit');
+  const capitalEl = document.getElementById('v219-capital');
+  const maxStageEl = document.getElementById('v219-max-stage');
+  if (!limitEl || !capitalEl || !maxStageEl) {
+    alert('❌ v219 세팅 UI를 찾을 수 없습니다.');
+    return;
+  }
+  const limit = parseInt(limitEl.value);
+  const capital = parseFloat(capitalEl.value);
+  const maxStageRaw = parseInt(maxStageEl.value);
+  const maxStage = Math.max(1, Math.min(3, isNaN(maxStageRaw) ? 2 : maxStageRaw));
+  const payload = {
+    top_short_daily_limit: isNaN(limit) ? 5 : limit,
+    default_capital: isNaN(capital) ? 300 : capital,
+    max_stage: maxStage,
+  };
+  try { localStorage.setItem('v219_settings_backup', JSON.stringify(payload)); } catch(_) {}
+  try {
+    const r = await api('/strategy-suggestions/sajangnim-settings', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    if (r && r.ok === false) {
+      alert('❌ 저장 실패: ' + (r.error || 'unknown'));
+      return;
+    }
+    if (typeof toast === 'function') {
+      toast('✅ v219 세팅 저장 완료! (마틴게일 최대 ' + maxStage + '단계)', 'success');
+    } else {
+      alert('✅ v219 세팅 저장 완료!');
+    }
+    loadV219Settings();  // 재로드
+  } catch (e) {
+    alert('❌ 저장 실패: ' + (e && e.message ? e.message : e));
+  }
+}
+
+async function loadV219Settings() {
+  const limitEl = document.getElementById('v219-daily-limit');
+  const capitalEl = document.getElementById('v219-capital');
+  const maxStageEl = document.getElementById('v219-max-stage');
+  if (!limitEl && !capitalEl && !maxStageEl) return;  // 카드 미표시 = skip
+  try {
+    const resp = await api('/strategy-suggestions/sajangnim-settings');
+    if (limitEl) limitEl.value = resp.top_short_daily_limit ?? 5;
+    if (capitalEl) capitalEl.value = resp.default_capital ?? 300;
+    if (maxStageEl) maxStageEl.value = resp.max_stage ?? 2;
+  } catch (e) {
+    // 서버 실패 = localStorage backup 복원!
+    try {
+      const backup = localStorage.getItem('v219_settings_backup');
+      if (backup) {
+        const s = JSON.parse(backup);
+        if (limitEl) limitEl.value = s.top_short_daily_limit ?? 5;
+        if (capitalEl) capitalEl.value = s.default_capital ?? 300;
+        if (maxStageEl) maxStageEl.value = s.max_stage ?? 2;
+      }
+    } catch(_) {}
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.saveV219Settings = saveV219Settings;
+  window.loadV219Settings = loadV219Settings;
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(loadV219Settings, 600);
+  });
 }
   window.resetAutoBBCounter = resetAutoBBCounter;  // 🔄 v163 리셋!
   document.addEventListener('DOMContentLoaded', () => {
@@ -1189,6 +1277,111 @@ if (typeof window !== 'undefined') {
   }
   window.loadUnified15mMonitoring = loadUnified15mMonitoring;
 
+  // 🎯 v219: 사장님 정점 SHORT + 활성 SHORT 실시간 모니터링!
+  // 📉 (2026-08-24): 저점 LONG 대칭 추가 = 별도 컨테이너에 렌더!
+  async function loadV219Monitoring() {
+    const bodyEl = document.getElementById('unified-15m-body');
+    const longSymEl = document.getElementById('v219-monitoring-symbols-long');
+    const longReentryEl = document.getElementById('v219-reentry-watch-long');
+    if (!bodyEl) return;
+    try {
+      const r = await api('/strategy-suggestions/v219-monitoring');
+
+      // ==================== 🎯 SHORT 영역 (기존 유지) ====================
+      let html = '';
+      // 활성 SHORT 표시
+      if (r.active_shorts && r.active_shorts.length) {
+        html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🎯 활성 SHORT ${r.active_shorts.length}건:</b><br>`;
+        r.active_shorts.forEach(s => {
+          const pnlVal = Number(s.unrealized_pnl) || 0;
+          const pnlColor = pnlVal >= 0 ? '#22c55e' : '#ef4444';
+          html += `<div style="padding:4px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;">${s.symbol} stage${s.stage} avg=${s.avg_price} <span style="color:${pnlColor};">${pnlVal.toFixed(2)} USDT</span></div>`;
+        });
+        html += '</div>';
+      }
+      // 정점 감지 후보
+      if (r.pump_top_alerts && r.pump_top_alerts.length) {
+        html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🚨 정점 감지 후보 ${r.pump_top_alerts.length}건:</b><br>`;
+        r.pump_top_alerts.forEach(a => {
+          html += `<div style="padding:4px 8px;background:rgba(236,72,153,0.15);margin:2px 0;border-radius:4px;">${a.symbol} ${a.side} conf=${a.confidence} 24h=${a.change_24h}%</div>`;
+        });
+        html += '</div>';
+      }
+      // 진입 슬롯 (SHORT + LONG 활성 합산 표시)
+      const shortCnt = (r.active_shorts && r.active_shorts.length) || 0;
+      const longCnt = (r.active_longs && r.active_longs.length) || 0;
+      html += `<div style="color:#94a3b8;font-size:11px;margin-top:8px;">오늘 진입: ${r.daily_used}/${r.daily_limit} · 활성 🎯 SHORT ${shortCnt} / 📉 LONG ${longCnt}</div>`;
+      if (!html) html = `<div style="color:#94a3b8;">v219 감지 대기 중...</div>`;
+      bodyEl.innerHTML = html;
+
+      // ==================== 📉 LONG 영역 (2026-08-24 신규) ====================
+      // 활성 LONG + 저점 감지 후보 = monitoring_symbols_long 컨테이너에 렌더
+      if (longSymEl) {
+        let lh = '';
+        if (r.active_longs && r.active_longs.length) {
+          lh += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>📉 활성 LONG ${r.active_longs.length}건:</b><br>`;
+          r.active_longs.forEach(s => {
+            const pnlVal = Number(s.unrealized_pnl) || 0;
+            const pnlColor = pnlVal >= 0 ? '#22c55e' : '#ef4444';
+            lh += `<div style="padding:4px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;">${s.symbol} stage${s.stage} avg=${s.avg_price} <span style="color:${pnlColor};">${pnlVal.toFixed(2)} USDT</span></div>`;
+          });
+          lh += '</div>';
+        }
+        if (r.long_bottom_alerts && r.long_bottom_alerts.length) {
+          lh += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🟢 저점 감지 후보 ${r.long_bottom_alerts.length}건:</b><br>`;
+          r.long_bottom_alerts.forEach(a => {
+            lh += `<div style="padding:4px 8px;background:rgba(34,197,94,0.15);margin:2px 0;border-radius:4px;">${a.symbol} ${a.side} conf=${a.confidence} 24h=${a.change_24h}%</div>`;
+          });
+          lh += '</div>';
+        }
+        if (r.monitoring_symbols_long && r.monitoring_symbols_long.length) {
+          lh += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>📉 v219 감시 심볼 (LONG 저점) ${r.monitoring_symbols_long.length}건:</b><br>`;
+          r.monitoring_symbols_long.forEach(s => {
+            const sym = (s && s.symbol) ? s.symbol : String(s);
+            const extra = (s && s.change_24h !== undefined) ? ` 24h=${s.change_24h}%` : '';
+            lh += `<div style="padding:4px 8px;background:rgba(34,197,94,0.10);margin:2px 0;border-radius:4px;">${sym}${extra}</div>`;
+          });
+          lh += '</div>';
+        }
+        longSymEl.innerHTML = lh;
+      }
+
+      // 재진입 대기 (LONG)
+      if (longReentryEl) {
+        let rh = '';
+        if (r.reentry_watch_long && r.reentry_watch_long.length) {
+          rh += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🔄 LONG 재진입 대기 ${r.reentry_watch_long.length}건:</b><br>`;
+          r.reentry_watch_long.forEach(w => {
+            const sym = (w && w.symbol) ? w.symbol : String(w);
+            const stage = (w && w.stage !== undefined) ? ` stage${w.stage}` : '';
+            const note = (w && w.note) ? ` — ${w.note}` : '';
+            rh += `<div style="padding:4px 8px;background:rgba(34,197,94,0.10);margin:2px 0;border-radius:4px;">${sym}${stage}${note}</div>`;
+          });
+          rh += '</div>';
+        }
+        longReentryEl.innerHTML = rh;
+      }
+
+      // ==================== Badge 갱신 ====================
+      const shortBadge = document.getElementById('unified-15m-badge');
+      const longBadge = document.getElementById('unified-15m-badge-long');
+      if (shortBadge) {
+        const shortPending = (r.pump_top_alerts && r.pump_top_alerts.length) || 0;
+        shortBadge.textContent = `🎯 ${shortCnt}/${shortPending}`;
+      }
+      if (longBadge) {
+        const longPending = (r.long_bottom_alerts && r.long_bottom_alerts.length) || 0;
+        longBadge.textContent = `📉 ${longCnt}/${longPending}`;
+      }
+    } catch (e) {
+      bodyEl.innerHTML = `<div style="color:#ef4444;">❌ 로드 실패: ${(e && e.message) || e}</div>`;
+      if (longSymEl) longSymEl.innerHTML = '';
+      if (longReentryEl) longReentryEl.innerHTML = '';
+      console.warn('[v219/monitoring] 실패:', e);
+    }
+  }
+  window.loadV219Monitoring = loadV219Monitoring;
+
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(loadStrategySuggestions, 1200);
     setInterval(loadStrategySuggestions, 30000);  // 30초 polling
@@ -1198,5 +1391,8 @@ if (typeof window !== 'undefined') {
     // 🌟 v224: 15m 통합 워커 실시간 모니터링! (매 30초 갱신!)
     setTimeout(loadUnified15mMonitoring, 1800);
     setInterval(loadUnified15mMonitoring, 30000);
+    // 🎯 v219: 사장님 정점 SHORT 모니터링! (매 30초 갱신!)
+    setTimeout(loadV219Monitoring, 2100);
+    setInterval(loadV219Monitoring, 30000);
   });
 }

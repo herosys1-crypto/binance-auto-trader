@@ -1061,23 +1061,71 @@
         </div>
       </div>
 
-      <!-- 🌟 v225 사장님 (2026-08-23!): v224 실시간 모니터링 = 「지금 운영 상태」 바로 아래! (2번째!) -->
-      <!-- = "지금까지 모든 자동매매는 오늘 15분 차트 급등과 급락한 심볼만 자동매매를 하는걸로 통합" -->
-      <div id="unified-15m-monitoring-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(6,182,212,0.15),rgba(34,197,94,0.15));border:1px solid rgba(6,182,212,0.4)">
+      <!-- 🎯 v219 사장님 (2026-08-23!): 정점 SHORT 모니터링 & 세팅 = 「지금 운영 상태」 바로 아래! (2번째!) -->
+      <!-- = 7중 정점 SHORT (4H BB 최상단 + OBV/MACD/RSI/CCI 최고점 + 24h≥+15%) 자동 진입! -->
+      <div id="unified-15m-monitoring-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(236,72,153,0.15),rgba(168,85,247,0.15));border:1px solid rgba(236,72,153,0.5)">
         <details id="unified-15m-details" open>
           <summary style="cursor:pointer;list-style:none;">
             <div class="flex items-center justify-between flex-wrap gap-1">
-              <span class="text-sm font-bold" style="color:#67e8f9">
-                📊 v224 실시간 모니터링
-                <span id="unified-15m-badge" style="background:#22d3ee;color:#000;padding:1px 6px;border-radius:8px;font-size:11px">-</span>
+              <span class="text-sm font-bold" style="color:#f9a8d4">
+                🎯 v219 정점 SHORT / 저점 LONG 모니터링 &amp; 세팅
+                <span id="unified-15m-badge" style="background:#ec4899;color:#fff;padding:1px 6px;border-radius:8px;font-size:11px">-</span>
+                <span id="unified-15m-badge-long" style="background:#22c55e;color:#fff;padding:1px 6px;border-radius:8px;font-size:11px;margin-left:4px">-</span>
               </span>
               <span id="unified-15m-updated" class="text-xs text-slate-400">아직 실행 X</span>
             </div>
             <div class="text-xs text-slate-400 mt-1">
-              15m 급등/급락 = 유일한 자동 진입 유니버스! (매 30초 스캔, 30초 자동 갱신, 접기/펴기!)
+              🎯 SHORT: 7중 정점 (4H BB 최상단 + OBV/MACD/RSI/CCI 최고점 + 24h≥+15%) 통과 시 자동 SHORT!<br>
+              📉 LONG: 저점 반전 (4H BB 최하단 + OBV/MACD/RSI/CCI 최저점 + 24h≤-15%) 통과 시 자동 LONG! (매 5분 감지 / 매 30초 실행!)
             </div>
           </summary>
+          <!-- 🎯 SHORT 영역 (기존): 활성 SHORT + 정점 감지 = JS가 unified-15m-body에 동적 렌더 -->
           <div id="unified-15m-body" style="margin-top:8px"></div>
+          <!-- 📉 LONG 영역 (2026-08-24 추가): 감시 심볼 + 재진입 대기 = JS가 채움 -->
+          <div id="v219-monitoring-symbols-long" style="margin-top:8px"></div>
+          <div id="v219-reentry-watch-long" style="margin-top:8px"></div>
+          <div style="border-top:1px solid #334155;padding-top:12px;margin-top:12px;">
+            <h4 class="text-sm font-bold mb-2" style="color:#f9a8d4">⚙ 세팅</h4>
+            <div class="flex flex-col gap-2" style="font-size:12px;">
+              <label class="flex items-center justify-between gap-2">
+                <span class="text-slate-300">일 자동 진입 한도</span>
+                <select id="v219-daily-limit" class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="min-width:90px">
+                  <option value="0">0 (끔)</option>
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3" selected>3</option>
+                  <option value="5">5</option>
+                  <option value="10">10</option>
+                  <option value="15">15</option>
+                  <option value="20">20</option>
+                  <option value="30">30</option>
+                </select>
+              </label>
+              <label class="flex items-center justify-between gap-2">
+                <span class="text-slate-300">초기 자본 (USDT)</span>
+                <input type="number" id="v219-capital" min="50" max="100000" step="50" value="300"
+                       class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:110px" />
+              </label>
+              <label class="flex items-center justify-between gap-2">
+                <span class="text-slate-300">마틴게일 최대 단계</span>
+                <select id="v219-max-stage" class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="min-width:90px">
+                  <option value="1">1 (안전)</option>
+                  <option value="2">2</option>
+                  <option value="3" selected>3 (⚠ 신중!)</option>
+                </select>
+              </label>
+              <div class="text-xs text-slate-500" style="line-height:1.4">
+                💡 마틴게일: 1단계=초기 / 2단계=이전×2 / 3단계=투자금 전체×2 (⚠ 매우 신중!) / 4단계+ = 🚨 금지!
+              </div>
+              <div class="flex justify-end">
+                <button onclick="saveV219Settings()"
+                        class="text-xs bg-pink-600 hover:bg-pink-500 text-white px-3 py-1 rounded font-bold">
+                  💾 저장
+                </button>
+              </div>
+              <div id="v219-settings-msg" class="text-xs" style="min-height:14px"></div>
+            </div>
+          </div>
         </details>
       </div>
 

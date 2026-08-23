@@ -373,6 +373,30 @@ def start_scheduler() -> None:
     #     id="auto_short_at_top",
     #     replace_existing=True, max_instances=1, coalesce=True,
     # )
+    # 🟢 LONG 저점 대칭 워커 (2026-08-24): v219 SHORT 정점 대칭 = LONG 저점 감지 + 자동 진입!
+    # long_bottom_detector = 매 5분 = 저점 후보 감지 → Redis sajangnim:bottom_long:* 알람.
+    # auto_long_at_bottom = 매 30초 = 24h ticker 스캔 → 조건 충족 시 LONG 자동 진입 + SL -5%.
+    # daily_limit / _count_used_slots = auto_bb_breakdown 통합 counter 공유 (단일 진실!).
+    # API (long_bottom_alerts / active_longs / monitoring_symbols_long / reentry_watch_long) +
+    # UI (v219-monitoring-symbols-long / v219-reentry-watch-long / unified-15m-badge-long) 이미 준비 완료!
+    def _long_bottom_detector():
+        from app.workers.long_bottom_detector_worker import run_long_bottom_detector
+        run_long_bottom_detector()
+    scheduler.add_job(
+        guarded_job("long_bottom_detector", 240, _long_bottom_detector),
+        trigger=IntervalTrigger(minutes=5),
+        id="long_bottom_detector",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+    def _auto_long_at_bottom():
+        from app.workers.auto_long_at_bottom_worker import run_auto_long_at_bottom
+        run_auto_long_at_bottom()
+    scheduler.add_job(
+        guarded_job("auto_long_at_bottom", 25, _auto_long_at_bottom),
+        trigger=IntervalTrigger(seconds=30),
+        id="auto_long_at_bottom",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 🚨 v220 (2026-08-22 사장님 verbatim!): 자동 증거금 추가!
     # 사장님: "2단계 진입후 손실 30% 넘어가면 초기금액으로 증거금 추가
     #         3단계 진입전에 청산가를 높이고 심볼차트가 하락이 시작하면 3단계 진입
@@ -491,6 +515,19 @@ def start_scheduler() -> None:
             trigger=CronTrigger(hour=0, minute=0),  # UTC 00:00 = KST 09:00
             id="daily_report", replace_existing=True, max_instances=1, coalesce=True,
         )
+
+    def _peak_break_reversal():
+        from app.workers.peak_break_reversal_worker import run_peak_break_reversal_once
+        run_peak_break_reversal_once()
+
+    scheduler.add_job(
+        guarded_job("peak_break_reversal", 25, _peak_break_reversal),
+        trigger=IntervalTrigger(seconds=30),
+        id="peak_break_reversal",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
 
 if __name__ == "__main__":

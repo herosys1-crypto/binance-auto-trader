@@ -800,7 +800,9 @@ def _count_used_slots(db: Session) -> int:
 
     # 🎯 v219 통합 (2026-08-22 사장님!): 사장님 정점 SHORT도 포함!
     # 사장님 요구: "일 진입수는 급등락 실시간과 같이 세팅"
-    _auto_types = ["bb4h_auto_entry", "sajangnim_top_short"]
+    # 🎯 v220+ (2026-08-24): 사장님 저점 LONG도 통합! (헌법 6 단일 진실)
+    # SHORT/LONG 대칭 = 하루 총 진입 수 = 통합 counter 공유!
+    _auto_types = ["bb4h_auto_entry", "sajangnim_top_short", "sajangnim_bottom_long"]
     rows = db.execute(
         select(StrategySuggestion)
         .where(StrategySuggestion.status == "EXECUTED")
