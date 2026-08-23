@@ -1108,12 +1108,27 @@ if (typeof window !== 'undefined') {
   async function loadUnified15mMonitoring() {
     const bodyEl = document.getElementById('unified-15m-body');
     const badgeEl = document.getElementById('unified-15m-badge');
+    // Fix 34: v224 OFF 시 자동 접힘 + opacity!
+    try {
+      const detailsEl = document.getElementById('unified-15m-details');
+      const cardEl = document.getElementById('unified-15m-monitoring-card');
+      if (detailsEl && cardEl) {
+        if (!enabled) {
+          detailsEl.removeAttribute('open');
+          cardEl.style.opacity = '0.5';
+          cardEl.style.background = 'linear-gradient(135deg,rgba(100,116,139,0.15),rgba(71,85,105,0.15))';
+        } else {
+          detailsEl.setAttribute('open', 'open');
+          cardEl.style.opacity = '1';
+        }
+      }
+    } catch(e){}
     const updEl = document.getElementById('unified-15m-updated');
     if (!bodyEl) return;
     try {
       const r = await api('/strategy-suggestions/unified-15m/monitoring');
       if (!r || r.empty) {
-        if (badgeEl) badgeEl.textContent = 'OFF';
+        if (badgeEl) badgeEl.textContent = 'v219 ON';
         if (updEl) updEl.textContent = r && r.note ? r.note : '아직 실행 X';
         bodyEl.innerHTML = '<div class="text-xs text-slate-400 text-center py-2">30초 대기 후 첫 스캔 결과 표시!</div>';
         return;
@@ -1178,7 +1193,7 @@ if (typeof window !== 'undefined') {
 
       const enabledNote = enabled ? '' :
         `<div style="background:#7f1d1d;color:#fecaca;padding:4px 8px;border-radius:4px;margin-bottom:6px;font-size:11px">
-          ⚠️ unified_entry_enabled=0 = 스캔만, 실 진입 X!
+          ⚠️ unified_entry_enabled=0 = v219 = 유일한 자동 진입!!
         </div>`;
 
       bodyEl.innerHTML = enabledNote + summary + surgesHtml + reasonsHtml;
@@ -1198,5 +1213,117 @@ if (typeof window !== 'undefined') {
     // 🌟 v224: 15m 통합 워커 실시간 모니터링! (매 30초 갱신!)
     setTimeout(loadUnified15mMonitoring, 1800);
     setInterval(loadUnified15mMonitoring, 30000);
+  });
+}
+
+// Fix 35 (2026-08-23): v219 세팅 폼!
+async function saveV219Settings() {
+  const limit = parseInt(document.getElementById('v219-daily-limit').value);
+  const capital = parseFloat(document.getElementById('v219-capital').value);
+  const maxStage = parseInt(document.getElementById('v219-max-stage').value);
+  const msgEl = document.getElementById('v219-settings-msg');
+  const payload = { top_short_daily_limit: limit, default_capital: capital, max_stage: maxStage };
+  try {
+    await api('/strategy-suggestions/sajangnim-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (msgEl) msgEl.innerHTML = '<span style="color:#22c55e;font-weight:bold;">✅ 저장 완료! 값=' + payload.top_short_daily_limit + ' (2초 후 재로드!)</span>';
+    setTimeout(() => {
+      loadV219Settings();
+      // 값 세팅 후 = 확실히 UI 반영!
+      setTimeout(() => {
+        const limitEl = document.getElementById('v219-daily-limit');
+        if (limitEl) limitEl.value = String(payload.top_short_daily_limit);
+        console.log('✅ 강제 세팅:', payload.top_short_daily_limit);
+      }, 1000);
+    }, 500);
+  } catch(e) {
+    if (msgEl) msgEl.innerHTML = '<span style="color:#ef4444;">❌ 실패: ' + e.message + '</span>';
+  }
+}
+async function loadV219Settings(retry = 0) {
+  const limitEl = document.getElementById('v219-daily-limit');
+  const capitalEl = document.getElementById('v219-capital');
+  const maxStageEl = document.getElementById('v219-max-stage');
+  // Fix 38: 요소 없으면 = 재시도! (카드가 늦게 로드!)
+  if (!limitEl && !capitalEl && !maxStageEl) {
+    if (retry < 20) setTimeout(() => loadV219Settings(retry + 1), 500);
+    return;
+  }
+  try {
+    const r = await api('/strategy-suggestions/sajangnim-settings');
+    if (limitEl) limitEl.value = r.top_short_daily_limit ?? 5;
+    if (capitalEl) capitalEl.value = r.default_capital ?? 300;
+    if (maxStageEl) maxStageEl.value = r.max_stage ?? 2;
+  } catch(e) {}
+}
+if (typeof window !== 'undefined') {
+  window.saveV219Settings = saveV219Settings;
+  window.loadV219Settings = loadV219Settings;
+  document.addEventListener('DOMContentLoaded', () => setTimeout(loadV219Settings, 600));
+}
+
+// Fix 36 (2026-08-23): v219 감시 데이터 표시!
+async function loadV219Monitoring() {
+  const bodyEl = document.getElementById('unified-15m-body');
+  const badgeEl = document.getElementById('unified-15m-badge');
+  const updEl = document.getElementById('unified-15m-updated');
+  if (!bodyEl) return;
+  try {
+    const r = await api('/strategy-suggestions/v219-monitoring');
+    const nShorts = (r.active_shorts || []).length;
+    const nAlerts = (r.pump_top_alerts || []).length;
+    if (badgeEl) {
+      badgeEl.textContent = `v219 · SHORT ${nShorts} · 감지 ${nAlerts}`;
+      badgeEl.style.background = '#ec4899';
+      badgeEl.style.color = 'white';
+    }
+    if (updEl) updEl.textContent = `${new Date().toLocaleTimeString()} · 오늘 ${r.daily_used||0}/${r.daily_limit||0}`;
+    let html = '';
+    // Fix 37: monitoring_symbols 표시!
+    if (r.monitoring_symbols && r.monitoring_symbols.length) {
+      html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🔍 v219 감시 심볼 ${r.monitoring_symbols.length}개:</b></div>`;
+      r.monitoring_symbols.forEach(m => {
+        const color = m.passed_v219 ? '#22c55e' : (m.change_24h >= 10 ? '#f97316' : '#94a3b8');
+        const badge = m.passed_v219 ? '✅통과' : '👀감시';
+        html += `<div style="padding:3px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:11px;">${m.symbol} 24h=<span style="color:${color};font-weight:bold;">${m.change_24h}%</span> ${badge} vol=${m.volume_24h_m||"?"}M</div>`;
+      });
+    }
+    // Fix 37: reentry_watch 표시!
+    if (r.reentry_watch && r.reentry_watch.length) {
+      html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🔄 재진입 대기 (24h 청산!) ${r.reentry_watch.length}개:</b></div>`;
+      r.reentry_watch.forEach(w => {
+        const pnl = parseFloat(w.realized_pnl || 0);
+        const c = pnl >= 0 ? '#22c55e' : '#ef4444';
+        html += `<div style="padding:3px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:11px;">${w.symbol} ${w.status} <span style="color:${c};">${pnl.toFixed(2)}</span></div>`;
+      });
+    }
+    // 활성 SHORT = 개수만!
+    if (r.active_count) {
+      html += `<div style="color:#94a3b8;font-size:11px;margin-top:8px;">🎯 활성 SHORT: ${r.active_count}건 (전략 인스턴스 참조!)</div>`;
+    }
+    if (false && r.active_shorts && r.active_shorts.length) {
+      html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🎯 활성 SHORT ${r.active_shorts.length}건:</b></div>`;
+      r.active_shorts.forEach(s => {
+        const pnl = parseFloat(s.unrealized_pnl || 0);
+        const c = pnl >= 0 ? '#22c55e' : '#ef4444';
+        html += `<div style="padding:4px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:12px;">${s.symbol} stage${s.stage} avg=${s.avg_price} <span style="color:${c};font-weight:bold;">${pnl.toFixed(2)} USDT</span></div>`;
+      });
+    }
+    if (r.pump_top_alerts && r.pump_top_alerts.length) {
+      html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🚨 정점 감지 후보 ${r.pump_top_alerts.length}건:</b></div>`;
+      r.pump_top_alerts.forEach(a => {
+        html += `<div style="padding:4px 8px;background:rgba(236,72,153,0.15);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:12px;">${a.symbol} ${a.side} conf=${a.confidence} 24h=${a.change_24h}%</div>`;
+      });
+    }
+    if (!html) html = `<div style="color:#94a3b8;padding:8px;">v219 감지 대기 중 (매 5분!)</div>`;
+    bodyEl.innerHTML = html;
+  } catch(e) {
+    bodyEl.innerHTML = `<div style="color:#ef4444;padding:8px;">❌ ${e.message}</div>`;
+  }
+}
+if (typeof window !== 'undefined') {
+  window.loadV219Monitoring = loadV219Monitoring;
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(loadV219Monitoring, 1500);
+    setInterval(loadV219Monitoring, 30000);
   });
 }

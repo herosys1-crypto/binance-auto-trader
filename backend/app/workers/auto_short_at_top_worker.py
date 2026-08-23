@@ -48,12 +48,12 @@ def _get_daily_limit(db) -> int:
     사장님 요구: "일 진입수는 급등락 실시간과 같이 세팅"
     """
     try:
-        row = db.get(SystemSetting, "auto_bb_break_daily_limit")
+        row = db.get(SystemSetting, "sajangnim_top_short_daily_limit")
         if row and row.value:
             return max(0, int(row.value))
     except Exception:
         pass
-    return 0
+    return 5
 
 
 def run_auto_short_at_top() -> dict:
@@ -69,8 +69,8 @@ def run_auto_short_at_top() -> dict:
             return {"note": "daily_limit=0 (OFF!)", "entered": 0}
 
         # 통합 카운트 = 모든 자동 진입 (BB + PENDING_HC + OBV + v219 정점!) 포함!
-        from app.workers.auto_bb_breakdown_worker import _count_used_slots
-        used = _count_used_slots(db)
+        # Fix 34: v219 독립! (기존 _count_used_slots import 제거)
+        used = _count_v219_used_slots(db)
         remaining = daily_limit - used
         if remaining <= 0:
             return {"note": f"daily {used}/{daily_limit} (통합!)", "entered": 0}
@@ -253,3 +253,24 @@ def run_auto_short_at_top() -> dict:
         return {"error": str(e), "entered": 0}
     finally:
         db.close()
+
+
+def _count_v219_used_slots(db) -> int:
+    """🎯 Fix 34: v219 전용 카운터 (auto_bb_breakdown과 완전 분리!)"""
+    try:
+        from app.models.strategy_suggestion import StrategySuggestion
+        from app.workers.auto_bb_breakdown_worker import _auto_bb_reset_at
+        from sqlalchemy import and_
+        today_start = _auto_bb_reset_at(db)
+        count = db.query(StrategySuggestion).filter(
+            and_(
+                StrategySuggestion.suggestion_type == 'sajangnim_top_short',
+                StrategySuggestion.execution_mode == 'AUTO',
+                StrategySuggestion.status == 'EXECUTED',
+                StrategySuggestion.executed_at >= today_start,
+                StrategySuggestion.outcome_status != 'SUCCESS'
+            )
+        ).count()
+        return count
+    except Exception:
+        return 0
