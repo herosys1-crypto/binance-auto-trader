@@ -552,6 +552,25 @@ def start_scheduler() -> None:
         )
 
 
+        # Fix 47 (2026-08-24): LONG 시스템 (v219 방식!)
+        def _long_bottom_detector():
+            from app.workers.long_bottom_detector_worker import run_long_bottom_detector
+            run_long_bottom_detector()
+        scheduler.add_job(
+            guarded_job('long_bottom_detector', 240, _long_bottom_detector),
+            trigger=IntervalTrigger(minutes=5),
+            id='long_bottom_detector', replace_existing=True, max_instances=1, coalesce=True,
+        )
+        def _auto_long_at_bottom():
+            from app.workers.auto_long_at_bottom_worker import run_auto_long_at_bottom_once
+            run_auto_long_at_bottom_once()
+        scheduler.add_job(
+            guarded_job('auto_long_at_bottom', 25, _auto_long_at_bottom),
+            trigger=IntervalTrigger(seconds=30),
+            id='auto_long_at_bottom', replace_existing=True, max_instances=1, coalesce=True,
+        )
+
+
         scheduler.start()
 
 if __name__ == "__main__":
