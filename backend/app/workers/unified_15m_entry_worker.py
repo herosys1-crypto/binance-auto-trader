@@ -233,18 +233,26 @@ def run_unified_15m_entry() -> dict:
                 # 12a. 15m 분석! (Redis 캐시 재사용!)
                 a15 = ChartAnalyzer.analyze_timeframe(bc, symbol, "15m", limit=60)
                 if not a15:
+                    skipped += 1
+                    logger.info("[unified_15m_v224] skip %s: 15m 분석 없음(캔들 부족?)", symbol)
                     continue
                 closes = a15.get("closes") or []
                 matched, side, surge_meta = _detect_15m_surge(closes, pct_1h, pct_3h)
                 if not matched or side is None:
                     continue
                 surges_found += 1
+                logger.info(
+                    "[unified_15m_v224] 🎯 surge 감지: %s side=%s window=%s pct=%+.2f%%",
+                    symbol, side, surge_meta.get("matched_window"),
+                    surge_meta.get("matched_pct", 0),
+                )
 
                 key = f"{symbol}:{side}"
 
                 # 12b. 활성 심볼 skip!
                 if key in active_keys:
                     skipped += 1
+                    logger.info("[unified_15m_v224] skip %s: 활성 심볼(중복 진입 방지)", key)
                     continue
 
                 # 12c. 최근 48h 손실 skip! (마틴게일은 realtime_reentry_worker 담당!)
@@ -258,13 +266,24 @@ def run_unified_15m_entry() -> dict:
 
                 # 12d. v223 = 15m score + 1h/4h 역방향!
                 v = PumpTopDetector.check_v223_15m_primary(bc, symbol, side)
-                if not v.get("detected"):
-                    logger.debug(
-                        "[unified_15m_v224] v223 skip %s %s: %s",
+                # v223 relax override = SystemSetting "unified_v223_min_score" (default 3)
+                _min_score = _get_setting_int(db, "unified_v223_min_score", V223_MIN_SCORE)
+                _s15 = int(v.get("score_15m") or 0)
+                _detected_relaxed = bool(v.get("detected")) or (_s15 >= _min_score)
+                if not _detected_relaxed:
+                    skipped += 1
+                    logger.info(
+                        "[unified_15m_v224] skip %s %s: v223 미통과 reason=%s "
+                        "score_15m=%s(min=%d) opp_1h=%s opp_4h=%s conf=%s",
                         symbol, side, v.get("reason"),
+                        v.get("score_15m"), _min_score, v.get("opp_score_1h"),
+                        v.get("opp_score_4h"), v.get("confidence"),
                     )
                     continue
                 confidence = float(v.get("confidence", 0) or 0)
+                if confidence <= 0:
+                    # relaxed 통과 + confidence 없음 → score 비례 fallback
+                    confidence = min(0.60, 0.20 + 0.10 * _s15)
 
                 # 12e. 학습된 실패 조건 skip! (BTC 방향 + WORST 시나리오 포함!)
                 snap15 = (v.get("entry_snapshot") or {}).get("15m") or {}
