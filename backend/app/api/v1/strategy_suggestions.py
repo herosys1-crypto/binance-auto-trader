@@ -359,6 +359,43 @@ def recent_auto_outcomes(
     }
 
 
+@router.get("/unified-15m/monitoring")
+def get_unified_15m_monitoring(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🌟 v224 (2026-08-23 사장님!): 15m 통합 워커 실시간 모니터링!
+
+    Redis "unified_15m:monitoring" (TTL 60s, 워커가 매 30초 갱신!) 조회.
+    - last_run_at / scanned / no_surge / surges / entered_today / skip_reasons
+    - 사장님 대시보드 = 어떤 심볼이 지금 감지되는지 = 투명하게 표시!
+    """
+    try:
+        import json as _json
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+        raw = r.get("unified_15m:monitoring")
+        if not raw:
+            return {
+                "empty": True,
+                "note": "아직 실행 결과 없음! (30초 대기!)",
+                "unified_entry_enabled": bool(int(
+                    (db.get(SystemSetting, "unified_entry_enabled").value
+                     if db.get(SystemSetting, "unified_entry_enabled") else "1")
+                )),
+            }
+        data = _json.loads(raw)
+        # 활성화 상태 병기!
+        _en_row = db.get(SystemSetting, "unified_entry_enabled")
+        data["unified_entry_enabled"] = (
+            bool(int(_en_row.value)) if _en_row and _en_row.value else True
+        )
+        return data
+    except Exception as e:
+        logger.warning("[unified-15m/monitoring] 실패: %s", e)
+        return {"error": str(e), "empty": True}
+
+
 @router.get("/auto-bb-limit")
 def get_auto_bb_limit(
     db: Session = Depends(get_db),

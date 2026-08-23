@@ -377,12 +377,11 @@ function renderSuggestions() {
                     title="상세 분석 새 창 열기!">
               📊 상세 분석
             </button>
-            <button onclick="event.stopPropagation();openSuggestionsSettingsModal()"
-                    class="text-xs px-3 py-1 rounded"
-                    style="background:#7c3aed;color:#fff;border:0;cursor:pointer"
-                    title="자동 실행 옵션 세팅!">
-              ⚙ 자동
-            </button>
+            <span class="text-xs px-2 py-1 rounded"
+                  style="background:rgba(6,182,212,0.20);color:#67e8f9;border:1px solid rgba(6,182,212,0.4);font-weight:bold"
+                  title="v224 통합 워커(unified_15m_entry) = 15m 급등/급락 심볼만 매 30초 자동 진입. 이 카드는 조회 전용!">
+              ⚠️ v224 통합 워커가 자동 진입! 조회 전용!
+            </span>
             <button onclick="event.stopPropagation();dismissSuggestion(${s.id})"
                     class="text-xs px-3 py-1 rounded"
                     style="background:#475569;color:#fff;border:0;cursor:pointer"
@@ -1104,11 +1103,100 @@ if (typeof window !== 'undefined') {
   window.openSuggestionAnalysis = openSuggestionAnalysis;  // 🌟 v133c!
   // 🎯 v218 사장님 (2026-08-22): 자동 제안 outcome 함수 전역 노출!
   window.loadRecentAutoOutcomes = loadRecentAutoOutcomes;
+  // 🌟 v224 사장님 (2026-08-23): 15m 통합 워커 실시간 모니터링!
+  // "지금까지 모든 자동매매는 오늘 15분 차트 급등과 급락한 심볼만 자동매매를 하는걸로 통합"
+  async function loadUnified15mMonitoring() {
+    const bodyEl = document.getElementById('unified-15m-body');
+    const badgeEl = document.getElementById('unified-15m-badge');
+    const updEl = document.getElementById('unified-15m-updated');
+    if (!bodyEl) return;
+    try {
+      const r = await api('/strategy-suggestions/unified-15m/monitoring');
+      if (!r || r.empty) {
+        if (badgeEl) badgeEl.textContent = 'OFF';
+        if (updEl) updEl.textContent = r && r.note ? r.note : '아직 실행 X';
+        bodyEl.innerHTML = '<div class="text-xs text-slate-400 text-center py-2">30초 대기 후 첫 스캔 결과 표시!</div>';
+        return;
+      }
+      const enabled = !!r.unified_entry_enabled;
+      const surges = Array.isArray(r.surges) ? r.surges : [];
+      const skipReasons = r.skip_reasons || {};
+      const last = r.last_run_at ? new Date(r.last_run_at) : null;
+      const agoSec = last ? Math.max(0, Math.floor((Date.now() - last.getTime())/1000)) : null;
+      const agoStr = agoSec == null ? '?' :
+                     agoSec < 60 ? `${agoSec}초 전` : `${Math.floor(agoSec/60)}분 전`;
+      if (badgeEl) {
+        badgeEl.textContent = enabled ? `ON · surge ${surges.length}` : 'OFF';
+        badgeEl.style.background = enabled ? '#22d3ee' : '#64748b';
+      }
+      if (updEl) updEl.textContent = `${agoStr} 갱신 · 오늘 ${r.entered_today||0}/${r.daily_limit||0}건`;
+
+      const summary = `
+        <div style="display:flex;gap:6px;flex-wrap:wrap;font-size:11px;margin-bottom:6px">
+          <span style="background:#0e7490;color:#fff;padding:2px 8px;border-radius:8px">🔎 스캔 ${r.scanned||0}</span>
+          <span style="background:#334155;color:#e2e8f0;padding:2px 8px;border-radius:8px">캔들X ${r.no_candles||0}</span>
+          <span style="background:#334155;color:#e2e8f0;padding:2px 8px;border-radius:8px">평온 ${r.no_surge||0}</span>
+          <span style="background:#f59e0b;color:#000;padding:2px 8px;border-radius:8px">🎯 급등락 ${r.surges_found||0}</span>
+          <span style="background:#10b981;color:#000;padding:2px 8px;border-radius:8px">✅ 진입 ${r.entered||0}</span>
+          <span style="background:#ef4444;color:#fff;padding:2px 8px;border-radius:8px">⏭ skip ${r.skipped||0}</span>
+        </div>`;
+
+      let surgesHtml = '';
+      if (surges.length === 0) {
+        surgesHtml = '<div class="text-xs text-slate-400 py-2">지금 15m 급등/급락 없음 (평온!)</div>';
+      } else {
+        surgesHtml = `
+          <div style="max-height:220px;overflow-y:auto;padding-right:4px">
+            ${surges.map(s => {
+              const isLong = s.side === 'LONG';
+              const sideColor = isLong ? '#22c55e' : '#ef4444';
+              const icon = isLong ? '🐂' : '🐻';
+              const pct = Number(s.matched_pct||0);
+              const pctStr = (pct>=0?'+':'') + pct.toFixed(2) + '%';
+              const win = s.window || '?';
+              const c24 = Number(s.change_24h_pct||0);
+              const c24Str = (c24>=0?'+':'') + c24.toFixed(2) + '%';
+              return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 6px;margin-bottom:2px;background:rgba(15,23,42,0.5);border-left:3px solid ${sideColor};border-radius:3px;font-size:11px">
+                <span><b>${icon} ${s.symbol}</b> <span style="color:${sideColor}">${s.side}</span></span>
+                <span style="color:${sideColor}">${win} ${pctStr} <span style="color:#94a3b8">· 24h ${c24Str}</span></span>
+              </div>`;
+            }).join('')}
+          </div>`;
+      }
+
+      let reasonsHtml = '';
+      const rk = Object.keys(skipReasons);
+      if (rk.length > 0) {
+        reasonsHtml = `
+          <details style="margin-top:6px;font-size:11px">
+            <summary style="cursor:pointer;color:#94a3b8">🔎 skip 이유 breakdown (${rk.length}종)</summary>
+            <div style="padding:4px 8px;color:#cbd5e1">
+              ${rk.map(k => `<div>· ${k}: ${skipReasons[k]}건</div>`).join('')}
+            </div>
+          </details>`;
+      }
+
+      const enabledNote = enabled ? '' :
+        `<div style="background:#7f1d1d;color:#fecaca;padding:4px 8px;border-radius:4px;margin-bottom:6px;font-size:11px">
+          ⚠️ unified_entry_enabled=0 = 스캔만, 실 진입 X!
+        </div>`;
+
+      bodyEl.innerHTML = enabledNote + summary + surgesHtml + reasonsHtml;
+    } catch (e) {
+      if (bodyEl) bodyEl.innerHTML = `<div class="text-xs text-red-400">모니터링 로드 실패: ${(e&&e.message)||e}</div>`;
+      console.warn('[unified-15m/monitoring] 실패:', e);
+    }
+  }
+  window.loadUnified15mMonitoring = loadUnified15mMonitoring;
+
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(loadStrategySuggestions, 1200);
     setInterval(loadStrategySuggestions, 30000);  // 30초 polling
     // 🎯 v218: 자동 제안 outcome 표시! (매 30초 갱신!)
     setTimeout(loadRecentAutoOutcomes, 1500);
     setInterval(loadRecentAutoOutcomes, 30000);
+    // 🌟 v224: 15m 통합 워커 실시간 모니터링! (매 30초 갱신!)
+    setTimeout(loadUnified15mMonitoring, 1800);
+    setInterval(loadUnified15mMonitoring, 30000);
   });
 }

@@ -139,6 +139,7 @@ def run_unified_15m_entry() -> dict:
     no_surge = 0                # 급등/급락 없음 (대상 아님!)
     skip_reasons: dict[str, int] = {}   # 사장님 검증용!
     results: list[dict] = []
+    surges: list[dict] = []             # 감지된 급등/급락 심볼 = UI 모니터링용!
 
     def _skip(reason: str, symbol: str, side: str | None, extra: str = "") -> None:
         """대상 심볼 skip 헬퍼 = 카운트 + INFO 로그 + 이유 집계!"""
@@ -264,6 +265,15 @@ def run_unified_15m_entry() -> dict:
                     symbol, side, surge_meta.get("matched_window"),
                     surge_meta.get("matched_pct", 0),
                 )
+                surges.append({
+                    "symbol": symbol,
+                    "side": side,
+                    "window": surge_meta.get("matched_window"),
+                    "matched_pct": surge_meta.get("matched_pct", 0),
+                    "change_1h_pct": surge_meta.get("change_1h_pct"),
+                    "change_3h_pct": surge_meta.get("change_3h_pct"),
+                    "change_24h_pct": float(t.get("priceChangePercent", 0) or 0),
+                })
 
                 key = f"{symbol}:{side}"
 
@@ -461,10 +471,12 @@ def run_unified_15m_entry() -> dict:
             scanned, no_candles, no_surge, surges_found, entered, skipped,
             _reasons_str, used + entered, daily_limit,
         )
-        return {
+        payload = {
+            "last_run_at": datetime.now(timezone.utc).isoformat(),
             "daily_limit": daily_limit,
             "used_before": used,
             "remaining_before": remaining,
+            "entered_today": used + entered,
             "scanned": scanned,
             "no_candles": no_candles,
             "no_surge": no_surge,
@@ -472,9 +484,24 @@ def run_unified_15m_entry() -> dict:
             "entered": entered,
             "skipped": skipped,
             "skip_reasons": skip_reasons,
+            "surges": surges,
             "results": results,
             "spec_version": "v224",
         }
+        # 🌟 사장님 요구 (2026-08-23): Redis 저장 = UI 실시간 모니터링용!
+        # Key: unified_15m:monitoring / TTL: 60s (매 30초 실행 = 항상 fresh!)
+        try:
+            import json as _json
+            from app.core.redis_client import get_redis_client
+            _r = get_redis_client()
+            _r.setex(
+                "unified_15m:monitoring",
+                60,
+                _json.dumps(payload, ensure_ascii=False, default=str),
+            )
+        except Exception as _re:
+            logger.debug("[unified_15m_v224] Redis 저장 실패(무시): %s", _re)
+        return payload
     except Exception as e:
         logger.exception("[unified_15m_v224] 예외: %s", e)
         return {"error": str(e), "entered": entered}
