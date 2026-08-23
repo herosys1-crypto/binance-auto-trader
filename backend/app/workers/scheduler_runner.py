@@ -491,20 +491,20 @@ def start_scheduler() -> None:
             trigger=CronTrigger(hour=0, minute=0),  # UTC 00:00 = KST 09:00
             id="daily_report", replace_existing=True, max_instances=1, coalesce=True,
         )
-    
-    # ─────────── Fix 29 v228 (2026-08-23): 저항 반전 SHORT 2단계 자동 진입 ───────────
-    def _resistance_reversal():
-        from app.workers.resistance_reversal_worker import run_resistance_reversal_once
-        run_resistance_reversal_once()
+        # ─────────── Fix 29 v228 (2026-08-23): 저항 반전 SHORT 2단계 자동 진입 ───────────
+        def _resistance_reversal():
+            from app.workers.resistance_reversal_worker import run_resistance_reversal_once
+            run_resistance_reversal_once()
 
-    scheduler.add_job(
-        guarded_job('resistance_reversal', 25, _resistance_reversal),
-        trigger=IntervalTrigger(seconds=30),
-        id='resistance_reversal',
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,
-    )
+        scheduler.add_job(
+            guarded_job('resistance_reversal', 25, _resistance_reversal),
+            trigger=IntervalTrigger(seconds=30),
+            id='resistance_reversal',
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+
 
         scheduler.start()
 
