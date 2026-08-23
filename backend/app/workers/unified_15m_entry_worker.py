@@ -132,10 +132,25 @@ def run_unified_15m_entry() -> dict:
     """🌟 v224: 15m 급등/급락 통합 진입 워커! (매 30초!)"""
     db: Session = SessionLocal()
     entered = 0
-    skipped = 0
+    skipped = 0                 # 대상 심볼 (surge 감지!) 중 skip 카운트!
     scanned = 0
     surges_found = 0
+    no_candles = 0              # 15m 캔들 없음 (대상 아님!)
+    no_surge = 0                # 급등/급락 없음 (대상 아님!)
+    skip_reasons: dict[str, int] = {}   # 사장님 검증용!
     results: list[dict] = []
+
+    def _skip(reason: str, symbol: str, side: str | None, extra: str = "") -> None:
+        """대상 심볼 skip 헬퍼 = 카운트 + INFO 로그 + 이유 집계!"""
+        nonlocal skipped
+        skipped += 1
+        skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+        _side_str = side or "?"
+        logger.info(
+            "[unified_15m_v224] skip %s %s reason=%s%s",
+            symbol, _side_str, reason,
+            (" " + extra) if extra else "",
+        )
     try:
         # 1. 활성화 여부!
         if not _get_setting_int(db, "unified_entry_enabled", 1):
@@ -233,12 +248,15 @@ def run_unified_15m_entry() -> dict:
                 # 12a. 15m 분석! (Redis 캐시 재사용!)
                 a15 = ChartAnalyzer.analyze_timeframe(bc, symbol, "15m", limit=60)
                 if not a15:
-                    skipped += 1
-                    logger.info("[unified_15m_v224] skip %s: 15m 분석 없음(캔들 부족?)", symbol)
+                    # 대상 심볼 아님! (surge 판정 전!) = skipped++ X, debug만!
+                    no_candles += 1
+                    logger.debug("[unified_15m_v224] %s: 15m 분석 없음(캔들 부족?)", symbol)
                     continue
                 closes = a15.get("closes") or []
                 matched, side, surge_meta = _detect_15m_surge(closes, pct_1h, pct_3h)
                 if not matched or side is None:
+                    # 대상 심볼 아님! = 무로그 (40개 = 노이즈!)
+                    no_surge += 1
                     continue
                 surges_found += 1
                 logger.info(
@@ -251,17 +269,12 @@ def run_unified_15m_entry() -> dict:
 
                 # 12b. 활성 심볼 skip!
                 if key in active_keys:
-                    skipped += 1
-                    logger.info("[unified_15m_v224] skip %s: 활성 심볼(중복 진입 방지)", key)
+                    _skip("active_symbol", symbol, side, "중복 진입 방지")
                     continue
 
                 # 12c. 최근 48h 손실 skip! (마틴게일은 realtime_reentry_worker 담당!)
                 if key in recent_loss_keys:
-                    skipped += 1
-                    logger.info(
-                        "[unified_15m_v224] skip %s (최근 48h 손실 = 재진입은 realtime_reentry!)",
-                        key,
-                    )
+                    _skip("recent_loss_48h", symbol, side, "재진입은 realtime_reentry!")
                     continue
 
                 # 12d. v223 = 15m score + 1h/4h 역방향!
@@ -271,13 +284,11 @@ def run_unified_15m_entry() -> dict:
                 _s15 = int(v.get("score_15m") or 0)
                 _detected_relaxed = bool(v.get("detected")) or (_s15 >= _min_score)
                 if not _detected_relaxed:
-                    skipped += 1
-                    logger.info(
-                        "[unified_15m_v224] skip %s %s: v223 미통과 reason=%s "
-                        "score_15m=%s(min=%d) opp_1h=%s opp_4h=%s conf=%s",
-                        symbol, side, v.get("reason"),
-                        v.get("score_15m"), _min_score, v.get("opp_score_1h"),
-                        v.get("opp_score_4h"), v.get("confidence"),
+                    _skip(
+                        "v223_fail", symbol, side,
+                        f"v223={v.get('reason')} score_15m={_s15}(min={_min_score}) "
+                        f"opp_1h={v.get('opp_score_1h')} opp_4h={v.get('opp_score_4h')} "
+                        f"conf={v.get('confidence')}",
                     )
                     continue
                 confidence = float(v.get("confidence", 0) or 0)
@@ -298,10 +309,10 @@ def run_unified_15m_entry() -> dict:
                     "suggestion_type": SUGGESTION_TYPE,
                 }
                 if _matches_failure_condition(_filter_it, side):
-                    skipped += 1
-                    logger.info(
-                        "[unified_15m_v224] 학습 실패 조건 skip: %s %s",
-                        symbol, side,
+                    _skip(
+                        "learned_failure", symbol, side,
+                        f"rsi={snap15.get('rsi_now')} cci={snap15.get('cci_now')} "
+                        f"24h={float(t.get('priceChangePercent', 0) or 0):+.1f}%",
                     )
                     continue
 
@@ -314,10 +325,9 @@ def run_unified_15m_entry() -> dict:
                     strategy_type_suffix="_UNIFIED_15M",
                 )
                 if not new_strategy:
-                    skipped += 1
-                    logger.info(
-                        "[unified_15m_v224] ❌ %s %s 진입 실패 = skip (재시도!)",
-                        symbol, side,
+                    _skip(
+                        "create_strategy_failed", symbol, side,
+                        f"capital={base_capital:.2f} lev={entry_cfg['leverage']}x (재시도!)",
                     )
                     continue
 
@@ -435,26 +445,33 @@ def run_unified_15m_entry() -> dict:
                     logger.debug("[unified_15m_v224] EventBus 실패: %s", _be)
 
             except Exception as e:
+                # 예외 = 대상 심볼 skip으로 집계 (재시도 대상!)
+                _skip("exception", symbol, None, f"err={e!r}")
                 logger.warning(
-                    "[unified_15m_v224] %s 처리 실패: %s", symbol, e,
+                    "[unified_15m_v224] %s 처리 예외 상세: %s", symbol, e,
                 )
-                skipped += 1
                 db.rollback()
                 continue
 
+        # 사장님 검증용 완료 로그 = 대상 심볼 skip 이유 breakdown!
+        _reasons_str = " ".join(f"{k}={v}" for k, v in sorted(skip_reasons.items())) or "-"
         logger.info(
-            "[unified_15m_v224] 완료: scanned=%d surges=%d entered=%d skipped=%d "
-            "(daily %d/%d)",
-            scanned, surges_found, entered, skipped, used + entered, daily_limit,
+            "[unified_15m_v224] 완료: scanned=%d no_candles=%d no_surge=%d "
+            "surges=%d entered=%d skipped=%d [%s] (daily %d/%d)",
+            scanned, no_candles, no_surge, surges_found, entered, skipped,
+            _reasons_str, used + entered, daily_limit,
         )
         return {
             "daily_limit": daily_limit,
             "used_before": used,
             "remaining_before": remaining,
             "scanned": scanned,
+            "no_candles": no_candles,
+            "no_surge": no_surge,
             "surges_found": surges_found,
             "entered": entered,
             "skipped": skipped,
+            "skip_reasons": skip_reasons,
             "results": results,
             "spec_version": "v224",
         }
