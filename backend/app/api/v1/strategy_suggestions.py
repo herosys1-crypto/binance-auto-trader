@@ -223,12 +223,16 @@ def get_sajangnim_settings(
     mode_row = db.get(SystemSetting, "sajangnim_capital_mode")
     pct_row = db.get(SystemSetting, "sajangnim_entry_pct")
     daily_limit_row = db.get(SystemSetting, "sajangnim_daily_limit")
+    top_short_row = db.get(SystemSetting, "sajangnim_top_short_daily_limit")
+    max_stage_row = db.get(SystemSetting, "sajangnim_max_stage")
 
     return {
         "default_capital": float(default_cap_row.value) if default_cap_row and default_cap_row.value else 300.0,
         "capital_mode": (mode_row.value if mode_row and mode_row.value else "fixed"),
         "entry_pct": float(pct_row.value) if pct_row and pct_row.value else 0.01,
         "daily_limit": int(daily_limit_row.value) if daily_limit_row and daily_limit_row.value else 1,
+        "top_short_daily_limit": int(top_short_row.value) if top_short_row and top_short_row.value else 20,
+        "max_stage": int(max_stage_row.value) if max_stage_row and max_stage_row.value else 2,
     }
 
 
@@ -244,6 +248,8 @@ def set_sajangnim_settings(
         "sajangnim_capital_mode": ("capital_mode", lambda v: str(v).lower() if str(v).lower() in ("fixed", "percent") else "fixed"),
         "sajangnim_entry_pct": ("entry_pct", lambda v: str(max(0.001, min(0.02, float(v))))),
         "sajangnim_daily_limit": ("daily_limit", lambda v: str(max(0, min(10, int(v))))),
+        "sajangnim_top_short_daily_limit": ("top_short_daily_limit", lambda v: str(max(0, min(30, int(v))))),
+        "sajangnim_max_stage": ("max_stage", lambda v: str(max(1, min(3, int(v))))),
     }
     updated = {}
     for key, (payload_key, sanitizer) in fields.items():

@@ -521,6 +521,25 @@ def start_scheduler() -> None:
         )
 
 
+        # Fix 42 (2026-08-23 사장님!): v219 재등록!
+        def _auto_short_at_top_v219():
+            from app.workers.auto_short_at_top_worker import run_auto_short_at_top
+            run_auto_short_at_top()
+        scheduler.add_job(
+            guarded_job('auto_short_at_top', 25, _auto_short_at_top_v219),
+            trigger=IntervalTrigger(seconds=30),
+            id='auto_short_at_top', replace_existing=True, max_instances=1, coalesce=True,
+        )
+        def _pump_top_detector_v219():
+            from app.workers.pump_top_detector_worker import run_pump_top_detector
+            run_pump_top_detector()
+        scheduler.add_job(
+            guarded_job('pump_top_detector', 240, _pump_top_detector_v219),
+            trigger=IntervalTrigger(minutes=5),
+            id='pump_top_detector', replace_existing=True, max_instances=1, coalesce=True,
+        )
+
+
         scheduler.start()
 
 if __name__ == "__main__":
