@@ -274,23 +274,20 @@ def start_scheduler() -> None:
         id="learning_team_cycle",
         replace_existing=True, max_instances=1, coalesce=True,
     )
-    # 🤖 v162 (2026-08-16 사장님!): BB 이탈 SUSTAINED 자동 진입!
-    # 🎯 v190 (2026-08-20 사장님!): 매 1시간! MTA 소스 추가!
-    # 🚨 v196 (2026-08-20 CRITICAL!): API Ban 사고! 매 4시간 복원!
-    # 원인: v190 매 1h + MTA 3 프레임 = Binance IP Ban! (Way too many requests!)
-    # (auto_bb_break_daily_limit 옵션에 따라!)
-    def _auto_bb_breakdown():
-        from app.workers.auto_bb_breakdown_worker import run_auto_bb_breakdown
-        run_auto_bb_breakdown()
-    scheduler.add_job(
-        guarded_job("auto_bb_breakdown", 900, _auto_bb_breakdown),
-        # v218 (2026-08-22 사장님!): 4h → 1h!
-        # 사장님 verbatim: "실시간으로 급등과 급락을 하는 심볼들을 매매하기 때문에 = 빠른 대응 필요!"
-        # 안전: MTA=30 (v196 축소 유지) + scan_bb_breakdown ban 갭 fix (bb_middle_scan.py) 병행!
-        trigger=IntervalTrigger(hours=1),
-        id="auto_bb_breakdown",
-        replace_existing=True, max_instances=1, coalesce=True,
-    )
+    # ⛔ v224 통합 (2026-08-23 사장님!): auto_bb_breakdown = unified_15m_entry로 대체!
+    # 사장님 verbatim: "지금까지 모든 자동매매는 오늘 15분 차트 급등과 급락한 심볼만
+    #                  자동매매를 하는걸로 통합해서 운영할수 있게 하나도 통합정리해줘"
+    # → 진입 소스는 unified_15m_entry 하나만! (아래 참조!)
+    # 롤백 원할 시 = 아래 주석 해제 + unified_entry_enabled=0 세팅!
+    # def _auto_bb_breakdown():
+    #     from app.workers.auto_bb_breakdown_worker import run_auto_bb_breakdown
+    #     run_auto_bb_breakdown()
+    # scheduler.add_job(
+    #     guarded_job("auto_bb_breakdown", 900, _auto_bb_breakdown),
+    #     trigger=IntervalTrigger(hours=1),
+    #     id="auto_bb_breakdown",
+    #     replace_existing=True, max_instances=1, coalesce=True,
+    # )
     # 🎓 v187 (2026-08-20 사장님!): 성공/실패 패턴 학습!
     # "성공과 실패에서 포지션 진입해야 할곳을 분석해서 학습해줘!"
     def _pattern_learning():
@@ -340,42 +337,42 @@ def start_scheduler() -> None:
         id="success_pyramiding",
         replace_existing=True, max_instances=1, coalesce=True,
     )
-    # 🎯 v218 (2026-08-22 사장님!): PENDING_HC 급속 진입 워커! 매 2분!
-    # 사장님: "실시간으로 급등과 급락을 하는 심볼들을 매매 = 빠른 대응!"
-    # auto_bb_breakdown = 1h (API 부담!) but PENDING_HC 85%+ = DB만 = 즉시 진입!
-    def _pending_hc_fast():
-        from app.workers.pending_hc_fast_worker import run_pending_hc_fast
-        run_pending_hc_fast()
-    scheduler.add_job(
-        guarded_job("pending_hc_fast", 90, _pending_hc_fast),
-        trigger=IntervalTrigger(minutes=2),
-        id="pending_hc_fast",
-        replace_existing=True, max_instances=1, coalesce=True,
-    )
-    # 🎯 v219 (2026-08-22 사장님 실 성공 로직!): 정점 감지 워커! 매 5분!
-    # 사장님 verbatim: "급등하는 심볼 4시간봉 최상단 볼밴 최상단밖 obv 최고점
-    #                  macd rsi cci 모든 지표가 최고점일때 포지션 진입!"
-    # 7중 조건 통과 → Redis 알람 → auto_short_at_top_worker가 자동 진입!
-    def _pump_top_detector():
-        from app.workers.pump_top_detector_worker import run_pump_top_detector
-        run_pump_top_detector()
-    scheduler.add_job(
-        guarded_job("pump_top_detector", 240, _pump_top_detector),
-        trigger=IntervalTrigger(minutes=5),
-        id="pump_top_detector",
-        replace_existing=True, max_instances=1, coalesce=True,
-    )
-    # 🎯 v219 사장님 자동 진입! 매 30초!
-    # daily_limit=1 (매우 신중!) 자본 = 전체 자산 × 1~2%!
-    def _auto_short_at_top():
-        from app.workers.auto_short_at_top_worker import run_auto_short_at_top
-        run_auto_short_at_top()
-    scheduler.add_job(
-        guarded_job("auto_short_at_top", 25, _auto_short_at_top),
-        trigger=IntervalTrigger(seconds=30),
-        id="auto_short_at_top",
-        replace_existing=True, max_instances=1, coalesce=True,
-    )
+    # ⛔ v224 통합 (2026-08-23 사장님!): pending_hc_fast = unified_15m_entry로 대체!
+    # 사장님 통합 요구 = 15m 급등/급락 유일 진입! (PENDING_HC 85%+ 소스는 병합됨.)
+    # 롤백 시 = 아래 주석 해제 + unified_entry_enabled=0!
+    # def _pending_hc_fast():
+    #     from app.workers.pending_hc_fast_worker import run_pending_hc_fast
+    #     run_pending_hc_fast()
+    # scheduler.add_job(
+    #     guarded_job("pending_hc_fast", 90, _pending_hc_fast),
+    #     trigger=IntervalTrigger(minutes=2),
+    #     id="pending_hc_fast",
+    #     replace_existing=True, max_instances=1, coalesce=True,
+    # )
+    # ⛔ v224 통합 (2026-08-23 사장님!): pump_top_detector + auto_short_at_top = unified_15m_entry로 대체!
+    # 사장님 verbatim (2026-08-23): "지금까지 모든 자동매매는 오늘 15분 차트 급등과 급락한 심볼만
+    #                                자동매매를 하는걸로 통합해서 운영할수 있게 하나도 통합정리해줘"
+    # v223 = 15m score + 1h/4h 역방향 검사가 unified_15m_entry 내부에서 실행됨.
+    # PumpTopDetector.check_v223_15m_primary()는 여전히 unified 워커 안에서 호출됨.
+    # 롤백 시 = 아래 주석 해제 + unified_entry_enabled=0!
+    # def _pump_top_detector():
+    #     from app.workers.pump_top_detector_worker import run_pump_top_detector
+    #     run_pump_top_detector()
+    # scheduler.add_job(
+    #     guarded_job("pump_top_detector", 240, _pump_top_detector),
+    #     trigger=IntervalTrigger(minutes=5),
+    #     id="pump_top_detector",
+    #     replace_existing=True, max_instances=1, coalesce=True,
+    # )
+    # def _auto_short_at_top():
+    #     from app.workers.auto_short_at_top_worker import run_auto_short_at_top
+    #     run_auto_short_at_top()
+    # scheduler.add_job(
+    #     guarded_job("auto_short_at_top", 25, _auto_short_at_top),
+    #     trigger=IntervalTrigger(seconds=30),
+    #     id="auto_short_at_top",
+    #     replace_existing=True, max_instances=1, coalesce=True,
+    # )
     # 🚨 v220 (2026-08-22 사장님 verbatim!): 자동 증거금 추가!
     # 사장님: "2단계 진입후 손실 30% 넘어가면 초기금액으로 증거금 추가
     #         3단계 진입전에 청산가를 높이고 심볼차트가 하락이 시작하면 3단계 진입
