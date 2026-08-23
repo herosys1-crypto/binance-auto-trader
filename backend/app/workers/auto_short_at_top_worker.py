@@ -53,7 +53,7 @@ def _get_daily_limit(db) -> int:
             return max(0, int(row.value))
     except Exception:
         pass
-    return 5
+    return 20
 
 
 def run_auto_short_at_top() -> dict:
