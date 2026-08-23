@@ -83,6 +83,19 @@ def _is_risky_time_kst() -> tuple[bool, str]:
 
 
 def run_auto_bb_breakdown() -> dict:
+    # Fix 33 (2026-08-23 사장님!): v219만 유지! auto_bb_breakdown OFF!
+    try:
+        from app.core.database import SessionLocal as _SL
+        from app.models.system_setting import SystemSetting as _SS
+        _db = _SL()
+        try:
+            _s = _db.get(_SS, "auto_bb_breakdown_enabled")
+            if _s and str(_s.value) in ("0", "false", "False"):
+                import logging
+                logging.getLogger(__name__).warning("[auto_bb_breakdown] DISABLED = skip")
+                return {"disabled": True}
+        finally: _db.close()
+    except Exception: pass
     """매 4시간 = SUSTAINED 심볼 자동 진입! (v174 완성 + v197 시간대 필터!)"""
     db: Session = SessionLocal()
     entered = 0
