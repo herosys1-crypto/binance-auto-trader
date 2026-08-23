@@ -222,3 +222,173 @@ class ChartAnalyzer:
                 symbol, detail,
             )
         return (signal, detail)
+
+    # ==========================================================================
+    # 🌟 v222 (2026-08-23): 다중 시간대 통합 진입 헬퍼
+    # spec: docs/MULTI_TIMEFRAME_ENTRY_SPEC_v222.md
+    # ==========================================================================
+
+    @staticmethod
+    def analyze_timeframe(bc, symbol: str, interval: str, limit: int = 80) -> dict:
+        """단일 시간대 지표 5개 딕셔너리 반환 (v222!).
+
+        Returns:
+            {closes, obv, rsi_now, rsi_prev, macd_hist, cci_now, cci_prev, bb_up, bb_lo}
+            실패 시 {} 반환 (헌법 v127: 캐시 우선 = 인접 실행 재사용!)
+        """
+        try:
+            # 캐시 확인 (Redis TTL = interval별 다름!)
+            from app.core.redis_client import get_redis_client
+            r = get_redis_client()
+            cache_ttl = {"4h": 300, "1h": 180, "15m": 60}.get(interval, 60)
+            cache_key = f"kline_cache:{symbol}:{interval}"
+            kl = None
+            try:
+                cached = r.get(cache_key)
+                if cached:
+                    import json as _j
+                    kl = _j.loads(cached)
+            except Exception:
+                pass
+            if not kl or not isinstance(kl, list):
+                kl = bc.get_klines(symbol=symbol, interval=interval, limit=limit)
+                if isinstance(kl, list) and len(kl) >= 30:
+                    try:
+                        import json as _j
+                        r.setex(cache_key, cache_ttl, _j.dumps(kl))
+                    except Exception:
+                        pass
+            if not isinstance(kl, list) or len(kl) < 30:
+                return {}
+
+            from app.services.bb_4h_band_analyzer import BB4HBandAnalyzer
+            closes = [float(k[4]) for k in kl]
+            obv = [float(x) for x in ChartAnalyzer.compute_obv(kl)]
+            rsi_now = BB4HBandAnalyzer._calc_rsi(closes)
+            rsi_prev = BB4HBandAnalyzer._calc_rsi(closes[:-1])
+            cci = ChartAnalyzer.compute_cci(kl)
+            mid, up, lo = BB4HBandAnalyzer.bollinger(closes)
+
+            # MACD 히스토그램!
+            macd_hist = []
+            try:
+                if len(closes) >= 35:
+                    ema12 = BB4HBandAnalyzer._calc_ema(closes, 12)
+                    ema26 = BB4HBandAnalyzer._calc_ema(closes, 26)
+                    macd_line = [a - b for a, b in zip(ema12[26 - 12:], ema26)]
+                    if len(macd_line) >= 10:
+                        sig = BB4HBandAnalyzer._calc_ema(macd_line, 9)
+                        if sig:
+                            macd_hist = [m - s for m, s in zip(macd_line[-len(sig):], sig)]
+            except Exception:
+                pass
+
+            return {
+                "closes": closes,
+                "obv": obv,
+                "rsi_now": rsi_now,
+                "rsi_prev": rsi_prev,
+                "macd_hist": macd_hist,
+                "cci_now": cci[-1] if cci else None,
+                "cci_prev": cci[-2] if len(cci) >= 2 else None,
+                "bb_up_last": up[-1] if up else None,
+                "bb_lo_last": lo[-1] if lo else None,
+                "kl_count": len(kl),
+            }
+        except Exception as e:
+            logger.warning("[chart_analyzer v222] analyze_timeframe %s %s 실패: %s",
+                           symbol, interval, e)
+            return {}
+
+    @staticmethod
+    def compute_reversal_score(analysis: dict, side: str) -> int:
+        """반전 점수 (0~5)! 4H는 5지표, 1h/15m은 부분 지표만 사용!
+
+        SHORT = 정점 반전 (하락 시작!)
+        LONG  = 저점 반전 (상승 시작!)
+        """
+        if not analysis:
+            return 0
+        score = 0
+        closes = analysis.get("closes") or []
+        obv = analysis.get("obv") or []
+        rsi_n = analysis.get("rsi_now")
+        rsi_p = analysis.get("rsi_prev")
+        hist = analysis.get("macd_hist") or []
+        cci_n = analysis.get("cci_now")
+        cci_p = analysis.get("cci_prev")
+        up = analysis.get("bb_up_last")
+        lo = analysis.get("bb_lo_last")
+        side_u = (side or "").upper()
+
+        if side_u == "SHORT":
+            # BB 상단 밖!
+            if up is not None and closes and closes[-1] > up:
+                score += 1
+            # OBV 최고점 (최근 LOOKBACK 최대!)
+            if len(obv) >= 20 and obv[-1] >= max(obv[-20:]):
+                score += 1
+            # MACD 히스토그램 최고점 + 꺾임!
+            if len(hist) >= 20 and hist[-2] >= max(hist[-20:]) and hist[-1] < hist[-2]:
+                score += 1
+            # RSI ≥70 + 꺾임!
+            if rsi_n is not None and rsi_p is not None and rsi_n >= 70 and rsi_n < rsi_p:
+                score += 1
+            # CCI ≥200 + 꺾임!
+            if cci_n is not None and cci_p is not None and cci_n >= 200 and cci_n < cci_p:
+                score += 1
+        else:  # LONG!
+            # BB 하단 밖!
+            if lo is not None and closes and closes[-1] < lo:
+                score += 1
+            # OBV 최저점 (최근 LOOKBACK 최소!)
+            if len(obv) >= 20 and obv[-1] <= min(obv[-20:]):
+                score += 1
+            # MACD 히스토그램 최저점 + 반등!
+            if len(hist) >= 20 and hist[-2] <= min(hist[-20:]) and hist[-1] > hist[-2]:
+                score += 1
+            # RSI ≤30 + 반등!
+            if rsi_n is not None and rsi_p is not None and rsi_n <= 30 and rsi_n > rsi_p:
+                score += 1
+            # CCI ≤-200 + 반등!
+            if cci_n is not None and cci_p is not None and cci_n <= -200 and cci_n > cci_p:
+                score += 1
+        return score
+
+    @staticmethod
+    def multi_tf_entry_score(bc, symbol: str, side: str) -> dict:
+        """3 시간대 (4h/1h/15m) 통합 진입 점수 (v222!).
+
+        Returns:
+            {enter, confidence, weighted, score_4h, score_1h, score_15m,
+             signals_4h, signals_1h, signals_15m, spec_version: "v222"}
+        """
+        a4 = ChartAnalyzer.analyze_timeframe(bc, symbol, "4h", limit=120)
+        a1 = ChartAnalyzer.analyze_timeframe(bc, symbol, "1h", limit=80)
+        a15 = ChartAnalyzer.analyze_timeframe(bc, symbol, "15m", limit=60)
+
+        s4 = ChartAnalyzer.compute_reversal_score(a4, side)   # 0~5
+        s1 = ChartAnalyzer.compute_reversal_score(a1, side)   # 0~3 실 사용
+        s15 = ChartAnalyzer.compute_reversal_score(a15, side)  # 0~3 실 사용
+        # 1h/15m은 최대 3점만 유의미 (BB/OBV/RSI 반전만!)
+        s1_capped = min(s1, 3)
+        s15_capped = min(s15, 3)
+
+        weighted = (s4 / 5.0) * 0.5 + (s1_capped / 3.0) * 0.3 + (s15_capped / 3.0) * 0.2
+        # 4H 대장 최소 4/5 + weighted 0.75 이상 = 진입!
+        enter = (s4 >= 4 and weighted >= 0.75)
+        confidence = 0.0
+        if enter:
+            confidence = round(0.80 + (weighted - 0.75) * 0.6, 4)
+            confidence = min(confidence, 0.95)
+
+        return {
+            "enter": enter,
+            "confidence": confidence,
+            "weighted": round(weighted, 4),
+            "score_4h": s4,
+            "score_1h": s1_capped,
+            "score_15m": s15_capped,
+            "side": side,
+            "spec_version": "v222",
+        }

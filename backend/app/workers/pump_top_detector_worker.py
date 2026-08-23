@@ -36,13 +36,17 @@ from app.services.chart_analyzer import ChartAnalyzer
 logger = logging.getLogger(__name__)
 
 LOOKBACK = 20        # 최고점 판정 창!
-MAX_SYMBOLS = 60     # 스캔 상한 (API 부담!)
+# 🌟 v222 (2026-08-23): 다중 시간대 = 심볼당 3 kline call = 60→40 축소 (API 부담!)
+MAX_SYMBOLS = 40     # 스캔 상한 (v219 60 → v222 40 = 3배 호출 대응!)
 # 🎯 v220 사장님 신 사상 (2026-08-22):
 # "급등락이 10 20 30 40 등등 상관없어 차트가 하락으로 시작할수 있는 타이핑에!"
 # = 크기 무관! but API pre-filter 최소치 5% (완전 제거 X = 하락 종목 필터!)
 MIN_24H_CHANGE = 5.0   # 15→5 = 사장님 사상 반영! (7중 지표만 중심!)
 ALERT_TTL_SEC = 1800   # 알람 유효 30분!
 MIN_CONFIDENCE = 0.85  # 최소 신뢰도 (7/7 통과 = 남발 차단!)
+# 🌟 v222: 다중 시간대 통합!
+MULTI_TF_ENABLED = True   # False = v219 순수 로직 fallback!
+MULTI_TF_LONG_ENABLED = True  # 사장님 "하락으로 시작할수 있는 타이밍" = LONG 대칭!
 
 
 class PumpTopDetector:
@@ -181,10 +185,11 @@ def run_pump_top_detector() -> dict:
             usdt.sort(key=lambda x: float(x.get("quoteVolume", 0) or 0), reverse=True)
         except Exception:
             pass
-        # 24h 급등만 pre-filter!
+        # 🌟 v222: SHORT 후보 (chg≥+5) + LONG 후보 (chg≤-5) = 대칭!
+        # 이전 (v219/v220): SHORT 방향만!
         candidates = [
             t for t in usdt[:MAX_SYMBOLS * 2]
-            if float(t.get("priceChangePercent", 0) or 0) >= MIN_24H_CHANGE
+            if abs(float(t.get("priceChangePercent", 0) or 0)) >= MIN_24H_CHANGE
         ][:MAX_SYMBOLS]
 
         if not candidates:
@@ -205,7 +210,7 @@ def run_pump_top_detector() -> dict:
         from app.core.redis_client import get_redis_client
         r = get_redis_client()
 
-        # 7. 심볼별 7중 확인!
+        # 7. 심볼별 7중 확인 + 🌟 v222 다중 시간대 통합!
         for t in candidates:
             symbol = str(t.get("symbol", ""))
             if not symbol or symbol in active_syms:
@@ -216,61 +221,106 @@ def run_pump_top_detector() -> dict:
                     continue
                 scanned += 1
 
-                result = PumpTopDetector.check_7_signals(kl, t)
-                if not result.get("detected"):
-                    continue
-                if result.get("confidence", 0) < MIN_CONFIDENCE:
-                    continue
+                chg24 = float(t.get("priceChangePercent", 0) or 0)
+                # 방향 결정: chg24 부호 = 우선 후보!
+                sides_to_test = []
+                if chg24 >= MIN_24H_CHANGE:
+                    sides_to_test.append("SHORT")  # 급등 = 정점 SHORT!
+                if chg24 <= -MIN_24H_CHANGE and MULTI_TF_LONG_ENABLED:
+                    sides_to_test.append("LONG")   # 급락 = 저점 LONG!
 
-                # 알람 저장!
-                alert_key = f"pump_top:alert:{symbol}"
-                alert_data = {
-                    "symbol": symbol,
-                    "side": "SHORT",
-                    "confidence": result["confidence"],
-                    "signals": result["signals"],
-                    "close": result["close"],
-                    "rsi": result["rsi"],
-                    "cci_last": result["cci_last"],
-                    "change_24h": result["change_24h"],
-                    "detected_at": datetime.now(timezone.utc).isoformat(),
-                    "source": "sajangnim_top_v219",
-                }
-                r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data))
-                detected_symbols.append({
-                    "symbol": symbol,
-                    "confidence": result["confidence"],
-                    "change_24h": result["change_24h"],
-                })
+                for side in sides_to_test:
+                    # ── v219 SHORT 순수 로직 (기존 유지, LONG은 신 로직만!)
+                    if side == "SHORT" and not MULTI_TF_ENABLED:
+                        result = PumpTopDetector.check_7_signals(kl, t)
+                        if not result.get("detected"):
+                            continue
+                        if result.get("confidence", 0) < MIN_CONFIDENCE:
+                            continue
+                        alert_data = {
+                            "symbol": symbol, "side": "SHORT",
+                            "confidence": result["confidence"],
+                            "signals": result["signals"],
+                            "close": result["close"], "rsi": result["rsi"],
+                            "cci_last": result["cci_last"],
+                            "change_24h": result["change_24h"],
+                            "detected_at": datetime.now(timezone.utc).isoformat(),
+                            "source": "sajangnim_top_v219",
+                        }
+                        alert_key = f"pump_top:alert:{symbol}:SHORT"
+                        r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data))
+                        detected_symbols.append({
+                            "symbol": symbol, "side": "SHORT",
+                            "confidence": result["confidence"], "change_24h": chg24,
+                        })
+                        continue
 
-                logger.warning(
-                    "[pump_top_v219] 🎯 정점 감지! %s SHORT (conf=%.2f, 24h=+%.1f%%)",
-                    symbol, result["confidence"], result["change_24h"],
-                )
+                    # 🌟 v222: 다중 시간대 통합 판정 (SHORT+LONG 대칭!)
+                    mtf = ChartAnalyzer.multi_tf_entry_score(bc, symbol, side)
+                    if not mtf.get("enter"):
+                        continue
+                    conf = mtf.get("confidence", 0)
+                    if conf < MIN_CONFIDENCE:
+                        continue
 
-                # 텔레그램 알림! (fix: NotificationService 사용!)
-                try:
-                    from app.services.notification_service import NotificationService
-                    _db_n = SessionLocal()
-                    _ns = NotificationService(_db_n)
-                    _body = (
-                        f"🎯 사장님 정점 감지! (v219)\n"
-                        f"심볼: {symbol} SHORT\n"
-                        f"신뢰도: {result['confidence']*100:.0f}%\n"
-                        f"24h: +{result['change_24h']:.1f}%\n"
-                        f"RSI: {result['rsi']:.1f} / CCI: {result['cci_last']:.0f}\n"
-                        f"7중 확인 통과! 자동 SHORT 진입 대기!"
+                    alert_key = f"pump_top:alert:{symbol}:{side}"
+                    alert_data = {
+                        "symbol": symbol,
+                        "side": side,
+                        "confidence": conf,
+                        "weighted": mtf.get("weighted"),
+                        "score_4h": mtf.get("score_4h"),
+                        "score_1h": mtf.get("score_1h"),
+                        "score_15m": mtf.get("score_15m"),
+                        "change_24h": chg24,
+                        "detected_at": datetime.now(timezone.utc).isoformat(),
+                        "source": "sajangnim_mtf_v222",
+                        "spec_version": "v222",
+                    }
+                    r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data))
+                    detected_symbols.append({
+                        "symbol": symbol, "side": side,
+                        "confidence": conf, "change_24h": chg24,
+                        "weighted": mtf.get("weighted"),
+                    })
+                    # 신 v222 진입 결과 = v219 파이프라인과 나란히!
+                    result = {
+                        "confidence": conf, "change_24h": chg24,
+                        "rsi": None, "cci_last": None,
+                    }
+
+                    logger.warning(
+                        "[pump_top_v222] 🎯 %s %s conf=%.2f 24h=%+.1f%% (mtf=%s)",
+                        symbol, side, result["confidence"], chg24,
+                        alert_data.get("source"),
                     )
-                    _ns.send_system_alert(
-                        title=f"🎯 [v219 정점] {symbol} SHORT ({result['confidence']*100:.0f}%)",
-                        body=_body,
-                    )
+
+                    # 텔레그램 알림! (v222: side/spec 반영!)
                     try:
-                        _db_n.close()
-                    except Exception:
-                        pass
-                except Exception as _te:
-                    logger.warning("[pump_top_v219] telegram 실패: %s", _te)
+                        from app.services.notification_service import NotificationService
+                        _db_n = SessionLocal()
+                        _ns = NotificationService(_db_n)
+                        _rsi_txt = f"{result['rsi']:.1f}" if result.get("rsi") is not None else "-"
+                        _cci_txt = f"{result['cci_last']:.0f}" if result.get("cci_last") is not None else "-"
+                        _spec = alert_data.get("spec_version", "v219")
+                        _body = (
+                            f"🎯 사장님 반전 감지! ({_spec})\n"
+                            f"심볼: {symbol} {side}\n"
+                            f"신뢰도: {result['confidence']*100:.0f}%\n"
+                            f"24h: {chg24:+.1f}%\n"
+                            f"RSI: {_rsi_txt} / CCI: {_cci_txt}\n"
+                            f"다중 시간대 확인 통과! 자동 {side} 진입 대기!"
+                        )
+                        _ns.send_system_alert(
+                            title=f"🎯 [{_spec} 반전] {symbol} {side} ({result['confidence']*100:.0f}%)",
+                            body=_body,
+                        )
+                        try:
+                            _db_n.close()
+                        except Exception:
+                            pass
+                    except Exception as _te:
+                        logger.warning("[pump_top_v222] telegram 실패: %s", _te)
 
             except Exception as e:
                 logger.warning("[pump_top_v219] %s 스캔 실패: %s", symbol, e)
