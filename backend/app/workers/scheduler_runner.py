@@ -402,6 +402,12 @@ def start_scheduler() -> None:
     #         3단계 진입전에 청산가를 높이고 심볼차트가 하락이 시작하면 3단계 진입
     #         최종청산가는 -80% 손실일때 청산"
     # 매 15초 = ROI < -30% 감지 → add_position_margin 자동 호출!
+    # → 이 워커 = 증거금 추가만! 3단계 진입 = stage_trigger / -80% SL = evaluate_stop_loss.
+    # Fix 51 (2026-08-24 사장님 감사 지적!): _auto_add_margin 중복 정리 완료 =
+    #   원래 아래(orchestra_health 뒤)에 100% 동일한 두 번째 def+add_job 이 있었음
+    #   (같은 함수명 + 같은 import + 같은 lock 이름 + 같은 job id + 같은 trigger).
+    #   APScheduler replace_existing=True 로 뒤엣것이 앞엣것을 대체 = 실행은 1회였으나
+    #   헌법 6번(단일 진실) + 헌법 63번(같은 이름 함수 재정의 금지) 위배 → 두 번째 블록 완전 제거.
     def _auto_add_margin():
         from app.workers.auto_add_margin_worker import run_auto_add_margin
         run_auto_add_margin()
@@ -423,19 +429,7 @@ def start_scheduler() -> None:
         id="orchestra_health",
         replace_existing=True, max_instances=1, coalesce=True,
     )
-    # 💉 v220 (2026-08-22 사장님 verbatim!): 2단계 후 자동 증거금 추가! 매 15초!
-    # "2단계 진입후 손실 30% 넘으면 초기금액으로 증거금을 추가해줘 3단계 진입전에 청산가를 높이고
-    #  심볼차트가 하락이 시작하면 3단계 진입 / 최종청산가는 -80% 손실일때 청산"
-    # → 이 워커 = 증거금 추가만! 3단계 진입 = stage_trigger / -80% SL = evaluate_stop_loss.
-    def _auto_add_margin():
-        from app.workers.auto_add_margin_worker import run_auto_add_margin
-        run_auto_add_margin()
-    scheduler.add_job(
-        guarded_job("auto_add_margin", 12, _auto_add_margin),
-        trigger=IntervalTrigger(seconds=15),
-        id="auto_add_margin",
-        replace_existing=True, max_instances=1, coalesce=True,
-    )
+    # (Fix 51: _auto_add_margin 중복 블록 = 위 v220 블록으로 통합됨! 2026-08-24.)
     # (v219 pump_top_detector + auto_short_at_top = 위에 이미 등록됨! 중복 제거 2026-08-22.)
     # 🌟 v224 (2026-08-23 사장님 통합 요구!): 15m 급등/급락 = 유일한 진입!
     # 사장님 verbatim: "지금까지 모든 자동매매는 오늘 15분 차트 급등과 급락한 심볼만

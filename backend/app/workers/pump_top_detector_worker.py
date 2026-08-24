@@ -383,12 +383,16 @@ def run_pump_top_detector() -> dict:
 
                 # 방향 결정: chg24 부호 = 우선 후보!
                 # Fix 44 적용: 트렌드 강도 판정!
+                # Fix 51 P3 (2026-08-24): strong_bull = confidence 감산 실 적용!
                 trend = _check_trend_strength(bc, symbol)
                 if trend == "extreme_bull":
                     logger.info(f"[Fix44] {symbol} 트렌드 극강 (3일 +80%+!) = SHORT skip!")
                     continue
                 if trend == "strong_bull":
-                    logger.info(f"[Fix44] {symbol} 강세 트렌드 = 신중 진입!")
+                    logger.info(
+                        "[Fix44/51] %s 강세 트렌드 = 신중 진입 (confidence -%.2f 감산 예정!)",
+                        symbol, TREND_CONFIDENCE_PENALTY,
+                    )
                 
                 sides_to_test = []
                 if chg24 >= MIN_24H_CHANGE:
@@ -412,7 +416,20 @@ def run_pump_top_detector() -> dict:
                             )
                             continue
                         conf = v.get("confidence", 0)
+                        # Fix 51 P3: strong_bull = confidence 감산 실 적용!
+                        if trend == "strong_bull":
+                            _conf_before = conf
+                            conf = round(conf - TREND_CONFIDENCE_PENALTY, 4)
+                            logger.info(
+                                "[Fix44/51] %s strong_bull v223 = confidence %.2f -> %.2f (신중 진입!)",
+                                symbol, _conf_before, conf,
+                            )
                         if conf < MIN_CONFIDENCE:
+                            if trend == "strong_bull":
+                                logger.info(
+                                    "[Fix44/51] %s v223 confidence 부족 (%.2f < %.2f) = skip",
+                                    symbol, conf, MIN_CONFIDENCE,
+                                )
                             continue
 
                         alert_key = f"pump_top:alert:{symbol}:{side}"
@@ -420,6 +437,8 @@ def run_pump_top_detector() -> dict:
                             "symbol": symbol,
                             "side": side,
                             "confidence": conf,
+                            "trend_strength": trend,
+                            "trend_penalty_applied": (trend == "strong_bull"),
                             "score_15m": v.get("score_15m"),
                             "opp_score_1h": v.get("opp_score_1h"),
                             "opp_score_4h": v.get("opp_score_4h"),
@@ -427,7 +446,7 @@ def run_pump_top_detector() -> dict:
                             "change_24h": chg24,
                             "detected_at": datetime.now(timezone.utc).isoformat(),
                             "source": "sajangnim_15m_main_v223",
-                            "spec_version": "v223",
+                            "spec_version": "pump_top_detector_v2_fix51_strong_bull_penalty_2026-08-24",
                         }
                         r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data, default=str))
                         detected_symbols.append({
@@ -476,11 +495,26 @@ def run_pump_top_detector() -> dict:
                         if not mtf.get("enter"):
                             continue
                         conf = mtf.get("confidence", 0)
+                        # Fix 51 P3: strong_bull = confidence 감산 실 적용!
+                        if trend == "strong_bull":
+                            _conf_before = conf
+                            conf = round(conf - TREND_CONFIDENCE_PENALTY, 4)
+                            logger.info(
+                                "[Fix44/51] %s strong_bull v222 = confidence %.2f -> %.2f (신중 진입!)",
+                                symbol, _conf_before, conf,
+                            )
                         if conf < MIN_CONFIDENCE:
+                            if trend == "strong_bull":
+                                logger.info(
+                                    "[Fix44/51] %s v222 confidence 부족 (%.2f < %.2f) = skip",
+                                    symbol, conf, MIN_CONFIDENCE,
+                                )
                             continue
                         alert_key = f"pump_top:alert:{symbol}:{side}"
                         alert_data = {
                             "symbol": symbol, "side": side, "confidence": conf,
+                            "trend_strength": trend,
+                            "trend_penalty_applied": (trend == "strong_bull"),
                             "weighted": mtf.get("weighted"),
                             "score_4h": mtf.get("score_4h"),
                             "score_1h": mtf.get("score_1h"),
@@ -488,7 +522,7 @@ def run_pump_top_detector() -> dict:
                             "change_24h": chg24,
                             "detected_at": datetime.now(timezone.utc).isoformat(),
                             "source": "sajangnim_mtf_v222",
-                            "spec_version": "v222",
+                            "spec_version": "pump_top_detector_v2_fix51_strong_bull_penalty_2026-08-24",
                         }
                         r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data))
                         detected_symbols.append({
@@ -513,23 +547,40 @@ def run_pump_top_detector() -> dict:
                     result = PumpTopDetector.check_7_signals(kl, t)
                     if not result.get("detected"):
                         continue
-                    if result.get("confidence", 0) < MIN_CONFIDENCE:
+                    conf = result.get("confidence", 0)
+                    # Fix 51 P3: strong_bull = confidence 감산 실 적용!
+                    if trend == "strong_bull":
+                        _conf_before = conf
+                        conf = round(conf - TREND_CONFIDENCE_PENALTY, 4)
+                        logger.info(
+                            "[Fix44/51] %s strong_bull v219 = confidence %.2f -> %.2f (신중 진입!)",
+                            symbol, _conf_before, conf,
+                        )
+                    if conf < MIN_CONFIDENCE:
+                        if trend == "strong_bull":
+                            logger.info(
+                                "[Fix44/51] %s v219 confidence 부족 (%.2f < %.2f) = skip",
+                                symbol, conf, MIN_CONFIDENCE,
+                            )
                         continue
                     alert_key = f"pump_top:alert:{symbol}:SHORT"
                     alert_data = {
                         "symbol": symbol, "side": "SHORT",
-                        "confidence": result["confidence"],
+                        "confidence": conf,
+                        "trend_strength": trend,
+                        "trend_penalty_applied": (trend == "strong_bull"),
                         "signals": result["signals"],
                         "close": result["close"], "rsi": result["rsi"],
                         "cci_last": result["cci_last"],
                         "change_24h": result["change_24h"],
                         "detected_at": datetime.now(timezone.utc).isoformat(),
                         "source": "sajangnim_top_v219",
+                        "spec_version": "pump_top_detector_v2_fix51_strong_bull_penalty_2026-08-24",
                     }
                     r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data))
                     detected_symbols.append({
                         "symbol": symbol, "side": "SHORT",
-                        "confidence": result["confidence"], "change_24h": chg24,
+                        "confidence": conf, "change_24h": chg24,
                     })
 
             except Exception as e:

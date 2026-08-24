@@ -1,23 +1,34 @@
-"""🎯 v219 (2026-08-22 사장님!): 정점 감지 자동 SHORT 진입 워커!
+"""🎯 v219 (2026-08-22 사장님!) + Fix 51 (2026-08-24!): 정점 감지 자동 SHORT 진입 워커!
 
 사장님 verbatim (실 성공 로직!):
 "급등하는 심볼 4시간봉 최상단 볼밴 최상단밖 obv 최고점 macd rsi cci 모든 지표가
  최고점일때 포지션 진입 전체자산에 1-2% 진입"
 
+사장님 verbatim (Fix 49 위험 정책!):
+"v219 단계별 진입후 -5% 손실이면 청산하고 대기 모니터링"
+
+사장님 verbatim (Fix 51 P2 일 진입수 통합!):
+"일 진입수는 급등락 실시간과 같이 세팅"
+
 로직:
 1. Redis `pump_top:alert:*` 스캔 (pump_top_detector_worker가 저장!)
-2. daily_limit 체크 (SystemSetting `sajangnim_daily_limit`, default 1!)
+2. daily_limit 체크 = _get_daily_limit (Fix 51 P2!):
+   sajangnim_top_short_daily_limit → auto_bb_break_daily_limit → 20 fallback!
 3. 활성 심볼 skip!
 4. 자본 = compute_stage1_capital (전체 자산 × 1~2%!)
 5. SHORT 자동 진입 (레버리지 2x!)
-6. entry_snapshot 저장 (학습!)
-7. 헌법 64 예외 (사장님 실 성공 로직!)
+6. Fix 49 (P1): 신 진입만 force_sl_override = -5% (짧은 손절!)
+7. entry_snapshot 저장 (학습!)
+8. 헌법 64 예외 (사장님 실 성공 로직!)
 
 안전:
-- daily_limit 1 (매우 신중!)
+- daily_limit fallback chain (v219 전용 → 공유 → default!)
 - 소액 자본 (1~2%!)
 - 7중 정점 확인 후만!
+- 신 진입 = -5% SL (Fix 49 대칭 정책!)
 - API Ban 체크!
+
+SPEC: auto_short_at_top_v2_fix51_2026-08-24
 """
 from __future__ import annotations
 
@@ -38,22 +49,32 @@ from app.models.system_setting import SystemSetting
 
 logger = logging.getLogger(__name__)
 
+SPEC_VERSION = "auto_short_at_top_v2_fix51_2026-08-24"
 DEFAULT_LEVERAGE = 2      # 사장님 default!
+DEFAULT_DAILY_LIMIT = 20  # sajangnim_top_short_daily_limit fallback!
 ALERT_PATTERN = "pump_top:alert:*"
 
 
 def _get_daily_limit(db) -> int:
-    """🎯 v219 통합 (2026-08-22 사장님!):
+    """🎯 v219 통합 (2026-08-22 사장님!) + Fix 51 P2 fallback 강화!:
     급등락 실시간과 같은 daily_limit 공유 = auto_bb_break_daily_limit!
-    사장님 요구: "일 진입수는 급등락 실시간과 같이 세팅"
+    사장님 verbatim: "일 진입수는 급등락 실시간과 같이 세팅"
+
+    LONG (auto_long_at_bottom) 동일 패턴 = 헌법 6 (단일 진실!):
+    1) sajangnim_top_short_daily_limit (v219 정점 전용)
+    2) auto_bb_break_daily_limit       (급등락 실시간 공유!)
+    3) DEFAULT_DAILY_LIMIT (fallback = 20)
     """
-    try:
-        row = db.get(SystemSetting, "sajangnim_top_short_daily_limit")
-        if row and row.value:
-            return max(0, int(row.value))
-    except Exception:
-        pass
-    return 20
+    for key in ("sajangnim_top_short_daily_limit", "auto_bb_break_daily_limit"):
+        try:
+            row = db.get(SystemSetting, key)
+            if row and row.value:
+                v = int(row.value)
+                if v > 0:
+                    return v
+        except Exception:
+            continue
+    return DEFAULT_DAILY_LIMIT
 
 
 def run_auto_short_at_top() -> dict:
@@ -151,6 +172,25 @@ def run_auto_short_at_top() -> dict:
                         symbol,
                     )
                     continue
+
+                # Fix 49 (2026-08-24 사장님 위험 정책!): 정점 SHORT = -5% 짧은 손절!
+                # 사장님 verbatim: "v219 단계별 진입후 -5% 손실이면 청산하고 대기 모니터링"
+                # LONG (auto_long_at_bottom L800-812) 대칭 패턴!
+                # 기존 활성 전략은 그대로! 신 진입만 -5%!
+                try:
+                    new_strategy.force_sl_enabled_override = True
+                    new_strategy.force_sl_roi_override = Decimal("5")
+                    db.commit()
+                    logger.info(
+                        "[sajangnim_top_v219] 🛡️ %s SL override -5%% 적용 (strategy_id=%s)",
+                        symbol, new_strategy.id,
+                    )
+                except Exception as _sl_exc:
+                    logger.warning(
+                        "[sajangnim_top_v219] ⚠️ %s SL override 실패: %s (진입은 유지)",
+                        symbol, _sl_exc,
+                    )
+                    db.rollback()
 
                 # 8. entry_snapshot 저장 (학습!)
                 _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
