@@ -49,9 +49,13 @@ from app.models.system_setting import SystemSetting
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# SPEC 상수 (사장님 verbatim!)
+# SPEC 상수 (Fix 50 v2 = 사장님 verbatim 2 패턴 분기!)
+#   사장님 verbatim 1: "급락한 종목에서 롱을 찾아야지 지금은 급등후에 조정후 상승에 진입이 많은것 같아"
+#   사장님 verbatim 2: "경로 A: 진짜 급락(-30%~-10%) ... 최근 1일 -2일 10% 전후 상승하는
+#                       심볼을 모니터링해서 상승할 심볼에 롱으로 진입하고 나머진 급상승후 큰조정에서
+#                       모니터링중 심볼중에 다시 상승할것 같으면 롱으로 진입하는거야"
 # ============================================================================
-SPEC_VERSION = "auto_long_at_bottom_v1_2026-08-24"
+SPEC_VERSION = "auto_long_at_bottom_v2_fix50_two_pattern_2026-08-24"
 INTERVAL_SEC = 30
 
 DEFAULT_LEVERAGE = 2          # 사장님 default!
@@ -62,16 +66,26 @@ DEFAULT_DAILY_LIMIT = 20      # sajangnim_top_short_daily_limit fallback!
 OBV_LOOKBACK_4H = 20          # 4H 최근 20봉 = 약 3일 매크로!
 OBV_MIN_SLOPE_PCT = 0.5       # OBV 20봉 회귀 기울기 > 0.5% = "상승 지속"!
 
-# 15m MACD/RSI/CCI 반전!
+# 15m MACD/RSI/CCI 반전 (레거시 상수 = 다른 곳 참조 방지 = 유지!)
 MACD_15M_LIMIT = 80
 RSI_OVERSOLD_MAX = 45         # RSI ≤ 45 = 과매도 회복권!
 RSI_MIN_TURNUP = 0.5          # RSI now > prev + 0.5 = 반등!
 CCI_OVERSOLD_MAX = -50        # CCI ≤ -50 = 저점권!
 CCI_MIN_TURNUP = 5.0          # CCI now > prev + 5 = 반등!
 
-# 24h 필터!
-MIN_24H_CHANGE = -5.0         # -5% 이상 (급락 계속 X!)
-MAX_24H_CHANGE = 10.0         # +10% 이하 (급등 계속 X = 물타기 위험!)
+# 24h 필터 (Fix 50 v2 = 확장! 큰 조정 -15% ~ 상승 초기 +15%!)
+MIN_24H_CHANGE = -15.0        # -15% 이상 (큰 조정 하한! 패턴 B 하한!)
+MAX_24H_CHANGE = 15.0         # +15% 이하 (상승 상한! 패턴 A 상한!)
+
+# Fix 50 v2 = 사장님 verbatim 2 패턴 분기 상수!
+PATTERN_A_MIN_CHG = 5.0       # 패턴 A 하한 (지속 상승 초기!)
+PATTERN_A_MAX_CHG = 15.0      # 패턴 A 상한
+PATTERN_B_MIN_CHG = -15.0     # 패턴 B 하한 (큰 조정!)
+PATTERN_B_MAX_CHG = 0.0       # 패턴 B 상한
+TREND_EXTREME_BULL_PCT_3D = 30.0  # 3일 +30%↑ = extreme (skip! 정점 위험!)
+RSI_PATTERN_A_MIN = 30.0      # 패턴 A RSI 하한
+RSI_PATTERN_A_MAX = 60.0      # 패턴 A RSI 상한 (과매수 X!)
+RSI_PATTERN_B_MAX = 45.0      # 패턴 B RSI (조정 후 회복!)
 
 # 스캔 상한!
 MAX_SYMBOLS = 40              # 심볼당 4 kline call = API 부담 대응!
@@ -189,144 +203,358 @@ def _get_macd_signal(bc, symbol: str, interval: str = "15m") -> dict:
         return {"bullish": False, "reason": f"exc:{e}"}
 
 
-def _check_long_entry_conditions(bc, symbol: str, ticker_24h: dict) -> dict:
-    """🎯 7중 LONG 조건 AND 검사 (사장님 사상 100%!)
+# ============================================================================
+# Fix 50 v2 = 사장님 verbatim 2 패턴 헬퍼! (재사용 우선 = 헌법 6 단일 진실!)
+# ============================================================================
 
-    Fix 48 OBV 계층 하드 게이트:
-      OBV 4H 상승 X = 즉시 skip (다른 조건 확인도 X!)
+
+def _check_trend_strength_long(bc, symbol: str) -> str:
+    """Fix 50 v2: 3일 종가 기반 트렌드 강도 판정!
+
+    Returns:
+      - "extreme_bull" (3일 +30%↑) = LONG skip (급등 지속 = 정점 위험!)
+      - "strong_bull" (3일 +15~30%) = 패턴 A로만 가능 (조심!)
+      - "normal" (3일 ±15%) = 패턴 A/B 모두 가능
+      - "bear" (3일 -15%↓) = 패턴 B 우선!
+      - "unknown" (조회 실패 = 안전상 skip 처리 대상!)
+    """
+    try:
+        klines = bc.get_klines(symbol=symbol, interval="1d", limit=4)
+        if not isinstance(klines, list) or len(klines) < 4:
+            return "unknown"
+        close_3d_ago = float(klines[0][4])
+        close_now = float(klines[-1][4])
+        if close_3d_ago <= 0:
+            return "unknown"
+        chg_3d = ((close_now - close_3d_ago) / close_3d_ago) * 100.0
+        if chg_3d >= TREND_EXTREME_BULL_PCT_3D:
+            return "extreme_bull"
+        if chg_3d >= 15.0:
+            return "strong_bull"
+        if chg_3d <= -15.0:
+            return "bear"
+        return "normal"
+    except Exception as e:
+        logger.debug("[Fix50/trend] %s: %s", symbol, e)
+        return "unknown"
+
+
+def _get_rsi(bc, symbol: str, interval: str = "15m"):
+    """Fix 50 v2: 특정 timeframe RSI (rsi_now) 조회 헬퍼.
+
+    ChartAnalyzer.analyze_timeframe 재사용 = 헌법 6 단일 진실!
+    """
+    try:
+        from app.services.chart_analyzer import ChartAnalyzer
+        a = ChartAnalyzer.analyze_timeframe(bc, symbol, interval, limit=60)
+        if not a:
+            return None
+        return a.get("rsi_now")
+    except Exception as e:
+        logger.debug("[Fix50/rsi] %s %s: %s", symbol, interval, e)
+        return None
+
+
+def _check_obv_uptrend(bc, symbol: str, interval: str = "4h", period: int = 20) -> bool:
+    """Fix 50 v2: OBV 상승 지속 (기울기 >= OBV_MIN_SLOPE_PCT).
+
+    _get_obv_trend 재사용 = 헌법 6 단일 진실!
+    """
+    tr = _get_obv_trend(bc, symbol, interval)
+    return bool(tr.get("rising"))
+
+
+def _check_obv_reversal_up(bc, symbol: str, interval: str = "4h") -> bool:
+    """Fix 50 v2: OBV 반전 상승 (조정 저점 후 회복!).
+
+    조건: 최근 8봉 = 저점 만들고 재상승 (last > 이전 저점 + last > prev)
+    """
+    try:
+        from app.services.chart_analyzer import ChartAnalyzer
+        kl = bc.get_klines(symbol=symbol, interval=interval, limit=15)
+        if not isinstance(kl, list) or len(kl) < 8:
+            return False
+        obv = [float(x) for x in ChartAnalyzer.compute_obv(kl)]
+        if len(obv) < 8:
+            return False
+        recent = obv[-8:]
+        last = recent[-1]
+        prev = recent[-2]
+        window_min = min(recent[:-1])
+        base = max(abs(max(recent)), abs(min(recent)), 1.0)
+        # 최근 봉이 이전 봉보다 크고, 이전 저점 대비 확실히 회복!
+        if last <= prev:
+            return False
+        recover_ratio = (last - window_min) / base * 100.0
+        return recover_ratio >= 0.5
+    except Exception as e:
+        logger.debug("[Fix50/obv-rev] %s: %s", symbol, e)
+        return False
+
+
+def _check_macd_hist_positive(bc, symbol: str, interval: str = "15m") -> bool:
+    """Fix 50 v2: MACD Histogram 양수 (지속 상승!).
+
+    _get_macd_signal 재사용 = hist_now > 0!
+    """
+    try:
+        m = _get_macd_signal(bc, symbol, interval)
+        hn = m.get("hist_now")
+        return hn is not None and float(hn) > 0.0
+    except Exception:
+        return False
+
+
+def _check_macd_hist_reversal_up(bc, symbol: str, interval: str = "15m") -> bool:
+    """Fix 50 v2: MACD Hist 반전 (음수 저점 → 상승!).
+
+    _get_macd_signal.bullish (cross or hist_turnup) 재사용!
+    """
+    try:
+        m = _get_macd_signal(bc, symbol, interval)
+        return bool(m.get("bullish"))
+    except Exception:
+        return False
+
+
+# ============================================================================
+# Fix 50 v2 = 메인 dispatcher + 패턴 A/B 분기 (사장님 verbatim!)
+# ============================================================================
+
+
+def _check_long_entry_conditions(bc, symbol: str, ticker_24h: dict) -> dict:
+    """Fix 50 v2: 사장님 verbatim 2 패턴 분기!
+
+    - 패턴 A: 24h +5~+15% 상승 진행 + OBV/MACD/RSI 지속 신호!
+    - 패턴 B: 24h -15~0% 조정 + OBV/MACD/RSI 반전 신호!
 
     Returns:
         {detected, passed, confidence, signals, entry_snapshot, reason}
     """
     try:
-        # ---- 조건 7 (선처리): 24h 변동 -5% ~ +10% ----
         chg24 = float(ticker_24h.get("priceChangePercent", 0) or 0)
-        c7 = MIN_24H_CHANGE <= chg24 <= MAX_24H_CHANGE
-        if not c7:
+
+        # 트렌드 강도 확인 (extreme_bull = skip = 정점 위험!)
+        trend = _check_trend_strength_long(bc, symbol)
+        if trend == "extreme_bull":
             return {
                 "detected": False, "passed": 0, "confidence": 0.0,
-                "reason": f"24h={chg24:.2f}% 범위 밖 ({MIN_24H_CHANGE}~{MAX_24H_CHANGE})",
+                "reason": (
+                    f"3일 +{TREND_EXTREME_BULL_PCT_3D}%↑ extreme_bull SKIP "
+                    f"(정점 위험!)"
+                ),
+                "trend": trend,
             }
 
-        # ---- 조건 1 (Fix 48 하드 게이트): OBV 4H 상승 지속 ----
-        obv_trend = _get_obv_trend(bc, symbol, "4h")
-        c1 = obv_trend.get("rising", False)
-        if not c1:
+        # 패턴 판정 (사장님 verbatim 2 = 두 경로!)
+        if PATTERN_A_MIN_CHG <= chg24 <= PATTERN_A_MAX_CHG:
+            return _check_pattern_A_continuation(
+                bc, symbol, ticker_24h, trend, chg24,
+            )
+        if PATTERN_B_MIN_CHG <= chg24 <= PATTERN_B_MAX_CHG:
+            return _check_pattern_B_after_correction(
+                bc, symbol, ticker_24h, trend, chg24,
+            )
+        return {
+            "detected": False, "passed": 0, "confidence": 0.0,
+            "reason": (
+                f"24h={chg24:.2f}% 어느 패턴 범위도 밖 "
+                f"(A={PATTERN_A_MIN_CHG}~{PATTERN_A_MAX_CHG}, "
+                f"B={PATTERN_B_MIN_CHG}~{PATTERN_B_MAX_CHG})"
+            ),
+            "trend": trend,
+        }
+    except Exception as e:
+        logger.warning("[Fix50/check] %s 실패: %s", symbol, e)
+        return {
+            "detected": False, "passed": 0, "confidence": 0.0,
+            "reason": f"exc:{e}",
+        }
+
+
+def _check_pattern_A_continuation(
+    bc, symbol: str, ticker_24h: dict, trend: str, chg24: float,
+) -> dict:
+    """Fix 50 v2 = 패턴 A: 지속 상승 편승 (초기 상승!).
+
+    조건 (AND!):
+      - OBV 4H 상승 지속 (slope >= 0.5%)
+      - MACD Hist 양수 (15m + 1h!)
+      - RSI 15m 30 ~ 60 (과매수 X!)
+
+    Returns dict compatible with 호출자 (_check_long_entry_conditions 대체!).
+    """
+    try:
+        # OBV 지속 상승 (4H!)
+        obv_ok = _check_obv_uptrend(bc, symbol, "4h", period=OBV_LOOKBACK_4H)
+        if not obv_ok:
             return {
                 "detected": False, "passed": 0, "confidence": 0.0,
-                "reason": f"OBV 4H 상승 X (slope={obv_trend.get('slope_pct')}%) = Fix 48 하드 게이트!",
-                "obv_trend": obv_trend,
+                "reason": "패턴 A: OBV 4H 상승 X",
+                "pattern": "A", "trend": trend,
             }
 
-        # ---- 15m 지표 분석 (한 번에 모두!) ----
-        from app.services.chart_analyzer import ChartAnalyzer
-        a15 = ChartAnalyzer.analyze_timeframe(bc, symbol, "15m", limit=60)
-        if not a15:
+        # MACD Hist 양수 (15m + 1h!)
+        macd_15m_ok = _check_macd_hist_positive(bc, symbol, "15m")
+        macd_1h_ok = _check_macd_hist_positive(bc, symbol, "1h")
+        if not (macd_15m_ok and macd_1h_ok):
             return {
                 "detected": False, "passed": 1, "confidence": 0.0,
-                "reason": "15m 분석 실패",
+                "reason": (
+                    f"패턴 A: MACD Hist 양수 X "
+                    f"(15m={macd_15m_ok} 1h={macd_1h_ok})"
+                ),
+                "pattern": "A", "trend": trend,
             }
 
-        closes = a15.get("closes") or []
-        rsi_now = a15.get("rsi_now")
-        rsi_prev = a15.get("rsi_prev")
-        cci_now = a15.get("cci_now")
-        cci_prev = a15.get("cci_prev")
-        bb_lo = a15.get("bb_lo_last")
-
-        # ---- 조건 2: MACD Golden Cross OR Hist 반전 (초록 시작!) ----
-        macd = _get_macd_signal(bc, symbol, "15m")
-        c2 = macd.get("bullish", False)
-
-        # ---- 조건 3: RSI 과매도 회복 (30 근처 → 반등!) ----
-        c3 = (
-            rsi_now is not None and rsi_prev is not None
-            and rsi_now <= RSI_OVERSOLD_MAX
-            and rsi_now > rsi_prev + RSI_MIN_TURNUP
-        )
-
-        # ---- 조건 4: CCI 저점 회복 (-200 근처 → 반등!) ----
-        c4 = (
-            cci_now is not None and cci_prev is not None
-            and cci_now <= CCI_OVERSOLD_MAX
-            and cci_now > cci_prev + CCI_MIN_TURNUP
-        )
-
-        # ---- 조건 5: 볼륨 매수 우세 (최근 3봉 vol 증가!) ----
-        c5 = False
-        try:
-            kl = bc.get_klines(symbol=symbol, interval="15m", limit=6)
-            if isinstance(kl, list) and len(kl) >= 4:
-                vols = [float(k[5]) for k in kl]
-                # 최근 3봉 평균 > 이전 3봉 평균 = 매수세 증가!
-                c5 = sum(vols[-3:]) / 3.0 > sum(vols[-6:-3]) / 3.0 * 1.1
-        except Exception:
-            pass
-
-        # ---- 조건 6: BB 하단 지지 or 반등 ----
-        # (하단 근처 = close 가 하단의 ±1% 안 or 이탈 후 복귀!)
-        c6 = False
-        if bb_lo is not None and closes:
-            close_last = closes[-1]
-            close_prev = closes[-2] if len(closes) >= 2 else close_last
-            near_band = abs(close_last - bb_lo) / bb_lo * 100.0 <= 1.0
-            recover = (close_prev < bb_lo) and (close_last >= bb_lo)
-            c6 = near_band or recover
-
-        passed = sum([c1, c2, c3, c4, c5, c6, c7])
-        # confidence: 4/7 = 0.85, 5/7 = 0.88, 6/7 = 0.91, 7/7 = 0.94
-        # (사장님 요구 = 강력 조건 = 최소 4중!)
-        min_passed = 4
-        if passed < min_passed:
+        # RSI 30 ~ 60 (과매수 X!)
+        rsi_15m = _get_rsi(bc, symbol, "15m")
+        if rsi_15m is None or not (
+            RSI_PATTERN_A_MIN <= float(rsi_15m) <= RSI_PATTERN_A_MAX
+        ):
             return {
-                "detected": False, "passed": passed, "confidence": 0.0,
-                "reason": f"passed={passed}/7 < {min_passed}",
-                "signals": {
-                    "obv_4h_rising": c1, "macd_bullish": c2,
-                    "rsi_recover": c3, "cci_recover": c4,
-                    "vol_up": c5, "bb_low_support": c6, "chg24_ok": c7,
-                },
+                "detected": False, "passed": 2, "confidence": 0.0,
+                "reason": f"패턴 A: RSI 범위 밖 (rsi={rsi_15m})",
+                "pattern": "A", "trend": trend,
             }
 
-        confidence = round(0.85 + 0.03 * (passed - min_passed), 4)
-        confidence = min(confidence, 0.94)
-
+        # 신뢰도 = 0.86 (패턴 A 기본!)
+        confidence = 0.86
+        obv_tr = _get_obv_trend(bc, symbol, "4h")
         _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
+        signals_passed = {
+            "obv_4h_rising": True,
+            "macd_hist_15m_pos": macd_15m_ok,
+            "macd_hist_1h_pos": macd_1h_ok,
+            "rsi_range": True,
+            "chg24_pattern_A": True,
+        }
         entry_snapshot = {
-            "rsi": rsi_now,
-            "cci": cci_now,
-            "obv_slope_pct": obv_trend.get("slope_pct"),
-            "regime": "BOTTOM_REVERSAL",
-            "source": "SAJANGNIM_BOTTOM",
+            "rsi": rsi_15m,
+            "cci": None,
+            "obv_slope_pct": obv_tr.get("slope_pct"),
+            "regime": "PATTERN_A_CONTINUATION",
+            "source": "SAJANGNIM_BOTTOM_v2_A",
             "sustained_bars": 0,
             "change_24h": chg24,
             "kst_hour": _kst_hour,
             "confidence": confidence,
-            "signals_passed": {
-                "obv_4h_rising": c1, "macd_bullish": c2,
-                "rsi_recover": c3, "cci_recover": c4,
-                "vol_up": c5, "bb_low_support": c6, "chg24_ok": c7,
-            },
-            "bb_lo": bb_lo,
-            "close_last": closes[-1] if closes else None,
-            "macd_cross": macd.get("cross"),
-            "macd_hist_turnup": macd.get("hist_turnup"),
+            "trend_3d": trend,
+            "signals_passed": signals_passed,
             "spec_version": SPEC_VERSION,
             "entered_at": datetime.now(timezone.utc).isoformat(),
         }
-
         return {
             "detected": True,
-            "passed": passed,
+            "passed": 3,
             "confidence": confidence,
-            "signals": entry_snapshot["signals_passed"],
+            "signals": signals_passed,
             "entry_snapshot": entry_snapshot,
             "change_24h": chg24,
-            "obv_slope_pct": obv_trend.get("slope_pct"),
+            "obv_slope_pct": obv_tr.get("slope_pct"),
+            "pattern": "A",
         }
     except Exception as e:
-        logger.warning("[auto_long_bottom] _check %s 실패: %s", symbol, e)
-        return {"detected": False, "passed": 0, "confidence": 0.0, "reason": f"exc:{e}"}
+        logger.warning("[Fix50/A] %s 실패: %s", symbol, e)
+        return {
+            "detected": False, "passed": 0, "confidence": 0.0,
+            "reason": f"exc:{e}", "pattern": "A", "trend": trend,
+        }
+
+
+def _check_pattern_B_after_correction(
+    bc, symbol: str, ticker_24h: dict, trend: str, chg24: float,
+) -> dict:
+    """Fix 50 v2 = 패턴 B: 큰 조정 후 재상승!
+
+    조건 (AND!):
+      - 이전 3일 상승세 (strong_bull or normal) = 조정 前 상승!
+      - OBV 4H 반전 상승 (저점 후 회복!)
+      - MACD Hist 반전 (음수 저점 → 상승! 15m!)
+      - RSI 15m <= 45 (조정 후 회복권!)
+    """
+    try:
+        # 이전 3일 상승세 확인 (조정 전!)
+        was_bull = trend in ("strong_bull", "normal")
+        if not was_bull:
+            return {
+                "detected": False, "passed": 0, "confidence": 0.0,
+                "reason": f"패턴 B: 이전 상승세 X (trend={trend})",
+                "pattern": "B", "trend": trend,
+            }
+
+        # OBV 반전 상승!
+        obv_reversal = _check_obv_reversal_up(bc, symbol, "4h")
+        if not obv_reversal:
+            return {
+                "detected": False, "passed": 1, "confidence": 0.0,
+                "reason": "패턴 B: OBV 4H 반전 X",
+                "pattern": "B", "trend": trend,
+            }
+
+        # MACD Hist 반전 (음수 → 양수!)
+        macd_reversal = _check_macd_hist_reversal_up(bc, symbol, "15m")
+        if not macd_reversal:
+            return {
+                "detected": False, "passed": 2, "confidence": 0.0,
+                "reason": "패턴 B: MACD Hist 반전 X (15m)",
+                "pattern": "B", "trend": trend,
+            }
+
+        # RSI 회복권 (45 이하!)
+        rsi_15m = _get_rsi(bc, symbol, "15m")
+        if rsi_15m is None or float(rsi_15m) > RSI_PATTERN_B_MAX:
+            return {
+                "detected": False, "passed": 3, "confidence": 0.0,
+                "reason": (
+                    f"패턴 B: RSI 회복권 X "
+                    f"(rsi={rsi_15m} > {RSI_PATTERN_B_MAX})"
+                ),
+                "pattern": "B", "trend": trend,
+            }
+
+        # 신뢰도 = 0.88 (패턴 B 기본 = 조정 후 재상승 = 더 확실!)
+        confidence = 0.88
+        obv_tr = _get_obv_trend(bc, symbol, "4h")
+        _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
+        signals_passed = {
+            "prev_bull": True,
+            "obv_4h_reversal": True,
+            "macd_hist_reversal_15m": True,
+            "rsi_recover": True,
+            "chg24_pattern_B": True,
+        }
+        entry_snapshot = {
+            "rsi": rsi_15m,
+            "cci": None,
+            "obv_slope_pct": obv_tr.get("slope_pct"),
+            "regime": "PATTERN_B_AFTER_CORRECTION",
+            "source": "SAJANGNIM_BOTTOM_v2_B",
+            "sustained_bars": 0,
+            "change_24h": chg24,
+            "kst_hour": _kst_hour,
+            "confidence": confidence,
+            "trend_3d": trend,
+            "signals_passed": signals_passed,
+            "spec_version": SPEC_VERSION,
+            "entered_at": datetime.now(timezone.utc).isoformat(),
+        }
+        return {
+            "detected": True,
+            "passed": 4,
+            "confidence": confidence,
+            "signals": signals_passed,
+            "entry_snapshot": entry_snapshot,
+            "change_24h": chg24,
+            "obv_slope_pct": obv_tr.get("slope_pct"),
+            "pattern": "B",
+        }
+    except Exception as e:
+        logger.warning("[Fix50/B] %s 실패: %s", symbol, e)
+        return {
+            "detected": False, "passed": 0, "confidence": 0.0,
+            "reason": f"exc:{e}", "pattern": "B", "trend": trend,
+        }
 
 
 # ============================================================================
@@ -485,12 +713,30 @@ def run_auto_long_at_bottom_once() -> dict:
             return {"error": "ticker 실패!", "entered": 0, "spec": SPEC_VERSION}
 
         usdt = [t for t in tickers if str(t.get("symbol", "")).endswith("USDT")]
+
+        # Fix 50 v2: 정렬 우선순위 = 패턴 B (조정 심볼) 우선 → 패턴 A (상승 심볼) → 그 외
+        # 사장님 verbatim 1: "급락한 종목에서 롱을 찾아야지" = 조정 우선!
+        # 같은 그룹 내에서는 quoteVolume 큰 심볼 우선 (유동성!)
+        def _pattern_priority(t):
+            try:
+                c = float(t.get("priceChangePercent", 0) or 0)
+            except Exception:
+                c = 0.0
+            try:
+                v = float(t.get("quoteVolume", 0) or 0)
+            except Exception:
+                v = 0.0
+            if PATTERN_B_MIN_CHG <= c <= PATTERN_B_MAX_CHG:
+                return (0, -v)  # 패턴 B (조정!) 우선!
+            if PATTERN_A_MIN_CHG <= c <= PATTERN_A_MAX_CHG:
+                return (1, -v)  # 패턴 A (지속 상승!)
+            return (2, -v)      # 그 외 (범위 밖 = 후순위!)
         try:
-            usdt.sort(key=lambda x: float(x.get("quoteVolume", 0) or 0), reverse=True)
+            usdt.sort(key=_pattern_priority)
         except Exception:
             pass
 
-        # 24h 범위 pre-filter (-5% ~ +10%!)
+        # 24h 범위 pre-filter (Fix 50 v2 = -15% ~ +15% 확장!)
         candidates = []
         for t in usdt[:MAX_SYMBOLS * 3]:
             try:

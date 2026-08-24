@@ -1,10 +1,18 @@
-"""📉 v223 대칭 (2026-08-24 사장님!): 7중 저점 LONG 감지 (pump_top의 완전 대칭!)
+"""📉 Fix 50 v2 (2026-08-24 사장님 신 사상!): 2-패턴 LONG 감지 (A=상승 지속, B=조정 후 반전!)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-사장님 사상 (LONG 대칭!):
+Fix 50 v2 사장님 verbatim:
+  "최근 1일 -2일 10% 전후 상승하는 심볼을 모니터링해서 상승할 심볼에 롱으로 진입하고
+   나머진 급상승후 큰조정에서 모니터링중 심볼중에 다시 상승할것 같으면 롱으로 진입"
+
+패턴 A (상승 지속 진입): 24h +5% ~ +15%
+  = OBV 지속 상승 + MACD Hist 양수 + RSI 30~60 (과열 아님) → 추세 지속 LONG!
+패턴 B (조정 후 반전 진입): 24h -15% ~ 0%
+  = OBV 반전 상승 + MACD Hist 저점 반전 + RSI 40 회복 → 반전 저점 LONG!
+
+기존 사상 (LONG 대칭!):
   "급락 종목 저점 = OBV 반전 상승이 나올 때 저점 LONG!"
   "OBV 반전 없으면 = 급락 지속 = 반대매매 금지 (헌법 64)!"
-  "OBV 우선 = 반전 확인 통과 못하면 다른 지표 True여도 skip!"
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 v223 대칭 로직 (SHORT의 정점 → LONG의 저점):
@@ -62,7 +70,17 @@ TREND_STRENGTH_ENABLED = True   # False = filter 완전 비활성 (v223 대칭 �
 TREND_EXTREME_BEAR_PCT = -80.0  # 3일(72h) 하락률 이 이하 = extreme_bear (LONG 금지!)
 TREND_STRONG_BEAR_PCT = -50.0   # 3일 이 이하 (+ OBV 하락) = strong_bear (신중!)
 TREND_BULL_PCT = 20.0           # 3일 이 이상 = bull (LONG 유리, SHORT 신중!)
+TREND_EXTREME_BULL_PCT_3D = 30.0  # 🌟 Fix 50 v2: 3일 +30% 이상 = extreme_bull (LONG skip, 정점 위험!)
 TREND_CONFIDENCE_PENALTY = 0.05  # strong_bear LONG confidence 감소량!
+
+# 🌟 Fix 50 v2 (2026-08-24 사장님 신 사상!): 2-패턴 진입!
+# 패턴 A = "1-2일 10% 전후 상승 = 상승 지속" → +5%~+15% 후보!
+# 패턴 B = "급상승후 큰조정 = 반전 저점" → -15%~0% 후보!
+SPEC_VERSION = "long_bottom_detector_v2_fix50_two_pattern_2026-08-24"
+PATTERN_A_MIN_CHG = 5.0     # 패턴 A: 24h 최소 +5%
+PATTERN_A_MAX_CHG = 15.0    # 패턴 A: 24h 최대 +15%
+PATTERN_B_MIN_CHG = -15.0   # 패턴 B: 24h 최소 -15%
+PATTERN_B_MAX_CHG = 0.0     # 패턴 B: 24h 최대 0%
 
 
 def _check_trend_strength_long(bc, symbol: str) -> str:
@@ -71,7 +89,8 @@ def _check_trend_strength_long(bc, symbol: str) -> str:
     4H 봉 20개 (약 3.3일) 기준으로 판정:
       - "extreme_bear": 3일 -80% 이하 + OBV 3일 하락 + 반등 얕음 → LONG 절대 금지!
       - "strong_bear": 3일 -50%~-80% + OBV 3일 하락 → LONG 매우 신중 (confidence 감소)!
-      - "bull": 3일 +20% 이상 → LONG 유리 (SHORT 신중!)
+      - "extreme_bull": 3일 +30% 이상 (Fix 50 v2!) → LONG skip! (이미 정점 = 추격 매수 위험!)
+      - "bull": 3일 +20%~+30% → LONG 유리 (SHORT 신중!)
       - "normal": 그 외
       - "unknown": 데이터 부족/예외
 
@@ -121,11 +140,13 @@ def _check_trend_strength_long(bc, symbol: str) -> str:
         except Exception:
             shallow_bounce = False
 
-        # 판정!
+        # 판정! (Fix 50 v2: extreme_bull 추가 = 3일 +30% 이상 정점 추격 방지!)
         if chg_pct <= TREND_EXTREME_BEAR_PCT and obv_down and shallow_bounce:
             return "extreme_bear"  # LONG 절대 금지!
         elif chg_pct <= TREND_STRONG_BEAR_PCT and obv_down:
             return "strong_bear"   # LONG 매우 신중!
+        elif chg_pct >= TREND_EXTREME_BULL_PCT_3D:
+            return "extreme_bull"  # 🌟 Fix 50 v2: 3일 +30%↑ = 정점 위험 → LONG skip!
         elif chg_pct >= TREND_BULL_PCT:
             return "bull"          # LONG 유리!
         else:
@@ -349,6 +370,127 @@ class LongBottomDetector:
             return False
 
 
+def _classify_pattern(chg24: float) -> str | None:
+    """🌟 Fix 50 v2: 24h 변동으로 패턴 A / B 분류 (사장님 verbatim 대응!).
+
+    Returns:
+        "A" = 상승 지속 진입 (+5%~+15% 사장님 "1-2일 10% 전후 상승"!)
+        "B" = 조정 후 반전 진입 (-15%~0% 사장님 "급상승후 큰조정"!)
+        None = 어느 패턴에도 해당 안 됨 (skip!)
+    """
+    if PATTERN_A_MIN_CHG <= chg24 <= PATTERN_A_MAX_CHG:
+        return "A"
+    if PATTERN_B_MIN_CHG <= chg24 <= PATTERN_B_MAX_CHG:
+        return "B"
+    return None
+
+
+def _check_pattern_signals(bc, symbol: str, pattern: str) -> dict:
+    """🌟 Fix 50 v2: 패턴별 세부 신호 검증 (사장님 신 사상 = 패턴별 지표 다름!).
+
+    패턴 A (상승 지속) = OBV 지속 상승 + MACD Hist 양수 + RSI 30~60 (과열 아님)!
+    패턴 B (반전 저점) = OBV 반전 상승 + MACD Hist 저점 반전 + RSI 40 회복!
+
+    Returns:
+        {"ok": bool, "reason": str, "signals": {...}}
+    """
+    try:
+        # 4H 봉 60개 = 모든 지표 계산 충분!
+        kl = bc.get_klines(symbol=symbol, interval="4h", limit=60)
+        if not isinstance(kl, list) or len(kl) < 35:
+            return {"ok": False, "reason": "4h 데이터 부족", "signals": {}}
+
+        closes = [float(k[4]) for k in kl]
+
+        # OBV
+        obv = [float(x) for x in (ChartAnalyzer.compute_obv(kl) or [])]
+        # RSI
+        rsi_now = BB4HBandAnalyzer._calc_rsi(closes)
+        rsi_prev = BB4HBandAnalyzer._calc_rsi(closes[:-1])
+        # MACD Hist (마지막 값 + 이전 값)
+        macd_hist_last = None
+        macd_hist_prev = None
+        try:
+            ema12 = BB4HBandAnalyzer._calc_ema(closes, 12)
+            ema26 = BB4HBandAnalyzer._calc_ema(closes, 26)
+            offset = 26 - 12
+            macd_line = [a - b for a, b in zip(ema12[offset:], ema26)]
+            signal_line = BB4HBandAnalyzer._calc_ema(macd_line, 9)
+            if signal_line and len(signal_line) >= 2:
+                hist = [m - s for m, s in zip(macd_line[-len(signal_line):], signal_line)]
+                if len(hist) >= 2:
+                    macd_hist_last = hist[-1]
+                    macd_hist_prev = hist[-2]
+        except Exception:
+            pass
+
+        if pattern == "A":
+            # 패턴 A = 상승 지속!
+            # 1. OBV 지속 상승 (최근 5봉 vs 그 이전 5봉)
+            obv_rising = False
+            if len(obv) >= 10:
+                obv_rising = obv[-1] > obv[-6]  # 5봉 전보다 상승!
+            # 2. MACD Hist 양수 (추세 강함!)
+            macd_positive = macd_hist_last is not None and macd_hist_last > 0
+            # 3. RSI 30~60 (과열 아님!)
+            rsi_ok = rsi_now is not None and 30 <= rsi_now <= 60
+
+            ok = obv_rising and macd_positive and rsi_ok
+            reason = (
+                f"A: obv_rising={obv_rising} macd+={macd_positive} rsi_ok={rsi_ok} "
+                f"(rsi={rsi_now})"
+            )
+            return {
+                "ok": ok,
+                "reason": reason,
+                "signals": {
+                    "obv_rising": obv_rising,
+                    "macd_positive": macd_positive,
+                    "rsi_ok": rsi_ok,
+                    "rsi": rsi_now,
+                    "macd_hist": macd_hist_last,
+                },
+            }
+        elif pattern == "B":
+            # 패턴 B = 조정 후 반전!
+            # 1. OBV 반전 상승 (직전 저점 → 이번 봉 반등)
+            obv_reversal = False
+            if len(obv) >= LOOKBACK and len(obv) >= 2:
+                obv_prev_was_min = obv[-2] <= min(obv[-LOOKBACK:])
+                obv_now_rising = obv[-1] > obv[-2]
+                obv_reversal = obv_prev_was_min and obv_now_rising
+            # 2. MACD Hist 저점 반전 (직전 최저 → 이번 반전 상승)
+            macd_reversal = LongBottomDetector._macd_hist_bottom_turned(closes)
+            # 3. RSI 40 회복 (30에서 반등 시작!)
+            rsi_recover = (
+                rsi_now is not None and rsi_prev is not None
+                and rsi_now >= 40 and rsi_now > rsi_prev
+            )
+
+            ok = obv_reversal and macd_reversal and rsi_recover
+            reason = (
+                f"B: obv_rev={obv_reversal} macd_rev={macd_reversal} "
+                f"rsi_recover={rsi_recover} (rsi={rsi_now})"
+            )
+            return {
+                "ok": ok,
+                "reason": reason,
+                "signals": {
+                    "obv_reversal": obv_reversal,
+                    "macd_reversal": macd_reversal,
+                    "rsi_recover": rsi_recover,
+                    "rsi": rsi_now,
+                    "macd_hist": macd_hist_last,
+                },
+            }
+        else:
+            return {"ok": False, "reason": f"unknown pattern {pattern}", "signals": {}}
+    except Exception as e:
+        logger.warning("[Fix50v2/_check_pattern_signals] %s pattern=%s 실패: %s",
+                       symbol, pattern, e)
+        return {"ok": False, "reason": f"예외: {e}", "signals": {}}
+
+
 def run_long_bottom_detector() -> dict:
     """매 5분 실행 = 저점 LONG 감지 (v223 15m MAIN → v219 대칭 fallback)!
 
@@ -391,18 +533,24 @@ def run_long_bottom_detector() -> dict:
         except Exception:
             pass
 
-        # 🎯 LONG 전용: 24h ≤ -MIN_24H_CHANGE 인 급락 종목만!
-        candidates = [
-            t for t in usdt[:MAX_SYMBOLS * 2]
-            if float(t.get("priceChangePercent", 0) or 0) <= -MIN_24H_CHANGE
-        ][:MAX_SYMBOLS]
+        # 🌟 Fix 50 v2 (2026-08-24 사장님 verbatim!):
+        # "1-2일 10% 전후 상승" (패턴 A: +5%~+15%) OR
+        # "급상승후 큰조정" (패턴 B: -15%~0%)
+        candidates = []
+        for t in usdt[:MAX_SYMBOLS * 3]:  # 후보 pool 확대 (2 패턴이라!)
+            chg = float(t.get("priceChangePercent", 0) or 0)
+            if _classify_pattern(chg) is not None:
+                candidates.append(t)
+            if len(candidates) >= MAX_SYMBOLS:
+                break
 
         if not candidates:
             logger.info(
-                "[LONG bottom detector v223] 급락 심볼 (<=-%.0f%%) 없음!",
-                MIN_24H_CHANGE,
+                "[Fix50v2/long] 후보 없음! (A: +%.1f~+%.1f%%, B: %.1f~%.1f%%)",
+                PATTERN_A_MIN_CHG, PATTERN_A_MAX_CHG,
+                PATTERN_B_MIN_CHG, PATTERN_B_MAX_CHG,
             )
-            return {"detected": 0, "scanned": 0}
+            return {"detected": 0, "scanned": 0, "spec_version": SPEC_VERSION}
 
         # 5. 활성 심볼 skip! (헌법 6 = 단일 진실 = 공유 원칙!)
         active_syms = set()
@@ -434,6 +582,7 @@ def run_long_bottom_detector() -> dict:
                     trend = _check_trend_strength_long(bc, symbol)
 
                 # 🌟 Fix 44 대칭: 트렌드 필터 (LONG 위험 차단)!
+                # 🌟 Fix 50 v2: extreme_bull 도 skip! (3일 +30%↑ = 정점 추격 방지!)
                 if TREND_STRENGTH_ENABLED:
                     if trend == "extreme_bear":
                         logger.info(
@@ -441,7 +590,33 @@ def run_long_bottom_detector() -> dict:
                             symbol, TREND_EXTREME_BEAR_PCT,
                         )
                         continue
+                    if trend == "extreme_bull":
+                        logger.info(
+                            "[Fix50v2/long] %s 트렌드 extreme_bull (3일 +%.0f%%↑!) = LONG skip! (정점 위험!)",
+                            symbol, TREND_EXTREME_BULL_PCT_3D,
+                        )
+                        continue
                     # strong_bear = skip X (진입은 허용) but confidence 감소 = 하단 처리!
+
+                # 🌟 Fix 50 v2: 패턴 분류 (A=상승 지속 / B=조정 반전)!
+                pattern = _classify_pattern(chg24)
+                if pattern is None:
+                    # 이론상 candidates 필터에서 걸러졌지만 방어!
+                    continue
+
+                # 🌟 Fix 50 v2: 패턴별 지표 확인!
+                # 사장님 verbatim: "상승할 심볼에 롱으로 진입" + "다시 상승할것 같으면 롱으로 진입"
+                pat_res = _check_pattern_signals(bc, symbol, pattern)
+                if not pat_res.get("ok"):
+                    logger.debug(
+                        "[Fix50v2/long] %s pattern=%s 지표 미충족: %s",
+                        symbol, pattern, pat_res.get("reason"),
+                    )
+                    continue
+                logger.info(
+                    "[Fix50v2/long] %s pattern=%s 지표 통과: %s",
+                    symbol, pattern, pat_res.get("reason"),
+                )
 
                 # ========================================================
                 # 🌟 v223 대칭: 15m MAIN gate + 1h/4h 역방향 skip! (default!)
@@ -466,48 +641,67 @@ def run_long_bottom_detector() -> dict:
                         continue
 
                     # Redis 알람 (신 키 형식: sajangnim:bottom_long:{symbol})
+                    # 🌟 Fix 50 v2: pattern 필드 추가 (A/B 구분!)
                     alert_key = f"sajangnim:bottom_long:{symbol}"
                     alert_data = {
                         "symbol": symbol,
                         "side": "LONG",
+                        "pattern": pattern,        # 🌟 Fix 50 v2: A or B!
+                        "chg_24h": chg24,          # 🌟 Fix 50 v2: 명시!
                         "confidence": conf,
                         "score_15m": v.get("score_15m"),
                         "opp_score_1h": v.get("opp_score_1h"),
                         "opp_score_4h": v.get("opp_score_4h"),
                         "entry_snapshot": v.get("entry_snapshot"),
-                        "change_24h": chg24,
-                        "trend_strength": trend,  # Fix 44 대칭!
+                        "pattern_signals": pat_res.get("signals"),  # 🌟 Fix 50 v2!
+                        "change_24h": chg24,       # 호환 유지 (기존 필드!)
+                        "trend_strength": trend,   # Fix 44 대칭!
                         "detected_at": datetime.now(timezone.utc).isoformat(),
-                        "source": "sajangnim_15m_main_v223_long",
-                        "spec_version": "v223_long",
+                        "source": "sajangnim_fix50v2_long",
+                        "spec_version": SPEC_VERSION,
                     }
                     r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data, default=str))
                     detected_symbols.append({
                         "symbol": symbol, "side": "LONG",
+                        "pattern": pattern,        # 🌟 Fix 50 v2!
                         "confidence": conf, "change_24h": chg24,
                         "score_15m": v.get("score_15m"),
                     })
 
+                    # 🌟 Fix 50 v2: 로그에 pattern 명시!
                     logger.warning(
-                        "[LONG bottom detector v223] 📉 %s LONG conf=%.2f 15m=%d/5 24h=%+.1f%% opp(1h=%d,4h=%d)",
-                        symbol, conf, v.get("score_15m", 0),
+                        "[Fix50v2/long] 🎯 %s LONG pattern=%s conf=%.2f 15m=%d/5 24h=%+.1f%% opp(1h=%d,4h=%d)",
+                        symbol, pattern, conf, v.get("score_15m", 0),
                         chg24, v.get("opp_score_1h", 0), v.get("opp_score_4h", 0),
                     )
 
-                    # 텔레그램!
+                    # 텔레그램! (🌟 Fix 50 v2: pattern별 설명 추가!)
                     try:
                         from app.services.notification_service import NotificationService
                         _db_n = SessionLocal()
                         _ns = NotificationService(_db_n)
+                        # 사장님 verbatim 인용!
+                        if pattern == "A":
+                            _pat_desc = (
+                                f"패턴 A (상승 지속): 사장님 verbatim = \n"
+                                f"「1-2일 10% 전후 상승 = 상승할 심볼에 롱으로 진입」!"
+                            )
+                        else:
+                            _pat_desc = (
+                                f"패턴 B (조정 반전): 사장님 verbatim = \n"
+                                f"「급상승후 큰조정에서 다시 상승할것 같으면 롱으로 진입」!"
+                            )
                         _body = (
-                            f"📉 7중 저점 LONG 감지: {symbol} (24h {chg24:+.1f}%)\n"
+                            f"🎯 Fix50v2 LONG 감지: {symbol} (24h {chg24:+.1f}%)\n"
+                            f"패턴: {pattern}\n"
+                            f"{_pat_desc}\n"
                             f"신뢰도: {conf*100:.0f}%\n"
                             f"15m score: {v.get('score_15m')}/5 (MAIN)\n"
                             f"1h/4h 역방향(SHORT): {v.get('opp_score_1h')}/{v.get('opp_score_4h')}\n"
-                            f"15m MAIN 통과 + 상위 시간대 반대 없음! 자동 LONG 진입 대기!"
+                            f"자동 LONG 진입 대기!"
                         )
                         _ns.send_system_alert(
-                            title=f"📉 [v223 저점] {symbol} LONG ({conf*100:.0f}%)",
+                            title=f"🎯 [Fix50v2 pat={pattern}] {symbol} LONG ({conf*100:.0f}%)",
                             body=_body,
                         )
                         try:
@@ -540,27 +734,32 @@ def run_long_bottom_detector() -> dict:
                     continue
 
                 alert_key = f"sajangnim:bottom_long:{symbol}"
+                # 🌟 Fix 50 v2: fallback도 pattern 필드 명시!
                 alert_data = {
                     "symbol": symbol, "side": "LONG",
+                    "pattern": pattern,         # 🌟 Fix 50 v2!
+                    "chg_24h": chg24,           # 🌟 Fix 50 v2!
                     "confidence": result["confidence"],
                     "signals": result["signals"],
+                    "pattern_signals": pat_res.get("signals"),  # 🌟 Fix 50 v2!
                     "close": result["close"], "rsi": result["rsi"],
                     "cci_last": result["cci_last"],
                     "change_24h": result["change_24h"],
                     "trend_strength": trend,  # Fix 44 대칭!
                     "detected_at": datetime.now(timezone.utc).isoformat(),
-                    "source": "sajangnim_bottom_v219_long",
-                    "spec_version": "v219_long",
+                    "source": "sajangnim_bottom_v219_long_fix50v2",
+                    "spec_version": SPEC_VERSION,
                 }
                 r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data))
                 detected_symbols.append({
                     "symbol": symbol, "side": "LONG",
+                    "pattern": pattern,        # 🌟 Fix 50 v2!
                     "confidence": result["confidence"], "change_24h": chg24,
                 })
 
                 logger.warning(
-                    "[LONG bottom detector v219] 📉 %s LONG conf=%.2f 24h=%+.1f%%",
-                    symbol, result["confidence"], chg24,
+                    "[Fix50v2/long/v219fb] 🎯 %s LONG pattern=%s conf=%.2f 24h=%+.1f%%",
+                    symbol, pattern, result["confidence"], chg24,
                 )
 
                 # 텔레그램! (v219 대칭 fallback 경로!)
@@ -593,15 +792,20 @@ def run_long_bottom_detector() -> dict:
                 )
                 continue
 
+        # 🌟 Fix 50 v2: pattern별 카운트 로그!
+        pat_a = sum(1 for d in detected_symbols if d.get("pattern") == "A")
+        pat_b = sum(1 for d in detected_symbols if d.get("pattern") == "B")
         logger.info(
-            "[LONG bottom detector v223] 완료: scanned=%d detected=%d",
-            scanned, len(detected_symbols),
+            "[Fix50v2/long] 완료: scanned=%d detected=%d (A=%d, B=%d)",
+            scanned, len(detected_symbols), pat_a, pat_b,
         )
         return {
             "scanned": scanned,
             "detected": len(detected_symbols),
+            "pattern_a": pat_a,
+            "pattern_b": pat_b,
             "symbols": detected_symbols,
-            "spec_version": "v223_long" if V223_ENABLED else "v219_long",
+            "spec_version": SPEC_VERSION,
         }
     except Exception as e:
         logger.exception("[LONG bottom detector v223] 실행 실패: %s", e)
