@@ -791,6 +791,16 @@ def run_auto_long_at_bottom_once() -> dict:
                 if confidence < MIN_CONFIDENCE:
                     continue
 
+                # Fix 65: OBV 절대값 검증 (사장님 사상! PENGUUSDT 사고 재발 방지!)
+                try:
+                    from app.services.obv_gate import check_obv_gate
+                    obv_pass, obv_reason = check_obv_gate(bc, symbol, "LONG")
+                    if not obv_pass:
+                        logger.info("[auto_long_bottom+Fix65] %s skip: %s", symbol, obv_reason)
+                        continue
+                except Exception as _obv_exc:
+                    logger.warning("[auto_long_bottom+Fix65] %s obv_gate error: %s (fail-open)", symbol, _obv_exc)
+
                 # 9. 실 진입!
                 new_strategy = _create_long_strategy(db, symbol, capital)
                 if not new_strategy:

@@ -733,6 +733,16 @@ def run_long_bottom_detector() -> dict:
                 if result.get("confidence", 0) < MIN_CONFIDENCE:
                     continue
 
+                # Fix 65: OBV 절대값 검증 (사장님 사상!)
+                try:
+                    from app.services.obv_gate import check_obv_gate
+                    obv_pass, obv_reason = check_obv_gate(bc, symbol, "LONG")
+                    if not obv_pass:
+                        logger.info("[long_bottom+Fix65] %s skip: %s", symbol, obv_reason)
+                        continue
+                except Exception as _obv_exc:
+                    logger.warning("[long_bottom+Fix65] %s obv_gate error: %s", symbol, _obv_exc)
+
                 alert_key = f"sajangnim:bottom_long:{symbol}"
                 # 🌟 Fix 50 v2: fallback도 pattern 필드 명시!
                 alert_data = {

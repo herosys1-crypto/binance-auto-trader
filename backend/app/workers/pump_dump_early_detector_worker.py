@@ -10,7 +10,7 @@ from app.models.exchange_account import ExchangeAccount
 
 logger = logging.getLogger(__name__)
 
-SPEC_VERSION = "pump_dump_early_detector_v1_fix62_2026-08-24"
+SPEC_VERSION = "pump_dump_early_detector_v2_fix62_fix65_2026-08-25"
 INTERVAL_SEC = 300  # 5분
 MAX_SYMBOLS = 50
 MIN_24H_CHANGE = 15.0  # 급등 심볼만!
@@ -199,6 +199,16 @@ def run_pump_dump_early_detector() -> dict:
                     skipped_mixed += 1
                     continue
                 # consistent_down = 강력! or unknown = 통과!
+
+                # Fix 65: OBV 절대값 검증 (사장님 사상!)
+                try:
+                    from app.services.obv_gate import check_obv_gate
+                    obv_pass, obv_reason = check_obv_gate(bc, symbol, "SHORT")
+                    if not obv_pass:
+                        logger.info("[Fix62+Fix65] %s skip: %s", symbol, obv_reason)
+                        continue
+                except Exception as _obv_exc:
+                    logger.warning("[Fix62+Fix65] %s obv_gate error: %s", symbol, _obv_exc)
 
                 # 3. confidence 계산
                 confidence = 0.85 + 0.02 * (passed - MIN_PASSED)

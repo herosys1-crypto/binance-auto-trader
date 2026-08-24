@@ -159,6 +159,16 @@ def run_auto_short_at_top() -> dict:
                 if confidence < 0.85:
                     continue
 
+                # Fix 65: OBV 절대값 검증 (사장님 사상!)
+                try:
+                    from app.services.obv_gate import check_obv_gate
+                    obv_pass, obv_reason = check_obv_gate(bc, symbol, "SHORT")
+                    if not obv_pass:
+                        logger.info("[auto_short_top+Fix65] %s skip: %s", symbol, obv_reason)
+                        continue
+                except Exception as _obv_exc:
+                    logger.warning("[auto_short_top+Fix65] %s obv_gate error: %s (fail-open)", symbol, _obv_exc)
+
                 # 7. 자동 진입!
                 cfg = {"capitals": [capital_float], "leverage": DEFAULT_LEVERAGE}
                 new_strategy = _create_auto_bb_strategy(
