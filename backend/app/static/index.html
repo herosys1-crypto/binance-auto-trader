@@ -754,7 +754,8 @@
       overflow-x: auto !important; overflow-y: auto !important;
       -webkit-overflow-scrolling: touch;
     }
-    .strategies-table-wrap table { min-width: 720px !important; }
+    /* 🌟 2026-08-25 UI 컴팩트 (사장님 「가로 너무 길어!」): 720 → 640 */
+    .strategies-table-wrap table { min-width: 640px !important; }
     .strategies-table-wrap th {
       position: sticky; top: 0; z-index: 2;
       background: #0f172a !important;
@@ -1564,7 +1565,7 @@
               <th class="num" title="평단 / 마크 / 청산예정">진입가/마크/청산</th>
               <th class="num" title="포지션 수량 / 마진(USDT)">수량/마진</th>
               <th class="num" title="미실현 USDT / leveraged ROI %">PnL / ROI</th>
-              <th style="width:140px">액션</th>
+              <th style="width:115px">액션</th>
             </tr>
           </thead>
           <tbody id="strategies-tbody"><tr><td colspan="9" class="text-center text-slate-500 py-3 text-xs">로딩 중...</td></tr></tbody>
@@ -2747,7 +2748,7 @@ function openBBMiddleRanking(direction) {
 <script src="/static/js/dashboard-refresh.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/templates-panel.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/indicators.js?v=20260722v119-grid-align"></script>
-<script src="/static/js/strategies-list.js?v=20260825-fix69-martingale-badges"></script>
+<script src="/static/js/strategies-list.js?v=20260825-ui-compact-issue2"></script>
 <script src="/static/js/external-positions.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/multi-symbol.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/template-save.js?v=20260722v119-grid-align"></script>

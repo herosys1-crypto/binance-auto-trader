@@ -886,21 +886,44 @@ def get_v219_monitoring(
     except Exception as e:
         logger.warning("[v219-monitoring] monitoring_symbols_long 정렬 실패: %s", e)
 
-    # ─── 2) 활성 SHORT (ACTIVE_LIKE) = 개수만! ───
+    # ─── 2) 활성 SHORT (ACTIVE_LIKE) = 목록 + 개수! ───
+    # 🚨 Fix 64 (2026-08-25): UI가 r.active_shorts.length 읽는데 API는 int만
+    #    반환 = badge 0/0 silent bug! 대칭 `active_longs` 목록 형태로 반환!
     active_count = 0
+    active_shorts: list[dict] = []
     try:
         from app.models.strategy_instance import StrategyInstance
         from app.core.strategy_status import ACTIVE_LIKE, TERMINAL_STATUSES
-        active_count = int(db.execute(
-            select(func.count(StrategyInstance.id))
+        rows_short = db.execute(
+            select(StrategyInstance)
             .where(StrategyInstance.user_id == user_id)
             .where(StrategyInstance.side == "SHORT")
             .where(StrategyInstance.status.in_(tuple(ACTIVE_LIKE)))
-        ).scalar() or 0)
+            .order_by(StrategyInstance.created_at.desc())
+            .limit(30)
+        ).scalars().all()
+        for si in rows_short:
+            active_shorts.append({
+                "id": si.id,
+                "symbol": si.symbol,
+                "side": si.side,
+                "status": si.status,
+                "stage": int(getattr(si, "current_stage", 0) or 0),
+                "avg_price": (
+                    str(si.avg_entry_price) if si.avg_entry_price is not None else None
+                ),
+                "unrealized_pnl": (
+                    str(si.unrealized_pnl) if si.unrealized_pnl is not None else "0"
+                ),
+                "strategy_type": si.strategy_type,
+                "created_at": si.created_at.isoformat() if si.created_at else None,
+            })
+        active_count = len(active_shorts)
     except Exception as e:
-        logger.warning("[v219-monitoring] active SHORT count 실패: %s", e)
+        logger.warning("[v219-monitoring] active SHORT 목록 실패: %s", e)
 
     # ─── 2a) 활성 LONG (sajangnim_bottom 전략) = 목록! ───
+    # 🚨 Fix 64: UI가 stage/avg_price/unrealized_pnl 요구 = 대칭 필드 추가!
     active_longs: list[dict] = []
     try:
         from app.models.strategy_instance import StrategyInstance
@@ -920,6 +943,13 @@ def get_v219_monitoring(
                 "symbol": si.symbol,
                 "side": si.side,
                 "status": si.status,
+                "stage": int(getattr(si, "current_stage", 0) or 0),
+                "avg_price": (
+                    str(si.avg_entry_price) if si.avg_entry_price is not None else None
+                ),
+                "unrealized_pnl": (
+                    str(si.unrealized_pnl) if si.unrealized_pnl is not None else "0"
+                ),
                 "strategy_type": si.strategy_type,
                 "created_at": si.created_at.isoformat() if si.created_at else None,
             })
@@ -1022,6 +1052,7 @@ def get_v219_monitoring(
         "monitoring_symbols": monitoring_symbols,
         "reentry_watch": reentry_watch,
         "active_count": active_count,
+        "active_shorts": active_shorts,  # Fix 64: UI 대칭 = badge/목록 표시!
         "daily_used": daily_used,
         "daily_limit": daily_limit,
         "remaining": max(0, daily_limit - daily_used),

@@ -381,6 +381,11 @@ def run_pump_top_detector() -> dict:
             try:
                 scanned += 1
                 chg24 = float(t.get("priceChangePercent", 0) or 0)
+                # 🚨 Fix 64 (2026-08-25): API v219-monitoring이 pump_top:scanned:*
+                #    를 읽어 "감시 심볼" 섹션에 노출 = 사장님 요구!
+                #    감시 초기 상태 = 통과 여부 미정 = passed_v219=False!
+                #    각 성공 경로(v223/v222/v219)에서 True로 갱신!
+                _passed_this_iter = False
 
                 # 방향 결정: chg24 부호 = 우선 후보!
                 # Fix 44 적용: 트렌드 강도 판정!
@@ -450,6 +455,7 @@ def run_pump_top_detector() -> dict:
                             "spec_version": "pump_top_detector_v2_fix51_strong_bull_penalty_2026-08-24",
                         }
                         r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data, default=str))
+                        _passed_this_iter = True  # Fix 64: 감시 마커 pass!
                         detected_symbols.append({
                             "symbol": symbol, "side": side,
                             "confidence": conf, "change_24h": chg24,
@@ -526,6 +532,7 @@ def run_pump_top_detector() -> dict:
                             "spec_version": "pump_top_detector_v2_fix51_strong_bull_penalty_2026-08-24",
                         }
                         r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data))
+                        _passed_this_iter = True  # Fix 64: 감시 마커 pass!
                         detected_symbols.append({
                             "symbol": symbol, "side": side,
                             "confidence": conf, "change_24h": chg24,
@@ -579,10 +586,27 @@ def run_pump_top_detector() -> dict:
                         "spec_version": "pump_top_detector_v2_fix51_strong_bull_penalty_2026-08-24",
                     }
                     r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data))
+                    _passed_this_iter = True  # Fix 64: 감시 마커 pass!
                     detected_symbols.append({
                         "symbol": symbol, "side": "SHORT",
                         "confidence": conf, "change_24h": chg24,
                     })
+
+                # 🚨 Fix 64 (2026-08-25): 감시 마커 (통과 여부 관계없이 스캔 완료 심볼!)
+                #    v219-monitoring API가 `pump_top:scanned:*` 스캔 → UI "감시 심볼"!
+                try:
+                    _scan_key = f"pump_top:scanned:{symbol}"
+                    _scan_data = {
+                        "symbol": symbol,
+                        "change_24h": chg24,
+                        "trend": trend,
+                        "passed_v219": bool(_passed_this_iter),
+                        "sides_tested": sides_to_test,
+                        "scanned_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    r.setex(_scan_key, ALERT_TTL_SEC, json.dumps(_scan_data, default=str))
+                except Exception as _se:
+                    logger.debug("[pump_top_v223] scanned marker 저장 skip %s: %s", symbol, _se)
 
             except Exception as e:
                 logger.warning("[pump_top_v223] %s 스캔 실패: %s", symbol, e)

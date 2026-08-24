@@ -522,19 +522,25 @@ async function refreshStrategies() {
       const plannedNotional = sCap > 0 && sLev > 0 ? sCap * sLev : 0;
 
       // 평단/마크/청산 — 3 줄 stack (Binance 스타일)
+      // 🌟 2026-08-25 UI 컴팩트 (사장님 「가로 너무 길어!」): 접두어 E/M/L + 폰트 11 (여전히 3줄, 세로 축소)
       const priceStack = hasPosition
-        ? `<div class="text-xs leading-none"><span class="text-slate-300" title="평단가">${fmtNum(sAvg)}</span><br><span class="text-cyan-300" title="마크가">${fmtNum(sMark)}</span><br><span class="text-red-300" title="청산예정">${fmtNum(sLiq)}</span></div>`
+        ? `<div class="text-xs leading-none" style="font-size:11px">
+            <span class="text-slate-300" title="평단가 (Entry)">E ${fmtNum(sAvg)}</span><br>
+            <span class="text-cyan-300" title="마크가 (Mark)">M ${fmtNum(sMark)}</span><br>
+            <span class="text-red-300" title="청산예정 (Liq)">L ${fmtNum(sLiq)}</span>
+          </div>`
         : '<span class="text-slate-500">-</span>';
       // 수량/마진 — 2 줄 stack + 「💰 증거금 추가」 버튼 (포지션 보유 시).
       // 마진은 「현재 사용 마진 / 계획 총 마진」 형식.
       // 1단계만 진입한 다단계 전략은 둘이 다름 (e.g. 10.58 / 3275 USDT).
       // 2026-05-04 (사용자 요청): 증거금 추가 버튼을 가시성 높은 위치 + 명확한 라벨로
       // 마진 옆에 직접 노출 (이전 액션 컬럼의 🛡 아이콘만 — 발견 어려움 개선).
+      // 🌟 2026-08-25 UI 컴팩트 fix (사장님 「가로가 너무 길어」!): 버튼 라벨 → 아이콘만 (tooltip 유지)
       const addMarginBtnInQty = hasPosition
         ? `<button onclick="event.stopPropagation(); addMargin(${s.id}, '${s.symbol}', '${s.side}')"
                   class="btn-warning btn text-xs mt-1"
-                  style="padding:2px 6px;font-size:12px;line-height:1.2"
-                  title="증거금 추가 — ISOLATED 모드 포지션의 청산가 완화 (CROSS 면 거래소 거절)">💰 증거금 추가</button>`
+                  style="padding:2px 4px;font-size:11px;line-height:1.2"
+                  title="💰 증거금 추가 — ISOLATED 모드 포지션의 청산가 완화 (CROSS 면 거래소 거절)">💰</button>`
         : '';
       // 2026-05-04 (사용자 요청): 「💉 포지션 추가」 — ad-hoc 자유 금액 시장가/지정가 진입.
       // isTerminal 이 아직 정의 전이라 (line 1581) inline 으로 status 체크.
@@ -543,8 +549,8 @@ async function refreshStrategies() {
       const addPositionBtn = _activeForAddPos
         ? `<button onclick="event.stopPropagation(); openAddPositionModal(${s.id}, '${s.symbol}', '${s.side}', ${s.leverage || 1}, ${s.exchange_account_id || 'null'})"
                   class="btn-primary btn text-xs mt-1 ml-1"
-                  style="padding:2px 6px;font-size:12px;line-height:1.2"
-                  title="포지션 추가 (ad-hoc) — 자유 금액 시장가/지정가 즉시 진입. qty + 평단 갱신, stage 진행 X. v4 안전망: 사용 시 max_loss 임계 도달하면 Crisis 발동 (stage 미완료라도)">💉 포지션 추가</button>`
+                  style="padding:2px 4px;font-size:11px;line-height:1.2"
+                  title="💉 포지션 추가 (ad-hoc) — 자유 금액 시장가/지정가 즉시 진입. qty + 평단 갱신, stage 진행 X. v4 안전망: 사용 시 max_loss 임계 도달하면 Crisis 발동 (stage 미완료라도)">💉</button>`
         : '';
       // 2026-06-06 evening 재활성화 — 사장님 Sub-Account 운영 + Binance UI 직접 청산 불가
       // 발견: PR #87 비활성화 후 = audit log silent bug (close_order.get → AttributeError) 진짜 원인 확정.
@@ -554,8 +560,8 @@ async function refreshStrategies() {
       const manualTpBtn = (_activeForAddPos && hasPosition)
         ? `<button onclick="event.stopPropagation(); openManualTPModal(${s.id}, '${s.symbol}', '${s.side}', ${sQtyAbs}, ${sAvg}, ${sLev})"
                   class="btn-success btn text-xs mt-1 ml-1"
-                  style="padding:2px 6px;font-size:12px;line-height:1.2;background:#16a34a;color:white"
-                  title="수동 익절 — 현재 보유 포지션 의 N% 시장가 청산 (25%/50%/75%/100% 빠른 선택 또는 직접 입력). Sub-Account 청산 유일 수단.">💰 수동 익절</button>`
+                  style="padding:2px 4px;font-size:11px;line-height:1.2;background:#16a34a;color:white"
+                  title="💰 수동 익절 — 현재 보유 포지션 의 N% 시장가 청산 (25%/50%/75%/100% 빠른 선택 또는 직접 입력). Sub-Account 청산 유일 수단.">💰↓</button>`
         : '';
       // 2026-06-05 바이낸스 UI 스타일 단순화 (사장님 요구):
       // 바이낸스 = Size / Margin / PNL 단순 — 「계획」 같은 거 없음.
@@ -577,16 +583,17 @@ async function refreshStrategies() {
       // 🚨 v105 사장님 신 요구: notional (레버리지 미적용) 자본 두 값 표시!
       const positionNotionalDisp = positionMargin * sLev;
       const plannedNotionalDisp = plannedMargin * sLev;
+      // 🌟 2026-08-25 UI 컴팩트: margin 폰트 16→14 (여전히 가독), notional 별줄 → inline 축약
       const qtyStack = hasPosition
         ? `<div class="text-sm leading-none">
             <span class="${qtyColor}" style="font-size:10px" title="${qtyTooltip}">${qtySideIcon} ${fmtQty(sQtyAbs)}</span>
-            <span class="text-slate-100 font-bold" title="${planTooltip}" style="font-size:16px"> ${positionMargin.toFixed(0)}/${plannedMargin.toFixed(0)} <span class="${entryColor}">${entryPct.toFixed(0)}%</span></span>
+            <span class="text-slate-100 font-bold" title="${planTooltip}" style="font-size:14px"> ${positionMargin.toFixed(0)}/${plannedMargin.toFixed(0)} <span class="${entryColor}">${entryPct.toFixed(0)}%</span></span>
             <span class="text-slate-500" style="font-size:10px" title="notional (레버리지 미적용) = 마진 × ${sLev}x">📊 ${positionNotionalDisp.toFixed(0)}/${plannedNotionalDisp.toFixed(0)} (${sLev}x)</span>
             <div class="mt-0.5">${addMarginBtnInQty}${addPositionBtn}${manualTpBtn}</div>
           </div>`
         : `<div class="text-sm leading-none">
             <span class="text-slate-500">- (미진입)</span>
-            <span class="text-slate-400" style="font-size:12px" title="${planTooltip}"> 자본 ${plannedMargin > 0 ? plannedMargin.toFixed(0)+' USDT' : '-'}</span>
+            <span class="text-slate-400" style="font-size:11px" title="${planTooltip}"> 자본 ${plannedMargin > 0 ? plannedMargin.toFixed(0)+' USDT' : '-'}</span>
             <span class="text-slate-500" style="font-size:10px" title="notional = 마진 × ${sLev}x"> 📊 ${plannedNotionalDisp > 0 ? plannedNotionalDisp.toFixed(0)+' (${sLev}x)' : '-'}</span>
             ${addPositionBtn ? '<div class="mt-0.5">'+addPositionBtn+'</div>' : ''}
           </div>`;
@@ -668,7 +675,8 @@ async function refreshStrategies() {
       //   최대 20단계까지 (v118 확장 반영)!
       const totalStagesForBtn = 20;
       const canTriggerNext = !isTerminal && (s.current_stage || 0) >= 1 && (s.current_stage || 0) < totalStagesForBtn;
-      const btnStyle = "padding:3px 6px;font-size:12px;white-space:nowrap;line-height:1.3";
+      // 🌟 2026-08-25 UI 컴팩트: 3x6 → 2x5 (사장님 「가로 너무 길어!」)
+      const btnStyle = "padding:2px 5px;font-size:11px;white-space:nowrap;line-height:1.3";
       const triggerNextBtn = canTriggerNext
         ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="▶ 다음 단계 즉시 강제 진입! (미체결 시 재시도, 세팅 없어도 마지막 자본으로 진입)">▶</button>`
         : '';
@@ -686,14 +694,14 @@ async function refreshStrategies() {
         stopBtn = `<button onclick="event.stopPropagation(); restoreStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="archive 해제 — UI 목록에 다시 표시 (status 그대로)">↻ 복원</button>`;
       } else if (isManualCleanup) {
         // 사장님이 거래소에서 직접 청산 후 ack 하는 흐름. 「긴급 종료」 재시도도 함께 노출.
-        stopBtn = `<div class="flex flex-wrap gap-1" style="max-width:160px">
+        stopBtn = `<div class="flex flex-wrap gap-1" style="max-width:140px">
             <button onclick="event.stopPropagation(); emergencyStop(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="긴급 종료 재시도 (시장가 청산 — 거래소 거절 시 status 유지)">🛑 재시도</button>
             <button onclick="event.stopPropagation(); acknowledgeManualCleanup(${s.id})" class="btn-success btn text-xs" style="${btnStyle};background:#16a34a;color:white" title="거래소에서 직접 청산 완료 — STOPPED 전환 (감사 로그 기록)">✅ 처리 완료</button>
           </div>`;
       } else if (isTerminal) {
         stopBtn = neverEntered
           ? `<button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="전략 보관 (archive — DB row 보존, UI 숨김, 손익 통계 유지)">🗑</button>`
-          : `<div class="flex flex-wrap gap-1" style="max-width:130px">
+          : `<div class="flex flex-wrap gap-1" style="max-width:110px">
               <button onclick="event.stopPropagation(); restartStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="같은 설정으로 새 전략 시작 (이 전략은 그대로 보존)">🔄</button>
               <button onclick="event.stopPropagation(); deleteStrategy(${s.id})" class="btn-danger btn text-xs" style="${btnStyle}" title="전략 보관 (archive — DB row 보존, UI 숨김, 손익 통계 유지)">🗑</button>
             </div>`;
@@ -717,7 +725,7 @@ async function refreshStrategies() {
         // 🌟 v124 사장님 요구: ⏸ + 🛑 = ✏️ 수정 버튼 아래 2번째 줄로!
         //   1줄: ✏️ 수정 + triggerNext + 📋 미체결 조회
         //   2줄: ⏸ 미체결 취소 + 🛑 긴급 + ⚡ 강제
-        stopBtn = `<div style="display:flex;flex-direction:column;gap:2px;max-width:130px">
+        stopBtn = `<div style="display:flex;flex-direction:column;gap:2px;max-width:110px">
             <div class="flex gap-1">
               <button onclick="event.stopPropagation(); editStrategy(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="설정 수정 (in-place 또는 종료+재시작) — 미진입 단계 재계산은 「수정 모드」 모달 → 「현재가」 버튼 사용">✏️</button>
               ${triggerNextBtn}
@@ -808,10 +816,10 @@ async function refreshStrategies() {
               ? `<span style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#a855f7);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(245,158,11,0.6)" title="🔄 청산 후 자동 재진입 활성! (트리거 ${s.retry_trigger_pct || 10}%) — 손절 후 = 다음 단계 자동 대기 + 트리거 도달 시 자동 진입!">🔄 재진입 ${s.retry_trigger_pct || 10}%</span>`
               : ''
             }<br>
-            <span class="text-slate-500" style="font-size:12px" title="전략 생성 일시">${createdShort}</span>
+            <span class="text-slate-500" style="font-size:10px" title="전략 생성 일시">${createdShort}</span>
           </div>
         </td>
-        <td>${sideBadge(s.side, s.leverage)}${s.strategy_type === 'auto_bb_break' ? (s.side === 'LONG' ? '<br><span style="display:inline-block;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-top:2px" title="🤖 v174 BB 자동 진입 LONG!">🤖 자동LONG</span>' : '<br><span style="display:inline-block;background:linear-gradient(135deg,#dc2626,#f97316);color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-top:2px" title="🤖 v174 BB 자동 진입 SHORT!">🤖 자동SHORT</span>') : ''}${s.trigger_mode === 'OBV_REVERSE' ? '<br><span style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-top:2px" title="📊 신 OBV 자동 재진입 전략!">📊 OBV</span>' : ''}${s.retry_after_liquidation_enabled ? `<br><span style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#a855f7);color:#fff;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-top:2px" title="🔄 청산 후 자동 재진입! 트리거 ${s.retry_trigger_pct || 10}%">🔄 재진입</span>` : ''}</td>
+        <td>${sideBadge(s.side, s.leverage)}${s.strategy_type === 'auto_bb_break' ? (s.side === 'LONG' ? '<br><span style="display:inline-block;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:bold;margin-top:1px" title="🤖 v174 BB 자동 진입 LONG!">🤖</span>' : '<br><span style="display:inline-block;background:linear-gradient(135deg,#dc2626,#f97316);color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:bold;margin-top:1px" title="🤖 v174 BB 자동 진입 SHORT!">🤖</span>') : ''}</td><!-- 🌟 2026-08-25 UI 컴팩트: OBV/재진입 배지 = 심볼 col 과 중복 → 방향 col 에서 제거 (사장님 「가로 너무 길어」!). 자동LONG/SHORT = side 반복 = 아이콘만 -->
         <td>${stateCell}</td>
         <td>${stage}</td>
         <td class="num">${entry}</td>
