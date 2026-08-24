@@ -164,6 +164,117 @@ def _is_margin_insufficient(exc: Exception) -> bool:
     return "-2019" in msg or "Margin is insufficient" in msg
 
 
+# ---------------------------------------------------------------------------
+# 🌟 Fix 55 사장님 critical (2026-08-24): 마틴게일 단계별 지표 반전 확인!
+# 사장님 verbatim: "충분히 상승/하락 반복 → 조정 시점 진입 → 3단계까지 실패는 말이 안돼!"
+#
+# 옛 로직: PRICE_DOWN_PCT = mark >= trigger 도달만 = 지표 확인 없음!
+#   → 2/3/4단계 = 자본 6배씩 폭발하는데도 = 같은 조건으로 자동 진입!
+#
+# 신 로직 (Fix 55):
+#   - 2단계 = 지표 반전 2/3 통과 (MEDIUM)
+#   - 3단계+ = 지표 반전 3/3 통과 (STRICT)
+#   - 24h 변동 필터 (헌법 64): SHORT + +15% 이상 = skip / LONG + -15% 이하 = skip
+#   - 1단계는 대상 아님 (원 진입 = 신 진입 워커 별도!)
+# ---------------------------------------------------------------------------
+def _check_stage_indicator_reversal(bc, symbol: str, side: str, next_stage: int) -> tuple[bool, dict]:
+    """Fix 55: 마틴게일 2단계+ 지표 반전 확인 (RSI / MACD Hist / OBV).
+
+    SHORT = 상승 반전 필요 (가격 상승 중단!)
+    LONG  = 하락 반전 필요 (가격 하락 중단!)
+
+    Returns (passed, detail_dict). fail-safe: 지표 확인 실패 시 False (skip!).
+    """
+    try:
+        from app.services.chart_analyzer import ChartAnalyzer
+        result = ChartAnalyzer.analyze_timeframe(bc, symbol, "15m")
+        if not result:
+            return False, {"error": "analyze_timeframe empty"}
+        rsi_now = result.get("rsi_now")
+        rsi_prev = result.get("rsi_prev")
+        macd_hist = result.get("macd_hist") or []
+        obv = result.get("obv") or []
+
+        macd_hist_now = macd_hist[-1] if macd_hist else None
+        macd_hist_prev = macd_hist[-2] if len(macd_hist) >= 2 else None
+        # OBV 기울기 = 최근 5 봉 방향 (양수=상승 / 음수=하락)
+        obv_slope = None
+        if len(obv) >= 5:
+            obv_slope = obv[-1] - obv[-5]
+
+        side_u = (side or "").upper()
+        if side_u == "SHORT":
+            # SHORT 추가 진입 = 상승세 꺾임 확인!
+            rsi_reversal = (
+                rsi_prev is not None and rsi_now is not None
+                and rsi_now < rsi_prev - 1.0
+            )
+            macd_reversal = (
+                macd_hist_prev is not None and macd_hist_now is not None
+                and macd_hist_now < macd_hist_prev
+            )
+            obv_reversal = obv_slope is not None and obv_slope < 0
+        else:  # LONG
+            # LONG 추가 진입 = 하락세 꺾임 확인!
+            rsi_reversal = (
+                rsi_prev is not None and rsi_now is not None
+                and rsi_now > rsi_prev + 1.0
+            )
+            macd_reversal = (
+                macd_hist_prev is not None and macd_hist_now is not None
+                and macd_hist_now > macd_hist_prev
+            )
+            obv_reversal = obv_slope is not None and obv_slope > 0
+
+        passed = sum([bool(rsi_reversal), bool(macd_reversal), bool(obv_reversal)])
+
+        # 단계별 필요 통과 수 (사장님 verbatim: 3단계까지 최대!)
+        if next_stage == 2:
+            required = 2  # 2/3 (MEDIUM)
+        else:  # 3단계+ = 자본 폭발 방지 매우 신중!
+            required = 3  # 3/3 (STRICT)
+
+        detail = {
+            "rsi": bool(rsi_reversal),
+            "macd": bool(macd_reversal),
+            "obv": bool(obv_reversal),
+            "passed": passed,
+            "required": required,
+            "rsi_now": rsi_now,
+            "rsi_prev": rsi_prev,
+            "macd_hist_now": macd_hist_now,
+            "obv_slope": obv_slope,
+        }
+        return passed >= required, detail
+    except Exception as e:
+        logger.warning("[Fix55/reversal] %s stage=%s: %s", symbol, next_stage, e)
+        return False, {"error": str(e)}  # fail-safe = skip 진입!
+
+
+def _check_stage_24h_filter(bc, symbol: str, side: str) -> tuple[bool, float | None]:
+    """Fix 55: 24h 변동 필터 (헌법 64 = 급등 반대매매 금지!).
+
+    SHORT + 24h ≥ +15% = skip (급등에 SHORT 진입 = 물타기 폭발!)
+    LONG  + 24h ≤ -15% = skip (급락에 LONG 진입 = 물타기 폭발!)
+
+    fail-open: ticker 조회 실패 시 True (기존 로직 유지 = 진입 허용).
+    """
+    try:
+        t = bc.get_24hr_ticker(symbol=symbol)
+        if isinstance(t, list):
+            t = t[0] if t else {}
+        chg = float(t.get("priceChangePercent", 0) or 0)
+        side_u = (side or "").upper()
+        if side_u == "SHORT" and chg >= 15:
+            return False, chg
+        if side_u == "LONG" and chg <= -15:
+            return False, chg
+        return True, chg
+    except Exception as e:
+        logger.warning("[Fix55/24h] %s: %s", symbol, e)
+        return True, None  # fail-open (기존 로직 유지)
+
+
 def run_stage_trigger_once(decrypt_text) -> None:
     """활성 전략의 다음 stage 트리거 검사 + 자동 LIMIT 주문 발송.
 
@@ -404,6 +515,66 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     should_fire = (mark >= trigger) if strategy.side == "SHORT" else (mark <= trigger)
                 if not should_fire:
                     continue
+                # 🌟 Fix 55 사장님 critical (2026-08-24): 마틴게일 2단계+ 지표 반전 확인 필수!
+                # 사장님 verbatim: "충분히 상승/하락 반복 → 조정 시점 진입 → 3단계까지 실패는 말이 안돼!"
+                # = 옛 로직 (가격 도달만) → 신 로직 (가격 도달 + 지표 반전 + 24h 필터)!
+                # 1단계는 대상 아님 (원 진입 = 신 진입 워커 별도!)
+                if next_stage_no >= 2:
+                    try:
+                        from app.integrations.binance.client import BinanceClient as _BC55
+                        _bc55 = _BC55(
+                            api_key=decrypt_text(account.api_key_enc),
+                            api_secret=decrypt_text(account.api_secret_enc),
+                            is_testnet=account.is_testnet,
+                        )
+                        # (A) 24h 변동 필터 (헌법 64 = 급등 반대매매 금지!)
+                        _ok24, _chg = _check_stage_24h_filter(_bc55, strategy.symbol, strategy.side)
+                        if not _ok24:
+                            _reason55a = (
+                                f"Fix55 24h 필터 차단 (stage={next_stage_no} "
+                                f"side={strategy.side} chg={_chg:.2f}%)"
+                            )
+                            logger.info(
+                                "[Fix55/24h] skip strategy=%s stage=%s %s %s chg=%.2f%%",
+                                strategy.id, next_stage_no, strategy.symbol, strategy.side, _chg or 0,
+                            )
+                            _record_block_reason(_redis, strategy.id, _reason55a, next_stage_no)
+                            _alert_silent_block_once(_redis, db, strategy, _reason55a, next_stage_no)
+                            continue
+                        # (B) 지표 반전 확인 (2단계=2/3, 3단계+=3/3 STRICT!)
+                        _ok_rev, _rev_detail = _check_stage_indicator_reversal(
+                            _bc55, strategy.symbol, strategy.side, next_stage_no
+                        )
+                        if not _ok_rev:
+                            _reason55b = (
+                                f"Fix55 지표 반전 미달 (stage={next_stage_no} "
+                                f"passed={_rev_detail.get('passed')}/{_rev_detail.get('required')})"
+                            )
+                            logger.info(
+                                "[Fix55/reversal] skip strategy=%s stage=%s %s %s detail=%s",
+                                strategy.id, next_stage_no, strategy.symbol, strategy.side, _rev_detail,
+                            )
+                            _record_block_reason(_redis, strategy.id, _reason55b, next_stage_no)
+                            _alert_silent_block_once(_redis, db, strategy, _reason55b, next_stage_no)
+                            continue
+                        logger.info(
+                            "[Fix55] ✅ 지표 반전 통과! strategy=%s stage=%s %s %s "
+                            "passed=%s/%s chg24h=%.2f%%",
+                            strategy.id, next_stage_no, strategy.symbol, strategy.side,
+                            _rev_detail.get("passed"), _rev_detail.get("required"), _chg or 0,
+                        )
+                    except Exception as _e55:
+                        # 예외 = fail-safe = skip (자본 보호 우선!)
+                        logger.warning(
+                            "[Fix55] 검증 예외 → skip 진입! strategy=%s stage=%s err=%s",
+                            strategy.id, next_stage_no, _e55,
+                        )
+                        _record_block_reason(
+                            _redis, strategy.id,
+                            f"Fix55 검증 예외 (skip): {str(_e55)[:60]}",
+                            next_stage_no,
+                        )
+                        continue
                 # LIMIT 주문 발송
                 exec_service = ExecutionService(
                     db,

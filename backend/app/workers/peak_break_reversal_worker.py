@@ -169,6 +169,33 @@ def _calc_obv(klines):
     except Exception: return []
 
 
+def _get_24h_change(bc, symbol):
+    """Fix 55: 24h 변동률 (%) 조회 — 실패 시 0.0 (fail-open)."""
+    for fn_name in ("get_24hr_ticker", "get_ticker_24hr", "get_ticker"):
+        fn = getattr(bc, fn_name, None)
+        if fn is None:
+            continue
+        try:
+            ticker = fn(symbol=symbol)
+        except TypeError:
+            try:
+                ticker = fn(symbol)
+            except Exception as e:
+                logger.warning(f"[Fix55] 24h {symbol} {fn_name}: {e}")
+                continue
+        except Exception as e:
+            logger.warning(f"[Fix55] 24h {symbol} {fn_name}: {e}")
+            continue
+        try:
+            if isinstance(ticker, list) and ticker:
+                ticker = ticker[0]
+            if isinstance(ticker, dict):
+                return float(ticker.get("priceChangePercent", 0) or 0)
+        except Exception:
+            pass
+    return 0.0
+
+
 def _check_reversal_signals(bc, symbol):
     """확실한 하락 6개 지표 AND!"""
     try:
@@ -263,14 +290,35 @@ def _process_strategy(db, bc, s, next_stage):
     return False
 
 
-def _enter_next_stage(db, s, next_stage, snap):
+def _enter_next_stage(db, s, next_stage, snap, bc=None):
     """다음 단계 진입!"""
     try:
         capital = _get_stage_capital(db, next_stage)
         if capital is None:
             logger.warning(f"[Fix41] max_stage 초과 #{s.id} stage={next_stage}")
             return False
-        
+
+        # Fix 55 P2: 단계별 조건 강화 (사장님 사상 — 3단계 실패 = 말이 안돼!)
+        # worker는 SHORT만 처리 (see _get_active_short_strategies)
+        if bc is not None and next_stage >= 3:
+            chg_24h = _get_24h_change(bc, s.symbol)
+            if next_stage == 3:
+                # 3단계 강화 = SHORT + 급등 skip (헌법 64!)
+                if chg_24h >= 15.0:
+                    logger.warning(
+                        "[Fix55/stage3] %s SHORT + 24h +%.1f%% = skip (헌법 64!)",
+                        s.symbol, chg_24h,
+                    )
+                    return False
+            elif next_stage >= 4:
+                # 4단계+ (라스트!) = 매우 엄격 (급등/급락 모두 skip!)
+                if abs(chg_24h) >= 15.0:
+                    logger.warning(
+                        "[Fix55/stage4+] %s 24h %+.1f%% = skip (매우 엄격!)",
+                        s.symbol, chg_24h,
+                    )
+                    return False
+
         # ExecutionService 사용!
         from app.services.execution_service import ExecutionService
         svc = ExecutionService(db)
@@ -387,8 +435,8 @@ def run_peak_break_reversal_once():
                     _set_state(s.id, next_stage, "TRACKING_PEAK_B")
                     continue
                 
-                # 진입!
-                if _enter_next_stage(db, s, next_stage, snap):
+                # 진입! (Fix 55: bc 전달 = 단계별 24h 필터!)
+                if _enter_next_stage(db, s, next_stage, snap, bc=bc):
                     result["entered"] += 1
                 
             except Exception as e:

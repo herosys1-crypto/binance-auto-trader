@@ -61,19 +61,33 @@ MIN_LEARNING_SUCCESS_RATE = 0.30  # 학습 성공률 30%+ 심볼만!
 ENABLE_LAST_CHANCE = True
 MAX_REENTRY_STAGE_WITH_LAST = 4  # 3단계 + 라스트 챈스 1회!
 
+# 🎯 Fix 55 P3 (2026-08-24): 단계별 지표 반전 gate 계단식 강화!
+# 2단계 = 기존 2/3 (loose) / 3단계 = 3/3 (엄격!) / 라스트 챈스 = 3/3 (매우 엄격!)
+# + 3단계+ = 24h 변동 필터 (SHORT +15%↑ / LONG -15%↓ = skip!)
+MIN_PASSED_STAGE2 = 2         # 2단계 = 3중 반전 최소 2/3 (기존 유지)
+MIN_PASSED_STAGE3 = 3         # 3단계 = 3중 반전 3/3 필수 (엄격!)
+MIN_PASSED_STAGE_LAST = 3     # 라스트 챈스 = 3중 반전 3/3 필수 (매우 엄격!)
+STAGE3_24H_ABS_LIMIT_PCT = 15.0  # 3단계+ = 24h 변동 ±15% 초과 시 반대매매 skip!
+
 
 def _check_indicator_reversal_for_reentry(
-    bc, symbol: str, side: str, use_4h: bool = True
+    bc, symbol: str, side: str, use_4h: bool = True, min_passed: int = 2
 ) -> tuple[bool, str, dict]:
     """🎯 v221 사장님 재설계 (2026-08-23): 지표 반전 = 재진입 진짜 조건!
+    🎯 Fix 55 P3 (2026-08-24): min_passed 인자 추가 = 단계별 계단식 강화!
 
     사장님 verbatim: "차트와 보조지표가 다시 롱이나 숏으로 진행할수 있는 지표"
 
-    로직 (3중 = 최소 2/3 통과!):
+    로직 (3중 = 최소 min_passed/3 통과!):
     - 15m RSI 반전  (LONG: 상승 반전 / SHORT: 하락 반전)
     - 15m MACD hist 반전
     - 15m OBV slope 반전 (지속!)
     - 4h RSI 방향 확인 (option = use_4h)
+
+    min_passed:
+    - 2단계 = 2 (기존 loose)
+    - 3단계 = 3 (엄격!)
+    - 라스트 챈스 = 3 (매우 엄격!)
 
     Return: (통과, 사유, 스냅샷)
     """
@@ -130,9 +144,10 @@ def _check_indicator_reversal_for_reentry(
             else (obv_slope_now < 0 and obv_slope_now < obv_slope_prev)
         )
 
-        # 15m 3중 = 최소 2/3 통과!
+        # 15m 3중 = 최소 min_passed/3 통과! (Fix 55 P3: 단계별 계단식!)
         passes = int(rsi_rev) + int(macd_rev) + int(obv_rev)
         snapshot["passes_15m"] = f"{passes}/3"
+        snapshot["min_passed_required"] = min_passed
 
         # 4) 4h 방향 확인 (option — 큰 흐름 상충 시 skip!)
         if use_4h:
@@ -158,10 +173,10 @@ def _check_indicator_reversal_for_reentry(
             except Exception:
                 pass  # 4h 실패 시 = 15m만 신뢰!
 
-        ok = passes >= 2
+        ok = passes >= min_passed
         return (
             ok,
-            f"15m {passes}/3 (RSI={rsi_rev} MACD={macd_rev} OBV={obv_rev})",
+            f"15m {passes}/3 (need {min_passed}/3, RSI={rsi_rev} MACD={macd_rev} OBV={obv_rev})",
             snapshot,
         )
     except Exception as e:
@@ -374,6 +389,22 @@ def run_realtime_reentry() -> dict:
                 )
                 continue
 
+            # 🎯 Fix 55 P3 (2026-08-24): 단계별 min_passed 결정!
+            # 익절 후 재진입 = 초기 stage 취급 (loose 2/3)
+            # 실패 재진입 = re_count + 2 stage
+            if _use_success_reentry:
+                _stage_no_for_gate = 2  # 익절 재진입 = loose
+            else:
+                _stage_no_for_gate = re_count + 2
+            if _stage_no_for_gate == 2:
+                _min_passed = MIN_PASSED_STAGE2
+            elif _stage_no_for_gate == 3:
+                _min_passed = MIN_PASSED_STAGE3
+            elif _stage_no_for_gate >= 4:
+                _min_passed = MIN_PASSED_STAGE_LAST
+            else:
+                _min_passed = MIN_PASSED_STAGE2
+
             # (c) 지표 반전 확인 = 핵심 gate! (실패/익절 모두!)
             try:
                 from app.integrations.binance.client import BinanceClient
@@ -391,7 +422,7 @@ def run_realtime_reentry() -> dict:
                     is_testnet=False,
                 )
                 _ind_ok, _ind_msg, _ind_snap = _check_indicator_reversal_for_reentry(
-                    _bc, symbol, side, use_4h=True,
+                    _bc, symbol, side, use_4h=True, min_passed=_min_passed,
                 )
             except Exception as _ve:
                 logger.warning("[RT_REENTRY] 지표 조회 실패 = skip 안전: %s", _ve)
@@ -401,10 +432,36 @@ def run_realtime_reentry() -> dict:
             if not _ind_ok:
                 skipped += 1
                 logger.info(
-                    "[RT_REENTRY] skip: %s %s 지표 반전 미확인 (%s) [rebound=%.2f%%]",
-                    symbol, side, _ind_msg, _rebound_pct,
+                    "[RT_REENTRY] skip: %s %s 지표 반전 미확인 (%s) [rebound=%.2f%% stage=%d need=%d/3]",
+                    symbol, side, _ind_msg, _rebound_pct, _stage_no_for_gate, _min_passed,
                 )
                 continue
+
+            # 🎯 Fix 55 P3 (2026-08-24): 3단계+ = 24h 변동 필터 = 급등/급락 반대매매 skip!
+            # (2단계는 기존 유지 = loose)
+            # 사장님 헌법 64: 급등 SHORT / 급락 LONG = 물타기 폭발 방지!
+            if (not _use_success_reentry) and _stage_no_for_gate >= 3:
+                try:
+                    _ticker = _bc.get_24hr_ticker(symbol=symbol)
+                    _chg_pct = None
+                    if isinstance(_ticker, dict):
+                        _chg_pct = float(_ticker.get("priceChangePercent") or 0)
+                    elif isinstance(_ticker, list) and _ticker:
+                        _chg_pct = float(_ticker[0].get("priceChangePercent") or 0)
+                    if _chg_pct is not None:
+                        _skip_24h = (
+                            (side == "SHORT" and _chg_pct >= STAGE3_24H_ABS_LIMIT_PCT)
+                            or (side == "LONG" and _chg_pct <= -STAGE3_24H_ABS_LIMIT_PCT)
+                        )
+                        if _skip_24h:
+                            skipped += 1
+                            logger.warning(
+                                "[RT_REENTRY] 🚨 stage %d skip: %s %s 24h=%.2f%% (한도 ±%.1f%% 초과 = 헌법 64!)",
+                                _stage_no_for_gate, symbol, side, _chg_pct, STAGE3_24H_ABS_LIMIT_PCT,
+                            )
+                            continue
+                except Exception as _te:
+                    logger.warning("[RT_REENTRY] 24h ticker 조회 실패 = 진행: %s", _te)
 
             # 통과 → 진입!
             _kind = "RT_REENTRY_SUCCESS" if _use_success_reentry else "RT_REENTRY"
