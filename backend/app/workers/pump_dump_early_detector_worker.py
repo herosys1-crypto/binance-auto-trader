@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 SPEC_VERSION = "pump_dump_early_detector_v1_fix62_2026-08-24"
 INTERVAL_SEC = 300  # 5분
-MAX_SYMBOLS = 40
+MAX_SYMBOLS = 50
 MIN_24H_CHANGE = 15.0  # 급등 심볼만!
 MIN_PASSED = 5  # 5/7 지표 통과!
 ALERT_TTL_SEC = 1800  # 30분

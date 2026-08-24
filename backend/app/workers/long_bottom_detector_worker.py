@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 LOOKBACK = 20        # 최저점 판정 창 (v219 순수 대칭 로직용!)
 # 🌟 v222 대칭 (2026-08-24): 다중 시간대 = 심볼당 3 kline call = API 부담 축소!
-MAX_SYMBOLS = 40     # 스캔 상한 (SHORT와 동일!)
+MAX_SYMBOLS = 50     # Fix 64 = 하위 50 심볼 모니터링!
 # 🎯 사장님 사상 대칭 (2026-08-24):
 # 급락 종목 = 반대매매 위험 크므로 (헌법 64!) LONG 최소 -10% 요구 (SHORT +5%보다 엄격)
 MIN_24H_CHANGE = 10.0  # LONG용 = 24h ≤ -10% (사장님 verbatim 완화 요구!)

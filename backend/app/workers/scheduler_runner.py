@@ -441,6 +441,18 @@ def start_scheduler() -> None:
         id="martingale_gate_validator",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # Fix 64 (2026-08-25): 실패 패턴 분석 (사장님 verbatim!)
+    # 실패 데이터 스캔 → 공통 패턴 (심볼/시간대/지표) 추출 → 인사이트 생성!
+    # 주기: 30분 (실패 데이터 = 자주 스캔 불필요!)
+    def _failure_pattern_analyzer():
+        from app.workers.failure_pattern_analyzer_worker import run_failure_pattern_analyzer
+        run_failure_pattern_analyzer()
+    scheduler.add_job(
+        guarded_job("failure_pattern_analyzer", 1800, _failure_pattern_analyzer),
+        trigger=IntervalTrigger(minutes=30),
+        id="failure_pattern_analyzer",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # (Fix 51: _auto_add_margin 중복 블록 = 위 v220 블록으로 통합됨! 2026-08-24.)
     # (v219 pump_top_detector + auto_short_at_top = 위에 이미 등록됨! 중복 제거 2026-08-22.)
     # 🌟 v224 (2026-08-23 사장님 통합 요구!): 15m 급등/급락 = 유일한 진입!
