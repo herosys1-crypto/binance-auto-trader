@@ -28,7 +28,7 @@ def _check_15m_dump_signals(bc, symbol):
     """15m 지표 5중 감지 (사장님 verbatim = 6중 통과 = SHORT!)"""
     try:
         # 15m klines
-        klines = bc.get_klines(symbol, "15m", limit=60)
+        klines = bc.get_klines(symbol=symbol, interval="15m", limit=60)
         if not klines or len(klines) < 30:
             return None, "insufficient_klines"
 
