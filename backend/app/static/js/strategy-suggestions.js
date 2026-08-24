@@ -1322,6 +1322,24 @@ if (typeof window !== 'undefined') {
         });
         html += '</div>';
       }
+      // 🔍 SHORT 실시간 감시 심볼 (사장님 요구 2026-08-24 복원: 정의2 삭제 시 유실 방지!)
+      if (r.monitoring_symbols && r.monitoring_symbols.length) {
+        html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🔍 v219 감시 심볼 (SHORT 정점) ${r.monitoring_symbols.length}개:</b></div>`;
+        r.monitoring_symbols.forEach(m => {
+          const color = m.passed_v219 ? '#22c55e' : (m.change_24h >= 10 ? '#f97316' : '#94a3b8');
+          const badge = m.passed_v219 ? '✅통과' : '👀감시';
+          html += `<div style="padding:3px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:11px;">${m.symbol} 24h=<span style="color:${color};font-weight:bold;">${m.change_24h}%</span> ${badge} vol=${m.volume_24h_m||"?"}M</div>`;
+        });
+      }
+      // 🔄 SHORT 재진입 대기 (24h 내 청산 이력, 사장님 요구 2026-08-24 복원!)
+      if (r.reentry_watch && r.reentry_watch.length) {
+        html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🔄 SHORT 재진입 대기 (24h 청산!) ${r.reentry_watch.length}개:</b></div>`;
+        r.reentry_watch.forEach(w => {
+          const pnl = parseFloat(w.realized_pnl || 0);
+          const c = pnl >= 0 ? '#22c55e' : '#ef4444';
+          html += `<div style="padding:3px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:11px;">${w.symbol} ${w.status||w.reason||''} <span style="color:${c};">${pnl.toFixed(2)}</span></div>`;
+        });
+      }
       // 진입 슬롯 (SHORT + LONG 활성 합산 표시)
       const shortCnt = (r.active_shorts && r.active_shorts.length) || 0;
       const longCnt = (r.active_longs && r.active_longs.length) || 0;
@@ -1457,69 +1475,14 @@ if (typeof window !== 'undefined') {
   document.addEventListener('DOMContentLoaded', () => setTimeout(loadV219Settings, 600));
 }
 
-// Fix 36 (2026-08-23): v219 감시 데이터 표시!
-async function loadV219Monitoring() {
-  const bodyEl = document.getElementById('unified-15m-body');
-  const badgeEl = document.getElementById('unified-15m-badge');
-  const updEl = document.getElementById('unified-15m-updated');
-  if (!bodyEl) return;
-  try {
-    const r = await api('/strategy-suggestions/v219-monitoring');
-    const nShorts = (r.active_shorts || []).length;
-    const nAlerts = (r.pump_top_alerts || []).length;
-    if (badgeEl) {
-      badgeEl.textContent = `v219 · SHORT ${nShorts} · 감지 ${nAlerts}`;
-      badgeEl.style.background = '#ec4899';
-      badgeEl.style.color = 'white';
-    }
-    if (updEl) updEl.textContent = `${new Date().toLocaleTimeString()} · 오늘 ${r.daily_used||0}/${r.daily_limit||0}`;
-    let html = '';
-    // Fix 37: monitoring_symbols 표시!
-    if (r.monitoring_symbols && r.monitoring_symbols.length) {
-      html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🔍 v219 감시 심볼 ${r.monitoring_symbols.length}개:</b></div>`;
-      r.monitoring_symbols.forEach(m => {
-        const color = m.passed_v219 ? '#22c55e' : (m.change_24h >= 10 ? '#f97316' : '#94a3b8');
-        const badge = m.passed_v219 ? '✅통과' : '👀감시';
-        html += `<div style="padding:3px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:11px;">${m.symbol} 24h=<span style="color:${color};font-weight:bold;">${m.change_24h}%</span> ${badge} vol=${m.volume_24h_m||"?"}M</div>`;
-      });
-    }
-    // Fix 37: reentry_watch 표시!
-    if (r.reentry_watch && r.reentry_watch.length) {
-      html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🔄 재진입 대기 (24h 청산!) ${r.reentry_watch.length}개:</b></div>`;
-      r.reentry_watch.forEach(w => {
-        const pnl = parseFloat(w.realized_pnl || 0);
-        const c = pnl >= 0 ? '#22c55e' : '#ef4444';
-        html += `<div style="padding:3px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:11px;">${w.symbol} ${w.status} <span style="color:${c};">${pnl.toFixed(2)}</span></div>`;
-      });
-    }
-    // 활성 SHORT = 개수만!
-    if (r.active_count) {
-      html += `<div style="color:#94a3b8;font-size:11px;margin-top:8px;">🎯 활성 SHORT: ${r.active_count}건 (전략 인스턴스 참조!)</div>`;
-    }
-    if (false && r.active_shorts && r.active_shorts.length) {
-      html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🎯 활성 SHORT ${r.active_shorts.length}건:</b></div>`;
-      r.active_shorts.forEach(s => {
-        const pnl = parseFloat(s.unrealized_pnl || 0);
-        const c = pnl >= 0 ? '#22c55e' : '#ef4444';
-        html += `<div style="padding:4px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:12px;">${s.symbol} stage${s.stage} avg=${s.avg_price} <span style="color:${c};font-weight:bold;">${pnl.toFixed(2)} USDT</span></div>`;
-      });
-    }
-    if (r.pump_top_alerts && r.pump_top_alerts.length) {
-      html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🚨 정점 감지 후보 ${r.pump_top_alerts.length}건:</b></div>`;
-      r.pump_top_alerts.forEach(a => {
-        html += `<div style="padding:4px 8px;background:rgba(236,72,153,0.15);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:12px;">${a.symbol} ${a.side} conf=${a.confidence} 24h=${a.change_24h}%</div>`;
-      });
-    }
-    if (!html) html = `<div style="color:#94a3b8;padding:8px;">v219 감지 대기 중 (매 5분!)</div>`;
-    bodyEl.innerHTML = html;
-  } catch(e) {
-    bodyEl.innerHTML = `<div style="color:#ef4444;padding:8px;">❌ ${e.message}</div>`;
-  }
-}
-if (typeof window !== 'undefined') {
-  window.loadV219Monitoring = loadV219Monitoring;
-  document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(loadV219Monitoring, 1500);
-    setInterval(loadV219Monitoring, 30000);
-  });
-}
+// Fix 63 (2026-08-24): silent bug 제거 = loadV219Monitoring 중복 정의 삭제!
+// 정의2가 정의1 결과 매번 덮어써서 실시간 감시/재진입 대기 심볼 UI 사라짐!
+// 헌법 63 (함수 재정의 금지) 준수!
+//
+// 배경 (Fix 36/37 (2026-08-23) → 정의 통합 (2026-08-24 사장님 지적!)):
+//   loadV219Monitoring 함수가 파일 내 2번 정의되어 = silent bug!
+//   정의2가 정의1보다 600ms 먼저 실행되나 정의1이 매 사이클 마다 bodyEl 덮어씀!
+//   → 정의2가 렌더하던 monitoring_symbols (SHORT 실시간 감시) / reentry_watch (SHORT 재진입 대기) = 화면 소실!
+//   → 사장님 스크린샷 = 「정점 감지 후보 2건」 만 표시!
+//   fix = 정의1(위쪽 IIFE 내부)에 monitoring_symbols + reentry_watch 렌더 추가 + 정의2 완전 삭제!
+//   v211 잔재 사고 재발 방지!
