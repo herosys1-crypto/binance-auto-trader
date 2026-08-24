@@ -55,16 +55,20 @@ logger = logging.getLogger(__name__)
 #                       심볼을 모니터링해서 상승할 심볼에 롱으로 진입하고 나머진 급상승후 큰조정에서
 #                       모니터링중 심볼중에 다시 상승할것 같으면 롱으로 진입하는거야"
 # ============================================================================
-SPEC_VERSION = "auto_long_at_bottom_v2_fix50_two_pattern_2026-08-24"
+# Fix 61 P1 = 사장님 verbatim (2026-08-24): "손실만 늘어나는데 진입조건을
+#              다시 정리해서 롱은 좀더 신뢰도을 높혀줘"
+#            → MIN_CONFIDENCE 0.85→0.90, RSI/OBV 임계값 강화,
+#              패턴 A/B 조건 대폭 상향! (손실 방지!)
+SPEC_VERSION = "auto_long_at_bottom_v3_fix61_strict_2026-08-24"
 INTERVAL_SEC = 30
 
 DEFAULT_LEVERAGE = 2          # 사장님 default!
 DEFAULT_CAPITAL = 300.0       # sajangnim_default_capital fallback!
 DEFAULT_DAILY_LIMIT = 20      # sajangnim_top_short_daily_limit fallback!
 
-# 4H OBV 상승 하드 게이트 = Fix 48!
+# 4H OBV 상승 하드 게이트 = Fix 48 + Fix 61 P1 (사장님 verbatim = 손실 방지!)
 OBV_LOOKBACK_4H = 20          # 4H 최근 20봉 = 약 3일 매크로!
-OBV_MIN_SLOPE_PCT = 0.5       # OBV 20봉 회귀 기울기 > 0.5% = "상승 지속"!
+OBV_MIN_SLOPE_PCT = 1.0       # Fix 61 P1: 0.5 → 1.0 (더 확실한 상승!)
 
 # 15m MACD/RSI/CCI 반전 (레거시 상수 = 다른 곳 참조 방지 = 유지!)
 MACD_15M_LIMIT = 80
@@ -77,19 +81,23 @@ CCI_MIN_TURNUP = 5.0          # CCI now > prev + 5 = 반등!
 MIN_24H_CHANGE = -15.0        # -15% 이상 (큰 조정 하한! 패턴 B 하한!)
 MAX_24H_CHANGE = 15.0         # +15% 이하 (상승 상한! 패턴 A 상한!)
 
-# Fix 50 v2 = 사장님 verbatim 2 패턴 분기 상수!
+# Fix 50 v2 = 사장님 verbatim 2 패턴 분기 상수 (Fix 61 P1 상향!)
 PATTERN_A_MIN_CHG = 5.0       # 패턴 A 하한 (지속 상승 초기!)
 PATTERN_A_MAX_CHG = 15.0      # 패턴 A 상한
 PATTERN_B_MIN_CHG = -15.0     # 패턴 B 하한 (큰 조정!)
 PATTERN_B_MAX_CHG = 0.0       # 패턴 B 상한
 TREND_EXTREME_BULL_PCT_3D = 30.0  # 3일 +30%↑ = extreme (skip! 정점 위험!)
-RSI_PATTERN_A_MIN = 30.0      # 패턴 A RSI 하한
-RSI_PATTERN_A_MAX = 60.0      # 패턴 A RSI 상한 (과매수 X!)
-RSI_PATTERN_B_MAX = 45.0      # 패턴 B RSI (조정 후 회복!)
+RSI_PATTERN_A_MIN = 35.0      # Fix 61 P1: 30 → 35 (더 엄격!)
+RSI_PATTERN_A_MAX = 55.0      # Fix 61 P1: 60 → 55 (과매수 X! 더 엄격!)
+RSI_PATTERN_B_MAX = 40.0      # Fix 61 P1: 45 → 40 (더 과매도 회복!)
 
 # 스캔 상한!
 MAX_SYMBOLS = 40              # 심볼당 4 kline call = API 부담 대응!
-MIN_CONFIDENCE = 0.85         # 통과 최소 신뢰도!
+MIN_CONFIDENCE = 0.90         # Fix 61 P1: 0.85 → 0.90 (사장님 신뢰도 상향!)
+MIN_PASSED = 5                # Fix 61 P1: 4/7 → 5/7 (71% = 더 엄격!)
+                              # (참고 = 각 패턴 함수는 모든 조건 AND 통과 시만
+                              #  detected=True 반환 = 사실상 100% 통과가 게이트.
+                              #  이 상수는 문서/향후 확장용!)
 
 # ============================================================================
 # 조건 검사 헬퍼 (v219 대칭 = LONG 방향!)
@@ -418,8 +426,8 @@ def _check_pattern_A_continuation(
                 "pattern": "A", "trend": trend,
             }
 
-        # 신뢰도 = 0.86 (패턴 A 기본!)
-        confidence = 0.86
+        # Fix 61 P1: 0.86 → 0.90 (사장님 신뢰도 상향! 손실 방지!)
+        confidence = 0.90
         obv_tr = _get_obv_trend(bc, symbol, "4h")
         _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
         signals_passed = {
@@ -513,8 +521,8 @@ def _check_pattern_B_after_correction(
                 "pattern": "B", "trend": trend,
             }
 
-        # 신뢰도 = 0.88 (패턴 B 기본 = 조정 후 재상승 = 더 확실!)
-        confidence = 0.88
+        # Fix 61 P1: 0.88 → 0.92 (조정 후 재상승 = 더 확실! 사장님 verbatim!)
+        confidence = 0.92
         obv_tr = _get_obv_trend(bc, symbol, "4h")
         _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
         signals_passed = {
