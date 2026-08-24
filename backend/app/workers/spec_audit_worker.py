@@ -74,6 +74,50 @@ REQUIRED_PATTERNS = [
         "severity": "WARN",
         "msg": "v42 fix 누락! _refreshLiveCalc() 강제 호출 필수!",
     },
+    # 🌟 Fix 57 (2026-08-24): 사장님 사상 = spec ↔ 코드 동기 강제 확장!
+    # 옛 silent bug 재발 차단 = SASANG_SASANG_REGISTRY 참고!
+    {
+        "name": "fix55_stage_indicator_reversal",
+        "pattern": r"_check_stage_indicator_reversal",
+        "file_pattern": "stage_trigger_worker.py",
+        "severity": "CRITICAL",
+        "msg": "Fix 55 마틴게일 지표 확인 필수! stage_trigger_worker.py에 _check_stage_indicator_reversal 누락!",
+    },
+    {
+        "name": "fix55_stage_24h_filter",
+        "pattern": r"_check_stage_24h_filter",
+        "file_pattern": "stage_trigger_worker.py",
+        "severity": "CRITICAL",
+        "msg": "Fix 55 24h 필터 필수! stage_trigger_worker.py에 _check_stage_24h_filter 누락!",
+    },
+    {
+        "name": "fix55_peak_break_24h_change",
+        "pattern": r"_get_24h_change",
+        "file_pattern": "peak_break_reversal_worker.py",
+        "severity": "CRITICAL",
+        "msg": "Fix 55 24h 필터! peak_break_reversal_worker.py에 _get_24h_change 누락!",
+    },
+    {
+        "name": "fix55_reentry_min_passed_stage3",
+        "pattern": r"MIN_PASSED_STAGE3",
+        "file_pattern": "realtime_reentry_worker.py",
+        "severity": "CRITICAL",
+        "msg": "Fix 55 3단계 엄격! realtime_reentry_worker.py에 MIN_PASSED_STAGE3 상수 누락!",
+    },
+    {
+        "name": "fix49_auto_short_sl_override",
+        "pattern": r"force_sl_roi_override",
+        "file_pattern": "auto_short_at_top_worker.py",
+        "severity": "CRITICAL",
+        "msg": "Fix 49 SL -5%! auto_short_at_top_worker.py에 force_sl_roi_override 누락!",
+    },
+    {
+        "name": "fix49_auto_long_sl_override",
+        "pattern": r"force_sl_roi_override",
+        "file_pattern": "auto_long_at_bottom_worker.py",
+        "severity": "CRITICAL",
+        "msg": "Fix 49 SL -5%! auto_long_at_bottom_worker.py에 force_sl_roi_override 누락!",
+    },
 ]
 
 
@@ -183,12 +227,16 @@ def run_spec_audit_once() -> dict:
                 if not _is_dedup(redis, p["name"]):
                     _mark_dedup(redis, p["name"])
                     try:
+                        # 🌟 Fix 57: CRITICAL severity = 텔레그램 CRITICAL 알림 강화!
+                        _sev = p.get("severity", "WARN")
+                        _title_prefix = "[spec audit CRITICAL]" if _sev == "CRITICAL" else "[spec audit]"
                         NotificationService(db).send_system_alert(
-                            title=f"[spec audit] 필수 패턴 누락! {p['name']}",
+                            title=f"{_title_prefix} 필수 패턴 누락! {p['name']}",
                             body=(
-                                f"사장님 사상 구현 누락!\n\n"
+                                f"사장님 사상 구현 누락! (SASANG_SASANG_REGISTRY 참고!)\n\n"
                                 f"패턴: {p['name']}\n"
-                                f"심각도: {p['severity']}\n"
+                                f"대상 파일: {p['file_pattern']}\n"
+                                f"심각도: {_sev}\n"
                                 f"{p['msg']}\n\n"
                                 f"개발자 즉시 추가 부탁드립니다!\n"
                                 f"이 알림 = 24시간 dedup"

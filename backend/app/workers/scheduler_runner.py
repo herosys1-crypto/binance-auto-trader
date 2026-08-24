@@ -429,6 +429,18 @@ def start_scheduler() -> None:
         id="orchestra_health",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # Fix 58 (2026-08-24): 마틴게일 gate 감시! 매 5분!
+    # 사장님 사상: 자동 진입 후 → 마틴게일 gate (RSI/OBV/MACD/BB) 정상 동작 검증!
+    # gate 오작동 (신호 없이 2단계 진입 or 신호 있어도 진입 X) = 즉시 알림!
+    def _martingale_gate_validator():
+        from app.workers.martingale_gate_validator_worker import run_martingale_gate_validator
+        run_martingale_gate_validator()
+    scheduler.add_job(
+        guarded_job("martingale_gate_validator", 240, _martingale_gate_validator),
+        trigger=IntervalTrigger(minutes=5),
+        id="martingale_gate_validator",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # (Fix 51: _auto_add_margin 중복 블록 = 위 v220 블록으로 통합됨! 2026-08-24.)
     # (v219 pump_top_detector + auto_short_at_top = 위에 이미 등록됨! 중복 제거 2026-08-22.)
     # 🌟 v224 (2026-08-23 사장님 통합 요구!): 15m 급등/급락 = 유일한 진입!

@@ -26,7 +26,7 @@ jobs:
       - name: 사장님 단위 테스트
         run: |
           cd backend
-          python -m pytest tests/unit/test_sajangnim_stage_calculation.py tests/unit/test_current_price_action.py -v
+          python -m pytest tests/unit/test_sajangnim_stage_calculation.py tests/unit/test_current_price_action.py tests/unit/test_martingale_stage_entry.py -v
 
   sajangnim_e2e_tests:
     name: 사장님 E2E 시나리오 테스트
