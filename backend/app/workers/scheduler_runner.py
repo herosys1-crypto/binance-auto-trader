@@ -152,7 +152,7 @@ def start_scheduler() -> None:
     # 강제 종료된 심볼 = 4H OBV/RSI 반전 + 10% 이동 시 = 알람!
     # 사장님이 = 알람 선택 = 신 전략 즉시 생성!
     def _reentry_alert_wrap():
-        from app.db.session import SessionLocal
+        from app.core.database import SessionLocal
         from app.core.crypto import decrypt_text as _dec
         with SessionLocal() as _db:
             run_reentry_alert_watcher(_db, _dec)
@@ -162,7 +162,7 @@ def start_scheduler() -> None:
     # 급등 top 50 종목 = 4H 최고점 = BB중단(20MA!) ±5% 근접 = 알람!
     # 10분마다 실행 (자원 절약!)
     def _pump_bb_wrap():
-        from app.db.session import SessionLocal
+        from app.core.database import SessionLocal
         from app.core.crypto import decrypt_text as _dec
         with SessionLocal() as _db:
             run_pump_bb_watcher(_db, _dec)
@@ -171,7 +171,7 @@ def start_scheduler() -> None:
     # 사장님 요구: 매일 자동 예측 → 전략 draft 제안 → 사장님 결정!
     # 06:30 UTC = 매일 예측! (Team Lead 통해 EventBus로!)
     def _suggestion_daily_predict():
-        from app.db.session import SessionLocal
+        from app.core.database import SessionLocal
         from app.core.crypto import decrypt_text as _dec
         from app.agents.strategy_suggestion_team.team_lead import StrategySuggestionTeamLead
         with SessionLocal() as _db:
@@ -184,7 +184,7 @@ def start_scheduler() -> None:
     )
     # 매 1시간 = 자동 삭제 (24h 미실행!)
     def _suggestion_cleanup():
-        from app.db.session import SessionLocal
+        from app.core.database import SessionLocal
         from app.agents.strategy_suggestion_team.team_lead import StrategySuggestionTeamLead
         with SessionLocal() as _db:
             StrategySuggestionTeamLead().run_hourly_cleanup(_db)
@@ -196,7 +196,7 @@ def start_scheduler() -> None:
     )
     # 매일 07:00 = 자동 실행 배치! (사장님 옵션 ON 시!)
     def _suggestion_auto_execute():
-        from app.db.session import SessionLocal
+        from app.core.database import SessionLocal
         from app.agents.strategy_suggestion_team.team_lead import StrategySuggestionTeamLead
         with SessionLocal() as _db:
             StrategySuggestionTeamLead().run_auto_execute(_db)
@@ -209,7 +209,7 @@ def start_scheduler() -> None:
     # 🌅 매일 아침 브리핑! (KST 07:30 = UTC 22:30 = 사장님 요구!)
     # 사장님: "학습한 내용을 매일 아침에 간략하게 요점정리해서 브리핑해줘"
     def _daily_briefing():
-        from app.db.session import SessionLocal
+        from app.core.database import SessionLocal
         from app.agents.strategy_suggestion_team.team_lead import StrategySuggestionTeamLead
         with SessionLocal() as _db:
             StrategySuggestionTeamLead().run_daily_briefing(_db)
@@ -264,7 +264,7 @@ def start_scheduler() -> None:
     # 🎓 v136 (2026-08-13 사장님!): Learning Team cycle!
     # 매 4시간 = 메모리 → 분석 → 학습!
     def _learning_team_cycle():
-        from app.db.session import SessionLocal
+        from app.core.database import SessionLocal
         from app.agents.learning_team.team_lead import LearningTeamLead
         with SessionLocal() as _db:
             LearningTeamLead().run_learning_cycle(_db, days=30)
@@ -448,7 +448,7 @@ def start_scheduler() -> None:
     # 📊 v152 (2026-08-16 사장님!): Chart Pattern Learning Team!
     # 매 6시간 = 1달 4H 캔들 → 패턴 감지 → 저장 + outcome tracking!
     def _chart_pattern_scan():
-        from app.db.session import SessionLocal
+        from app.core.database import SessionLocal
         from app.core.crypto import decrypt_text as _dec
         from app.agents.chart_pattern_learning_team.team_lead import ChartPatternLearningTeamLead
         with SessionLocal() as _db:

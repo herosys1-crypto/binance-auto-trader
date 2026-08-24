@@ -283,7 +283,7 @@ def run_reentry_alert_watcher(db: Session, decrypt_text) -> dict:
 
 
 if __name__ == "__main__":
-    from app.db.session import SessionLocal
+    from app.core.database import SessionLocal
     from app.core.crypto import decrypt_text
     with SessionLocal() as _db:
         print(run_reentry_alert_watcher(_db, decrypt_text))
