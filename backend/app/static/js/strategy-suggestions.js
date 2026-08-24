@@ -316,12 +316,30 @@ function renderSuggestions() {
       const rankIcon = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`;
 
       // 🌟 v133c: suggestion_type label 매핑!
+      // 🌟 Fix 69 (2026-08-25): v219 sajangnim_top/bottom + 마틴게일 재진입 접미사 매핑 확장!
       const TYPE_LABELS = {
         // 🌟 v143a: 자동 제안 소스가 4H 볼밴 스캐너로 교체됨 (실측 기대값 기반)
         'bb4h_mid_down': '📉 4H 중단이탈→하단',
         'bb4h_mid_up': '📈 4H 중단돌파→상단',
         'bb4h_lower_break': '📉 4H 하단이탈',
         'bb4h_upper_break': '📈 4H 상단돌파',
+        // 🌟 Fix 14 (v219): 사장님 실 성공 로직 = 7중 정점 SHORT / 저점 LONG!
+        'sajangnim_top_short': '👑 v219 정점 SHORT',
+        'sajangnim_top_short_reentry1': '👑🥈 정점 2차재진입 SHORT',
+        'sajangnim_top_short_reentry2': '👑🥉 정점 3차재진입 SHORT',
+        'sajangnim_top_short_reentry3': '👑🚨 정점 라스트 SHORT',
+        'sajangnim_bottom_long': '🌊 v219 저점 LONG',
+        'sajangnim_bottom_long_reentry1': '🌊🥈 저점 2차재진입 LONG',
+        'sajangnim_bottom_long_reentry2': '🌊🥉 저점 3차재진입 LONG',
+        'sajangnim_bottom_long_reentry3': '🌊🚨 저점 라스트 LONG',
+        // 🌟 Fix 4/Fix 7: 성공 피라미딩 + PENDING_HC fast + Unified 15m + OBV
+        'auto_bb_break_pyramid1': '🎯 성공재진입 #1',
+        'auto_bb_break_pyramid2': '🎯 성공재진입 #2',
+        'auto_bb_break_pyramid3': '🎯 성공재진입 #3 MAX',
+        'auto_bb_break_lastchance': '🚨 라스트챈스',
+        'PENDING_HC_FAST': '⚡ 급속 HC 85%+',
+        'UNIFIED_15M': '📊 통합 15m',
+        'OBV_HOLD': '📈 OBV 홀드',
         // 아래는 옛 24h 순위 기반 (v143a 이전 생성분 = 24h 내 자동 만료)
         'pump_end': '급등후 반락',
         'pump_continuation': '급등 지속',
