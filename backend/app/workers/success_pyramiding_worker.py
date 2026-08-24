@@ -45,10 +45,15 @@ PEAK_HOLD_TOLERANCE_PCT = 2.5      # v220: 1.5 → 2.5 (변동성 관대!)
 COOLDOWN_SECONDS = 300             # 심볼:side 단위 5분 cooldown!
 PYRAMID_COUNT_TTL_DAYS = 7         # 카운터 7일 후 리셋!
 
-# 🎯 v220 사장님 신 마틴게일 (300/600/1800 규정!)
-# 사장님 verbatim: "3단계까지 갈수 있다야 가능하면 가지않는 관리가 필요"
-MAX_PYRAMID_COUNT = 3              # 5 → 3 (사장님 상한!)
-MARTINGALE_MULT = [1.0, 2.0, 6.0]  # 1단계=원, 2단계=×2, 3단계=투자금 전체×2
+# 🌟 v241 Fix 68 사장님 신 verbatim (2026-08-25!):
+# "이건 이미 있는 전략이야 TP1 실행후 지속적인 수익일때
+#  포지션 초기진입 설정된 금액으로 포지션 추가야"
+# = 마틴게일 배수 X! = 초기진입 설정 금액 그대로!
+# = 예: 초기 300 USDT → TP1 실행 → 지속 수익 → 추가 300 → 추가 300!
+# 이전 (v220 Fix 17): MARTINGALE_MULT = [1.0, 2.0, 6.0] (배수 도입 = 사장님 verbatim 위반!)
+# 지금 (v241 Fix 68): 배수 완전 제거 = 초기진입 금액 그대로!
+MAX_PYRAMID_COUNT = 3              # 사장님 상한 유지 ("3단계까지 갈수 있다야 가능하면 가지않는 관리")
+# MARTINGALE_MULT 제거 = 배수 X = 초기진입 금액 그대로!
 
 # 🚨 v220 사장님: 원본 필터 확장! (사장님 지적 root cause!)
 # 이전: auto_bb_break* 만 → sajangnim_top_short/realtime_reentry = skip!
@@ -272,22 +277,35 @@ def run_success_pyramiding() -> dict:
             except Exception:
                 pass  # ticker 실패 = 조용히 통과 (Redis mark_price는 이미 확보!)
 
-            # 🎯 v220 사장님 신 마틴게일! (300/600/1800 사상 적용!)
-            # 1단계=원, 2단계=×2, 3단계=투자금 전체×2
-            # 이전: base_capital 그대로 재사용!
-            # 신: pyramid 단계별 × MARTINGALE_MULT!
-            _parent_capital = float(si.total_capital or 0)
-            if _parent_capital <= 0:
+            # 🌟 v241 Fix 68 사장님 신 verbatim (2026-08-25!):
+            # "TP1 실행후 지속적인 수익일때 포지션 초기진입 설정된 금액으로 포지션 추가"
+            # = 마틴게일 배수 X! = 초기진입 설정 금액 그대로!
+            # = 예: 300 USDT → 추가 300 USDT → 추가 300 USDT (누적 900, 각 300!)
+            # 이전 (v220 Fix 17): 부모 자본 × [1.0, 2.0, 6.0] = 마틴게일 배수 (사장님 verbatim 위반!)
+            # 지금 (v241 Fix 68): 최초 진입 금액 (template capitals[0]) 그대로!
+            _initial_capital = 0.0
+            try:
+                _parent_tpl = si.template if hasattr(si, "template") else None
+                _tpl_config = getattr(_parent_tpl, "config", None) if _parent_tpl else None
+                if isinstance(_tpl_config, dict):
+                    _caps = _tpl_config.get("capitals") or []
+                    if _caps and float(_caps[0] or 0) > 0:
+                        _initial_capital = float(_caps[0])  # 🌟 최초 진입 금액!
+            except Exception:
+                _initial_capital = 0.0
+            # fallback: si.total_capital (template 없을 때만!)
+            if _initial_capital <= 0:
+                _initial_capital = float(si.total_capital or 0)
+            if _initial_capital <= 0:
                 continue
             _seq = pyr_count + 1  # 1, 2, 3
             if _seq > MAX_PYRAMID_COUNT:
                 skipped += 1
                 continue
-            _mult = MARTINGALE_MULT[_seq - 1]
-            base_capital = _parent_capital * _mult
+            base_capital = _initial_capital  # 🌟 그대로! 배수 X!
             logger.info(
-                "[SUCCESS_PYRAMID] 🎯 v220 마틴게일 #%d: %s %s 부모=%.0f × %.1fx = %.0f USDT",
-                _seq, si.symbol, si.side, _parent_capital, _mult, base_capital,
+                "[SUCCESS_PYRAMID] 🌟 v241 Fix 68 초기금액 재사용 #%d: %s %s = %.0f USDT (배수 X!)",
+                _seq, si.symbol, si.side, base_capital,
             )
 
             # 신 pyramid strategy 생성
