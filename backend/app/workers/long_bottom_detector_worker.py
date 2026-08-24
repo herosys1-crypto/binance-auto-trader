@@ -743,6 +743,26 @@ def run_long_bottom_detector() -> dict:
                 except Exception as _obv_exc:
                     logger.warning("[long_bottom+Fix65] %s obv_gate error: %s", symbol, _obv_exc)
 
+                # Fix 66 P1 + P2!
+                try:
+                    from app.services.bidirectional_blocklist import is_bidirectional_blocked
+                    from app.services.pump_dump_regime import is_regime_blocked_for_long
+                    from app.core.database import SessionLocal as _SL
+                    db_bl = _SL()
+                    try:
+                        blocked, block_reason = is_bidirectional_blocked(db_bl, symbol)
+                        if blocked:
+                            logger.info("[long_bottom+Fix66] %s skip: %s", symbol, block_reason)
+                            continue
+                    finally:
+                        db_bl.close()
+                    regime_blocked, regime_reason = is_regime_blocked_for_long(bc, symbol)
+                    if regime_blocked:
+                        logger.info("[long_bottom+Fix66] %s skip: %s", symbol, regime_reason)
+                        continue
+                except Exception as _f66_exc:
+                    logger.warning("[long_bottom+Fix66] error: %s", _f66_exc)
+
                 alert_key = f"sajangnim:bottom_long:{symbol}"
                 # 🌟 Fix 50 v2: fallback도 pattern 필드 명시!
                 alert_data = {

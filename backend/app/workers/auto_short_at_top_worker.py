@@ -169,6 +169,26 @@ def run_auto_short_at_top() -> dict:
                 except Exception as _obv_exc:
                     logger.warning("[auto_short_top+Fix65] %s obv_gate error: %s (fail-open)", symbol, _obv_exc)
 
+                # Fix 66 P1: 양방향 실패 blocklist!
+                try:
+                    from app.services.bidirectional_blocklist import is_bidirectional_blocked
+                    blocked, block_reason = is_bidirectional_blocked(db, symbol)
+                    if blocked:
+                        logger.info("[auto_short_top+Fix66] %s skip: %s", symbol, block_reason)
+                        continue
+                except Exception as _bl_exc:
+                    logger.warning("[auto_short_top+Fix66] blocklist error: %s", _bl_exc)
+
+                # Fix 66 P2: pump_dump_regime (SHORT!)
+                try:
+                    from app.services.pump_dump_regime import is_regime_blocked_for_short
+                    regime_blocked, regime_reason = is_regime_blocked_for_short(bc, symbol)
+                    if regime_blocked:
+                        logger.info("[auto_short_top+Fix66] %s skip: %s", symbol, regime_reason)
+                        continue
+                except Exception as _rg_exc:
+                    logger.warning("[auto_short_top+Fix66] regime error: %s", _rg_exc)
+
                 # 7. 자동 진입!
                 cfg = {"capitals": [capital_float], "leverage": DEFAULT_LEVERAGE}
                 new_strategy = _create_auto_bb_strategy(

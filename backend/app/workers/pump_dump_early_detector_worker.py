@@ -210,6 +210,26 @@ def run_pump_dump_early_detector() -> dict:
                 except Exception as _obv_exc:
                     logger.warning("[Fix62+Fix65] %s obv_gate error: %s", symbol, _obv_exc)
 
+                # Fix 66 P1 + P2!
+                try:
+                    from app.services.bidirectional_blocklist import is_bidirectional_blocked
+                    from app.services.pump_dump_regime import is_regime_blocked_for_short
+                    from app.core.database import SessionLocal as _SL
+                    db_bl = _SL()
+                    try:
+                        blocked, block_reason = is_bidirectional_blocked(db_bl, symbol)
+                        if blocked:
+                            logger.info("[Fix62+Fix66] %s skip: %s", symbol, block_reason)
+                            continue
+                    finally:
+                        db_bl.close()
+                    regime_blocked, regime_reason = is_regime_blocked_for_short(bc, symbol)
+                    if regime_blocked:
+                        logger.info("[Fix62+Fix66] %s skip: %s", symbol, regime_reason)
+                        continue
+                except Exception as _f66_exc:
+                    logger.warning("[Fix62+Fix66] error: %s", _f66_exc)
+
                 # 3. confidence 계산
                 confidence = 0.85 + 0.02 * (passed - MIN_PASSED)
                 confidence = min(confidence, 0.94)
