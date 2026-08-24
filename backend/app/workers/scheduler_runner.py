@@ -570,6 +570,18 @@ def start_scheduler() -> None:
         id="pump_top_detector", replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # Fix 62 (2026-08-24 사장님!): 급등 후 하락 초기 감지!
+    # v219 = 완전 정점 (7/7) / Fix 62 = 하락 초기 (5/6) = 사장님 사상!
+    def _pump_dump_early_detector():
+        from app.workers.pump_dump_early_detector_worker import run_pump_dump_early_detector
+        run_pump_dump_early_detector()
+    scheduler.add_job(
+        guarded_job("pump_dump_early_detector", 240, _pump_dump_early_detector),
+        trigger=IntervalTrigger(minutes=5),
+        id="pump_dump_early_detector",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     # Fix 41 (2026-08-23 사장님!): 전고점 돌파 후 반전 마틴게일!
     def _peak_break_reversal():
         from app.workers.peak_break_reversal_worker import run_peak_break_reversal_once
