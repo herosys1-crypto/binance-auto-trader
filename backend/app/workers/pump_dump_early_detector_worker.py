@@ -102,9 +102,14 @@ def _check_multi_tf_obv_consistency(bc, symbol):
 
 
 def _save_alert_redis(r, symbol, signals, passed, confidence, chg_24h):
-    """Redis 알람 = auto_short_at_top이 처리!"""
+    """Redis 알람 = auto_short_at_top이 처리!
+
+    ⚠️ CRITICAL fix (Fix 67 발견 silent bug!): auto_short_at_top ALERT_PATTERN = "pump_top:alert:*" 만 스캔!
+    → 옛 "sajangnim:top_short:{symbol}" = 진입 0건 (silent bug!)
+    → 신 "pump_top:alert:{symbol}:SHORT" = pump_top_detector 동일 패턴!
+    """
     try:
-        alert_key = f"sajangnim:top_short:{symbol}"  # auto_short_at_top이 스캔!
+        alert_key = f"pump_top:alert:{symbol}:SHORT"  # auto_short_at_top ALERT_PATTERN 일치!
         alert_data = {
             "symbol": symbol,
             "side": "SHORT",

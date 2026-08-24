@@ -594,6 +594,25 @@ def start_scheduler() -> None:
         replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🌟 Fix 67 (2026-08-25 사장님 신 사상 v2 = SHORT BB상단돌파 마틴게일!)
+    # spec: bb_upper_breakout_short_v1_fix67_2026-08-25
+    # 사장님 verbatim: "SHORT은 급등해서 볼밴 상단 돌파했을때 마틴게일 전략!
+    #                   (확실한 수익을 낼수 있어!)"
+    # = 매 5분 = 상위 심볼 스캔 → BB 상단 돌파 + 마틴게일 3중 지표 (RSI/MACD/볼륨)
+    # → Redis alert (pump_top:alert:{symbol}:SHORT, source='bb_upper_breakout')
+    # → auto_short_at_top_worker(진입 300 USDT + -5% SL)
+    # → realtime_reentry_worker(마틴게일 300/600/1800 + Fix 53 라스트 챈스)
+    # Fix 65 (obv_gate SHORT) + Fix 66 P1/P2 통합 (bidirectional_blocklist + pump_dump_regime).
+    def _bb_upper_breakout_short():
+        from app.workers.bb_upper_breakout_short_worker import run_bb_upper_breakout_short
+        run_bb_upper_breakout_short()
+    scheduler.add_job(
+        guarded_job("bb_upper_breakout_short", 240, _bb_upper_breakout_short),
+        trigger=IntervalTrigger(seconds=300),  # 매 5분!
+        id="bb_upper_breakout_short",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     # Fix 41 (2026-08-23 사장님!): 전고점 돌파 후 반전 마틴게일!
     def _peak_break_reversal():
         from app.workers.peak_break_reversal_worker import run_peak_break_reversal_once
