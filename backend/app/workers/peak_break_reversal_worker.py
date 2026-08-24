@@ -282,7 +282,17 @@ def _enter_next_stage(db, s, next_stage, snap):
             tpl.stages[next_stage - 1].capital_usdt = capital
             tpl.stages[next_stage - 1].trigger_price = None
             db.commit()
-        
+
+        # Fix 52 = 사장님 -5% 짧은 손절 방침 (모든 진입 워커 통일!)
+        try:
+            s.force_sl_enabled_override = True
+            s.force_sl_roi_override = Decimal("5")
+            db.commit()
+            logger.info("[Fix41+52] 🛡️ %s SL -5%% 적용 (stage=%s)", s.symbol, next_stage)
+        except Exception as _sl_exc:
+            logger.warning("[Fix41+52] ⚠️ %s SL override 실패: %s", s.symbol, _sl_exc)
+            db.rollback()
+
         order = None
         for fn_name in ('enter_stage_at_market', 'start_stage', 'add_stage'):
             fn = getattr(svc, fn_name, None)

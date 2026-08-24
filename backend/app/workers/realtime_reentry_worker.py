@@ -52,6 +52,15 @@ MAX_HOURLY_REENTRIES = 5        # 1h 최대 5건 (남발 방지!)
 STAGE3_MIN_WAIT_HOURS = 4.0     # 3단계 = 충분히 대기!
 MIN_LEARNING_SUCCESS_RATE = 0.30  # 학습 성공률 30%+ 심볼만!
 
+# 🎯 Fix 53 사장님 신 사상 (2026-08-24!):
+# 사장님 verbatim: "최종 단계까지 진행했는데 손실이면 -5%에서 다시 모니터링 대기하고
+#                  최종단계 진입금액으로 한번더 하고 안되면 종료하는 로직으로 해줘"
+# = 3단계 (1800 USDT) SL 발동 후 = 라스트 챈스 1회 (동일 자본 1800!)
+# = 라스트 챈스도 SL = 완전 종료 (더 이상 재진입 X!)
+# 최소 침습: 기존 v219 로직 유지 + stage 4 = 라스트 챈스만 추가!
+ENABLE_LAST_CHANCE = True
+MAX_REENTRY_STAGE_WITH_LAST = 4  # 3단계 + 라스트 챈스 1회!
+
 
 def _check_indicator_reversal_for_reentry(
     bc, symbol: str, side: str, use_4h: bool = True
@@ -300,11 +309,17 @@ def run_realtime_reentry() -> dict:
                 skipped += 1
                 continue
 
-            # 재진입 카운터 max 2!
+            # 재진입 카운터 max 2 (기존) or 3 (Fix 53 라스트 챈스!)
             re_count = _get_reentry_count(symbol, side)
-            if re_count >= MAX_REENTRY_COUNT:
+            _max_count_effective = (
+                MAX_REENTRY_COUNT + 1 if ENABLE_LAST_CHANCE else MAX_REENTRY_COUNT
+            )
+            if re_count >= _max_count_effective:
                 skipped += 1
-                logger.info("[RT_REENTRY] skip: %s %s MAX 재진입 %d회 도달!", symbol, side, re_count)
+                logger.info(
+                    "[RT_REENTRY] skip: %s %s MAX 재진입 %d회 도달! (max=%d, last_chance=%s)",
+                    symbol, side, re_count, _max_count_effective, ENABLE_LAST_CHANCE,
+                )
                 continue
 
             # mark_price 조회!
@@ -398,16 +413,16 @@ def run_realtime_reentry() -> dict:
                 f"지표 반전 [{_ind_msg}] rebound={_rebound_pct:.2f}% [{_learn_msg}]"
             )
 
-            # 3단계 = "충분히 대기" = 최소 4h!
+            # 3단계 + Fix 53 4단계 (라스트 챈스) = "충분히 대기" = 최소 4h!
             if not _use_success_reentry:
                 _stage_no = re_count + 2
-                if _stage_no == 3 and si.stopped_at:
+                if _stage_no >= 3 and si.stopped_at:
                     _elapsed_h = (datetime.now(timezone.utc) - si.stopped_at).total_seconds() / 3600
                     if _elapsed_h < STAGE3_MIN_WAIT_HOURS:
                         skipped += 1
                         logger.info(
-                            "[RT_REENTRY] stage 3 skip: %s 대기 부족 (%.1fh < %.1fh)",
-                            symbol, _elapsed_h, STAGE3_MIN_WAIT_HOURS,
+                            "[RT_REENTRY] stage %d skip: %s 대기 부족 (%.1fh < %.1fh)",
+                            _stage_no, symbol, _elapsed_h, STAGE3_MIN_WAIT_HOURS,
                         )
                         continue
 
@@ -416,42 +431,73 @@ def run_realtime_reentry() -> dict:
                 # 🎯 v219 사장님 최종 마틴게일 (2026-08-22!):
                 # "300 600 1800" = 1단계 초기 / 2단계 이전×2 / 3단계 투자금전체×2
                 # "3단계까지 갈수 있다야 가능하면 가지않는 관리가 필요"
+                # 🎯 Fix 53 (2026-08-24): 4단계 = 라스트 챈스 (동일 자본!)
                 _base_capital = _get_base_capital_from_instance(si)
+                _is_last_chance = False  # Fix 53 라스트 챈스 여부!
                 if _use_success_reentry:
                     # 사장님: 익절 후 재진입 = 초기 시작금액!
                     _entry_capital = float(_base_capital)
                     _mult_label = ""
                 else:
-                    # 🎯 v219 사장님 신 마틴게일 (300/600/1800!)
+                    # 🎯 v219 사장님 신 마틴게일 (300/600/1800!) + Fix 53 라스트 챈스!
                     from decimal import Decimal as _D
                     from app.services.sajangnim_capital import compute_reentry_capital, MAX_REENTRY_STAGE
-                    _stage = re_count + 2  # count=0 → 2단계, count=1 → 3단계
-                    if _stage > MAX_REENTRY_STAGE:
+                    _stage = re_count + 2  # count=0 → 2단계, count=1 → 3단계, count=2 → 4단계(라스트!)
+                    _is_last_chance = (
+                        ENABLE_LAST_CHANCE
+                        and _stage == MAX_REENTRY_STAGE_WITH_LAST
+                    )
+                    if _stage > MAX_REENTRY_STAGE and not _is_last_chance:
                         skipped += 1
                         logger.info(
                             "[RT_REENTRY] v219 STOP: %s %s stage=%d > MAX=%d (3단계까지!)",
                             symbol, side, _stage, MAX_REENTRY_STAGE,
                         )
                         continue
-                    # 이전 진입 자본 리스트 구성!
-                    _prev_caps = [_D(str(_base_capital))]
-                    if _stage == 3:
-                        # 2단계 자본 = base × 2 (실 이력 없이 규정 기반 재구성!)
-                        _prev_caps.append(_D(str(_base_capital)) * _D("2"))
-                    _entry_capital_dec = compute_reentry_capital(_stage, _prev_caps)
-                    if _entry_capital_dec is None:
-                        skipped += 1
-                        continue
-                    _entry_capital = float(_entry_capital_dec)
-                    _mult = _entry_capital / float(_base_capital)
-                    _mult_label = f" ×{_mult:.2f} ({_stage}단계)"
-                    logger.info(
-                        "[RT_REENTRY] 🎯 v219 마틴게일 %d단계: %s %s base=%.0f → %.0f USDT (×%.2f)",
-                        _stage, symbol, side, float(_base_capital), _entry_capital, _mult,
-                    )
+
+                    if _is_last_chance:
+                        # 🎯 Fix 53 라스트 챈스 = 3단계 동일 자본 (base × 6 = 1800!)
+                        # compute_reentry_capital(3, ...)와 동일 결과 재사용!
+                        _prev_caps = [
+                            _D(str(_base_capital)),
+                            _D(str(_base_capital)) * _D("2"),
+                        ]
+                        _entry_capital_dec = compute_reentry_capital(3, _prev_caps)
+                        if _entry_capital_dec is None:
+                            skipped += 1
+                            continue
+                        _entry_capital = float(_entry_capital_dec)
+                        _mult = _entry_capital / float(_base_capital)
+                        _mult_label = f" ×{_mult:.2f} ({_stage}단계 🚨라스트 챈스!)"
+                        logger.warning(
+                            "[RT_REENTRY] 🚨 Fix 53 라스트 챈스: %s %s base=%.0f → %.0f USDT (마지막 1회!)",
+                            symbol, side, float(_base_capital), _entry_capital,
+                        )
+                    else:
+                        # 이전 진입 자본 리스트 구성!
+                        _prev_caps = [_D(str(_base_capital))]
+                        if _stage == 3:
+                            # 2단계 자본 = base × 2 (실 이력 없이 규정 기반 재구성!)
+                            _prev_caps.append(_D(str(_base_capital)) * _D("2"))
+                        _entry_capital_dec = compute_reentry_capital(_stage, _prev_caps)
+                        if _entry_capital_dec is None:
+                            skipped += 1
+                            continue
+                        _entry_capital = float(_entry_capital_dec)
+                        _mult = _entry_capital / float(_base_capital)
+                        _mult_label = f" ×{_mult:.2f} ({_stage}단계)"
+                        logger.info(
+                            "[RT_REENTRY] 🎯 v219 마틴게일 %d단계: %s %s base=%.0f → %.0f USDT (×%.2f)",
+                            _stage, symbol, side, float(_base_capital), _entry_capital, _mult,
+                        )
                 cfg = {"capitals": [_entry_capital], "leverage": 2}
                 _reason_suffix += _mult_label  # UI 배지에 ×1.50 표시!
-                _suffix = "_success" if _use_success_reentry else f"_reentry{re_count + 1}"
+                if _use_success_reentry:
+                    _suffix = "_success"
+                elif _is_last_chance:
+                    _suffix = "_lastchance"  # Fix 53 = 라스트 챈스 마킹!
+                else:
+                    _suffix = f"_reentry{re_count + 1}"
                 new_strategy = _create_auto_bb_strategy(
                     db, symbol, side, cfg,
                     strategy_type_suffix=_suffix,
@@ -478,6 +524,7 @@ def run_realtime_reentry() -> dict:
                     "indicator_msg": _ind_msg,
                     "learning_msg": _learn_msg,
                     "reentry_count": re_count + 1 if not _use_success_reentry else 0,
+                    "is_last_chance": _is_last_chance,  # 🎯 Fix 53 마킹!
                     "entered_at": datetime.now(timezone.utc).isoformat(),
                 }
                 # StrategySuggestion 기록!

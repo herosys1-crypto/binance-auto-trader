@@ -1381,10 +1381,16 @@ def _apply_obv_hold_settings(db: Session, strategy: StrategyInstance) -> None:
     - 강제 SL X = Liquidation까지 버티기!
     """
     try:
-        strategy.force_sl_enabled_override = False
+        # 🌟 Fix 52 P1 사장님 (2026-08-24): OBV hold 경로도 = SL 강제 -5%!
+        # 사장님 verbatim (v219+ 스마트 마틴게일): "짧은 손절후 적당히 시점에
+        #   다시 마틴게일 전략으로 진입할수 있는 차트분석 학습이 되었으면 로직을 변경해야"!
+        # 이전: force_sl_enabled_override=False (오래 버티기) → Liquidation 위험!
+        # 신 (Fix 52 P1): SL -5% 강제 + 재진입 마틴게일 = 총 손실 44% 감소!
+        strategy.force_sl_enabled_override = True
+        strategy.force_sl_roi_override = Decimal("5")  # ROI <= -5% 시 발동! (짧은 손절!)
         db.commit()
         logger.info(
-            "[auto_obv_hold] 🎯 OBV 전략 설정: strategy=%s force_sl=X (오래 버티기!)",
+            "[auto_obv_hold] 🎯 Fix 52 P1 OBV 전략 설정: strategy=%s SL 강제 -5%% (짧은 손절 + 재진입!)",
             strategy.id,
         )
     except Exception as e:
@@ -1570,22 +1576,24 @@ def _create_auto_bb_strategy(
         ),
     )
 
-    # 🌟 v225 사장님 v219 사상 (2026-08-23): 신 자동 진입 = SL 강제 -80%!
-    # 사장님 verbatim: "최종청산가는 -80%!"
-    # = 전역 기본 (롱 -5%/숏 OFF) 무시 = 전략별 override로 -80% 강제!
-    # SHORT도 강제 ON (전역 SHORT default=OFF 무시!)
-    # ⚠️ OBV_HOLD 예외 = 오래 버티기 = 강제 SL 비활성 (기존 로직 존중!)
+    # 🌟 Fix 52 P1 사장님 (2026-08-24): 신 자동 진입 = SL 강제 -5%!
+    # 사장님 verbatim (v219+ 스마트 마틴게일 사상): "짧은 손절후 적당히 시점에
+    #   다시 마틴게일 전략으로 진입할수 있는 차트분석 학습이 되었으면 로직을 변경해야"!
+    # = 짧은 손절 (-5%) + 학습 + 재진입 (마틴게일) = 총 손실 44% 감소!
+    # 이전 (v225): SL -80% = 청산 직전까지 방치 → 단일 사고 -400 USDT+ 위험!
+    # 신 (Fix 52 P1): SL -5% = 손실 최소화 + 재도전 가능! (SHORT도 강제 ON!)
+    # ⚠️ OBV_HOLD 예외 = 오래 버티기 = 아래 _apply_obv_hold_settings에서 별도 처리!
     if not _is_obv_hold:
         try:
             strategy.force_sl_enabled_override = True
-            strategy.force_sl_roi_override = Decimal("80")  # ROI <= -80% 시 발동!
+            strategy.force_sl_roi_override = Decimal("5")  # ROI <= -5% 시 발동! (짧은 손절!)
             db.commit()
             logger.info(
-                "[auto_bb_breakdown] 🎯 v225 SL 강제 -80%%: strategy=%s %s %s",
+                "[auto_bb_breakdown] 🎯 Fix 52 P1 SL 강제 -5%%: strategy=%s %s %s (짧은 손절 + 재도전!)",
                 strategy.id, symbol, side,
             )
         except Exception as _sl_e:
-            logger.warning("[auto_bb_breakdown] v225 SL -80%% 세팅 실패 (fail-open): %s", _sl_e)
+            logger.warning("[auto_bb_breakdown] Fix 52 P1 SL -5%% 세팅 실패 (fail-open): %s", _sl_e)
             db.rollback()
 
     # 🎯 Agent 검증 fix v2 (2026-08-22): 자동 진입 = 실 주문 발송!

@@ -248,6 +248,15 @@ def _enter_stage2(db, s, snap, resistance, source):
         if order is None:
             logger.error(f"[Fix29] Stage2 FAILED #{s.id}")
             return False
+        # Fix 52 = 사장님 -5% 짧은 손절 방침 (모든 진입 워커 통일!)
+        try:
+            s.force_sl_enabled_override = True
+            s.force_sl_roi_override = Decimal("5")
+            db.commit()
+            logger.info("[Fix29+52] 🛡️ %s SL -5%% 적용 (strategy_id=%s)", s.symbol, s.id)
+        except Exception as _sl_exc:
+            logger.warning("[Fix29+52] ⚠️ %s SL override 실패: %s (진입 유지)", s.symbol, _sl_exc)
+            db.rollback()
         _mark_triggered(db, s.id)
         _notify(f"[저항 반전 2단계 SHORT 진입] {s.symbol}",
                 f"{s.symbol} SHORT #{s.id}\n자본: {MARTINGALE_STAGE2_USDT} USDT\n저항: {resistance} ({source})")
