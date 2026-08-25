@@ -613,6 +613,28 @@ def start_scheduler() -> None:
         replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🌟 Fix 74 (2026-08-25 사장님 헌법 77 = 15m MACD 히스토그램 pivot 반전 감지!)
+    # spec: macd_reversal_15m_v1_fix74_2026-08-25
+    # 사장님 verbatim: "15분 macd 히스토그램에서 최저점을 찍고 다시 반등하는 시점에서 롱포지션
+    #                   진입하고 반대로 상승하다가 최고점을 찍고 다시 하락하는 시점에서 숏 포지션 진입!
+    #                   4시간의 움직임도 같은 방향으로 흐를때는 성공률이 아주 높음!"
+    # = 매 3분 = 상위 심볼 15m MACD 히스토그램 3봉 pivot 감지
+    #   (LONG=hist[-3]>hist[-2]<hist[-1] & hist[-2]<0 = 저점 반등 / SHORT=hist[-3]<hist[-2]>hist[-1] & hist[-2]>0)
+    # + 4H MACD 방향 필터 (같은 방향 시 confidence +0.05) + 볼륨 30%+ 증가 확인
+    # + 헌법 64 준수 (24h ±15% 극단은 반대매매 방지 skip)
+    # + Fix 65 obv_gate + Fix 66 P1 bidirectional_blocklist + P2 pump_dump_regime 통합
+    # → Redis alert (SHORT=pump_top:alert:{symbol}:SHORT, LONG=sajangnim:bottom_long:{symbol})
+    # → auto_short_at_top_worker / auto_long_at_bottom_worker (매 30초 consumer!)
+    def _macd_reversal_15m():
+        from app.workers.macd_reversal_15m_worker import run_macd_reversal_15m
+        run_macd_reversal_15m()
+    scheduler.add_job(
+        guarded_job("macd_reversal_15m", 150, _macd_reversal_15m),
+        trigger=IntervalTrigger(seconds=180),  # 매 3분!
+        id="macd_reversal_15m",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     # Fix 41 (2026-08-23 사장님!): 전고점 돌파 후 반전 마틴게일!
     def _peak_break_reversal():
         from app.workers.peak_break_reversal_worker import run_peak_break_reversal_once
