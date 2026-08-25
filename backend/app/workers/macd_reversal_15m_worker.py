@@ -241,12 +241,17 @@ def _check_4h_direction_filter(bc, symbol: str, side: str) -> tuple[bool, str, d
 
         # 사장님 사상: 두 시간대 방향 일치 요구!
         if side_l == "long":
-            # 4H MACD Hist 상승 중 or 이미 양수 = 상승 우호!
-            ok = (hist_4h_now >= hist_4h_prev) or (hist_4h_now >= 0)
+            # 🌟 Fix 87 P1 (2026-08-25 사장님!): LONG 4H 필터 강화!
+            # 원 (OR): hist > 0 OR hist > hist_prev = 관대 (하락중이어도 양수면 통과!)
+            # 신 (AND): hist > 0 AND hist > hist_prev = 엄격 (양수 + 상승 지속!)
+            # 이유: LONG 진입 = 4H 확실한 상승 지속 요구 = 헌법 78 대칭!
+            ok = (hist_4h_now > 0) and (hist_4h_now > hist_4h_prev)
             reason = (
-                f"4h dir={direction_4h} hist={hist_4h_now:+.5f} (LONG ok)"
+                f"4h dir={direction_4h} hist={hist_4h_now:+.5f} > 0 AND > prev "
+                f"(LONG Fix87 AND ok)"
                 if ok else
-                f"4h dir={direction_4h} hist={hist_4h_now:+.5f} (LONG 역방향)"
+                f"4h dir={direction_4h} hist={hist_4h_now:+.5f} "
+                f"prev={hist_4h_prev:+.5f} (LONG Fix87 AND 조건 미달 = skip!)"
             )
         elif side_l == "short":
             # 4H MACD Hist 하락 중 or 이미 음수 = 하락 우호!

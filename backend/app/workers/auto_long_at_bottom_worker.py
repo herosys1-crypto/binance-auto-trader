@@ -83,19 +83,31 @@ RSI_MIN_TURNUP = 0.5          # RSI now > prev + 0.5 = 반등!
 CCI_OVERSOLD_MAX = -50        # CCI ≤ -50 = 저점권!
 CCI_MIN_TURNUP = 5.0          # CCI now > prev + 5 = 반등!
 
-# 24h 필터 (Fix 50 v2 = 확장! 큰 조정 -15% ~ 상승 초기 +15%!)
+# 🌟 Fix 87 P0 (2026-08-25 사장님 = 헌법 78!):
+# 사장님 verbatim: "전략에 들어가는건 당일 급등락한 심볼만 거래하는거야"
+# → LONG = 급락 (-10% 이하)만! 상승 = SHORT 대칭 처리!
+# 패턴 A (+5%~+15% 상승 지속) = 헌법 78 위반 = 완전 skip!
+# 패턴 B 상한도 -3%로 강화 = 더 확실한 급락 심볼만!
+# 24h 필터 (Fix 87 = 급락만!)
 MIN_24H_CHANGE = -15.0        # -15% 이상 (큰 조정 하한! 패턴 B 하한!)
-MAX_24H_CHANGE = 15.0         # +15% 이하 (상승 상한! 패턴 A 상한!)
+MAX_24H_CHANGE = -3.0         # 🌟 Fix 87: -3% 이하 (급락 상한 강화!)
 
-# Fix 50 v2 = 사장님 verbatim 2 패턴 분기 상수 (Fix 61 P1 상향!)
-PATTERN_A_MIN_CHG = 5.0       # 패턴 A 하한 (지속 상승 초기!)
-PATTERN_A_MAX_CHG = 15.0      # 패턴 A 상한
+# Fix 50 v2 = 사장님 verbatim 2 패턴 분기 상수 (Fix 87 = 패턴 A 완전 skip!)
+# ⚠️ Fix 87 (헌법 78): PATTERN_A_* 상수는 dispatcher에서 참조하지만 실제 진입은 skip!
+#   (상수는 유지 = 다른 곳 참조 방지 + 로그 표현)
+PATTERN_A_MIN_CHG = 5.0       # 패턴 A 하한 (지속 상승 초기!) — Fix 87 = 진입 skip!
+PATTERN_A_MAX_CHG = 15.0      # 패턴 A 상한 — Fix 87 = 진입 skip!
 PATTERN_B_MIN_CHG = -15.0     # 패턴 B 하한 (큰 조정!)
-PATTERN_B_MAX_CHG = 0.0       # 패턴 B 상한
+PATTERN_B_MAX_CHG = -3.0      # 🌟 Fix 87: 0 → -3.0 (급락 확실!)
 TREND_EXTREME_BULL_PCT_3D = 30.0  # 3일 +30%↑ = extreme (skip! 정점 위험!)
 RSI_PATTERN_A_MIN = 35.0      # Fix 61 P1: 30 → 35 (더 엄격!)
 RSI_PATTERN_A_MAX = 55.0      # Fix 61 P1: 60 → 55 (과매수 X! 더 엄격!)
 RSI_PATTERN_B_MAX = 40.0      # Fix 61 P1: 45 → 40 (더 과매도 회복!)
+
+# 🌟 Fix 87 P0 (2026-08-25 사장님!): BTC 방향 필터 (SHORT auto_short_at_top 대칭!)
+# BTC 24h < -2% = 시장 하락장 = LONG 위험! (LONG skip!)
+# auto_bb_breakdown BTC_DIRECTION_THRESHOLD (3.0)보다 엄격 (LONG = 하방 리스크 큼!)
+BTC_DIRECTION_THRESHOLD_LONG = 2.0
 
 # 스캔 상한!
 MAX_SYMBOLS = 40              # 심볼당 4 kline call = API 부담 대응!
@@ -108,6 +120,43 @@ MIN_PASSED = 5                # Fix 61 P1: 4/7 → 5/7 (71% = 더 엄격!)
 # ============================================================================
 # 조건 검사 헬퍼 (v219 대칭 = LONG 방향!)
 # ============================================================================
+
+
+def _get_btc_change_24h() -> float | None:
+    """🌟 Fix 87 (2026-08-25): BTC 24h 변동 조회 = 시장 방향!
+    (auto_bb_breakdown._get_btc_change_24h L975 대칭!)
+    """
+    try:
+        from app.core.redis_client import get_redis_client
+        import json as _j
+        r = get_redis_client()
+        _raw = r.get("ticker_24h:BTCUSDT")
+        if _raw:
+            _data = _j.loads(_raw.decode() if isinstance(_raw, bytes) else _raw)
+            return float(_data.get("priceChangePercent", 0) or 0)
+    except Exception:
+        pass
+    return None
+
+
+def _matches_btc_direction_conflict_long() -> tuple[bool, str]:
+    """🌟 Fix 87 (2026-08-25 사장님!): BTC 하락장 = LONG 진입 금지!
+
+    사장님 사상 대칭 (auto_short_at_top BTC 필터 대칭!):
+      - BTC 24h < -2% = 시장 하락장 = LONG 위험 = skip!
+
+    Returns:
+        (blocked, reason)
+    """
+    _btc = _get_btc_change_24h()
+    if _btc is None:
+        return False, "btc 데이터 없음 = 통과"
+    if _btc < -BTC_DIRECTION_THRESHOLD_LONG:
+        return True, (
+            f"🚨 Fix 87: BTC 24h {_btc:+.2f}% < -{BTC_DIRECTION_THRESHOLD_LONG}% "
+            f"= 시장 하락장 = LONG skip!"
+        )
+    return False, f"btc {_btc:+.2f}% = 통과"
 
 
 def _get_obv_trend(bc, symbol: str, interval: str = "4h") -> dict:
@@ -360,11 +409,19 @@ def _check_long_entry_conditions(bc, symbol: str, ticker_24h: dict) -> dict:
                 "trend": trend,
             }
 
-        # 패턴 판정 (사장님 verbatim 2 = 두 경로!)
+        # 🌟 Fix 87 P0 (2026-08-25 사장님 = 헌법 78!):
+        # 사장님 verbatim: "전략에 들어가는건 당일 급등락한 심볼만 거래하는거야"
+        # → LONG = 급락만! 패턴 A (+5%~+15% 상승) = 완전 skip!
         if PATTERN_A_MIN_CHG <= chg24 <= PATTERN_A_MAX_CHG:
-            return _check_pattern_A_continuation(
-                bc, symbol, ticker_24h, trend, chg24,
-            )
+            return {
+                "detected": False, "passed": 0, "confidence": 0.0,
+                "reason": (
+                    f"🌟 Fix 87 (헌법 78) = 패턴 A skip! "
+                    f"24h={chg24:.2f}% 상승 = LONG X (급락만 진입!)"
+                ),
+                "trend": trend, "pattern": "A_SKIPPED",
+            }
+        # 패턴 B (급락 후 반전) 만 유지!
         if PATTERN_B_MIN_CHG <= chg24 <= PATTERN_B_MAX_CHG:
             return _check_pattern_B_after_correction(
                 bc, symbol, ticker_24h, trend, chg24,
@@ -372,9 +429,8 @@ def _check_long_entry_conditions(bc, symbol: str, ticker_24h: dict) -> dict:
         return {
             "detected": False, "passed": 0, "confidence": 0.0,
             "reason": (
-                f"24h={chg24:.2f}% 어느 패턴 범위도 밖 "
-                f"(A={PATTERN_A_MIN_CHG}~{PATTERN_A_MAX_CHG}, "
-                f"B={PATTERN_B_MIN_CHG}~{PATTERN_B_MAX_CHG})"
+                f"24h={chg24:.2f}% 급락 범위 밖 "
+                f"(Fix 87 = B={PATTERN_B_MIN_CHG}~{PATTERN_B_MAX_CHG} 만!)"
             ),
             "trend": trend,
         }
@@ -683,6 +739,16 @@ def run_auto_long_at_bottom_once() -> dict:
     scanned = 0
     results: list[dict] = []
     try:
+        # 🌟 Fix 87 P0 (2026-08-25 사장님!): BTC 방향 필터 = 하락장 = LONG 전면 skip!
+        # (auto_short_at_top BTC 필터 대칭 = SHORT 대칭 정합성!)
+        _btc_blocked, _btc_reason = _matches_btc_direction_conflict_long()
+        if _btc_blocked:
+            logger.warning("[auto_long_bottom+Fix87] %s → 전체 사이클 skip!", _btc_reason)
+            return {
+                "note": _btc_reason,
+                "entered": 0, "spec": SPEC_VERSION, "btc_blocked": True,
+            }
+
         # 1. daily_limit 체크 (v219 통합!)
         daily_limit = _get_daily_limit(db)
         if daily_limit <= 0:
@@ -857,16 +923,18 @@ def run_auto_long_at_bottom_once() -> dict:
                     )
                     continue
 
-                # -5% 짧은 손절 override (auto_short_at_top L210~223 대칭!)
-                # 사장님 verbatim: "v219 단계별 진입후 -5% 손실이면 청산하고
-                #                    대기 모니터링"
+                # 🌟 Fix 87 P0 (2026-08-25 사장님!): -10% 손절 override!
+                # 원 -5% = leverage 2x + 15m 알트 노이즈 = 자연 노이즈 손절!
+                # 신 -10% = leverage 2x → 실 가격 5% = 15m 알트 노이즈 뛰어넘음!
+                # 기존 사장님 verbatim: "v219 단계별 진입후 -5% 손실이면 청산하고
+                #                        대기 모니터링" → 사장님 요구 상향 반영!
                 try:
                     new_strategy.force_sl_enabled_override = True
-                    new_strategy.force_sl_roi_override = Decimal("5")
+                    new_strategy.force_sl_roi_override = Decimal("10")
                     db.commit()
                     logger.info(
-                        "[Fix75/alert-long] 🛡️ %s SL override -5%% 적용 "
-                        "(strategy_id=%s)",
+                        "[Fix75/alert-long+Fix87] 🛡️ %s SL override -10%% 적용 "
+                        "(strategy_id=%s, 2x 상향 = 15m 노이즈 방지!)",
                         symbol, new_strategy.id,
                     )
                 except Exception as _sl_exc:
@@ -1119,15 +1187,16 @@ def run_auto_long_at_bottom_once() -> dict:
                     )
                     continue
 
-                # Fix 신 사상: 저점 LONG = -5% 짧은 손절! (auto_short_at_top 대칭!)
-                # 사장님 verbatim: "v219 단계별 진입후 -5% 손실이면 청산하고 대기 모니터링"
-                # 기존 활성 전략은 그대로! 신 진입만 -5%!
+                # 🌟 Fix 87 P0 (2026-08-25 사장님!): -10% 손절 override!
+                # 원 -5% = leverage 2x + 15m 알트 노이즈 = 자연 노이즈 손절!
+                # 신 -10% = leverage 2x → 실 가격 5% = 15m 알트 노이즈 뛰어넘음!
+                # 기존 활성 전략은 그대로! 신 진입만 -10%!
                 try:
                     new_strategy.force_sl_enabled_override = True
-                    new_strategy.force_sl_roi_override = Decimal("5")
+                    new_strategy.force_sl_roi_override = Decimal("10")
                     db.commit()
                     logger.info(
-                        "[auto_long_bottom] 🛡️ %s SL override -5%% 적용 (strategy_id=%s)",
+                        "[auto_long_bottom+Fix87] 🛡️ %s SL override -10%% 적용 (strategy_id=%s, 2x 상향!)",
                         symbol, new_strategy.id,
                     )
                 except Exception as _sl_exc:

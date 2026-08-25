@@ -73,14 +73,16 @@ TREND_BULL_PCT = 20.0           # 3일 이 이상 = bull (LONG 유리, SHORT 신
 TREND_EXTREME_BULL_PCT_3D = 30.0  # 🌟 Fix 50 v2: 3일 +30% 이상 = extreme_bull (LONG skip, 정점 위험!)
 TREND_CONFIDENCE_PENALTY = 0.05  # strong_bear LONG confidence 감소량!
 
-# 🌟 Fix 50 v2 (2026-08-24 사장님 신 사상!): 2-패턴 진입!
-# 패턴 A = "1-2일 10% 전후 상승 = 상승 지속" → +5%~+15% 후보!
-# 패턴 B = "급상승후 큰조정 = 반전 저점" → -15%~0% 후보!
-SPEC_VERSION = "long_bottom_detector_v2_fix50_two_pattern_2026-08-24"
-PATTERN_A_MIN_CHG = 5.0     # 패턴 A: 24h 최소 +5%
-PATTERN_A_MAX_CHG = 15.0    # 패턴 A: 24h 최대 +15%
+# 🌟 Fix 87 P0 (2026-08-25 사장님 = 헌법 78!):
+# 사장님 verbatim: "전략에 들어가는건 당일 급등락한 심볼만 거래하는거야"
+# → LONG = 급락 (-3% 이하)만! 상승 = SHORT 대칭 처리!
+# 패턴 A (+5%~+15% 상승 지속) = 헌법 78 위반 = 완전 skip!
+# 패턴 B 상한 = 0 → -3.0 (더 확실한 급락!)
+SPEC_VERSION = "long_bottom_detector_v3_fix87_dump_only_2026-08-25"
+PATTERN_A_MIN_CHG = 5.0     # 패턴 A: 24h 최소 +5% (Fix 87 = 진입 skip!)
+PATTERN_A_MAX_CHG = 15.0    # 패턴 A: 24h 최대 +15% (Fix 87 = 진입 skip!)
 PATTERN_B_MIN_CHG = -15.0   # 패턴 B: 24h 최소 -15%
-PATTERN_B_MAX_CHG = 0.0     # 패턴 B: 24h 최대 0%
+PATTERN_B_MAX_CHG = -3.0    # 🌟 Fix 87: 0 → -3.0 (급락 확실!)
 
 
 def _check_trend_strength_long(bc, symbol: str) -> str:
@@ -371,15 +373,18 @@ class LongBottomDetector:
 
 
 def _classify_pattern(chg24: float) -> str | None:
-    """🌟 Fix 50 v2: 24h 변동으로 패턴 A / B 분류 (사장님 verbatim 대응!).
+    """🌟 Fix 87 (2026-08-25 사장님 = 헌법 78!):
+    "전략에 들어가는건 당일 급등락한 심볼만 거래하는거야"
+    → LONG = 급락만! 패턴 A (상승) = 완전 skip!
 
     Returns:
-        "A" = 상승 지속 진입 (+5%~+15% 사장님 "1-2일 10% 전후 상승"!)
-        "B" = 조정 후 반전 진입 (-15%~0% 사장님 "급상승후 큰조정"!)
-        None = 어느 패턴에도 해당 안 됨 (skip!)
+        "B" = 급락 후 반전 진입 (-15%~-3%) 만 유효!
+        None = skip! (패턴 A 포함!)
     """
+    # 🌟 Fix 87: 패턴 A (+5%~+15% 상승) = 헌법 78 위반 = skip!
+    #   ※ PATTERN_A_MIN_CHG/MAX_CHG 상수는 유지 (다른 곳 참조/로그 표현) but 진입 X!
     if PATTERN_A_MIN_CHG <= chg24 <= PATTERN_A_MAX_CHG:
-        return "A"
+        return None  # skip! (헌법 78 = LONG = 급락만!)
     if PATTERN_B_MIN_CHG <= chg24 <= PATTERN_B_MAX_CHG:
         return "B"
     return None
