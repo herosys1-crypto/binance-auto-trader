@@ -184,7 +184,7 @@ def list_profiles(
 
 @router.put("", response_model=ProfilesResponse)
 def update_profiles(
-    payload: dict,
+    payload: dict = Body(...),  # Fix 86: FastAPI dict 파싱
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> ProfilesResponse:

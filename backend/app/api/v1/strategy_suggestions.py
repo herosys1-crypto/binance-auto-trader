@@ -16,7 +16,7 @@ import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -243,11 +243,16 @@ def get_sajangnim_settings(
 
 @router.put("/sajangnim-settings")
 def set_sajangnim_settings(
-    payload: dict,
+    payload: dict = Body(...),  # 🌟 Fix 86 (2026-08-25): Body(...) 명시 = FastAPI dict 파싱 정상! (사장님 422 오류 fix!)
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> dict:
-    """🎯 v219: 사장님 실 성공 로직 세팅 저장!"""
+    """🎯 v219: 사장님 실 성공 로직 세팅 저장!
+
+    🌟 Fix 86 (2026-08-25 사장님 422 오류!): payload: dict = Body(...)
+       = 옛: payload: dict → FastAPI가 raw string으로 해석 → 422!
+       = 신: Body(...) 명시 → JSON body 자동 dict 파싱!
+    """
     fields = {
         "sajangnim_default_capital": ("default_capital", lambda v: str(max(50.0, min(100000.0, float(v))))),
         "sajangnim_capital_mode": ("capital_mode", lambda v: str(v).lower() if str(v).lower() in ("fixed", "percent") else "fixed"),
@@ -429,7 +434,7 @@ def get_auto_bb_limit(
 
 @router.put("/auto-bb-limit")
 def set_auto_bb_limit(
-    payload: dict,
+    payload: dict = Body(...),  # Fix 86: FastAPI dict 파싱
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> dict:
@@ -488,7 +493,7 @@ def get_obv_settings(
 
 @router.put("/obv-settings")
 def set_obv_settings(
-    payload: dict,
+    payload: dict = Body(...),  # Fix 86: FastAPI dict 파싱
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> dict:
