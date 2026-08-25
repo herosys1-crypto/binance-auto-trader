@@ -99,7 +99,8 @@ function parseMartingaleBadge(s) {
 
   // 1️⃣ 라스트챈스 (Fix 53 = 최종 기회!)
   if (st.includes('_lastchance')) {
-    return `<span style="display:inline-block;background:linear-gradient(135deg,#dc2626,#7f1d1d);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 12px rgba(220,38,38,1);animation:pulse 1.5s infinite" title="🚨 Fix 53 라스트챈스 = 마틴게일 최종 기회! 자본 ${cap} USDT ${side}. 다음 = 종료 (재진입 없음!)">🚨 라스트 ${cap}U ${side}</span>`;
+    // 🌟 2026-08-25 Fix 80 (사장님 「배지 2줄!」): 라스트/자본 1줄 + 최종 경고 2줄
+    return `<span style="display:inline-block;background:linear-gradient(135deg,#dc2626,#7f1d1d);color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;line-height:1.2;box-shadow:0 0 12px rgba(220,38,38,1);animation:pulse 1.5s infinite" title="🚨 Fix 53 라스트챈스 = 마틴게일 최종 기회! 자본 ${cap} USDT ${side}. 다음 = 종료 (재진입 없음!)">🚨 라스트 ${cap}U ${side}<br><span style="font-size:9px;opacity:0.9">최종 기회!</span></span>`;
   }
 
   // 2️⃣ 마틴게일 재진입 (v219 = 300/600/1800!)
@@ -122,7 +123,9 @@ function parseMartingaleBadge(s) {
     const nextCap = nextStage(actualStage);
     const nextHint = nextCap ? ` | 다음: ${nextCap}U` : ' | ⚠최대!';
     const tooltip = `🎯 v219 마틴게일 ${stageIdx}차재진입 (=${actualStage}단계!) = 자본 ${cap} USDT ${side}. 사장님 신 사다리: 300→600→1800.${nextCap ? ` 실패 시 다음 = ${nextCap} USDT!` : ' ⚠ 3단계 = 최대! (실패 시 종료!)'}`;
-    return `<span style="display:inline-block;background:${bg};color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 10px rgba(239,68,68,0.8)" title="${tooltip}">${emoji} ${stageIdx}차재진입 ${cap}U ${side}${nextHint}</span>`;
+    // 🌟 2026-08-25 Fix 80 (사장님 「배지 2줄!」): stageIdx/cap/side 1줄 + nextHint 2줄
+    const nextHintLine = nextCap ? `다음: ${nextCap}U` : '⚠최대!';
+    return `<span style="display:inline-block;background:${bg};color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;line-height:1.2;box-shadow:0 0 10px rgba(239,68,68,0.8)" title="${tooltip}">${emoji} ${stageIdx}차재진입 ${cap}U ${side}<br><span style="font-size:9px;opacity:0.9">${nextHintLine}</span></span>`;
   }
 
   // 3️⃣ 성공 피라미딩 (Fix 68 = 배수 X = 300 flat!)
@@ -137,7 +140,8 @@ function parseMartingaleBadge(s) {
     const bg = shades[pyrN] || shades[3];
     const maxTag = pyrN >= 3 ? ' MAX!' : '';
     const tooltip = `🎯 Fix 68 성공 피라미딩 #${pyrN}${maxTag} = 자본 ${cap} USDT ${side} (배수 X = 300 USDT flat, 사장님 verbatim!). 익절 후 즉시 재진입 = 수익 누적!`;
-    return `<span style="display:inline-block;background:${bg};color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 10px rgba(14,165,233,0.9)" title="${tooltip}">🎯 성공재진입 #${pyrN} ${cap}U ${side}${maxTag}</span>`;
+    // 🌟 2026-08-25 Fix 80 (사장님 「배지 2줄!」)
+    return `<span style="display:inline-block;background:${bg};color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;line-height:1.2;box-shadow:0 0 10px rgba(14,165,233,0.9)" title="${tooltip}">🎯 성공재진입 #${pyrN} ${cap}U ${side}${maxTag ? '<br><span style=\"font-size:9px;opacity:0.9\">' + maxTag.trim() + '</span>' : ''}</span>`;
   }
 
   // 4️⃣ 성공 재진입 (레거시 v204!)
@@ -145,7 +149,7 @@ function parseMartingaleBadge(s) {
     const bg = isLong
       ? 'linear-gradient(135deg,#0ea5e9,#22c55e)'
       : 'linear-gradient(135deg,#0ea5e9,#dc2626)';
-    return `<span style="display:inline-block;background:${bg};color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 10px rgba(14,165,233,0.9)" title="🚀 v204 성공 재진입 ${side}! 초기 자본 ${cap} USDT!">🚀 성공재진입 ${cap}U ${side}</span>`;
+    return `<span style="display:inline-block;background:${bg};color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;line-height:1.2;box-shadow:0 0 10px rgba(14,165,233,0.9)" title="🚀 v204 성공 재진입 ${side}! 초기 자본 ${cap} USDT!">🚀 성공재진입 ${cap}U ${side}</span>`;
   }
 
   // 5️⃣ 기본 BB 자동 진입 (신규 = 1단계 초기!)
@@ -154,7 +158,9 @@ function parseMartingaleBadge(s) {
     : 'linear-gradient(135deg,#3b82f6,#1e40af)';
   const nextCap = nextStage(1);  // 실패 시 다음 = 600U (2단계!)
   const tooltip = `🥇 v174 BB 자동 진입 = 1단계 원 진입 (${cap} USDT ${side}). 사장님 신 마틴게일 사다리: 300→600→1800.${nextCap ? ` 실패 시 다음 = ${nextCap} USDT (2단계!)` : ''}`;
-  return `<span style="display:inline-block;background:${bg};color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(59,130,246,0.7)" title="${tooltip}">🥇 1단계 ${cap}U ${side}${nextCap ? ' | 다음: ' + nextCap + 'U' : ''}</span>`;
+  // 🌟 2026-08-25 Fix 80 (사장님 「배지 2줄!」): 단계/자본/side 1줄 + 다음 자본 2줄
+  const line2 = nextCap ? `다음: ${nextCap}U` : '';
+  return `<span style="display:inline-block;background:${bg};color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:4px;line-height:1.2;box-shadow:0 0 8px rgba(59,130,246,0.7)" title="${tooltip}">🥇 1단계 ${cap}U ${side}${line2 ? `<br><span style="font-size:9px;opacity:0.9">${line2}</span>` : ''}</span>`;
 }
 
 // status 에서 TP 카운트 산출. totalTps 는 template 의 활성 TP 수.
