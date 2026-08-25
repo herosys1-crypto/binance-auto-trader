@@ -493,7 +493,12 @@ async function refreshStrategies() {
           </select>`
         : '';
       // 🌟 2026-06-09 사장님 신 기능: 단계 클릭 = 단계별 상세 popup (진입예정가 + 자본)
-      const stage = `<div class="text-xs leading-none" onclick="event.stopPropagation(); openStageDetailModal(${s.id}, '${s.symbol}', '${s.side}')" style="cursor:pointer" title="클릭 = 단계별 진입예정가 + 자본 확인"><span class="text-slate-400" style="font-size:var(--font-md)">진입</span> ${stageBar} <span class="text-blue-300" style="font-size:var(--font-xs)">📋</span><br><span class="text-slate-400" style="font-size:var(--font-md)">익절</span> ${tpBar}${tp1ThresholdSelect}${forceSlSelect}</div>`;
+      // 🌟 2026-08-25 Fix 94 (사장님 「4번째 열 3줄로!」): 진입/익절/옵션 셀렉트 = 3줄 분리!
+      const stage = `<div class="text-xs" onclick="event.stopPropagation(); openStageDetailModal(${s.id}, '${s.symbol}', '${s.side}')" style="cursor:pointer;line-height:1.4" title="클릭 = 단계별 진입예정가 + 자본 확인">
+        <div><span class="text-slate-400" style="font-size:var(--font-md)">진입</span> ${stageBar} <span class="text-blue-300" style="font-size:var(--font-xs)">📋</span></div>
+        <div><span class="text-slate-400" style="font-size:var(--font-md)">익절</span> ${tpBar}</div>
+        <div style="margin-top:2px">${tp1ThresholdSelect}${forceSlSelect}</div>
+      </div>`;
       const pnlNum = Number(s.unrealized_pnl || 0);
       const sCap = Number(s.total_capital || 0);
       const sLev = Number(s.leverage || 1) || 1;
