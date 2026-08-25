@@ -47,10 +47,22 @@ logger = logging.getLogger(__name__)
 # 🎯 v221 사장님 재설계 (2026-08-23): 지표 반전 = MAIN gate!
 # 사장님 verbatim: "차트와 보조지표가 다시 롱이나 숏으로 진행할수 있는 지표가 필요"
 # = 반등 % 는 최소 안전선만! (0.5%!) → 지표 반전 = 진짜 조건!
-REBOUND_PCT_MIN_SAFETY = 0.5    # 최소 안전선 (역방향 폭주 방지!)
+#
+# 🎯 Fix 99 정밀 강화 (2026-08-25!):
+# 사장님 verbatim: "손절후 이익이 더 많은 이익이 가능해" = 재진입 시점만 정확하면 큰 수익!
+# → 반등 % 상향 (0.5% → 1.5%!) = 노이즈 대신 진짜 반전!
+REBOUND_PCT_MIN_SAFETY = 1.5    # 🎯 Fix 99 D: 0.5 → 1.5 (진짜 반전 = 노이즈 배제!)
 MAX_HOURLY_REENTRIES = 5        # 1h 최대 5건 (남발 방지!)
 STAGE3_MIN_WAIT_HOURS = 4.0     # 3단계 = 충분히 대기!
 MIN_LEARNING_SUCCESS_RATE = 0.30  # 학습 성공률 30%+ 심볼만!
+
+# 🎯 Fix 99 E (2026-08-25): 손절 후 최소 대기 시간 (whipsaw 방지!)
+# 사장님 사상 = 정밀 재진입! → SL 직후 급변동 = skip 필수!
+MIN_STOP_WAIT_MINUTES = 5.0     # 손절 후 최소 5분 대기 (whipsaw 방지!)
+
+# 🎯 Fix 99 C (2026-08-25): 볼륨 반전 확인 = 진짜 세력!
+# 반등 볼륨 = 이전 3봉 평균 × 1.5+ → 저볼륨 반등 (fake bounce!) 차단!
+VOLUME_REVERSAL_MULTIPLIER = 1.5
 
 # 🎯 Fix 53 사장님 신 사상 (2026-08-24!):
 # 사장님 verbatim: "최종 단계까지 진행했는데 손실이면 -5%에서 다시 모니터링 대기하고
@@ -61,33 +73,40 @@ MIN_LEARNING_SUCCESS_RATE = 0.30  # 학습 성공률 30%+ 심볼만!
 ENABLE_LAST_CHANCE = True
 MAX_REENTRY_STAGE_WITH_LAST = 4  # 3단계 + 라스트 챈스 1회!
 
-# 🎯 Fix 55 P3 (2026-08-24): 단계별 지표 반전 gate 계단식 강화!
-# 2단계 = 기존 2/3 (loose) / 3단계 = 3/3 (엄격!) / 라스트 챈스 = 3/3 (매우 엄격!)
-# + 3단계+ = 24h 변동 필터 (SHORT +15%↑ / LONG -15%↓ = skip!)
-MIN_PASSED_STAGE2 = 2         # 2단계 = 3중 반전 최소 2/3 (기존 유지)
-MIN_PASSED_STAGE3 = 3         # 3단계 = 3중 반전 3/3 필수 (엄격!)
-MIN_PASSED_STAGE_LAST = 3     # 라스트 챈스 = 3중 반전 3/3 필수 (매우 엄격!)
+# 🎯 Fix 99 A (2026-08-25): 3중 → 5중 반전 (계단식 강화!)
+# 사장님 사상 = 정밀 재진입! → RSI/MACD/OBV/CCI/볼륨 = 5중 확인!
+# 2단계 = 3/5 (loose) / 3단계 = 4/5 (엄격!) / 라스트 = 5/5 (완벽!)
+MIN_PASSED_STAGE2 = 3         # 2단계 = 5중 반전 최소 3/5 (Fix 99!)
+MIN_PASSED_STAGE3 = 4         # 3단계 = 5중 반전 4/5 (엄격!)
+MIN_PASSED_STAGE_LAST = 5     # 라스트 챈스 = 5중 반전 5/5 (완벽!)
 STAGE3_24H_ABS_LIMIT_PCT = 15.0  # 3단계+ = 24h 변동 ±15% 초과 시 반대매매 skip!
 
 
 def _check_indicator_reversal_for_reentry(
-    bc, symbol: str, side: str, use_4h: bool = True, min_passed: int = 2
+    bc, symbol: str, side: str, use_4h: bool = True, min_passed: int = 3
 ) -> tuple[bool, str, dict]:
     """🎯 v221 사장님 재설계 (2026-08-23): 지표 반전 = 재진입 진짜 조건!
     🎯 Fix 55 P3 (2026-08-24): min_passed 인자 추가 = 단계별 계단식 강화!
+    🎯 Fix 99 (2026-08-25): 3중 → 5중 강화 + 4H MACD Hist 필터 + 볼륨 gate!
 
-    사장님 verbatim: "차트와 보조지표가 다시 롱이나 숏으로 진행할수 있는 지표"
+    사장님 verbatim (Fix 99): "손절후 이익이 더 많은 이익이 가능해"
+    = 재진입 시점만 정확하면 = 큰 수익! → 5중 반전 = 정밀 확인!
 
-    로직 (3중 = 최소 min_passed/3 통과!):
+    로직 (5중 = 최소 min_passed/5 통과!):
     - 15m RSI 반전  (LONG: 상승 반전 / SHORT: 하락 반전)
     - 15m MACD hist 반전
     - 15m OBV slope 반전 (지속!)
-    - 4h RSI 방향 확인 (option = use_4h)
+    - 15m CCI 반전 (Fix 99 A: 4번째 = 정밀!)
+    - 15m 볼륨 반등 확인 (Fix 99 A/C: 5번째 = 진짜 세력! 3봉 평균 × 1.5+)
 
-    min_passed:
-    - 2단계 = 2 (기존 loose)
-    - 3단계 = 3 (엄격!)
-    - 라스트 챈스 = 3 (매우 엄격!)
+    하드 필터 (whipsaw 방지!):
+    - 4h MACD Hist 방향 (Fix 99 B): SHORT=음수 필수 / LONG=양수 필수!
+    - 4h RSI 급진행 (기존): 역방향 지속 시 차단!
+
+    min_passed (Fix 99 A):
+    - 2단계 = 3/5 (loose)
+    - 3단계 = 4/5 (엄격!)
+    - 라스트 챈스 = 5/5 (완벽!)
 
     Return: (통과, 사유, 스냅샷)
     """
@@ -99,6 +118,8 @@ def _check_indicator_reversal_for_reentry(
         if not isinstance(kl, list) or len(kl) < 35:
             return False, "kline 부족", snapshot
         closes = [float(k[4]) for k in kl]
+        highs = [float(k[2]) for k in kl]
+        lows = [float(k[3]) for k in kl]
         vols = [float(k[5]) for k in kl]
 
         # 1) RSI 반전 (직전 대비 방향 전환)
@@ -144,39 +165,108 @@ def _check_indicator_reversal_for_reentry(
             else (obv_slope_now < 0 and obv_slope_now < obv_slope_prev)
         )
 
-        # 15m 3중 = 최소 min_passed/3 통과! (Fix 55 P3: 단계별 계단식!)
-        passes = int(rsi_rev) + int(macd_rev) + int(obv_rev)
-        snapshot["passes_15m"] = f"{passes}/3"
-        snapshot["min_passed_required"] = min_passed
+        # 4) 🎯 Fix 99 A (2026-08-25): CCI 반전 (14 period, 4번째 지표!)
+        cci_period = 14
+        cci_rev = False
+        if len(closes) >= cci_period + 3:
+            tps = [(highs[i] + lows[i] + closes[i]) / 3.0 for i in range(len(closes))]
 
-        # 4) 4h 방향 확인 (option — 큰 흐름 상충 시 skip!)
+            def _calc_cci_at(end_idx: int):
+                """end_idx 시점 (exclusive) 기준 CCI = 마지막 end_idx-1 지점의 CCI!"""
+                if end_idx < cci_period:
+                    return None
+                window = tps[end_idx - cci_period:end_idx]
+                sma = sum(window) / cci_period
+                mean_dev = sum(abs(x - sma) for x in window) / cci_period
+                if mean_dev <= 0:
+                    return 0.0
+                return (tps[end_idx - 1] - sma) / (0.015 * mean_dev)
+
+            cci_now = _calc_cci_at(len(tps))
+            cci_prev = _calc_cci_at(len(tps) - 3)
+            if cci_now is not None and cci_prev is not None:
+                snapshot["cci"] = cci_now
+                snapshot["cci_prev"] = cci_prev
+                # CCI 반전 임계 = ±5 (RSI 대비 스케일 큼!)
+                cci_rev = (cci_now > cci_prev + 5) if side == "LONG" else (cci_now < cci_prev - 5)
+
+        # 5) 🎯 Fix 99 A/C (2026-08-25): 볼륨 반전 확인 (5번째 지표!)
+        # 최근 3봉 평균 볼륨 >= 이전 3봉 평균 × 1.5 → 진짜 세력 진입!
+        # 저볼륨 반등 = fake bounce (dead cat bounce!) = 차단!
+        vol_rev = False
+        if len(vols) >= 6:
+            vol_recent3 = sum(vols[-3:]) / 3.0
+            vol_prev3 = sum(vols[-6:-3]) / 3.0
+            vol_ratio = (vol_recent3 / vol_prev3) if vol_prev3 > 0 else 0.0
+            snapshot["vol_ratio"] = round(vol_ratio, 2)
+            snapshot["vol_recent3"] = round(vol_recent3, 4)
+            snapshot["vol_prev3"] = round(vol_prev3, 4)
+            vol_rev = vol_ratio >= VOLUME_REVERSAL_MULTIPLIER
+
+        # 15m 5중 = 최소 min_passed/5 통과! (Fix 99 A: 계단식 강화!)
+        passes = int(rsi_rev) + int(macd_rev) + int(obv_rev) + int(cci_rev) + int(vol_rev)
+        snapshot["passes_15m"] = f"{passes}/5"
+        snapshot["min_passed_required"] = min_passed
+        snapshot["rsi_rev"] = rsi_rev
+        snapshot["macd_rev"] = macd_rev
+        snapshot["obv_rev"] = obv_rev
+        snapshot["cci_rev"] = cci_rev
+        snapshot["vol_rev"] = vol_rev
+
+        # 6) 4h 방향 확인 = 하드 필터 (whipsaw 방지!)
         if use_4h:
             try:
                 kl4 = bc.get_klines(symbol=symbol, interval="4h", limit=40)
-                if isinstance(kl4, list) and len(kl4) >= 20:
+                if isinstance(kl4, list) and len(kl4) >= 30:
                     c4 = [float(k[4]) for k in kl4]
+
+                    # 6a) 4h RSI 역방향 급진행 = 기존 필터!
                     rsi4_now = BB._calc_rsi(c4)
                     rsi4_prev = BB._calc_rsi(c4[:-2])
                     if rsi4_now is not None and rsi4_prev is not None:
                         snapshot["rsi_4h"] = rsi4_now
-                        # 4h가 강한 역방향이면 = 재진입 금지!
-                        # LONG: 4h RSI < 30 극과매도는 반등 대기 → OK
-                        #       BUT 4h RSI 급락 중 (rsi4_now < rsi4_prev - 3) = 하락 지속 → 금지
-                        # SHORT: 4h RSI > 70 극과매수 → OK
-                        #        4h RSI 급등 중 = 금지
-                        contradicts_4h = (
+                        contradicts_4h_rsi = (
                             (side == "LONG" and rsi4_now < rsi4_prev - 3 and rsi4_now < 40)
                             or (side == "SHORT" and rsi4_now > rsi4_prev + 3 and rsi4_now > 60)
                         )
-                        if contradicts_4h:
-                            return False, f"4h 역방향 지속 (RSI4={rsi4_now:.1f})", snapshot
+                        if contradicts_4h_rsi:
+                            return False, f"4h RSI 역방향 지속 (RSI4={rsi4_now:.1f})", snapshot
+
+                    # 6b) 🎯 Fix 99 B (2026-08-25): 4h MACD Hist 방향 = 하드 필터!
+                    # SHORT 재진입 = 4h 하락 지속 필요 (hist < 0)
+                    # LONG 재진입 = 4h 상승 지속 필요 (hist > 0)
+                    # → 4h 역방향이면 whipsaw 위험 = skip!
+                    ema12_4h = BB._calc_ema(c4, 12)
+                    ema26_4h = BB._calc_ema(c4, 26)
+                    if ema12_4h and ema26_4h:
+                        macd_line_4h = [a - b for a, b in zip(ema12_4h[14:], ema26_4h)]
+                        sig_4h = BB._calc_ema(macd_line_4h, 9)
+                        if sig_4h and len(sig_4h) >= 1:
+                            hist_4h = [m - s for m, s in zip(macd_line_4h[-len(sig_4h):], sig_4h)]
+                            if hist_4h:
+                                _h4 = hist_4h[-1]
+                                snapshot["macd_hist_4h"] = _h4
+                                bad_4h_macd = (
+                                    (side == "SHORT" and _h4 > 0)
+                                    or (side == "LONG" and _h4 < 0)
+                                )
+                                if bad_4h_macd:
+                                    _need = "음수" if side == "SHORT" else "양수"
+                                    return False, (
+                                        f"4h MACD 역방향 (hist4h={_h4:.6f}, "
+                                        f"{side}는 {_need} 필요!)"
+                                    ), snapshot
             except Exception:
                 pass  # 4h 실패 시 = 15m만 신뢰!
 
         ok = passes >= min_passed
         return (
             ok,
-            f"15m {passes}/3 (need {min_passed}/3, RSI={rsi_rev} MACD={macd_rev} OBV={obv_rev})",
+            (
+                f"15m {passes}/5 (need {min_passed}/5, "
+                f"RSI={rsi_rev} MACD={macd_rev} OBV={obv_rev} "
+                f"CCI={cci_rev} VOL={vol_rev})"
+            ),
             snapshot,
         )
     except Exception as e:
@@ -345,6 +435,19 @@ def run_realtime_reentry() -> dict:
             pnl = float(si.realized_pnl or 0)
             _is_fail = pnl < 0
             _is_success = pnl > 0
+
+            # 🎯 Fix 99 E (2026-08-25): 손절/익절 후 최소 대기 시간 (whipsaw 방지!)
+            # 사장님 사상 = 정밀 재진입! → SL 직후 급변동 = skip 필수!
+            # (기존 STAGE3_MIN_WAIT_HOURS 는 3단계+만 적용 = 2단계에서 무대기 whipsaw!)
+            if si.stopped_at:
+                _elapsed_min = (datetime.now(timezone.utc) - si.stopped_at).total_seconds() / 60.0
+                if _elapsed_min < MIN_STOP_WAIT_MINUTES:
+                    skipped += 1
+                    logger.info(
+                        "[RT_REENTRY] skip: %s %s 손절/익절 후 대기 부족 (%.1fmin < %.1fmin) = whipsaw 방지!",
+                        symbol, side, _elapsed_min, MIN_STOP_WAIT_MINUTES,
+                    )
+                    continue
 
             # 급등/급락 필터 = 24h 변동 조회 (안전!)
             # 여기선 skip 판정만 = 근사치!
@@ -553,12 +656,16 @@ def run_realtime_reentry() -> dict:
                 # 🎓 v218 fix (2026-08-22 사장님!): entry_snapshot 저장 = 학습 데이터!
                 _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
                 # 🎯 v221: 실제 지표 값 저장 = 학습 사이클 완성!
+                # 🎯 Fix 99 (2026-08-25): CCI + 볼륨 + 4h MACD 추가 = 5중 지표 학습!
                 _rt_entry_snapshot = {
                     "rsi": _ind_snap.get("rsi"),
-                    "cci": None,  # 이 워커는 CCI 미측정 (BB4H와 대칭 X)
+                    "cci": _ind_snap.get("cci"),  # 🎯 Fix 99 A: CCI 실 측정값!
                     "obv_slope_pct": _ind_snap.get("obv_slope"),
                     "macd_hist": _ind_snap.get("macd_hist"),
                     "rsi_4h": _ind_snap.get("rsi_4h"),
+                    "macd_hist_4h": _ind_snap.get("macd_hist_4h"),  # 🎯 Fix 99 B!
+                    "vol_ratio": _ind_snap.get("vol_ratio"),        # 🎯 Fix 99 C!
+                    "passes_15m": _ind_snap.get("passes_15m"),      # 🎯 Fix 99 A: 5중 통과!
                     "regime": "REVERSAL_LONG" if side == "LONG" else "REVERSAL_SHORT",
                     "source": "RT_REENTRY_SUCCESS" if _use_success_reentry else "RT_REENTRY_FAIL",
                     "kst_hour": _kst_hour,
@@ -569,6 +676,7 @@ def run_realtime_reentry() -> dict:
                     "learning_msg": _learn_msg,
                     "reentry_count": re_count + 1 if not _use_success_reentry else 0,
                     "is_last_chance": _is_last_chance,  # 🎯 Fix 53 마킹!
+                    "fix99_applied": True,  # 🎯 Fix 99 마킹 (학습 데이터 필터링 용!)
                     "entered_at": datetime.now(timezone.utc).isoformat(),
                 }
                 # StrategySuggestion 기록!
