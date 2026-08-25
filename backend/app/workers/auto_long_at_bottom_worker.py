@@ -31,6 +31,7 @@ Fix 48 OBV 계층 100%:
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -59,8 +60,13 @@ logger = logging.getLogger(__name__)
 #              다시 정리해서 롱은 좀더 신뢰도을 높혀줘"
 #            → MIN_CONFIDENCE 0.85→0.90, RSI/OBV 임계값 강화,
 #              패턴 A/B 조건 대폭 상향! (손실 방지!)
-SPEC_VERSION = "auto_long_at_bottom_v3_fix61_strict_2026-08-24"
+SPEC_VERSION = "auto_long_at_bottom_v4_fix75_2026-08-25"
 INTERVAL_SEC = 30
+
+# 🚨 Fix 75 (2026-08-25 사장님!): long_bottom_detector_worker가 저장한 알람을
+# 실제로 소비하는 Redis key pattern (auto_short_at_top ALERT_PATTERN 대칭!)
+# 사장님 verbatim: "macd 15분 하락 후 반등 시작점과 반등후 하락 위치를 참고"
+ALERT_PATTERN = "sajangnim:bottom_long:*"
 
 DEFAULT_LEVERAGE = 2          # 사장님 default!
 DEFAULT_CAPITAL = 300.0       # sajangnim_default_capital fallback!
@@ -715,6 +721,300 @@ def run_auto_long_at_bottom_once() -> dict:
             is_testnet=False,
         )
 
+        # ========================================================
+        # 활성 심볼 + 자본 (alert loop + 자체 스캔 loop 공유!)
+        # Fix 75: 이전엔 자체 스캔에서만 계산했으나, alert loop도 필요 =
+        # 상위로 승격 → 아래 자체 스캔은 재계산 X (헌법 6 단일 진실!)
+        # ========================================================
+        active_syms: set[str] = set()
+        try:
+            active = db.execute(
+                select(StrategyInstance).where(
+                    StrategyInstance.status.in_(list(ACTIVE_LIKE))
+                )
+            ).scalars().all()
+            active_syms = {r_.symbol for r_ in active}
+        except Exception:
+            pass
+
+        capital = _get_default_capital(db)
+
+        # ========================================================
+        # 🚨 Fix 75 (2026-08-25 사장님!): Redis alert consumer!
+        # long_bottom_detector_worker가 저장하는 sajangnim:bottom_long:*
+        # alert를 실제로 소비 = auto_short_at_top와 100% 대칭!
+        # 사장님 verbatim: "macd 15분 하락 후 반등 시작점과 반등후
+        #                    하락 위치를 참고해줘"
+        # additive = 기존 24h ticker 자체 스캔은 유지 (fallback!)
+        # ========================================================
+        alert_keys: list = []
+        r = None
+        try:
+            from app.core.redis_client import get_redis_client
+            r = get_redis_client()
+            alert_keys = list(r.scan_iter(ALERT_PATTERN))
+        except Exception as _rc_exc:
+            logger.warning(
+                "[Fix75/alert-long] Redis alert scan 실패 (fail-open): %s",
+                _rc_exc,
+            )
+            alert_keys = []
+
+        for _ak in alert_keys:
+            if remaining <= 0:
+                break
+            key_str = _ak.decode() if isinstance(_ak, bytes) else _ak
+            try:
+                raw = r.get(key_str) if r is not None else None
+                if not raw:
+                    continue
+                alert = json.loads(
+                    raw.decode() if isinstance(raw, bytes) else raw
+                )
+                symbol = alert.get("symbol")
+                side = alert.get("side", "LONG")
+                if not symbol or side != "LONG":
+                    logger.info(
+                        "[Fix75/alert-skip] %s: side=%s (LONG 아님)",
+                        symbol, side,
+                    )
+                    continue
+                if symbol in active_syms:
+                    skipped += 1
+                    logger.info(
+                        "[Fix75/alert-skip] %s: 이미 활성 심볼", symbol,
+                    )
+                    continue
+
+                confidence = float(alert.get("confidence", 0) or 0)
+                if confidence < MIN_CONFIDENCE:
+                    logger.info(
+                        "[Fix75/alert-skip] %s: conf=%.2f < %.2f",
+                        symbol, confidence, MIN_CONFIDENCE,
+                    )
+                    continue
+
+                # Fix 65: OBV 절대값 검증 (LONG 방향)
+                try:
+                    from app.services.obv_gate import check_obv_gate
+                    obv_pass, obv_reason = check_obv_gate(bc, symbol, "LONG")
+                    if not obv_pass:
+                        logger.info(
+                            "[Fix75/alert-long+Fix65] %s skip: %s",
+                            symbol, obv_reason,
+                        )
+                        continue
+                except Exception as _obv_exc:
+                    logger.warning(
+                        "[Fix75/alert-long+Fix65] %s obv_gate error: %s (fail-open)",
+                        symbol, _obv_exc,
+                    )
+
+                # Fix 66 P1: 양방향 실패 blocklist!
+                try:
+                    from app.services.bidirectional_blocklist import (
+                        is_bidirectional_blocked,
+                    )
+                    blocked, block_reason = is_bidirectional_blocked(db, symbol)
+                    if blocked:
+                        logger.info(
+                            "[Fix75/alert-long+Fix66] %s skip: %s",
+                            symbol, block_reason,
+                        )
+                        continue
+                except Exception as _bl_exc:
+                    logger.warning(
+                        "[Fix75/alert-long+Fix66] blocklist error: %s",
+                        _bl_exc,
+                    )
+
+                # Fix 66 P2: pump_dump_regime (LONG 사이드!)
+                try:
+                    from app.services.pump_dump_regime import (
+                        is_regime_blocked_for_long,
+                    )
+                    regime_blocked, regime_reason = is_regime_blocked_for_long(
+                        bc, symbol,
+                    )
+                    if regime_blocked:
+                        logger.info(
+                            "[Fix75/alert-long+Fix66] %s skip: %s",
+                            symbol, regime_reason,
+                        )
+                        continue
+                except Exception as _rg_exc:
+                    logger.warning(
+                        "[Fix75/alert-long+Fix66] regime error: %s", _rg_exc,
+                    )
+
+                # 실 진입! (_create_long_strategy 재사용 = 헌법 6!)
+                new_strategy = _create_long_strategy(db, symbol, capital)
+                if not new_strategy:
+                    skipped += 1
+                    logger.info(
+                        "[Fix75/alert-long] ❌ %s 진입 실패 = 알람 유지 (재시도!)",
+                        symbol,
+                    )
+                    continue
+
+                # -5% 짧은 손절 override (auto_short_at_top L210~223 대칭!)
+                # 사장님 verbatim: "v219 단계별 진입후 -5% 손실이면 청산하고
+                #                    대기 모니터링"
+                try:
+                    new_strategy.force_sl_enabled_override = True
+                    new_strategy.force_sl_roi_override = Decimal("5")
+                    db.commit()
+                    logger.info(
+                        "[Fix75/alert-long] 🛡️ %s SL override -5%% 적용 "
+                        "(strategy_id=%s)",
+                        symbol, new_strategy.id,
+                    )
+                except Exception as _sl_exc:
+                    logger.warning(
+                        "[Fix75/alert-long] ⚠️ %s SL override 실패: %s "
+                        "(진입은 유지)",
+                        symbol, _sl_exc,
+                    )
+                    db.rollback()
+
+                # entry_snapshot 병합 (Fix 72 upstream rich 우선 =
+                #                       auto_short_at_top L233~L260 대칭!)
+                _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
+                _entered_iso = datetime.now(timezone.utc).isoformat()
+                upstream_snapshot = alert.get("entry_snapshot") \
+                    if isinstance(alert, dict) else None
+                if isinstance(upstream_snapshot, dict) and upstream_snapshot:
+                    entry_snapshot = dict(upstream_snapshot)
+                    entry_snapshot.setdefault("regime", "BOTTOM_REVERSAL")
+                    entry_snapshot.setdefault("source", "SAJANGNIM_BOTTOM_ALERT")
+                    entry_snapshot.setdefault(
+                        "change_24h",
+                        alert.get("change_24h") or alert.get("chg_24h"),
+                    )
+                    entry_snapshot.setdefault(
+                        "signals_passed",
+                        alert.get("signals") or alert.get("pattern_signals"),
+                    )
+                    entry_snapshot["kst_hour"] = _kst_hour
+                    entry_snapshot["confidence"] = confidence
+                    entry_snapshot["entered_at"] = _entered_iso
+                    entry_snapshot.setdefault("sustained_bars", 0)
+                    entry_snapshot.setdefault("spec_version", SPEC_VERSION)
+                else:
+                    entry_snapshot = {
+                        "rsi": alert.get("rsi"),
+                        "cci": alert.get("cci_last"),
+                        "obv_slope_pct": None,
+                        "regime": "BOTTOM_REVERSAL",
+                        "source": "SAJANGNIM_BOTTOM_ALERT",
+                        "sustained_bars": 0,
+                        "change_24h":
+                            alert.get("change_24h") or alert.get("chg_24h"),
+                        "kst_hour": _kst_hour,
+                        "confidence": confidence,
+                        "signals_passed":
+                            alert.get("signals") or alert.get("pattern_signals"),
+                        "entered_at": _entered_iso,
+                        "spec_version": SPEC_VERSION,
+                    }
+
+                _chg24_val = float(
+                    alert.get("change_24h") or alert.get("chg_24h") or 0,
+                )
+                sugg = StrategySuggestion(
+                    symbol=symbol, side="LONG",
+                    suggestion_type="sajangnim_bottom_long",
+                    strategy_config={
+                        "capitals": [capital],
+                        "symbol": symbol, "side": "LONG",
+                        "sajangnim_bottom": True,
+                        "confidence": confidence,
+                        "signals":
+                            alert.get("signals") or alert.get("pattern_signals"),
+                        "entry_snapshot": entry_snapshot,
+                        "alert_source": alert.get("source"),
+                        "pattern": alert.get("pattern"),
+                    },
+                    confidence_score=Decimal(str(round(confidence, 4))),
+                    reason=(
+                        f"🐂 사장님 저점 LONG (Fix75/alert)! "
+                        f"pattern={alert.get('pattern', '?')} "
+                        f"conf={confidence*100:.0f}% "
+                        f"24h={_chg24_val:+.2f}% "
+                        f"src={alert.get('source', '?')}"
+                    ),
+                    status="EXECUTED",
+                    execution_mode="AUTO",
+                    executed_at=datetime.now(timezone.utc),
+                    executed_strategy_id=new_strategy.id,
+                    outcome_status="PENDING",
+                )
+                db.add(sugg)
+                db.commit()
+
+                # 알람 삭제 = 중복 진입 방지! (auto_short_at_top L290 대칭!)
+                try:
+                    if r is not None:
+                        r.delete(key_str)
+                except Exception as _de:
+                    logger.debug(
+                        "[Fix75/alert-long] alert delete 실패 (무시): %s", _de,
+                    )
+
+                # 자체 스캔 fallback에서 재진입 방지!
+                active_syms.add(symbol)
+
+                remaining -= 1
+                entered += 1
+                results.append({
+                    "symbol": symbol, "side": "LONG",
+                    "capital": capital,
+                    "confidence": confidence,
+                    "strategy_id": new_strategy.id,
+                    "source": "alert",
+                })
+                logger.warning(
+                    "[Fix75/alert-long] ✅ %s LONG 진입 성공: id=%d source=%s "
+                    "conf=%.2f pattern=%s",
+                    symbol, new_strategy.id,
+                    alert.get("source", "?"), confidence,
+                    alert.get("pattern", "?"),
+                )
+
+                # 텔레그램! (기존 _notify_entry 재사용!)
+                _notify_entry(new_strategy, confidence, entry_snapshot)
+
+                # 오케스트라 EventBus (v206 통합!)
+                try:
+                    from app.agents.orchestrator.event_bus import get_event_bus
+                    from app.agents.orchestrator.event_types import EventType
+                    bus = get_event_bus()
+                    bus.publish(EventType.AUTO_ENTRY_TRIGGERED, {
+                        "strategy_id": new_strategy.id,
+                        "symbol": symbol, "side": "LONG",
+                        "prob": confidence,
+                        "regime": "BOTTOM_REVERSAL",
+                        "source": "SAJANGNIM_BOTTOM_ALERT",
+                    })
+                except Exception as _be:
+                    logger.debug(
+                        "[Fix75/alert-long] EventBus 실패 (fail-open): %s", _be,
+                    )
+
+            except Exception as e:
+                logger.warning(
+                    "[Fix75/alert-long] %s 처리 실패: %s", key_str, e,
+                )
+                skipped += 1
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                continue
+
+        # ========================================================
+        # 5. 24h ticker 자체 스캔 (Fix 75 이전 로직 = fallback 유지!)
+        # ========================================================
         # 5. 24h ticker 상위 = 후보!
         tickers = bc.get_24hr_ticker()
         if not isinstance(tickers, list):
@@ -759,20 +1059,8 @@ def run_auto_long_at_bottom_once() -> dict:
         if not candidates:
             return {"note": "24h 범위 심볼 없음", "entered": 0, "spec": SPEC_VERSION}
 
-        # 6. 활성 심볼 skip!
-        active_syms = set()
-        try:
-            active = db.execute(
-                select(StrategyInstance).where(
-                    StrategyInstance.status.in_(list(ACTIVE_LIKE))
-                )
-            ).scalars().all()
-            active_syms = {r.symbol for r in active}
-        except Exception:
-            pass
-
-        # 7. 자본 계산!
-        capital = _get_default_capital(db)
+        # 6~7. 활성 심볼 + 자본 = Fix 75에서 이미 상위로 승격됨 (헌법 6 단일 진실!)
+        # (alert loop에서 진입한 심볼은 위 active_syms.add(symbol)로 자동 반영)
 
         # 8. 심볼별 검사 + 진입!
         for t in candidates:
