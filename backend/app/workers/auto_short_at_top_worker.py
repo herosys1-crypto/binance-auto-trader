@@ -347,19 +347,31 @@ def run_auto_short_at_top() -> dict:
 
 
 def _count_v219_used_slots(db) -> int:
-    """🎯 Fix 34: v219 전용 카운터 (auto_bb_breakdown과 완전 분리!)"""
+    """🎯 Fix 34: v219 전용 카운터 (auto_bb_breakdown과 완전 분리!)
+    🚨 Fix 101 (2026-08-26 사장님 verbatim CRITICAL!):
+    > "설정해도 그수량을 넘어서 자동진입포지션이 발생하고 있어"
+
+    Root cause: 옛 로직 = 'sajangnim_top_short' suggestion_type만 카운트!
+                → bb4h_auto_entry, chart_pattern, realtime_reentry_short,
+                  sajangnim_multi_pump_peak_v226 등 = 카운트 X!
+                → 30 초과 진입 발생!
+
+    신 로직: 오늘 진입한 모든 SHORT AUTO 진입 카운트! (헌법 6 = 단일 진실!)
+    """
     try:
         from app.models.strategy_suggestion import StrategySuggestion
+        from app.models.strategy_instance import StrategyInstance
         from app.workers.auto_bb_breakdown_worker import _auto_bb_reset_at
         from sqlalchemy import and_
         today_start = _auto_bb_reset_at(db)
+        # Fix 101: 모든 SHORT AUTO 진입 카운트 (suggestion_type 무관!)
         count = db.query(StrategySuggestion).filter(
             and_(
-                StrategySuggestion.suggestion_type == 'sajangnim_top_short',
                 StrategySuggestion.execution_mode == 'AUTO',
                 StrategySuggestion.status == 'EXECUTED',
                 StrategySuggestion.executed_at >= today_start,
-                StrategySuggestion.outcome_status != 'SUCCESS'
+                StrategySuggestion.outcome_status != 'SUCCESS',
+                StrategySuggestion.side == 'SHORT',
             )
         ).count()
         return count
