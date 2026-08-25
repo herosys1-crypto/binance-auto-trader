@@ -825,7 +825,7 @@ async function refreshStrategies() {
       // 상태 셀에 모드 배지 + 최대손익 tooltip 까지 합쳐 9 컬럼으로 압축.
       const stateCell = `
         <div class="flex flex-col gap-1" title="모드: ${modeBadge.replace(/<[^>]+>/g,'').trim()} / 진입요청가: ${s.start_price ? fmtNum(s.start_price) : '-'} / 최대 손실: ${s.max_loss_pct !== null && s.max_loss_pct !== undefined ? fmtNum(s.max_loss_pct)+'%' : '-'} / 최대 이익: ${s.max_profit_pct !== null && s.max_profit_pct !== undefined ? '+'+fmtNum(s.max_profit_pct)+'%' : '-'}">
-          <span class="badge badge-${info.sig}">${info.icon} ${info.ko}</span>
+          <span class="badge badge-${info.sig}" style="line-height:1.2">${info.icon} ${(info.ko || '').replace(/(\d단계) /, '$1<br>')}</span>
           ${stuckBadge}
           ${s.crisis_mode_triggered_at ? modeBadge : ''}
         </div>`;

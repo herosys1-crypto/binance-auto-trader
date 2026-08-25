@@ -28,14 +28,15 @@ function sideBadge(side, leverage) {
   // 🌟 2026-07-01 사장님 요구: 아이콘 완전히 다른 것 + 색상 쉬운 구분!
   //   LONG = 🐂 (황소, 상승!) + 진한 초록 + 강력 시각!
   //   SHORT = 🐻 (곰, 하락!) + 진한 빨강 + 강력 시각!
+  // 🌟 2026-08-25 Fix 81 (사장님 「방향+상태 2줄!」): leverage = <br> 로 2줄 배치 = 가로 절반!
   const lev = (leverage !== undefined && leverage !== null && Number(leverage) > 0)
-    ? ` <span class="text-xs text-slate-300 ml-1">${leverage}x</span>`
+    ? `<br><span class="text-xs text-slate-300" style="font-size:11px">${leverage}x</span>`
     : '';
   if (side === 'SHORT') {
-    return `<span style="display:inline-block;background:#dc2626;color:#fff;padding:3px 10px;border-radius:6px;font-weight:bold;font-size:13px;box-shadow:0 0 6px rgba(239,68,68,0.6);">🐻 SHORT</span>${lev}`;
+    return `<span style="display:inline-block;background:#dc2626;color:#fff;padding:2px 8px;border-radius:6px;font-weight:bold;font-size:13px;line-height:1.2;box-shadow:0 0 6px rgba(239,68,68,0.6);">🐻 SHORT</span>${lev}`;
   }
   if (side === 'LONG') {
-    return `<span style="display:inline-block;background:#16a34a;color:#fff;padding:3px 10px;border-radius:6px;font-weight:bold;font-size:13px;box-shadow:0 0 6px rgba(34,197,94,0.6);">🐂 LONG</span>${lev}`;
+    return `<span style="display:inline-block;background:#16a34a;color:#fff;padding:2px 8px;border-radius:6px;font-weight:bold;font-size:13px;line-height:1.2;box-shadow:0 0 6px rgba(34,197,94,0.6);">🐂 LONG</span>${lev}`;
   }
   return '<span class="badge badge-gray">' + side + '</span>' + lev;
 }
