@@ -503,7 +503,6 @@ def run_bb_upper_breakout_short() -> dict:
                                 f"→ auto_short_at_top 자동 진입 대기!\n"
                                 f"→ 실패 시 realtime_reentry 마틴게일 (300/600/1800)!"
                             ),
-                            severity="INFO",
                         )
                     finally:
                         try:

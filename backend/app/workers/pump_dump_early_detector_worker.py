@@ -316,7 +316,6 @@ def run_pump_dump_early_detector() -> dict:
                         NotificationService(db_n).send_system_alert(
                             title=f"📉 Fix 62 급락 초기 감지: {symbol}",
                             body=f"24h +{chg:.1f}% / 6중 {passed}/6 / conf {confidence:.2f} / 1h+4h OBV {obv_direction}",
-                            severity="INFO",
                         )
                     finally:
                         db_n.close()
