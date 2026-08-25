@@ -51,18 +51,22 @@ logger = logging.getLogger(__name__)
 # 🎯 Fix 99 정밀 강화 (2026-08-25!):
 # 사장님 verbatim: "손절후 이익이 더 많은 이익이 가능해" = 재진입 시점만 정확하면 큰 수익!
 # → 반등 % 상향 (0.5% → 1.5%!) = 노이즈 대신 진짜 반전!
-REBOUND_PCT_MIN_SAFETY = 1.5    # 🎯 Fix 99 D: 0.5 → 1.5 (진짜 반전 = 노이즈 배제!)
+#
+# 🎯 Fix 102 완화 + 정밀 (2026-08-26!):
+# 사장님 verbatim: "손절후 2단계 진입이 없는것 같이 이것도 보조지표를 최대한 활용해"
+# → Fix 99 = 너무 엄격 = 진입 X! → 완화 + 다이버전스/BB 위치 정밀 활용!
+REBOUND_PCT_MIN_SAFETY = 1.0    # 🎯 Fix 102 C: 1.5 → 1.0 (완화! 진입 가능성 확보!)
 MAX_HOURLY_REENTRIES = 5        # 1h 최대 5건 (남발 방지!)
 STAGE3_MIN_WAIT_HOURS = 4.0     # 3단계 = 충분히 대기!
 MIN_LEARNING_SUCCESS_RATE = 0.30  # 학습 성공률 30%+ 심볼만!
 
-# 🎯 Fix 99 E (2026-08-25): 손절 후 최소 대기 시간 (whipsaw 방지!)
-# 사장님 사상 = 정밀 재진입! → SL 직후 급변동 = skip 필수!
-MIN_STOP_WAIT_MINUTES = 5.0     # 손절 후 최소 5분 대기 (whipsaw 방지!)
+# 🎯 Fix 99 E → Fix 102 C 완화 (2026-08-26): 손절 후 최소 대기 (whipsaw 방지!)
+# 5분 → 3분 (완화!) = 급변동 whipsaw 방지 유지하되 실행 가능성 회복!
+MIN_STOP_WAIT_MINUTES = 3.0     # 🎯 Fix 102 C: 5.0 → 3.0 (완화!)
 
-# 🎯 Fix 99 C (2026-08-25): 볼륨 반전 확인 = 진짜 세력!
-# 반등 볼륨 = 이전 3봉 평균 × 1.5+ → 저볼륨 반등 (fake bounce!) 차단!
-VOLUME_REVERSAL_MULTIPLIER = 1.5
+# 🎯 Fix 99 C → Fix 102 C 완화 (2026-08-26): 볼륨 반전 확인 = 진짜 세력!
+# 반등 볼륨 = 이전 3봉 평균 × 1.3+ → 이중 볼륨 확인 (OBV+VOL) 중복 완화!
+VOLUME_REVERSAL_MULTIPLIER = 1.3  # 🎯 Fix 102 C: 1.5 → 1.3 (완화!)
 
 # 🎯 Fix 53 사장님 신 사상 (2026-08-24!):
 # 사장님 verbatim: "최종 단계까지 진행했는데 손실이면 -5%에서 다시 모니터링 대기하고
@@ -73,40 +77,57 @@ VOLUME_REVERSAL_MULTIPLIER = 1.5
 ENABLE_LAST_CHANCE = True
 MAX_REENTRY_STAGE_WITH_LAST = 4  # 3단계 + 라스트 챈스 1회!
 
-# 🎯 Fix 99 A (2026-08-25): 3중 → 5중 반전 (계단식 강화!)
-# 사장님 사상 = 정밀 재진입! → RSI/MACD/OBV/CCI/볼륨 = 5중 확인!
-# 2단계 = 3/5 (loose) / 3단계 = 4/5 (엄격!) / 라스트 = 5/5 (완벽!)
-MIN_PASSED_STAGE2 = 3         # 2단계 = 5중 반전 최소 3/5 (Fix 99!)
-MIN_PASSED_STAGE3 = 4         # 3단계 = 5중 반전 4/5 (엄격!)
-MIN_PASSED_STAGE_LAST = 5     # 라스트 챈스 = 5중 반전 5/5 (완벽!)
+# 🎯 Fix 99 A → Fix 102 A 완화 (2026-08-26): 5중 → 8중 (5 core + 3 bonus)
+# 사장님 verbatim: "손절후 2단계 진입이 없는것 같이 이것도 보조지표를 최대한 활용해"
+# → 5중 3/4/5 = 너무 엄격 = 실 진입 X! → 8중 통과 조건 확장 + 임계 완화!
+#
+# 5 core (15m): RSI, MACD, OBV, CCI, VOLUME (기존!)
+# 3 bonus (Fix 102 B/D): 4H MACD 동조 (soft!) + 다이버전스 + BB 위치!
+# → 2단계 = 2/8 (완화!) / 3단계 = 3/8 / 라스트 = 4/8 (라스트 챈스 실 작동!)
+MIN_PASSED_STAGE2 = 2         # 🎯 Fix 102 A: 3 → 2 (완화! 첫 재진입 = 진입 가능성!)
+MIN_PASSED_STAGE3 = 3         # 🎯 Fix 102 A: 4 → 3 (완화!)
+MIN_PASSED_STAGE_LAST = 4     # 🎯 Fix 102 A: 5 → 4 (라스트 챈스 실 작동!)
 STAGE3_24H_ABS_LIMIT_PCT = 15.0  # 3단계+ = 24h 변동 ±15% 초과 시 반대매매 skip!
+
+# 🎯 Fix 102 D (2026-08-26): 다이버전스 + BB 위치 정밀 gate 파라미터!
+DIVERGENCE_LOOKBACK = 10          # 최근 10봉 extreme 탐색!
+DIVERGENCE_RSI_GAP = 3.0          # 다이버전스 인정 = RSI 3+ 차이!
+DIVERGENCE_PRICE_TOL_PCT = 1.0    # extreme 대비 1% 이내 = "근접"!
+BB_PERIOD = 20                    # BB(20, 2) 표준!
+BB_STD = 2.0
+BB_NEAR_BAND_PCT = 0.10           # 밴드 폭의 10% 이내 = "밴드 근접"!
 
 
 def _check_indicator_reversal_for_reentry(
-    bc, symbol: str, side: str, use_4h: bool = True, min_passed: int = 3
+    bc, symbol: str, side: str, use_4h: bool = True, min_passed: int = 2
 ) -> tuple[bool, str, dict]:
     """🎯 v221 사장님 재설계 (2026-08-23): 지표 반전 = 재진입 진짜 조건!
     🎯 Fix 55 P3 (2026-08-24): min_passed 인자 추가 = 단계별 계단식 강화!
     🎯 Fix 99 (2026-08-25): 3중 → 5중 강화 + 4H MACD Hist 필터 + 볼륨 gate!
+    🎯 Fix 102 (2026-08-26): 5중 → 8중 (5 core + 3 bonus!) = 완화 + 정밀!
 
-    사장님 verbatim (Fix 99): "손절후 이익이 더 많은 이익이 가능해"
-    = 재진입 시점만 정확하면 = 큰 수익! → 5중 반전 = 정밀 확인!
+    사장님 verbatim (Fix 102): "손절후 2단계 진입이 없는것 같이 이것도 보조지표를 최대한 활용해"
+    → Fix 99 = 너무 엄격 = 진입 X! → 완화 + 다이버전스/BB 정밀 활용!
 
-    로직 (5중 = 최소 min_passed/5 통과!):
-    - 15m RSI 반전  (LONG: 상승 반전 / SHORT: 하락 반전)
-    - 15m MACD hist 반전
-    - 15m OBV slope 반전 (지속!)
-    - 15m CCI 반전 (Fix 99 A: 4번째 = 정밀!)
-    - 15m 볼륨 반등 확인 (Fix 99 A/C: 5번째 = 진짜 세력! 3봉 평균 × 1.5+)
+    로직 (8중 통과 조건 = 최소 min_passed 통과!):
+    Core 5 (15m):
+    - RSI 반전 (LONG: 상승 반전 / SHORT: 하락 반전)
+    - MACD hist 반전
+    - OBV slope 반전 (지속!)
+    - CCI 반전 (Fix 99 A!)
+    - 볼륨 반등 확인 (Fix 99 A/C, Fix 102 C: 1.5x → 1.3x 완화!)
+    Bonus 3 (Fix 102 B/D):
+    - 4H MACD Hist 동조 (Fix 102 B: 하드 필터 → 소프트 = 강력 반전 시 4H 역방향 허용!)
+    - 다이버전스 (Fix 102 D: SHORT=베어리시 / LONG=불리시 = 진짜 반전 신호!)
+    - BB 위치 근접 (Fix 102 D: SHORT=상단 / LONG=하단 근접 = 반등/반락 자리!)
 
-    하드 필터 (whipsaw 방지!):
-    - 4h MACD Hist 방향 (Fix 99 B): SHORT=음수 필수 / LONG=양수 필수!
-    - 4h RSI 급진행 (기존): 역방향 지속 시 차단!
+    하드 필터 (whipsaw 방지, 완화 후에도 유지!):
+    - 4h RSI 급진행: 역방향 지속 시 차단!
 
-    min_passed (Fix 99 A):
-    - 2단계 = 3/5 (loose)
-    - 3단계 = 4/5 (엄격!)
-    - 라스트 챈스 = 5/5 (완벽!)
+    min_passed (Fix 102 A):
+    - 2단계 = 2/8 (완화! 첫 재진입 실행 가능성 확보!)
+    - 3단계 = 3/8
+    - 라스트 챈스 = 4/8 (라스트 챈스 = 실 작동!)
 
     Return: (통과, 사유, 스냅샷)
     """
@@ -203,24 +224,83 @@ def _check_indicator_reversal_for_reentry(
             snapshot["vol_prev3"] = round(vol_prev3, 4)
             vol_rev = vol_ratio >= VOLUME_REVERSAL_MULTIPLIER
 
-        # 15m 5중 = 최소 min_passed/5 통과! (Fix 99 A: 계단식 강화!)
-        passes = int(rsi_rev) + int(macd_rev) + int(obv_rev) + int(cci_rev) + int(vol_rev)
-        snapshot["passes_15m"] = f"{passes}/5"
-        snapshot["min_passed_required"] = min_passed
-        snapshot["rsi_rev"] = rsi_rev
-        snapshot["macd_rev"] = macd_rev
-        snapshot["obv_rev"] = obv_rev
-        snapshot["cci_rev"] = cci_rev
-        snapshot["vol_rev"] = vol_rev
+        # 🎯 Fix 102 D (2026-08-26): 다이버전스 감지 (진짜 반전 신호!)
+        # SHORT 재진입 = 베어리시 다이버전스 (가격 신 고점 but RSI 하락)
+        # LONG 재진입 = 불리시 다이버전스 (가격 신 저점 but RSI 반등)
+        divergence_ok = False
+        try:
+            _lb = min(DIVERGENCE_LOOKBACK, len(closes) - 5)
+            if _lb >= 5:
+                _recent = closes[-_lb:]
+                if side == "LONG":
+                    # 불리시 다이버전스: 최근 저점 대비 RSI 개선!
+                    _extreme_val = min(_recent)
+                    _extreme_local_idx = _recent.index(_extreme_val)
+                    _extreme_full_idx = len(closes) - _lb + _extreme_local_idx
+                    if _extreme_full_idx >= 15:  # RSI 최소 14봉 필요!
+                        _rsi_at_extreme = BB._calc_rsi(closes[:_extreme_full_idx + 1])
+                        _price_tol = _extreme_val * (1 + DIVERGENCE_PRICE_TOL_PCT / 100.0)
+                        _price_near = closes[-1] <= _price_tol
+                        if _rsi_at_extreme is not None:
+                            _rsi_higher = rsi_now > _rsi_at_extreme + DIVERGENCE_RSI_GAP
+                            divergence_ok = _price_near and _rsi_higher
+                            snapshot["rsi_at_extreme"] = round(_rsi_at_extreme, 2)
+                else:  # SHORT
+                    # 베어리시 다이버전스: 최근 고점 대비 RSI 하락!
+                    _extreme_val = max(_recent)
+                    _extreme_local_idx = _recent.index(_extreme_val)
+                    _extreme_full_idx = len(closes) - _lb + _extreme_local_idx
+                    if _extreme_full_idx >= 15:
+                        _rsi_at_extreme = BB._calc_rsi(closes[:_extreme_full_idx + 1])
+                        _price_tol = _extreme_val * (1 - DIVERGENCE_PRICE_TOL_PCT / 100.0)
+                        _price_near = closes[-1] >= _price_tol
+                        if _rsi_at_extreme is not None:
+                            _rsi_lower = rsi_now < _rsi_at_extreme - DIVERGENCE_RSI_GAP
+                            divergence_ok = _price_near and _rsi_lower
+                            snapshot["rsi_at_extreme"] = round(_rsi_at_extreme, 2)
+        except Exception:
+            divergence_ok = False
+        snapshot["divergence"] = divergence_ok
 
-        # 6) 4h 방향 확인 = 하드 필터 (whipsaw 방지!)
+        # 🎯 Fix 102 D (2026-08-26): BB 위치 확인 (반등/반락 자리!)
+        # SHORT 재진입 = BB 상단 근접 (반락 자리!)
+        # LONG 재진입 = BB 하단 근접 (반등 자리!)
+        bb_position_ok = False
+        try:
+            if len(closes) >= BB_PERIOD:
+                _bb_window = closes[-BB_PERIOD:]
+                _bb_mid = sum(_bb_window) / BB_PERIOD
+                _bb_var = sum((x - _bb_mid) ** 2 for x in _bb_window) / BB_PERIOD
+                _bb_std_val = _bb_var ** 0.5
+                _bb_upper = _bb_mid + BB_STD * _bb_std_val
+                _bb_lower = _bb_mid - BB_STD * _bb_std_val
+                _bb_width = _bb_upper - _bb_lower
+                _cur_px = closes[-1]
+                snapshot["bb_upper"] = round(_bb_upper, 6)
+                snapshot["bb_lower"] = round(_bb_lower, 6)
+                snapshot["bb_mid"] = round(_bb_mid, 6)
+                if _bb_width > 0:
+                    if side == "LONG":
+                        # 하단 근처 or 이탈 = LONG 반등 자리!
+                        _threshold = _bb_lower + _bb_width * BB_NEAR_BAND_PCT
+                        bb_position_ok = _cur_px <= _threshold
+                    else:  # SHORT
+                        # 상단 근처 or 이탈 = SHORT 반락 자리!
+                        _threshold = _bb_upper - _bb_width * BB_NEAR_BAND_PCT
+                        bb_position_ok = _cur_px >= _threshold
+        except Exception:
+            bb_position_ok = False
+        snapshot["bb_position_ok"] = bb_position_ok
+
+        # 6) 4h 방향 확인 = 하드 필터 (whipsaw 방지!) + 4H MACD 소프트 (Fix 102 B!)
+        macd_4h_agree = False  # 🎯 Fix 102 B: 4H MACD = 소프트 bonus!
         if use_4h:
             try:
                 kl4 = bc.get_klines(symbol=symbol, interval="4h", limit=40)
                 if isinstance(kl4, list) and len(kl4) >= 30:
                     c4 = [float(k[4]) for k in kl4]
 
-                    # 6a) 4h RSI 역방향 급진행 = 기존 필터!
+                    # 6a) 4h RSI 역방향 급진행 = 기존 하드 필터 (whipsaw 방지 유지!)
                     rsi4_now = BB._calc_rsi(c4)
                     rsi4_prev = BB._calc_rsi(c4[:-2])
                     if rsi4_now is not None and rsi4_prev is not None:
@@ -232,10 +312,10 @@ def _check_indicator_reversal_for_reentry(
                         if contradicts_4h_rsi:
                             return False, f"4h RSI 역방향 지속 (RSI4={rsi4_now:.1f})", snapshot
 
-                    # 6b) 🎯 Fix 99 B (2026-08-25): 4h MACD Hist 방향 = 하드 필터!
-                    # SHORT 재진입 = 4h 하락 지속 필요 (hist < 0)
-                    # LONG 재진입 = 4h 상승 지속 필요 (hist > 0)
-                    # → 4h 역방향이면 whipsaw 위험 = skip!
+                    # 6b) 🎯 Fix 102 B (2026-08-26): 4h MACD Hist = 하드 → 소프트!
+                    # 옛(Fix 99 B): 4H 역방향 = 무조건 skip = 진입 X 자주!
+                    # 신(Fix 102 B): 4H 동조 시 = bonus score 1점! 역방향이어도 = 통과 가능!
+                    # → 강력 반전 (다이버전스 + BB 위치 등) 시 = 4H 역방향 허용!
                     ema12_4h = BB._calc_ema(c4, 12)
                     ema26_4h = BB._calc_ema(c4, 26)
                     if ema12_4h and ema26_4h:
@@ -246,26 +326,41 @@ def _check_indicator_reversal_for_reentry(
                             if hist_4h:
                                 _h4 = hist_4h[-1]
                                 snapshot["macd_hist_4h"] = _h4
-                                bad_4h_macd = (
-                                    (side == "SHORT" and _h4 > 0)
-                                    or (side == "LONG" and _h4 < 0)
+                                macd_4h_agree = (
+                                    (side == "SHORT" and _h4 < 0)
+                                    or (side == "LONG" and _h4 > 0)
                                 )
-                                if bad_4h_macd:
-                                    _need = "음수" if side == "SHORT" else "양수"
-                                    return False, (
-                                        f"4h MACD 역방향 (hist4h={_h4:.6f}, "
-                                        f"{side}는 {_need} 필요!)"
-                                    ), snapshot
             except Exception:
                 pass  # 4h 실패 시 = 15m만 신뢰!
+        snapshot["macd_4h_agree"] = macd_4h_agree
+
+        # 🎯 Fix 102 A (2026-08-26): 8중 = core 5 + bonus 3 (완화 + 정밀!)
+        passes_core = (
+            int(rsi_rev) + int(macd_rev) + int(obv_rev)
+            + int(cci_rev) + int(vol_rev)
+        )
+        passes_bonus = (
+            int(divergence_ok) + int(bb_position_ok) + int(macd_4h_agree)
+        )
+        passes = passes_core + passes_bonus
+        snapshot["passes_15m"] = f"{passes_core}/5"
+        snapshot["passes_bonus"] = f"{passes_bonus}/3"
+        snapshot["passes_total"] = f"{passes}/8"
+        snapshot["min_passed_required"] = min_passed
+        snapshot["rsi_rev"] = rsi_rev
+        snapshot["macd_rev"] = macd_rev
+        snapshot["obv_rev"] = obv_rev
+        snapshot["cci_rev"] = cci_rev
+        snapshot["vol_rev"] = vol_rev
 
         ok = passes >= min_passed
         return (
             ok,
             (
-                f"15m {passes}/5 (need {min_passed}/5, "
+                f"total {passes}/8 (need {min_passed}/8, core={passes_core}/5 bonus={passes_bonus}/3 | "
                 f"RSI={rsi_rev} MACD={macd_rev} OBV={obv_rev} "
-                f"CCI={cci_rev} VOL={vol_rev})"
+                f"CCI={cci_rev} VOL={vol_rev} | "
+                f"DIV={divergence_ok} BB={bb_position_ok} 4HMACD={macd_4h_agree})"
             ),
             snapshot,
         )
@@ -522,7 +617,7 @@ def run_realtime_reentry() -> dict:
             if not _ind_ok:
                 skipped += 1
                 logger.info(
-                    "[RT_REENTRY] skip: %s %s 지표 반전 미확인 (%s) [rebound=%.2f%% stage=%d need=%d/3]",
+                    "[RT_REENTRY] skip: %s %s 지표 반전 미확인 (%s) [rebound=%.2f%% stage=%d need=%d/8]",
                     symbol, side, _ind_msg, _rebound_pct, _stage_no_for_gate, _min_passed,
                 )
                 continue
@@ -657,6 +752,7 @@ def run_realtime_reentry() -> dict:
                 _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
                 # 🎯 v221: 실제 지표 값 저장 = 학습 사이클 완성!
                 # 🎯 Fix 99 (2026-08-25): CCI + 볼륨 + 4h MACD 추가 = 5중 지표 학습!
+                # 🎯 Fix 102 (2026-08-26): 다이버전스 + BB 위치 + 4H MACD 소프트 = 8중 학습!
                 _rt_entry_snapshot = {
                     "rsi": _ind_snap.get("rsi"),
                     "cci": _ind_snap.get("cci"),  # 🎯 Fix 99 A: CCI 실 측정값!
@@ -664,8 +760,18 @@ def run_realtime_reentry() -> dict:
                     "macd_hist": _ind_snap.get("macd_hist"),
                     "rsi_4h": _ind_snap.get("rsi_4h"),
                     "macd_hist_4h": _ind_snap.get("macd_hist_4h"),  # 🎯 Fix 99 B!
+                    "macd_4h_agree": _ind_snap.get("macd_4h_agree"),  # 🎯 Fix 102 B: 소프트!
                     "vol_ratio": _ind_snap.get("vol_ratio"),        # 🎯 Fix 99 C!
-                    "passes_15m": _ind_snap.get("passes_15m"),      # 🎯 Fix 99 A: 5중 통과!
+                    "passes_15m": _ind_snap.get("passes_15m"),      # core 5중!
+                    "passes_bonus": _ind_snap.get("passes_bonus"),  # 🎯 Fix 102: bonus 3!
+                    "passes_total": _ind_snap.get("passes_total"),  # 🎯 Fix 102: total 8!
+                    # 🎯 Fix 102 D: 다이버전스 + BB 위치 (정밀 반전 신호!)
+                    "divergence": _ind_snap.get("divergence"),
+                    "rsi_at_extreme": _ind_snap.get("rsi_at_extreme"),
+                    "bb_position_ok": _ind_snap.get("bb_position_ok"),
+                    "bb_upper": _ind_snap.get("bb_upper"),
+                    "bb_lower": _ind_snap.get("bb_lower"),
+                    "bb_mid": _ind_snap.get("bb_mid"),
                     "regime": "REVERSAL_LONG" if side == "LONG" else "REVERSAL_SHORT",
                     "source": "RT_REENTRY_SUCCESS" if _use_success_reentry else "RT_REENTRY_FAIL",
                     "kst_hour": _kst_hour,
@@ -677,6 +783,7 @@ def run_realtime_reentry() -> dict:
                     "reentry_count": re_count + 1 if not _use_success_reentry else 0,
                     "is_last_chance": _is_last_chance,  # 🎯 Fix 53 마킹!
                     "fix99_applied": True,  # 🎯 Fix 99 마킹 (학습 데이터 필터링 용!)
+                    "fix102_applied": True,  # 🎯 Fix 102 마킹 (완화 + 다이버전스/BB!)
                     "entered_at": datetime.now(timezone.utc).isoformat(),
                 }
                 # StrategySuggestion 기록!
