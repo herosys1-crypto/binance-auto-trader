@@ -24,10 +24,11 @@ from app.core.database import SessionLocal
 from app.core.strategy_status import ACTIVE_LIKE
 from app.models.exchange_account import ExchangeAccount
 from app.models.strategy_instance import StrategyInstance
+from app.models.strategy_suggestion import StrategySuggestion
 
 logger = logging.getLogger(__name__)
 
-SPEC_VERSION = "peak_break_reversal_v1_2026-08-23"
+SPEC_VERSION = "peak_break_reversal_v2_fix72_2026-08-25"
 KLINE_INTERVAL = "15m"
 KLINE_LIMIT = 60
 PULLBACK_PCT = Decimal("0.01")
@@ -229,8 +230,19 @@ def _check_reversal_signals(bc, symbol):
         vol_avg = mean(volumes[-6:-1]) if len(volumes) >= 6 else vol_last
         vol_ok = vol_last < vol_avg * VOL_MULT
         all_ok = all([wick_ok, rsi_ok, macd_ok, cci_ok, obv_ok, vol_ok])
+        # Fix 72 (2026-08-25): 학습용 raw 값 추가! (하위 호환 = 기존 boolean 유지!)
         snap = {"wick": wick_ok, "rsi": rsi_ok, "macd": macd_ok, "cci": cci_ok,
-                "obv": obv_ok, "vol": vol_ok, "all_ok": all_ok}
+                "obv": obv_ok, "vol": vol_ok, "all_ok": all_ok,
+                "rsi_now": rsi_now, "rsi_prev": rsi_prev,
+                "macd_hist_now": (hist[-1] if hist else None),
+                "macd_hist_prev": (hist[-2] if len(hist) >= 2 else None),
+                "cci_now": (cci[-1] if cci else None),
+                "cci_prev": (cci[-2] if len(cci) >= 2 else None),
+                "obv_now": (obv[-1] if obv else None),
+                "obv_prev": (obv[-2] if len(obv) >= 2 else None),
+                "volume_last": vol_last, "volume_avg": vol_avg,
+                "volume_mult": (float(vol_last / vol_avg) if vol_avg else None),
+                "close_now": (closes[-1] if closes else None)}
         return (all_ok, snap)
     except Exception as e:
         logger.warning(f"[Fix41] reversal {symbol}: {e}")
@@ -288,6 +300,116 @@ def _process_strategy(db, bc, s, next_stage):
         return False
     
     return False
+
+
+def _save_entry_snapshot_suggestion(db, s, next_stage, snap, capital):
+    """Fix 72 (2026-08-25): stage-N 마틴게일 트리거 지표 학습 데이터 확보!
+
+    사장님 신 사상 (Fix 41 v1 spec verbatim):
+    "2단계 진입가를 15분차트 최고가에서 밀려서 내려오다가 다시 상승해서 전고점을
+     돌파하면 대기 모니터링하고 최고가에서 다시 밀려 내려오면 그때 2단계를 실행"
+
+    peak_A → low → break_A → peak_B → reversal 상태 머신의 트리거 시점 지표(
+    peak_A/low/peak_B, RSI drop, volume mult, break_ratio, wick, MACD/CCI/OBV 방향)를
+    StrategySuggestion.strategy_config.entry_snapshot에 박제 →
+    pattern_learning_worker가 이후 성공/실패 분석에 활용.
+
+    fail-open: INSERT 실패 = 진입 자체는 성공! (학습 데이터 유실 < 마틴게일 실패)
+    """
+    try:
+        # Redis 상태 머신 값들 (peak_A / low / peak_B)
+        peak_a = _get(s.id, next_stage, "peak_A")
+        low = _get(s.id, next_stage, "low")
+        peak_b = _get(s.id, next_stage, "peak_B")
+
+        # RSI drop 계산 (snap.rsi_now / rsi_prev 활용!)
+        rsi_now = snap.get("rsi_now") if isinstance(snap, dict) else None
+        rsi_prev = snap.get("rsi_prev") if isinstance(snap, dict) else None
+        rsi_drop_pct = None
+        try:
+            if rsi_now is not None and rsi_prev is not None and rsi_prev != 0:
+                rsi_drop_pct = float(((rsi_prev - rsi_now) / rsi_prev) * 100)
+        except Exception:
+            rsi_drop_pct = None
+
+        # break_ratio = peak_B / peak_A (돌파 강도!)
+        break_ratio = None
+        try:
+            if peak_a and peak_b:
+                pa = Decimal(str(peak_a))
+                pb = Decimal(str(peak_b))
+                if pa > 0:
+                    break_ratio = float(pb / pa)
+        except Exception:
+            break_ratio = None
+
+        _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
+        entry_snapshot = {
+            "source": "PEAK_BREAK_REVERSAL",
+            "spec_version": SPEC_VERSION,
+            "peak_A": str(peak_a) if peak_a else None,
+            "low_between": str(low) if low else None,
+            "peak_B": str(peak_b) if peak_b else None,
+            "break_ratio": break_ratio,
+            "rsi_drop_pct": rsi_drop_pct,
+            "rsi_now": rsi_now,
+            "rsi_prev": rsi_prev,
+            "macd_hist_now": snap.get("macd_hist_now") if isinstance(snap, dict) else None,
+            "macd_hist_prev": snap.get("macd_hist_prev") if isinstance(snap, dict) else None,
+            "cci_now": snap.get("cci_now") if isinstance(snap, dict) else None,
+            "cci_prev": snap.get("cci_prev") if isinstance(snap, dict) else None,
+            "obv_now": snap.get("obv_now") if isinstance(snap, dict) else None,
+            "obv_prev": snap.get("obv_prev") if isinstance(snap, dict) else None,
+            "volume_last": snap.get("volume_last") if isinstance(snap, dict) else None,
+            "volume_avg": snap.get("volume_avg") if isinstance(snap, dict) else None,
+            "volume_mult": snap.get("volume_mult") if isinstance(snap, dict) else None,
+            "close_now": snap.get("close_now") if isinstance(snap, dict) else None,
+            "wick_ok": snap.get("wick") if isinstance(snap, dict) else None,
+            "rsi_ok": snap.get("rsi") if isinstance(snap, dict) else None,
+            "macd_ok": snap.get("macd") if isinstance(snap, dict) else None,
+            "cci_ok": snap.get("cci") if isinstance(snap, dict) else None,
+            "obv_ok": snap.get("obv") if isinstance(snap, dict) else None,
+            "vol_ok": snap.get("vol") if isinstance(snap, dict) else None,
+            "regime": "PEAK_BREAK_REVERSAL_SHORT",
+            "kst_hour": _kst_hour,
+            "parent_strategy_id": s.id,
+            "stage_num": next_stage,
+            "entered_at": datetime.now(timezone.utc).isoformat(),
+        }
+        sugg = StrategySuggestion(
+            symbol=s.symbol,
+            side="SHORT",
+            suggestion_type="peak_break_reversal_short",
+            strategy_config={
+                "capitals": [float(capital) if capital is not None else None],
+                "symbol": s.symbol,
+                "side": "SHORT",
+                "peak_break_reversal": True,
+                "stage_num": next_stage,
+                "parent_strategy_id": s.id,
+                "entry_snapshot": entry_snapshot,
+            },
+            reason=(
+                f"🎯 전고점 돌파 후 반전 SHORT stage-{next_stage} (Fix 41)! "
+                f"peak_A={peak_a} low={low} peak_B={peak_b} "
+                f"break_ratio={break_ratio} rsi_drop={rsi_drop_pct}"
+            ),
+            status="EXECUTED",
+            execution_mode="AUTO",
+            executed_at=datetime.now(timezone.utc),
+            executed_strategy_id=s.id,
+            outcome_status="PENDING",
+        )
+        db.add(sugg)
+        db.commit()
+        logger.info("[Fix41+72] StrategySuggestion 저장 #%s stage=%s", s.id, next_stage)
+    except Exception as e:
+        logger.warning("[Fix41+72] snapshot save 실패 #%s stage=%s: %s (진입은 성공 유지)",
+                       s.id, next_stage, e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 def _enter_next_stage(db, s, next_stage, snap, bc=None):
@@ -361,6 +483,8 @@ def _enter_next_stage(db, s, next_stage, snap, bc=None):
             return False
         
         _set_state(s.id, next_stage, "ENTERED")
+        # Fix 72 (2026-08-25): 학습용 StrategySuggestion INSERT (fail-open!)
+        _save_entry_snapshot_suggestion(db, s, next_stage, snap, capital)
         # 다음 단계 위한 클리어!
         _clear(s.id, next_stage + 1)
         

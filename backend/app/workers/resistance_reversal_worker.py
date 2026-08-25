@@ -15,10 +15,11 @@ from app.core.database import SessionLocal
 from app.core.strategy_status import ACTIVE_LIKE
 from app.models.exchange_account import ExchangeAccount
 from app.models.strategy_instance import StrategyInstance
+from app.models.strategy_suggestion import StrategySuggestion
 
 logger = logging.getLogger(__name__)
 
-SPEC_VERSION = "resistance_reversal_v1_2026-08-23"
+SPEC_VERSION = "resistance_reversal_v2_fix72_2026-08-25"
 RESISTANCE_PROXIMITY_RATIO = Decimal("0.01")
 RESISTANCE_AUTO_LOOKBACK_KLINES = 672
 RESISTANCE_AUTO_TTL_HOURS = 24
@@ -221,7 +222,84 @@ def _get_current_price(bc, symbol):
     return None
 
 
-def _enter_stage2(db, s, snap, resistance, source):
+def _save_entry_snapshot_suggestion(db, s, snap, resistance, source, cur):
+    """Fix 72 (2026-08-25): stage-2 마틴게일 트리거 지표 학습 데이터 확보!
+
+    사장님 신 사상: resistance_reversal 발동 시점의 저항선/RSI/MACD/CCI/OBV/volume/wick
+    상태를 StrategySuggestion.strategy_config.entry_snapshot에 박제 →
+    pattern_learning_worker가 이후 성공/실패 분석에 활용.
+
+    fail-open: INSERT 실패 = 진입 자체는 성공! (학습 데이터 유실 < 마틴게일 실패)
+    """
+    try:
+        # break_type = 돌파 후 하락 (fake_breakdown) vs 돌파 전 하락 (rejection)
+        break_type = "unknown"
+        try:
+            if cur is not None and resistance is not None:
+                break_type = "fake_breakdown" if Decimal(str(cur)) > Decimal(str(resistance)) else "rejection"
+        except Exception:
+            pass
+
+        _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
+        entry_snapshot = {
+            "source": "RESISTANCE_REVERSAL",
+            "spec_version": SPEC_VERSION,
+            "resistance_price": str(resistance) if resistance is not None else None,
+            "resistance_source": source,
+            "current_price": str(cur) if cur is not None else None,
+            "break_type": break_type,
+            "wick_ok": snap.get("wick") if isinstance(snap, dict) else None,
+            "rsi_ok": snap.get("rsi") if isinstance(snap, dict) else None,
+            "macd_ok": snap.get("macd") if isinstance(snap, dict) else None,
+            "cci_ok": snap.get("cci") if isinstance(snap, dict) else None,
+            "vol_ok": snap.get("vol") if isinstance(snap, dict) else None,
+            "rsi_now": snap.get("rsi_now") if isinstance(snap, dict) else None,
+            "rsi_prev": snap.get("rsi_prev") if isinstance(snap, dict) else None,
+            "regime": "RESISTANCE_REVERSAL_SHORT",
+            "kst_hour": _kst_hour,
+            "parent_strategy_id": s.id,
+            "stage_num": 2,
+            "entered_at": datetime.now(timezone.utc).isoformat(),
+        }
+        sugg = StrategySuggestion(
+            symbol=s.symbol,
+            side="SHORT",
+            suggestion_type="resistance_reversal_short",
+            strategy_config={
+                "capitals": [float(MARTINGALE_STAGE2_USDT)],
+                "symbol": s.symbol,
+                "side": "SHORT",
+                "resistance_reversal": True,
+                "stage_num": 2,
+                "parent_strategy_id": s.id,
+                "resistance_price": str(resistance) if resistance is not None else None,
+                "resistance_source": source,
+                "break_type": break_type,
+                "entry_snapshot": entry_snapshot,
+            },
+            reason=(
+                f"🎯 저항 반전 SHORT 2단계 (Fix 29 v228)! "
+                f"저항={resistance} ({source}) break={break_type} "
+                f"5지표 통과 (wick/rsi/macd/cci/vol)"
+            ),
+            status="EXECUTED",
+            execution_mode="AUTO",
+            executed_at=datetime.now(timezone.utc),
+            executed_strategy_id=s.id,
+            outcome_status="PENDING",
+        )
+        db.add(sugg)
+        db.commit()
+        logger.info("[Fix29+72] StrategySuggestion 저장 #%s stage=2 break=%s", s.id, break_type)
+    except Exception as e:
+        logger.warning("[Fix29+72] snapshot save 실패 #%s: %s (진입은 성공 유지)", s.id, e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _enter_stage2(db, s, snap, resistance, source, cur=None):
     try:
         from app.models.strategy_template import StrategyTemplate
         tpl = db.get(StrategyTemplate, s.strategy_template_id)
@@ -258,6 +336,8 @@ def _enter_stage2(db, s, snap, resistance, source):
             logger.warning("[Fix29+52] ⚠️ %s SL override 실패: %s (진입 유지)", s.symbol, _sl_exc)
             db.rollback()
         _mark_triggered(db, s.id)
+        # Fix 72 (2026-08-25): 학습용 StrategySuggestion INSERT (fail-open!)
+        _save_entry_snapshot_suggestion(db, s, snap, resistance, source, cur)
         _notify(f"[저항 반전 2단계 SHORT 진입] {s.symbol}",
                 f"{s.symbol} SHORT #{s.id}\n자본: {MARTINGALE_STAGE2_USDT} USDT\n저항: {resistance} ({source})")
         logger.warning(f"[Fix29] ENTERED #{s.id} {s.symbol}")
@@ -321,7 +401,7 @@ def run_resistance_reversal_once():
                 result["reversed"] += 1
                 _notify(f"[저항 반전 감지] {s.symbol} SHORT",
                         f"{s.symbol}\n저항: {resistance}\n현재: {cur}\n5지표: {snap}")
-                if _enter_stage2(db, s, snap, resistance, source):
+                if _enter_stage2(db, s, snap, resistance, source, cur=cur):
                     result["entered"] += 1
             except Exception as e:
                 result["errors"] += 1

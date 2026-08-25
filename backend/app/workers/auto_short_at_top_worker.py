@@ -49,7 +49,7 @@ from app.models.system_setting import SystemSetting
 
 logger = logging.getLogger(__name__)
 
-SPEC_VERSION = "auto_short_at_top_v2_fix51_2026-08-24"
+SPEC_VERSION = "auto_short_at_top_v3_fix72_2026-08-25"
 DEFAULT_LEVERAGE = 2      # 사장님 default!
 DEFAULT_DAILY_LIMIT = 20  # sajangnim_top_short_daily_limit fallback!
 ALERT_PATTERN = "pump_top:alert:*"
@@ -223,20 +223,41 @@ def run_auto_short_at_top() -> dict:
                     db.rollback()
 
                 # 8. entry_snapshot 저장 (학습!)
+                # Fix 72 (2026-08-25): rich upstream snapshot 우선 사용!
+                #  - bb_upper_breakout_short_worker / pump_dump_early_detector_worker /
+                #    pump_top_detector_worker가 alert.entry_snapshot에 저장한
+                #    breakout_snapshot / martingale_signals / trend_strength / rsi/cci/obv/macd/bb
+                #    실 값을 그대로 학습 DB까지 전달!
+                #  - 없으면 legacy Fix 20 v219 재구축 (하위 호환!)
                 _kst_hour = (datetime.now(timezone.utc).hour + 9) % 24
-                entry_snapshot = {
-                    "rsi": alert.get("rsi"),
-                    "cci": alert.get("cci_last"),
-                    "obv_slope_pct": None,
-                    "regime": "TOP_REVERSAL",
-                    "source": "SAJANGNIM_TOP",
-                    "sustained_bars": 0,
-                    "change_24h": alert.get("change_24h"),
-                    "kst_hour": _kst_hour,
-                    "confidence": confidence,
-                    "signals_passed": alert.get("signals"),
-                    "entered_at": datetime.now(timezone.utc).isoformat(),
-                }
+                _entered_iso = datetime.now(timezone.utc).isoformat()
+                upstream_snapshot = alert.get("entry_snapshot") if isinstance(alert, dict) else None
+                if isinstance(upstream_snapshot, dict) and upstream_snapshot:
+                    # Fix 72: upstream rich snapshot 채택 + 진입 메타만 덧붙임!
+                    entry_snapshot = dict(upstream_snapshot)
+                    entry_snapshot.setdefault("regime", "TOP_REVERSAL")
+                    entry_snapshot.setdefault("source", "SAJANGNIM_TOP")
+                    entry_snapshot.setdefault("change_24h", alert.get("change_24h") or alert.get("chg_24h"))
+                    entry_snapshot.setdefault("signals_passed", alert.get("signals"))
+                    entry_snapshot["kst_hour"] = _kst_hour
+                    entry_snapshot["confidence"] = confidence
+                    entry_snapshot["entered_at"] = _entered_iso
+                    entry_snapshot.setdefault("sustained_bars", 0)
+                else:
+                    # Legacy fallback (Fix 20 v219 하위 호환!)
+                    entry_snapshot = {
+                        "rsi": alert.get("rsi"),
+                        "cci": alert.get("cci_last"),
+                        "obv_slope_pct": None,
+                        "regime": "TOP_REVERSAL",
+                        "source": "SAJANGNIM_TOP",
+                        "sustained_bars": 0,
+                        "change_24h": alert.get("change_24h") or alert.get("chg_24h"),
+                        "kst_hour": _kst_hour,
+                        "confidence": confidence,
+                        "signals_passed": alert.get("signals"),
+                        "entered_at": _entered_iso,
+                    }
                 sugg = StrategySuggestion(
                     symbol=symbol, side=side,
                     suggestion_type="sajangnim_top_short",

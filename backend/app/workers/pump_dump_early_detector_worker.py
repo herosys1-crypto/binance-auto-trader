@@ -10,7 +10,7 @@ from app.models.exchange_account import ExchangeAccount
 
 logger = logging.getLogger(__name__)
 
-SPEC_VERSION = "pump_dump_early_detector_v2_fix62_fix65_2026-08-25"
+SPEC_VERSION = "pump_dump_early_detector_v3_fix72_2026-08-25"
 INTERVAL_SEC = 300  # 5분
 MAX_SYMBOLS = 50
 MIN_24H_CHANGE = 15.0  # 급등 심볼만!
@@ -25,18 +25,22 @@ OBV_DECLINE_MIN_PCT = 2.0  # OBV 2%+ 감소 = 하락 시작!
 
 
 def _check_15m_dump_signals(bc, symbol):
-    """15m 지표 5중 감지 (사장님 verbatim = 6중 통과 = SHORT!)"""
+    """15m 지표 5중 감지 (사장님 verbatim = 6중 통과 = SHORT!)
+
+    Fix 72 (2026-08-25): raw_values 반환 추가 = entry_snapshot 학습 데이터 확보!
+    반환: (signals_dict, passed_count, raw_values_dict) or (None, "error_str", None)
+    """
     try:
         # 15m klines
         klines = bc.get_klines(symbol=symbol, interval="15m", limit=60)
         if not klines or len(klines) < 30:
-            return None, "insufficient_klines"
+            return None, "insufficient_klines", None
 
         # ChartAnalyzer로 지표 계산
         from app.services.chart_analyzer import ChartAnalyzer
         result = ChartAnalyzer.analyze_timeframe(bc, symbol, "15m")
         if not result:
-            return None, "no_analysis"
+            return None, "no_analysis", None
 
         # 6중 지표
         signals = {}
@@ -44,6 +48,7 @@ def _check_15m_dump_signals(bc, symbol):
         # 1. BB 상단 밀림 or MB 하회
         bb_up = result.get("bb_up")
         bb_mb = result.get("bb_mb")
+        bb_lo = result.get("bb_lo")
         close_now = result.get("close_now")
         signals["bb_dump"] = bool(close_now and bb_mb and close_now < bb_mb)
 
@@ -71,10 +76,24 @@ def _check_15m_dump_signals(bc, symbol):
 
         passed = sum(1 for v in signals.values() if v)
 
-        return signals, passed
+        # Fix 72: raw indicator values (학습 entry_snapshot용!)
+        raw_values = {
+            "rsi": rsi6,
+            "cci": cci,
+            "macd_hist": macd_hist,
+            "obv_slope": obv_slope,
+            "bb_up": bb_up,
+            "bb_mb": bb_mb,
+            "bb_lo": bb_lo,
+            "close_now": close_now,
+            "volume_recent": recent,
+            "volume_prior": prior,
+        }
+
+        return signals, passed, raw_values
     except Exception as e:
         logger.warning("[Fix62/signals] %s: %s", symbol, e)
-        return None, "error"
+        return None, "error", None
 
 
 def _check_multi_tf_obv_consistency(bc, symbol):
@@ -101,25 +120,59 @@ def _check_multi_tf_obv_consistency(bc, symbol):
         return "unknown"
 
 
-def _save_alert_redis(r, symbol, signals, passed, confidence, chg_24h):
+def _save_alert_redis(r, symbol, signals, passed, confidence, chg_24h, raw_values=None, obv_direction=None):
     """Redis 알람 = auto_short_at_top이 처리!
 
     ⚠️ CRITICAL fix (Fix 67 발견 silent bug!): auto_short_at_top ALERT_PATTERN = "pump_top:alert:*" 만 스캔!
     → 옛 "sajangnim:top_short:{symbol}" = 진입 0건 (silent bug!)
     → 신 "pump_top:alert:{symbol}:SHORT" = pump_top_detector 동일 패턴!
+
+    Fix 72 (2026-08-25): entry_snapshot 저장 = 학습 데이터 완전 확보!
+    - raw_values (rsi/cci/macd/obv/bb) → alert.entry_snapshot 딕셔너리
+    - 하위 호환 = alert.rsi/cci_last top-level 유지 (auto_short_at_top 옛 fallback!)
     """
     try:
         alert_key = f"pump_top:alert:{symbol}:SHORT"  # auto_short_at_top ALERT_PATTERN 일치!
+        rv = raw_values or {}
+        # Fix 72: rich entry_snapshot (auto_short_at_top이 우선 사용!)
+        entry_snapshot = {
+            "rsi": rv.get("rsi"),
+            "cci": rv.get("cci"),
+            "macd_hist": rv.get("macd_hist"),
+            "obv_slope": rv.get("obv_slope"),
+            "obv_slope_pct": rv.get("obv_slope"),  # legacy 필드명 호환
+            "bb_up": rv.get("bb_up"),
+            "bb_mb": rv.get("bb_mb"),
+            "bb_lo": rv.get("bb_lo"),
+            "close_now": rv.get("close_now"),
+            "volume_recent": rv.get("volume_recent"),
+            "volume_prior": rv.get("volume_prior"),
+            "regime": "DUMP_EARLY",
+            "obv_direction_multi_tf": obv_direction,
+            "signals_passed": signals,
+            "signals_passed_count": passed,
+            "confidence": confidence,
+            "change_24h": chg_24h,
+            "source": "pump_dump_early",
+            "spec_version": SPEC_VERSION,
+            "detected_at": datetime.now(timezone.utc).isoformat(),
+        }
         alert_data = {
             "symbol": symbol,
             "side": "SHORT",
             "confidence": confidence,
             "chg_24h": chg_24h,
+            "change_24h": chg_24h,  # 하위 호환 (auto_short_at_top이 change_24h로 읽음!)
             "signals": signals,
             "passed": passed,
             "detected_at": datetime.now(timezone.utc).isoformat(),
             "source": "pump_dump_early",
             "spec_version": SPEC_VERSION,
+            # Fix 72: 하위 호환 = auto_short_at_top의 옛 fallback 경로 유지!
+            "rsi": rv.get("rsi"),
+            "cci_last": rv.get("cci"),
+            # Fix 72: rich snapshot (다운스트림 우선 소비!)
+            "entry_snapshot": entry_snapshot,
         }
         r.setex(alert_key, 1800, json.dumps(alert_data, default=str))
         return True
@@ -184,11 +237,19 @@ def run_pump_dump_early_detector() -> dict:
 
         for symbol, chg, _t in candidates:
             try:
-                # 1. 15m 지표 확인
+                # 1. 15m 지표 확인 (Fix 72: raw_values 반환!)
                 signals_result = _check_15m_dump_signals(bc, symbol)
                 if signals_result is None:
                     continue
-                signals, passed = signals_result
+                # Fix 72: 3-tuple (signals, passed, raw_values)
+                if not isinstance(signals_result, tuple) or len(signals_result) < 2:
+                    continue
+                if len(signals_result) == 3:
+                    signals, passed, raw_values = signals_result
+                else:
+                    # 하위 호환 (2-tuple 반환)
+                    signals, passed = signals_result
+                    raw_values = None
                 if not isinstance(passed, int):
                     continue
                 if passed < MIN_PASSED:
@@ -241,8 +302,9 @@ def run_pump_dump_early_detector() -> dict:
                 if obv_direction == "consistent_down":
                     confidence = min(confidence + 0.02, 0.94)
 
-                # 4. Redis 알람 저장
-                if _save_alert_redis(r, symbol, signals, passed, confidence, chg):
+                # 4. Redis 알람 저장 (Fix 72: raw_values + obv_direction 전달!)
+                if _save_alert_redis(r, symbol, signals, passed, confidence, chg,
+                                     raw_values=raw_values, obv_direction=obv_direction):
                     detected += 1
                     logger.warning(
                         "[Fix62/detected] %s: chg=%.2f%% passed=%d/6 conf=%.2f obv_dir=%s",
