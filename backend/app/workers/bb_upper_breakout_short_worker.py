@@ -70,6 +70,43 @@ MIN_CONFIDENCE = 0.85                # auto_short_at_top 통과 최소치 (L159!
 # ─── Fix 44 트렌드 강도 임계값 (재사용 = 헌법 6 단일 진실!) ────────
 TREND_CONFIDENCE_PENALTY = 0.05
 
+# ─── Fix 100 (2026-08-26 사장님 신 사상!): 반복 상승 감지! ─────────
+# 사장님 verbatim:
+#   "한번올랐다 다시 내려오고 이렇게 2-3번 반복하면
+#    rsi macd obv cci 등등 고점에 이란 신호를 보고 진입"
+# = 단일 급등 상승 초입 오진입 방지! 2회+ 반복 상승 후만 진짜 정점!
+PEAK_LOOKBACK_BARS = 20    # 4H 최근 ~3.3일 창
+PEAK_MIN_GAP = 3           # pivot 좌우 확인 봉수
+MIN_PEAK_COUNT_4H = 2      # 사장님 verbatim = 최소 2회 반복 상승!
+
+
+def _count_swing_peaks(closes: list, lookback: int = PEAK_LOOKBACK_BARS,
+                       min_gap: int = PEAK_MIN_GAP) -> int:
+    """🌟 Fix 100 (2026-08-26 사장님!): 최근 lookback 봉에서 swing peak 개수 카운트!
+
+    peak = 좌우 min_gap 봉 대비 최고!
+
+    사장님 사상:
+      "한번올랐다 다시 내려오고 이렇게 2-3번 반복하면
+       rsi macd obv cci 등등 고점에 이란 신호를 보고 진입"
+      = 반복 상승 = 소진 확인 = 진짜 정점!
+      = 단일 급등 초입 오진입 완전 차단!
+    """
+    if not closes or len(closes) < lookback:
+        return 0
+    window = closes[-lookback:]
+    peaks = 0
+    for i in range(min_gap, len(window) - min_gap):
+        try:
+            center = float(window[i])
+            left_max = max(float(x) for x in window[i - min_gap:i])
+            right_max = max(float(x) for x in window[i + 1:i + min_gap + 1])
+            if center > left_max and center > right_max:
+                peaks += 1
+        except Exception:
+            continue
+    return peaks
+
 
 def _check_bb_upper_breakout(bc, symbol: str) -> tuple[bool, float, dict]:
     """🎯 BB 상단 돌파 감지 (핵심!)
@@ -209,6 +246,7 @@ def _save_alert_redis(
     confidence: float,
     chg_24h: float,
     trend_strength: str,
+    peaks_4h: int = 0,
 ) -> bool:
     """Redis 알람 저장 (auto_short_at_top_worker가 processing!)
 
@@ -228,11 +266,15 @@ def _save_alert_redis(
             "breakout_pct": round(breakout_pct, 3),
             "martingale_passed": martingale_passed,
             "martingale_signals": martingale_signals,
+            "peaks_4h": peaks_4h,  # Fix 100 = 반복 상승 횟수 학습!
             "entry_snapshot": {
                 **breakout_snapshot,
                 "martingale_signals": martingale_signals,
                 "martingale_passed": martingale_passed,
                 "trend_strength": trend_strength,
+                "peaks_4h": peaks_4h,  # Fix 100
+                "peak_lookback_bars": PEAK_LOOKBACK_BARS,
+                "peak_min_gap": PEAK_MIN_GAP,
                 "spec_version": SPEC_VERSION,
             },
             # legacy 호환 (auto_short_at_top L226~229 fallback!)
@@ -446,6 +488,45 @@ def run_bb_upper_breakout_short() -> dict:
                         symbol, _rg_exc,
                     )
 
+                # (g2) 🌟 Fix 100 (2026-08-26 사장님!): 반복 상승 감지!
+                # 사장님 verbatim:
+                #   "한번올랐다 다시 내려오고 이렇게 2-3번 반복하면
+                #    rsi macd obv cci 등등 고점에 이란 신호를 보고 진입"
+                # = 4H 창에서 swing peak 2회+ 확인!
+                # = 단일 상승 초입 오진입 완전 차단!
+                peaks_4h = 0
+                try:
+                    kl_4h = bc.get_klines(
+                        symbol=symbol, interval="4h",
+                        limit=PEAK_LOOKBACK_BARS + PEAK_MIN_GAP,
+                    )
+                    if isinstance(kl_4h, list) and len(kl_4h) >= PEAK_LOOKBACK_BARS:
+                        closes_4h = [float(k[4]) for k in kl_4h]
+                        peaks_4h = _count_swing_peaks(
+                            closes_4h,
+                            lookback=PEAK_LOOKBACK_BARS,
+                            min_gap=PEAK_MIN_GAP,
+                        )
+                    else:
+                        logger.debug(
+                            "[Fix100/skip] %s: 4H klines 부족 (%d bars)",
+                            symbol, len(kl_4h) if isinstance(kl_4h, list) else 0,
+                        )
+                        continue
+                except Exception as _pe:
+                    logger.warning(
+                        "[Fix100] %s 4H peak count 실패: %s (skip=fail-closed!)",
+                        symbol, _pe,
+                    )
+                    continue
+                if peaks_4h < MIN_PEAK_COUNT_4H:
+                    logger.info(
+                        "[Fix100/skip] %s: 4H 반복 상승 부족 = %d peaks (%d+ 필요!) "
+                        "사장님 사상: 2-3회 반복 후 진짜 정점!",
+                        symbol, peaks_4h, MIN_PEAK_COUNT_4H,
+                    )
+                    continue
+
                 # (h) confidence 계산!
                 # base 0.85 + 마틴게일 (3/3 시 +0.05) + BB 강도 보너스 (>=1% 시 +0.02)
                 confidence = 0.85
@@ -468,6 +549,7 @@ def run_bb_upper_breakout_short() -> dict:
                 if not _save_alert_redis(
                     r, symbol, breakout_pct, mart_passed, mart_signals,
                     breakout_snap, confidence, chg_24h, trend,
+                    peaks_4h=peaks_4h,
                 ):
                     continue
 
@@ -478,11 +560,13 @@ def run_bb_upper_breakout_short() -> dict:
                     "change_24h": chg_24h,
                     "breakout_pct": round(breakout_pct, 3),
                     "martingale_passed": mart_passed,
+                    "peaks_4h": peaks_4h,  # Fix 100
                 })
                 logger.warning(
                     "[Fix67/detected] %s: chg=+%.2f%% bb_breakout=%.2f%% "
-                    "mart=%d/3 trend=%s conf=%.2f",
+                    "mart=%d/3 trend=%s conf=%.2f peaks_4h=%d",
                     symbol, chg_24h, breakout_pct, mart_passed, trend, confidence,
+                    peaks_4h,
                 )
 
                 # (j) 텔레그램 알림!
@@ -500,6 +584,7 @@ def run_bb_upper_breakout_short() -> dict:
                                 f"BB 돌파 강도: {breakout_pct:.2f}%\n"
                                 f"마틴게일 지표: {mart_passed}/3\n"
                                 f"트렌드: {trend}\n"
+                                f"🎯 4H 반복 상승: {peaks_4h}회 (Fix 100!)\n"
                                 f"→ auto_short_at_top 자동 진입 대기!\n"
                                 f"→ 실패 시 realtime_reentry 마틴게일 (300/600/1800)!"
                             ),

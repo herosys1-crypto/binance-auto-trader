@@ -74,6 +74,45 @@ TREND_STRONG_BULL_PCT = 50.0
 TREND_BEAR_PCT = -20.0
 TREND_CONFIDENCE_PENALTY = 0.05
 
+# ============================================================
+# 🌟 Fix 100 (2026-08-26 사장님 신 사상!): 반복 상승 감지!
+# 사장님 verbatim:
+#   "한번올랐다 다시 내려오고 이렇게 2-3번 반복하면
+#    rsi macd obv cci 등등 고점에 이란 신호를 보고 진입"
+# = 단일 상승 초입 오진입 완전 차단! 4H swing peak 2회+ 필수!
+# ============================================================
+PEAK_LOOKBACK_BARS = 20    # 4H 최근 ~3.3일 창
+PEAK_MIN_GAP = 3           # pivot 좌우 확인 봉수
+MIN_PEAK_COUNT_4H = 2      # 사장님 verbatim = 최소 2회 반복 상승!
+
+
+def _count_swing_peaks(closes: list, lookback: int = PEAK_LOOKBACK_BARS,
+                       min_gap: int = PEAK_MIN_GAP) -> int:
+    """🌟 Fix 100 (2026-08-26 사장님!): 최근 lookback 봉에서 swing peak 개수 카운트!
+
+    peak = 좌우 min_gap 봉 대비 최고!
+
+    사장님 사상:
+      "한번올랐다 다시 내려오고 이렇게 2-3번 반복하면
+       rsi macd obv cci 등등 고점에 이란 신호를 보고 진입"
+      = 반복 상승 = 소진 확인 = 진짜 정점!
+      = 단일 급등 초입 오진입 완전 차단!
+    """
+    if not closes or len(closes) < lookback:
+        return 0
+    window = closes[-lookback:]
+    peaks = 0
+    for i in range(min_gap, len(window) - min_gap):
+        try:
+            center = float(window[i])
+            left_max = max(float(x) for x in window[i - min_gap:i])
+            right_max = max(float(x) for x in window[i + 1:i + min_gap + 1])
+            if center > left_max and center > right_max:
+                peaks += 1
+        except Exception:
+            continue
+    return peaks
+
 
 def _check_trend_strength(bc, symbol):
     """Fix 44: 트렌드 강도 판정!"""
@@ -408,6 +447,47 @@ def run_pump_top_detector() -> dict:
                 if not sides_to_test:
                     continue
 
+                # 🌟 Fix 100 (2026-08-26 사장님!): 4H 반복 상승 감지!
+                # 사장님 verbatim:
+                #   "한번올랐다 다시 내려오고 이렇게 2-3번 반복하면
+                #    rsi macd obv cci 등등 고점에 이란 신호를 보고 진입"
+                # = 단일 상승 초입 오진입 완전 차단! (STARUSDT 사례!)
+                # LONG/SHORT 모두 동일 로직 = swing peak 2회+ 필수
+                # (반복 pump-and-dump 소진 후 진짜 반전 = LONG 저점도 동일 사상!)
+                peaks_4h = 0
+                try:
+                    _kl4 = bc.get_klines(
+                        symbol=symbol, interval="4h",
+                        limit=PEAK_LOOKBACK_BARS + PEAK_MIN_GAP,
+                    )
+                    if isinstance(_kl4, list) and len(_kl4) >= PEAK_LOOKBACK_BARS:
+                        _closes4 = [float(k[4]) for k in _kl4]
+                        peaks_4h = _count_swing_peaks(
+                            _closes4,
+                            lookback=PEAK_LOOKBACK_BARS,
+                            min_gap=PEAK_MIN_GAP,
+                        )
+                    else:
+                        logger.debug(
+                            "[Fix100/pump_top] %s: 4H klines 부족 (%d bars) = skip",
+                            symbol,
+                            len(_kl4) if isinstance(_kl4, list) else 0,
+                        )
+                        continue
+                except Exception as _pe:
+                    logger.warning(
+                        "[Fix100/pump_top] %s 4H peak count 실패: %s (skip=fail-closed!)",
+                        symbol, _pe,
+                    )
+                    continue
+                if peaks_4h < MIN_PEAK_COUNT_4H:
+                    logger.info(
+                        "[Fix100/pump_top/skip] %s: 4H 반복 상승 부족 = %d peaks "
+                        "(%d+ 필요!) 사장님 사상: 2-3회 반복 후 진짜 정점!",
+                        symbol, peaks_4h, MIN_PEAK_COUNT_4H,
+                    )
+                    continue
+
                 for side in sides_to_test:
                     # ========================================================
                     # 🌟 v223: 15m MAIN gate + 1h/4h 역방향 skip! (default!)
@@ -439,6 +519,11 @@ def run_pump_top_detector() -> dict:
                             continue
 
                         alert_key = f"pump_top:alert:{symbol}:{side}"
+                        # Fix 100: entry_snapshot에도 peaks_4h 병합 (학습!)
+                        _es_v223 = dict(v.get("entry_snapshot") or {})
+                        _es_v223["peaks_4h"] = peaks_4h
+                        _es_v223["peak_lookback_bars"] = PEAK_LOOKBACK_BARS
+                        _es_v223["peak_min_gap"] = PEAK_MIN_GAP
                         alert_data = {
                             "symbol": symbol,
                             "side": side,
@@ -448,11 +533,12 @@ def run_pump_top_detector() -> dict:
                             "score_15m": v.get("score_15m"),
                             "opp_score_1h": v.get("opp_score_1h"),
                             "opp_score_4h": v.get("opp_score_4h"),
-                            "entry_snapshot": v.get("entry_snapshot"),
+                            "peaks_4h": peaks_4h,  # Fix 100
+                            "entry_snapshot": _es_v223,
                             "change_24h": chg24,
                             "detected_at": datetime.now(timezone.utc).isoformat(),
                             "source": "sajangnim_15m_main_v223",
-                            "spec_version": "pump_top_detector_v2_fix51_strong_bull_penalty_2026-08-24",
+                            "spec_version": "pump_top_detector_v3_fix100_multi_peak_2026-08-26",
                         }
                         r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data, default=str))
                         _passed_this_iter = True  # Fix 64: 감시 마커 pass!
@@ -463,9 +549,11 @@ def run_pump_top_detector() -> dict:
                         })
 
                         logger.warning(
-                            "[pump_top_v223] 🎯 %s %s conf=%.2f 15m=%d/5 24h=%+.1f%% opp(1h=%d,4h=%d)",
+                            "[pump_top_v223+Fix100] 🎯 %s %s conf=%.2f 15m=%d/5 24h=%+.1f%% "
+                            "opp(1h=%d,4h=%d) peaks_4h=%d",
                             symbol, side, conf, v.get("score_15m", 0),
                             chg24, v.get("opp_score_1h", 0), v.get("opp_score_4h", 0),
+                            peaks_4h,
                         )
 
                         # 텔레그램!
@@ -474,13 +562,14 @@ def run_pump_top_detector() -> dict:
                             _db_n = SessionLocal()
                             _ns = NotificationService(_db_n)
                             _body = (
-                                f"🎯 사장님 반전 감지! (v223)\n"
+                                f"🎯 사장님 반전 감지! (v223 + Fix 100)\n"
                                 f"심볼: {symbol} {side}\n"
                                 f"신뢰도: {conf*100:.0f}%\n"
                                 f"15m score: {v.get('score_15m')}/5 (MAIN)\n"
                                 f"1h/4h 역방향: {v.get('opp_score_1h')}/{v.get('opp_score_4h')}\n"
+                                f"🎯 4H 반복 상승: {peaks_4h}회 (Fix 100!)\n"
                                 f"24h: {chg24:+.1f}%\n"
-                                f"15m MAIN 통과 + 상위 시간대 반대 없음! 자동 {side} 진입 대기!"
+                                f"15m MAIN + 반복 상승 확인! 자동 {side} 진입 대기!"
                             )
                             _ns.send_system_alert(
                                 title=f"🎯 [v223 반전] {symbol} {side} ({conf*100:.0f}%)",
@@ -526,10 +615,11 @@ def run_pump_top_detector() -> dict:
                             "score_4h": mtf.get("score_4h"),
                             "score_1h": mtf.get("score_1h"),
                             "score_15m": mtf.get("score_15m"),
+                            "peaks_4h": peaks_4h,  # Fix 100
                             "change_24h": chg24,
                             "detected_at": datetime.now(timezone.utc).isoformat(),
                             "source": "sajangnim_mtf_v222",
-                            "spec_version": "pump_top_detector_v2_fix51_strong_bull_penalty_2026-08-24",
+                            "spec_version": "pump_top_detector_v3_fix100_multi_peak_2026-08-26",
                         }
                         r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data))
                         _passed_this_iter = True  # Fix 64: 감시 마커 pass!
@@ -580,10 +670,11 @@ def run_pump_top_detector() -> dict:
                         "signals": result["signals"],
                         "close": result["close"], "rsi": result["rsi"],
                         "cci_last": result["cci_last"],
+                        "peaks_4h": peaks_4h,  # Fix 100
                         "change_24h": result["change_24h"],
                         "detected_at": datetime.now(timezone.utc).isoformat(),
                         "source": "sajangnim_top_v219",
-                        "spec_version": "pump_top_detector_v2_fix51_strong_bull_penalty_2026-08-24",
+                        "spec_version": "pump_top_detector_v3_fix100_multi_peak_2026-08-26",
                     }
                     r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data))
                     _passed_this_iter = True  # Fix 64: 감시 마커 pass!
@@ -600,6 +691,7 @@ def run_pump_top_detector() -> dict:
                         "symbol": symbol,
                         "change_24h": chg24,
                         "trend": trend,
+                        "peaks_4h": peaks_4h,  # Fix 100 = 반복 상승 횟수!
                         "passed_v219": bool(_passed_this_iter),
                         "sides_tested": sides_to_test,
                         "scanned_at": datetime.now(timezone.utc).isoformat(),
