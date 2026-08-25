@@ -116,6 +116,10 @@ function _binanceCompareRow(s) {
   const pnlCls = upnlMismatch ? 'text-red-400 font-bold' : roiCls;
   const pnlWarn = upnlMismatch ? `<span class="text-red-400 ml-1" title="우리 DB: ${ourUpnl.toFixed(2)} USDT (차이 ${upnlDiff.toFixed(2)} USDT)">⚠</span>` : '';
 
+  // 🌟 2026-08-25 Fix 76 초 컴팩트 (사장님 「한 화면 나오게」!):
+  // 정상 (mismatchCount=0) 시 = 별도 행 렌더 skip! → 우리 행 PnL 셀 ✓ 초록 칩 (getBinanceHealthChip) 로 대체!
+  // mismatch 시에만 = 옛 4열 상세 렌더 (빨강/노랑 배경 유지 = 사장님 경고 즉시 인지!)
+  if (!hasAnyMismatch) return '';
   // 2026-06-08 revert (사장님): PR #141/#142 의 white-space:normal 제거.
   // 사장님 = "세로는 기존방식으로 그냥둬 지금보다 기존ui가 좋아" = 한 줄 UI 복원.
   return `<tr class="${rowBg}">
@@ -136,6 +140,36 @@ function _binanceCompareRow(s) {
       <span class="text-slate-500 ml-3" title="Binance 호출 시각 (30초 캐시)">⏱ ${ts}</span>
     </td>
   </tr>`;
+}
+
+// 🌟 2026-08-25 Fix 76 초 컴팩트 (사장님 「한 화면 나오게」!):
+// _binanceCompareRow 가 healthy 시 skip = 우리 행 PnL 셀에 ✓/⚠ 칩만 노출.
+// mismatch = 여전히 아래 상세 행 렌더 (빨강 유지!) + 여기 ⚠ 칩 = 이중 경고.
+function _binanceHealthChip(s) {
+  const acctData = _binancePositionsCache[s.exchange_account_id];
+  if (!acctData) return '';
+  const bp = (acctData.positions || {})[s.symbol];
+  if (!bp) {
+    // 우리 DB만 있음 = 큰 차이 = 빨강 ⚠
+    return ` <span title="⚠ Binance 거래소에 포지션 없음 — 큰 차이! (아래 빨강 상세 행 확인)" style="display:inline-block;background:#7f1d1d;color:#fecaca;padding:0 4px;border-radius:3px;font-size:9px;margin-left:3px;vertical-align:middle">⚠</span>`;
+  }
+  const ourQty = Number(s.current_position_qty || 0);
+  const ourEntry = Number(s.avg_entry_price || 0);
+  const ourUpnl = Number(s.unrealized_pnl || 0);
+  const bnQty = Number(bp.size);
+  const bnEntry = Number(bp.entry_price);
+  const bnUpnl = Number(bp.unrealized_pnl);
+  const qtyDiffPct = ourQty !== 0 ? Math.abs((ourQty - bnQty) / ourQty * 100) : (bnQty !== 0 ? 100 : 0);
+  const entryDiffPct = ourEntry > 0 ? Math.abs((ourEntry - bnEntry) / ourEntry * 100) : 0;
+  const upnlDiff = Math.abs(ourUpnl - bnUpnl);
+  const mismatchCount = (qtyDiffPct > 1.0 ? 1 : 0) + (entryDiffPct > 0.1 ? 1 : 0) + (upnlDiff > 1.0 ? 1 : 0);
+  const ts = acctData.fetched_at
+    ? new Date(acctData.fetched_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+    : '-';
+  if (mismatchCount === 0) {
+    return ` <span title="✓ Binance 일치 (⏱ ${ts})" style="display:inline-block;background:#064e3b;color:#6ee7b7;padding:0 3px;border-radius:3px;font-size:9px;margin-left:3px;vertical-align:middle">✓</span>`;
+  }
+  return ` <span title="⚠ Binance 차이 ${mismatchCount}건 — 아래 빨강 상세 행 확인 (⏱ ${ts})" style="display:inline-block;background:#7f1d1d;color:#fecaca;padding:0 4px;border-radius:3px;font-size:9px;margin-left:3px;vertical-align:middle">⚠${mismatchCount}</span>`;
 }
 
 // 2026-05-06 (C-full Step 3): archived 보기 토글. localStorage 저장.
@@ -522,11 +556,15 @@ async function refreshStrategies() {
       const plannedNotional = sCap > 0 && sLev > 0 ? sCap * sLev : 0;
 
       // 평단/마크/청산 — 3 줄 stack (Binance 스타일)
-      // 🌟 2026-08-25 UI 컴팩트 (사장님 「가로 너무 길어!」): 접두어 E/M/L + 폰트 11 (여전히 3줄, 세로 축소)
+      // 🌟 2026-08-25 Fix 76 초 컴팩트 (사장님 「한 화면 나오게 + 세로 더 나오게 넓혀줘」!):
+      //   3줄 <br> stack (~54px 세로) → 1줄 inline E · M · L (~14px 세로) = 행당 40px 절감!
+      //   폰트 11→10px, 색상/tooltip 100% 유지, 정보 손실 ZERO.
       const priceStack = hasPosition
-        ? `<div class="text-xs leading-none" style="font-size:11px">
-            <span class="text-slate-300" title="평단가 (Entry)">E ${fmtNum(sAvg)}</span><br>
-            <span class="text-cyan-300" title="마크가 (Mark)">M ${fmtNum(sMark)}</span><br>
+        ? `<div class="leading-none" style="font-size:10px;white-space:nowrap">
+            <span class="text-slate-300" title="평단가 (Entry)">E ${fmtNum(sAvg)}</span>
+            <span class="text-slate-600"> · </span>
+            <span class="text-cyan-300" title="마크가 (Mark)">M ${fmtNum(sMark)}</span>
+            <span class="text-slate-600"> · </span>
             <span class="text-red-300" title="청산예정 (Liq)">L ${fmtNum(sLiq)}</span>
           </div>`
         : '<span class="text-slate-500">-</span>';
@@ -535,11 +573,11 @@ async function refreshStrategies() {
       // 1단계만 진입한 다단계 전략은 둘이 다름 (e.g. 10.58 / 3275 USDT).
       // 2026-05-04 (사용자 요청): 증거금 추가 버튼을 가시성 높은 위치 + 명확한 라벨로
       // 마진 옆에 직접 노출 (이전 액션 컬럼의 🛡 아이콘만 — 발견 어려움 개선).
-      // 🌟 2026-08-25 UI 컴팩트 fix (사장님 「가로가 너무 길어」!): 버튼 라벨 → 아이콘만 (tooltip 유지)
+      // 🌟 2026-08-25 Fix 76 초 컴팩트 (사장님 「한 화면 나오게」!): 버튼 padding 2/4→1/3, font 11→10, line 1.2→1
       const addMarginBtnInQty = hasPosition
         ? `<button onclick="event.stopPropagation(); addMargin(${s.id}, '${s.symbol}', '${s.side}')"
-                  class="btn-warning btn text-xs mt-1"
-                  style="padding:2px 4px;font-size:11px;line-height:1.2"
+                  class="btn-warning btn text-xs"
+                  style="padding:1px 3px;font-size:10px;line-height:1;min-height:0"
                   title="💰 증거금 추가 — ISOLATED 모드 포지션의 청산가 완화 (CROSS 면 거래소 거절)">💰</button>`
         : '';
       // 2026-05-04 (사용자 요청): 「💉 포지션 추가」 — ad-hoc 자유 금액 시장가/지정가 진입.
@@ -548,8 +586,8 @@ async function refreshStrategies() {
       // 🚨 v127 (2026-07-24): exchangeAccountId 전달 = 계정별 여유 정확 표시 (-2019 재발 방지)!
       const addPositionBtn = _activeForAddPos
         ? `<button onclick="event.stopPropagation(); openAddPositionModal(${s.id}, '${s.symbol}', '${s.side}', ${s.leverage || 1}, ${s.exchange_account_id || 'null'})"
-                  class="btn-primary btn text-xs mt-1 ml-1"
-                  style="padding:2px 4px;font-size:11px;line-height:1.2"
+                  class="btn-primary btn text-xs ml-1"
+                  style="padding:1px 3px;font-size:10px;line-height:1;min-height:0"
                   title="💉 포지션 추가 (ad-hoc) — 자유 금액 시장가/지정가 즉시 진입. qty + 평단 갱신, stage 진행 X. v4 안전망: 사용 시 max_loss 임계 도달하면 Crisis 발동 (stage 미완료라도)">💉</button>`
         : '';
       // 2026-06-06 evening 재활성화 — 사장님 Sub-Account 운영 + Binance UI 직접 청산 불가
@@ -559,8 +597,8 @@ async function refreshStrategies() {
       // 응답 message 에 = Binance #orderId + status + 체결가 직접 표시 (사장님 즉시 검증 가능).
       const manualTpBtn = (_activeForAddPos && hasPosition)
         ? `<button onclick="event.stopPropagation(); openManualTPModal(${s.id}, '${s.symbol}', '${s.side}', ${sQtyAbs}, ${sAvg}, ${sLev})"
-                  class="btn-success btn text-xs mt-1 ml-1"
-                  style="padding:2px 4px;font-size:11px;line-height:1.2;background:#16a34a;color:white"
+                  class="btn-success btn text-xs ml-1"
+                  style="padding:1px 3px;font-size:10px;line-height:1;min-height:0;background:#16a34a;color:white"
                   title="💰 수동 익절 — 현재 보유 포지션 의 N% 시장가 청산 (25%/50%/75%/100% 빠른 선택 또는 직접 입력). Sub-Account 청산 유일 수단.">💰↓</button>`
         : '';
       // 2026-06-05 바이낸스 UI 스타일 단순화 (사장님 요구):
@@ -583,19 +621,20 @@ async function refreshStrategies() {
       // 🚨 v105 사장님 신 요구: notional (레버리지 미적용) 자본 두 값 표시!
       const positionNotionalDisp = positionMargin * sLev;
       const plannedNotionalDisp = plannedMargin * sLev;
-      // 🌟 2026-08-25 UI 컴팩트: margin 폰트 16→14 (여전히 가독), notional 별줄 → inline 축약
+      // 🌟 2026-08-25 Fix 76 초 컴팩트 (사장님 「한 화면 나오게」!):
+      //   옛 4줄 (qty + margin + notional + 버튼) → 신 2줄 (qty · margin/plan% + 버튼)
+      //   notional 별줄 = 완전 삭제 → planTooltip hover 로 확인 (정보 손실 X)
+      //   margin 폰트 14→12, qty 10→9, 세로 30px+ 절감/행
       const qtyStack = hasPosition
-        ? `<div class="text-sm leading-none">
-            <span class="${qtyColor}" style="font-size:10px" title="${qtyTooltip}">${qtySideIcon} ${fmtQty(sQtyAbs)}</span>
-            <span class="text-slate-100 font-bold" title="${planTooltip}" style="font-size:14px"> ${positionMargin.toFixed(0)}/${plannedMargin.toFixed(0)} <span class="${entryColor}">${entryPct.toFixed(0)}%</span></span>
-            <span class="text-slate-500" style="font-size:10px" title="notional (레버리지 미적용) = 마진 × ${sLev}x">📊 ${positionNotionalDisp.toFixed(0)}/${plannedNotionalDisp.toFixed(0)} (${sLev}x)</span>
-            <div class="mt-0.5">${addMarginBtnInQty}${addPositionBtn}${manualTpBtn}</div>
+        ? `<div class="leading-none" style="white-space:nowrap">
+            <span class="${qtyColor}" style="font-size:9px" title="${qtyTooltip}\n\n📊 notional = 마진 × ${sLev}x = ${positionNotionalDisp.toFixed(0)}/${plannedNotionalDisp.toFixed(0)} USDT">${qtySideIcon} ${fmtQty(sQtyAbs)}</span>
+            <span class="text-slate-100 font-bold" title="${planTooltip}" style="font-size:12px"> ${positionMargin.toFixed(0)}/${plannedMargin.toFixed(0)} <span class="${entryColor}">${entryPct.toFixed(0)}%</span></span>
+            <div style="margin-top:1px;line-height:1">${addMarginBtnInQty}${addPositionBtn}${manualTpBtn}</div>
           </div>`
-        : `<div class="text-sm leading-none">
-            <span class="text-slate-500">- (미진입)</span>
-            <span class="text-slate-400" style="font-size:11px" title="${planTooltip}"> 자본 ${plannedMargin > 0 ? plannedMargin.toFixed(0)+' USDT' : '-'}</span>
-            <span class="text-slate-500" style="font-size:10px" title="notional = 마진 × ${sLev}x"> 📊 ${plannedNotionalDisp > 0 ? plannedNotionalDisp.toFixed(0)+' (${sLev}x)' : '-'}</span>
-            ${addPositionBtn ? '<div class="mt-0.5">'+addPositionBtn+'</div>' : ''}
+        : `<div class="leading-none" style="white-space:nowrap">
+            <span class="text-slate-500" style="font-size:10px">- (미진입)</span>
+            <span class="text-slate-400" style="font-size:11px" title="${planTooltip}\n\n📊 notional = 마진 × ${sLev}x = ${plannedNotionalDisp > 0 ? plannedNotionalDisp.toFixed(0)+' USDT' : '-'}"> 자본 ${plannedMargin > 0 ? plannedMargin.toFixed(0)+' USDT' : '-'}</span>
+            ${addPositionBtn ? '<div style="margin-top:1px;line-height:1">'+addPositionBtn+'</div>' : ''}
           </div>`;
       // PnL/ROI — 4 줄 stack: PnL + 포지션 ROI + 전략 ROI + 🆕 SL 한도 시각 (2026-06-03)
       const posSign = positionRoi > 0 ? '+' : '';
@@ -621,8 +660,9 @@ async function refreshStrategies() {
       // 2026-06-08 사장님 v4 요구: PnL stack 4줄 → 2줄 압축 (가로 줄수 최대 축소).
       // 1줄: PnL +0.68 (+1.37%)   ← 메인 (font-semibold)
       // 2줄: 전략 +0.14% · SL 0% (-800) ← 보조 (12px)
+      // 🌟 2026-08-25 Fix 76 초 컴팩트: SL inline 12→10px
       const slInline = slThreshold > 0
-        ? ` <span class="${slClass}" style="font-size:12px" title="${slTooltip}">· ${slIcon}SL ${slProgressPct.toFixed(0)}% (-${slThreshold.toFixed(0)})</span>`
+        ? ` <span class="${slClass}" style="font-size:10px" title="${slTooltip}">· ${slIcon}SL ${slProgressPct.toFixed(0)}% (-${slThreshold.toFixed(0)})</span>`
         : '';
       // 🌟 2026-06-08 사장님 trailing retrace 옵션 드롭다운 (Phase 3 — spec).
       // 활성 strategy 만 노출 (= TERMINAL X). 변경 즉시 PATCH = 다음 risk cycle 적용.
@@ -645,16 +685,19 @@ async function refreshStrategies() {
           </select>`
         : '';
       // 🎨 2026-06-10 사장님 요구 v27: 포지션 ROI = 15px (= 더 크게, 가독성 강조)
-      // PnL = 색깔 + font-semibold (= 손익 즉시 인지)
-      // 포지션 ROI = 15px (= PnL 옆 = 큰 가독성!)
-      // 전략 ROI = 13px (= 보조 정보 = 그대로)
+      // 🌟 2026-08-25 Fix 76 초 컴팩트: pos ROI 15→13px, 전략 ROI 13→11px, SL 12→10px + Binance ✓/⚠ 칩 인라인!
+      // showBinanceCompare 는 이 시점 미정의 = _isActiveForTp1 (= !isTerminal) + exchange_account_id 로 대체
+      const _showBinCompareInline = _isActiveForTp1 && s.exchange_account_id;
+      const binHealthChip = _showBinCompareInline ? _binanceHealthChip(s) : '';
       const pnl = hasPosition
-        ? `<div class="text-sm leading-none">
-            <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span>
-            <span class="text-slate-300 font-semibold" style="font-size:15px" title="${posTooltip}">(${posSign}${positionRoi.toFixed(2)}%)</span><br>
-            <span class="text-slate-300" style="font-size:13px; opacity:0.85" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slInline}${trailingRetraceSelect}
+        ? `<div class="leading-none" style="white-space:nowrap">
+            <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" style="font-size:12px" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span>
+            <span class="text-slate-300 font-semibold" style="font-size:13px" title="${posTooltip}">(${posSign}${positionRoi.toFixed(2)}%)</span>${binHealthChip}
+            <div style="line-height:1.1">
+              <span class="text-slate-300" style="font-size:11px; opacity:0.85" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slInline}${trailingRetraceSelect}
+            </div>
           </div>`
-        : '<span class="text-slate-500">-</span>';
+        : `<span class="text-slate-500">-${binHealthChip}</span>`;
 
       // 호환용 alias (기존 변수 사용 위치 보존)
       const entry = priceStack;
@@ -675,8 +718,8 @@ async function refreshStrategies() {
       //   최대 20단계까지 (v118 확장 반영)!
       const totalStagesForBtn = 20;
       const canTriggerNext = !isTerminal && (s.current_stage || 0) >= 1 && (s.current_stage || 0) < totalStagesForBtn;
-      // 🌟 2026-08-25 UI 컴팩트: 3x6 → 2x5 (사장님 「가로 너무 길어!」)
-      const btnStyle = "padding:2px 5px;font-size:11px;white-space:nowrap;line-height:1.3";
+      // 🌟 2026-08-25 Fix 76 초 컴팩트 (사장님 「한 화면 나오게」!): padding 2/5→1/3, font 11→10, line 1.3→1
+      const btnStyle = "padding:1px 3px;font-size:10px;white-space:nowrap;line-height:1;min-height:0";
       const triggerNextBtn = canTriggerNext
         ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="▶ 다음 단계 즉시 강제 진입! (미체결 시 재시도, 세팅 없어도 마지막 자본으로 진입)">▶</button>`
         : '';

@@ -440,12 +440,15 @@
     /* 헤더 컴팩트 */
     body header, body nav, body .header { padding: 2px 8px !important; min-height: 32px !important; }
     /* 전략 인스턴스 = 진짜 화면 끝까지 (v9: 더 확장) */
-    #section-strategies .strategies-table-wrap { max-height: calc(100vh - 140px) !important; }
+    /* 🌟 2026-08-25 Fix 76 초 컴팩트 (사장님 「한 화면 + 세로 더 넓게」!):
+       calc 값 -140 → -110 = 세로 30px 추가! (헤더 축소분 재활용) */
+    #section-strategies .strategies-table-wrap { max-height: calc(100vh - 110px) !important; }
     /* 전략 행 = 위아래 padding 최소 (= 행간 공간 최소) */
-    .strategies-table-wrap tbody tr td { padding-top: 3px !important; padding-bottom: 3px !important; }
+    /* 🌟 2026-08-25 Fix 76: padding 3→1px + line-height 1.15 = 행당 ~4px 절감 (18행 = 72px!) */
+    .strategies-table-wrap tbody tr td { padding-top: 1px !important; padding-bottom: 1px !important; line-height: 1.15 !important; }
     /* Binance 비교 행 = 더 컴팩트 */
     .strategies-table-wrap tbody tr.binance-compare-row td,
-    .strategies-table-wrap tbody tr td[colspan] { padding-top: 1px !important; padding-bottom: 1px !important; font-size: 11px !important; }
+    .strategies-table-wrap tbody tr td[colspan] { padding-top: 0 !important; padding-bottom: 0 !important; font-size: 10px !important; line-height: 1.1 !important; }
 
     /* 좌측 sidebar v12-5 (사장님 「공백 빼고 축소」) — 더 컴팩트 */
     #section-syshealth .card-header { padding: 2px 6px !important; font-size: 10px !important; }
@@ -754,8 +757,8 @@
       overflow-x: auto !important; overflow-y: auto !important;
       -webkit-overflow-scrolling: touch;
     }
-    /* 🌟 2026-08-25 UI 컴팩트 (사장님 「가로 너무 길어!」): 720 → 640 */
-    .strategies-table-wrap table { min-width: 640px !important; }
+    /* 🌟 2026-08-25 Fix 76 초 컴팩트 (사장님 「한 화면 나오게」!): 720 → 640 → 480 (모바일 대응!) */
+    .strategies-table-wrap table { min-width: 480px !important; }
     .strategies-table-wrap th {
       position: sticky; top: 0; z-index: 2;
       background: #0f172a !important;
@@ -1553,7 +1556,8 @@
       <!-- 2026-06-08 사장님 fix v2: 가로 스크롤바
            PC (= 큰 화면, > 768px) = overflow-x: hidden (= 깔끔, 옛 PR #144)
            모바일 (= 작은 화면, ≤ 768px) = overflow-x: auto (= 사장님 모바일 시각) -->
-      <div class="strategies-table-wrap overflow-y-auto" style="max-height:560px">
+      <!-- 🌟 2026-08-25 Fix 76 CRITICAL: 인라인 max-height:560px 제거 = CSS calc(100vh-110px) 활성 = 세로 3배 확장! (사장님 「한 화면 나오게」!) -->
+      <div class="strategies-table-wrap overflow-y-auto">
         <table class="min-w-max">
           <thead>
             <tr>
@@ -2748,7 +2752,7 @@ function openBBMiddleRanking(direction) {
 <script src="/static/js/dashboard-refresh.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/templates-panel.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/indicators.js?v=20260722v119-grid-align"></script>
-<script src="/static/js/strategies-list.js?v=20260825-ui-compact-issue2"></script>
+<script src="/static/js/strategies-list.js?v=20260825-fix76-ultra-compact"></script>
 <script src="/static/js/external-positions.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/multi-symbol.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/template-save.js?v=20260722v119-grid-align"></script>
