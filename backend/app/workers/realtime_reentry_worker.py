@@ -186,27 +186,14 @@ def _check_indicator_reversal_for_reentry(
 def _is_symbol_learning_ok(db: Session, symbol: str, side: str) -> tuple[bool, str]:
     """🎓 v221 (2026-08-23): 학습 인사이트 활용 = 심볼 성공률 gate!
 
-    사장님: "학습 시스템 활용!" (이미 만들어져 있음!)
-    - top_symbols_long/short = 성공률 50%+ 심볼!
-    - worst_symbols_long/short = 30% 미만 = 진입 금지!
+    🚨 Fix 71 (2026-08-25 사장님 verbatim!):
+    "제한 심볼들 모두 해제해줘 제한 심볼을 만들지 않도록해"
+    → 심볼 이름 기반 worst gate = 완전 해제! (재진입 항상 허용!)
+    → 항상 (True, "disabled_by_sajangnim") 반환!
 
-    표본이 없으면 = 허용 (초기 데이터 부족 대응!)
+    ※ 지표 기반 재진입 판단 (OBV/RSI/BB 반전) 은 상위 로직에서 유지!
     """
-    try:
-        from app.workers.pattern_learning_worker import get_learning_insights
-        ins = get_learning_insights(db) or {}
-        worst_key = f"worst_symbols_{side.lower()}"
-        for row in ins.get(worst_key, []) or []:
-            if row.get("symbol") == symbol:
-                return False, f"학습 worst {row.get('success_rate', 0):.1%}"
-        # top 심볼 = boost 표시! (skip X, 통과!)
-        top_key = f"top_symbols_{side.lower()}"
-        for row in ins.get(top_key, []) or []:
-            if row.get("symbol") == symbol:
-                return True, f"학습 top {row.get('success_rate', 0):.1%}"
-        return True, "학습 데이터 없음(허용)"
-    except Exception as e:
-        return True, f"학습 조회 실패:{e} (허용)"
+    return True, "disabled_by_sajangnim_2026-08-25"
 
 
 def _get_base_capital_from_instance(si: StrategyInstance) -> float:

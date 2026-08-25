@@ -177,27 +177,13 @@ class BB4HScanner(BaseAgent):
         except Exception:
             ticker_map = {}
 
-        # 🚨 v155 사장님 지시 (2026-08-16, -792 USDT 손실 사고!):
-        # 30일 성공률 < 40% 심볼 = 완전 블록!
-        # (기존 = 배율만 조정, 지금은 = 완전 제외!)
-        SYMBOL_BLOCKLIST_THRESHOLD = 0.40
-        blocked_symbols: set[str] = set()
-        try:
-            from app.workers.prediction_outcome_worker import get_symbol_success_rate
-            for sym in symbols:
-                # LONG/SHORT 각각 확인 = 어느 쪽이라도 < 40% = 블록!
-                for chk_side in ("LONG", "SHORT"):
-                    sr = get_symbol_success_rate(db, sym, chk_side, days=30)
-                    if sr < SYMBOL_BLOCKLIST_THRESHOLD:
-                        blocked_symbols.add(sym)
-                        break
-        except Exception as e:
-            logger.warning("[%s] blocklist 계산 실패: %s", self.AGENT_NAME, e)
-        if blocked_symbols:
-            logger.info(
-                "[%s] v155 심볼 블록 = %d개 (성공률 <%.0f%%)",
-                self.AGENT_NAME, len(blocked_symbols), SYMBOL_BLOCKLIST_THRESHOLD * 100,
-            )
+        # 🚨 Fix 71 (2026-08-25 사장님 verbatim!):
+        # "제한 심볼들 모두 해제해줘 제한 심볼을 만들지 않도록해"
+        # → v155 심볼 성공률 blocklist = 완전 해제!
+        # ※ 유지: 지표 기반 판단 (BB/OBV/RSI/CCI) 은 하위 loop 에서 계속 사용!
+        SYMBOL_BLOCKLIST_THRESHOLD = 0.0  # deprecated (Fix 71: 사용 안 함)
+        blocked_symbols: set[str] = set()  # Fix 71: 항상 빈 set!
+        logger.debug("[%s] Fix71: v155 blocklist disabled by 사장님 verbatim", self.AGENT_NAME)
 
         for sym in symbols:
             # 🚨 v155: 블록 심볼 = 완전 스킵!

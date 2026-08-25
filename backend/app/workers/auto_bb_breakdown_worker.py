@@ -477,19 +477,11 @@ def run_auto_bb_breakdown() -> dict:
                 )
                 continue
 
-            # 🚨 v179: 심볼 30일 성공률 < 40% = skip! (30% → 40%!)
-            try:
-                from app.workers.prediction_outcome_worker import get_symbol_success_rate
-                sr = get_symbol_success_rate(db, symbol, side, days=30)
-                if sr < MIN_SYMBOL_SUCCESS_RATE:
-                    skipped += 1
-                    logger.info(
-                        "[auto_bb_breakdown] 🚨 v179 skip: %s (심볼 30일 성공률 %.0f%% < %d%%)",
-                        key, sr * 100, int(MIN_SYMBOL_SUCCESS_RATE * 100),
-                    )
-                    continue
-            except Exception:
-                pass  # sr 조회 실패 = 계속 진행 (fail-open)
+            # 🚨 Fix 71 (2026-08-25 사장님 verbatim!):
+            # "제한 심볼들 모두 해제해줘 제한 심볼을 만들지 않도록해"
+            # → 심볼 30일 성공률 gate = 완전 해제! (심볼 이름 기반 제한!)
+            # ※ 유지: MIN_SUCCESS_PROBABILITY (예측 확률 = 지표 기반!) / REGIME 필터 (지표!)
+            # (기존 v179 심볼 성공률 40% 미만 skip 로직 제거)
 
             # 6b. 성공률 필터! (v201 사장님 「적극」!)
             # 🎓 v188: TOP 학습 심볼 = 완화 필터 (0.65!)
@@ -997,30 +989,15 @@ def _get_btc_change_24h() -> float | None:
 
 def _matches_worst_scenario(it: dict, side: str) -> bool:
     """🚨 v220 사장님 (2026-08-22): WORST 시나리오 blocklist!
-    사장님 지적: 손절 39건 -400 USDT = 학습된 최악 시나리오 진입!
-    - suggestion_type:side 성공률 <20% + 표본 8건+ = blocklist!
-    - bb4h_bottom_reversal:LONG (0%!), bb4h_top_reversal:SHORT (0%!) 자동 skip!
+
+    🚨 Fix 71 (2026-08-25 사장님 verbatim!):
+    "제한 심볼들 모두 해제해줘 제한 심볼을 만들지 않도록해"
+    → 심볼/시나리오 이름 기반 WORST blocklist = 완전 해제!
+    → 항상 False 반환 = 어떤 시나리오도 skip 안 함!
+
+    ※ 지표 기반 판단 (RSI/OBV/CCI) 은 _matches_failure_condition 후반부에서 유지!
     """
-    _stype = it.get("suggestion_type") or it.get("source", "")
-    if not _stype:
-        return False
-    _key = f"{_stype}:{side}"
-    try:
-        from app.workers.pattern_learning_worker import get_learning_insights
-        from app.core.database import SessionLocal as _SL
-        _db2 = _SL()
-        try:
-            _insights = get_learning_insights(_db2) or {}
-        finally:
-            _db2.close()
-        # type_side_rankings 조회!
-        for r in _insights.get("type_side_rankings", []):
-            if r.get("key") == _key and r.get("total", 0) >= WORST_SCENARIO_MIN_TOTAL:
-                _rate = r.get("success_rate", 1.0)
-                if _rate < WORST_SCENARIO_MAX_RATE:
-                    return True  # WORST 시나리오 = skip!
-    except Exception:
-        pass
+    logger.debug("[Fix71] worst_scenario disabled by 사장님 verbatim")
     return False
 
 
@@ -1125,62 +1102,15 @@ def _obv_bucket_local(obv: float) -> str:
 def _get_worst_learning_keys(db: Session) -> set[str]:
     """🎓 v188+v194 사장님: 학습 인사이트 + 실제 손실 = WORST 심볼 자동 제외!
 
-    v188: outcome_status 기반 (인사이트!)
-    🚨 v194 (2026-08-20 사장님 실적 -798/24h 분석!):
-    - 인사이트 outcome_status ≠ 실제 PnL! (CYSUSDT 88%인데 실제 -165!)
-    - **실제 realized_pnl 기반 추가!**
-    - 7일 -100 USDT+ 손실 심볼 = 자동 제외!
-    """
-    worst = set()
-    # 1️⃣ v188: 학습 인사이트 기반!
-    try:
-        from app.workers.pattern_learning_worker import get_learning_insights
-        insights = get_learning_insights(db) or {}
-        for w in insights.get("worst_symbols_short", []):
-            if w.get("total", 0) >= 5:
-                worst.add(f"{w['symbol']}:SHORT")
-        for w in insights.get("worst_symbols_long", []):
-            if w.get("total", 0) >= 5:
-                worst.add(f"{w['symbol']}:LONG")
-    except Exception as e:
-        logger.warning("[v188] worst 인사이트 로드 실패: %s", e)
+    🚨 Fix 71 (2026-08-25 사장님 verbatim!):
+    "제한 심볼들 모두 해제해줘 제한 심볼을 만들지 않도록해"
+    → 심볼 이름 기반 WORST blocklist = 완전 해제!
+    → 항상 빈 set 반환 (계산 X!) = fail-open!
 
-    # 🚨 2️⃣ v194: 실제 realized_pnl 기반! (더 강력!)
-    try:
-        from datetime import timedelta as _td
-        from app.core.strategy_status import TERMINAL_STATUSES as _TS
-        cutoff = datetime.now(timezone.utc) - _td(days=7)
-        rows = db.execute(
-            select(StrategyInstance)
-            .where(StrategyInstance.stopped_at >= cutoff)
-            .where(StrategyInstance.status.in_(list(_TS)))
-        ).scalars().all()
-        sym_pnl: dict[str, dict] = {}
-        for s in rows:
-            key = f"{s.symbol}:{s.side}"
-            pnl = float(s.realized_pnl or 0)
-            if key not in sym_pnl:
-                sym_pnl[key] = {"total": 0.0, "wins": 0, "losses": 0}
-            sym_pnl[key]["total"] += pnl
-            if pnl > 0:
-                sym_pnl[key]["wins"] += 1
-            elif pnl < 0:
-                sym_pnl[key]["losses"] += 1
-        # -100 USDT+ 손실 + 2건+ 손실 + 승률 <30% = worst!
-        for key, s in sym_pnl.items():
-            total_trades = s["wins"] + s["losses"]
-            if total_trades < 2:
-                continue
-            win_rate = s["wins"] / total_trades if total_trades > 0 else 0
-            if s["total"] <= -100 and win_rate < 0.30:
-                worst.add(key)
-                logger.info(
-                    "[v194] worst 추가: %s (%.2f USDT, %d승/%d패)",
-                    key, s["total"], s["wins"], s["losses"],
-                )
-    except Exception as e:
-        logger.warning("[v194] realized_pnl worst 계산 실패: %s", e)
-    return worst
+    ※ 지표 기반 판단 (OBV/BB/RSI) + 시장 국면 판단 (pump_dump_regime) 은 유지!
+    """
+    logger.debug("[Fix71] worst_learning_keys disabled by 사장님 verbatim")
+    return set()
 
 
 def _get_top_learning_keys(db: Session) -> set[str]:
@@ -1434,27 +1364,13 @@ def _is_success_reentry_candidate(db: Session, symbol: str, side: str) -> bool:
 def _get_recent_loss_symbol_keys(db: Session) -> set[str]:
     """🚨 v179: 최근 48h 손실 심볼 keys! (v176 24h → v179 48h!)
 
-    사장님 CBRSUSDT #1013 = -10.97% 손실 → 3분 후 재진입 = 같은 심볼!
-    = 손실 후 즉시 재진입 = 위험! 48h 쿨다운!
+    🚨 Fix 71 (2026-08-25 사장님 verbatim!):
+    "제한 심볼들 모두 해제해줘 제한 심볼을 만들지 않도록해"
+    → 심볼 이름 기반 48h 손실 blocklist = 완전 해제!
+    → 항상 빈 set 반환 = 손실 심볼도 즉시 재진입 허용!
     """
-    from datetime import timedelta
-    loss_keys = set()
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=LOSS_BLOCKLIST_HOURS)
-    # STOPPED 이면서 = realized_pnl < 0 = 손실 심볼!
-    for s in db.execute(
-        select(StrategyInstance)
-        .where(StrategyInstance.status.in_([
-            "STOPPED", "CLOSED", "CLOSED_BY_SL", "STOPPED_CAPITAL_EXHAUSTED",
-        ]))
-        .where(StrategyInstance.stopped_at >= cutoff)
-    ).scalars().all():
-        try:
-            pnl = float(s.realized_pnl or 0)
-            if pnl < 0:  # 손실!
-                loss_keys.add(f"{s.symbol}:{s.side}")
-        except Exception:
-            pass
-    return loss_keys
+    logger.debug("[Fix71] recent_loss_symbol_keys disabled by 사장님 verbatim")
+    return set()
 
 
 def _create_auto_bb_strategy(

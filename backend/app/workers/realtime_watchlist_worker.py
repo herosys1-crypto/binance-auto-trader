@@ -198,18 +198,14 @@ def _build_watchlist(db: Session, tickers: list[dict]) -> list[dict]:
 
 
 def _get_exclude_set(db: Session) -> set[str]:
-    """WORST 심볼 제외 (v188/v194!)"""
-    exclude = set()
-    try:
-        from app.workers.auto_bb_breakdown_worker import _get_worst_learning_keys
-        worst = _get_worst_learning_keys(db)
-        # key = "SYMBOL:SIDE" → symbol만!
-        for k in worst:
-            sym = k.split(":")[0]
-            exclude.add(sym)
-    except Exception:
-        pass
-    return exclude
+    """WORST 심볼 제외 (v188/v194!)
+
+    🚨 Fix 71 (2026-08-25 사장님 verbatim!):
+    "제한 심볼들 모두 해제해줘 제한 심볼을 만들지 않도록해"
+    → 심볼 이름 기반 watchlist exclude = 완전 해제!
+    → 항상 빈 set 반환 = 모든 심볼 watchlist 포함!
+    """
+    return set()
 
 
 def _get_reentry_candidates(db: Session, limit: int = 5) -> list[str]:
