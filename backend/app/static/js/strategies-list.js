@@ -441,7 +441,7 @@ async function refreshStrategies() {
                   onmousedown="event.stopPropagation()"
                   onchange="event.stopPropagation(); updateTp1Threshold(${s.id}, this.value)"
                   class="bg-slate-800 border border-slate-600 rounded text-slate-300"
-                  style="font-size:10px;padding:0 2px;margin-left:4px;cursor:pointer"
+                  style="font-size:11px;padding:1px 3px;margin-left:4px;cursor:pointer"
                   title="🌟 TP1 임계 옵션 (사장님 자율) — 10/15/20/25 즉시 선택 + 즉시 적용! Crisis 모드 = 영구 비활성 (v30). 사장님 상황 인지 = 임의 조정.">
             <option value="0" ${_tp1Pct===0 ? 'selected':''}>🚫 TP 끔 (수동!)</option>
             <option value="10" ${_tp1Pct===10 ? 'selected':''}>TP1 +10%</option>
@@ -471,7 +471,7 @@ async function refreshStrategies() {
                   onmousedown="event.stopPropagation()"
                   onchange="event.stopPropagation(); updateForceSl(${s.id}, this.value)"
                   class="bg-slate-800 border border-slate-600 rounded text-slate-300"
-                  style="font-size:10px;padding:0 2px;margin-left:4px;cursor:pointer"
+                  style="font-size:11px;padding:1px 3px;margin-left:4px;cursor:pointer"
                   title="🛑 손실 한도 강제 청산 (전략별 우선) — 전역=「💼 계정」 설정 따름 / 끔 / -5~-20% 이 전략만. ROI 도달 시 전량 청산 + 종료.">
             <option value="inherit" ${_fslSel==='inherit'?'selected':''}>강제:전역</option>
             <option value="off"     ${_fslSel==='off'?'selected':''}>강제:끔</option>
@@ -560,7 +560,7 @@ async function refreshStrategies() {
       //   3줄 <br> stack (~54px 세로) → 1줄 inline E · M · L (~14px 세로) = 행당 40px 절감!
       //   폰트 11→10px, 색상/tooltip 100% 유지, 정보 손실 ZERO.
       const priceStack = hasPosition
-        ? `<div class="leading-none" style="font-size:10px;white-space:nowrap">
+        ? `<div class="leading-none" style="font-size:11px;white-space:nowrap">
             <span class="text-slate-300" title="평단가 (Entry)">E ${fmtNum(sAvg)}</span>
             <span class="text-slate-600"> · </span>
             <span class="text-cyan-300" title="마크가 (Mark)">M ${fmtNum(sMark)}</span>
@@ -577,7 +577,7 @@ async function refreshStrategies() {
       const addMarginBtnInQty = hasPosition
         ? `<button onclick="event.stopPropagation(); addMargin(${s.id}, '${s.symbol}', '${s.side}')"
                   class="btn-warning btn text-xs"
-                  style="padding:1px 3px;font-size:10px;line-height:1;min-height:0"
+                  style="padding:2px 5px;font-size:11px;line-height:1.1;min-height:0"
                   title="💰 증거금 추가 — ISOLATED 모드 포지션의 청산가 완화 (CROSS 면 거래소 거절)">💰</button>`
         : '';
       // 2026-05-04 (사용자 요청): 「💉 포지션 추가」 — ad-hoc 자유 금액 시장가/지정가 진입.
@@ -587,7 +587,7 @@ async function refreshStrategies() {
       const addPositionBtn = _activeForAddPos
         ? `<button onclick="event.stopPropagation(); openAddPositionModal(${s.id}, '${s.symbol}', '${s.side}', ${s.leverage || 1}, ${s.exchange_account_id || 'null'})"
                   class="btn-primary btn text-xs ml-1"
-                  style="padding:1px 3px;font-size:10px;line-height:1;min-height:0"
+                  style="padding:2px 5px;font-size:11px;line-height:1.1;min-height:0"
                   title="💉 포지션 추가 (ad-hoc) — 자유 금액 시장가/지정가 즉시 진입. qty + 평단 갱신, stage 진행 X. v4 안전망: 사용 시 max_loss 임계 도달하면 Crisis 발동 (stage 미완료라도)">💉</button>`
         : '';
       // 2026-06-06 evening 재활성화 — 사장님 Sub-Account 운영 + Binance UI 직접 청산 불가
@@ -598,7 +598,7 @@ async function refreshStrategies() {
       const manualTpBtn = (_activeForAddPos && hasPosition)
         ? `<button onclick="event.stopPropagation(); openManualTPModal(${s.id}, '${s.symbol}', '${s.side}', ${sQtyAbs}, ${sAvg}, ${sLev})"
                   class="btn-success btn text-xs ml-1"
-                  style="padding:1px 3px;font-size:10px;line-height:1;min-height:0;background:#16a34a;color:white"
+                  style="padding:2px 5px;font-size:11px;line-height:1.1;min-height:0;background:#16a34a;color:white"
                   title="💰 수동 익절 — 현재 보유 포지션 의 N% 시장가 청산 (25%/50%/75%/100% 빠른 선택 또는 직접 입력). Sub-Account 청산 유일 수단.">💰↓</button>`
         : '';
       // 2026-06-05 바이낸스 UI 스타일 단순화 (사장님 요구):
@@ -627,8 +627,8 @@ async function refreshStrategies() {
       //   margin 폰트 14→12, qty 10→9, 세로 30px+ 절감/행
       const qtyStack = hasPosition
         ? `<div class="leading-none" style="white-space:nowrap">
-            <span class="${qtyColor}" style="font-size:9px" title="${qtyTooltip}\n\n📊 notional = 마진 × ${sLev}x = ${positionNotionalDisp.toFixed(0)}/${plannedNotionalDisp.toFixed(0)} USDT">${qtySideIcon} ${fmtQty(sQtyAbs)}</span>
-            <span class="text-slate-100 font-bold" title="${planTooltip}" style="font-size:12px"> ${positionMargin.toFixed(0)}/${plannedMargin.toFixed(0)} <span class="${entryColor}">${entryPct.toFixed(0)}%</span></span>
+            <span class="${qtyColor}" style="font-size:10px" title="${qtyTooltip}\n\n📊 notional = 마진 × ${sLev}x = ${positionNotionalDisp.toFixed(0)}/${plannedNotionalDisp.toFixed(0)} USDT">${qtySideIcon} ${fmtQty(sQtyAbs)}</span>
+            <span class="text-slate-100 font-bold" title="${planTooltip}" style="font-size:13px"> ${positionMargin.toFixed(0)}/${plannedMargin.toFixed(0)} <span class="${entryColor}">${entryPct.toFixed(0)}%</span></span>
             <div style="margin-top:1px;line-height:1">${addMarginBtnInQty}${addPositionBtn}${manualTpBtn}</div>
           </div>`
         : `<div class="leading-none" style="white-space:nowrap">
@@ -676,7 +676,7 @@ async function refreshStrategies() {
                   onmousedown="event.stopPropagation()"
                   onchange="event.stopPropagation(); updateTrailingRetrace(${s.id}, this.value)"
                   class="bg-slate-800 border border-slate-600 rounded text-slate-300"
-                  style="font-size:10px;padding:0 2px;margin-left:4px;cursor:pointer"
+                  style="font-size:11px;padding:1px 3px;margin-left:4px;cursor:pointer"
                   title="Trailing retrace 옵션 — peak 대비 -X% 회귀 시 전량 청산. 운영 중 변경 즉시 적용. spec: TRAILING_RETRACE_POLICY_SPEC_2026-06-08.md">
             <option value="5"  ${_trailingRetracePct===5  ? 'selected':''}>-5%</option>
             <option value="10" ${_trailingRetracePct===10 ? 'selected':''}>-10%</option>
@@ -691,7 +691,7 @@ async function refreshStrategies() {
       const binHealthChip = _showBinCompareInline ? _binanceHealthChip(s) : '';
       const pnl = hasPosition
         ? `<div class="leading-none" style="white-space:nowrap">
-            <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" style="font-size:12px" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span>
+            <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" style="font-size:13px" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span>
             <span class="text-slate-300 font-semibold" style="font-size:13px" title="${posTooltip}">(${posSign}${positionRoi.toFixed(2)}%)</span>${binHealthChip}
             <div style="line-height:1.1">
               <span class="text-slate-300" style="font-size:11px; opacity:0.85" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slInline}${trailingRetraceSelect}
@@ -719,7 +719,7 @@ async function refreshStrategies() {
       const totalStagesForBtn = 20;
       const canTriggerNext = !isTerminal && (s.current_stage || 0) >= 1 && (s.current_stage || 0) < totalStagesForBtn;
       // 🌟 2026-08-25 Fix 76 초 컴팩트 (사장님 「한 화면 나오게」!): padding 2/5→1/3, font 11→10, line 1.3→1
-      const btnStyle = "padding:1px 3px;font-size:10px;white-space:nowrap;line-height:1;min-height:0";
+      const btnStyle = "padding:2px 5px;font-size:11px;white-space:nowrap;line-height:1.1;min-height:0";
       const triggerNextBtn = canTriggerNext
         ? `<button onclick="event.stopPropagation(); triggerNextStage(${s.id})" class="btn-ghost btn text-xs" style="${btnStyle}" title="▶ 다음 단계 즉시 강제 진입! (미체결 시 재시도, 세팅 없어도 마지막 자본으로 진입)">▶</button>`
         : '';
