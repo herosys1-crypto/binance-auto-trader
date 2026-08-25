@@ -52,7 +52,7 @@ PYRAMID_COUNT_TTL_DAYS = 7         # 카운터 7일 후 리셋!
 # = 예: 초기 300 USDT → TP1 실행 → 지속 수익 → 추가 300 → 추가 300!
 # 이전 (v220 Fix 17): MARTINGALE_MULT = [1.0, 2.0, 6.0] (배수 도입 = 사장님 verbatim 위반!)
 # 지금 (v241 Fix 68): 배수 완전 제거 = 초기진입 금액 그대로!
-MAX_PYRAMID_COUNT = 3              # 사장님 상한 유지 ("3단계까지 갈수 있다야 가능하면 가지않는 관리")
+MAX_PYRAMID_COUNT = 2              # 🌟 Fix 98 (2026-08-25 사장님 verbatim!): "tp1 익절후 추가 진입은 최대 2번까지만" = 3 → 2!
 # MARTINGALE_MULT 제거 = 배수 X = 초기진입 금액 그대로!
 
 # 🚨 v220 사장님: 원본 필터 확장! (사장님 지적 root cause!)
