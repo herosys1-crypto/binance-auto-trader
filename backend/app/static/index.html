@@ -445,8 +445,10 @@
     #section-strategies .strategies-table-wrap { max-height: calc(100vh - 110px) !important; }
     /* 전략 행 = 위아래 padding 최소 (= 행간 공간 최소) */
     /* 🌟 2026-08-25 Fix 76: padding 3→1px + line-height 1.15 = 행당 ~4px 절감 */
-    /* 🌟 2026-08-25 Fix 77 (사장님 「가로 널려주고 글자 크게」!): padding 1→2px + line-height 1.3 + 가로 padding 여유 */
-    .strategies-table-wrap tbody tr td { padding-top: 2px !important; padding-bottom: 2px !important; padding-left: 6px !important; padding-right: 6px !important; line-height: 1.3 !important; }
+    /* 🌟 2026-08-25 Fix 77 (사장님 「가로 널려주고 글자 크게」!): padding 1→2px + line-height 1.3 */
+    /* 🌟 2026-08-25 Fix 79 (사장님 「가로 공백 줄여서 한 화면」!): 가로 padding 6→3px = 각 셀 양쪽 6px 절감 (9열 × 6 = 54px 절감!) */
+    .strategies-table-wrap tbody tr td { padding-top: 2px !important; padding-bottom: 2px !important; padding-left: 3px !important; padding-right: 3px !important; line-height: 1.3 !important; }
+    .strategies-table-wrap thead th { padding-left: 3px !important; padding-right: 3px !important; }
     /* Binance 비교 행 = 더 컴팩트 */
     .strategies-table-wrap tbody tr.binance-compare-row td,
     .strategies-table-wrap tbody tr td[colspan] { padding-top: 0 !important; padding-bottom: 0 !important; font-size: 10px !important; line-height: 1.1 !important; }
@@ -759,8 +761,9 @@
       -webkit-overflow-scrolling: touch;
     }
     /* 🌟 2026-08-25 Fix 76 초 컴팩트 (사장님 「한 화면 나오게」!): 720 → 640 → 480 */
-    /* 🌟 2026-08-25 Fix 77 (사장님 「가로 널려주고 글자 크게」!): 480 → 620 (여유 + 가독성!) */
-    .strategies-table-wrap table { min-width: 620px !important; }
+    /* 🌟 2026-08-25 Fix 77 (사장님 「가로 널려주고 글자 크게」!): 480 → 620 */
+    /* 🌟 2026-08-25 Fix 79 (사장님 「가로 공백 줄여 한 화면」!): 620 → 520 (가로 100px 축소!) */
+    .strategies-table-wrap table { min-width: 520px !important; border-collapse: collapse !important; }
     .strategies-table-wrap th {
       position: sticky; top: 0; z-index: 2;
       background: #0f172a !important;
@@ -2754,7 +2757,7 @@ function openBBMiddleRanking(direction) {
 <script src="/static/js/dashboard-refresh.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/templates-panel.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/indicators.js?v=20260722v119-grid-align"></script>
-<script src="/static/js/strategies-list.js?v=20260825-fix78-fonts-bigger"></script>
+<script src="/static/js/strategies-list.js?v=20260825-fix79-two-line"></script>
 <script src="/static/js/external-positions.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/multi-symbol.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/template-save.js?v=20260722v119-grid-align"></script>

@@ -41,14 +41,23 @@ function sideBadge(side, leverage) {
 }
 
 function renderStageBar(current, total) {
+  // 🌟 2026-08-25 Fix 79 (사장님 「익절 20개 두 줄로!」):
+  //   total > 10 = 2줄로 나누기 (10개씩 wrapping!)
+  //   가로 공간 절반 절감!
+  const rowSize = 10;
   let dots = '';
   for (let i = 1; i <= total; i++) {
     let cls = 'stage-dot';
     if (i < current) cls += ' done';
     else if (i === current) cls += ' current';
     dots += `<span class="${cls}"></span>`;
+    // 10개마다 줄바꿈 (total > 10 일 때만!)
+    if (total > rowSize && i % rowSize === 0 && i < total) {
+      dots += '<br>';
+    }
   }
-  return `<span class="stage-bar">${dots} <span class="text-xs text-slate-400 ml-1">${current}/${total}</span></span>`;
+  const wrapStyle = total > rowSize ? 'display:inline-block;vertical-align:middle;line-height:1.4' : '';
+  return `<span class="stage-bar" style="${wrapStyle}">${dots} <span class="text-xs text-slate-400 ml-1">${current}/${total}</span></span>`;
 }
 
 /**
