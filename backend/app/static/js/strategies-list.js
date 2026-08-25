@@ -560,20 +560,15 @@ async function refreshStrategies() {
       const plannedMargin = sCap > 0 ? sCap : 0;
       const plannedNotional = sCap > 0 && sLev > 0 ? sCap * sLev : 0;
 
-      // 평단/마크/청산 — 2줄 (사장님 Fix 79: 가로 공간 확보!)
-      // 1줄: E / M  |  2줄: L
-      // 🌟 2026-08-25 Fix 79 (사장님 「가로 공간 만들어줘 = 두 줄」!):
-      //   1줄 (E · M · L 가로 길게) → 2줄 (E · M + L) = 가로 절반 절감!
+      // 평단/마크/청산 — 3줄 (사장님 Fix 95: 완전 분리!)
+      // 1줄: E (평단!) / 2줄: M (마크!) / 3줄: L (청산!)
+      // 🌟 2026-08-25 Fix 95 (사장님 「3줄로 해줘」!):
+      //   Fix 79 (2줄) → 3줄 완전 분리 = 각 값 명확 시각!
       const priceStack = hasPosition
         ? `<div class="leading-none" style="font-size:var(--font-md);line-height:1.35">
-            <div>
-              <span class="text-slate-300" title="평단가 (Entry)">E ${fmtNum(sAvg)}</span>
-              <span class="text-slate-600"> · </span>
-              <span class="text-cyan-300" title="마크가 (Mark)">M ${fmtNum(sMark)}</span>
-            </div>
-            <div>
-              <span class="text-red-300" title="청산예정 (Liq)">L ${fmtNum(sLiq)}</span>
-            </div>
+            <div><span class="text-slate-300" title="평단가 (Entry)">E ${fmtNum(sAvg)}</span></div>
+            <div><span class="text-cyan-300" title="마크가 (Mark)">M ${fmtNum(sMark)}</span></div>
+            <div><span class="text-red-300" title="청산예정 (Liq)">L ${fmtNum(sLiq)}</span></div>
           </div>`
         : '<span class="text-slate-500">-</span>';
       // 수량/마진 — 2 줄 stack + 「💰 증거금 추가」 버튼 (포지션 보유 시).
