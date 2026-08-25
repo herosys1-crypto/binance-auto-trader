@@ -111,7 +111,9 @@ BTC_DIRECTION_THRESHOLD_LONG = 2.0
 
 # 스캔 상한!
 MAX_SYMBOLS = 40              # 심볼당 4 kline call = API 부담 대응!
-MIN_CONFIDENCE = 0.90         # Fix 61 P1: 0.85 → 0.90 (사장님 신뢰도 상향!)
+MIN_CONFIDENCE = 0.85         # 🌟 Fix 90 (2026-08-25 사장님!): 0.90 → 0.85
+                              # long_bottom_detector와 통일! (기존 = 알람 대부분 drop = 낭비!)
+                              # Fix 87 헌법 78 (급락만) + BTC 필터 + Pattern A skip = 이미 안전!
 MIN_PASSED = 5                # Fix 61 P1: 4/7 → 5/7 (71% = 더 엄격!)
                               # (참고 = 각 패턴 함수는 모든 조건 AND 통과 시만
                               #  detected=True 반환 = 사실상 100% 통과가 게이트.

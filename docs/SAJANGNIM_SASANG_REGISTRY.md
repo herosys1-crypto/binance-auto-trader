@@ -52,6 +52,48 @@
 | SASANG-023 | "다음 단계 남으면 SL 발동 X" (v130) | `backend/app/services/stage_calculator.py` | `_check_next_stage_available` | ✅ |
 | SASANG-024 | "TP1 옵션 - 실시간 변경 = confirm 모달 X" (6-08) | `backend/app/static/index.html` | `updateStrategyRealtime` | ✅ |
 | SASANG-025 | "capital = margin, qty = capital × leverage" (v107) | `backend/app/services/strategy_service.py` | `_calc_quantity` | ✅ |
+| SASANG-026 | "전략에 들어가는건 당일 급등락한 심볼만 거래하는거야" (2026-08-25, 헌법 78) | `backend/app/workers/{auto_long_at_bottom,long_bottom_detector,macd_reversal_15m}_worker.py` | `_check_24h_change_filter` (LONG ≤ -3% / SHORT ≥ +5%) | ✅ |
+| SASANG-027 | "FastAPI dict = Body(...) 필수" (2026-08-25, 헌법 79, Fix 86 사건) | `backend/app/api/v1/strategies.py` | `payload: dict = Body(...)` | ✅ |
+
+---
+
+## SASANG-026 (2026-08-25): 헌법 78 = 급등락 심볼만 거래!
+
+사장님 verbatim: **"전략에 들어가는건 당일 급등락한 심볼만 거래하는거야"**
+
+- **LONG = 24h ≤ -3%** (급락만!)
+- **SHORT = 24h ≥ +5%** (급등만!)
+- **중간 = 진입 절대 금지!**
+
+관련 워커:
+- `backend/app/workers/auto_long_at_bottom_worker.py`
+- `backend/app/workers/long_bottom_detector_worker.py`
+- `backend/app/workers/macd_reversal_15m_worker.py`
+
+관련 Fix: **Fix 87**
+
+---
+
+## SASANG-027 (2026-08-25): 헌법 79 = FastAPI dict = Body(...) 필수!
+
+**발견 사건**: 사장님 UI 저장 422 오류!
+
+**원인**: FastAPI dict 파라미터 = `Body(...)` 없이 사용 시 raw string 파싱 오류!
+
+**해결**: 모든 dict 파라미터 = `payload: dict = Body(...)` 명시!
+
+```python
+# ❌ 잘못된 예 (422 오류!)
+async def update_settings(payload: dict):
+    ...
+
+# ✅ 올바른 예
+from fastapi import Body
+async def update_settings(payload: dict = Body(...)):
+    ...
+```
+
+관련 Fix: **Fix 86**
 
 ---
 
@@ -111,6 +153,7 @@
 | 날짜 | 버전 | 변경 |
 |---|---|---|
 | 2026-08-24 | v1.0 | Fix 60 = 사장님 사상 등록 시스템 신설! (25개 사상 등록!) |
+| 2026-08-25 | v1.1 | Fix 92 = 헌법 78 (급등락만!) + 헌법 79 (FastAPI Body!) 추가! (27개 사상!) |
 
 ---
 

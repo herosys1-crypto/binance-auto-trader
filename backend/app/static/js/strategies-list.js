@@ -602,7 +602,7 @@ async function refreshStrategies() {
         ? `<button onclick="event.stopPropagation(); openManualTPModal(${s.id}, '${s.symbol}', '${s.side}', ${sQtyAbs}, ${sAvg}, ${sLev})"
                   class="btn-success btn text-xs ml-1"
                   style="padding:2px 4px;font-size:var(--font-sm);line-height:1.2;min-height:0;background:#16a34a;color:white"
-                  title="💰 수동 익절 — 현재 보유 포지션 의 N% 시장가 청산 (25%/50%/75%/100% 빠른 선택 또는 직접 입력). Sub-Account 청산 유일 수단.">💰↓</button>`
+                  title="💰 수동 익절 — 현재 보유 포지션 의 N% 시장가 청산 (25%/50%/75%/100% 빠른 선택 또는 직접 입력). Sub-Account 청산 유일 수단.">📤</button>`
         : '';
       // 2026-06-05 바이낸스 UI 스타일 단순화 (사장님 요구):
       // 바이낸스 = Size / Margin / PNL 단순 — 「계획」 같은 거 없음.
