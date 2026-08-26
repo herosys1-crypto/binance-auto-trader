@@ -561,7 +561,10 @@ def run_long_bottom_detector() -> dict:
         active_syms = set()
         try:
             active = db.execute(
-                select(StrategyInstance).where(StrategyInstance.status.in_(list(ACTIVE_LIKE)))
+                select(StrategyInstance).where(
+                    StrategyInstance.status.in_(list(ACTIVE_LIKE)),
+                    StrategyInstance.is_archived.is_(False),  # Fix 171 (헌법 108): 보관된 전략이 심볼을 점유하지 않도록
+                )
             ).scalars().all()
             active_syms = {r.symbol for r in active}
         except Exception:

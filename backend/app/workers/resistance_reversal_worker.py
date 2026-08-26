@@ -353,7 +353,8 @@ def _query_candidates(db):
             .filter(StrategyInstance.side == 'SHORT',
                     StrategyInstance.current_stage == 1,
                     StrategyInstance.resistance_reversal_triggered_at.is_(None),
-                    StrategyInstance.status.in_(list(ACTIVE_LIKE)))
+                    StrategyInstance.status.in_(list(ACTIVE_LIKE)),
+                    StrategyInstance.is_archived.is_(False))  # Fix 171: 보관 전략에 발주 금지
             .limit(MAX_STRATEGIES_PER_CYCLE).all())
 
 

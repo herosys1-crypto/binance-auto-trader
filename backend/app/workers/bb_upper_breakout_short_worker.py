@@ -374,7 +374,8 @@ def run_bb_upper_breakout_short() -> dict:
             from app.models.strategy_instance import StrategyInstance
             active = db.execute(
                 select(StrategyInstance).where(
-                    StrategyInstance.status.in_(list(ACTIVE_LIKE))
+                    StrategyInstance.status.in_(list(ACTIVE_LIKE)),
+                    StrategyInstance.is_archived.is_(False),  # Fix 171 (헌법 108): 보관된 전략이 심볼을 점유하지 않도록
                 )
             ).scalars().all()
             active_syms = {row.symbol for row in active}

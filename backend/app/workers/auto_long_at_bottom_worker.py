@@ -991,7 +991,8 @@ def run_auto_long_at_bottom_once() -> dict:
         try:
             active = db.execute(
                 select(StrategyInstance).where(
-                    StrategyInstance.status.in_(list(ACTIVE_LIKE))
+                    StrategyInstance.status.in_(list(ACTIVE_LIKE)),
+                    StrategyInstance.is_archived.is_(False),  # Fix 171 (헌법 108): 보관된 전략이 심볼을 점유하지 않도록
                 )
             ).scalars().all()
             active_syms = {r_.symbol for r_ in active}
