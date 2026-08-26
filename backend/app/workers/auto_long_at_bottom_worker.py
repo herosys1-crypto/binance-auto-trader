@@ -769,14 +769,26 @@ def run_auto_long_at_bottom_once() -> dict:
             }
 
         # 1. daily_limit 체크 (v219 통합!)
+        # 🚨 Fix 109 (2026-08-26 헌법 80): 조기 return 무로그 금지!
+        #   무로그 return = 「워커가 죽음」과 「조용히 종료」를 구별 불가!
+        #   (realtime_reentry 가 정확히 이것 때문에 며칠간 침묵했음 = Fix 103!)
         daily_limit = _get_daily_limit(db)
         if daily_limit <= 0:
+            logger.warning(
+                "[auto_long_bottom] SKIP: daily_limit=%d = 자동 진입 OFF (사장님 명시 정지!)",
+                daily_limit,
+            )
             return {"note": "daily_limit=0 (OFF!)", "entered": 0, "spec": SPEC_VERSION}
 
         from app.workers.auto_bb_breakdown_worker import _count_used_slots
         used = _count_used_slots(db)
         remaining = daily_limit - used
         if remaining <= 0:
+            logger.warning(
+                "[auto_long_bottom] SKIP: 일일 슬롯 소진 %d/%d (remaining=%d) "
+                "= 오늘 진입 종료! (KST 자정 리셋 대기)",
+                used, daily_limit, remaining,
+            )
             return {
                 "note": f"daily {used}/{daily_limit} (v219 공유 counter!)",
                 "entered": 0, "spec": SPEC_VERSION,
@@ -787,12 +799,16 @@ def run_auto_long_at_bottom_once() -> dict:
             select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
         ).scalar_one_or_none()
         if not account:
+            logger.warning("[auto_long_bottom] SKIP: mainnet 계정 없음! (설정 확인 필요)")
             return {"error": "mainnet 계정 없음!", "entered": 0, "spec": SPEC_VERSION}
 
         # 3. API Ban 체크!
         try:
             from app.core.api_backoff import is_account_banned
             if is_account_banned(account.id):
+                logger.warning(
+                    "[auto_long_bottom] SKIP: API Ban 중! (account_id=%s)", account.id,
+                )
                 return {"error": "API Ban 중!", "entered": 0, "spec": SPEC_VERSION}
         except Exception:
             pass

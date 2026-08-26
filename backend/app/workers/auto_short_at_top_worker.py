@@ -101,8 +101,17 @@ def run_auto_short_at_top() -> dict:
     results: list[dict] = []
     try:
         # 1. daily_limit 체크! (v219 통합 = auto_bb_break_daily_limit 공유!)
+        # 🚨 Fix 109 (2026-08-26 헌법 80): 조기 return 무로그 금지!
+        #   사장님 실측: 「[sajangnim_top_v219] 완료」 로그가 30초마다 나오다가
+        #   갑자기 0건 = 워커가 죽은 건지 조기 종료인지 구별 불가!
+        #   → realtime_reentry 와 똑같은 silent bug (Fix 103 에서 겪은 것!)
+        #   → 모든 조기 return 에 반드시 사유 로그!
         daily_limit = _get_daily_limit(db)
         if daily_limit <= 0:
+            logger.warning(
+                "[sajangnim_top_v219] SKIP: daily_limit=%d = 자동 진입 OFF (사장님 명시 정지!)",
+                daily_limit,
+            )
             return {"note": "daily_limit=0 (OFF!)", "entered": 0}
 
         # 통합 카운트 = 모든 자동 진입 (BB + PENDING_HC + OBV + v219 정점!) 포함!
@@ -110,6 +119,11 @@ def run_auto_short_at_top() -> dict:
         used = _count_v219_used_slots(db)
         remaining = daily_limit - used
         if remaining <= 0:
+            logger.warning(
+                "[sajangnim_top_v219] SKIP: 일일 슬롯 소진 %d/%d (remaining=%d) "
+                "= 오늘 진입 종료! (KST 자정 리셋 대기)",
+                used, daily_limit, remaining,
+            )
             return {"note": f"daily {used}/{daily_limit} (통합!)", "entered": 0}
 
         # 2. Redis 알람 조회!
@@ -118,6 +132,10 @@ def run_auto_short_at_top() -> dict:
 
         alert_keys = list(r.scan_iter(ALERT_PATTERN))
         if not alert_keys:
+            logger.info(
+                "[sajangnim_top_v219] 완료: 정점 알람 0건 (슬롯 %d/%d 여유 %d)",
+                used, daily_limit, remaining,
+            )
             return {"note": "정점 알람 없음!", "entered": 0}
 
         # 3. 활성 심볼 skip!
