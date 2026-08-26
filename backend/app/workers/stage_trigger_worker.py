@@ -366,12 +366,89 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     # 🌟 v18 fix: cooldown 차단 = 사장님 즉시 인지!
                     _record_block_reason(_redis, strategy.id, "Redis margin cooldown (30분 대기)", next_stage_no)
                     continue
-                if not next_plan.trigger_price:
-                    # LIQUIDATION_BUFFER 모드 (마지막 단계) — trigger_price 가 None.
-                    # 실시간으로 청산가 -5% 기반 산출 필요. 일단 skip (후속 작업으로 분리).
-                    _record_block_reason(_redis, strategy.id, f"단계{next_stage_no} trigger_price=None (LIQUIDATION_BUFFER 미구현)", next_stage_no)
-                    _alert_silent_block_once(_redis, db, strategy, f"단계{next_stage_no} trigger_price 미설정", next_stage_no)
-                    continue
+                # ══════════════════════════════════════════════════════════
+                # 🚨 Fix 113 (2026-08-26 사장님: "새전략 기본방식 / OBV
+                #    자동 단계별 진입이 진행되지 않아")
+                #
+                # 옛 버그: 여기서 trigger_price 가 없으면 무조건 continue.
+                #   그런데 모드 분기(아래 L~470)는 이 게이트 「뒤」에 있다!
+                #   → 가격 트리거를 애초에 쓰지 않는 3개 모드가 전부 영구 차단:
+                #     (1) OBV_REVERSE          = OBV 신호로 진입 (가격 무관!)
+                #     (2) LIQUIDATED_WAITING_RETRY = 청산가 기준 (가격 무관!)
+                #     (3) LIQUIDATION_BUFFER   = 청산가 기반 실시간 산출 대상인데
+                #                                산출 코드가 없어 "미구현" 상태였음
+                #   ⚠️ Decimal("0") 도 falsy → trigger_price=0 이어도 같이 막혔음!
+                #
+                # 신: 모드를 「먼저」 판정하고, 가격 트리거가 실제로 필요한
+                #     경로에만 이 게이트를 적용한다. LIQUIDATION_BUFFER 는
+                #     이 자리에서 청산가 기준으로 산출 (= 미구현 해소!).
+                # ══════════════════════════════════════════════════════════
+                _tpl_trigger_mode = "PRICE_DOWN_PCT"
+                try:
+                    from app.models.strategy_template import StrategyTemplate as _TmplM0
+                    _tpl_row0 = (
+                        db.get(_TmplM0, strategy.strategy_template_id)
+                        if strategy.strategy_template_id else None
+                    )
+                    if _tpl_row0 and getattr(_tpl_row0, "trigger_mode", None):
+                        _tpl_trigger_mode = _tpl_row0.trigger_mode
+                except Exception as _tme:
+                    logger.warning("[Fix113] #%s template trigger_mode 조회 실패: %s", strategy.id, _tme)
+
+                _plan_mode = str(getattr(next_plan, "trigger_mode", "") or "").upper()
+                _is_retry_mode = strategy.status == "LIQUIDATED_WAITING_RETRY"
+                _is_obv_mode = _tpl_trigger_mode == "OBV_REVERSE"
+                _is_liqbuf_mode = _plan_mode == "LIQUIDATION_BUFFER"
+
+                _trigger_px = next_plan.trigger_price
+                if not _trigger_px:
+                    if _is_liqbuf_mode:
+                        # 🎯 Fix 113: 「청산가 산출 시점에 채움」 = 여기가 그 시점!
+                        #   SHORT = 가격이 위로 가며 청산에 접근 → 청산가 살짝 아래에서 진입
+                        #   LONG  = 가격이 아래로 가며 청산에 접근 → 청산가 살짝 위에서 진입
+                        _liq = None
+                        try:
+                            _lp = PositionRepository(db).latest_by_strategy(strategy.id)
+                            if _lp and _lp.liquidation_price:
+                                _liq = Decimal(str(_lp.liquidation_price))
+                            elif strategy.last_liquidation_price:
+                                _liq = Decimal(str(strategy.last_liquidation_price))
+                        except Exception as _le:
+                            logger.warning("[Fix113/liqbuf] #%s 청산가 조회 실패: %s", strategy.id, _le)
+                        if not _liq or _liq <= 0:
+                            _record_block_reason(
+                                _redis, strategy.id,
+                                f"단계{next_stage_no} LIQUIDATION_BUFFER: 청산가 미확보 (거래소 동기화 대기)",
+                                next_stage_no,
+                            )
+                            continue
+                        _buf_pct = Decimal(str(getattr(next_plan, "trigger_percent", None) or 5))
+                        if strategy.side == "SHORT":
+                            _trigger_px = _liq * (Decimal("1") - _buf_pct / Decimal("100"))
+                        else:
+                            _trigger_px = _liq * (Decimal("1") + _buf_pct / Decimal("100"))
+                        logger.info(
+                            "[Fix113/liqbuf] #%s %s 단계%d trigger 산출: 청산가=%s buffer=%s%% → %s",
+                            strategy.id, strategy.side, next_stage_no, _liq, _buf_pct, _trigger_px,
+                        )
+                    elif _is_retry_mode or _is_obv_mode:
+                        # 가격 트리거 불필요 = 통과! (아래 모드 분기에서 실제 판정)
+                        logger.info(
+                            "[Fix113] #%s 단계%d trigger_price 없음이지만 %s 모드 = 통과!",
+                            strategy.id, next_stage_no,
+                            "LIQUIDATED_WAITING_RETRY" if _is_retry_mode else "OBV_REVERSE",
+                        )
+                    else:
+                        _record_block_reason(
+                            _redis, strategy.id,
+                            f"단계{next_stage_no} trigger_price 미설정 (mode={_plan_mode or 'N/A'})",
+                            next_stage_no,
+                        )
+                        _alert_silent_block_once(
+                            _redis, db, strategy,
+                            f"단계{next_stage_no} trigger_price 미설정", next_stage_no,
+                        )
+                        continue
                 # 현재 mark price 조회.
                 # 🚨 2026-06-22 사장님 critical fix (v51 — "또 2단계가 진행되지 않았어"):
                 # 옛 버그: DB Position snapshot 의 mark_price 만 사용 → stage 1 진입 직후엔
@@ -428,14 +505,8 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 # spec: docs/CHART_REENTRY_STRATEGY_SPEC.md
                 # 기존 (PRICE_DOWN_PCT): 가격 도달 시 진입
                 # 신 (OBV_REVERSE): 4H OBV 첫 하락 + 15m/1h + 10% 가격 이동
-                _tpl_trigger_mode = "PRICE_DOWN_PCT"
-                try:
-                    from app.models.strategy_template import StrategyTemplate as _TmplM
-                    _tpl_row = db.get(_TmplM, strategy.strategy_template_id) if strategy.strategy_template_id else None
-                    if _tpl_row and getattr(_tpl_row, "trigger_mode", None):
-                        _tpl_trigger_mode = _tpl_row.trigger_mode
-                except Exception:
-                    pass
+                # ⚠️ Fix 113: _tpl_trigger_mode 는 위(trigger_price 게이트 직전)에서
+                #   이미 판정했다 = 재조회 X (헌법 6 단일 진실 + DB 왕복 절약).
                 should_fire = False
                 # 🌟 v131 (2026-08-09 사장님!): 청산 후 자동 재진입!
                 # LIQUIDATED_WAITING_RETRY = 청산가 기준 트리거 감시! (retry_trigger_pct!)
@@ -509,7 +580,9 @@ def run_stage_trigger_once(decrypt_text) -> None:
                         should_fire = False
                 else:
                     # 기존 로직 (PRICE_DOWN_PCT)
-                    trigger = Decimal(str(next_plan.trigger_price))
+                    # ⚠️ Fix 113: next_plan.trigger_price 가 아니라 _trigger_px 사용!
+                    #   LIQUIDATION_BUFFER 는 위에서 청산가 기준으로 방금 산출했다.
+                    trigger = Decimal(str(_trigger_px))
                     # SHORT: 가격 위로 더 갔으면 추가 SHORT 진입 (mark >= trigger)
                     # LONG: 가격 아래로 더 갔으면 추가 LONG 진입 (mark <= trigger)
                     should_fire = (mark >= trigger) if strategy.side == "SHORT" else (mark <= trigger)
