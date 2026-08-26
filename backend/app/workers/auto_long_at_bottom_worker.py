@@ -124,6 +124,10 @@ CCI_MIN_TURNUP = 5.0          # CCI now > prev + 5 = 반등!
 # (24h 는 "움직인 종목인가"를 거르는 1차 필터일 뿐, 방향 판정 도구가 아니다)
 # ═══════════════════════════════════════════════════════════════════════════
 MIN_ABS_24H_CHANGE = 3.0      # |24h| >= 3% = 당일 급등락 종목 (헌법 78)
+# 🎯 Fix 150: 급등 종목이 「조정 중」인지 판정하는 BB 위치 상한
+#   bb_pos = (종가-하단)/(상단-하단). 0.5 = 중단, 1.0 = 상단
+#   사장님 "급등후 조정 볼밴 중단 지지" → 중단(0.5) 이하로 내려왔을 때만 LONG
+PUMP_PULLBACK_MAX_BBPOS = 0.5
 MIN_24H_CHANGE = -15.0        # (레거시 = 패턴 B 등 다른 참조 유지용)
 MAX_24H_CHANGE = -3.0         # (레거시)
 
@@ -465,16 +469,76 @@ def _check_long_entry_conditions(bc, symbol: str, ticker_24h: dict) -> dict:
                 ),
                 "trend": trend, "pattern": "A_SKIPPED",
             }
-        # 패턴 B (급락 후 반전) 만 유지!
-        if PATTERN_B_MIN_CHG <= chg24 <= PATTERN_B_MAX_CHG:
+        # ═══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 150 (2026-08-26): 사장님 LONG 시나리오 3 이 코드에 아예 없었다
+        #
+        # 사장님 verbatim (헌법 73~75):
+        #   "급등후 조정 볼밴 중단 지지와 하단 지지에 진입해야 해"
+        #
+        # Fix 87 이 「헌법 78 = LONG 은 급락만」을 근거로 패턴 A 를 통째로 막았는데,
+        # 두 가지를 혼동했다:
+        #   (a) 급등 「중」 상승 지속 LONG = 추격매수 = 위험 = 막는 게 맞다
+        #   (b) 급등 「후」 조정에서 BB중단/하단 지지 LONG = 사장님이 원하는 진입
+        # 둘은 BB 위치로 구별된다. (a)는 상단 근처, (b)는 중단 이하로 내려와 있다.
+        #
+        # 그리고 아래 fallthrough 때문에 24h < -15% (진짜 급락) 도 전부 탈락했다.
+        # 사장님 시나리오 1 의 가장 강한 케이스가 배제되고 있었던 것.
+        #
+        # → 급락은 하한 제거, 급등은 「BB 중단 이하로 조정됐을 때만」 허용.
+        # ═══════════════════════════════════════════════════════════════════
+
+        # 시나리오 1·2: 급락 (하한 제거 = -22%, -30% 도 후보)
+        if chg24 <= PATTERN_B_MAX_CHG:
             return _check_pattern_B_after_correction(
                 bc, symbol, ticker_24h, trend, chg24,
             )
+
+        # 시나리오 3: 급등 후 「조정」 — BB 중단 이하로 내려왔을 때만
+        if chg24 >= PATTERN_A_MIN_CHG:
+            _bbpos = None
+            try:
+                from app.services.chart_analyzer import ChartAnalyzer
+                _a15 = ChartAnalyzer.analyze_timeframe(bc, symbol, "15m", limit=80)
+                if _a15:
+                    _cl = _a15.get("closes") or []
+                    _up, _lo = _a15.get("bb_up_last"), _a15.get("bb_lo_last")
+                    if _cl and _up is not None and _lo is not None:
+                        _w = float(_up) - float(_lo)
+                        if _w > 0:
+                            _bbpos = (float(_cl[-1]) - float(_lo)) / _w
+            except Exception as _be:
+                logger.warning("[Fix150] %s bb_pos 산출 실패: %s", symbol, _be)
+
+            if _bbpos is None:
+                return {
+                    "detected": False, "passed": 0, "confidence": 0.0,
+                    "reason": f"24h={chg24:.2f}% 급등 but BB 위치 확인 불가 = skip",
+                    "trend": trend, "pattern": "A_NO_BBPOS",
+                }
+            if _bbpos > PUMP_PULLBACK_MAX_BBPOS:
+                return {
+                    "detected": False, "passed": 0, "confidence": 0.0,
+                    "reason": (
+                        f"24h={chg24:.2f}% 급등 중 BB {_bbpos:.2f} (>{PUMP_PULLBACK_MAX_BBPOS}) "
+                        f"= 아직 상단권 = 추격매수 금지 (헌법 78)"
+                    ),
+                    "trend": trend, "pattern": "A_STILL_HIGH",
+                }
+            # BB 중단 이하로 조정됨 = 사장님 시나리오 3 = 급락 판정 로직 재사용
+            logger.info(
+                "[Fix150] %s 급등 후 조정 감지: 24h=%+.2f%% BB위치=%.2f (<=%.2f) "
+                "= 사장님 시나리오 3 진입 검사",
+                symbol, chg24, _bbpos, PUMP_PULLBACK_MAX_BBPOS,
+            )
+            return _check_pattern_B_after_correction(
+                bc, symbol, ticker_24h, trend, chg24,
+            )
+
         return {
             "detected": False, "passed": 0, "confidence": 0.0,
             "reason": (
-                f"24h={chg24:.2f}% 급락 범위 밖 "
-                f"(Fix 87 = B={PATTERN_B_MIN_CHG}~{PATTERN_B_MAX_CHG} 만!)"
+                f"24h={chg24:.2f}% = 당일 급등락 아님 "
+                f"(급락<={PATTERN_B_MAX_CHG}% or 급등>={PATTERN_A_MIN_CHG}%)"
             ),
             "trend": trend,
         }
