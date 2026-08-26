@@ -1390,7 +1390,7 @@ def _get_recent_loss_symbol_keys(db: Session) -> set[str]:
 def _create_auto_bb_strategy(
     db: Session, symbol: str, side: str, cfg: dict[str, Any],
     strategy_type_suffix: str = "",
-) -> StrategyInstance:
+) -> StrategyInstance | None:   # Fix 168: None 반환 경로가 실재한다 (주석이 거짓이었다)
     """사장님 default profile 기반 = template + strategy 자동 생성!
 
     🎯 v203: strategy_type_suffix (예: "_reentry1") = 재진입 번호!
@@ -1398,6 +1398,39 @@ def _create_auto_bb_strategy(
     - "_reentry1" = 1차 재진입!
     - "_reentry2" = 2차 재진입!
     """
+    # ══════════════════════════════════════════════════════════════════
+    # 🚨 Fix 168 (2026-08-26): 생성 **직전** 동시보유 상한 재검사 (워커 간 TOCTOU).
+    #
+    # 각 워커는 루프 시작 전 1회만 check_position_slot 으로 remaining 을 잡고
+    # 그 예산만큼 만든다. 그런데 guarded_job 의 락은 **job 이름별**이라
+    # unified_15m / realtime_reentry / auto_long_bottom / pending_hc_fast /
+    # auto_short_top / auto_bb_breakdown 이 동시에 돌 수 있고,
+    # 각자 같은 remaining 을 자기 예산으로 잡는다 → 합계가 상한을 넘는다.
+    #   실측 증거: "[sajangnim_top_v219+Fix112] SKIP: 동시보유 상한 도달 36/20"
+    #             (상한 20 인데 활성 36 = 80% 초과)
+    #
+    # 이 함수가 자동 진입 6개 워커의 **공용 생성 깔때기**이므로, 호출부 6곳을
+    # 각각 고치는 대신 여기 한 곳에서 막는다 (헌법 101 = 읽는 함수가 여럿이면 어긋난다).
+    # count_active_positions 는 DB 를 새로 읽으므로 경쟁하는 워커의 생성분도 즉시 반영된다.
+    #
+    # fail-SAFE: 검사 자체가 실패하면 **만들지 않는다** (자본을 늘리는 방향이므로).
+    # ══════════════════════════════════════════════════════════════════
+    try:
+        from app.services.position_limit import check_position_slot
+        _ok, _why, _act, _cap = check_position_slot(db, "create_auto_bb")
+        if not _ok:
+            logger.warning(
+                "[auto_bb_breakdown] ⛔ Fix168 생성 직전 상한 재검사 차단: %s (%s %s)",
+                _why, symbol, side,
+            )
+            return None
+    except Exception as _slot_e:
+        logger.error(
+            "[auto_bb_breakdown] ⛔ Fix168 상한 재검사 실패 → 생성 보류 (%s %s): %s",
+            symbol, side, _slot_e,
+        )
+        return None
+
     # symbol 검증!
     symbol_row = db.execute(
         select(Symbol).where(Symbol.symbol == symbol)
