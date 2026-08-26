@@ -12,12 +12,21 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Fix 141: OBV 기울기/평균거래량 산출 창 (4H 봉 기준 = 약 3~4일)
+OBV_SLOPE_LOOKBACK = 20
+
 # Fix 65 상수 (사장님 사상!)
 # OBV 극단 임계값 = 심볼별 상대적이지만 = 절대값 기준!
 # 4H OBV 절대값이 = 유통량 대비 매우 크면 = 극단!
 # 실제: OBV / 최근 봉의 볼륨 = 상대적 비율 판단!
 
-OBV_EXTREME_RATIO = 20.0  # OBV / avg_volume >= 20 = 극단!
+# 🚨 Fix 141: ratio 지표 자체가 잘못돼 있었다.
+#   옛: |누적 OBV| / 봉당 평균거래량  → 봉 수에 비례해 커진다 (80봉이면 ~80)
+#       임계 20 은 거의 항상 초과 = 의미 없는 수치
+#   신: |누적 OBV| / (평균거래량 × 봉수) = 0~1
+#       "전체 거래량 중 몇 %가 한 방향이었는가" = 세력 확신도
+#   0.6 = 전체의 60% 가 한 방향 = 진짜 극단으로 본다
+OBV_EXTREME_RATIO = 0.6
 
 
 def _get_obv_direction_4h(bc, symbol) -> tuple:
@@ -34,9 +43,43 @@ def _get_obv_direction_4h(bc, symbol) -> tuple:
         if not result:
             return ("unknown", 0.0, 0.0)
 
-        obv_slope = result.get("obv_slope")
-        obv_now = result.get("obv_now") or 0
-        avg_vol = result.get("avg_volume") or 1
+        # ═══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 141 (2026-08-26): 이 게이트는 「존재하지 않는 키」를 읽고 있었다
+        #
+        # analyze_timeframe(chart_analyzer.py) 이 실제로 돌려주는 키는
+        #   closes / volumes / obv / rsi_now / rsi_prev / macd_hist /
+        #   cci_now / cci_prev / bb_up_last / bb_mid_last / bb_lo_last / kl_count
+        # 이며 obv_slope / obv_now / avg_volume 은 「없다」.
+        # → obv_slope 가 항상 None → direction="unknown" → check_obv_gate 가
+        #   무조건 (True, "unknown_pass") 로 통과.
+        # → OBV 게이트를 쓰는 워커 6개 전부에서 이 안전장치가 무효였다.
+        #   (auto_long_at_bottom / auto_short_at_top / bb_upper_breakout_short /
+        #    long_bottom_detector / macd_reversal_15m / pump_dump_early_detector)
+        #
+        # 사장님 사상에서 OBV 는 「지속성」의 핵심 지표인데 그게 죽어 있었다.
+        # → 실제 반환값(obv 리스트, volumes)에서 직접 산출한다.
+        # ═══════════════════════════════════════════════════════════════════
+        _obv = result.get("obv") or []
+        _vols = result.get("volumes") or []
+
+        obv_now = float(_obv[-1]) if _obv else 0.0
+
+        # 기울기: 창 진폭 대비 % (심볼 스케일 차이를 제거해야 임계 비교가 의미를 갖는다)
+        obv_slope = None
+        try:
+            from app.services.mtf_snapshot import _slope_pct
+            obv_slope = _slope_pct([float(x) for x in _obv], OBV_SLOPE_LOOKBACK)
+        except Exception as _se:
+            logger.warning("[Fix141/obv] %s 기울기 산출 실패: %s", symbol, _se)
+
+        # 평균 거래량 (ratio 의 분모)
+        try:
+            _recent = [float(v) for v in _vols[-OBV_SLOPE_LOOKBACK:]] if _vols else []
+            avg_vol = (sum(_recent) / len(_recent)) if _recent else 1.0
+        except Exception:
+            avg_vol = 1.0
+        if avg_vol <= 0:
+            avg_vol = 1.0
 
         # 방향
         if obv_slope is None:
@@ -49,7 +92,9 @@ def _get_obv_direction_4h(bc, symbol) -> tuple:
             direction = "flat"
 
         # 절대값 상대 비율
-        ratio = abs(float(obv_now)) / max(abs(float(avg_vol)), 1.0)
+        # Fix 141: 봉 수로 정규화 → 0~1 (전체 거래량 대비 방향성 비율)
+        _bars = max(len(_obv), 1)
+        ratio = abs(obv_now) / max(abs(avg_vol) * _bars, 1.0)
 
         return (direction, ratio, float(obv_now))
     except Exception as e:
@@ -79,27 +124,37 @@ def check_obv_gate(bc, symbol: str, side: str) -> tuple:
         if side == "LONG":
             # 4H OBV 매우 큰 음수 = 세력 이탈 = LONG 금지!
             if direction == "down" and ratio >= OBV_EXTREME_RATIO:
-                reason = f"LONG skip: 4H OBV 극단 하락 (ratio={ratio:.1f} obv={obv_now:.0f})"
+                reason = f"LONG skip: 4H OBV 극단 하락 (ratio={ratio:.3f} obv={obv_now:.0f})"
                 logger.warning("[Fix65/gate] %s %s: %s", symbol, side, reason)
                 return (False, reason)
-            # 4H OBV 방향 = 하락 지속 = LONG 위험!
+            # 🚨 Fix 141: 「방향만으로 무조건 차단」 제거!
+            #   사장님 LONG 시나리오 1 = "급락 후 반등" → 급락 종목은 OBV 가 하락 상태다.
+            #   그걸 무조건 막으면 사장님이 원하는 진입을 정확히 차단하게 된다.
+            #   (Fix 114 의 24h 절대 필터와 같은 실수)
+            #   → 극단(ratio >= OBV_EXTREME_RATIO) 만 남긴다 = 세력 이탈 방어는 유지.
             if direction == "down":
-                reason = f"LONG skip: 4H OBV 하락 지속 (ratio={ratio:.1f})"
-                logger.info("[Fix65/gate] %s %s: %s", symbol, side, reason)
-                return (False, reason)
+                logger.info(
+                    "[Fix141/gate] %s LONG: 4H OBV 하락이지만 극단 아님 "
+                    "(ratio=%.3f < %.2f) = 통과 (반등 진입 허용)",
+                    symbol, ratio, OBV_EXTREME_RATIO,
+                )
 
         # SHORT 진입 시:
         elif side == "SHORT":
             # 4H OBV 매우 큰 양수 = 세력 매집 = SHORT 금지!
             if direction == "up" and ratio >= OBV_EXTREME_RATIO:
-                reason = f"SHORT skip: 4H OBV 극단 상승 (ratio={ratio:.1f} obv={obv_now:.0f})"
+                reason = f"SHORT skip: 4H OBV 극단 상승 (ratio={ratio:.3f} obv={obv_now:.0f})"
                 logger.warning("[Fix65/gate] %s %s: %s", symbol, side, reason)
                 return (False, reason)
-            # 4H OBV 방향 = 상승 지속 = SHORT 위험!
+            # 🚨 Fix 141: 헌법 72 = "급등해서 볼밴 상단돌파 했을때 마틴게일 진입"
+            #   급등 종목은 OBV 가 상승 상태다. 방향만으로 막으면 헌법 72 가 영구 봉쇄된다.
+            #   → 극단만 차단.
             if direction == "up":
-                reason = f"SHORT skip: 4H OBV 상승 지속 (ratio={ratio:.1f})"
-                logger.info("[Fix65/gate] %s %s: %s", symbol, side, reason)
-                return (False, reason)
+                logger.info(
+                    "[Fix141/gate] %s SHORT: 4H OBV 상승이지만 극단 아님 "
+                    "(ratio=%.3f < %.2f) = 통과 (헌법 72 정점 진입 허용)",
+                    symbol, ratio, OBV_EXTREME_RATIO,
+                )
 
         # 통과!
         return (True, f"pass:{direction}_ratio_{ratio:.1f}")
