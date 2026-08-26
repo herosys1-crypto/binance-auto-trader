@@ -35,6 +35,10 @@ async function submitCreate() {
   // 사장님 SYNUSDT = 트리거 +45% = 너무 멀음 = 자동 진입 X = 사장님 자본 손실!
   // = 신 fix: 트리거 > 30% 단계 발견 시 = 사전 위험 알림!
   try {
+    // 🎯 Fix 173 (2026-08-27): OBV 모드는 트리거 % 를 쓰지 않는다 →
+    //   SYNUSDT 경고(트리거가 멀어 자동 진입 실패)는 이 모드에 해당하지 않는다.
+    //   그대로 두면 사장님이 상관없는 경고를 매번 확인해야 한다.
+    const _isObvMode = (cmState._triggerMode === 'OBV_REVERSE');
     const _maxSafeTrigger = 30;
     const _warnTriggers = [];
     for (let i = 2; i <= 10; i++) {
@@ -55,7 +59,7 @@ async function submitCreate() {
         _warnTriggers.push(`마지막 단계: 트리거 ${lastTrg}%`);
       }
     }
-    if (_warnTriggers.length > 0) {
+    if (!_isObvMode && _warnTriggers.length > 0) {   // Fix 173: OBV 모드는 해당 없음
       const proceed = confirm(
         `⚠️ 트리거 % 위험 사전 알림! (= 사장님 SYNUSDT 사건!)\n\n` +
         `🚨 다음 단계 = 트리거 ${_maxSafeTrigger}% 초과:\n` +

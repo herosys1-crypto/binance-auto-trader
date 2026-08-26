@@ -623,31 +623,73 @@ def run_stage_trigger_once(decrypt_text) -> None:
                         logger.warning("[stage-trigger v131 retry] 판정 실패: %s", _e)
                         should_fire = False
                 elif _tpl_trigger_mode == "OBV_REVERSE":
-                    # 신 로직 v130: ChartAnalyzer 호출!
-                    # 이전 손절가 = strategy.avg_entry_price (1단계 진입가 = 손절 기준)
-                    # 또는 prev_stage_plan.trigger_price (이전 stage 진입가)
+                    # ══════════════════════════════════════════════════════════
+                    # 🎯 Fix 173 (2026-08-27 사장님): 「운영 중인 로직」으로 단계 진입.
+                    #
+                    # 사장님 verbatim:
+                    #   "기본에는 트리거%를 내가 임의로 정했는데 지금부터는 지금 운영중인
+                    #    로직으로 포지션에 들어가게 해줘 ... 지금까지 다음 포지션 진입에
+                    #    대한 신뢰가 없어서 사용하지 못했는데 가능할까?"
+                    #
+                    # 옛 코드는 ChartAnalyzer.check_obv_reverse_signal 을 썼는데
+                    # 신뢰를 못 받은 이유가 코드에 그대로 있었다:
+                    #   1) **SHORT 전용 하드코딩** — check_4h_first_bear_bar /
+                    #      check_15m_1h_bearish_trend 둘 다 「하락」만 본다.
+                    #      LONG 전략에 걸면 방향이 반대라 사실상 발동하지 않는다.
+                    #   2) **3중 AND** (4H 첫 하락봉 AND 15m+1h 하락 AND 손절가 대비 10%)
+                    #      — 동시에 성립하는 창이 매우 좁다.
+                    #   3) **운영 로직과 다르다** — 자동 진입 워커는 obv_gate +
+                    #      confirm_peak 를 쓴다. 즉 「자동 진입이 옳다고 보는 기준」과
+                    #      「단계 진입이 보는 기준」이 서로 달랐다. 신뢰가 안 생기는 게 당연하다.
+                    #   4) **차단 사유가 안 남는다** — 왜 안 들어갔는지 볼 수 없었다.
+                    #
+                    # 신: stage_entry_signal.check_stage_entry_signal =
+                    #     자동 진입 워커와 **같은 함수를 같은 순서로** 호출한다.
+                    #     방향(LONG/SHORT)도 자동 판정한다.
+                    #     차단되면 사유를 Redis 에 남긴다 (헌법 8 = silent 차단 금지).
+                    #
+                    # ⚠️ 단계별 「지정 금액」은 이 판정과 무관하게 그대로 쓰인다 —
+                    #    stage_plan.planned_capital 이 발주 시 Fix 130 경로에서
+                    #    현재가 기준으로 수량 재계산된다. 사장님이 입력한 금액 그대로다.
+                    # ══════════════════════════════════════════════════════════
                     try:
-                        from app.services.chart_analyzer import ChartAnalyzer
                         from app.integrations.binance.client import BinanceClient
+                        from app.services.stage_entry_signal import check_stage_entry_signal
                         _bc = BinanceClient(
                             api_key=decrypt_text(account.api_key_enc),
                             api_secret=decrypt_text(account.api_secret_enc),
                             is_testnet=account.is_testnet,
                         )
-                        _prev_price = Decimal(str(strategy.avg_entry_price or 0))
-                        if _prev_price > 0:
-                            _analyzer = ChartAnalyzer(_bc)
-                            _signal, _detail = _analyzer.check_obv_reverse_signal(
-                                strategy.symbol, _prev_price
+                        _sig_ok, _sig_why, _sig_det = check_stage_entry_signal(
+                            _bc, db, strategy.symbol, strategy.side,
+                        )
+                        should_fire = _sig_ok
+                        if _sig_ok:
+                            logger.info(
+                                "[stage-trigger Fix173 OBV] 🎯 진입 신호! strategy=%s stage=%s "
+                                "%s %s | %s | detail=%s",
+                                strategy.id, next_stage_no, strategy.symbol, strategy.side,
+                                _sig_why, _sig_det.get("gates"),
                             )
-                            should_fire = _signal
-                            if should_fire:
-                                logger.info(
-                                    "[stage-trigger v130 OBV] 🎯 신호 발동! strategy=%s stage=%s detail=%s",
-                                    strategy.id, next_stage_no, _detail,
-                                )
+                        else:
+                            # 헌법 8 / 93: 차단은 반드시 사유를 남긴다 (= 사장님 신뢰의 근거)
+                            logger.info(
+                                "[stage-trigger Fix173 OBV] ⏳ 대기: strategy=%s stage=%s %s %s — %s",
+                                strategy.id, next_stage_no, strategy.symbol, strategy.side, _sig_why,
+                            )
+                            _record_block_reason(
+                                _redis, strategy.id, f"Fix173 OBV 대기: {_sig_why}", next_stage_no,
+                            )
                     except Exception as _e:
-                        logger.warning("[stage-trigger v130 OBV] 분석 실패 (skip): %s", _e)
+                        # 판정 자체가 실패 = 자본을 넣지 않는다 (보류) + 사유 기록
+                        logger.warning("[stage-trigger Fix173 OBV] 분석 실패 (보류): %s", _e)
+                        try:
+                            _record_block_reason(
+                                _redis, strategy.id, f"Fix173 OBV 분석 실패: {_e}", next_stage_no,
+                            )
+                        except Exception:
+                            pass
+                        should_fire = False
                         should_fire = False
                 else:
                     # 기존 로직 (PRICE_DOWN_PCT)
