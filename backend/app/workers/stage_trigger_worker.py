@@ -568,6 +568,16 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 # 신 (OBV_REVERSE): 4H OBV 첫 하락 + 15m/1h + 10% 가격 이동
                 # ⚠️ Fix 113: _tpl_trigger_mode 는 위(trigger_price 게이트 직전)에서
                 #   이미 판정했다 = 재조회 X (헌법 6 단일 진실 + DB 왕복 절약).
+                #
+                # 🚨🚨 Fix 129 (2026-08-26 CRITICAL — 사장님 "obv 단계 진입이 안 돼"의 진짜 원인):
+                #   `trigger` 는 아래 else(PRICE_DOWN_PCT) 분기 「안에서만」 정의되는데,
+                #   발주 직전 로그(L~846)가 f-string 으로 무조건 참조한다.
+                #   → OBV_REVERSE / LIQUIDATED_WAITING_RETRY 경로는 정의되지 않은 채 도달
+                #   → NameError → 바깥 except 가 삼킴 → "failed for strategy #N" 만 남고
+                #     trigger_next_stage 가 호출되지 않는다 = 주문이 나가지 않는다!
+                #   즉 「발주 직전 로그 한 줄」 때문에 OBV 단계 진입이 한 번도 성공한 적이 없다.
+                #   (Fix 113 으로 게이트를 통과시켜도 여기서 죽으므로 여전히 진입 0건)
+                trigger = None
                 should_fire = False
                 # 🌟 v131 (2026-08-09 사장님!): 청산 후 자동 재진입!
                 # LIQUIDATED_WAITING_RETRY = 청산가 기준 트리거 감시! (retry_trigger_pct!)
@@ -841,9 +851,17 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     #   preflight (Binance availableBalance) = 백업 = 안전!
                     logger.warning("[stage-trigger v130] wallet 검증 실패 (preflight 백업으로 계속): %s", _e)
 
+                # Fix 129: trigger 는 가격 트리거 경로에서만 정의된다 → 모드를 함께 표기
+                _fire_mode = (
+                    "RETRY(청산가)" if _is_retry_mode
+                    else "OBV_REVERSE" if _is_obv_mode
+                    else "LIQ_BUFFER" if _is_liqbuf_mode
+                    else "PRICE"
+                )
                 logger.info(
-                    f"[stage-trigger] firing stage{next_stage_no} for #{strategy.id} "
-                    f"{strategy.symbol} {strategy.side} (mark={mark} {'>=' if strategy.side == 'SHORT' else '<='} trig={trigger})"
+                    "[stage-trigger] firing stage%s for #%s %s %s mode=%s mark=%s trig=%s",
+                    next_stage_no, strategy.id, strategy.symbol, strategy.side,
+                    _fire_mode, mark, trigger if trigger is not None else "n/a",
                 )
                 exec_service.trigger_next_stage(strategy.id, next_stage_no)
                 _stat["fired"] += 1

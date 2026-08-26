@@ -1009,14 +1009,72 @@ class ExecutionService:
         # 🌟 2026-08-08 v130 사장님: 시작가 없으면 (start_price=None) = MARKET 진입!
         #   trigger_price=None → MARKET (현재가 즉시 진입!)
         #   trigger_price=값 → LIMIT (기존 로직!)
-        if stage_plan.planned_qty is None:
-            raise ValueError(f"Stage {stage_plan.stage_no} planned_qty is missing")
         side = "BUY" if strategy.side == "LONG" else "SELL"
         position_side = strategy.side
         client_order_id = self._new_client_order_id(strategy.symbol, f"ENTRY{stage_plan.stage_no}")
         # trigger_price 없음 = MARKET!
         if stage_plan.trigger_price is None:
             current_price = self._fetch_current_mark_price(strategy.symbol)
+            # ══════════════════════════════════════════════════════════════
+            # 🚨 Fix 130 (2026-08-26): MARKET 진입은 「발주 시점 가격」으로 수량 재계산
+            #
+            # 사장님 질문: "단계별 지정한 금액에 포지션진입에 문제없는거지?"
+            # 검증 결과 = MARKET 경로만 문제. 두 가지가 겹쳐 있었다:
+            #
+            #  (1) planned_qty 는 「전략 생성 시점 가격」으로 한 번 계산해 DB 에 고정된다
+            #      (strategy_calculator.py:384). MARKET 은 「현재가」에 체결되므로
+            #      체결가가 계획가보다 X% 높으면 실제 증거금도 정확히 X% 더 들어간다.
+            #      예) 300 USDT 지정, 계획가 0.5000 → qty 3000 고정.
+            #          체결가 0.5150(+3%) → 실제 증거금 309 USDT (+9)
+            #      급등 종목 자동 진입은 수 초 사이 변동이 커서 이 오차가 실제로 발생한다.
+            #
+            #  (2) LIQUIDATION_BUFFER 단계는 planned_qty 가 아예 None 이다
+            #      (strategy_calculator.py:274 — 청산가 산출 시점에 채우기로 하고 비워둠).
+            #      옛 코드는 여기서 ValueError → 그 단계 금액이 「한 푼도」 안 들어갔다.
+            #      Fix 113 으로 게이트를 통과시켜도 발주 단계에서 죽고 있었다.
+            #
+            # 해법: planned_capital 기준으로 현재가에 맞춰 재계산.
+            #   (enter_stage_at_market():1105-1109 이 이미 쓰는 정확한 방식과 동일)
+            # ══════════════════════════════════════════════════════════════
+            _qty = None
+            if stage_plan.planned_capital is not None and current_price and current_price > 0:
+                try:
+                    _lev = Decimal(str(strategy.leverage or 1))
+                    _cap = Decimal(str(stage_plan.planned_capital))
+                    _qty = self._floor_qty_to_step(
+                        strategy.symbol, (_cap * _lev) / Decimal(str(current_price)),
+                    )
+                    if _qty and _qty > 0:
+                        if stage_plan.planned_qty is not None:
+                            logger.info(
+                                "[Fix130] stage%s %s MARKET 수량 재계산: %s → %s "
+                                "(capital=%s lev=%s 현재가=%s) = 지정 금액 정확히 반영",
+                                stage_plan.stage_no, strategy.symbol,
+                                stage_plan.planned_qty, _qty, _cap, _lev, current_price,
+                            )
+                        else:
+                            logger.info(
+                                "[Fix130] stage%s %s planned_qty 없음(LIQUIDATION_BUFFER 등) → "
+                                "capital=%s 기준 산출: qty=%s @ %s",
+                                stage_plan.stage_no, strategy.symbol, _cap, _qty, current_price,
+                            )
+                        stage_plan.planned_qty = _qty      # 이후 로직/기록이 실제 수량을 보게
+                    else:
+                        _qty = None
+                except Exception as _qe:
+                    logger.warning(
+                        "[Fix130] stage%s 수량 재계산 실패 → 기존 planned_qty 사용: %s",
+                        stage_plan.stage_no, _qe,
+                    )
+                    _qty = None
+            if _qty is None:
+                if stage_plan.planned_qty is None:
+                    raise ValueError(
+                        f"Stage {stage_plan.stage_no} planned_qty is missing "
+                        f"(planned_capital={stage_plan.planned_capital}, price={current_price})"
+                    )
+                _qty = Decimal(str(stage_plan.planned_qty))
+            stage_plan.planned_qty = _qty
             # preflight 검증
             self._preflight_entry_market_check(
                 strategy, qty=Decimal(str(stage_plan.planned_qty)),
@@ -1041,6 +1099,11 @@ class ExecutionService:
             logger.info("[stage_entry v130] MARKET 진입 완료: strategy=%s stage=%s qty=%s @ current=%s", strategy.id, stage_plan.stage_no, stage_plan.planned_qty, current_price)
             return order
         # trigger_price 있음 = 기존 LIMIT 로직!
+        # Fix 130: MARKET 분기로 옮긴 planned_qty 검사를 LIMIT 경로에도 유지.
+        #   LIMIT 은 trigger_price 에 체결되고 planned_qty 도 그 가격으로 계산됐으므로
+        #   재계산하지 않는다 (= 지정 금액 그대로가 이미 맞다).
+        if stage_plan.planned_qty is None:
+            raise ValueError(f"Stage {stage_plan.stage_no} planned_qty is missing")
         payload = {"symbol": strategy.symbol, "side": side, "positionSide": position_side, "type": "LIMIT", "quantity": str(stage_plan.planned_qty), "price": str(stage_plan.trigger_price), "timeInForce": "GTC", "newClientOrderId": client_order_id}
         adapter = self.execution_router.route_for_type(payload["type"])
         response = adapter.place_order(payload)
