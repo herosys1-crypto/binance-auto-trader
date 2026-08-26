@@ -348,14 +348,44 @@ def run_success_pyramiding() -> dict:
                     tk = bc.get_24hr_ticker(symbol=si.symbol)
                     if isinstance(tk, dict):
                         ch = float(tk.get("priceChangePercent") or 0)
+                        # ═══════════════════════════════════════════════
+                        # 🚨 Fix 155 (2026-08-26 사장님 실측): 이 게이트가
+                        #   v219 정점 SHORT 의 피라미딩을 100% 차단하고 있었다.
+                        #
+                        # 사장님 스크린샷: #1493 ZESTUSDT 1단계 10U SHORT +6.23%
+                        #   "다음단계 진입이 되어야 하는데"
+                        # v219 정점 SHORT 는 「24h >= +15% 급등 종목」만 진입한다.
+                        #   → ch > 15 조건에 언제나 걸린다 = 구조적 100% 차단.
+                        #
+                        # 헌법 64 = 급등에 SHORT 「신규 진입」 금지
+                        # 헌법 68 = 그 예외가 사장님 v219 정점 SHORT
+                        #   여기는 헌법 68 을 무시하고 64 만 적용하고 있었다.
+                        #   (Fix 114 / Fix 141 에 이어 같은 실수 세 번째)
+                        #
+                        # 더 근본적으로: 이미 수익 중인 포지션에 추가하는 것은
+                        # 「반대매매」가 아니다. 방향이 맞다는 게 이미 증명된 상태다
+                        # (이 워커는 ROI >= +5% 일 때만 여기 도달한다).
+                        # 사장님 지시도 "수익일떄 10 +5% 마틴게일 300 진입" 이다.
+                        #
+                        # → 24h 극단 필터는 「기록만」 하고 차단하지 않는다.
+                        #   안전은 이미 있는 장치가 맡는다:
+                        #   ROI>=5% / peak 지속 / cooldown 5분 /
+                        #   MAX_PYRAMID_COUNT=2 / 동시보유 상한 / 자체 SL -5%
+                        # ═══════════════════════════════════════════════
                         if si.side == "SHORT" and ch > 15.0:
-                            skipped += 1
-                            _bump("chg24_extreme")
-                            continue
+                            logger.info(
+                                "[Fix155/헌법68] %s SHORT 24h=%+.1f%% 이지만 "
+                                "수익 중(ROI>=%.1f%%) 포지션 추가 = 반대매매 아님 → 허용",
+                                si.symbol, ch, MIN_UNREALIZED_ROI_PCT,
+                            )
+                            _bump("chg24_extreme_allowed")
                         if si.side == "LONG" and ch < -15.0:
-                            skipped += 1
-                            _bump("regime_block")
-                            continue
+                            logger.info(
+                                "[Fix155/대칭] %s LONG 24h=%+.1f%% 이지만 "
+                                "수익 중 포지션 추가 = 반대매매 아님 → 허용",
+                                si.symbol, ch,
+                            )
+                            _bump("chg24_extreme_allowed")
             except Exception:
                 pass  # ticker 실패 = 조용히 통과 (Redis mark_price는 이미 확보!)
 
@@ -367,7 +397,8 @@ def run_success_pyramiding() -> dict:
             # 지금 (v241 Fix 68): 최초 진입 금액 (template capitals[0]) 그대로!
             _initial_capital = 0.0
             try:
-                _parent_tpl = si.template if hasattr(si, "template") else None
+                # Fix 155b: 관계명은 strategy_template (Fix 142 와 같은 버그 3번째 위치)
+                _parent_tpl = getattr(si, "strategy_template", None) or getattr(si, "template", None)
                 _tpl_config = getattr(_parent_tpl, "config", None) if _parent_tpl else None
                 if isinstance(_tpl_config, dict):
                     _caps = _tpl_config.get("capitals") or []
@@ -378,8 +409,14 @@ def run_success_pyramiding() -> dict:
             # fallback: si.total_capital (template 없을 때만!)
             if _initial_capital <= 0:
                 _initial_capital = float(si.total_capital or 0)
+            # 🚨 Fix 155b: 무로그 continue 제거 (헌법 80).
+            #   게다가 Fix 134 이후 추가 자본의 진실은 get_pyramid_capital(사다리) 이므로
+            #   최초 진입금을 못 구했다고 진입을 막을 이유가 없다 (fallback 일 뿐).
             if _initial_capital <= 0:
-                continue
+                logger.info(
+                    "[Fix155b] %s 최초 진입금 미확보 → 사다리 자본으로 진행", si.symbol,
+                )
+                _bump("initial_capital_unknown_using_ladder")
             _seq = pyr_count + 1  # 1, 2, 3
             if _seq > MAX_PYRAMID_COUNT:
                 skipped += 1

@@ -92,8 +92,17 @@ function parseMartingaleBadge(s) {
 
   // 사장님 신 마틴게일 사다리 (v219 = 300/600/1800!)
   // 사장님 verbatim: "1단계=초기 / 2단계=이전×2 / 3단계=투자금 전체×2"
-  const SAJANGNIM_LADDER = [300, 600, 1800];
-  const nextStage = (stage) => (stage >= 1 && stage < 3) ? SAJANGNIM_LADDER[stage] : null;
+  // 🚨 Fix 154 (2026-08-26 사장님 스크린샷): 옛 사다리가 하드코딩돼 있었다.
+  //   서버 사다리는 [10,300,600] 인데 화면은 [300,600,1800] 을 보여줘
+  //   1단계 10U 포지션에 "다음: 600U" 라고 표시됐다 (실제 2단계는 300U).
+  //   → 세팅 로드 시 서버 값을 window.__SAJANGNIM_LADDER 에 담아 그걸 쓴다.
+  //     (헌법 85 = 화면과 워커가 같은 진실을 봐야 한다)
+  const SAJANGNIM_LADDER = (typeof window !== 'undefined'
+    && Array.isArray(window.__SAJANGNIM_LADDER)
+    && window.__SAJANGNIM_LADDER.length)
+    ? window.__SAJANGNIM_LADDER
+    : [300, 600, 1800];
+  const nextStage = (stage) => (stage >= 1 && stage < SAJANGNIM_LADDER.length) ? SAJANGNIM_LADDER[stage] : null;
 
   // 1️⃣ 라스트챈스 (Fix 53 = 최종 기회!)
   if (st.includes('_lastchance')) {
@@ -120,7 +129,7 @@ function parseMartingaleBadge(s) {
     const emoji = stageEmojis[stageIdx] || '🚨';
     const nextCap = nextStage(actualStage);
     const nextHint = nextCap ? ` | 다음: ${nextCap}U` : ' | ⚠최대!';
-    const tooltip = `🎯 v219 마틴게일 ${stageIdx}차재진입 (=${actualStage}단계!) = 자본 ${cap} USDT ${side}. 사장님 신 사다리: 300→600→1800.${nextCap ? ` 실패 시 다음 = ${nextCap} USDT!` : ' ⚠ 3단계 = 최대! (실패 시 종료!)'}`;
+    const tooltip = `🎯 v219 마틴게일 ${stageIdx}차재진입 (=${actualStage}단계!) = 자본 ${cap} USDT ${side}. 사장님 사다리: ${SAJANGNIM_LADDER.join("→")}.${nextCap ? ` 실패 시 다음 = ${nextCap} USDT!` : ' ⚠ 3단계 = 최대! (실패 시 종료!)'}`;
     // 🌟 2026-08-25 Fix 80 (사장님 「배지 2줄!」): stageIdx/cap/side 1줄 + nextHint 2줄
     const nextHintLine = nextCap ? `다음: ${nextCap}U` : '⚠최대!';
     return `<span style="display:inline-block;background:${bg};color:#fff;padding:1px 5px;border-radius:4px;font-size:var(--font-badge);font-weight:600;margin-left:3px;line-height:1.15;box-shadow:0 0 10px rgba(239,68,68,0.8)" title="${tooltip}">${emoji} ${stageIdx}차재진입 ${cap}U ${side}<br><span style="font-size:9px;opacity:0.9">${nextHintLine}</span></span>`;

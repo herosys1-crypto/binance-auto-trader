@@ -1504,6 +1504,12 @@ async function loadV219Settings(retry = 0) {
     // 🎯 Fix 144: 사다리 값 + 미리보기 (실제 적용값을 화면에서 확인 가능하게)
     const ladderEl2 = document.getElementById('v219-ladder');
     if (ladderEl2 && r.capital_ladder) ladderEl2.value = r.capital_ladder;
+    // 🚨 Fix 154: 배지(helpers.js)가 쓸 수 있게 전역에 실제 사다리를 공유
+    if (r.capital_ladder && typeof window !== 'undefined') {
+      const arr = String(r.capital_ladder).split(',')
+        .map(x => parseFloat(x.trim())).filter(v => !isNaN(v) && v > 0);
+      if (arr.length) window.__SAJANGNIM_LADDER = arr;
+    }
     const prev = document.getElementById('v219-ladder-preview');
     if (prev && r.capital_ladder) {
       const parts = String(r.capital_ladder).split(',').map(x => x.trim()).filter(Boolean);
