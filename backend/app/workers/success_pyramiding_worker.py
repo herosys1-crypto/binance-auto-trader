@@ -285,11 +285,19 @@ def run_success_pyramiding() -> dict:
                 continue
 
             # unrealized ROI 판정 (익절중?)
+            # 🚨 Fix 160: 여기에는 사유 기록이 없어 「평단/마크 결손」이
+            #   집계되지 않았다. 정작 no_avg_or_mark 라벨은 ROI 조건에 붙어 있었다
+            #   (Fix 140 이 줄 번호로 삽입했는데 이후 수정으로 줄이 밀린 탓).
+            #   = 진단 도구가 거짓 라벨을 보고하고 있었다.
             avg = float(si.avg_entry_price or 0)
             if avg <= 0:
+                skipped += 1
+                _bump("no_avg_entry")
                 continue
             mp = _get_mark_price(si.symbol)
             if mp is None:
+                skipped += 1
+                _bump("no_mark_price")
                 continue
 
             # 🎯 Fix 134: ROI = 가격변동률 × 레버리지 (손절 -5% 와 동일한 자!)
@@ -305,7 +313,7 @@ def run_success_pyramiding() -> dict:
 
             if roi_pct < MIN_UNREALIZED_ROI_PCT:
                 skipped += 1
-                _bump("no_avg_or_mark")
+                _bump("roi_below_trigger")
                 continue
 
             # peak 갱신 + 지속 판정
@@ -317,7 +325,7 @@ def run_success_pyramiding() -> dict:
             if retrace_pct > PEAK_HOLD_TOLERANCE_PCT:
                 # peak 대비 되돌림 크다 = 지속 약함 = skip
                 skipped += 1
-                _bump("roi_below_5pct")
+                _bump("peak_retraced")
                 continue
 
             # 시작가 대비 방향 지속 검증
@@ -421,7 +429,7 @@ def run_success_pyramiding() -> dict:
             _seq = pyr_count + 1  # 1, 2, 3
             if _seq > MAX_PYRAMID_COUNT:
                 skipped += 1
-                _bump("capital_invalid")
+                _bump("seq_over_max")
                 continue
             # 🎯 Fix 134 (사장님 지시): 추가 금액은 「사다리 2번째 칸」 = 300
             #   사장님 verbatim: "10 +5% 마틴게일 300 진입 ... 300한번더 포지션 진입"
