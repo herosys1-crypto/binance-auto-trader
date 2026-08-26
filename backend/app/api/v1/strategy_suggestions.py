@@ -422,13 +422,21 @@ def get_auto_bb_limit(
     """🌟 v162 사장님: BB 이탈 SUSTAINED 자동 진입 하루 개수 조회!
     v163: 사용 상태 (활성/손절/익절!)도 반환!
     """
-    row = db.get(SystemSetting, "auto_bb_break_daily_limit")
-    limit = int(row.value) if row and row.value else 0
     usage = _count_auto_bb_used(db)
+    # 🎯 Fix 112 (2026-08-26 사장님 "일 20개로 하지말고 최대 20개"):
+    #   대시보드 「오늘 자동 진입 145/0」 = 하루 누적 카운터라 계속 커짐!
+    #   → 「동시 보유 N/20」 으로 교체 = 워커 게이트와 동일 진실 (헌법 85!)
+    from app.services.position_limit import get_max_concurrent, count_active_positions
+    limit, _src = get_max_concurrent(db)
+    concurrent = count_active_positions(db)
     return {
         "limit": limit,
         **usage,
-        "remaining": max(0, limit - usage["daily_used"]),
+        "daily_used": concurrent,          # UI 표시 = 동시 보유 수!
+        "today_entered": usage.get("daily_used", 0),   # 참고: 오늘 신규 건수
+        "limit_mode": "concurrent",
+        "limit_src": _src,
+        "remaining": max(0, limit - concurrent),
     }
 
 
@@ -1027,16 +1035,24 @@ def get_v219_monitoring(
     #       → 그런데 워커는 fallback 체인(auto_bb_break_daily_limit → DEFAULT 20)
     #       → 화면은 「0 = 정지」인데 실제로는 20건씩 진입! (사장님 137건 사고!)
     #   신: 워커의 _get_daily_limit 을 그대로 재사용 = 화면 == 실제!
+    #
+    # 🎯 Fix 112 (2026-08-26 사장님 verbatim "일 20개로 하지말고 최대 20개"):
+    #   의미 자체가 바뀜! 「하루 신규 건수」 → 「동시 보유 건수」
+    #   UI 도 워커와 같은 함수(check_position_slot)를 써야 함 = 헌법 85!
     daily_limit = 0
+    daily_used = 0
     try:
-        from app.workers.auto_short_at_top_worker import _get_daily_limit as _wk_daily_limit
-        daily_limit = _wk_daily_limit(db)
+        from app.services.position_limit import get_max_concurrent, count_active_positions
+        daily_limit, _lim_src = get_max_concurrent(db)
+        daily_used = count_active_positions(db)     # = 지금 열려 있는 포지션!
     except Exception as e:
-        logger.warning("[v219-monitoring+Fix110] daily_limit 조회 실패: %s", e)
+        logger.warning("[v219-monitoring+Fix112] 동시보유 상한 조회 실패: %s", e)
 
     # ─── 4) daily_used (오늘 v219 실행 개수 = KST 기준!) ───
     #    suggestion_type = "sajangnim_top_short" + executed_at 오늘 (KST)!
-    daily_used = 0
+    #   ⚠️ Fix 112: daily_used 는 위에서 「동시 보유 수」로 이미 채워짐!
+    #      아래는 참고용 「오늘 신규 진입 건수」 = today_entered 로 분리 보관.
+    today_entered = 0
     try:
         from datetime import timedelta as _td
         now_utc = _dt.now(timezone.utc)
@@ -1056,9 +1072,9 @@ def get_v219_monitoring(
         #     = 화면 숫자 == 워커 판정 근거 (100% 동일 진실!)
         #     사장님 사상: "익절 = 카운트 X (성공 = 재도전 가능!)" 도 자동 반영!
         from app.workers.auto_short_at_top_worker import _count_v219_used_slots
-        daily_used = _count_v219_used_slots(db)
+        today_entered = _count_v219_used_slots(db)
     except Exception as e:
-        logger.warning("[v219-monitoring+Fix110] daily_used 집계 실패: %s", e)
+        logger.warning("[v219-monitoring+Fix110] today_entered 집계 실패: %s", e)
 
     return {
         # ─── SHORT (기존, 호환성 유지!) ───
@@ -1067,9 +1083,12 @@ def get_v219_monitoring(
         "reentry_watch": reentry_watch,
         "active_count": active_count,
         "active_shorts": active_shorts,  # Fix 64: UI 대칭 = badge/목록 표시!
+        # 🎯 Fix 112: daily_used = 「지금 동시 보유 중」 (하루 누적 X!)
         "daily_used": daily_used,
         "daily_limit": daily_limit,
         "remaining": max(0, daily_limit - daily_used),
+        "limit_mode": "concurrent",        # UI 라벨 분기용 (하루 X = 동시!)
+        "today_entered": today_entered,    # 참고: 오늘 신규 진입 건수
         # ─── LONG (신규, 사장님 신 사상!) ───
         "long_bottom_alerts": long_bottom_alerts,
         "monitoring_symbols_long": monitoring_symbols_long,

@@ -793,6 +793,15 @@ def run_realtime_reentry() -> dict:
                 f"= 재진입 전용 카운터 (신규 진입 무관!)"
             )
 
+        # 🎯 Fix 112 (2026-08-26 사장님 verbatim "일 20개 최대 20개"):
+        #   재진입도 「새 포지션」을 만든다! (JASMYUSDT #1480 이 그 증거!)
+        #   → 동시 보유 상한을 재진입에도 적용하지 않으면 활성이 계속 누적됨!
+        #   (재진입 전용 일일 한도와 별개 = 둘 다 통과해야 진입!)
+        from app.services.position_limit import check_position_slot
+        _slot_ok, _slot_why, _act, _cap = check_position_slot(db, "RT_REENTRY")
+        if not _slot_ok:
+            return _finish(f"동시보유 상한 (Fix112): {_slot_why}")
+
         # 2. 1h 재진입 남발 체크!
         cutoff_1h = datetime.now(timezone.utc) - timedelta(hours=1)
         from app.models.strategy_suggestion import StrategySuggestion
@@ -1094,6 +1103,31 @@ def run_realtime_reentry() -> dict:
                 _ind_ok, _ind_msg, _ind_snap = _check_indicator_reversal_for_reentry(
                     _bc, symbol, side, use_4h=True, min_passed=_min_passed,
                 )
+
+                # 🎯 Fix 111 Part B (2026-08-26): 재진입에도 「새 정점」 확인!
+                #
+                # 사장님 JASMYUSDT 지적: "지금 진입이 첫진입을 해야 하는데
+                #                        지금은 재진입으로 포지션에 진입한거야"
+                #
+                # 근본 결함: 옛 재진입은 「옛 손절가 대비 반등」 + 「범용 지표 반전」만 봄.
+                #   → 새로 형성된 정점의 조건(반복 상승 + 지표 꺾임)은 한 번도 확인 X!
+                #   → 첫 진입에는 Fix 111 게이트가 있는데 재진입엔 없었음 = 비대칭!
+                #   → 결과: 첫 진입보다 재진입이 「더 느슨한」 기준으로 통과 (역전!)
+                #
+                # 신: 첫 진입과 똑같은 정점 게이트를 재진입에도 적용 = 대칭 (헌법 5!)
+                if _ind_ok:
+                    from app.services.peak_confirmation import confirm_peak
+                    _rpk_ok, _rpk_why, _rpk_det = confirm_peak(_bc, symbol, side)
+                    if not _rpk_ok:
+                        _ind_ok = False
+                        _ind_msg = f"{_ind_msg} | Fix111 정점 미확인: {_rpk_why}"
+                        logger.warning(
+                            "[RT_REENTRY+Fix111] %s %s 재진입 차단: %s | %s",
+                            symbol, side, _rpk_why, _rpk_det,
+                        )
+                    else:
+                        _ind_snap["fix111_peak"] = _rpk_det
+                        _ind_msg = f"{_ind_msg} | Fix111 {_rpk_why}"
             except Exception as _ve:
                 logger.warning(
                     "[RT_REENTRY] skip: %s %s 지표 조회 실패 = skip 안전: %s", symbol, side, _ve,

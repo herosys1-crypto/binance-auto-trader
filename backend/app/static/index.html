@@ -1119,7 +1119,7 @@
             <h4 class="text-sm font-bold mb-2" style="color:#f9a8d4">⚙ 세팅</h4>
             <div class="flex flex-col gap-2" style="font-size:12px;">
               <label class="flex items-center justify-between gap-2">
-                <span class="text-slate-300">일 자동 진입 한도</span>
+                <span class="text-slate-300" title="하루 신규 건수가 아니라 「동시에 열려 있는 포지션」 상한! (사장님 Fix 112)">최대 동시 포지션</span>
                 <select id="v219-daily-limit" class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="min-width:90px">
                   <option value="0">0 (끔)</option>
                   <option value="1">1</option>
@@ -2982,8 +2982,8 @@ async function loadLiveStatus() {
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px;">
         <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;text-align:center;">
-          <div style="font-size:10px;color:#94a3b8;">📅 오늘 자동 진입</div>
-          <div style="font-size:14px;font-weight:bold;color:#fbbf24;">${autoBb.daily_used || 0}/${autoBb.limit || 0}</div>
+          <div style="font-size:10px;color:#94a3b8;">📦 동시 보유 / 상한</div>
+          <div style="font-size:14px;font-weight:bold;color:${(autoBb.daily_used||0) >= (autoBb.limit||0) ? '#ef4444' : '#fbbf24'};">${autoBb.daily_used || 0}/${autoBb.limit || 0}</div>
         </div>
         <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;text-align:center;">
           <div style="font-size:10px;color:#94a3b8;">🎯 자동 활성/손절/익절 🔍</div>

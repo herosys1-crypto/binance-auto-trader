@@ -106,25 +106,20 @@ def run_auto_short_at_top() -> dict:
         #   갑자기 0건 = 워커가 죽은 건지 조기 종료인지 구별 불가!
         #   → realtime_reentry 와 똑같은 silent bug (Fix 103 에서 겪은 것!)
         #   → 모든 조기 return 에 반드시 사유 로그!
-        daily_limit = _get_daily_limit(db)
-        if daily_limit <= 0:
-            logger.warning(
-                "[sajangnim_top_v219] SKIP: daily_limit=%d = 자동 진입 OFF (사장님 명시 정지!)",
-                daily_limit,
-            )
-            return {"note": "daily_limit=0 (OFF!)", "entered": 0}
+        # 🎯 Fix 112 (2026-08-26 사장님 verbatim):
+        #   "일 20개로 하지말고 일 20개 최대 20개 수정해줘"
+        #   = 「하루 신규 20건」이 아니라 「동시 보유 최대 20건」!
+        #   옛 로직은 KST 자정마다 카운터가 리셋돼서 활성이 20→44 로 계속 누적됨!
+        #   신 로직 = 지금 열려 있는 포지션이 상한이면 신규 진입 X (노출 고정!)
+        from app.services.position_limit import check_position_slot
+        _ok, _why, active_cnt, daily_limit = check_position_slot(db, "sajangnim_top_v219")
+        if not _ok:
+            logger.warning("[sajangnim_top_v219+Fix112] SKIP: %s", _why)
+            return {"note": _why, "entered": 0, "active": active_cnt, "limit": daily_limit}
 
-        # 통합 카운트 = 모든 자동 진입 (BB + PENDING_HC + OBV + v219 정점!) 포함!
-        # Fix 34: v219 독립! (기존 _count_used_slots import 제거)
-        used = _count_v219_used_slots(db)
-        remaining = daily_limit - used
-        if remaining <= 0:
-            logger.warning(
-                "[sajangnim_top_v219] SKIP: 일일 슬롯 소진 %d/%d (remaining=%d) "
-                "= 오늘 진입 종료! (KST 자정 리셋 대기)",
-                used, daily_limit, remaining,
-            )
-            return {"note": f"daily {used}/{daily_limit} (통합!)", "entered": 0}
+        used = active_cnt                      # 「지금 보유 중」 = 소진 슬롯!
+        remaining = daily_limit - active_cnt   # 남은 동시보유 여유
+        logger.info("[sajangnim_top_v219+Fix112] %s", _why)
 
         # 2. Redis 알람 조회!
         from app.core.redis_client import get_redis_client
@@ -237,51 +232,23 @@ def run_auto_short_at_top() -> dict:
                 #   + pump_dump_early + macd_reversal_15m)는 전부 이 소비자를 통과!
                 #   → 여기 게이트 1개 = 5개 경로 동시 커버 (헌법 6 단일 진실!)
                 #
-                # 2중 확인 (둘 다 통과해야 진입!):
-                #   [A] 4H 반복 상승 소진: swing peak >= 2  (상승 초입 차단!)
-                #   [B] 4H MACD Hist 양수 + 상승 중이면 금지 (아직 상승 지속!)
-                try:
-                    from app.workers.bb_upper_breakout_short_worker import (
-                        _count_swing_peaks, MIN_PEAK_COUNT_4H,
-                    )
-                    from app.services.chart_analyzer import ChartAnalyzer
-                    _a4 = ChartAnalyzer.analyze_timeframe(bc, symbol, "4h", limit=60)
-                    if _a4:
-                        # [A] 반복 상승 소진 확인
-                        _closes4 = _a4.get("closes") or []
-                        _peaks4 = _count_swing_peaks(_closes4)
-                        if _peaks4 < MIN_PEAK_COUNT_4H:
-                            logger.warning(
-                                "[auto_short_top+Fix106] %s SKIP: 4H 반복상승 %d회 < %d "
-                                "(상승 초입! 사장님 사상 = 2-3회 반복 후 정점!)",
-                                symbol, _peaks4, MIN_PEAK_COUNT_4H,
-                            )
-                            continue
-                        # [B] 4H MACD 아직 상승 중이면 금지 (TACUSDT 사고 방지!)
-                        _h4 = _a4.get("macd_hist") or []
-                        if len(_h4) >= 2:
-                            _h_now, _h_prev = float(_h4[-1]), float(_h4[-2])
-                            if _h_now > 0 and _h_now >= _h_prev:
-                                logger.warning(
-                                    "[auto_short_top+Fix106] %s SKIP: 4H MACD Hist 양수 상승 중 "
-                                    "(%.8f >= %.8f) = 아직 상승 지속! SHORT 금지!",
-                                    symbol, _h_now, _h_prev,
-                                )
-                                continue
-                        logger.info(
-                            "[auto_short_top+Fix106] %s 정점 확인 통과: peaks4h=%d macd4h=%s",
-                            symbol, _peaks4,
-                            f"{float(_h4[-1]):.8f}" if _h4 else "n/a",
-                        )
-                    else:
-                        logger.warning(
-                            "[auto_short_top+Fix106] %s 4H 분석 실패 = fail-open 통과", symbol,
-                        )
-                except Exception as _pk_exc:
+                # ⚠️ Fix 111 (2026-08-26): Fix 106 이 틀렸음 — 사장님 龙虾USDT 지적!
+                #   옛 [A] = 4H peak 카운트 → 사장님 기준은 「15분 차트」!
+                #            4H 급등은 폭발 캔들 1~2개라 peak 0~1 = 전부 차단됨!
+                #   옛 [B] = 4H MACD 양수 상승 중 금지 → 4H 는 후행지표!
+                #            급등 직후엔 언제나 양수 상승 중 →
+                #            헌법 72(급등 BB상단돌파 마틴게일)를 영구 봉쇄!
+                #   신 = peak_confirmation.confirm_peak (15m 기준, 헌법 6 단일 진실!)
+                #        [A] 15m 반복 상승 >= 2회  [B] 15m 지표 꺾임 >= 2/3
+                #        [C] 4H = 참고 정보만 (차단 X!)
+                from app.services.peak_confirmation import confirm_peak
+                _pk_ok, _pk_why, _pk_det = confirm_peak(bc, symbol, "SHORT")
+                if not _pk_ok:
                     logger.warning(
-                        "[auto_short_top+Fix106] %s peak gate error (fail-open): %s",
-                        symbol, _pk_exc,
+                        "[auto_short_top+Fix111] %s SKIP: %s | %s", symbol, _pk_why, _pk_det,
                     )
+                    continue
+                logger.info("[auto_short_top+Fix111] %s %s | %s", symbol, _pk_why, _pk_det)
 
                 # 7. 자동 진입!
                 cfg = {"capitals": [capital_float], "leverage": DEFAULT_LEVERAGE}

@@ -170,10 +170,13 @@ def run_unified_15m_entry() -> dict:
             _matches_failure_condition,
             _create_auto_bb_strategy,
         )
-        used = _count_used_slots(db)
+        # 🎯 Fix 112 (2026-08-26 사장님 "일 20개 최대 20개"): 동시 보유 상한!
+        from app.services.position_limit import check_position_slot
+        _slot_ok, _slot_why, used, daily_limit = check_position_slot(db, "unified_15m")
+        if not _slot_ok:
+            logger.warning("[unified_15m+Fix112] SKIP: %s", _slot_why)
+            return {"note": _slot_why, "entered": 0}
         remaining = daily_limit - used
-        if remaining <= 0:
-            return {"note": f"오늘 {used}/{daily_limit} 소진!", "entered": 0}
 
         # 4. mainnet 계정 + API Ban!
         account = db.execute(
@@ -336,36 +339,14 @@ def run_unified_15m_entry() -> dict:
                 #                  rsi macd obv cci 등등 고점에 이란 신호를 보고 진입"
                 #   = 단순 「올랐다」가 아니라 「반복 상승 소진 + 지표 꺾임」!
                 #
-                # SHORT 만 검사 (LONG 은 헌법 78 급락 조건이 이미 별도 적용!)
-                if side == "SHORT":
-                    try:
-                        from app.workers.bb_upper_breakout_short_worker import (
-                            _count_swing_peaks, MIN_PEAK_COUNT_4H,
-                        )
-                        from app.services.chart_analyzer import ChartAnalyzer
-                        _a4 = ChartAnalyzer.analyze_timeframe(bc, symbol, "4h", limit=60)
-                        if _a4:
-                            _peaks4 = _count_swing_peaks(_a4.get("closes") or [])
-                            if _peaks4 < MIN_PEAK_COUNT_4H:
-                                _skip(
-                                    "fix106_no_repeated_peak", symbol, side,
-                                    f"4H 반복상승 {_peaks4}회 < {MIN_PEAK_COUNT_4H} (상승 초입!)",
-                                )
-                                continue
-                            _h4 = _a4.get("macd_hist") or []
-                            if len(_h4) >= 2:
-                                _hn, _hp = float(_h4[-1]), float(_h4[-2])
-                                if _hn > 0 and _hn >= _hp:
-                                    _skip(
-                                        "fix106_macd4h_still_rising", symbol, side,
-                                        f"4H MACD Hist 양수 상승 중 ({_hn:.8f} >= {_hp:.8f})",
-                                    )
-                                    continue
-                    except Exception as _pk_exc:
-                        logger.warning(
-                            "[unified_15m+Fix106] %s peak gate error (fail-open): %s",
-                            symbol, _pk_exc,
-                        )
+                # ⚠️ Fix 111 (2026-08-26): 4H → 15m 정정 + 4H MACD 하드차단 제거!
+                #   (사장님 龙虾USDT 「이런 진입은 왜 없냐」 지적 = 4H 게이트가 과차단!)
+                #   이제 LONG/SHORT 대칭 적용 = 저점도 같은 기준으로 확인!
+                from app.services.peak_confirmation import confirm_peak
+                _pk_ok, _pk_why, _pk_det = confirm_peak(bc, symbol, side)
+                if not _pk_ok:
+                    _skip("fix111_no_peak_confirm", symbol, side, _pk_why)
+                    continue
 
                 # 12f. 실 진입!
                 entry_cfg = dict(cfg_base)

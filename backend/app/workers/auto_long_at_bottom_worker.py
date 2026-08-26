@@ -772,27 +772,21 @@ def run_auto_long_at_bottom_once() -> dict:
         # 🚨 Fix 109 (2026-08-26 헌법 80): 조기 return 무로그 금지!
         #   무로그 return = 「워커가 죽음」과 「조용히 종료」를 구별 불가!
         #   (realtime_reentry 가 정확히 이것 때문에 며칠간 침묵했음 = Fix 103!)
-        daily_limit = _get_daily_limit(db)
-        if daily_limit <= 0:
-            logger.warning(
-                "[auto_long_bottom] SKIP: daily_limit=%d = 자동 진입 OFF (사장님 명시 정지!)",
-                daily_limit,
-            )
-            return {"note": "daily_limit=0 (OFF!)", "entered": 0, "spec": SPEC_VERSION}
-
-        from app.workers.auto_bb_breakdown_worker import _count_used_slots
-        used = _count_used_slots(db)
-        remaining = daily_limit - used
-        if remaining <= 0:
-            logger.warning(
-                "[auto_long_bottom] SKIP: 일일 슬롯 소진 %d/%d (remaining=%d) "
-                "= 오늘 진입 종료! (KST 자정 리셋 대기)",
-                used, daily_limit, remaining,
-            )
+        # 🎯 Fix 112 (2026-08-26 사장님 verbatim):
+        #   "일 20개로 하지말고 일 20개 최대 20개 수정해줘"
+        #   = 동시 보유 상한! (SHORT 와 같은 풀 공유 = 전체 노출 20건 고정!)
+        from app.services.position_limit import check_position_slot
+        _ok, _why, active_cnt, daily_limit = check_position_slot(db, "auto_long_bottom")
+        if not _ok:
+            logger.warning("[auto_long_bottom+Fix112] SKIP: %s", _why)
             return {
-                "note": f"daily {used}/{daily_limit} (v219 공유 counter!)",
-                "entered": 0, "spec": SPEC_VERSION,
+                "note": _why, "entered": 0, "spec": SPEC_VERSION,
+                "active": active_cnt, "limit": daily_limit,
             }
+
+        used = active_cnt
+        remaining = daily_limit - active_cnt
+        logger.info("[auto_long_bottom+Fix112] %s", _why)
 
         # 2. mainnet 계정!
         account = db.execute(
