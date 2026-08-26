@@ -454,37 +454,26 @@ def run_pump_top_detector() -> dict:
                 # = 단일 상승 초입 오진입 완전 차단! (STARUSDT 사례!)
                 # LONG/SHORT 모두 동일 로직 = swing peak 2회+ 필수
                 # (반복 pump-and-dump 소진 후 진짜 반전 = LONG 저점도 동일 사상!)
-                peaks_4h = 0
-                try:
-                    _kl4 = bc.get_klines(
-                        symbol=symbol, interval="4h",
-                        limit=PEAK_LOOKBACK_BARS + PEAK_MIN_GAP,
-                    )
-                    if isinstance(_kl4, list) and len(_kl4) >= PEAK_LOOKBACK_BARS:
-                        _closes4 = [float(k[4]) for k in _kl4]
-                        peaks_4h = _count_swing_peaks(
-                            _closes4,
-                            lookback=PEAK_LOOKBACK_BARS,
-                            min_gap=PEAK_MIN_GAP,
-                        )
-                    else:
-                        logger.debug(
-                            "[Fix100/pump_top] %s: 4H klines 부족 (%d bars) = skip",
-                            symbol,
-                            len(_kl4) if isinstance(_kl4, list) else 0,
-                        )
-                        continue
-                except Exception as _pe:
-                    logger.warning(
-                        "[Fix100/pump_top] %s 4H peak count 실패: %s (skip=fail-closed!)",
-                        symbol, _pe,
-                    )
-                    continue
-                if peaks_4h < MIN_PEAK_COUNT_4H:
+                # ⚠️ Fix 111b (2026-08-26): 4H → 15m 정정! (사장님 龙虾USDT 지적!)
+                #
+                # 🚨 Fix 111 이 반쪽이었던 이유:
+                #   Fix 111 은 「소비자」(auto_short_at_top) 의 4H 게이트만 고쳤는데,
+                #   진짜 병목은 여기 「생산자」였음! 알람 자체가 안 만들어지면
+                #   소비자를 아무리 고쳐도 진입은 영원히 0건!
+                #   → 龙虾USDT 가 계속 차단된 진짜 이유가 바로 이 줄!
+                #
+                # 4H peak 의 문제: 급등은 4H 로 보면 폭발 캔들 1~2개 = peak 0~1
+                #   → 사장님이 「진입해야 한다」고 지적하신 정점까지 전부 차단
+                # 15m 으로 보면 계단식 2~3회 상승이 뚜렷 = 사장님 기준과 일치!
+                # chg24 >= +15% 와 <= -15% 는 상호배타 → sides_to_test 는 항상 1개
+                side_hint = sides_to_test[0]
+                from app.services.peak_confirmation import confirm_peak
+                _pk_ok, _pk_why, _pk_det = confirm_peak(bc, symbol, side_hint)
+                peaks_4h = _pk_det.get("swings_15m", 0)   # 하위 호환 (로그/스냅샷용)
+                if not _pk_ok:
                     logger.info(
-                        "[Fix100/pump_top/skip] %s: 4H 반복 상승 부족 = %d peaks "
-                        "(%d+ 필요!) 사장님 사상: 2-3회 반복 후 진짜 정점!",
-                        symbol, peaks_4h, MIN_PEAK_COUNT_4H,
+                        "[Fix111b/pump_top/skip] %s (%s): %s | %s",
+                        symbol, side_hint, _pk_why, _pk_det,
                     )
                     continue
 

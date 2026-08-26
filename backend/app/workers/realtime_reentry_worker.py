@@ -802,6 +802,18 @@ def run_realtime_reentry() -> dict:
         if not _slot_ok:
             return _finish(f"동시보유 상한 (Fix112): {_slot_why}")
 
+        # 🚨 Fix 112b: 위 체크는 「루프 시작 전 1회」 뿐!
+        #   remaining 은 재진입 「일일」 예산이라 루프를 그것만으로 돌면
+        #   active=19/cap=20 인데 한 번에 10건 재진입 → 29건 = 상한 45% 초과!
+        #   → 루프 예산을 두 한도의 「작은 쪽」으로 묶는다.
+        _slot_room = _cap - _act
+        if _slot_room < remaining:
+            logger.info(
+                "[RT_REENTRY+Fix112b] 루프 예산 축소: 재진입일일 %d → 동시보유여유 %d (%d/%d)",
+                remaining, _slot_room, _act, _cap,
+            )
+            remaining = _slot_room
+
         # 2. 1h 재진입 남발 체크!
         cutoff_1h = datetime.now(timezone.utc) - timedelta(hours=1)
         from app.models.strategy_suggestion import StrategySuggestion

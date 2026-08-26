@@ -688,7 +688,7 @@ def _get_default_capital(db: Session) -> float:
 
 
 def _create_long_strategy(
-    db: Session, symbol: str, capital: float,
+    db: Session, symbol: str, capital: float, bc=None,
 ) -> StrategyInstance | None:
     """v219 진입 방식 재사용 = _create_auto_bb_strategy!
 
@@ -699,6 +699,21 @@ def _create_long_strategy(
     - MARKET 진입 + start_stage1 실 주문 발송!
     """
     try:
+        # 🎯 Fix 111b (2026-08-26): LONG 저점 게이트! (SHORT 와 대칭 = 헌법 5)
+        #   Fix 111 은 SHORT 경로에만 걸려 있었다 = 비대칭!
+        #   사장님 사상은 LONG 도 동일: 「급락이 2-3회 반복 + 지표 저점 반등」
+        #   → 단조 하락 도중(= 하락 초입) LONG 진입을 차단한다.
+        #   ZROUSDT(고점 대비 -11% 조정 중 진입) 같은 사고의 대칭 방지책.
+        if bc is not None:
+            from app.services.peak_confirmation import confirm_peak
+            _pk_ok, _pk_why, _pk_det = confirm_peak(bc, symbol, "LONG")
+            if not _pk_ok:
+                logger.warning(
+                    "[auto_long_bottom+Fix111b] %s SKIP: %s | %s", symbol, _pk_why, _pk_det,
+                )
+                return None
+            logger.info("[auto_long_bottom+Fix111b] %s %s", symbol, _pk_why)
+
         from app.workers.auto_bb_breakdown_worker import _create_auto_bb_strategy
         cfg = {
             "capitals": [capital],
@@ -943,7 +958,7 @@ def run_auto_long_at_bottom_once() -> dict:
                     )
 
                 # 실 진입! (_create_long_strategy 재사용 = 헌법 6!)
-                new_strategy = _create_long_strategy(db, symbol, capital)
+                new_strategy = _create_long_strategy(db, symbol, capital, bc)
                 if not new_strategy:
                     skipped += 1
                     logger.info(
@@ -1161,7 +1176,11 @@ def run_auto_long_at_bottom_once() -> dict:
 
         # 8. 심볼별 검사 + 진입!
         for t in candidates:
-            if entered >= remaining:
+            # 🚨 Fix 112b: 옛 `entered >= remaining` = 이중 차감 버그!
+            #   진입할 때마다 entered 는 +1, remaining 은 -1 (L1064/L1267) →
+            #   두 값이 서로 마주 달려서 실효 예산이 절반으로 줄었음.
+            #   alert 루프(L859)와 동일하게 remaining 하나만 예산으로 사용!
+            if remaining <= 0:
                 break
             symbol = str(t.get("symbol", ""))
             if not symbol or symbol in active_syms:
@@ -1207,7 +1226,7 @@ def run_auto_long_at_bottom_once() -> dict:
                     logger.warning("[auto_long_bottom+Fix66] regime error: %s", _rg_exc)
 
                 # 9. 실 진입!
-                new_strategy = _create_long_strategy(db, symbol, capital)
+                new_strategy = _create_long_strategy(db, symbol, capital, bc)
                 if not new_strategy:
                     skipped += 1
                     logger.info(

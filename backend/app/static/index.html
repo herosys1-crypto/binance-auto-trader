@@ -2983,7 +2983,7 @@ async function loadLiveStatus() {
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:6px;">
         <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;text-align:center;">
           <div style="font-size:10px;color:#94a3b8;">📦 동시 보유 / 상한</div>
-          <div style="font-size:14px;font-weight:bold;color:${(autoBb.daily_used||0) >= (autoBb.limit||0) ? '#ef4444' : '#fbbf24'};">${autoBb.daily_used || 0}/${autoBb.limit || 0}</div>
+          <div style="font-size:14px;font-weight:bold;color:${(autoBb.concurrent_limit > 0 && (autoBb.concurrent_active||0) >= autoBb.concurrent_limit) ? '#ef4444' : '#fbbf24'};">${autoBb.concurrent_active ?? 0}/${autoBb.concurrent_limit ?? 0}</div>
         </div>
         <div style="background:rgba(0,0,0,0.3);padding:6px 8px;border-radius:6px;text-align:center;">
           <div style="font-size:10px;color:#94a3b8;">🎯 자동 활성/손절/익절 🔍</div>

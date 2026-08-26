@@ -57,10 +57,17 @@ def run_pending_hc_fast() -> dict:
             _count_used_slots, _create_auto_bb_strategy,
             _get_active_symbol_keys, _get_recent_loss_symbol_keys,
         )
+        # 🎯 Fix 112b (2026-08-26): 동시 보유 상한 = 이 워커도 신규 포지션을 만든다!
+        from app.services.position_limit import check_position_slot
+        _slot_ok, _slot_why, _act, _cap = check_position_slot(db, "pending_hc_fast")
+        if not _slot_ok:
+            logger.warning("[pending_hc_fast+Fix112b] SKIP: %s", _slot_why)
+            return {"note": _slot_why, "entered": 0}
+
         used = _count_used_slots(db)
-        remaining = daily_limit - used
+        remaining = min(daily_limit - used, _cap - _act)   # 두 예산 중 작은 쪽!
         if remaining <= 0:
-            return {"note": f"daily {used}/{daily_limit}", "entered": 0}
+            return {"note": f"daily {used}/{daily_limit} concurrent {_act}/{_cap}", "entered": 0}
 
         # 3. PENDING 85%+ suggestion 조회 (DB만 = API X!)
         pending_hc = db.execute(

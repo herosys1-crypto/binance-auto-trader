@@ -494,37 +494,16 @@ def run_bb_upper_breakout_short() -> dict:
                 #    rsi macd obv cci 등등 고점에 이란 신호를 보고 진입"
                 # = 4H 창에서 swing peak 2회+ 확인!
                 # = 단일 상승 초입 오진입 완전 차단!
-                peaks_4h = 0
-                try:
-                    kl_4h = bc.get_klines(
-                        symbol=symbol, interval="4h",
-                        limit=PEAK_LOOKBACK_BARS + PEAK_MIN_GAP,
-                    )
-                    if isinstance(kl_4h, list) and len(kl_4h) >= PEAK_LOOKBACK_BARS:
-                        closes_4h = [float(k[4]) for k in kl_4h]
-                        peaks_4h = _count_swing_peaks(
-                            closes_4h,
-                            lookback=PEAK_LOOKBACK_BARS,
-                            min_gap=PEAK_MIN_GAP,
-                        )
-                    else:
-                        logger.debug(
-                            "[Fix100/skip] %s: 4H klines 부족 (%d bars)",
-                            symbol, len(kl_4h) if isinstance(kl_4h, list) else 0,
-                        )
-                        continue
-                except Exception as _pe:
-                    logger.warning(
-                        "[Fix100] %s 4H peak count 실패: %s (skip=fail-closed!)",
-                        symbol, _pe,
-                    )
-                    continue
-                if peaks_4h < MIN_PEAK_COUNT_4H:
-                    logger.info(
-                        "[Fix100/skip] %s: 4H 반복 상승 부족 = %d peaks (%d+ 필요!) "
-                        "사장님 사상: 2-3회 반복 후 진짜 정점!",
-                        symbol, peaks_4h, MIN_PEAK_COUNT_4H,
-                    )
+                # ⚠️ Fix 111b (2026-08-26): 4H → 15m 정정! (사장님 龙虾USDT 지적!)
+                #   여기는 「알람 생산자」 = 진짜 병목!
+                #   4H 로 세면 급등은 폭발 캔들 1~2개 = peak 0~1 → 알람 자체가 안 생김
+                #   → 소비자(auto_short_at_top)를 아무리 고쳐도 진입 영원히 0건!
+                #   헌법 72(급등 BB상단돌파 마틴게일)를 여기서 봉쇄하고 있었음!
+                from app.services.peak_confirmation import confirm_peak
+                _pk_ok, _pk_why, _pk_det = confirm_peak(bc, symbol, "SHORT")
+                peaks_4h = _pk_det.get("swings_15m", 0)   # 하위 호환 (confidence/스냅샷용)
+                if not _pk_ok:
+                    logger.info("[Fix111b/bb_upper/skip] %s: %s | %s", symbol, _pk_why, _pk_det)
                     continue
 
                 # (h) confidence 계산!

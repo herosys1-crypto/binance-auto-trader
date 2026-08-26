@@ -261,7 +261,10 @@ def set_sajangnim_settings(
         # 🎯 v219+ (2026-08-23 사장님!): 마틴게일 최대 단계 = 1~3 clamp!
         "sajangnim_max_stage": ("max_stage", lambda v: str(max(1, min(3, int(v))))),
         # 🎯 v219 (2026-08-23 사장님!): 7중 정점 SHORT 일일 한도 = 0~30 clamp!
-        "sajangnim_top_short_daily_limit": ("top_short_daily_limit", lambda v: str(max(0, min(30, int(v))))),
+        # 🎯 Fix 112b: 의미가 「하루 건수」 → 「동시 보유 건수」 로 바뀜 (사장님 요구).
+        #   상한 30 이면 활성이 33건인 지금 사장님이 상한을 올려서 풀 수가 없다!
+        #   → 0~200 으로 확장 (0 = 완전 OFF 는 그대로 유지!)
+        "sajangnim_top_short_daily_limit": ("top_short_daily_limit", lambda v: str(max(0, min(200, int(v))))),
     }
     updated = {}
     for key, (payload_key, sanitizer) in fields.items():
@@ -426,17 +429,27 @@ def get_auto_bb_limit(
     # 🎯 Fix 112 (2026-08-26 사장님 "일 20개로 하지말고 최대 20개"):
     #   대시보드 「오늘 자동 진입 145/0」 = 하루 누적 카운터라 계속 커짐!
     #   → 「동시 보유 N/20」 으로 교체 = 워커 게이트와 동일 진실 (헌법 85!)
+    #
+    # 🚨 Fix 112b: 단, `limit` 필드는 이 엔드포인트의 PUT 이 쓰는 키
+    #   (auto_bb_break_daily_limit) 를 그대로 돌려줘야 한다!
+    #   안 그러면 BB 드롭다운이 저장 직후 「남의 값」으로 되돌아간다 = 조작 불가!
+    #   동시보유 상한은 concurrent_limit 로 분리해서 내보낸다.
+    row = db.get(SystemSetting, "auto_bb_break_daily_limit")
+    bb_limit = int(row.value) if row and row.value else 0
+
     from app.services.position_limit import get_max_concurrent, count_active_positions
-    limit, _src = get_max_concurrent(db)
+    concurrent_limit, _src = get_max_concurrent(db)
     concurrent = count_active_positions(db)
     return {
-        "limit": limit,
+        "limit": bb_limit,                 # ← PUT 이 쓰는 키와 동일 (되돌림 방지!)
         **usage,
-        "daily_used": concurrent,          # UI 표시 = 동시 보유 수!
+        "daily_used": concurrent,          # 대시보드 카드 표시 = 동시 보유 수!
         "today_entered": usage.get("daily_used", 0),   # 참고: 오늘 신규 건수
+        "concurrent_limit": concurrent_limit,
+        "concurrent_active": concurrent,
         "limit_mode": "concurrent",
         "limit_src": _src,
-        "remaining": max(0, limit - concurrent),
+        "remaining": max(0, concurrent_limit - concurrent),
     }
 
 

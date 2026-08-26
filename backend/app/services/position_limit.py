@@ -47,11 +47,24 @@ def get_max_concurrent(db) -> tuple[int, str]:
     for key in LIMIT_KEYS:
         try:
             row = db.get(SystemSetting, key)
-            if row and row.value is not None and str(row.value).strip() != "":
-                v = int(str(row.value).strip())
-                return (v if v > 0 else 0), key      # 0 도 그대로 존중!
-        except Exception:
-            continue
+        except Exception as e:
+            # 🚨 Fix 112b: DB 조회 실패를 삼키고 다음 키로 넘어가면
+            #   결국 default 20 이 나온다 = fail-OPEN! (사장님이 0 으로 꺼놔도 20!)
+            #   → 상한 함수는 fail-SAFE 여야 하므로 예외를 올려서 차단시킨다.
+            raise RuntimeError(f"SystemSetting '{key}' 조회 실패: {e}") from e
+
+        if row is None or row.value is None or str(row.value).strip() == "":
+            continue                                  # 값 없음 = 다음 키로
+
+        raw = str(row.value).strip()
+        try:
+            v = int(raw)
+        except (TypeError, ValueError) as e:
+            # 🚨 값이 「있는데 숫자가 아님」 = 설정 손상! 이것도 삼키면 20 으로 둔갑!
+            raise RuntimeError(f"SystemSetting '{key}' 값 파싱 실패: {raw!r}") from e
+
+        return (v if v > 0 else 0), key               # 0 도 그대로 존중! (헌법 83)
+
     return MAX_CONCURRENT_DEFAULT, "default"
 
 

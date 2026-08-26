@@ -114,11 +114,18 @@ def run_auto_bb_breakdown() -> dict:
             return {"note": "auto_bb_break_daily_limit=0 (OFF!)", "entered": 0}
 
         # 2. 카운터 (v163: 활성 + 손절 = 카운트, 익절 = 제외!)
+        # 🎯 Fix 112b (2026-08-26): 동시 보유 상한 = 이 워커도 신규 포지션을 만든다!
+        from app.services.position_limit import check_position_slot
+        _slot_ok, _slot_why, _act, _cap = check_position_slot(db, "auto_bb_breakdown")
+        if not _slot_ok:
+            logger.warning("[auto_bb_breakdown+Fix112b] SKIP: %s", _slot_why)
+            return {"note": _slot_why, "entered": 0}
+
         used = _count_used_slots(db)
-        remaining = daily_limit - used
+        remaining = min(daily_limit - used, _cap - _act)   # 두 예산 중 작은 쪽!
         if remaining <= 0:
             return {
-                "note": f"오늘 사용 {used}/{daily_limit} (활성+손절, 익절 제외!)",
+                "note": f"오늘 사용 {used}/{daily_limit} 동시보유 {_act}/{_cap}",
                 "entered": 0,
             }
 

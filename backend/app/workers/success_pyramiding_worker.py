@@ -149,10 +149,21 @@ def run_success_pyramiding() -> dict:
         from app.workers.auto_bb_breakdown_worker import (
             _count_used_slots, _create_auto_bb_strategy,
         )
+        # 🎯 Fix 112b (2026-08-26): 동시 보유 상한 = 이 워커도 신규 포지션을 만든다!
+        #   최초 Fix 112 는 4개 워커에만 걸었는데, 이 워커는 30초마다 돌면서
+        #   _create_auto_bb_strategy 로 「새 StrategyInstance」를 만든다 = 상한 우회!
+        #   특히 사장님이 상한을 0으로 내려도 이 워커는 auto_bb_break_daily_limit 만
+        #   보므로 계속 진입 = 정지 스위치까지 우회 (헌법 83 위반!)
+        from app.services.position_limit import check_position_slot
+        _slot_ok, _slot_why, _act, _cap = check_position_slot(db, "success_pyramiding")
+        if not _slot_ok:
+            logger.warning("[success_pyramiding+Fix112b] SKIP: %s", _slot_why)
+            return {"note": _slot_why, "entered": 0}
+
         used = _count_used_slots(db)
-        remaining = daily_limit - used
+        remaining = min(daily_limit - used, _cap - _act)   # 두 예산 중 작은 쪽!
         if remaining <= 0:
-            return {"note": f"daily {used}/{daily_limit}", "entered": 0}
+            return {"note": f"daily {used}/{daily_limit} concurrent {_act}/{_cap}", "entered": 0}
 
         # 2. 활성 심볼 조회 (익절중 후보!)
         active = db.execute(
