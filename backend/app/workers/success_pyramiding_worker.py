@@ -143,12 +143,33 @@ def run_success_pyramiding() -> dict:
     skipped = 0
     results: list[dict] = []
     try:
-        # 1. daily_limit 체크 (auto_bb_break_daily_limit 공유!)
+        # ═══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 138 (2026-08-26): 피라미딩이 남의 스위치에 물려 꺼져 있었다
+        #
+        # 사장님 질문: "이익일때 추가 300씩 두번 진입도 하는거지?"
+        # 확인 결과 = 아니오. 이 워커 첫 줄이 auto_bb_break_daily_limit 을 보는데
+        # 사장님이 「BB 이탈 자동진입」을 끄려고 그 값을 0 으로 두셨기 때문에
+        # 별개 기능인 수익 피라미딩까지 통째로 꺼져 있었다.
+        #   (두 기능이 스위치를 공유한 것 자체가 설계 실수 = 헌법 83 정신 위반)
+        #
+        # 또한 Fix 112 로 실질 상한이 「동시 보유 수」가 되었으므로,
+        # 하루 카운터는 더 이상 이 워커의 예산이 아니다 (아래 check_position_slot 이 담당).
+        #
+        # 신: 전용 스위치 sajangnim_pyramid_enabled (기본 ON = 사장님이 원하는 기능).
+        #     0 을 넣으면 피라미딩만 정확히 꺼진다.
+        # ═══════════════════════════════════════════════════════════════════
         from app.models.system_setting import SystemSetting
-        limit_row = db.get(SystemSetting, "auto_bb_break_daily_limit")
-        daily_limit = int(limit_row.value) if limit_row and limit_row.value else 0
-        if daily_limit <= 0:
-            return {"note": "daily_limit=0 (OFF!)", "entered": 0}
+        _pyr_row = db.get(SystemSetting, "sajangnim_pyramid_enabled")
+        if _pyr_row is not None and str(_pyr_row.value).strip() not in ("", None):
+            try:
+                if int(str(_pyr_row.value).strip()) <= 0:
+                    logger.warning(
+                        "[success_pyramiding+Fix138] SKIP: sajangnim_pyramid_enabled=0 "
+                        "= 사장님 명시 OFF"
+                    )
+                    return {"note": "pyramid_enabled=0 (사장님 명시 OFF)", "entered": 0}
+            except (TypeError, ValueError):
+                pass    # 손상값이면 켜진 것으로 본다 (사장님이 원하는 기본 동작)
 
         from app.workers.auto_bb_breakdown_worker import (
             _count_used_slots, _create_auto_bb_strategy,
@@ -164,10 +185,14 @@ def run_success_pyramiding() -> dict:
             logger.warning("[success_pyramiding+Fix112b] SKIP: %s", _slot_why)
             return {"note": _slot_why, "entered": 0}
 
-        used = _count_used_slots(db)
-        remaining = min(daily_limit - used, _cap - _act)   # 두 예산 중 작은 쪽!
+        # Fix 138: 예산 = 동시 보유 여유 (하루 카운터는 Fix 112 로 의미가 바뀌어 제외)
+        used = _count_used_slots(db)     # 참고 로그용
+        remaining = _cap - _act
         if remaining <= 0:
-            return {"note": f"daily {used}/{daily_limit} concurrent {_act}/{_cap}", "entered": 0}
+            return {
+                "note": f"동시보유 {_act}/{_cap} (오늘 신규 {used})",
+                "entered": 0,
+            }
 
         # 2. 활성 심볼 조회 (익절중 후보!)
         active = db.execute(
