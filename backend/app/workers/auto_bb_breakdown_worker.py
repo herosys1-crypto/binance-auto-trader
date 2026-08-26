@@ -1432,14 +1432,64 @@ def _create_auto_bb_strategy(
             "stages_count": 3,
         }
     else:
-        # v177: 1단계 강제!
-        capitals = [stage1_only]
-        total_capital = stage1_only
-        stages_config = {
-            "capitals": capitals,
-            "trigger_percents": [None],
-            "stages_count": 1,
-        }
+        # ═══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 136 (2026-08-26 사장님 지시): 「1단계 강제」가 마틴게일을 죽이고 있었다
+        #
+        # 옛 (v177): capitals=[단일값], stages_count=1
+        #   → _count_active_stages = 1
+        #   → risk_service.py:283 「current_stage(1) >= total(1)」
+        #   → force SL -5% 가 1단계에서 즉시 발동
+        #   → 마틴게일 2·3단계가 「애초에 존재하지 않음」
+        #   실측: 7일 승률 3.7% (11승 288패) = 매 진입 -5% 손절만 반복한 구조.
+        #
+        # 사장님 verbatim (2026-08-26):
+        #   "10 300 600으로 마틴게일 설정"
+        #   "-5%일때 손절없이 다음단계 진입모니터링해서 조건에 맞으면 다음단계 300포지션
+        #    진입하고 그리고 -5% 손실이면 청산하고 다음단계 모니터링 대기야"
+        #
+        # 신 구조 = 사장님 설계 그대로:
+        #   템플릿 = 사다리의 「물타기 구간」 2칸 [10, 300]
+        #     · 1단계 10 진입 → -5% 도달해도 force SL 발동 X (1 < 2 = 다음 단계 남음)
+        #       ← risk_service v130 가드가 이미 이걸 해준다. 단계가 1개였던 게 문제였다.
+        #     · 조건 충족 시 2단계 300 「추가」 (포지션 누적 = 평단 개선)
+        #     · 여기서 다시 -5% → 이제 current_stage(2) >= total(2) → force SL 청산
+        #   그 다음 3단계 600 은 「청산 후 새 진입」이므로 realtime_reentry 가 담당
+        #   (compute_reentry_capital 이 사다리 3번째 칸 600 을 돌려준다 = Fix 133)
+        #
+        # trigger_percent 는 가격 기준이므로 ROI -5% 를 레버리지로 나눠 환산한다.
+        #   2x 기준: -5% ROI = -2.5% 가격
+        # ═══════════════════════════════════════════════════════════════════
+        try:
+            from app.services.sajangnim_capital import get_capital_ladder
+            _ladder = [float(x) for x in get_capital_ladder(db)]
+        except Exception as _le:
+            logger.warning("[Fix136] 사다리 조회 실패 → 1단계 fallback: %s", _le)
+            _ladder = []
+        _lev_f = float(cfg.get("leverage") or 2) or 2.0
+        _roi_step = 5.0                       # 사장님 -5% (ROI 기준)
+        _price_step = round(_roi_step / _lev_f, 4)
+        if len(_ladder) >= 2:
+            capitals = _ladder[:2]            # 물타기 구간 = 1·2단계
+            total_capital = sum(capitals)
+            stages_config = {
+                "capitals": capitals,
+                "trigger_percents": [None, -_price_step],
+                "stages_count": len(capitals),
+            }
+            logger.info(
+                "[Fix136] %s %s 마틴게일 템플릿: 자본 %s / 2단계 트리거 -%.2f%% 가격"
+                "(= ROI -%.1f%% @ %.0fx) — 1단계는 손절 없이 2단계 대기",
+                symbol, side, capitals, _price_step, _roi_step, _lev_f,
+            )
+        else:
+            # 사다리가 1칸뿐이면 기존 동작 유지 (하위 호환)
+            capitals = [stage1_only]
+            total_capital = stage1_only
+            stages_config = {
+                "capitals": capitals,
+                "trigger_percents": [None],
+                "stages_count": 1,
+            }
 
     # 신 template = 1단계만!
     now = datetime.now(timezone.utc)
