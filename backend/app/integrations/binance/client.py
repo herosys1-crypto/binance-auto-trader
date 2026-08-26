@@ -84,6 +84,67 @@ _KLINE_TTL = {
 _REQ_COUNT_KEY = "binance:reqcount:{minute}"
 _REQ_COUNT_TTL_SEC = 900
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 🚨 Fix 124 (2026-08-26): weight 거버너 — IP ban 을 「사전에」 막는다
+#
+# 실측(Fix 118, ban 해제 후 정상 가동): 2,935 weight/분 = 한도(2400)의 122%.
+#   → 캐시만으로는 부족하다. 넘으면 또 ban → 수십 분 전면 정지 → 사장님 자본 위험.
+#
+# 설계 원칙: 「스캔은 버려도 되지만 주문은 절대 막으면 안 된다」
+#   - 필수(주문/포지션/계정/마진/레버리지) = 어떤 경우에도 통과
+#   - 스캔(klines/ticker/premiumIndex) = 임계 초과 시 차단
+#   임계를 한도보다 낮게 잡아, 필수 호출이 쓸 여유를 항상 남긴다.
+# ═══════════════════════════════════════════════════════════════════════════
+BINANCE_WEIGHT_LIMIT_PER_MIN = 2400
+SCAN_WEIGHT_BUDGET_PER_MIN = 1500      # 스캔용 상한 (한도의 62.5%)
+_WEIGHT_KEY = "binance:weight:{minute}"
+_WEIGHT_TTL_SEC = 180
+
+# 엔드포인트별 weight (Binance USD-M). 미등록은 1로 간주.
+_ENDPOINT_WEIGHT = {
+    "/fapi/v1/klines": 2,
+    "/fapi/v1/ticker/24hr": 40,      # symbol 없는 전체 조회 기준 (최악값)
+    "/fapi/v1/premiumIndex": 10,
+    "/fapi/v1/openOrders": 40,
+    "/fapi/v2/positionRisk": 5,
+    "/fapi/v2/account": 5,
+    "/fapi/v2/balance": 5,
+}
+
+# 「스캔」 = 없어도 거래가 죽지 않는 조회. 이것만 거버너가 차단한다.
+_SCAN_ENDPOINTS = frozenset({
+    "/fapi/v1/klines",
+    "/fapi/v1/ticker/24hr",
+    "/fapi/v1/premiumIndex",
+    "/fapi/v1/ticker/price",
+    "/fapi/v1/ticker/bookTicker",
+})
+
+
+def _add_weight(endpoint: str) -> int:
+    """이번 분 누적 weight 에 더하고 누적값 반환. 실패 시 0(=차단 안 함)."""
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+        key = _WEIGHT_KEY.format(minute=time.strftime("%Y%m%d%H%M", time.gmtime()))
+        total = int(r.incrby(key, _ENDPOINT_WEIGHT.get(endpoint, 1)))
+        r.expire(key, _WEIGHT_TTL_SEC)
+        return total
+    except Exception:
+        return 0
+
+
+def get_current_weight() -> int:
+    """이번 분 누적 weight (진단용)."""
+    try:
+        from app.core.redis_client import get_redis_client
+        raw = get_redis_client().get(
+            _WEIGHT_KEY.format(minute=time.strftime("%Y%m%d%H%M", time.gmtime()))
+        )
+        return int(raw.decode() if isinstance(raw, bytes) else raw) if raw else 0
+    except Exception:
+        return 0
+
 
 def _count_request(endpoint: str, status: str) -> None:
     """엔드포인트별 호출 수 집계 (실패해도 무시)."""
@@ -551,6 +612,22 @@ class BinanceClient:
                 status_code=418,
                 code=-1003,
                 locally_suppressed=True,      # Fix 119: ban 재기록 되먹임 차단
+            )
+
+        # 🚨 Fix 124: weight 거버너 — 스캔 호출만 차단, 주문/포지션은 항상 통과
+        _wtotal = _add_weight(path)
+        if path in _SCAN_ENDPOINTS and _wtotal > SCAN_WEIGHT_BUDGET_PER_MIN:
+            binance_api_requests_total.labels(
+                endpoint=path, method=method, status="weight_throttled",
+            ).inc()
+            _count_request(path, "weight_throttled")
+            raise BinanceAPIError(
+                f"Binance API error: status=429, code=-1003, "
+                f"msg=weight budget exceeded — scan suppressed locally "
+                f"({_wtotal}/{SCAN_WEIGHT_BUDGET_PER_MIN} this minute). Fix124 governor.",
+                status_code=429,
+                code=-1003,
+                locally_suppressed=True,     # Fix 119: ban 재기록 되먹임 차단
             )
 
         start = time.perf_counter()
