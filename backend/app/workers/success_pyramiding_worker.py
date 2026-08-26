@@ -39,7 +39,11 @@ logger = logging.getLogger(__name__)
 
 # 🚨 v220 사장님 (2026-08-22): 조건 완화 = 미발동 fix!
 # 사장님 지적: "익절중인 심볼들의 추가 포지션에 들어가지 못한 원인 파악!"
-MIN_UNREALIZED_PNL_PCT = 2.0       # v220: 3.0 → 2.0 (raw price, 레버리지 무시!)
+# 🎯 Fix 134 (2026-08-26 사장님 지시): "수익일떄 10 +5% 마틴게일 300 진입"
+#   손절이 -5% ROI(레버리지 반영) 이므로 익절 트리거도 「같은 자」로 재야 대칭이다.
+#   옛 값 2.0 은 raw 가격 변동률이라 2x 레버리지에서 ROI 4% 를 뜻했다 = 기준 불일치.
+MIN_UNREALIZED_ROI_PCT = 5.0       # ROI 기준 (= 가격변동 × 레버리지)
+MIN_UNREALIZED_PNL_PCT = 2.0       # (레거시 상수 = 다른 곳 참조 방지 위해 유지)
 MIN_SUSTAIN_PCT = 0.5              # v220: 1.0 → 0.5 (더 빨리 발동!)
 PEAK_HOLD_TOLERANCE_PCT = 2.5      # v220: 1.5 → 2.5 (변동성 관대!)
 COOLDOWN_SECONDS = 300             # 심볼:side 단위 5분 cooldown!
@@ -230,13 +234,18 @@ def run_success_pyramiding() -> dict:
             if mp is None:
                 continue
 
-            # ROI = (현재 - 평단) / 평단 × 방향
+            # 🎯 Fix 134: ROI = 가격변동률 × 레버리지 (손절 -5% 와 동일한 자!)
             if si.side == "LONG":
-                roi_pct = (mp - avg) / avg * 100
+                price_pct = (mp - avg) / avg * 100
             else:
-                roi_pct = (avg - mp) / avg * 100
+                price_pct = (avg - mp) / avg * 100
+            try:
+                _lev = float(si.leverage or 1) or 1.0
+            except Exception:
+                _lev = 1.0
+            roi_pct = price_pct * _lev
 
-            if roi_pct < MIN_UNREALIZED_PNL_PCT:
+            if roi_pct < MIN_UNREALIZED_ROI_PCT:
                 skipped += 1
                 continue
 
@@ -313,7 +322,16 @@ def run_success_pyramiding() -> dict:
             if _seq > MAX_PYRAMID_COUNT:
                 skipped += 1
                 continue
-            base_capital = _initial_capital  # 🌟 그대로! 배수 X!
+            # 🎯 Fix 134 (사장님 지시): 추가 금액은 「사다리 2번째 칸」 = 300
+            #   사장님 verbatim: "10 +5% 마틴게일 300 진입 ... 300한번더 포지션 진입"
+            #   옛 로직은 capitals[0](= 최초 진입금)을 그대로 추가했는데,
+            #   Fix 133 으로 1단계가 10 USDT(탐색 진입)가 되어 그대로 두면 10 만 추가된다.
+            try:
+                from app.services.sajangnim_capital import get_pyramid_capital
+                base_capital = float(get_pyramid_capital(db))
+            except Exception as _pe:
+                logger.warning("[Fix134] 피라미딩 자본 조회 실패 → 최초 진입금 사용: %s", _pe)
+                base_capital = _initial_capital
             logger.info(
                 "[SUCCESS_PYRAMID] 🌟 v241 Fix 68 초기금액 재사용 #%d: %s %s = %.0f USDT (배수 X!)",
                 _seq, si.symbol, si.side, base_capital,

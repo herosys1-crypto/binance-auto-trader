@@ -900,9 +900,34 @@ def run_realtime_reentry() -> dict:
             _max_count_effective = (
                 MAX_REENTRY_COUNT + 1 if ENABLE_LAST_CHANCE else MAX_REENTRY_COUNT
             )
+            # ═══════════════════════════════════════════════════════════════
+            # 🎯 Fix 135 (2026-08-26 사장님 지시): 사다리 소진 → 「1단계로 리셋」
+            #
+            # 사장님 verbatim:
+            #   "손실일때 -10%정도되면 청산하고 마틴게일 1단계 모니터링 대기하고
+            #    조건에 맞으면 1단계 진입하게 해줘"
+            #
+            # 옛 동작: 사다리(10→300→600)를 다 쓰면 그 심볼은 「영구 종료」.
+            #          카운터가 max 에 걸린 채 TTL(7일)이 지나야만 풀렸다.
+            # 신 동작: 소진되면 카운터를 0 으로 되돌려 「1단계(10 USDT) 대기」로 복귀.
+            #          10 USDT 탐색 진입이므로 재시작 리스크가 작다 (= 사장님 설계 의도).
+            #
+            # ⚠️ 즉시 재진입이 아니다. 카운터만 리셋하고 이번 사이클은 skip 하므로,
+            #    다음 사이클에 「1단계 진입 조건」을 처음부터 다시 통과해야 한다.
+            # ═══════════════════════════════════════════════════════════════
             if re_count >= _max_count_effective:
+                try:
+                    _reset_reentry_count(symbol, side)
+                    logger.warning(
+                        "[RT_REENTRY+Fix135] %s %s 사다리 소진(%d/%d) → 카운터 리셋 = "
+                        "1단계(탐색 진입) 모니터링 대기로 복귀",
+                        symbol, side, re_count, _max_count_effective,
+                    )
+                    _bump("ladder_exhausted_reset_to_stage1")
+                except Exception as _re:
+                    logger.warning("[Fix135] %s 카운터 리셋 실패: %s", symbol, _re)
+                    _bump("max_reentry_count")
                 skipped += 1
-                _bump("max_reentry_count")
                 logger.info(
                     "[RT_REENTRY] skip: %s %s MAX 재진입 %d회 도달! (max=%d, last_chance=%s)",
                     symbol, side, re_count, _max_count_effective, ENABLE_LAST_CHANCE,
