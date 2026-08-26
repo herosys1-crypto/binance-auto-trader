@@ -640,13 +640,30 @@ def _get_daily_limit(db: Session) -> int:
     사장님 verbatim: "일 진입수는 급등락 실시간과 같이 세팅"
     = sajangnim_top_short_daily_limit → auto_bb_break_daily_limit 통합!
     """
+    # 🚨🚨 Fix 108 (2026-08-26 CRITICAL): 「0 = OFF」 가 20 으로 둔갑하던 버그!
+    #
+    # 사장님 실측: 4개 설정 전부 0 인데 오늘 137건 진입!
+    #   sajangnim_top_short_daily_limit=0 / auto_bb_break_daily_limit=0 ...
+    #
+    # 옛 로직: `if v > 0: return v` → 0 이면 return 안 하고 루프 계속
+    #          → 전 키가 0 이면 마지막에 DEFAULT_DAILY_LIMIT(20) 반환!
+    #          → 사장님이 「끄기」 하려고 0 을 넣어도 시스템은 20건씩 진입!
+    #          = 정지 스위치가 작동하지 않는 상태 (자본 위험!)
+    #
+    # 신 로직: 값이 존재하면 0 이어도 그대로 존중 = 「명시적 0 = 완전 OFF」!
+    #          키 자체가 없을 때만 DEFAULT 사용.
     for key in ("sajangnim_top_short_daily_limit", "auto_bb_break_daily_limit"):
         try:
             row = db.get(SystemSetting, key)
-            if row and row.value:
+            if row and row.value is not None and str(row.value).strip() != "":
                 v = int(row.value)
-                if v > 0:
-                    return v
+                if v <= 0:
+                    logger.warning(
+                        "[auto_long_bottom+Fix108] %s=%d → 자동 진입 완전 OFF (사장님 명시 정지!)",
+                        key, v,
+                    )
+                    return 0        # 🚨 명시적 0 = OFF! (옛: 무시하고 20 으로 진행!)
+                return v
         except Exception:
             continue
     return DEFAULT_DAILY_LIMIT
