@@ -58,13 +58,24 @@ async function openCreateChartObvModal() {
   // 배너 = OBV 설명 + direct 강제 안내!
   const bannerEl = document.getElementById('cm-edit-banner-detail');
   if (bannerEl) {
+    // 🎯 Fix 173 (2026-08-27 사장님): 배너가 옛 로직을 설명하고 있었다.
+    //   옛 문구 "4H OBV 첫 하락 + 15m/1h 확인 + 10% 가격 이동" =
+    //   check_obv_reverse_signal 의 3중 AND. SHORT 전용이라 LONG 은 사실상 발동 안 함.
+    //   신: 자동 진입 워커와 **같은 게이트**를 쓴다 (stage_entry_signal).
     bannerEl.innerHTML =
-      '<b style="color:#a78bfa">📊 새 「차트 OBV 자동 재진입」 모드!</b><br>' +
+      '<b style="color:#a78bfa">📊 새 「OBV 자동 재진입」 모드 — 운영 진입 로직 적용!</b><br>' +
       '<b style="color:#fbbf24">⚠️ 직접 입력 필수!</b> (저장된 template 사용 X = 신 template 자동 생성!)<br>' +
       '• 1단계 = 사장님 시작가 진입 (기존과 동일!)<br>' +
-      '• 2~N단계 = 자동! (4H OBV 첫 하락 + 15m/1h 확인 + 10% 가격 이동!)<br>' +
-      '• 손절/TP = 기존 로직 그대로! (사장님 옵션 우선!)<br>' +
-      '• N+ 단계 = 수동 관리!';
+      '• <b style="color:#34d399">2~N단계 = 트리거 % 를 안 씁니다.</b> ' +
+      '지금 자동매매가 신규 진입을 판단할 때 쓰는 그 게이트를 그대로 통과해야 진입합니다:<br>' +
+      '&nbsp;&nbsp;① OBV 게이트 (4H 세력 방향) ② 양방향 실패 차단 ' +
+      '③ 급등/급락 regime (숏) ④ <b>15분 정점·저점 확인</b><br>' +
+      '&nbsp;&nbsp;<span style="color:#94a3b8">④ = 「한번 올랐다 내려오길 2~3번 반복 + ' +
+      'RSI/MACD/CCI 중 2개 이상 꺾임」 (사장님 사상)</span><br>' +
+      '• <b style="color:#34d399">단계별 금액 = 입력하신 금액 그대로</b> 들어갑니다 ' +
+      '(발주 시점 가격으로 수량만 재계산).<br>' +
+      '• 진입을 안 하면 <b>왜 안 했는지</b> 사유가 기록됩니다 (전략 카드 / 진단 화면).<br>' +
+      '• 손절/TP = 기존 로직 그대로! (사장님 옵션 우선!) • N+ 단계 = 수동 관리!';
     bannerEl.style.borderLeft = '3px solid #a78bfa';
     bannerEl.style.paddingLeft = '8px';
   }
@@ -85,6 +96,44 @@ async function openCreateChartObvModal() {
       const el = document.getElementById(id);
       if (el && !el.value) el.value = val;
     }
+    // 🎯 Fix 173: OBV 모드 = 트리거 % 미사용 → 입력칸 비활성 + 이유 표시.
+    //   사장님이 임의로 정해야 했던 값이 바로 「신뢰가 없다」던 그 값이다.
+    //   ⚠️ 값을 **지우지는 않는다** — 미리보기 계산이 0% 로 degenerate 한 단계가를
+    //      만들지 않도록 그대로 두고 비활성화만 한다 (사용되지 않는 값).
+    const _trgTip = 'OBV 모드에서는 이 % 를 쓰지 않습니다 — 운영 진입 로직(15분 정점확인 등)이 판단합니다.';
+    const _disableTrg = (el) => {
+      if (!el) return;
+      el.disabled = true;
+      el.title = _trgTip;
+      el.style.opacity = '0.4';
+      el.style.cursor = 'not-allowed';
+    };
+    for (let i = 2; i <= 10; i++) _disableTrg(document.getElementById('cm-trg-' + i));
+    _disableTrg(document.getElementById('cm-last-stage-trigger-pct'));
+    // 🚨 Fix 177 (2026-08-27): 「청산 후 재진입」을 켠다.
+    //   사장님 모델(-5% 청산 → 다음 단계 모니터링)은 이 토글이 켜져야 성립한다.
+    //   꺼져 있으면 (기본값 False) 청산돼도 LIQUIDATED_WAITING_RETRY 로 가지 않고,
+    //   force SL 도 v130 단계 게이트에 막혀 애초에 청산이 안 된다.
+    //   = 사장님이 매번 기억해서 켜야 하는 구조 자체가 함정이므로 모드 기본값으로 둔다.
+    const _retryEl = document.getElementById('cm-retry-after-liq-enabled');
+    if (_retryEl && !_retryEl.checked) {
+      _retryEl.checked = true;
+      try { _retryEl.dispatchEvent(new Event('change', { bubbles: true })); } catch (_e) {}
+    }
+    // 자본 칸 옆에 한 줄 안내 (그리드 위)
+    try {
+      const grid = document.getElementById('cm-capitals-grid');
+      if (grid && !document.getElementById('cm-obv-trg-note')) {
+        const note = document.createElement('div');
+        note.id = 'cm-obv-trg-note';
+        note.style.cssText = 'margin:6px 0;padding:6px 8px;border-left:3px solid #34d399;'
+          + 'background:rgba(52,211,153,0.08);color:#a7f3d0;font-size:12px;line-height:1.5';
+        note.innerHTML = '🎯 <b>트리거 % 는 비활성입니다.</b> 다음 단계 진입은 '
+          + '<b>지금 운영 중인 진입 로직</b>이 판단합니다 (15분 정점·저점 확인 + OBV 게이트).<br>'
+          + '단계별 <b>금액만</b> 입력하시면 됩니다 — 그 금액 그대로 진입합니다.';
+        grid.parentNode.insertBefore(note, grid);
+      }
+    } catch (_e) { /* 안내 실패는 기능에 영향 없음 */ }
   }, 200);
 }
 
@@ -99,6 +148,23 @@ let cmState = {
 };
 
 async function openCreateModal(editStrategyId) {
+  // 🎯 Fix 173 (2026-08-27): OBV 모달이 비활성화한 트리거 칸을 **반드시 되돌린다**.
+  //   두 모달이 같은 DOM 을 공유하므로, 초기화하지 않으면
+  //   「OBV 모달 열었다가 → 기존 방식 열기」 시 트리거 칸이 비활성인 채로 남아
+  //   사장님이 값을 못 넣는다 (헌법 110 = 화면과 실제가 어긋나는 함정).
+  try {
+    const _enableTrg = (el) => {
+      if (!el) return;
+      el.disabled = false;
+      el.title = '';
+      el.style.opacity = '';
+      el.style.cursor = '';
+    };
+    for (let i = 2; i <= 10; i++) _enableTrg(document.getElementById('cm-trg-' + i));
+    _enableTrg(document.getElementById('cm-last-stage-trigger-pct'));
+    const _oldNote = document.getElementById('cm-obv-trg-note');
+    if (_oldNote) _oldNote.remove();
+  } catch (_e) { /* 초기화 실패해도 모달 자체는 열려야 한다 */ }
   // 🌟 v130 (2026-08-06): _triggerMode 초기화 = default 'PRICE_DOWN_PCT' (구 시스템!)
   //   openCreateChartObvModal()가 = 이후에 = 'OBV_REVERSE'로 덮어씀!
   cmState._triggerMode = 'PRICE_DOWN_PCT';

@@ -274,18 +274,50 @@ class RiskService:
         )
         # 🌟 2026-08-06 v130 사장님 CRITICAL:
         # 다음 단계 미진입 시 = force SL도 발동 X! (손실 회복 기회 유지!)
+        #
+        # ══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 177 (2026-08-27 사장님 질문에서 발견):
+        #   "포지션 1단계진입후 -5%손실이면 다음단계로 넘어갈때
+        #    청산하고 다음단계 포지션에 들어가나요?"
+        #   → 확인해보니 **안 들어갔다.** 이 v130 게이트가 막고 있었다.
+        #
+        # v130 게이트는 「물타기 모델」 전제다 — 청산하지 않고 다음 단계를 더 태워
+        # 평단을 개선하는 방식. 그래서 단계가 남아 있으면 손절을 미룬다.
+        #
+        # 그런데 사장님은 2026-08-26 에 **청산 후 대체 모델**을 선택하셨다:
+        #   "복잡하면 10 -5%일때 청산하고 다음단계 모니터링 대기해도 됩니다."
+        #   "1단계 진입후 포지션 300진입후 손실이 -5%면 청산하고 다음단계 600 모니터링"
+        # 이 모델에서는 **-5% 청산이 반드시 일어나야** LIQUIDATED_WAITING_RETRY 로 가고
+        # 다음 단계 모니터링이 시작된다. v130 게이트가 그 첫 단추를 막고 있었다.
+        #
+        # 게다가 Fix 133(사다리 3칸)으로 template 이 제대로 3단계가 되면서
+        # `1 < 3` 이 성립해 **이 게이트가 오히려 더 확실하게 작동**하게 됐다.
+        # (그 전에는 1단계짜리 template 이라 1 >= 1 로 통과했었다.)
+        #
+        # 해법: 「청산 후 재진입」을 켠 전략은 청산 후 대체 모델이므로 게이트를 건너뛴다.
+        #   retry_after_liquidation_enabled = 사장님이 명시적으로 그 모델을 고른 신호다.
+        #   끈 전략(기존 방식/물타기)은 v130 동작 그대로 — 남의 전략을 바꾸지 않는다.
+        # ══════════════════════════════════════════════════════════════════
         if is_force:
-            from app.api.v1.strategies.helpers import _count_active_stages
-            from app.models.strategy_template import StrategyTemplate as _TmplM_fsl
-            _tpl_fsl = self.db.get(_TmplM_fsl, strategy.strategy_template_id) if strategy.strategy_template_id else None
-            _total_stages_fsl = _count_active_stages(_tpl_fsl)
-            _current_stage_fsl = strategy.current_stage or 0
-            if _current_stage_fsl < _total_stages_fsl:
+            _retry_flow = bool(getattr(strategy, "retry_after_liquidation_enabled", False))
+            if _retry_flow:
                 logger.info(
-                    "[force_sl v130] 사장님 사상: 발동 조건 도달 but 다음 단계 남음 (%s/%s) = 발동 X!",
-                    _current_stage_fsl, _total_stages_fsl,
+                    "[force_sl Fix177] #%s 청산 후 재진입 모드 = 단계 게이트 건너뜀 "
+                    "(-%s%% 청산 → 다음 단계 모니터링)",
+                    strategy.id, threshold,
                 )
-                return False
+            else:
+                from app.api.v1.strategies.helpers import _count_active_stages
+                from app.models.strategy_template import StrategyTemplate as _TmplM_fsl
+                _tpl_fsl = self.db.get(_TmplM_fsl, strategy.strategy_template_id) if strategy.strategy_template_id else None
+                _total_stages_fsl = _count_active_stages(_tpl_fsl)
+                _current_stage_fsl = strategy.current_stage or 0
+                if _current_stage_fsl < _total_stages_fsl:
+                    logger.info(
+                        "[force_sl v130] 사장님 사상: 발동 조건 도달 but 다음 단계 남음 (%s/%s) = 발동 X!",
+                        _current_stage_fsl, _total_stages_fsl,
+                    )
+                    return False
         if is_force:
             from app.core.risk_constants import PERCENT_DENOMINATOR
             if side == "LONG":

@@ -1134,6 +1134,18 @@
                 <input type="text" id="v219-ladder" placeholder="10,300,600" value="10,300,600"
                        class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:130px" />
               </label>
+              <!-- 🎯 Fix 176 (2026-08-27 사장님): 피라미딩 1회 금액 = 사다리와 독립!
+                   "10 +5% 마틴게일 300 진입 이건 초기 1단계 상관없이 300으로 고정하고
+                    300도 차후에 선택옵션으로 만들어두면 될것 같아" -->
+              <label class="flex items-center justify-between gap-2">
+                <span class="text-slate-300"
+                      title="수익 중 +5% 마다 추가 진입하는 1회 금액. 사다리(1단계 금액)와 무관한 고정값. 최대 2회.">
+                  피라미딩 1회 (USDT)
+                </span>
+                <input type="number" id="v219-pyramid-capital" min="1" max="100000" step="10" value="300"
+                       class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:110px"
+                       title="끄시려면 이 값이 아니라 「피라미딩 사용」 스위치를 내리세요." />
+              </label>
               <label class="flex items-center justify-between gap-2">
                 <span class="text-slate-300" title="사다리를 비웠을 때만 쓰이는 예비값">초기 자본 (예비)</span>
                 <input type="number" id="v219-capital" min="1" max="100000" step="10" value="10"
