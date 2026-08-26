@@ -229,6 +229,7 @@ def run_success_pyramiding() -> dict:
             .join(StrategyTemplate,
                   StrategyInstance.strategy_template_id == StrategyTemplate.id)
             .where(StrategyInstance.status.in_(list(ACTIVE_LIKE)))
+            .where(StrategyInstance.is_archived.is_(False))   # Fix 158
             .where(StrategyInstance.current_stage >= 1)
         ).scalars().all()
 
