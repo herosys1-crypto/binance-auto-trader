@@ -241,13 +241,23 @@ class ChartAnalyzer:
             from app.core.redis_client import get_redis_client
             r = get_redis_client()
             cache_ttl = {"4h": 300, "1h": 180, "15m": 60}.get(interval, 60)
-            cache_key = f"kline_cache:{symbol}:{interval}"
+            # 🚨 Fix 123 (2026-08-26): 캐시 키에 limit 이 빠져 있었다!
+            #   옛: kline_cache:{symbol}:{interval}
+            #   → limit=20 으로 캐시된 20봉이 limit=80 요청을 그대로 만족시킨다.
+            #   → peak_confirmation.confirm_peak 은 40봉(PEAK_LOOKBACK_BARS)이 필요한데
+            #     20봉만 받으면 swing peak 이 적게 세어져 「정점 아님」으로 오판 =
+            #     사장님 정점 SHORT 가 조용히 차단된다 (Fix 111 을 무력화!).
+            #   신: limit 을 키에 포함 + 캐시가 요청보다 짧으면 재조회.
+            cache_key = f"kline_cache:{symbol}:{interval}:{int(limit)}"
             kl = None
             try:
                 cached = r.get(cache_key)
                 if cached:
                     import json as _j
-                    kl = _j.loads(cached)
+                    _c = _j.loads(cached)
+                    # 길이 부족한 캐시는 버린다 (지표 창이 짧아져 오판하는 것 방지)
+                    if isinstance(_c, list) and len(_c) >= min(int(limit), 30):
+                        kl = _c
             except Exception:
                 pass
             if not kl or not isinstance(kl, list):

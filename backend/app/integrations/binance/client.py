@@ -65,6 +65,16 @@ _IP_BAN_REDIS_KEY = "api_backoff:ip:ban_until_ms"
 _TICKER_ALL_KEY = "binance:ticker24h:all"
 _TICKER_ALL_TTL_SEC = 30
 
+# 🎯 Fix 122: klines 공유 캐시 TTL (봉 길이에 비례 = 짧은 봉일수록 짧게).
+#   진행 중인 마지막 봉이 갱신되는 주기를 고려한 보수적 값.
+_KLINE_TTL = {
+    "1m": 5, "3m": 10, "5m": 10,
+    "15m": 20, "30m": 30,
+    "1h": 60, "2h": 90, "4h": 180,
+    "6h": 240, "8h": 300, "12h": 300,
+    "1d": 300, "3d": 600, "1w": 600, "1M": 600,
+}
+
 # 🎯 Fix 118 (2026-08-26): REST 호출량 실측 계측
 #   배경: Prometheus 는 uvicorn 을 띄우는 api 컨테이너만 긁는다. 정작 호출을
 #   쏟아내는 scheduler 컨테이너는 /metrics 를 노출하지 않아 「어느 엔드포인트가
@@ -269,7 +279,45 @@ class BinanceClient:
           calling: get_klines(symbol="BTCUSDT", interval="1d", limit=8) → 7일 변동률 계산.
         """
         params = {"symbol": symbol.upper(), "interval": interval, "limit": int(limit)}
-        return self._request("GET", "/fapi/v1/klines", signed=False, params=params)
+
+        # ══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 122 (2026-08-26): klines 공유 캐시 — IP ban 최대 원인 제거
+        #
+        # 실측 (Fix 118 계측, ban 해제 직후 5분):
+        #   /fapi/v1/klines 1,953회 = 분당 391회 = 전체 호출의 95%
+        #   총 1,094 weight/분 = 한도(2400)의 45.6%
+        #
+        # 왜 이렇게 많은가: peak_break_reversal / resistance_reversal 이 각각
+        #   30초마다 「같은」 활성 심볼 33개를 조회하고, 워커 내부에서도
+        #   심볼당 2~3회 부른다. 서로의 결과를 재사용하지 않는다.
+        #
+        # 캐시 키에 limit 을 포함하는 것이 중요:
+        #   limit 없이 캐싱하면 20봉 캐시가 80봉 요청을 만족시켜
+        #   정점 판정(peak_confirmation, 40봉 필요)이 조용히 오작동한다.
+        #   (ChartAnalyzer 의 기존 캐시가 정확히 그 버그를 갖고 있었다 → Fix 123)
+        #
+        # TTL 은 봉 길이에 비례. 짧은 봉일수록 짧게 = 정확도 우선.
+        # ══════════════════════════════════════════════════════════════════
+        ttl = _KLINE_TTL.get(interval, 15)
+        ckey = f"binance:kl:{symbol.upper()}:{interval}:{int(limit)}"
+        import json as _json
+        _r = None
+        try:
+            from app.core.redis_client import get_redis_client
+            _r = get_redis_client()
+            hit = _r.get(ckey)
+            if hit:
+                return _json.loads(hit.decode() if isinstance(hit, bytes) else hit)
+        except Exception:
+            _r = None      # Redis 장애 = 직접 조회 (기존 동작 유지)
+
+        data = self._request("GET", "/fapi/v1/klines", signed=False, params=params)
+        if _r is not None and isinstance(data, list) and data:
+            try:
+                _r.setex(ckey, ttl, _json.dumps(data))
+            except Exception:
+                pass
+        return data
 
     def get_24hr_ticker(self, symbol: str | None = None) -> list[dict[str, Any]] | dict[str, Any]:
         """Binance Futures /fapi/v1/ticker/24hr — 24h 변동률 (priceChangePercent 등).
