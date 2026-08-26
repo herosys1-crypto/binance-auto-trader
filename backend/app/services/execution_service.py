@@ -157,6 +157,27 @@ class ExecutionService:
                     f"   = silent bug 영구 차단 (사장님 #237 SLXUSDT 1539 USDT 손실 사건!)\n"
                     f"   error: {err_msg}"
                 )
+            # 🎯 Fix 120 (2026-08-26 사장님 보고): IP ban 을 「설정 오류」로 오인시키던 문구!
+            #   사장님 화면에 「ISOLATED 변경 실패 = critical! Binance 앱에서 마진 모드 확인!」
+            #   이 떠서 계정 설정 문제로 보였지만, 실제 원인은 Binance IP ban 이었다.
+            #   → 사장님이 하실 조치는 「마진 모드 확인」이 아니라 「N초 기다리기」!
+            _ban_left = 0
+            try:
+                from app.integrations.binance.client import get_ip_ban_remaining_sec
+                _ban_left = get_ip_ban_remaining_sec()
+            except Exception:
+                pass
+            if _ban_left > 0 or "ban active" in err_msg.lower() or "-1003" in err_msg:
+                _m, _s = divmod(max(_ban_left, 0), 60)
+                raise ValueError(
+                    f"⏳ Binance API 일시 차단 중 (요청 과다 = IP rate limit) — "
+                    f"{strategy.symbol} 진입 보류!\n"
+                    f"💡 조치 = 기다리시면 자동 복구됩니다"
+                    + (f" (약 {_m}분 {_s}초 남음)" if _ban_left > 0 else "")
+                    + "\n"
+                    f"   ⚠️ 계정/마진 모드 문제 아님 — 지금 재시도하면 차단이 더 길어집니다!\n"
+                    f"   error: {err_msg}"
+                )
             # 🚨 v53: 다른 에러 = critical!
             raise ValueError(
                 f"🚨 ISOLATED 변경 실패 = critical! strategy={strategy.id} symbol={strategy.symbol}!\n"
