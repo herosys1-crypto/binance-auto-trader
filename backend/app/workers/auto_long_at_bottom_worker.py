@@ -795,7 +795,26 @@ def _get_daily_limit(db: Session) -> int:
 
 
 def _get_default_capital(db: Session) -> float:
-    """사장님 초기 자본 = 300 USDT default (조정 가능!)"""
+    """🚨 Fix 159 (2026-08-26 사장님 지적): LONG 만 사다리를 무시하고 있었다.
+
+    사장님 스크린샷: #1511/#1492/#1500 이 전부 「1단계 50U LONG」
+      사다리는 10/300/600 인데 LONG 만 50 으로 진입.
+
+    원인 = 이 워커가 자체 함수로 sajangnim_default_capital(=50) 을 읽었다.
+      SHORT(auto_short_at_top)는 compute_stage1_capital → 사다리 1칸 = 10
+      LONG(여기)          는 sajangnim_default_capital     = 50
+      → 같은 「1단계 자본」에 읽는 경로가 둘 = 반드시 어긋난다 (헌법 101)
+      Fix 143 이 compute_stage1_capital 만 고치고 이 함수를 놓쳤다.
+
+    → SHORT 와 같은 단일 진실(사다리)을 쓴다 (헌법 6).
+    """
+    try:
+        from app.services.sajangnim_capital import compute_stage1_capital
+        v = float(compute_stage1_capital(None, db))
+        if v > 0:
+            return v
+    except Exception as e:
+        logger.warning("[Fix159] 사다리 조회 실패 → 옛 설정 fallback: %s", e)
     try:
         row = db.get(SystemSetting, "sajangnim_default_capital")
         if row and row.value:

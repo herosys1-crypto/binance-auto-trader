@@ -78,20 +78,16 @@ def _set_state(sid, stage, s): _set(sid, stage, "state", s)
 
 def _get_stage_capital(db, stage):
     """마틴게일: base × 2 × 3^(stage-2) → 300, 600, 1800, 5400..."""
+    # 🚨 Fix 159: 옛 배수(base×[1,2,6])는 사다리 10/300/600 을 표현할 수 없다.
+    #   같은 「단계 자본」에 읽는 경로가 둘이면 어긋난다 (헌법 101).
+    #   → 사다리 단일 진실(get_stage_capital)로 통일.
     if stage < 1: return None
     try:
-        from app.models.system_setting import SystemSetting
-        cap_row = db.get(SystemSetting, "sajangnim_default_capital")
-        max_row = db.get(SystemSetting, "sajangnim_max_stage")
-        base = Decimal(str(cap_row.value)) if cap_row and cap_row.value else Decimal("300")
-        max_stage = int(max_row.value) if max_row and max_row.value else 3
-        if stage > max_stage: return None
-        if stage == 1: return base
-        if stage == 2: return base * Decimal("2")
-        if stage == 3: return base * Decimal("6")
-        if stage >= 4: return base * Decimal("2") * (Decimal("3") ** (stage - 2))
+        from app.services.sajangnim_capital import get_stage_capital
+        return get_stage_capital(db, stage)
+    except Exception as e:
+        logger.warning("[Fix159] 사다리 조회 실패 → None (진입 보류): %s", e)
         return None
-    except Exception: return None
 
 
 def _calc_rsi(closes, period=6):
