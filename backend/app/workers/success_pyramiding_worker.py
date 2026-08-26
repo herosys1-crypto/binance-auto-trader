@@ -437,21 +437,62 @@ def run_success_pyramiding() -> dict:
                 _seq, si.symbol, si.side, base_capital,
             )
 
-            # 신 pyramid strategy 생성
+            # ═══════════════════════════════════════════════════════════════
+            # 🚨 Fix 156 (2026-08-26 사장님 실측): 「포지션 추가」를
+            #   「새 전략 생성」으로 구현한 것이 설계 오류였다.
+            #
+            # 사장님 실 로그:
+            #   🌟 초기금액 재사용 #1: ZESTUSDT SHORT = 300 USDT
+            #   진입 실패: ⚠️ ZESTUSDT SHORT 전략이 이미 진행 중입니다 (#1493).
+            #             Binance 는 한 종목/방향에 하나의 통합 포지션만 허용합니다.
+            #
+            # 자본 계산까지 정상이었는데 발주 직전 중복 방지 가드에 막혔다.
+            # 그 가드는 옳다 — Binance 는 한 종목/방향에 통합 포지션 하나뿐이고,
+            # 전략을 둘로 만들면 익절/손절이 서로 충돌한다.
+            #
+            # 사장님 지시는 "300한번더 「포지션 진입」" =
+            #   같은 포지션에 물량을 더하는 것이지 별도 전략이 아니다.
+            # → add_position_now (=「💉 포지션 추가」 와 같은 경로) 를 쓴다.
+            #   · 같은 전략에 MARKET 추가, 평단/qty/total_capital 자동 갱신
+            #   · mode="reset" = 신 평단 기준으로 TP1 부터 다시
+            #     (사장님 "+15% 익절시작" = 새 평단 기준이어야 맞다)
+            #   · 새 StrategyInstance 를 만들지 않으므로 동시보유 상한도 소비하지 않는다
+            #     (추가는 「새 포지션」이 아니다)
+            # ═══════════════════════════════════════════════════════════════
             try:
-                cfg = {
-                    "capitals": [base_capital],
-                    "leverage": int(si.leverage or 2),
-                }
-                suffix = f"_pyramid{pyr_count + 1}"
-                new_strategy = _create_auto_bb_strategy(
-                    db, si.symbol, si.side, cfg,
-                    strategy_type_suffix=suffix,
-                )
-                if not new_strategy:
+                from app.services.execution_service import ExecutionService
+                from app.core.crypto import decrypt_text as _dt
+                from app.models.exchange_account import ExchangeAccount as _EA
+                _acc = db.execute(
+                    select(_EA).where(_EA.is_testnet.is_(False)).where(_EA.is_active.is_(True))
+                ).scalars().first()
+                if _acc is None:
                     skipped += 1
-                    _bump("create_failed")
+                    _bump("no_mainnet_account")
+                    logger.warning("[Fix156] %s mainnet 계정 없음 = 포지션 추가 불가", si.symbol)
                     continue
+                _exec = ExecutionService(
+                    db,
+                    api_key=_dt(_acc.api_key_enc),
+                    api_secret=_dt(_acc.api_secret_enc),
+                    is_testnet=False,
+                )
+                _add_order = _exec.add_position_now(
+                    si.id,
+                    amount_usdt=Decimal(str(base_capital)),
+                    order_type="MARKET",
+                    mode="reset",
+                )
+                if not _add_order:
+                    skipped += 1
+                    _bump("add_position_failed")
+                    continue
+                new_strategy = si          # 이후 기록은 부모 전략 기준
+                logger.info(
+                    "[Fix156] ✅ %s %s 포지션 추가 #%d: %.0f USDT MARKET "
+                    "(전략 #%d 에 물량 추가, 평단 갱신)",
+                    si.symbol, si.side, _seq, base_capital, si.id,
+                )
 
                 # StrategySuggestion 기록!
                 from app.models.strategy_suggestion import StrategySuggestion
