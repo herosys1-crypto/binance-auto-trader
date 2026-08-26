@@ -121,13 +121,41 @@ _SCAN_ENDPOINTS = frozenset({
 })
 
 
-def _add_weight(endpoint: str) -> int:
+def estimate_weight(endpoint: str, params: dict | None = None) -> int:
+    """🎯 Fix 125: 실제 Binance 규칙에 맞는 weight 산출.
+
+    고정 표만 쓰면 과대평가되어 거버너가 정상 스캔까지 막는다:
+      - klines weight 는 limit 에 따라 1/2/5/10 (대부분의 호출은 limit<=100 = 1!)
+      - ticker/24hr 는 symbol 지정 시 1, 전체 조회일 때만 40
+      - openOrders 도 symbol 지정 시 1, 전체일 때 40
+    """
+    p = params or {}
+    if endpoint == "/fapi/v1/klines":
+        try:
+            lim = int(p.get("limit") or 500)
+        except (TypeError, ValueError):
+            lim = 500
+        if lim <= 100:
+            return 1
+        if lim <= 500:
+            return 2
+        if lim <= 1000:
+            return 5
+        return 10
+    if endpoint in ("/fapi/v1/ticker/24hr", "/fapi/v1/openOrders"):
+        return 1 if p.get("symbol") else 40
+    if endpoint == "/fapi/v1/premiumIndex":
+        return 1 if p.get("symbol") else 10
+    return _ENDPOINT_WEIGHT.get(endpoint, 1)
+
+
+def _add_weight(endpoint: str, params: dict | None = None) -> int:
     """이번 분 누적 weight 에 더하고 누적값 반환. 실패 시 0(=차단 안 함)."""
     try:
         from app.core.redis_client import get_redis_client
         r = get_redis_client()
         key = _WEIGHT_KEY.format(minute=time.strftime("%Y%m%d%H%M", time.gmtime()))
-        total = int(r.incrby(key, _ENDPOINT_WEIGHT.get(endpoint, 1)))
+        total = int(r.incrby(key, estimate_weight(endpoint, params)))
         r.expire(key, _WEIGHT_TTL_SEC)
         return total
     except Exception:
@@ -615,7 +643,7 @@ class BinanceClient:
             )
 
         # 🚨 Fix 124: weight 거버너 — 스캔 호출만 차단, 주문/포지션은 항상 통과
-        _wtotal = _add_weight(path)
+        _wtotal = _add_weight(path, params)
         if path in _SCAN_ENDPOINTS and _wtotal > SCAN_WEIGHT_BUDGET_PER_MIN:
             binance_api_requests_total.labels(
                 endpoint=path, method=method, status="weight_throttled",
