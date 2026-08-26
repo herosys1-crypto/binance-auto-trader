@@ -195,7 +195,7 @@ def _check_4h_direction_filter(bc, symbol: str, side: str) -> tuple[bool, str, d
     사장님 verbatim: "15분과 4시간의 움직임을"
       → 두 시간대 방향 일치 시만 진입!
 
-    LONG 조건: 4H MACD Hist 상승 중 (hist[-1] >= hist[-2]) OR hist[-1] >= 0
+    LONG 조건: 4H MACD Hist 상승 중 (hist[-1] >= hist[-2]) OR hist[-1] >= 0  (Fix 146 = SHORT 대칭)
     SHORT 조건: 4H MACD Hist 하락 중 (hist[-1] <= hist[-2]) OR hist[-1] <= 0
 
     Args:
@@ -245,13 +245,25 @@ def _check_4h_direction_filter(bc, symbol: str, side: str) -> tuple[bool, str, d
             # 원 (OR): hist > 0 OR hist > hist_prev = 관대 (하락중이어도 양수면 통과!)
             # 신 (AND): hist > 0 AND hist > hist_prev = 엄격 (양수 + 상승 지속!)
             # 이유: LONG 진입 = 4H 확실한 상승 지속 요구 = 헌법 78 대칭!
-            ok = (hist_4h_now > 0) and (hist_4h_now > hist_4h_prev)
+            # 🚨 Fix 146 (2026-08-26): Fix 87 P1 의 AND 가 헌법 77 을 봉쇄하고 있었다.
+            #
+            # 사장님 헌법 77: "macd 15분 하락 후 반등 시작점과 반등후 하락 위치를 참고"
+            #   15분에서 반등이 「시작」될 때 4H MACD 는 아직 음수이거나 하락 중이다.
+            #   4H 는 후행지표이기 때문. 그런데 AND 조건은 hist>0 그리고 상승을 요구해
+            #   「반등 시작점」을 정확히 배제한다 = 사장님이 원하는 진입만 골라 막는다.
+            #
+            # 게다가 SHORT 는 OR (hist<=prev OR hist<=0) 이라 두 조건이 논리적 여집합이었다.
+            #   → LONG 만 엄격 = SHORT 편중의 직접 원인 중 하나.
+            #
+            # Fix 111 에서 이미 같은 교훈을 얻었다: 4H 를 하드 게이트로 쓰지 말 것.
+            # → SHORT 와 대칭인 OR 로 되돌린다 (양수이거나 상승 중이면 통과).
+            ok = (hist_4h_now >= hist_4h_prev) or (hist_4h_now >= 0)
             reason = (
-                f"4h dir={direction_4h} hist={hist_4h_now:+.5f} > 0 AND > prev "
-                f"(LONG Fix87 AND ok)"
+                f"4h dir={direction_4h} hist={hist_4h_now:+.5f} "
+                f"prev={hist_4h_prev:+.5f} (LONG Fix146 OR ok = SHORT 대칭)"
                 if ok else
                 f"4h dir={direction_4h} hist={hist_4h_now:+.5f} "
-                f"prev={hist_4h_prev:+.5f} (LONG Fix87 AND 조건 미달 = skip!)"
+                f"prev={hist_4h_prev:+.5f} (LONG 4H 역방향 = skip)"
             )
         elif side_l == "short":
             # 4H MACD Hist 하락 중 or 이미 음수 = 하락 우호!

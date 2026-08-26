@@ -104,8 +104,28 @@ CCI_MIN_TURNUP = 5.0          # CCI now > prev + 5 = 반등!
 # 패턴 A (+5%~+15% 상승 지속) = 헌법 78 위반 = 완전 skip!
 # 패턴 B 상한도 -3%로 강화 = 더 확실한 급락 심볼만!
 # 24h 필터 (Fix 87 = 급락만!)
-MIN_24H_CHANGE = -15.0        # -15% 이상 (큰 조정 하한! 패턴 B 하한!)
-MAX_24H_CHANGE = -3.0         # 🌟 Fix 87: -3% 이하 (급락 상한 강화!)
+# ═══════════════════════════════════════════════════════════════════════════
+# 🚨 Fix 148 (2026-08-26): 닫힌 구간 [-15%, -3%] 이 사장님 LONG 시나리오를 배제
+#
+# 사장님 verbatim (헌법 73~75, LONG 4 시나리오):
+#   "롱진입은 급락후 반등하는 시점과 장기 하락후 볼밴하단 지지또는 돌파 확인된 시점에
+#    많이 진입하고 급등후 조정 볼밴 중단 지지와 하단 지지에 진입해야 해"
+#
+# 옛 창이 배제한 것:
+#   24h -20% (진짜 급락)  → 하한 -15% 미만이라 제외  ← 시나리오 1 의 강한 케이스
+#   24h +5%  (급등 후 조정) → 상한 -3% 초과라 제외    ← 시나리오 3 전체
+#   = 4개 시나리오 중 2개가 코드 레벨에서 영구 봉쇄
+#
+# 헌법 78 "당일 급등락한 심볼만" 은 지켜야 하므로 「절대값」 기준으로 바꾼다:
+#   |24h| >= 3%  = 급등이든 급락이든 당일 움직인 종목만 (헌법 78 충족)
+#   하한 제거    = -20%, -30% 급락도 후보 (시나리오 1)
+#   상한 제거    = +5%, +20% 급등 후 조정도 후보 (시나리오 3)
+# 실제 진입 판정은 BB 위치·지표 반전·peak_confirmation 이 담당한다.
+# (24h 는 "움직인 종목인가"를 거르는 1차 필터일 뿐, 방향 판정 도구가 아니다)
+# ═══════════════════════════════════════════════════════════════════════════
+MIN_ABS_24H_CHANGE = 3.0      # |24h| >= 3% = 당일 급등락 종목 (헌법 78)
+MIN_24H_CHANGE = -15.0        # (레거시 = 패턴 B 등 다른 참조 유지용)
+MAX_24H_CHANGE = -3.0         # (레거시)
 
 # Fix 50 v2 = 사장님 verbatim 2 패턴 분기 상수 (Fix 87 = 패턴 A 완전 skip!)
 # ⚠️ Fix 87 (헌법 78): PATTERN_A_* 상수는 dispatcher에서 참조하지만 실제 진입은 skip!
@@ -121,8 +141,14 @@ RSI_PATTERN_B_MAX = 40.0      # Fix 61 P1: 45 → 40 (더 과매도 회복!)
 
 # 🌟 Fix 87 P0 (2026-08-25 사장님!): BTC 방향 필터 (SHORT auto_short_at_top 대칭!)
 # BTC 24h < -2% = 시장 하락장 = LONG 위험! (LONG skip!)
-# auto_bb_breakdown BTC_DIRECTION_THRESHOLD (3.0)보다 엄격 (LONG = 하방 리스크 큼!)
-BTC_DIRECTION_THRESHOLD_LONG = 2.0
+# 🚨 Fix 147 (2026-08-26): 2.0 → 3.0 (auto_bb_breakdown 과 동일 = 진짜 대칭)
+#   옛 주석은 "auto_short_at_top BTC 필터 대칭" 이라 했지만
+#   auto_short_at_top_worker.py 에는 BTC 코드가 「한 줄도 없다」 = 근거가 거짓이었다.
+#   실제로는 LONG 만 시장 전체 차단을 받고 SHORT 는 무제한이었다 (SHORT 편중 원인).
+#   ⚠️ 사장님 LONG 시나리오 1 "급락 후 반등" 은 BTC 가 빠지는 국면이 바로 그 setup 이다.
+#      전면 차단은 사상과 충돌하므로 최소한 대칭값으로 맞춘다.
+#      진짜 안전장치는 peak_confirmation (반복 하락 + 지표 저점 반등) 이다.
+BTC_DIRECTION_THRESHOLD_LONG = 3.0
 
 # 스캔 상한!
 MAX_SYMBOLS = 40              # 심볼당 4 kline call = API 부담 대응!
@@ -159,8 +185,9 @@ def _get_btc_change_24h() -> float | None:
 def _matches_btc_direction_conflict_long() -> tuple[bool, str]:
     """🌟 Fix 87 (2026-08-25 사장님!): BTC 하락장 = LONG 진입 금지!
 
-    사장님 사상 대칭 (auto_short_at_top BTC 필터 대칭!):
-      - BTC 24h < -2% = 시장 하락장 = LONG 위험 = skip!
+    ⚠️ Fix 147 정정: 옛 주석의 "auto_short_at_top 대칭" 은 사실이 아니었다
+    (그 워커에 BTC 코드 없음). 임계를 auto_bb_breakdown 과 같은 3.0 으로 맞춤.
+      - BTC 24h < -3% = 시장 하락장 = LONG skip
 
     Returns:
         (blocked, reason)
@@ -1176,7 +1203,8 @@ def run_auto_long_at_bottom_once() -> dict:
         for t in usdt[:MAX_SYMBOLS * 3]:
             try:
                 c = float(t.get("priceChangePercent", 0) or 0)
-                if MIN_24H_CHANGE <= c <= MAX_24H_CHANGE:
+                # Fix 148: 닫힌 구간 → 절대값 기준 (급등/급락 양쪽 모두 후보)
+                if abs(c) >= MIN_ABS_24H_CHANGE:
                     candidates.append(t)
                 if len(candidates) >= MAX_SYMBOLS:
                     break
