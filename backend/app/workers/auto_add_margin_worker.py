@@ -60,17 +60,37 @@ AUTO_ENTRY_TYPES = (
 )
 
 
-def _get_add_margin_amount(db) -> Decimal:
-    """SystemSetting `auto_add_margin_usdt` (default 300!)"""
+def _get_add_margin_amount(db) -> Decimal | None:
+    """SystemSetting `auto_add_margin_usdt` → 투입 금액. None = 기능 OFF.
+
+    🚨 Fix 165 (2026-08-26): 헌법 83 (0 = OFF 는 0 을 반환해야 한다) **세 번째 재발**.
+
+    옛 코드:
+        if val > 0:
+            return val
+        ...
+        return DEFAULT_ADD_MARGIN_USDT     # ← 0 을 넣으면 여기로 떨어져 300 이 됐다
+
+    즉 `auto_add_margin_usdt = 0` 은 「끄기」가 아니라 「300」이었다.
+    이 워커엔 별도 ON/OFF 스위치도 없어서 **끌 방법이 존재하지 않았다.**
+    Fix 108 (`sajangnim_top_short_daily_limit`) 과 완전히 같은 패턴.
+
+    미설정(row 없음)은 기존 동작(300)을 그대로 유지한다 — 사장님이 요구하지 않은
+    동작 변경을 끼워넣지 않기 위해서다. 끄려면 명시적으로 0 을 넣으면 된다.
+    """
     try:
         row = db.get(SystemSetting, "auto_add_margin_usdt")
-        if row and row.value:
-            val = Decimal(str(row.value))
-            if val > 0:
-                return val
-    except Exception:
-        pass
-    return DEFAULT_ADD_MARGIN_USDT
+        if row is not None and row.value is not None and str(row.value).strip() != "":
+            val = Decimal(str(row.value).strip())
+            if val <= 0:
+                return None          # 명시적 0 = OFF
+            return val
+    except Exception as e:
+        logger.warning(
+            "[auto_add_margin] auto_add_margin_usdt 파싱 실패 → default %s 사용: %s",
+            DEFAULT_ADD_MARGIN_USDT, e,
+        )
+    return DEFAULT_ADD_MARGIN_USDT   # 미설정 = 기존 동작 유지
 
 
 def _redis():
@@ -124,8 +144,38 @@ def run_auto_add_margin() -> dict:
         if not account:
             return {"note": "mainnet 계정 없음!", "added": 0}
 
-        # 2. 증거금 금액
+        # ═══════════════════════════════════════════════════════════════
+        # 🚨 Fix 164 (2026-08-26): Kill-Switch 가 이 워커를 막지 못하고 있었다.
+        #
+        # 시스템 전체에서 AccountKillSwitchService.is_enabled 를 검사하는 지점은
+        # 5곳뿐이고 (execution_service.py:192/239/1143/1262, strategy_service.py:222)
+        # add_position_margin (execution_service.py:883) 은 그 안에 없다.
+        # → KS 가 켜진 「비상 정지」 상태에서도 -30% 포지션에 300 USDT 가 계속 들어갔다.
+        #   KS 안내문의 "신규 주문 자동 차단" 이 사실이 아니었다.
+        #
+        # ⚠️ 검사를 add_position_margin **안**에 넣지 않은 이유:
+        #    그 메서드는 운영자의 수동 증거금 추가와 공유된다. KS 중에 수동 증거금
+        #    투입까지 막으면 청산 직전 포지션을 구할 수단을 빼앗아 **오히려 손실을
+        #    만들 수 있다**. 막아야 할 것은 「자동」 투입이므로 워커 쪽에 둔다.
+        # ═══════════════════════════════════════════════════════════════
+        try:
+            from app.services.account_kill_switch_service import AccountKillSwitchService
+            if AccountKillSwitchService(db).is_enabled(account.id):
+                logger.warning(
+                    "[auto_add_margin] ⛔ Fix164: 계정 #%s Kill-Switch 활성 = 자동 증거금 추가 정지 "
+                    "(수동 추가는 계속 가능)", account.id,
+                )
+                return {"note": "kill-switch 활성 = 자동 증거금 추가 정지", "added": 0, "skipped": 0}
+        except Exception as _ks_e:
+            # 확인 실패 = 투입 보류 (fail-SAFE — 자본을 넣는 방향이므로 보수적으로)
+            logger.error("[auto_add_margin] ⛔ Kill-Switch 확인 실패 → 투입 보류: %s", _ks_e)
+            return {"note": f"kill-switch 확인 실패 = 보류 ({_ks_e})", "added": 0, "skipped": 0}
+
+        # 2. 증거금 금액 (0 = OFF)
         add_amount = _get_add_margin_amount(db)
+        if add_amount is None:
+            logger.info("[auto_add_margin] ⏹️ Fix165: auto_add_margin_usdt=0 = 기능 OFF")
+            return {"note": "auto_add_margin_usdt=0 = OFF", "added": 0, "skipped": 0}
 
         # 3. 활성 심볼 스캔
         rows = db.execute(
