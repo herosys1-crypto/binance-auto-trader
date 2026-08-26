@@ -326,6 +326,47 @@ def run_unified_15m_entry() -> dict:
                     )
                     continue
 
+                # 🚨🚨 Fix 106 (2026-08-26 CRITICAL): SHORT 정점 확인 게이트!
+                #
+                # 이 워커의 side 결정 = `side = "SHORT" if c1h > 0` (L116)
+                #   = 「1시간 올랐으면 무조건 SHORT」 = 지표 검증 0!
+                #   = TACUSDT(1H +154%) / STARUSDT(24h +41%) 사고의 직접 주범!
+                #
+                # 사장님 verbatim: "한번올랐다 다시 내려오고 이렇게 2-3번 반복하면
+                #                  rsi macd obv cci 등등 고점에 이란 신호를 보고 진입"
+                #   = 단순 「올랐다」가 아니라 「반복 상승 소진 + 지표 꺾임」!
+                #
+                # SHORT 만 검사 (LONG 은 헌법 78 급락 조건이 이미 별도 적용!)
+                if side == "SHORT":
+                    try:
+                        from app.workers.bb_upper_breakout_short_worker import (
+                            _count_swing_peaks, MIN_PEAK_COUNT_4H,
+                        )
+                        from app.services.chart_analyzer import ChartAnalyzer
+                        _a4 = ChartAnalyzer.analyze_timeframe(bc, symbol, "4h", limit=60)
+                        if _a4:
+                            _peaks4 = _count_swing_peaks(_a4.get("closes") or [])
+                            if _peaks4 < MIN_PEAK_COUNT_4H:
+                                _skip(
+                                    "fix106_no_repeated_peak", symbol, side,
+                                    f"4H 반복상승 {_peaks4}회 < {MIN_PEAK_COUNT_4H} (상승 초입!)",
+                                )
+                                continue
+                            _h4 = _a4.get("macd_hist") or []
+                            if len(_h4) >= 2:
+                                _hn, _hp = float(_h4[-1]), float(_h4[-2])
+                                if _hn > 0 and _hn >= _hp:
+                                    _skip(
+                                        "fix106_macd4h_still_rising", symbol, side,
+                                        f"4H MACD Hist 양수 상승 중 ({_hn:.8f} >= {_hp:.8f})",
+                                    )
+                                    continue
+                    except Exception as _pk_exc:
+                        logger.warning(
+                            "[unified_15m+Fix106] %s peak gate error (fail-open): %s",
+                            symbol, _pk_exc,
+                        )
+
                 # 12f. 실 진입!
                 entry_cfg = dict(cfg_base)
                 entry_cfg["capitals"] = [base_capital]

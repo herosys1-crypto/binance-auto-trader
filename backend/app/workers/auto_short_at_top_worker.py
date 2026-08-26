@@ -189,6 +189,66 @@ def run_auto_short_at_top() -> dict:
                 except Exception as _rg_exc:
                     logger.warning("[auto_short_top+Fix66] regime error: %s", _rg_exc)
 
+                # 🚨🚨 Fix 106 (2026-08-26 CRITICAL): 정점 확인 병목 게이트!
+                #
+                # 사장님 실측 사고 3연속 (전부 「아직 상승 중」인데 SHORT!):
+                #   STARUSDT 24h +41% 상승 초입 / TACUSDT 1H +154% 상승 지속
+                #   (TACUSDT 4H MACD Hist = +0.000110 = 양수 상승 중이었음!)
+                #
+                # 사장님 verbatim: "한번올랐다 다시 내려오고 이렇게 2-3번 반복하면
+                #                  rsi macd obv cci 등등 고점에 이란 신호를 보고 진입"
+                #
+                # 감사 결과 (Fix 106): SHORT 진입 경로 15개 중 12개가 Fix 100 미적용!
+                #   그런데 alert 경로 5개(pump_top v219/v222/v223 + bb_upper_breakout
+                #   + pump_dump_early + macd_reversal_15m)는 전부 이 소비자를 통과!
+                #   → 여기 게이트 1개 = 5개 경로 동시 커버 (헌법 6 단일 진실!)
+                #
+                # 2중 확인 (둘 다 통과해야 진입!):
+                #   [A] 4H 반복 상승 소진: swing peak >= 2  (상승 초입 차단!)
+                #   [B] 4H MACD Hist 양수 + 상승 중이면 금지 (아직 상승 지속!)
+                try:
+                    from app.workers.bb_upper_breakout_short_worker import (
+                        _count_swing_peaks, MIN_PEAK_COUNT_4H,
+                    )
+                    from app.services.chart_analyzer import ChartAnalyzer
+                    _a4 = ChartAnalyzer.analyze_timeframe(bc, symbol, "4h", limit=60)
+                    if _a4:
+                        # [A] 반복 상승 소진 확인
+                        _closes4 = _a4.get("closes") or []
+                        _peaks4 = _count_swing_peaks(_closes4)
+                        if _peaks4 < MIN_PEAK_COUNT_4H:
+                            logger.warning(
+                                "[auto_short_top+Fix106] %s SKIP: 4H 반복상승 %d회 < %d "
+                                "(상승 초입! 사장님 사상 = 2-3회 반복 후 정점!)",
+                                symbol, _peaks4, MIN_PEAK_COUNT_4H,
+                            )
+                            continue
+                        # [B] 4H MACD 아직 상승 중이면 금지 (TACUSDT 사고 방지!)
+                        _h4 = _a4.get("macd_hist") or []
+                        if len(_h4) >= 2:
+                            _h_now, _h_prev = float(_h4[-1]), float(_h4[-2])
+                            if _h_now > 0 and _h_now >= _h_prev:
+                                logger.warning(
+                                    "[auto_short_top+Fix106] %s SKIP: 4H MACD Hist 양수 상승 중 "
+                                    "(%.8f >= %.8f) = 아직 상승 지속! SHORT 금지!",
+                                    symbol, _h_now, _h_prev,
+                                )
+                                continue
+                        logger.info(
+                            "[auto_short_top+Fix106] %s 정점 확인 통과: peaks4h=%d macd4h=%s",
+                            symbol, _peaks4,
+                            f"{float(_h4[-1]):.8f}" if _h4 else "n/a",
+                        )
+                    else:
+                        logger.warning(
+                            "[auto_short_top+Fix106] %s 4H 분석 실패 = fail-open 통과", symbol,
+                        )
+                except Exception as _pk_exc:
+                    logger.warning(
+                        "[auto_short_top+Fix106] %s peak gate error (fail-open): %s",
+                        symbol, _pk_exc,
+                    )
+
                 # 7. 자동 진입!
                 cfg = {"capitals": [capital_float], "leverage": DEFAULT_LEVERAGE}
                 new_strategy = _create_auto_bb_strategy(

@@ -590,6 +590,84 @@ def _build_price_fallback_map(bc) -> dict[str, float]:
         return {}
 
 
+def _build_order_price_map(
+    db: Session, instance_ids: list[int],
+) -> dict[int, dict[str, float]]:
+    """🚨 Fix 105 A: 체결 주문 avg_price 배치 조회 = stop_price 3/4순위 소스!
+
+    사장님 사상: 재진입 = 「손절가 대비 +N% 반등 시 진입」
+    → 손절가(last_liquidation_price)/평단(avg_entry_price) 이 둘 다 결손이어도
+      **실제 체결가**가 orders 테이블에 남아있으면 반등% 계산 가능!
+
+    - "exit"  = 마지막 EXIT 체결가 = 실 청산가 (= 손절가 그 자체!)
+    - "entry" = 첫 ENTRY 체결가   = 1단계 실 진입 평단
+
+    배치 1회 조회 = 후보 N건이어도 쿼리 1번 (Fix 104 배치 패턴 동일!).
+    fail-safe = 실패 시 빈 dict = 아래 순위(start_price)로 자연 강등!
+    """
+    out: dict[int, dict[str, float]] = {}
+    if not instance_ids:
+        return out
+    try:
+        from app.models.order import Order
+
+        rows = db.execute(
+            select(Order.strategy_instance_id, Order.purpose, Order.avg_price)
+            .where(Order.strategy_instance_id.in_(list(instance_ids)))
+            .where(Order.status.in_(("FILLED", "PARTIALLY_FILLED")))
+            .where(Order.avg_price.isnot(None))
+            .order_by(Order.strategy_instance_id, Order.id)  # id asc = 시간순!
+        ).all()
+        for _sid, _purpose, _avg in rows:
+            try:
+                px = float(_avg or 0)
+            except (TypeError, ValueError):
+                continue
+            if px <= 0:
+                continue
+            slot = out.setdefault(_sid, {})
+            if str(_purpose or "").upper() == "EXIT":
+                slot["exit"] = px      # 덮어쓰기 = 마지막 EXIT (= 최종 청산가!)
+            elif "entry" not in slot:
+                slot["entry"] = px     # 최초 1회만 = 첫 ENTRY (= 1단계 진입가!)
+        logger.info(
+            "[Fix105] 체결가 배치 조회: instance %d건 중 %d건 확보 (1 query!)",
+            len(instance_ids), len(out),
+        )
+    except Exception as e:
+        logger.warning(
+            "[Fix105] 체결가 배치 조회 실패 (fallback 축소 = start_price 로 진행): %s", e,
+        )
+    return out
+
+
+def _classify_entry_error(msg: str) -> str:
+    """🚨 Fix 105 B: 진입 예외 메시지 → 원인 분류 (「entry_exception 5건」 정체 노출!).
+
+    create_strategy_instance 는 12개 가드가 모두 bare ValueError → worker 가
+    「어느 가드에 막혔는지」 구별 불가 = 사실상 silent bug (헌법 위반!).
+    → 메시지 패턴으로 분류해 완료 로그/응답에 사유를 명시!
+    """
+    m = str(msg or "")
+    if "동시 운영 한도" in m or "진행 중인 전략이" in m:
+        return "concurrent_limit"
+    if "포지션" in m and "이미 있습니다" in m:
+        return "residual_exchange_position"
+    if "잔액" in m or "availableBalance" in m or "부족" in m:
+        return "insufficient_balance"
+    if "마진" in m or "130" in m:
+        return "margin_reserve_exceeded"
+    if "허용되지 않습니다" in m or "화이트리스트" in m:
+        return "symbol_not_allowed"
+    if "현재가 조회 실패" in m:
+        return "no_start_price"
+    if "not in DB" in m:
+        return "symbol_not_in_db"
+    if "통신 실패" in m:
+        return "binance_api_error"
+    return "other"
+
+
 def _make_mainnet_client(db: Session):
     """🚨 Fix 104: mainnet BinanceClient 생성 (배치 ticker 전용, 없으면 None).
 
@@ -644,6 +722,15 @@ def run_realtime_reentry() -> dict:
     fallback_bc = None                               # lazy = 결손 없으면 client 생성 X!
     fallback_used = 0                                # fallback 적중 건수 (완료 로그!)
 
+    # 🚨 Fix 105 A (2026-08-26): stop_price 다단 fallback (no_stop_price 21건 → 0!)
+    # ※ Fix 104 와 동일하게 함수 최상단 초기화 필수! (_finish 가 payload 에 싣는데
+    #   조기 return 경로는 루프 시작 전에 _finish 호출 = 미초기화 시 NameError!)
+    order_px_map: dict[int, dict[str, float]] | None = None  # lazy = 결손 0건이면 쿼리 X!
+    stop_px_srcs: dict[str, int] = {}   # 어느 소스로 기준가를 잡았나 (추적!)
+    # 🚨 Fix 105 B: 진입 예외 정체 노출 = 메시지/분류를 응답에도 실어 보냄!
+    entry_error_kinds: dict[str, int] = {}
+    entry_errors: list[str] = []
+
     def _bump(reason: str) -> None:
         """🎯 Fix 103 A: skip 사유 집계 = 완료 로그 1줄로 원인 판정!"""
         skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
@@ -660,6 +747,11 @@ def run_realtime_reentry() -> dict:
             "skip_reasons": dict(skip_reasons),
             # 🚨 Fix 104: fallback 작동 여부 = 로그/응답 1줄로 확인!
             "fallback_px": fallback_used,
+            # 🚨 Fix 105 A: 기준가를 어느 소스로 잡았나 (liq/avg_entry/exit_fill/...)
+            "stop_px_srcs": dict(stop_px_srcs),
+            # 🚨 Fix 105 B: 진입 예외 정체 (분류 + 실 메시지 최대 5건!)
+            "entry_error_kinds": dict(entry_error_kinds),
+            "entry_errors": list(entry_errors),
             "note": note,
             "spec": _gate_spec(),
             "results": results,
@@ -858,17 +950,58 @@ def run_realtime_reentry() -> dict:
             # 🎯 v218 fix (2026-08-22): 청산가 우선 = 평단 fallback!
             # 이전 = 평단 = 실 청산가와 다름 = 3% 반등 판정 부정확!
             # last_liquidation_price = SL 발동가! = 반등 시작점 정확!
-            _stop_price = float(si.last_liquidation_price or si.avg_entry_price or 0)
+            # 🚨 Fix 105 A (2026-08-26): stop_price 다단 fallback (no_stop_price 21건 → 0!)
+            # 사장님 사상 = 재진입 = 「손절가 대비 +N% 반등 시 진입」
+            #   → 손절가가 없으면 평단/실 체결가/시작가로 대체 가능!
+            #     (SL -5% 로 청산됐으면 손절가 ≈ 평단 × 0.95, SHORT 는 × 1.05)
+            # ⚠️ 1/2순위는 기존과 100% 동일 = 지금 통과 중인 후보의 판정 불변!
+            #    (exit_fill 이 의미상 손절가에 더 가깝지만, 기존 동작 보존을 위해 3순위!)
+            # ※ 근본 원인 = stream_service ACCOUNT_UPDATE 의 ep="0.0" truthy 함정이
+            #   avg_entry_price 를 0 으로 파괴 → Fix 105 C 에서 별도 fix!
+            _stop_price = float(si.last_liquidation_price or 0)
+            _px_src = "liq"
             if _stop_price <= 0:
-                # 🎯 Fix 103 A: 옛 = 무로그 continue! (청산가/평단 둘 다 없음 = 데이터 결함!)
+                _stop_price = float(si.avg_entry_price or 0)
+                _px_src = "avg_entry"
+            if _stop_price <= 0:
+                # 3/4순위 = orders 실 체결가 (배치 1회 조회 = lazy!)
+                if order_px_map is None:
+                    order_px_map = _build_order_price_map(
+                        db, [c.id for c in closed],
+                    )
+                _slot = order_px_map.get(si.id) or {}
+                _exit_px = float(_slot.get("exit") or 0)
+                _entry_px = float(_slot.get("entry") or 0)
+                if _exit_px > 0:
+                    _stop_price = _exit_px
+                    _px_src = "exit_fill"      # 실 청산 체결가 = 손절가 그 자체!
+                elif _entry_px > 0:
+                    _stop_price = _entry_px
+                    _px_src = "entry_fill"     # 1단계 실 진입가 (평단 근사!)
+            if _stop_price <= 0:
+                # 5순위 = start_price (NOT NULL 컬럼 = 최후 보루!)
+                _stop_price = float(si.start_price or 0)
+                _px_src = "start_price"
+            if _stop_price <= 0:
+                # 🎯 Fix 103 A: 옛 = 무로그 continue! (전 소스 결손 = 데이터 결함!)
+                # 🚨 Fix 105 A: 「최종 실패」 시에만 집계 = Fix 103 카운터 왜곡 방지!
                 skipped += 1
                 _bump("no_stop_price")
                 logger.warning(
-                    "[RT_REENTRY] skip: %s %s 기준가 없음! (last_liquidation_price=%s "
-                    "avg_entry_price=%s instance_id=%s) = 반등%% 계산 불가!",
-                    symbol, side, si.last_liquidation_price, si.avg_entry_price, si.id,
+                    "[RT_REENTRY] skip: %s %s 기준가 전 소스 결손! "
+                    "(liq=%s avg_entry=%s orders=%s start_price=%s instance_id=%s) "
+                    "= 반등%% 계산 불가!",
+                    symbol, side, si.last_liquidation_price, si.avg_entry_price,
+                    (order_px_map or {}).get(si.id), si.start_price, si.id,
                 )
                 continue
+            stop_px_srcs[_px_src] = stop_px_srcs.get(_px_src, 0) + 1
+            if _px_src != "liq":
+                logger.info(
+                    "[RT_REENTRY] 🚨 Fix105 기준가 fallback: %s %s src=%s px=%s "
+                    "(liq 결손 → 대체 소스 적중!)",
+                    symbol, side, _px_src, _stop_price,
+                )
 
             pnl = float(si.realized_pnl or 0)
             _is_fail = pnl < 0
@@ -1026,6 +1159,44 @@ def run_realtime_reentry() -> dict:
                         )
                         continue
 
+            # 🚨 Fix 105 B (2026-08-26): 동시 운영 한도 preflight!
+            # create_strategy_instance 의 12개 가드는 전부 bare ValueError →
+            # worker 에선 「entry_exception」 한 덩어리로만 보임 = 원인 불명 (silent!).
+            # 그중 1순위 용의자(동시 한도)는 **미리** 판정 가능 → 전용 skip 사유로 승격!
+            # (덤으로 한도 초과 시 Binance get_account() 왕복도 절약!)
+            try:
+                from app.core.config import settings as _cfg_settings
+                _max_conc = max(1, int(_cfg_settings.max_concurrent_strategies_per_account))
+                # strategy_service.create_strategy_instance 의 가드와 **완전 동일 조건**!
+                # (_CLOSED_STATUSES = TERMINAL_STATUSES / exchange_account_id 별 집계)
+                # _create_auto_bb_strategy 는 exchange_account_id=1 고정 진입!
+                _live_cnt = len(
+                    db.execute(
+                        select(StrategyInstance.id)
+                        .where(StrategyInstance.exchange_account_id == 1)
+                        .where(StrategyInstance.status.notin_(list(TERMINAL_STATUSES)))
+                    ).all()
+                )
+                if _live_cnt >= _max_conc:
+                    skipped += 1
+                    _bump("concurrent_limit_full")
+                    logger.warning(
+                        "[RT_REENTRY] 🚨 skip: %s %s 동시 운영 한도! (비종료 전략 %d개 "
+                        ">= max_concurrent_strategies_per_account=%d) "
+                        "= 재진입 전 활성 전략 정리 필요! (옛 entry_exception 의 정체!)",
+                        symbol, side, _live_cnt, _max_conc,
+                    )
+                    continue
+            except Exception as _pc_e:
+                # fail-open = preflight 실패는 진입을 막지 않음 (기존 동작 유지!)
+                logger.warning("[RT_REENTRY] 동시 한도 preflight 실패 (fail-open): %s", _pc_e)
+
+            # 🚨 Fix 105 B: except 블록에서 반드시 참조 가능해야 함!
+            # (미할당 NameError 방지 + 직전 iteration 값이 새는 stale 오진 방지!)
+            _dbg_stage = 2 if _use_success_reentry else (re_count + 2)
+            _entry_capital = None
+            _suffix = None
+
             # 진입 실행!
             try:
                 # 🎯 v219 사장님 최종 마틴게일 (2026-08-22!):
@@ -1157,6 +1328,8 @@ def run_realtime_reentry() -> dict:
                     "kst_hour": _kst_hour,
                     "rt_reentry_price": mp,
                     "prev_stop_price": _stop_price,
+                    # 🚨 Fix 105 A: 기준가를 어느 소스로 판정했나 = 학습/추적 필수!
+                    "prev_stop_price_src": _px_src,
                     "rebound_pct": round(_rebound_pct, 4),
                     "indicator_msg": _ind_msg,
                     "learning_msg": _learn_msg,
@@ -1176,6 +1349,7 @@ def run_realtime_reentry() -> dict:
                         "rt_reentry": True,
                         "rt_reentry_price": mp,
                         "prev_stop_price": _stop_price,
+                        "prev_stop_price_src": _px_src,  # 🚨 Fix 105 A!
                         "entry_snapshot": _rt_entry_snapshot,  # 🎓 v218!
                     },
                     confidence_score=Decimal("0.65"),
@@ -1203,13 +1377,31 @@ def run_realtime_reentry() -> dict:
                     "strategy_id": new_strategy.id,
                 })
                 logger.info(
-                    "[RT_REENTRY] ✅ %s %s: %s (id=%d)",
-                    symbol, side, _reason_suffix, new_strategy.id,
+                    "[RT_REENTRY] ✅ %s %s: %s (id=%d, 기준가 src=%s px=%s)",
+                    symbol, side, _reason_suffix, new_strategy.id, _px_src, _stop_price,
                 )
             except Exception as e:
-                logger.warning("[RT_REENTRY] %s %s 진입 실패: %s", symbol, side, e)
+                # 🚨 Fix 105 B (2026-08-26): 옛 = logger.warning(메시지만!) =
+                #   「entry_exception 5건」의 정체 불명 = 사실상 silent bug (헌법 위반!)
+                #   → logger.exception = 전체 스택트레이스 필수!
+                #   → 분류(_classify_entry_error) + 실 메시지를 응답 payload 에도 적재!
+                # ※ _err_kind = 위 _kind (RT_REENTRY 라벨) 와 별개 변수! (shadow 방지)
+                _err_kind = _classify_entry_error(str(e))
+                _err_msg = (
+                    f"{symbol} {side} stage={_dbg_stage} "
+                    f"[{_err_kind}] {type(e).__name__}: {e}"
+                )
+                logger.exception(
+                    "[RT_REENTRY] 🚨 진입 예외: %s %s stage=%s capital=%s suffix=%s "
+                    "kind=%s → %s",
+                    symbol, side, _dbg_stage, _entry_capital, _suffix, _err_kind, e,
+                )
                 skipped += 1
                 _bump("entry_exception")
+                entry_error_kinds[_err_kind] = entry_error_kinds.get(_err_kind, 0) + 1
+                if len(entry_errors) < 5:
+                    entry_errors.append(_err_msg[:300])
+                # fail-open = 1건 예외가 전체 루프 중단 X (다음 후보 계속!)
                 db.rollback()
 
         # 🚨 Fix 103 B: 정상 완료 = 반드시 완료 로그! (매 30초 = 살아있음 증명!)

@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from sqlalchemy import select
 from app.integrations.binance.mapper import map_order_update_event, map_account_update_event
 from app.models.order import Order
@@ -392,7 +392,24 @@ class StreamService:
             #   None 으로 오염 X (= 4개 reader 동시 치유, 헌법 6번 단일 진실). 캐시 miss 시만 None.
             _cached_mark = get_mark_price(symbol)
             self.db.add(Position(strategy_instance_id=strategy.id, symbol=symbol, side=strategy.side, position_side=position_side, entry_price=Decimal(str(pos.get("ep"))) if pos.get("ep") else None, break_even_price=Decimal(str(pos.get("bep"))) if pos.get("bep") else None, mark_price=_cached_mark, liquidation_price=strategy.liquidation_price, position_amt=Decimal(str(pos.get("pa"))) if pos.get("pa") else None, isolated_margin=Decimal(str(pos.get("iw"))) if pos.get("iw") else None, unrealized_pnl=Decimal(str(pos.get("up"))) if pos.get("up") else None, margin_type=pos.get("mt"), leverage=strategy.leverage, source="ACCOUNT_UPDATE"))
-            strategy.avg_entry_price = Decimal(str(pos.get("ep"))) if pos.get("ep") else strategy.avg_entry_price
+            # 🚨 Fix 105 C (2026-08-26) ROOT CAUSE — 재진입 no_stop_price 21건의 진범!
+            # 옛 코드: `Decimal(str(pos.get("ep"))) if pos.get("ep") else 기존값`
+            #   → mapper 가 Binance payload 를 raw 로 넘기므로 ep 는 **문자열**.
+            #     완전 청산 시 오는 ep="0.0" 은 파이썬에서 **truthy** → 가드를 통과해
+            #     avg_entry_price 에 Decimal("0.0") 를 기록! (= 평단 파괴!)
+            #   → "값 없으면 보존" 의도가 "청산되면 평단 삭제" 로 정반대 동작.
+            #   → realtime_reentry_worker 가 기준가(평단) 를 잃고 재진입 전멸.
+            # 바로 옆 reconcile_worker.py 는 `if exchange_entry_price > 0 else 기존값`
+            # 으로 이미 올바르게 가드 중 = 여기만 누락 (헌법 「대칭성」 위반!).
+            # fix: 문자열이든 숫자든 **파싱 후 > 0 일 때만** 덮어쓴다.
+            try:
+                _ep_raw = pos.get("ep")
+                _ep_dec = Decimal(str(_ep_raw)) if _ep_raw not in (None, "") else None
+            except (InvalidOperation, ValueError, TypeError):
+                _ep_dec = None
+            if _ep_dec is not None and _ep_dec > 0:
+                strategy.avg_entry_price = _ep_dec
+            # else: 평단 보존! (청산 ep=0 로 삭제 금지 = Fix 105 C!)
             strategy.current_position_qty = Decimal(str(pos.get("pa"))) if pos.get("pa") else Decimal("0")
             strategy.unrealized_pnl = Decimal(str(pos.get("up"))) if pos.get("up") else Decimal("0")
         self.db.commit()
