@@ -34,6 +34,107 @@ class BinanceAPIError(Exception):
         self.payload = payload
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 🚨 Fix 116 (2026-08-26): IP ban 전역 회로 차단기
+#
+# 418 은 「계정」이 아니라 「IP」 ban 이다 → 프로세스/컨테이너 전체가 멈춰야 한다.
+# 1차 = 프로세스 메모리 (Redis 장애에도 동작, 가장 빠름)
+# 2차 = Redis (컨테이너 여러 개 = scheduler / api / user-stream 공유)
+# ═══════════════════════════════════════════════════════════════════════════
+_IP_BAN_REDIS_KEY = "api_backoff:ip:ban_until_ms"
+_ip_ban_until_ms_local: int = 0          # 프로세스 로컬 캐시
+_ip_ban_redis_checked_at: float = 0.0    # Redis 재확인 쓰로틀 (초)
+_IP_BAN_REDIS_RECHECK_SEC = 5.0
+
+_BAN_UNTIL_RE = __import__("re").compile(r"banned\s+until\s+(\d{13})", __import__("re").IGNORECASE)
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _ip_ban_remaining_ms() -> int:
+    """남은 IP ban 시간(ms). 0 이면 ban 아님."""
+    global _ip_ban_until_ms_local, _ip_ban_redis_checked_at
+    now = _now_ms()
+    if _ip_ban_until_ms_local > now:
+        return _ip_ban_until_ms_local - now
+
+    # 로컬은 풀렸지만 다른 컨테이너가 ban 을 봤을 수 있다 → Redis 확인 (쓰로틀)
+    mono = time.monotonic()
+    if mono - _ip_ban_redis_checked_at < _IP_BAN_REDIS_RECHECK_SEC:
+        return 0
+    _ip_ban_redis_checked_at = mono
+    try:
+        from app.core.redis_client import get_redis_client
+        raw = get_redis_client().get(_IP_BAN_REDIS_KEY)
+        if raw:
+            until = int(raw.decode() if isinstance(raw, bytes) else raw)
+            if until > now:
+                _ip_ban_until_ms_local = until
+                return until - now
+    except Exception:
+        # Redis 장애 = 로컬 캐시만으로 동작 (fail-open, 기존 흐름 유지).
+        # 단 재확인을 60s 뒤로 밀어 매 5초 연결 타임아웃으로 느려지는 것을 방지.
+        _ip_ban_redis_checked_at = mono + 60.0
+    return 0
+
+
+def _set_ip_ban(until_ms: int, *, source: str = "") -> None:
+    """IP ban 마킹 (로컬 + Redis). 더 늦은 만료로만 갱신."""
+    global _ip_ban_until_ms_local
+    now = _now_ms()
+    if until_ms <= now:
+        return
+    if until_ms > _ip_ban_until_ms_local:
+        _ip_ban_until_ms_local = until_ms
+        logger.error(
+            "[Fix116] 🚨 IP ban 감지 — 모든 REST 호출 로컬 차단! 만료까지 %ds (%s)",
+            (until_ms - now) // 1000, source,
+        )
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+        raw = r.get(_IP_BAN_REDIS_KEY)
+        cur = int(raw.decode() if isinstance(raw, bytes) else raw) if raw else 0
+        if until_ms > cur:
+            r.setex(_IP_BAN_REDIS_KEY, max(1, (until_ms - now) // 1000 + 5), str(until_ms))
+    except Exception:
+        pass
+
+
+def _mark_ip_ban_from_response(response: "requests.Response") -> None:
+    """418/429 응답에서 「banned until <ms>」 추출 → 전역 마킹.
+
+    명시 시각이 없으면 보수적으로 60초.
+    """
+    try:
+        text = response.text or ""
+    except Exception:
+        text = ""
+    m = _BAN_UNTIL_RE.search(text)
+    if m:
+        _set_ip_ban(int(m.group(1)), source=f"status={response.status_code} explicit")
+    else:
+        _set_ip_ban(_now_ms() + 60_000, source=f"status={response.status_code} default60s")
+
+
+def get_ip_ban_remaining_sec() -> int:
+    """운영/진단용 — 남은 IP ban 초."""
+    return _ip_ban_remaining_ms() // 1000
+
+
+def clear_ip_ban() -> None:
+    """운영자 강제 해제 (실 ban 중 사용 금지 — ban 이 연장된다!)."""
+    global _ip_ban_until_ms_local
+    _ip_ban_until_ms_local = 0
+    try:
+        from app.core.redis_client import get_redis_client
+        get_redis_client().delete(_IP_BAN_REDIS_KEY)
+    except Exception:
+        pass
+
+
 class BinanceClient:
     """Thin but complete REST client for the USDⓈ-M Futures API."""
 
@@ -265,6 +366,35 @@ class BinanceClient:
             signature = self._sign(query_string)
             params["signature"] = signature
 
+        # ══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 116 (2026-08-26): IP ban 전역 회로 차단기 (헌법 6 단일 진실)
+        #
+        # 사장님 실측 사고: IP(159.65.137.250) 가 418 ban 상태인데도
+        #   peak_break_reversal 이 2초에 18번 호출 → 매 요청이 ban 을 연장!
+        #   06:08:43 → 06:28:43 → 06:30:44 → 06:34:47 (계속 밀림)
+        #   Binance 는 ban 기간의 요청도 카운트해서 ban 을 연장/승격한다.
+        #
+        # 왜 워커별 가드로는 못 막나:
+        #   워커들은 루프 「시작 전」에 한 번만 is_account_banned() 를 본다.
+        #   루프 도중 ban 이 걸리면 33개 심볼을 끝까지 다 두드린다.
+        #   (_get_15m_high 처럼 418 예외를 삼키고 None 반환 = 다음 심볼로 진행!)
+        #   → 워커 20개를 개별 수정하는 대신 「네트워크 나가기 직전」 한 곳에서 차단.
+        #
+        # 418 은 계정이 아니라 「IP」 ban 이므로 전역 키를 쓴다.
+        # ══════════════════════════════════════════════════════════════════
+        _ban_left = _ip_ban_remaining_ms()
+        if _ban_left > 0:
+            binance_api_requests_total.labels(
+                endpoint=path, method=method, status="ip_banned_skip",
+            ).inc()
+            raise BinanceAPIError(
+                f"Binance API error: status=418, code=-1003, "
+                f"msg=IP ban active — request suppressed locally "
+                f"({_ban_left // 1000}s left). Fix116 circuit breaker.",
+                status_code=418,
+                code=-1003,
+            )
+
         start = time.perf_counter()
         status_label = "error"
         try:
@@ -278,6 +408,9 @@ class BinanceClient:
             )
             status_label = str(response.status_code)
             if response.status_code >= 400:
+                # Fix 116: 418/429 = IP ban → 전역 마킹 (다음 요청부터 네트워크 X)
+                if response.status_code in (418, 429):
+                    _mark_ip_ban_from_response(response)
                 self._raise_for_error(response)
             if not response.content:
                 return {}

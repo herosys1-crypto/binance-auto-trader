@@ -12,6 +12,10 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
@@ -1409,3 +1413,116 @@ def get_main_account_readonly_view(
             "type": "MAIN" if "main" in (a.name or "").lower() else "SUB",
         })
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🎯 Fix 115 (2026-08-26): API ban 조회 / 강제 해제
+#
+# 사장님 실측: stage_trigger 가 15초마다 "API ban active account=1 — skip cycle"
+#   → 이 플래그 하나가 워커 ~20개(진입/단계/증거금/reconcile)를 전부 정지시킨다.
+#   그런데 `reset_api_ban()` 함수는 존재하지만 「호출하는 곳이 아무데도 없었다」
+#   = 사장님이 오탐 ban 을 해제할 수단이 시스템에 없었음!
+#
+# -2015 (Invalid API-key, IP, or permissions) 는 특정 엔드포인트 권한 문제로도
+# 발생하는데, 그 한 번으로 계정 전체가 1시간 정지된다. 수동 주문이 정상 동작하면
+# 키·IP 는 멀쩡하다는 뜻 = 오탐. 그 경우 아래 reset 으로 즉시 복구.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/diagnostic/api-ban")
+def get_api_ban_status(
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """계정별 API ban 상태 + 원인 + 남은 시간 조회 (헌법 8 = silent 차단 금지)."""
+    import json as _j
+    from datetime import datetime, timezone
+    from app.core.redis_client import get_redis_client
+    from app.core.api_backoff import check_api_ban
+
+    r = get_redis_client()
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    out: list[dict] = []
+    for acc_id in range(1, 11):  # account id 1~10 스캔 (실사용 범위)
+        try:
+            banned, expiry_ms = check_api_ban(r, acc_id)
+        except Exception as e:
+            out.append({"account_id": acc_id, "error": str(e)})
+            continue
+        if not banned:
+            continue
+        cause = None
+        try:
+            raw = r.get(f"api_backoff:account:{acc_id}:cause")
+            if raw:
+                cause = _j.loads(raw.decode() if isinstance(raw, bytes) else raw)
+        except Exception:
+            pass
+        out.append({
+            "account_id": acc_id,
+            "banned": True,
+            "expiry_ms": expiry_ms,
+            "expiry_utc": datetime.fromtimestamp(expiry_ms / 1000, tz=timezone.utc).isoformat(),
+            "remaining_sec": max(0, (expiry_ms - now_ms) // 1000),
+            "cause": cause,
+        })
+    # Fix 116: IP ban (418) 은 계정이 아니라 IP 단위 = 별도 표시
+    ip_ban_sec = 0
+    try:
+        from app.integrations.binance.client import get_ip_ban_remaining_sec
+        ip_ban_sec = get_ip_ban_remaining_sec()
+    except Exception as e:
+        logger.warning("[Fix116] IP ban 조회 실패: %s", e)
+
+    return {
+        "banned_accounts": out,
+        "any_banned": bool(out) or ip_ban_sec > 0,
+        "ip_ban_remaining_sec": ip_ban_sec,
+        "ip_banned": ip_ban_sec > 0,
+        "note": (
+            "ban 중이면 진입/단계/증거금/reconcile 워커 ~20개가 전부 skip 됩니다. "
+            "수동 주문이 정상이면 키·IP 는 멀쩡한 것이므로 오탐일 수 있습니다 "
+            "(POST /admin/diagnostic/api-ban/reset 로 해제)."
+        ),
+    }
+
+
+@router.post("/diagnostic/api-ban/reset")
+def reset_api_ban_endpoint(
+    account_id: int,
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """운영자 강제 ban 해제.
+
+    ⚠️ 실제 Binance IP ban(418) 중에 해제하면 워커들이 다시 호출을 쏟아부어
+    ban 이 연장/승격될 수 있습니다 (2분 → 13분 → ...).
+    「수동 주문은 정상인데 워커만 막혀 있다」= 오탐 인 경우에만 사용하십시오.
+    """
+    from app.core.redis_client import get_redis_client
+    from app.core.api_backoff import check_api_ban, reset_api_ban
+
+    r = get_redis_client()
+    was_banned, expiry_ms = check_api_ban(r, account_id)
+    reset_api_ban(r, account_id)
+    # Fix 116: IP ban 회로 차단기도 함께 해제 (안 하면 계정 ban 만 풀려 무의미)
+    ip_was = 0
+    try:
+        from app.integrations.binance.client import get_ip_ban_remaining_sec, clear_ip_ban
+        ip_was = get_ip_ban_remaining_sec()
+        clear_ip_ban()
+    except Exception as e:
+        logger.warning("[Fix116] IP ban 해제 실패: %s", e)
+    try:
+        r.delete(f"api_backoff:account:{account_id}:cause")
+    except Exception:
+        pass
+    logger.warning(
+        "[Fix115] API ban 강제 해제: account=%s (was_banned=%s expiry_ms=%s) by user=%s",
+        account_id, was_banned, expiry_ms, user_id,
+    )
+    return {
+        "account_id": account_id,
+        "was_banned": was_banned,
+        "ip_ban_was_remaining_sec": ip_was,
+        "cleared": True,
+        "note": "워커들이 다음 cycle(최대 30초)부터 정상 동작합니다.",
+    }

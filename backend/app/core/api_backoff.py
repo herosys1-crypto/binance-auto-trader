@@ -35,6 +35,11 @@ logger = logging.getLogger(__name__)
 _BAN_KEY = "api_backoff:account:{account_id}:ban_until_ms"
 # 같은 ban 이벤트에 대해 Telegram 한 번만 발송 (cooldown 키)
 _NOTIFY_KEY = "api_backoff:account:{account_id}:notified"
+# 🎯 Fix 115 (2026-08-26): ban 「원인」 보존.
+#   옛: 원인 메시지가 Telegram 으로만 나감 → 알림을 놓치면 왜 막혔는지 알 길이 없음.
+#   그런데 이 ban 하나가 워커 ~20개(진입/단계/reconcile 전부)를 정지시킨다!
+#   → 사장님이 언제든 조회할 수 있게 Redis 에 함께 저장 (헌법 8 = silent 차단 금지).
+_CAUSE_KEY = "api_backoff:account:{account_id}:cause"
 
 # Binance ban / rate limit 패턴
 # - status=418: IP banned ("banned until 1778277772630")
@@ -168,10 +173,25 @@ def record_api_ban(
         return False
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     ttl_seconds = max(1, (expiry_ms - now_ms) // 1000 + 5)  # 5s 여유
+    _kind = "rate_limit"
     try:
         ban_key = _BAN_KEY.format(account_id=account_id)
         notify_key = _NOTIFY_KEY.format(account_id=account_id)
         redis_client.setex(ban_key, ttl_seconds, str(expiry_ms))
+        # 🎯 Fix 115: 원인 보존 (Telegram 놓쳐도 조회 가능 = 헌법 8)
+        try:
+            import json as _j
+            redis_client.setex(
+                _CAUSE_KEY.format(account_id=account_id), ttl_seconds,
+                _j.dumps({
+                    "kind": _kind,
+                    "error": str(error_message)[:500],
+                    "expiry_ms": expiry_ms,
+                    "recorded_at": datetime.now(timezone.utc).isoformat(),
+                }),
+            )
+        except Exception:
+            pass
 
         # Telegram 1회 알림 (이미 보냈으면 skip)
         already_notified = redis_client.get(notify_key)
@@ -228,10 +248,25 @@ def record_account_invalid_ban(
         return False
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     ttl_seconds = max(1, (expiry_ms - now_ms) // 1000 + 5)
+    _kind = "account_invalid"
     try:
         ban_key = _BAN_KEY.format(account_id=account_id)
         notify_key = _NOTIFY_KEY.format(account_id=account_id)
         redis_client.setex(ban_key, ttl_seconds, str(expiry_ms))
+        # 🎯 Fix 115: 원인 보존 (Telegram 놓쳐도 조회 가능 = 헌법 8)
+        try:
+            import json as _j
+            redis_client.setex(
+                _CAUSE_KEY.format(account_id=account_id), ttl_seconds,
+                _j.dumps({
+                    "kind": _kind,
+                    "error": str(error_message)[:500],
+                    "expiry_ms": expiry_ms,
+                    "recorded_at": datetime.now(timezone.utc).isoformat(),
+                }),
+            )
+        except Exception:
+            pass
 
         already_notified = redis_client.get(notify_key)
         if already_notified:
