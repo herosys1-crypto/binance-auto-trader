@@ -1313,7 +1313,15 @@ def run_auto_long_at_bottom_once() -> dict:
                     #   그걸 버킷 키로 써서 한 번에 원인을 보이게 한다 (헌법 93).
                     _pat = result.get("pattern")
                     if _pat:
-                        _bump(f"nd:{_pat}")
+                        # 🎯 Fix 152: 패턴 B 는 순차 AND 게이트 4개이고
+                        #   실패 지점마다 passed 값이 다르다 (0~3).
+                        #   그 값을 버킷에 넣어야 「어느 게이트가 막는지」 한 번에 보인다.
+                        #     B0 = was_bull 실패 (이전 상승 이력 없음)
+                        #     B1 = OBV 4H 반전 실패
+                        #     B2 = MACD 15m 반전 실패
+                        #     B3 = RSI > 40 (과매도 회복 안 됨)
+                        _ps = result.get("passed")
+                        _bump(f"nd:{_pat}{_ps}" if _ps is not None else f"nd:{_pat}")
                     else:
                         _r = str(result.get("reason") or "")
                         if "extreme_bull" in _r or "정점 위험" in _r:
