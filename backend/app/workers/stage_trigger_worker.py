@@ -600,20 +600,53 @@ def run_stage_trigger_once(decrypt_text) -> None:
                             api_secret=decrypt_text(account.api_secret_enc),
                             is_testnet=account.is_testnet,
                         )
-                        # (A) 24h 변동 필터 (헌법 64 = 급등 반대매매 금지!)
+                        # ══════════════════════════════════════════════════
+                        # 🚨 Fix 114 (2026-08-26): (A) 24h 절대 차단 → 정점 확인으로 교체
+                        #
+                        # 사장님 실측 #1488: SHORT stage=2 가
+                        #   "Fix55 24h 필터 차단 (chg=+153.00%)" 으로 영구 차단됨.
+                        #
+                        # 왜 잘못됐나:
+                        #  1) 헌법 68 = 헌법 64(급등 반대매매 금지)의 「예외」가
+                        #     바로 사장님 정점 SHORT. 헌법 72 = "급등해서 볼밴
+                        #     상단돌파 했을때 마틴게일로 진입해야 확실한 수익".
+                        #     24h ≥ +15% 절대 차단은 이 사상을 영구 봉쇄한다.
+                        #  2) 이건 「신규 진입」이 아니라 「이미 열린 포지션의
+                        #     계획된 2단계」다. 막으면 물타기 없이 1단계만 남아
+                        #     오히려 가장 나쁜 상태가 된다 (300 만 물린 채 방치).
+                        #  3) 24h 숫자 하나는 「아직 오르는 중」과 「정점 지나
+                        #     꺾임」을 구별하지 못한다. 그 판정은 Fix 111 의
+                        #     confirm_peak(15m 반복 + 지표 꺾임)이 훨씬 정확하다.
+                        #
+                        # 신: 24h 는 로그/기록용 참고값. 실 게이트는 정점 확인.
+                        #     (아래 (B) 지표 반전 STRICT 게이트는 그대로 유지!)
+                        # ══════════════════════════════════════════════════
                         _ok24, _chg = _check_stage_24h_filter(_bc55, strategy.symbol, strategy.side)
-                        if not _ok24:
-                            _reason55a = (
-                                f"Fix55 24h 필터 차단 (stage={next_stage_no} "
-                                f"side={strategy.side} chg={_chg:.2f}%)"
+                        from app.services.peak_confirmation import confirm_peak as _cp114
+                        _pk114_ok, _pk114_why, _pk114_det = _cp114(
+                            _bc55, strategy.symbol, strategy.side,
+                        )
+                        if not _pk114_ok:
+                            _reason114 = (
+                                f"Fix114 정점 미확인 (stage={next_stage_no} "
+                                f"side={strategy.side} 24h={_chg if _chg is not None else 'n/a'}%): {_pk114_why}"
                             )
                             logger.info(
-                                "[Fix55/24h] skip strategy=%s stage=%s %s %s chg=%.2f%%",
-                                strategy.id, next_stage_no, strategy.symbol, strategy.side, _chg or 0,
+                                "[Fix114/peak] skip strategy=%s stage=%s %s %s | %s | %s",
+                                strategy.id, next_stage_no, strategy.symbol, strategy.side,
+                                _pk114_why, _pk114_det,
                             )
-                            _record_block_reason(_redis, strategy.id, _reason55a, next_stage_no)
-                            _alert_silent_block_once(_redis, db, strategy, _reason55a, next_stage_no)
+                            _record_block_reason(_redis, strategy.id, _reason114, next_stage_no)
+                            _alert_silent_block_once(_redis, db, strategy, _reason114, next_stage_no)
                             continue
+                        if not _ok24:
+                            # 헌법 68 예외 발동 = 차단하지 않고 「기록만」 남긴다.
+                            logger.warning(
+                                "[Fix114/헌법68] strategy=%s stage=%s %s %s 24h=%.2f%% 이지만 "
+                                "정점 확인 통과 → 마틴게일 진행! (%s)",
+                                strategy.id, next_stage_no, strategy.symbol, strategy.side,
+                                _chg or 0, _pk114_why,
+                            )
                         # (B) 지표 반전 확인 (2단계=2/3, 3단계+=3/3 STRICT!)
                         _ok_rev, _rev_detail = _check_stage_indicator_reversal(
                             _bc55, strategy.symbol, strategy.side, next_stage_no
