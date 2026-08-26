@@ -142,6 +142,12 @@ def run_success_pyramiding() -> dict:
     entered = 0
     skipped = 0
     results: list[dict] = []
+    # 🎯 Fix 140: skip 사유 집계 — "왜 0건이지?" 에 로그만 보고 답할 수 있게.
+    #   (realtime_reentry 의 _bump 와 같은 패턴 = 헌법 93 차단 사유 기록)
+    _reasons: dict[str, int] = {}
+
+    def _bump(reason: str) -> None:
+        _reasons[reason] = _reasons.get(reason, 0) + 1
     try:
         # ═══════════════════════════════════════════════════════════════════
         # 🚨 Fix 138 (2026-08-26): 피라미딩이 남의 스위치에 물려 꺼져 있었다
@@ -229,6 +235,7 @@ def run_success_pyramiding() -> dict:
             # 이미 pyramid 활성 = skip
             if key in pyramid_active_syms:
                 skipped += 1
+                _bump("already_pyramid_active")
                 continue
 
             # pyramid strategy 자체 = 재 pyramid 금지!
@@ -236,6 +243,7 @@ def run_success_pyramiding() -> dict:
             stype = getattr(tpl, "strategy_type", "") if tpl else ""
             if "_pyramid" in stype:
                 skipped += 1
+                _bump("is_pyramid_strategy")
                 continue
 
             # 🚨 v220 사장님 (2026-08-22): 자동 진입 소스 확장! (root cause fix!)
@@ -243,17 +251,20 @@ def run_success_pyramiding() -> dict:
             # 신: 모든 자동 진입 소스 = pyramid 가능!
             if not any(stype.startswith(t) for t in AUTO_ENTRY_TYPES_PYRAMID):
                 skipped += 1
+                _bump("not_auto_entry_type")
                 continue
 
             # cooldown 체크
             if _cooldown_active(si.symbol, si.side):
                 skipped += 1
+                _bump("cooldown")
                 continue
 
             # pyramid count 체크
             pyr_count = _get_pyramid_count(si.symbol, si.side)
             if pyr_count >= MAX_PYRAMID_COUNT:
                 skipped += 1
+                _bump("max_pyramid_count")
                 continue
 
             # unrealized ROI 판정 (익절중?)
@@ -277,6 +288,7 @@ def run_success_pyramiding() -> dict:
 
             if roi_pct < MIN_UNREALIZED_ROI_PCT:
                 skipped += 1
+                _bump("no_avg_or_mark")
                 continue
 
             # peak 갱신 + 지속 판정
@@ -288,6 +300,7 @@ def run_success_pyramiding() -> dict:
             if retrace_pct > PEAK_HOLD_TOLERANCE_PCT:
                 # peak 대비 되돌림 크다 = 지속 약함 = skip
                 skipped += 1
+                _bump("roi_below_5pct")
                 continue
 
             # 시작가 대비 방향 지속 검증
@@ -299,6 +312,7 @@ def run_success_pyramiding() -> dict:
                     sustain_pct = (start - mp) / start * 100
                 if sustain_pct < MIN_SUSTAIN_PCT:
                     skipped += 1
+                    _bump("peak_not_sustained")
                     continue
 
             # 급등/급락 필터 (헌법 64!)
@@ -320,9 +334,11 @@ def run_success_pyramiding() -> dict:
                         ch = float(tk.get("priceChangePercent") or 0)
                         if si.side == "SHORT" and ch > 15.0:
                             skipped += 1
+                            _bump("chg24_extreme")
                             continue
                         if si.side == "LONG" and ch < -15.0:
                             skipped += 1
+                            _bump("regime_block")
                             continue
             except Exception:
                 pass  # ticker 실패 = 조용히 통과 (Redis mark_price는 이미 확보!)
@@ -351,6 +367,7 @@ def run_success_pyramiding() -> dict:
             _seq = pyr_count + 1  # 1, 2, 3
             if _seq > MAX_PYRAMID_COUNT:
                 skipped += 1
+                _bump("capital_invalid")
                 continue
             # 🎯 Fix 134 (사장님 지시): 추가 금액은 「사다리 2번째 칸」 = 300
             #   사장님 verbatim: "10 +5% 마틴게일 300 진입 ... 300한번더 포지션 진입"
@@ -380,6 +397,7 @@ def run_success_pyramiding() -> dict:
                 )
                 if not new_strategy:
                     skipped += 1
+                    _bump("create_failed")
                     continue
 
                 # StrategySuggestion 기록!
@@ -442,10 +460,16 @@ def run_success_pyramiding() -> dict:
                     "[SUCCESS_PYRAMID] %s %s 진입 실패: %s", si.symbol, si.side, e,
                 )
                 skipped += 1
+                _bump("exception")
                 db.rollback()
 
+        _reason_str = " ".join(
+            f"{k}={v}" for k, v in sorted(_reasons.items(), key=lambda x: -x[1])
+        ) or "-"
         logger.info(
-            "[SUCCESS_PYRAMID] 완료: entered=%d skipped=%d", entered, skipped,
+            "[SUCCESS_PYRAMID] 완료: entered=%d skipped=%d | 사유: %s "
+            "(트리거 ROI>=%.1f%% 추가자본=사다리2칸 최대%d회)",
+            entered, skipped, _reason_str, MIN_UNREALIZED_ROI_PCT, MAX_PYRAMID_COUNT,
         )
         return {"entered": entered, "skipped": skipped, "results": results}
     except Exception as e:
