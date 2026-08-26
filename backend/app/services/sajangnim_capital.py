@@ -121,10 +121,16 @@ def compute_stage1_capital(bc, db) -> Decimal:
     Returns:
         Decimal: 초기 진입 자본 USDT
     """
-    default_cap = _get_default_capital(db)
+    # 🚨 Fix 143 (2026-08-26): Fix 133 이 이 함수를 놓쳐 1단계가 사다리를 무시했다.
+    #   사장님이 sajangnim_capital_ladder="10,300,600" 을 설정했는데도
+    #   여기가 sajangnim_default_capital(=300) 을 읽어 1단계가 300 으로 나갔다.
+    #   = 「10 USDT 탐색 진입」이라는 설계 의도가 전혀 반영되지 않은 상태.
+    #   → 사다리 1칸을 진실로 삼고, 사다리가 없을 때만 옛 설정으로 fallback.
+    _ladder = get_capital_ladder(db)
+    default_cap = _ladder[0] if _ladder else _get_default_capital(db)
     logger.info(
-        "[sajangnim_capital] 🎯 1단계 초기 자본: %.2f USDT",
-        float(default_cap),
+        "[sajangnim_capital] 🎯 1단계 초기 자본: %.2f USDT (사다리 %s)",
+        float(default_cap), [str(x) for x in _ladder] or "없음",
     )
     return default_cap.quantize(Decimal("0.01"))
 

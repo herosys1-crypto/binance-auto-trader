@@ -238,7 +238,58 @@ def get_sajangnim_settings(
         "daily_limit": int(daily_limit_row.value) if daily_limit_row and daily_limit_row.value else 1,
         "max_stage": int(max_stage_row.value) if max_stage_row and max_stage_row.value else 2,
         "top_short_daily_limit": int(top_short_daily_limit_row.value) if top_short_daily_limit_row and top_short_daily_limit_row.value else 0,
+        # 🎯 Fix 144 (2026-08-26 사장님): 자본 사다리 (UI 에서 직접 수정 가능하게)
+        #   실제 적용값을 그대로 돌려준다 = 화면과 워커가 같은 진실을 본다 (헌법 85)
+        "capital_ladder": _current_ladder_str(db),
     }
+
+
+def _current_ladder_str(db) -> str:
+    """지금 실제로 적용 중인 자본 사다리를 문자열로 (UI 표시/수정용)."""
+    try:
+        from app.services.sajangnim_capital import get_capital_ladder
+        vals = get_capital_ladder(db)
+        out = []
+        for d in vals:
+            t = format(d, "f")
+            if "." in t:
+                t = t.rstrip("0").rstrip(".")
+            out.append(t or "0")
+        return ",".join(out)
+    except Exception as e:
+        logger.warning("[Fix144] 사다리 조회 실패: %s", e)
+        return ""
+
+
+def _sanitize_ladder(raw) -> str:
+    """🎯 Fix 144: 자본 사다리 문자열 정규화 ("10, 300 ,600" → "10,300,600").
+
+    손상값이 저장되면 사다리 조회가 기본값으로 떨어져 사장님 설정이 조용히 무시된다.
+    여기서 걸러 「저장은 됐는데 반영 안 됨」 상태를 만들지 않는다.
+    """
+    vals = []
+    for part in str(raw or "").replace(" ", "").split(","):
+        if not part:
+            continue
+        d = Decimal(part)              # 숫자가 아니면 여기서 예외 = 상위에서 400
+        if d <= 0:
+            raise ValueError(f"자본은 0보다 커야 합니다: {part}")
+        vals.append(d.quantize(Decimal("0.01")))
+    if not vals:
+        raise ValueError("자본 사다리가 비어 있습니다")
+    if len(vals) > 3:
+        raise ValueError(f"사다리는 최대 3칸입니다 (입력 {len(vals)}칸)")
+    for d in vals:
+        if d > Decimal("100000"):
+            raise ValueError(f"단계 자본 상한 100000 초과: {d}")
+    def _fmt(d: Decimal) -> str:
+        # ⚠️ rstrip("0") 은 소수점이 있을 때만! 정수 "10" 에 쓰면 "1" 이 된다.
+        t = format(d, "f")
+        if "." in t:
+            t = t.rstrip("0").rstrip(".")
+        return t or "0"
+
+    return ",".join(_fmt(d) for d in vals)
 
 
 @router.put("/sajangnim-settings")
@@ -265,6 +316,9 @@ def set_sajangnim_settings(
         #   상한 30 이면 활성이 33건인 지금 사장님이 상한을 올려서 풀 수가 없다!
         #   → 0~200 으로 확장 (0 = 완전 OFF 는 그대로 유지!)
         "sajangnim_top_short_daily_limit": ("top_short_daily_limit", lambda v: str(max(0, min(200, int(v))))),
+        # 🎯 Fix 144 (2026-08-26 사장님): 자본 사다리 "10,300,600"
+        #   각 칸 1~100000 clamp, 최대 3칸 (MAX_REENTRY_STAGE), 빈 값이면 미저장
+        "sajangnim_capital_ladder": ("capital_ladder", lambda v: _sanitize_ladder(v)),
     }
     updated = {}
     for key, (payload_key, sanitizer) in fields.items():

@@ -1132,9 +1132,15 @@
                   <option value="30">30</option>
                 </select>
               </label>
+              <!-- 🎯 Fix 144 (2026-08-26 사장님): 자본 「사다리」 직접 수정 -->
               <label class="flex items-center justify-between gap-2">
-                <span class="text-slate-300">초기 자본 (USDT)</span>
-                <input type="number" id="v219-capital" min="50" max="100000" step="50" value="300"
+                <span class="text-slate-300" title="쉼표로 구분한 단계별 자본. 예: 10,300,600">자본 사다리 (USDT)</span>
+                <input type="text" id="v219-ladder" placeholder="10,300,600" value="10,300,600"
+                       class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:130px" />
+              </label>
+              <label class="flex items-center justify-between gap-2">
+                <span class="text-slate-300" title="사다리를 비웠을 때만 쓰이는 예비값">초기 자본 (예비)</span>
+                <input type="number" id="v219-capital" min="1" max="100000" step="10" value="10"
                        class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:110px" />
               </label>
               <label class="flex items-center justify-between gap-2">
@@ -1145,13 +1151,14 @@
                   <option value="3" selected>3 (⚠ 신중!)</option>
                 </select>
               </label>
-              <div class="text-xs text-slate-500" style="line-height:1.4">
-                💡 <b>사장님 신 마틴게일 (v219 = Fix 15 확정!)</b>:<br>
-                &nbsp;&nbsp;🥇 <b style="color:#3b82f6">1단계 = 300 USDT</b> (원 진입!)<br>
-                &nbsp;&nbsp;🥈 <b style="color:#f59e0b">2단계 = 600 USDT</b> (이전 × 2 = 300×2)<br>
-                &nbsp;&nbsp;🥉 <b style="color:#ef4444">3단계 = 1800 USDT</b> (투자금 전체 × 2 = (300+600)×2 <span style="color:#dc2626">⚠ 최대!</span>)<br>
-                &nbsp;&nbsp;🚨 4단계+ = <b style="color:#dc2626">금지!</b> (사장님 상한!)<br>
-                <span style="color:#94a3b8">※ 초기 자본 조정 시 = 각 단계 자동 재계산!</span>
+              <div class="text-xs text-slate-500" style="line-height:1.5">
+                💡 <b style="color:#f9a8d4">사장님 마틴게일 (2026-08-26 사다리 방식)</b><br>
+                <span id="v219-ladder-preview" style="color:#cbd5e1">1단계 10 · 2단계 300 · 3단계 600</span><br>
+                <b style="color:#93c5fd">손실</b>: 1단계 진입 → −5% 청산 → 조건 충족 시 다음 단계 진입<br>
+                &nbsp;&nbsp;마지막 단계까지 소진 → <b>1단계 모니터링으로 복귀</b><br>
+                <b style="color:#86efac">수익</b>: ROI +5% → 2단계 금액 추가 → 지속 시 한번 더 (<b>최대 2회</b>)<br>
+                <span style="color:#94a3b8">※ 1단계를 작게(10) 두면 방향이 틀렸을 때 손실이 작습니다.<br>
+                &nbsp;&nbsp;&nbsp;맞을 때만 큰 금액으로 키우는 구조입니다.</span>
               </div>
               <div class="flex justify-end">
                 <button onclick="saveV219Settings()"

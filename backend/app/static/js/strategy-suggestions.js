@@ -1454,7 +1454,11 @@ async function saveV219Settings() {
   const capital = parseFloat(document.getElementById('v219-capital').value);
   const maxStage = parseInt(document.getElementById('v219-max-stage').value);
   const msgEl = document.getElementById('v219-settings-msg');
+  // 🎯 Fix 144 (2026-08-26 사장님): 자본 사다리도 함께 저장
+  const ladderEl = document.getElementById('v219-ladder');
+  const ladder = ladderEl ? String(ladderEl.value || '').trim() : '';
   const payload = { top_short_daily_limit: limit, default_capital: capital, max_stage: maxStage };
+  if (ladder) payload.capital_ladder = ladder;
   try {
     await api('/strategy-suggestions/sajangnim-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     if (msgEl) msgEl.innerHTML = '<span style="color:#22c55e;font-weight:bold;">✅ 저장 완료! 값=' + payload.top_short_daily_limit + ' (2초 후 재로드!)</span>';
@@ -1476,15 +1480,23 @@ async function loadV219Settings(retry = 0) {
   const capitalEl = document.getElementById('v219-capital');
   const maxStageEl = document.getElementById('v219-max-stage');
   // Fix 38: 요소 없으면 = 재시도! (카드가 늦게 로드!)
-  if (!limitEl && !capitalEl && !maxStageEl) {
+  if (!limitEl && !capitalEl && !maxStageEl && !document.getElementById('v219-ladder')) {
     if (retry < 20) setTimeout(() => loadV219Settings(retry + 1), 500);
     return;
   }
   try {
     const r = await api('/strategy-suggestions/sajangnim-settings');
     if (limitEl) limitEl.value = r.top_short_daily_limit ?? 5;
-    if (capitalEl) capitalEl.value = r.default_capital ?? 300;
-    if (maxStageEl) maxStageEl.value = r.max_stage ?? 2;
+    if (capitalEl) capitalEl.value = r.default_capital ?? 10;
+    if (maxStageEl) maxStageEl.value = r.max_stage ?? 3;
+    // 🎯 Fix 144: 사다리 값 + 미리보기 (실제 적용값을 화면에서 확인 가능하게)
+    const ladderEl2 = document.getElementById('v219-ladder');
+    if (ladderEl2 && r.capital_ladder) ladderEl2.value = r.capital_ladder;
+    const prev = document.getElementById('v219-ladder-preview');
+    if (prev && r.capital_ladder) {
+      const parts = String(r.capital_ladder).split(',').map(x => x.trim()).filter(Boolean);
+      prev.textContent = parts.map((v, i) => (i + 1) + '단계 ' + v).join(' · ');
+    }
   } catch(e) {}
 }
 if (typeof window !== 'undefined') {
