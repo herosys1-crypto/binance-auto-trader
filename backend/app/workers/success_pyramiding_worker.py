@@ -136,6 +136,24 @@ def _get_mark_price(symbol: str) -> float | None:
         return None
 
 
+def _strategy_type_of(si) -> str:
+    """🚨 Fix 142 (2026-08-26): 관계명이 틀려 피라미딩이 100% 차단되고 있었다.
+
+    옛 코드: `si.template if hasattr(si, "template") else None`
+      StrategyInstance 의 관계명은 `strategy_template` 이다 (`template` 아님,
+      models/strategy_instance.py:113). → hasattr False → tpl None → stype ""
+      → AUTO_ENTRY_TYPES_PYRAMID 매칭 전멸 → 후보 전원 탈락.
+      실 로그: "완료: entered=0 skipped=9 | 사유: not_auto_entry_type=9"
+      strategy_type 실제 값은 auto_bb_break{suffix} 라 원래 통과했어야 한다.
+
+    Fix 138(남의 스위치) 을 고쳐 워커가 돌기 시작하자 비로소 드러난 3번째 층이다.
+    """
+    tpl = getattr(si, "strategy_template", None)
+    if tpl is None:
+        tpl = getattr(si, "template", None)          # 혹시 모를 별칭 대비
+    return getattr(tpl, "strategy_type", "") or "" if tpl is not None else ""
+
+
 def run_success_pyramiding() -> dict:
     """매 30초 = 익절중 심볼 = 강한 지속 신호 시 = 원 자본으로 추가 진입!"""
     db: Session = SessionLocal()
@@ -217,8 +235,7 @@ def run_success_pyramiding() -> dict:
         # 3. 심볼별 이미 pyramid 활성 = skip 집합!
         pyramid_active_syms: set[tuple[str, str]] = set()
         for si in active:
-            tpl = si.template if hasattr(si, "template") else None
-            stype = getattr(tpl, "strategy_type", "") if tpl else ""
+            stype = _strategy_type_of(si)      # Fix 142
             if "_pyramid" in stype:
                 pyramid_active_syms.add((si.symbol, si.side))
 
@@ -239,8 +256,7 @@ def run_success_pyramiding() -> dict:
                 continue
 
             # pyramid strategy 자체 = 재 pyramid 금지!
-            tpl = si.template if hasattr(si, "template") else None
-            stype = getattr(tpl, "strategy_type", "") if tpl else ""
+            stype = _strategy_type_of(si)      # Fix 142
             if "_pyramid" in stype:
                 skipped += 1
                 _bump("is_pyramid_strategy")
