@@ -812,6 +812,13 @@ def run_auto_long_at_bottom_once() -> dict:
     db: Session = SessionLocal()
     entered = 0
     skipped = 0
+    # 🎯 Fix 149 (2026-08-26): scanned=40 인데 skipped=0 entered=0 = 사유 불명이었다.
+    #   판정 루프에 사유를 남기지 않는 continue 가 5개 있어
+    #   「왜 LONG 이 안 들어가는가」를 로그로 알 수 없었다 (헌법 93).
+    _reasons: dict[str, int] = {}
+
+    def _bump(reason: str) -> None:
+        _reasons[reason] = _reasons.get(reason, 0) + 1
     scanned = 0
     results: list[dict] = []
     try:
@@ -944,6 +951,7 @@ def run_auto_long_at_bottom_once() -> dict:
                         "[Fix75/alert-skip] %s: conf=%.2f < %.2f",
                         symbol, confidence, MIN_CONFIDENCE,
                     )
+                    _bump("alert_confidence_below_min")
                     continue
 
                 # Fix 65: OBV 절대값 검증 (LONG 방향)
@@ -955,6 +963,7 @@ def run_auto_long_at_bottom_once() -> dict:
                             "[Fix75/alert-long+Fix65] %s skip: %s",
                             symbol, obv_reason,
                         )
+                        _bump("alert_obv_gate")
                         continue
                 except Exception as _obv_exc:
                     logger.warning(
@@ -973,6 +982,7 @@ def run_auto_long_at_bottom_once() -> dict:
                             "[Fix75/alert-long+Fix66] %s skip: %s",
                             symbol, block_reason,
                         )
+                        _bump("alert_btc_or_blocked")
                         continue
                 except Exception as _bl_exc:
                     logger.warning(
@@ -993,6 +1003,7 @@ def run_auto_long_at_bottom_once() -> dict:
                             "[Fix75/alert-long+Fix66] %s skip: %s",
                             symbol, regime_reason,
                         )
+                        _bump("alert_regime_blocked")
                         continue
                 except Exception as _rg_exc:
                     logger.warning(
@@ -1233,9 +1244,11 @@ def run_auto_long_at_bottom_once() -> dict:
                 scanned += 1
                 result = _check_long_entry_conditions(bc, symbol, t)
                 if not result.get("detected"):
+                    _bump("not_detected")
                     continue
                 confidence = float(result.get("confidence", 0))
                 if confidence < MIN_CONFIDENCE:
+                    _bump("confidence_below_min")
                     continue
 
                 # Fix 65: OBV 절대값 검증 (사장님 사상! PENGUUSDT 사고 재발 방지!)
@@ -1244,6 +1257,7 @@ def run_auto_long_at_bottom_once() -> dict:
                     obv_pass, obv_reason = check_obv_gate(bc, symbol, "LONG")
                     if not obv_pass:
                         logger.info("[auto_long_bottom+Fix65] %s skip: %s", symbol, obv_reason)
+                        _bump("obv_gate")
                         continue
                 except Exception as _obv_exc:
                     logger.warning("[auto_long_bottom+Fix65] %s obv_gate error: %s (fail-open)", symbol, _obv_exc)
@@ -1254,6 +1268,7 @@ def run_auto_long_at_bottom_once() -> dict:
                     blocked, block_reason = is_bidirectional_blocked(db, symbol)
                     if blocked:
                         logger.info("[auto_long_bottom+Fix66] %s skip: %s", symbol, block_reason)
+                        _bump("btc_or_blocked")
                         continue
                 except Exception as _bl_exc:
                     logger.warning("[auto_long_bottom+Fix66] blocklist error: %s", _bl_exc)
@@ -1264,6 +1279,7 @@ def run_auto_long_at_bottom_once() -> dict:
                     regime_blocked, regime_reason = is_regime_blocked_for_long(bc, symbol)
                     if regime_blocked:
                         logger.info("[auto_long_bottom+Fix66] %s skip: %s", symbol, regime_reason)
+                        _bump("regime_blocked")
                         continue
                 except Exception as _rg_exc:
                     logger.warning("[auto_long_bottom+Fix66] regime error: %s", _rg_exc)
@@ -1369,7 +1385,8 @@ def run_auto_long_at_bottom_once() -> dict:
                 continue
 
         logger.info(
-            "[auto_long_bottom] 완료: scanned=%d entered=%d skipped=%d used=%d/%d",
+            "[auto_long_bottom] 완료: scanned=%d entered=%d skipped=%d used=%d/%d | 사유: "
+            + (" ".join(f"{k}={v}" for k, v in sorted(_reasons.items(), key=lambda x: -x[1])) or "-"),
             scanned, entered, skipped, used + entered, daily_limit,
         )
         return {
