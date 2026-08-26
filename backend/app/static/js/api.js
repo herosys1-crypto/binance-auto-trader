@@ -42,9 +42,27 @@ let _consecutive401 = 0;
 async function api(path, opts = {}) {
   const headers = opts.headers || {};
   if (token) headers['Authorization'] = 'Bearer ' + token;
-  if (opts.body && typeof opts.body === 'object' && !(opts.body instanceof URLSearchParams)) {
-    headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(opts.body);
+  // 🚨 Fix 107 (2026-08-26 CRITICAL): 사장님 UI 세팅 저장 422 진짜 원인!
+  //
+  // 옛 로직 = body 가 「object」 일 때만 Content-Type 을 설정!
+  //   → 호출부가 `body: JSON.stringify(payload)` 로 이미 문자열을 넘기면
+  //     이 if 를 건너뛰어 Content-Type 이 아예 안 붙음!
+  //   → 브라우저가 text/plain;charset=UTF-8 로 전송
+  //   → FastAPI 가 dict 가 아닌 「문자열」로 해석 = 422 dict_type!
+  //   → 사장님 에러: "input":"{\"top_short_daily_limit\":0,...}" (따옴표로 감싸짐!)
+  //
+  // 이중 인코딩이 아니라 「헤더 누락」이 원인 (Fix 86 의 Body(...) 는 무관했음).
+  // 신 로직 = 문자열 body 에도 Content-Type 을 붙여 준다 (헌법 6 = 한 곳에서 보장!).
+  const _isForm = (typeof FormData !== 'undefined' && opts.body instanceof FormData)
+    || (typeof URLSearchParams !== 'undefined' && opts.body instanceof URLSearchParams)
+    || (typeof Blob !== 'undefined' && opts.body instanceof Blob);
+  if (opts.body && !_isForm) {
+    if (typeof opts.body === 'object') {
+      opts.body = JSON.stringify(opts.body);
+    }
+    // 호출부가 직접 지정했으면 존중, 없으면 JSON 으로 강제!
+    const _hasCT = Object.keys(headers).some((k) => k.toLowerCase() === 'content-type');
+    if (!_hasCT) headers['Content-Type'] = 'application/json';
   }
   const res = await fetch(API_BASE + path, {...opts, headers});
   if (res.status === 401) {
