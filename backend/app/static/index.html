@@ -1120,17 +1120,13 @@
             <div class="flex flex-col gap-2" style="font-size:12px;">
               <label class="flex items-center justify-between gap-2">
                 <span class="text-slate-300" title="하루 신규 건수가 아니라 「동시에 열려 있는 포지션」 상한! (사장님 Fix 112)">최대 동시 포지션</span>
-                <select id="v219-daily-limit" class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="min-width:90px">
-                  <option value="0">0 (끔)</option>
-                  <option value="1">1</option>
-                  <option value="2">2</option>
-                  <option value="3" selected>3</option>
-                  <option value="5">5</option>
-                  <option value="10">10</option>
-                  <option value="15">15</option>
-                  <option value="20">20</option>
-                  <option value="30">30</option>
-                </select>
+                <!-- 🚨 Fix 161 (2026-08-26 사장님 스크린샷): select 였을 때
+                     옵션에 없는 값(40)은 표시되지 않아 화면은 20, 실제는 40 이었다.
+                     그 상태로 저장하면 20 으로 되돌아간다 = 헌법 85 위반.
+                     자유 입력(number)으로 바꿔 어떤 값이든 그대로 보이게 한다. -->
+                <input type="number" id="v219-daily-limit" min="0" max="200" step="1" value="20"
+                       class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1 text-center"
+                       style="width:90px" title="0 = 자동 진입 완전 OFF / 최대 200" />
               </label>
               <!-- 🎯 Fix 144 (2026-08-26 사장님): 자본 「사다리」 직접 수정 -->
               <label class="flex items-center justify-between gap-2">
