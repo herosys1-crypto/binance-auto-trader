@@ -56,6 +56,12 @@ logger = logging.getLogger(__name__)
 CAPITAL_LADDER_KEY = "sajangnim_capital_ladder"
 DEFAULT_CAPITAL_LADDER = [Decimal("10"), Decimal("300"), Decimal("600")]
 
+# 🎯 Fix 176 (2026-08-27 사장님): 수익 피라미딩 1회 금액 = 사다리와 **독립**.
+#   "10 +5% 마틴게일 300 진입 이건 초기 1단계 상관없이 300으로 고정하고
+#    300도 차후에 선택옵션으로 만들어두면 될것 같아"
+PYRAMID_CAPITAL_KEY = "sajangnim_pyramid_capital"
+DEFAULT_PYRAMID_CAPITAL = Decimal("300")
+
 # 🎯 사장님 1단계 = 사다리 첫 칸 (10 USDT = 탐색 진입!)
 DEFAULT_STAGE1_CAPITAL = DEFAULT_CAPITAL_LADDER[0]
 FALLBACK_CAPITAL = DEFAULT_CAPITAL_LADDER[0]   # 실패 시!
@@ -86,13 +92,38 @@ def get_capital_ladder(db) -> list:
 
 
 def get_pyramid_capital(db) -> Decimal:
-    """🎯 수익 피라미딩 1회당 자본 = 사다리 2번째 칸 (사장님: 10 → +5% → 300 추가).
+    """🎯 수익 피라미딩 1회당 자본 — **사다리와 독립된 고정값** (Fix 176).
 
-    ⚠️ 1단계(10)를 그대로 추가하면 사장님 의도와 다르다.
-    사장님 verbatim: "10 +5% 마틴게일 300 진입" = 추가 금액은 300 이다.
+    사장님 verbatim (2026-08-27):
+      "10 +5% 마틴게일 300 진입 이건 초기 1단계 상관없이 300으로 고정하고
+       300도 차후에 선택옵션으로 만들어두면 될것 같아"
+
+    옛 동작: `ladder[1]` (사다리 2번째 칸).
+      → 사다리를 100/**500**/900 으로 바꾸면 피라미딩도 500 으로 따라 움직였다.
+        사장님 의도는 「1단계 금액과 무관한 고정 300」이므로 사다리에서 떼어낸다.
+      (지금 쓰는 사다리 10/300/600 과 100/300/900 은 둘 다 2번째 칸이 300 이라
+       이 변경으로 **당장의 금액은 달라지지 않는다.**)
+
+    신 동작: SystemSetting `sajangnim_pyramid_capital` 우선 → 없으면 300.
+      UI 에서 바꿀 수 있게 세팅 항목으로 노출한다 (값만 만들고 조정 수단이 없으면
+      기능이 아니다 — Fix 115 교훈).
     """
-    ladder = get_capital_ladder(db)
-    return ladder[1] if len(ladder) >= 2 else ladder[0]
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, PYRAMID_CAPITAL_KEY)
+        if row is not None and row.value is not None and str(row.value).strip() != "":
+            v = Decimal(str(row.value).strip())
+            if v > 0:
+                return v
+            # 0/음수 = 잘못된 입력 → 기본값 (피라미딩 자체를 끄는 스위치는
+            # `sajangnim_pyramid_enabled` 로 따로 있다 — Fix 138. 헌법 102)
+            logger.warning(
+                "[sajangnim_capital] %s=%s 는 양수가 아님 → 기본 %s 사용",
+                PYRAMID_CAPITAL_KEY, row.value, DEFAULT_PYRAMID_CAPITAL,
+            )
+    except Exception as e:
+        logger.warning("[sajangnim_capital] %s 조회 실패 → 기본값: %s", PYRAMID_CAPITAL_KEY, e)
+    return DEFAULT_PYRAMID_CAPITAL
 
 
 def _get_default_capital(db) -> Decimal:

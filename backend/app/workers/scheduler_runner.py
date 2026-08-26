@@ -528,6 +528,13 @@ def start_scheduler() -> None:
     scheduler.add_job(guarded_job("auto_reentry", 50, lambda: run_auto_reentry_once(decrypt_text)), trigger=IntervalTrigger(seconds=60), id="auto_reentry", replace_existing=True, max_instances=1, coalesce=True)
     # Stage 2~N 자동 진입 트리거 감시 — 매 15초 (v171: 10s → 15s 감소!)
     scheduler.add_job(guarded_job("stage_trigger", 12, lambda: run_stage_trigger_once(decrypt_text)), trigger=IntervalTrigger(seconds=15), id="stage_trigger", replace_existing=True, max_instances=1, coalesce=True)
+    # 🔁 Fix 175 (2026-08-27 사장님): 사다리 전 단계 실패 → 대기 모니터링 → 처음부터 재시작 (최대 2회)
+    #   사장님 verbatim: "이렇게까지 실패한 심볼은 대기모니터링헤서 다시 처음부터 포지션에 들어가면 좋겠는데"
+    #   5분 주기 = 운영 진입 로직(15m 정점확인)이 15m 봉 기준이라 더 자주 볼 이유가 없다.
+    def _ladder_restart():
+        from app.workers.ladder_restart_worker import run_ladder_restart_once
+        run_ladder_restart_once()
+    scheduler.add_job(guarded_job("ladder_restart", 240, _ladder_restart), trigger=IntervalTrigger(seconds=300), id="ladder_restart", replace_existing=True, max_instances=1, coalesce=True)
     # Daily loss limit 체크 — 매 1분 (settings.daily_loss_limit_usdt 미설정 시 no-op).
     # audit 2026-05-04: AccountDailyLossLimiter 가 호출되는 곳 0건이라 안전장치 무력 상태였음.
     scheduler.add_job(guarded_job("daily_loss_check", 50, run_daily_loss_check_once), trigger=IntervalTrigger(minutes=1), id="daily_loss_check", replace_existing=True, max_instances=1, coalesce=True)

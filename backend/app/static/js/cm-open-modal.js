@@ -110,6 +110,16 @@ async function openCreateChartObvModal() {
     };
     for (let i = 2; i <= 10; i++) _disableTrg(document.getElementById('cm-trg-' + i));
     _disableTrg(document.getElementById('cm-last-stage-trigger-pct'));
+    // 🚨 Fix 177 (2026-08-27): 「청산 후 재진입」을 켠다.
+    //   사장님 모델(-5% 청산 → 다음 단계 모니터링)은 이 토글이 켜져야 성립한다.
+    //   꺼져 있으면 (기본값 False) 청산돼도 LIQUIDATED_WAITING_RETRY 로 가지 않고,
+    //   force SL 도 v130 단계 게이트에 막혀 애초에 청산이 안 된다.
+    //   = 사장님이 매번 기억해서 켜야 하는 구조 자체가 함정이므로 모드 기본값으로 둔다.
+    const _retryEl = document.getElementById('cm-retry-after-liq-enabled');
+    if (_retryEl && !_retryEl.checked) {
+      _retryEl.checked = true;
+      try { _retryEl.dispatchEvent(new Event('change', { bubbles: true })); } catch (_e) {}
+    }
     // 자본 칸 옆에 한 줄 안내 (그리드 위)
     try {
       const grid = document.getElementById('cm-capitals-grid');

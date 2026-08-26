@@ -579,10 +579,66 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 #   (Fix 113 으로 게이트를 통과시켜도 여기서 죽으므로 여전히 진입 0건)
                 trigger = None
                 should_fire = False
-                # 🌟 v131 (2026-08-09 사장님!): 청산 후 자동 재진입!
+                # ══════════════════════════════════════════════════════════════
+                # 🎯 Fix 174 (2026-08-27 사장님): 청산 후 다음 단계도 「운영 로직」으로.
+                #
+                # 사장님 질문: "처음 진입한 포지션이 -5% 면 청산하고 다음 단계 포지션이
+                #              진입되나요?" → 되긴 하는데, **가격 트리거**로 들어갔다.
+                #
+                # 옛 구조의 문제: 아래 retry 분기가 OBV 분기(더 아래)보다 **먼저** 실행되고
+                # 주석에 "trigger_mode / OBV 무관" 이라고 못 박혀 있었다.
+                # → 청산 후 재진입은 「청산가 대비 retry_trigger_pct(기본 10%)」라는
+                #   **가격 트리거**로만 들어갔고, Fix 173 에서 만든 운영 로직이
+                #   이 경로에는 아예 닿지 않았다.
+                #   사장님이 "트리거%를 내가 임의로 정했는데 이제 운영 로직으로" 라고
+                #   하신 것과 정면으로 어긋난다.
+                #
+                # 신: OBV 모드 전략이면 청산 후 재진입도 운영 로직으로 판정한다.
+                #     기존 방식(PRICE_*) 전략은 손대지 않는다 — 사장님 지시 범위가
+                #     "일단 obv 로직에 만들어줘" 였다.
+                # ══════════════════════════════════════════════════════════════
+                if strategy.status == "LIQUIDATED_WAITING_RETRY" and _is_obv_mode:
+                    try:
+                        from app.integrations.binance.client import BinanceClient
+                        from app.services.stage_entry_signal import check_stage_entry_signal
+                        _bc_r = BinanceClient(
+                            api_key=decrypt_text(account.api_key_enc),
+                            api_secret=decrypt_text(account.api_secret_enc),
+                            is_testnet=account.is_testnet,
+                        )
+                        _sig_ok, _sig_why, _sig_det = check_stage_entry_signal(
+                            _bc_r, db, strategy.symbol, strategy.side,
+                        )
+                        should_fire = _sig_ok
+                        if _sig_ok:
+                            logger.info(
+                                "[stage-trigger Fix174 retry+OBV] 🎯 청산 후 재진입 신호! "
+                                "strategy=%s stage=%s %s %s | %s",
+                                strategy.id, next_stage_no, strategy.symbol, strategy.side, _sig_why,
+                            )
+                        else:
+                            logger.info(
+                                "[stage-trigger Fix174 retry+OBV] ⏳ 청산 후 대기: "
+                                "strategy=%s stage=%s %s %s — %s",
+                                strategy.id, next_stage_no, strategy.symbol, strategy.side, _sig_why,
+                            )
+                            _record_block_reason(
+                                _redis, strategy.id,
+                                f"Fix174 청산후 대기: {_sig_why}", next_stage_no,
+                            )
+                    except Exception as _e:
+                        logger.warning("[stage-trigger Fix174 retry+OBV] 판정 실패 (보류): %s", _e)
+                        try:
+                            _record_block_reason(
+                                _redis, strategy.id,
+                                f"Fix174 청산후 판정 실패: {_e}", next_stage_no,
+                            )
+                        except Exception:
+                            pass
+                        should_fire = False
+                # 🌟 v131 (2026-08-09 사장님!): 청산 후 자동 재진입 (기존 방식 = 가격 트리거)
                 # LIQUIDATED_WAITING_RETRY = 청산가 기준 트리거 감시! (retry_trigger_pct!)
-                # = trigger_mode / OBV 무관 = 사장님 신 사상 우선!
-                if strategy.status == "LIQUIDATED_WAITING_RETRY":
+                elif strategy.status == "LIQUIDATED_WAITING_RETRY":
                     try:
                         _liq_price = Decimal(str(strategy.last_liquidation_price or 0))
                         # 🌟 v131 하이브리드 (사장님!): 단계별 개별 우선 → 기본값!

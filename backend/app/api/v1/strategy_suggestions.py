@@ -244,7 +244,22 @@ def get_sajangnim_settings(
         # 🎯 Fix 144 (2026-08-26 사장님): 자본 사다리 (UI 에서 직접 수정 가능하게)
         #   실제 적용값을 그대로 돌려준다 = 화면과 워커가 같은 진실을 본다 (헌법 85)
         "capital_ladder": _current_ladder_str(db),
+        # 🎯 Fix 176 (2026-08-27 사장님): 피라미딩 1회 금액 = 사다리와 독립된 고정값
+        #   "초기 1단계 상관없이 300으로 고정하고 300도 차후에 선택옵션으로"
+        #   워커와 같은 함수를 써서 화면과 실제가 어긋나지 않게 한다 (헌법 85)
+        "pyramid_capital": _current_pyramid_capital(db),
     }
+
+
+def _current_pyramid_capital(db) -> str:
+    """실제 적용되는 피라미딩 1회 금액 (get_pyramid_capital 그대로)."""
+    try:
+        from app.services.sajangnim_capital import get_pyramid_capital
+        v = get_pyramid_capital(db)
+        s = format(v, "f")
+        return s.rstrip("0").rstrip(".") if "." in s else s
+    except Exception:
+        return "300"
 
 
 def _effective_max_stage(db) -> int:
@@ -272,6 +287,27 @@ def _current_ladder_str(db) -> str:
     except Exception as e:
         logger.warning("[Fix144] 사다리 조회 실패: %s", e)
         return ""
+
+
+def _sanitize_pyramid_capital(raw) -> str:
+    """🎯 Fix 176: 피라미딩 1회 금액 정규화 (1~100000).
+
+    사장님이 「초기 1단계 상관없이 300으로 고정」 하라고 하신 값이다.
+    사다리와 독립이므로 여기서만 검증한다.
+    """
+    from decimal import Decimal as _D
+    try:
+        v = _D(str(raw).strip())
+    except Exception as e:
+        raise ValueError(f"피라미딩 금액이 숫자가 아닙니다: {raw!r}") from e
+    if v <= 0:
+        raise ValueError(
+            "피라미딩 금액은 0보다 커야 합니다. "
+            "피라미딩을 끄시려면 sajangnim_pyramid_enabled 를 0 으로 두세요."
+        )
+    v = min(v, _D("100000"))
+    s = format(v, "f")
+    return s.rstrip("0").rstrip(".") if "." in s else s
 
 
 def _sanitize_ladder(raw) -> str:
@@ -332,6 +368,10 @@ def set_sajangnim_settings(
         # 🎯 Fix 144 (2026-08-26 사장님): 자본 사다리 "10,300,600"
         #   각 칸 1~100000 clamp, 최대 3칸 (MAX_REENTRY_STAGE), 빈 값이면 미저장
         "sajangnim_capital_ladder": ("capital_ladder", lambda v: _sanitize_ladder(v)),
+        # 🎯 Fix 176 (2026-08-27 사장님): 피라미딩 1회 금액 (사다리와 독립, 1~100000)
+        #   0 을 넣으면 「끄기」가 아니라 잘못된 입력이다 — 피라미딩 ON/OFF 는
+        #   sajangnim_pyramid_enabled 로 따로 있다 (Fix 138 / 헌법 102).
+        "sajangnim_pyramid_capital": ("pyramid_capital", lambda v: _sanitize_pyramid_capital(v)),
     }
     updated = {}
     for key, (payload_key, sanitizer) in fields.items():

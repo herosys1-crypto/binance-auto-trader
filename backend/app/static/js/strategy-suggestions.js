@@ -1471,6 +1471,10 @@ async function saveV219Settings() {
   const ladder = ladderEl ? String(ladderEl.value || '').trim() : '';
   const payload = { top_short_daily_limit: limit, default_capital: capital, max_stage: maxStage };
   if (ladder) payload.capital_ladder = ladder;
+  // 🎯 Fix 176 (2026-08-27 사장님): 피라미딩 1회 금액 (사다리와 독립된 고정값)
+  const pyrEl = document.getElementById('v219-pyramid-capital');
+  const pyr = pyrEl ? parseFloat(pyrEl.value) : NaN;
+  if (!isNaN(pyr) && pyr > 0) payload.pyramid_capital = pyr;
   try {
     await api('/strategy-suggestions/sajangnim-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     if (msgEl) msgEl.innerHTML = '<span style="color:#22c55e;font-weight:bold;">✅ 저장 완료! 값=' + payload.top_short_daily_limit + ' (2초 후 재로드!)</span>';
@@ -1501,6 +1505,9 @@ async function loadV219Settings(retry = 0) {
     if (limitEl) limitEl.value = r.top_short_daily_limit ?? 5;
     if (capitalEl) capitalEl.value = r.default_capital ?? 10;
     if (maxStageEl) maxStageEl.value = r.max_stage ?? 3;
+    // 🎯 Fix 176: 피라미딩 1회 금액 (서버가 돌려주는 「실제 적용값」 — 헌법 85)
+    const pyrEl2 = document.getElementById('v219-pyramid-capital');
+    if (pyrEl2 && r.pyramid_capital != null) pyrEl2.value = r.pyramid_capital;
     // 🎯 Fix 144: 사다리 값 + 미리보기 (실제 적용값을 화면에서 확인 가능하게)
     const ladderEl2 = document.getElementById('v219-ladder');
     if (ladderEl2 && r.capital_ladder) ladderEl2.value = r.capital_ladder;
