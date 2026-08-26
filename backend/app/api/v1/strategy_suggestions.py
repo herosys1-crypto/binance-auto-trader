@@ -437,9 +437,16 @@ def get_auto_bb_limit(
     row = db.get(SystemSetting, "auto_bb_break_daily_limit")
     bb_limit = int(row.value) if row and row.value else 0
 
+    # ⚠️ Fix 112c: get_max_concurrent 는 설정 손상 시 RuntimeError 를 올린다 (fail-SAFE).
+    #   워커에서는 그게 맞지만 「화면 조회」가 500 으로 죽으면 대시보드 전체가 깨진다.
+    #   → 표시 경로는 soft-fail (unknown 표기), 자본 게이트는 hard-fail = 의도된 비대칭.
     from app.services.position_limit import get_max_concurrent, count_active_positions
-    concurrent_limit, _src = get_max_concurrent(db)
-    concurrent = count_active_positions(db)
+    try:
+        concurrent_limit, _src = get_max_concurrent(db)
+        concurrent = count_active_positions(db)
+    except Exception as e:
+        logger.warning("[auto-bb-limit+Fix112c] 동시보유 상한 조회 실패: %s", e)
+        concurrent_limit, _src, concurrent = 0, f"error: {e}", 0
     return {
         "limit": bb_limit,                 # ← PUT 이 쓰는 키와 동일 (되돌림 방지!)
         **usage,
