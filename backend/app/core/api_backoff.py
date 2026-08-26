@@ -67,6 +67,13 @@ def parse_rate_limit_error(exc: Exception) -> Optional[int]:
         - 60_000ms 후 (now + 60s) — rate limit 이지만 만료 시각 없는 경우 (보수적)
         - None — rate limit 아님 (다른 에러)
     """
+    # 🚨 Fix 119 (2026-08-26): 우리 회로 차단기(Fix 116)가 만든 합성 예외는 무시!
+    #   그 문구에 status=418/code=-1003 이 들어 있어 rate limit 으로 오인되면,
+    #   워커가 ban 을 now+60s 로 계속 재기록 → 실제 IP ban 이 풀린 뒤에도
+    #   최대 60초 더 막히는 되먹임이 생긴다. 거래소가 준 신호만 신뢰한다.
+    if getattr(exc, "locally_suppressed", False):
+        return None
+
     msg = str(exc)
     status_match = _STATUS_RE.search(msg)
     code_match = _CODE_RE.search(msg)
@@ -104,6 +111,13 @@ def parse_account_invalid_error(exc: Exception) -> Optional[int]:
         - ban 만료 ms epoch (now + ACCOUNT_INVALID_COOLDOWN_SECONDS)
         - None — account-invalid 아님 (다른 에러)
     """
+    # 🚨 Fix 119 (2026-08-26): 우리 회로 차단기(Fix 116)가 만든 합성 예외는 무시!
+    #   그 문구에 status=418/code=-1003 이 들어 있어 rate limit 으로 오인되면,
+    #   워커가 ban 을 now+60s 로 계속 재기록 → 실제 IP ban 이 풀린 뒤에도
+    #   최대 60초 더 막히는 되먹임이 생긴다. 거래소가 준 신호만 신뢰한다.
+    if getattr(exc, "locally_suppressed", False):
+        return None
+
     msg = str(exc)
     code_match = _CODE_RE.search(msg)
     code = int(code_match.group(1)) if code_match else None

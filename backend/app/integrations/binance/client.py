@@ -27,11 +27,26 @@ logger = logging.getLogger(__name__)
 class BinanceAPIError(Exception):
     """Raised when the Binance API returns an error response or HTTP failure."""
 
-    def __init__(self, message: str, *, status_code: int | None = None, code: int | None = None, payload: Any | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        code: int | None = None,
+        payload: Any | None = None,
+        locally_suppressed: bool = False,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.payload = payload
+        # 🚨 Fix 119: 이 예외가 「거래소 응답」이 아니라 「우리 회로 차단기가 만든 것」인지.
+        #   Fix 116 의 합성 예외 문구에 status=418/code=-1003 이 들어 있어서
+        #   parse_rate_limit_error 가 이를 '새 rate limit' 으로 오인 →
+        #   워커가 maybe_record_ban_from_exc 로 계정 ban 을 now+60s 로 계속 갱신 →
+        #   실제 IP ban 이 풀린 뒤에도 최대 60초 더 막히는 되먹임이 생긴다.
+        #   parse_* 가 이 플래그를 보고 무시하게 한다.
+        self.locally_suppressed = locally_suppressed
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -487,6 +502,7 @@ class BinanceClient:
                 f"({_ban_left // 1000}s left). Fix116 circuit breaker.",
                 status_code=418,
                 code=-1003,
+                locally_suppressed=True,      # Fix 119: ban 재기록 되먹임 차단
             )
 
         start = time.perf_counter()
