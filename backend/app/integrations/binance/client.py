@@ -149,13 +149,16 @@ def estimate_weight(endpoint: str, params: dict | None = None) -> int:
     return _ENDPOINT_WEIGHT.get(endpoint, 1)
 
 
-def _add_weight(endpoint: str, params: dict | None = None) -> int:
-    """이번 분 누적 weight 에 더하고 누적값 반환. 실패 시 0(=차단 안 함)."""
+def _add_weight(endpoint: str, params: dict | None = None, sign: int = 1) -> int:
+    """이번 분 누적 weight 에 sign 배로 더하고 누적값 반환. 실패 시 0(=차단 안 함).
+
+    sign=-1 은 차단된 요청의 weight 를 되돌릴 때 사용 (Fix 127).
+    """
     try:
         from app.core.redis_client import get_redis_client
         r = get_redis_client()
         key = _WEIGHT_KEY.format(minute=time.strftime("%Y%m%d%H%M", time.gmtime()))
-        total = int(r.incrby(key, estimate_weight(endpoint, params)))
+        total = int(r.incrby(key, sign * estimate_weight(endpoint, params)))
         r.expire(key, _WEIGHT_TTL_SEC)
         return total
     except Exception:
@@ -645,6 +648,14 @@ class BinanceClient:
         # 🚨 Fix 124: weight 거버너 — 스캔 호출만 차단, 주문/포지션은 항상 통과
         _wtotal = _add_weight(path, params)
         if path in _SCAN_ENDPOINTS and _wtotal > SCAN_WEIGHT_BUDGET_PER_MIN:
+            # 🚨 Fix 127 (2026-08-26): 차단한 요청의 weight 는 되돌린다!
+            #   옛: _add_weight 를 판정보다 먼저 불러 「차단된 요청」까지 누적 →
+            #       카운터가 부풀고 → 더 많이 차단하고 → 더 부푸는 악순환.
+            #   사장님 실측: 실제 전송 426회/분(≈450 weight, 한도의 19%)인데
+            #       표본이 2135 까지 치솟고 스캔의 18%(274건)가 잘못 차단됨.
+            #       = 안전장치가 오히려 매매 판정용 지표를 결손시키고 있었다.
+            #   신: 거래소로 「실제 나간」 요청만 센다.
+            _add_weight(path, params, sign=-1)
             binance_api_requests_total.labels(
                 endpoint=path, method=method, status="weight_throttled",
             ).inc()
