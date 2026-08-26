@@ -1526,3 +1526,45 @@ def reset_api_ban_endpoint(
         "cleared": True,
         "note": "워커들이 다음 cycle(최대 30초)부터 정상 동작합니다.",
     }
+
+
+@router.get("/diagnostic/binance-load")
+def get_binance_load(
+    minutes: int = 5,
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🎯 Fix 118: Binance REST 호출량 실측 (모든 컨테이너 합산).
+
+    Prometheus 는 uvicorn 을 띄우는 api 컨테이너만 긁는다 — 정작 호출을 쏟아내는
+    scheduler 는 /metrics 가 없어 「어느 엔드포인트가 얼마나 쓰는지」 볼 수 없었다.
+    IP ban(418) 원인 추적 / 워커 주기 조정 판단에 사용.
+    """
+    from app.integrations.binance.client import (
+        get_request_counts, get_ip_ban_remaining_sec,
+    )
+    data = get_request_counts(minutes)
+    # Binance USD-M weight 근사 (엔드포인트별)
+    weight_map = {
+        "/fapi/v1/ticker/24hr": 40,   # symbol 없는 전체 조회 기준 (최악값)
+        "/fapi/v1/klines": 2,
+        "/fapi/v2/positionRisk": 5,
+        "/fapi/v2/account": 5,
+        "/fapi/v2/balance": 5,
+        "/fapi/v1/openOrders": 40,
+    }
+    est_weight = 0
+    for ep, n in (data.get("by_endpoint") or {}).items():
+        est_weight += weight_map.get(ep, 1) * n
+    per_min_weight = round(est_weight / max(1, minutes), 1)
+    return {
+        **data,
+        "est_weight_total": est_weight,
+        "est_weight_per_minute": per_min_weight,
+        "binance_limit_per_minute": 2400,
+        "usage_pct": round(per_min_weight / 2400 * 100, 1),
+        "ip_ban_remaining_sec": get_ip_ban_remaining_sec(),
+        "note": (
+            "weight 는 근사치입니다 (ticker 는 전체 조회 40 기준 = 최악값). "
+            "usage_pct 가 50%% 를 넘으면 워커 주기/심볼 수를 줄이는 것을 검토하십시오."
+        ),
+    }

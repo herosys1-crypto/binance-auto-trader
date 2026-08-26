@@ -49,6 +49,61 @@ _IP_BAN_REDIS_KEY = "api_backoff:ip:ban_until_ms"
 #   (티커를 가격 fallback 으로 쓰는 경로는 mark_price 결손 시의 최후 수단이라 허용)
 _TICKER_ALL_KEY = "binance:ticker24h:all"
 _TICKER_ALL_TTL_SEC = 30
+
+# 🎯 Fix 118 (2026-08-26): REST 호출량 실측 계측
+#   배경: Prometheus 는 uvicorn 을 띄우는 api 컨테이너만 긁는다. 정작 호출을
+#   쏟아내는 scheduler 컨테이너는 /metrics 를 노출하지 않아 「어느 엔드포인트가
+#   얼마나 쓰는지」를 볼 방법이 아예 없었다 → IP ban 원인을 추측으로만 좁혀야 했음.
+#   분 단위 버킷 해시에 endpoint 별 카운트 (요청당 HINCRBY 1회, 15분 보관).
+#   Redis 장애/지연 시에는 조용히 skip = 거래 경로에 영향 없음.
+_REQ_COUNT_KEY = "binance:reqcount:{minute}"
+_REQ_COUNT_TTL_SEC = 900
+
+
+def _count_request(endpoint: str, status: str) -> None:
+    """엔드포인트별 호출 수 집계 (실패해도 무시)."""
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+        minute = time.strftime("%Y%m%d%H%M", time.gmtime())
+        key = _REQ_COUNT_KEY.format(minute=minute)
+        r.hincrby(key, f"{endpoint}|{status}", 1)
+        r.expire(key, _REQ_COUNT_TTL_SEC)
+    except Exception:
+        pass
+
+
+def get_request_counts(minutes: int = 5) -> dict:
+    """최근 N분 endpoint 별 호출 수 합계 — 운영 진단용.
+
+    Returns: {"minutes": N, "total": int, "by_endpoint": {ep: count}, "by_status": {...}}
+    """
+    out_ep: dict[str, int] = {}
+    out_st: dict[str, int] = {}
+    total = 0
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+        now = time.time()
+        for i in range(max(1, minutes)):
+            minute = time.strftime("%Y%m%d%H%M", time.gmtime(now - i * 60))
+            h = r.hgetall(_REQ_COUNT_KEY.format(minute=minute)) or {}
+            for k, v in h.items():
+                k = k.decode() if isinstance(k, bytes) else k
+                n = int(v.decode() if isinstance(v, bytes) else v)
+                ep, _, st = k.partition("|")
+                out_ep[ep] = out_ep.get(ep, 0) + n
+                out_st[st] = out_st.get(st, 0) + n
+                total += n
+    except Exception as e:
+        return {"error": str(e), "minutes": minutes, "total": 0, "by_endpoint": {}}
+    return {
+        "minutes": minutes,
+        "total": total,
+        "per_minute": round(total / max(1, minutes), 1),
+        "by_endpoint": dict(sorted(out_ep.items(), key=lambda x: -x[1])),
+        "by_status": out_st,
+    }
 _ip_ban_until_ms_local: int = 0          # 프로세스 로컬 캐시
 _ip_ban_redis_checked_at: float = 0.0    # Redis 재확인 쓰로틀 (초)
 _IP_BAN_REDIS_RECHECK_SEC = 5.0
@@ -425,6 +480,7 @@ class BinanceClient:
             binance_api_requests_total.labels(
                 endpoint=path, method=method, status="ip_banned_skip",
             ).inc()
+            _count_request(path, "ip_banned_skip")   # Fix 118
             raise BinanceAPIError(
                 f"Binance API error: status=418, code=-1003, "
                 f"msg=IP ban active — request suppressed locally "
@@ -460,6 +516,8 @@ class BinanceClient:
             elapsed = time.perf_counter() - start
             binance_api_requests_total.labels(endpoint=path, method=method, status=status_label).inc()
             binance_api_request_latency_seconds.labels(endpoint=path, method=method).observe(elapsed)
+            # Fix 118: scheduler 컨테이너는 /metrics 가 없으므로 Redis 로도 집계
+            _count_request(path, status_label)
 
     @staticmethod
     def _raise_for_error(response: requests.Response) -> None:
