@@ -302,6 +302,10 @@ def run_stage_trigger_once(decrypt_text) -> None:
             {t.id: t for t in db.query(StrategyTemplate).filter(StrategyTemplate.id.in_(template_ids)).all()}
             if template_ids else {}
         )
+        # 🎯 Fix 121 (2026-08-26 헌법 80): 완료 로그가 아예 없어서
+        #   「정상인데 발동 조건 미달」과 「워커 사망」을 구별할 수 없었다.
+        #   사장님이 Fix 113/114 검증하려고 로그를 봤는데 아무것도 없었음.
+        _stat = {"rows": len(rows), "scanned": 0, "fired": 0, "banned": 0, "err": 0}
         # 2026-05-17 rate limit ban 스파이럴 사후: account 별 ban skip (tp_sl 와 동일 패턴).
         _banned_accounts: set[int] = set()
         for strategy, account in rows:
@@ -310,7 +314,9 @@ def run_stage_trigger_once(decrypt_text) -> None:
             if is_account_banned(account.id):
                 _banned_accounts.add(account.id)
                 logger.info("[stage-trigger] API ban active account=%s — skip cycle", account.id)
+                _stat["banned"] += 1
                 continue
+            _stat["scanned"] += 1
             next_stage_no: int | None = None  # 2026-06-01: try 진입 전 명시 (except 분기에서 안전 참조)
             try:
                 # 🚨 2026-08-10 v131 사장님 critical (#828 TSTUSDT 사례!):
@@ -785,6 +791,7 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     f"{strategy.symbol} {strategy.side} (mark={mark} {'>=' if strategy.side == 'SHORT' else '<='} trig={trigger})"
                 )
                 exec_service.trigger_next_stage(strategy.id, next_stage_no)
+                _stat["fired"] += 1
                 # 🌟 v18 fix: 정상 진입 = block_reason 정리 (= 화면 알림 해소)
                 _clear_block_reason(_redis, strategy.id)
 
@@ -847,6 +854,7 @@ def run_stage_trigger_once(decrypt_text) -> None:
                         except Exception:
                             pass
                     continue  # 일반 「시스템 오류」 spam 알림 안 보냄
+                _stat["err"] += 1
                 logger.exception(f"[stage-trigger] failed for strategy #{strategy.id}: {e}")
                 try:
                     NotificationService(db).send_system_alert(
@@ -855,5 +863,10 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     )
                 except Exception:
                     pass
+        # 🎯 Fix 121: 완료 로그 (헌법 80 = 무로그 종료 금지)
+        logger.info(
+            "[stage-trigger] 완료: 활성=%d 검사=%d 발동=%d ban_skip=%d 오류=%d",
+            _stat["rows"], _stat["scanned"], _stat["fired"], _stat["banned"], _stat["err"],
+        )
     finally:
         db.close()
