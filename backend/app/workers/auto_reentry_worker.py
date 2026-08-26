@@ -103,6 +103,36 @@ def run_auto_reentry_once(decrypt_text: Callable[[str], str]) -> None:
                 logger.info("auto_reentry: skip strategy %s — API ban active account=%s", strategy.id, account.id)
                 continue
 
+            # ══════════════════════════════════════════════════════════════
+            # 🚨 Fix 172 (2026-08-26): 이 워커만 동시보유 상한을 지나지 않았다.
+            #
+            # create_strategy_instance 를 직접 호출해 **새 전략 = 새 동시 포지션**을
+            # 만드는데, check_position_slot 검사가 없어 사장님이 상한을 0 으로 두어도
+            # 재진입은 계속 들어갔다. 자동 진입 워커 7개 중 유일한 구멍이었다.
+            #
+            # 루프 **안**에서 검사한다 (헌법 119): 루프 밖에서 한 번만 재면
+            # 이 루프가 만드는 건들끼리도, 동시에 도는 다른 워커와도 예산이 겹친다.
+            #
+            # ⚠️ ban 처리와 같은 이유로 REENTRY_FAILED 로 마킹하지 않는다 —
+            #    일시적인 상한 도달 때문에 재진입 기회를 영구히 잃으면 안 된다.
+            #    상한이 풀리면 다음 cycle(60초)에 그대로 재시도된다.
+            # ══════════════════════════════════════════════════════════════
+            try:
+                from app.services.position_limit import check_position_slot
+                _slot_ok, _slot_why, _act, _cap = check_position_slot(db, "auto_reentry")
+            except Exception as _slot_e:
+                # 검사 실패 = 진입 보류 (자본을 늘리는 방향이므로 fail-SAFE)
+                logger.error(
+                    "auto_reentry: strategy %s 상한 검사 실패 → 보류: %s", strategy.id, _slot_e,
+                )
+                continue
+            if not _slot_ok:
+                logger.warning(
+                    "auto_reentry: ⛔ Fix172 skip strategy %s (%s %s) — %s",
+                    strategy.id, strategy.symbol, strategy.side, _slot_why,
+                )
+                continue
+
             # 현재가 → 새 start_price
             current_price = _fetch_current_price(strategy.symbol, account.is_testnet)
             if current_price is None:

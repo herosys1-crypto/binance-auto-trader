@@ -429,6 +429,14 @@ def detect_orphan_exchange_positions(
                 symbol = p.get("symbol")
                 position_side = p.get("positionSide")
                 # DB 에 매칭 active strategy 가 있는지 확인
+                #
+                # ⚠️ Fix 171 검토 (2026-08-26): 여기엔 is_archived 필터를 **일부러 넣지 않는다**.
+                # 헌법 108 은 ACTIVE_LIKE 쿼리에 is_archived=False 를 요구하지만,
+                # 그 원칙의 목적은 「보관된 전략이 슬롯/심볼을 점유하지 못하게」다.
+                # 이 쿼리는 정반대 방향이다 — **고아인지 판정하는 매칭**이라
+                # 필터를 좁히면 매칭이 줄어 **false orphan 이 늘고 계정 전체 Kill-Switch 가
+                # 더 자주 걸린다.** (헌법 117 = 같은 패턴이라도 호출부 전제가 다르면 처리도 다르다.)
+                # 나머지 8곳은 Fix 171 에서 필터를 추가했고 여기만 남긴 것은 의도다.
                 match = db.execute(
                     select(StrategyInstance)
                     .where(StrategyInstance.exchange_account_id == acc.id)

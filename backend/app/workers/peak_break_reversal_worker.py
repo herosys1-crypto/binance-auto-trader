@@ -508,6 +508,7 @@ def _get_active_short_strategies(db):
     return db.query(StrategyInstance).filter(
         StrategyInstance.side == "SHORT",
         StrategyInstance.status.in_(list(ACTIVE_LIKE)),
+        StrategyInstance.is_archived.is_(False),  # Fix 171: 보관 전략에 발주 금지
         StrategyInstance.current_stage >= 1
     ).all()
 
