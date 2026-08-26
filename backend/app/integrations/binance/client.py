@@ -42,6 +42,13 @@ class BinanceAPIError(Exception):
 # 2차 = Redis (컨테이너 여러 개 = scheduler / api / user-stream 공유)
 # ═══════════════════════════════════════════════════════════════════════════
 _IP_BAN_REDIS_KEY = "api_backoff:ip:ban_until_ms"
+
+# 🎯 Fix 117: 전 심볼 24h 티커 공유 캐시 (weight 40 짜리 호출을 워커들이 공유)
+#   TTL 30s: 가장 무거운 소비자가 30초 주기 워커 3개라 TTL<30 이면 대부분 miss.
+#   24h 롤링 변동률이 30초에 의미 있게 바뀌지 않으므로 정확도 손실 없음.
+#   (티커를 가격 fallback 으로 쓰는 경로는 mark_price 결손 시의 최후 수단이라 허용)
+_TICKER_ALL_KEY = "binance:ticker24h:all"
+_TICKER_ALL_TTL_SEC = 30
 _ip_ban_until_ms_local: int = 0          # 프로세스 로컬 캐시
 _ip_ban_redis_checked_at: float = 0.0    # Redis 재확인 쓰로틀 (초)
 _IP_BAN_REDIS_RECHECK_SEC = 5.0
@@ -202,7 +209,38 @@ class BinanceClient:
         params: dict[str, Any] = {}
         if symbol:
             params["symbol"] = symbol.upper()
-        return self._request("GET", "/fapi/v1/ticker/24hr", signed=False, params=params)
+            return self._request("GET", "/fapi/v1/ticker/24hr", signed=False, params=params)
+
+        # ══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 117 (2026-08-26): 전 심볼 티커 = weight 40 → 공유 캐시!
+        #
+        # 사장님 IP ban(418) 재발 방지. 실측: 이 「symbol 없는」 전체 조회를
+        #   12개 워커가 각자 호출하고, 그중 3개(unified_15m / auto_long_bottom /
+        #   realtime_reentry)는 30초마다 → 40 weight × 120회/h × 3 = 14,400 weight/h
+        #   (Binance USD-M 한도는 분당 2,400 weight)
+        #
+        # 24h 롤링 통계는 20초 사이에 의미 있게 변하지 않는다 →
+        # 한 곳(여기)에서 캐시하면 워커 코드 변경 0으로 전체가 혜택 (헌법 6).
+        # symbol 지정 호출(weight 1~2)은 캐시하지 않는다 = 정확도 유지.
+        # ══════════════════════════════════════════════════════════════════
+        import json as _json
+        _r = None
+        try:
+            from app.core.redis_client import get_redis_client
+            _r = get_redis_client()
+            _cached = _r.get(_TICKER_ALL_KEY)
+            if _cached:
+                return _json.loads(_cached.decode() if isinstance(_cached, bytes) else _cached)
+        except Exception:
+            _r = None      # Redis 장애 = 캐시 없이 직접 조회 (기존 동작 유지)
+
+        data = self._request("GET", "/fapi/v1/ticker/24hr", signed=False, params=params)
+        if _r is not None and isinstance(data, list) and data:
+            try:
+                _r.setex(_TICKER_ALL_KEY, _TICKER_ALL_TTL_SEC, _json.dumps(data))
+            except Exception:
+                pass
+        return data
 
     # ------------------------------------------------------------------
     # Account / position
