@@ -1308,7 +1308,31 @@ def run_auto_long_at_bottom_once() -> dict:
                 scanned += 1
                 result = _check_long_entry_conditions(bc, symbol, t)
                 if not result.get("detected"):
-                    _bump("not_detected")
+                    # 🎯 Fix 151: not_detected 는 단일 버킷이라 「어느 게이트가 막았는지」
+                    #   알 수 없었다. 판정 함수가 이미 pattern/reason 을 돌려주므로
+                    #   그걸 버킷 키로 써서 한 번에 원인을 보이게 한다 (헌법 93).
+                    _pat = result.get("pattern")
+                    if _pat:
+                        _bump(f"nd:{_pat}")
+                    else:
+                        _r = str(result.get("reason") or "")
+                        if "extreme_bull" in _r or "정점 위험" in _r:
+                            _bump("nd:extreme_bull")
+                        elif "급등락 아님" in _r:
+                            _bump("nd:not_moving")
+                        elif "BB" in _r:
+                            _bump("nd:bb_gate")
+                        elif "OBV" in _r or "obv" in _r:
+                            _bump("nd:obv")
+                        elif "통과" in _r or "/7" in _r:
+                            _bump("nd:signals_short")   # 7중 조건 미달
+                        else:
+                            _bump("nd:other")
+                            if _reasons.get("nd:other", 0) <= 2:
+                                logger.info(
+                                    "[Fix151] %s not_detected 미분류 사유: %s",
+                                    symbol, _r[:160],
+                                )
                     continue
                 confidence = float(result.get("confidence", 0))
                 if confidence < MIN_CONFIDENCE:
