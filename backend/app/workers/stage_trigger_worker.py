@@ -412,23 +412,49 @@ def run_stage_trigger_once(decrypt_text) -> None:
                         # 🎯 Fix 113: 「청산가 산출 시점에 채움」 = 여기가 그 시점!
                         #   SHORT = 가격이 위로 가며 청산에 접근 → 청산가 살짝 아래에서 진입
                         #   LONG  = 가격이 아래로 가며 청산에 접근 → 청산가 살짝 위에서 진입
+                        # 🚨 Fix 128 (2026-08-26): Fix 113 의 청산가 산출에 2가지 결함
+                        #   (15 에이전트 감사 지적 — 둘 다 실 자본 오발주로 이어짐)
+                        #
+                        # (a) last_liquidation_price 는 「과거에 청산된 가격」이다.
+                        #     stream_service:253 이 청산 체결 시 order.avg_price 를 넣는다.
+                        #     활성 포지션의 「현재 청산가」가 아니므로 fallback 으로 쓰면 안 된다.
+                        #     → 청산 후 재진입 대기(LIQUIDATED_WAITING_RETRY) 일 때만 의미가 있다.
+                        #
+                        # (b) buffer 로 쓴 trigger_percent 의 기본값이 20 이다
+                        #     (DEFAULT_LAST_SHORT_TRIGGER_PCT — 원래 PRICE_UP_PCT 용 값!).
+                        #     SHORT 에서 trigger = 청산가 × 0.8 이면 현재가보다 「아래」로
+                        #     떨어질 수 있고, 그러면 mark >= trigger 가 즉시 참 = 즉시 발주!
+                        #     → buffer 를 1~10% 로 제한하고, 방향 sanity 검사를 추가한다.
                         _liq = None
                         try:
                             _lp = PositionRepository(db).latest_by_strategy(strategy.id)
-                            if _lp and _lp.liquidation_price:
-                                _liq = Decimal(str(_lp.liquidation_price))
-                            elif strategy.last_liquidation_price:
+                            if _lp and _lp.liquidation_price and Decimal(str(_lp.liquidation_price)) > 0:
+                                _liq = Decimal(str(_lp.liquidation_price))   # 거래소 실시간 청산가
+                            elif _is_retry_mode and strategy.last_liquidation_price:
+                                # 청산 후 재진입 대기 상태에서만 「과거 청산가」가 의미를 갖는다
                                 _liq = Decimal(str(strategy.last_liquidation_price))
                         except Exception as _le:
                             logger.warning("[Fix113/liqbuf] #%s 청산가 조회 실패: %s", strategy.id, _le)
                         if not _liq or _liq <= 0:
                             _record_block_reason(
                                 _redis, strategy.id,
-                                f"단계{next_stage_no} LIQUIDATION_BUFFER: 청산가 미확보 (거래소 동기화 대기)",
+                                f"단계{next_stage_no} LIQUIDATION_BUFFER: 현재 청산가 미확보 "
+                                f"(Position.liquidation_price 동기화 대기)",
                                 next_stage_no,
                             )
                             continue
-                        _buf_pct = Decimal(str(getattr(next_plan, "trigger_percent", None) or 5))
+                        # buffer 는 「청산가 코앞」을 뜻한다 = 1~10% 로 제한 (기본 5%)
+                        try:
+                            _buf_raw = Decimal(str(getattr(next_plan, "trigger_percent", None) or 5))
+                        except Exception:
+                            _buf_raw = Decimal("5")
+                        _buf_pct = min(max(_buf_raw, Decimal("1")), Decimal("10"))
+                        if _buf_pct != _buf_raw:
+                            logger.warning(
+                                "[Fix128/liqbuf] #%s buffer %s%% → %s%% 로 제한 "
+                                "(trigger_percent 는 원래 PRICE_*_PCT 용 값이라 그대로 쓰면 위험!)",
+                                strategy.id, _buf_raw, _buf_pct,
+                            )
                         if strategy.side == "SHORT":
                             _trigger_px = _liq * (Decimal("1") - _buf_pct / Decimal("100"))
                         else:
@@ -437,6 +463,35 @@ def run_stage_trigger_once(decrypt_text) -> None:
                             "[Fix113/liqbuf] #%s %s 단계%d trigger 산출: 청산가=%s buffer=%s%% → %s",
                             strategy.id, strategy.side, next_stage_no, _liq, _buf_pct, _trigger_px,
                         )
+                        # 🚨 Fix 128 방향 sanity: 「아직 도달하지 않은 가격」이어야 한다.
+                        #   SHORT 는 가격이 올라가며 청산에 접근 → trigger 는 현재가보다 위,
+                        #   LONG 은 내려가며 접근 → trigger 는 현재가보다 아래여야 한다.
+                        #   아니면 계산이 무의미한 상태 = 즉시 발주 위험 → 차단!
+                        _mark_now = None
+                        try:
+                            from app.services.mark_price_cache import get_mark_price as _gmp
+                            _m = _gmp(strategy.symbol)
+                            if _m:
+                                _mark_now = Decimal(str(_m))
+                        except Exception:
+                            _mark_now = None
+                        if _mark_now and _mark_now > 0:
+                            _wrong_side = (
+                                (strategy.side == "SHORT" and _trigger_px <= _mark_now)
+                                or (strategy.side == "LONG" and _trigger_px >= _mark_now)
+                            )
+                            if _wrong_side:
+                                _reason128 = (
+                                    f"단계{next_stage_no} LIQUIDATION_BUFFER 즉시발주 방지: "
+                                    f"trigger={_trigger_px} 가 현재가({_mark_now}) 반대편 "
+                                    f"(청산가={_liq} buffer={_buf_pct}%) = 계산 무의미 → 차단"
+                                )
+                                logger.warning("[Fix128/liqbuf] #%s %s", strategy.id, _reason128)
+                                _record_block_reason(_redis, strategy.id, _reason128, next_stage_no)
+                                _alert_silent_block_once(
+                                    _redis, db, strategy, _reason128, next_stage_no,
+                                )
+                                continue
                     elif _is_retry_mode or _is_obv_mode:
                         # 가격 트리거 불필요 = 통과! (아래 모드 분기에서 실제 판정)
                         logger.info(
