@@ -189,6 +189,11 @@ def run_success_pyramiding() -> dict:
         used = _count_used_slots(db)     # 참고 로그용
         remaining = _cap - _act
         if remaining <= 0:
+            # Fix 139: 무로그 return 금지 (헌법 80)
+            logger.info(
+                "[success_pyramiding] SKIP: 동시보유 여유 없음 %d/%d (오늘 신규 %d)",
+                _act, _cap, used,
+            )
             return {
                 "note": f"동시보유 {_act}/{_cap} (오늘 신규 {used})",
                 "entered": 0,

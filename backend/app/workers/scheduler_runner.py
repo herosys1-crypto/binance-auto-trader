@@ -87,16 +87,45 @@ def start_scheduler() -> None:
     hb_thread.start()
     print("[scheduler] heartbeat thread started")
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # 🚨 Fix 139 (2026-08-26): guarded_job 의 무로그 return 2개 (헌법 80)
+    #
+    # 사장님 "이익일때 추가 300씩 두번 진입도 하는거지?" 를 확인하려는데
+    # success_pyramiding 로그가 한 줄도 없었다. 워커 자체는 등록돼 있는데도.
+    #
+    # 원인: 아래 두 return 이 아무 로그를 남기지 않는다.
+    #   (1) refresh_leader 실패 = 이 컨테이너가 리더가 아님
+    #   (2) acquire_job_lock 실패 = 이전 실행이 아직 락을 쥐고 있음
+    # success_pyramiding 은 락 TTL 25s / 주기 30s 라, 한 번이라도 25초를 넘기면
+    # 그 뒤로 계속 건너뛸 수 있고 「워커가 죽었는지 조용한지」 구별이 불가능하다.
+    # 이 클래스의 침묵이 이번 세션에서만 4번 나왔다 (Fix 103/109/121/138).
+    #
+    # 매 skip 마다 로그하면 41개 job × 고빈도 = spam 이므로,
+    # 「연속 skip 횟수」를 세어 처음과 20회마다만 남긴다 (지속 이상만 눈에 띄게).
+    # ═══════════════════════════════════════════════════════════════════════
+    _skip_streak: dict[str, int] = {}
+
+    def _note_skip(job_name: str, why: str) -> None:
+        n = _skip_streak.get(job_name, 0) + 1
+        _skip_streak[job_name] = n
+        if n == 1 or n % 20 == 0:
+            logger.warning(
+                "[scheduler] job '%s' 건너뜀 (%s) — 연속 %d회", job_name, why, n,
+            )
+
     def guarded_job(job_name: str, ttl_seconds: int, fn):
         def _wrapped():
             if not guard.refresh_leader():
                 scheduler_leader_status.set(0)
                 _set_scheduler_health(False, redis_client)
+                _note_skip(job_name, "리더 아님")
                 return
             scheduler_leader_status.set(1)
             _set_scheduler_health(True, redis_client)  # heartbeat 갱신
             if not guard.acquire_job_lock(job_name, ttl_seconds):
+                _note_skip(job_name, f"락 점유 중 (ttl={ttl_seconds}s)")
                 return
+            _skip_streak.pop(job_name, None)      # 정상 실행 = 연속 카운터 리셋
             fn()
         return _wrapped
 
