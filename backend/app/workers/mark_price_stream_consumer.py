@@ -49,8 +49,68 @@ ACTIVE_STATUS_NOT_IN = frozenset(
 )
 
 
+# 🚨🚨 Fix 104 Layer A (2026-08-26 CRITICAL): 재진입 후보도 구독!
+#
+# 사장님 VPS 실측 (Fix 103 로그로 최초 가시화!):
+#   [RT_REENTRY] 완료: scanned=65 skipped=65 reasons={'no_mark_price': 43, ...}
+#   = 재진입 후보 66%가 mark_price 없어서 지표 판정 전 탈락!
+#
+# 근본 원인 (이 파일!):
+#   ACTIVE_STATUS_NOT_IN 이 STOPPED/CLOSED_BY_SL/REENTRY_READY 를 제외
+#   → _refresh_loop 이 30초마다 UNSUBSCRIBE → set_mark_price 중단
+#   → mark_price:{SYM} TTL 60초 만료 → 키 소멸
+#   → 그런데 재진입 후보 = 정의상 「청산된 심볼」!
+#   → 재진입이 「구조적으로」 영원히 불가능한 상태였음!
+#
+# 해결: 최근 24h 내 청산된 자동 진입 심볼 = 재진입 후보 → 계속 구독 유지!
+#       (realtime_reentry_worker 의 후보 조회 조건과 동일 = 헌법 6 단일 진실!)
+REENTRY_WATCH_HOURS = 24          # 재진입 후보 추적 기간 (worker 와 동일!)
+MAX_WATCH_SYMBOLS = 200           # Binance 단일 연결 1024 스트림 한도 대비 안전 상한
+REENTRY_AUTO_TYPE_PREFIXES = (
+    "auto_bb_break",
+    "sajangnim_top",
+    "sajangnim_bottom",
+    "realtime_reentry",
+    "chart_pattern",
+)
+
+
+def _fetch_reentry_candidate_symbols() -> set[str]:
+    """🚨 Fix 104 Layer A: 최근 24h 청산된 자동 진입 심볼 = 재진입 후보!
+
+    이 심볼들이 markPrice 스트림에서 빠지면 realtime_reentry_worker 가
+    mark_price 를 못 읽어 지표 판정 자체를 못 함 (= 사장님 실측 66% 전멸!).
+
+    fail-open: 조회 실패 시 빈 집합 (기존 활성 구독은 그대로 유지!)
+    """
+    db = SessionLocal()
+    try:
+        from datetime import datetime, timedelta, timezone as _tz
+        from app.core.strategy_status import TERMINAL_STATUSES
+
+        since = datetime.now(_tz.utc) - timedelta(hours=REENTRY_WATCH_HOURS)
+        q = (
+            select(StrategyInstance.symbol)
+            .join(ExchangeAccount, StrategyInstance.exchange_account_id == ExchangeAccount.id)
+            .where(StrategyInstance.status.in_(list(TERMINAL_STATUSES)))
+            .where(StrategyInstance.updated_at >= since)
+            .where(StrategyInstance.is_archived.is_(False))
+            .where(ExchangeAccount.is_active.is_(True))
+        )
+        rows = db.execute(q.limit(MAX_WATCH_SYMBOLS)).scalars().all()
+        return {s.upper() for s in rows if s}
+    except Exception as e:  # fail-open = 활성 구독은 절대 방해 X!
+        logger.warning("[Fix104/LayerA] 재진입 후보 조회 실패 (활성만 구독): %s", e)
+        return set()
+    finally:
+        db.close()
+
+
 def _fetch_active_symbols() -> set[str]:
-    """현재 보유 중인 strategy 의 심볼 집합 (대문자). 활성 거래소 계정만."""
+    """구독 대상 심볼 집합 (대문자). 활성 거래소 계정만.
+
+    🚨 Fix 104 Layer A: 활성 보유 심볼 + 재진입 후보(최근 24h 청산) 합집합!
+    """
     db = SessionLocal()
     try:
         rows = db.execute(
@@ -60,9 +120,29 @@ def _fetch_active_symbols() -> set[str]:
             .where(StrategyInstance.is_archived.is_(False))
             .where(ExchangeAccount.is_active.is_(True))
         ).scalars().all()
-        return {s.upper() for s in rows if s}
+        active = {s.upper() for s in rows if s}
     finally:
         db.close()
+
+    # 🚨 Fix 104 Layer A: 재진입 후보 합집합!
+    reentry = _fetch_reentry_candidate_symbols()
+    merged = active | reentry
+
+    if len(merged) > MAX_WATCH_SYMBOLS:
+        # 활성은 절대 절단 X = 재진입 후보만 절단 (silent 금지 = 반드시 로그!)
+        allow = MAX_WATCH_SYMBOLS - len(active)
+        trimmed = set(sorted(reentry - active)[:max(0, allow)])
+        logger.warning(
+            "[Fix104/LayerA] 구독 상한 초과: 활성 %d + 재진입 %d = %d > %d → 재진입 %d건 절단!",
+            len(active), len(reentry), len(merged), MAX_WATCH_SYMBOLS, len(reentry) - len(trimmed),
+        )
+        merged = active | trimmed
+
+    logger.info(
+        "[Fix104/LayerA] markPrice 구독 대상: 활성 %d + 재진입후보 %d = %d",
+        len(active), len(merged) - len(active), len(merged),
+    )
+    return merged
 
 
 class MarkPriceStreamConsumer:

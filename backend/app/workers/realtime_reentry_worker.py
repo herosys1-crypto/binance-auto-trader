@@ -527,6 +527,97 @@ def _get_base_capital_from_instance(si: StrategyInstance) -> float:
     return 500.0
 
 
+# 🚨🚨 Fix 104 (2026-08-26): mark_price 결손 = 재진입 구조적 전멸! → 배치 ticker fallback!
+#
+# 사장님 VPS 실측 (Fix 103 로그):
+#   reasons={'no_mark_price': 43, 'already_active': 22}
+#   = 재진입 후보 66%가 mark_price Redis 키 없어서 탈락!
+#   = 지표 조건 판정까지 도달한 심볼 0건!
+#
+# 근본 원인 (mark_price_stream_consumer.py):
+#   ACTIVE_STATUS_NOT_IN 이 STOPPED/CLOSED_BY_SL/REENTRY_READY 등을 제외
+#   → _refresh_loop 이 30초마다 UNSUBSCRIBE → set_mark_price 중단 → TTL 60초 만료
+#   → 청산된 심볼(= 정확히 재진입 후보!) = Redis 키 영구 소멸!
+#   → 재진입이 「구조적으로」 영원히 불가능한 상태였음!
+#
+# 해결: 전 심볼 ticker 1회 배치 조회 (43 calls → 1 call = rate limit 안전!)
+FIX104_PRICE_FIELDS = ("lastPrice", "markPrice", "price")
+
+
+def _build_price_fallback_map(bc) -> dict[str, float]:
+    """🚨 Fix 104: 전 심볼 현재가 1회 배치 조회 = mark_price 결손 대비!
+
+    bc.get_24hr_ticker() 를 **심볼 인자 없이** 호출 = 전 심볼 한 번에!
+    (후보 43개를 개별 조회하면 43 calls / 배치는 1 call = rate limit 안전!)
+
+    실패 시 = 빈 dict = fallback 없이 기존 동작 유지 (fail-safe!).
+    """
+    if bc is None:
+        return {}
+    try:
+        rows = bc.get_24hr_ticker()   # symbol 인자 없음 = 전 심볼!
+        if not isinstance(rows, list):
+            logger.warning(
+                "[Fix104] ticker 배치 응답이 list 아님 (%s) = fallback 없이 진행!",
+                type(rows).__name__,
+            )
+            return {}
+        out: dict[str, float] = {}
+        for r in rows:
+            try:
+                if not isinstance(r, dict):
+                    continue
+                sym = str(r.get("symbol") or "").strip().upper()
+                if not sym:
+                    continue
+                px = 0.0
+                for _f in FIX104_PRICE_FIELDS:
+                    _v = r.get(_f)
+                    if _v not in (None, "", "0"):
+                        px = float(_v)
+                        if px > 0:
+                            break
+                if px > 0:
+                    out[sym] = px
+            except Exception:
+                continue
+        logger.info(
+            "[Fix104] ticker 배치 조회 성공: %d 심볼 가격 확보 (1 API call!)", len(out),
+        )
+        return out
+    except Exception as e:
+        logger.warning("[Fix104] ticker 배치 조회 실패 (fallback 없이 진행): %s", e)
+        return {}
+
+
+def _make_mainnet_client(db: Session):
+    """🚨 Fix 104: mainnet BinanceClient 생성 (배치 ticker 전용, 없으면 None).
+
+    fail-safe = 계정 없음/복호화 실패 = None 반환 = fallback 없이 기존 동작 유지!
+    """
+    try:
+        from app.core.crypto import decrypt_text
+        from app.integrations.binance.client import BinanceClient
+        from app.models.exchange_account import ExchangeAccount
+
+        acc = db.execute(
+            select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
+        ).scalar_one_or_none()
+        if not acc:
+            logger.warning(
+                "[Fix104] mainnet ExchangeAccount 없음 = ticker fallback 불가!",
+            )
+            return None
+        return BinanceClient(
+            api_key=decrypt_text(acc.api_key_enc),
+            api_secret=decrypt_text(acc.api_secret_enc),
+            is_testnet=False,
+        )
+    except Exception as e:
+        logger.warning("[Fix104] mainnet client 생성 실패 = fallback 불가: %s", e)
+        return None
+
+
 def run_realtime_reentry() -> dict:
     """매 30초 = 실시간 재진입 감지!
 
@@ -546,6 +637,13 @@ def run_realtime_reentry() -> dict:
     results: list[dict] = []
     skip_reasons: dict[str, int] = {}
 
+    # 🚨 Fix 104 (2026-08-26): mark_price 결손 대비 배치 ticker fallback!
+    # ※ 반드시 함수 최상단 초기화! (_finish 가 이 값을 읽는데, 조기 return 경로가
+    #   루프 시작 전에 _finish 를 호출 = 미초기화 시 NameError!)
+    price_fallback: dict[str, float] | None = None  # lazy = 결손 없으면 API 호출 0회!
+    fallback_bc = None                               # lazy = 결손 없으면 client 생성 X!
+    fallback_used = 0                                # fallback 적중 건수 (완료 로그!)
+
     def _bump(reason: str) -> None:
         """🎯 Fix 103 A: skip 사유 집계 = 완료 로그 1줄로 원인 판정!"""
         skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
@@ -560,6 +658,8 @@ def run_realtime_reentry() -> dict:
             "entered": entered_fail + entered_success,
             "skipped": skipped,
             "skip_reasons": dict(skip_reasons),
+            # 🚨 Fix 104: fallback 작동 여부 = 로그/응답 1줄로 확인!
+            "fallback_px": fallback_used,
             "note": note,
             "spec": _gate_spec(),
             "results": results,
@@ -568,9 +668,9 @@ def run_realtime_reentry() -> dict:
         _log = getattr(logger, level, logger.warning)
         _log(
             "[RT_REENTRY] 완료: scanned=%d candidates=%d reentered=%d "
-            "(fail=%d success=%d) skipped=%d note=%s reasons=%s spec=%s",
+            "(fail=%d success=%d) skipped=%d fallback_px=%d note=%s reasons=%s spec=%s",
             scanned, candidates, entered_fail + entered_success,
-            entered_fail, entered_success, skipped,
+            entered_fail, entered_success, skipped, fallback_used,
             note, (skip_reasons or "-"), _gate_spec(),
         )
         return payload
@@ -698,31 +798,62 @@ def run_realtime_reentry() -> dict:
 
             # mark_price 조회!
             # 🎯 Fix 103 A: 옛 = 3개 경로 모두 무로그 continue = 「후보인데 왜 사라졌나」 불명!
+            # 🚨 Fix 104 (2026-08-26): Redis 결손 = 청산 심볼 = 재진입 후보 66% 전멸!
+            #    → 실패 시 즉시 continue 하지 않고 배치 ticker fallback 을 먼저 시도!
+            #    (skip 사유는 「최종 실패」 시에만 1회 집계 = Fix 103 카운터 왜곡 방지!)
+            mark_price: float | None = None
+            _mp_issue = "no_mark_price"
             try:
                 mp_raw = redis.get(f"mark_price:{symbol}")
-                if not mp_raw:
-                    skipped += 1
-                    _bump("no_mark_price")
-                    logger.info(
-                        "[RT_REENTRY] skip: %s %s mark_price Redis 키 없음! (mark_price:%s)",
-                        symbol, side, symbol,
-                    )
-                    continue
-                mp = float(mp_raw.decode() if isinstance(mp_raw, bytes) else mp_raw)
-                if mp <= 0:
-                    skipped += 1
-                    _bump("mark_price_nonpositive")
-                    logger.warning(
-                        "[RT_REENTRY] skip: %s %s mark_price<=0 (%s)", symbol, side, mp,
-                    )
-                    continue
+                if mp_raw:
+                    _mp_val = float(mp_raw.decode() if isinstance(mp_raw, bytes) else mp_raw)
+                    if _mp_val > 0:
+                        mark_price = _mp_val
+                    else:
+                        _mp_issue = "mark_price_nonpositive"
+                        logger.warning(
+                            "[RT_REENTRY] %s %s Redis mark_price<=0 (%s) → Fix104 fallback 시도!",
+                            symbol, side, _mp_val,
+                        )
             except Exception as _mpe:
-                skipped += 1
-                _bump("mark_price_error")
+                _mp_issue = "mark_price_error"
                 logger.warning(
-                    "[RT_REENTRY] skip: %s %s mark_price 파싱 실패: %s", symbol, side, _mpe,
+                    "[RT_REENTRY] %s %s mark_price 파싱 실패 (→ Fix104 fallback 시도): %s",
+                    symbol, side, _mpe,
+                )
+
+            if mark_price is None or mark_price <= 0:
+                # 🚨 Fix 104: Redis 결손 → 전 심볼 ticker 배치 조회 (43 calls → 1 call!)
+                if price_fallback is None:
+                    # lazy 초기화 = 결손 0건이면 API 호출 0회 = rate limit 부담 X!
+                    if fallback_bc is None:
+                        fallback_bc = _make_mainnet_client(db)
+                    price_fallback = _build_price_fallback_map(fallback_bc)
+                # map key = 대문자 정규화 → DB 심볼 표기 흔들려도 적중!
+                _fb_px = price_fallback.get(symbol) or price_fallback.get(
+                    str(symbol).strip().upper()
+                )
+                if _fb_px and _fb_px > 0:
+                    mark_price = float(_fb_px)
+                    fallback_used += 1
+                    logger.info(
+                        "[RT_REENTRY] 🚨 Fix104 fallback 적중: %s %s px=%s "
+                        "(Redis %s → ticker 배치!)",
+                        symbol, side, mark_price, _mp_issue,
+                    )
+
+            if not mark_price or mark_price <= 0:
+                skipped += 1
+                _bump(_mp_issue)
+                logger.info(
+                    "[RT_REENTRY] skip: %s %s 현재가 확보 실패! "
+                    "(Redis mark_price:%s = %s + Fix104 ticker fallback 미적중)",
+                    symbol, side, symbol, _mp_issue,
                 )
                 continue
+
+            # 이후 기존 로직 = mp 변수 그대로 사용! (반등%% 계산 등)
+            mp = mark_price
 
             # 🎯 v218 fix (2026-08-22): 청산가 우선 = 평단 fallback!
             # 이전 = 평단 = 실 청산가와 다름 = 3% 반등 판정 부정확!
