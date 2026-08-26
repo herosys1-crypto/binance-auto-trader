@@ -678,6 +678,13 @@ def run_auto_bb_breakdown() -> dict:
                     "mta_total": it.get("mta_total"),
                     "entered_at": datetime.now(timezone.utc).isoformat(),
                 }
+                # 🎯 Fix 132: 15m/1h/4h 전 지표 병합 (사장님 학습 요구의 원재료)
+                #   기존 키는 덮어쓰지 않음 = 하위 호환 100%
+                try:
+                    from app.services.mtf_snapshot import merge_into as _mtf
+                    entry_snapshot = _mtf(entry_snapshot, None, symbol, side)
+                except Exception as _me:
+                    logger.warning("[Fix132] %s MTF 스냅샷 실패 (진입 계속): %s", symbol, _me)
                 sugg = StrategySuggestion(
                     symbol=symbol, side=side,
                     suggestion_type="bb4h_auto_entry",

@@ -49,6 +49,21 @@ from app.models.system_setting import SystemSetting
 
 logger = logging.getLogger(__name__)
 
+
+def _mtf_merge(snapshot, symbol, side):
+    """🎯 Fix 132: entry_snapshot 에 15m/1h/4h 전 지표를 덧붙인다.
+
+    사장님 요구 = "성공과 실패의 15분 1시간 4시간 차트와 보조지표들의 정확한 수치"
+    기존 키는 절대 덮지 않으며, 실패해도 원본을 그대로 돌려준다 (진입을 막지 않음).
+    """
+    try:
+        from app.services.mtf_snapshot import merge_into
+        return merge_into(snapshot, None, symbol, side)
+    except Exception as e:
+        logger.warning("[Fix132] %s MTF 스냅샷 실패 (진입 계속): %s", symbol, e)
+        return snapshot
+
+
 # ============================================================================
 # SPEC 상수 (Fix 50 v2 = 사장님 verbatim 2 패턴 분기!)
 #   사장님 verbatim 1: "급락한 종목에서 롱을 찾아야지 지금은 급등후에 조정후 상승에 진입이 많은것 같아"
@@ -1043,7 +1058,7 @@ def run_auto_long_at_bottom_once() -> dict:
                         "confidence": confidence,
                         "signals":
                             alert.get("signals") or alert.get("pattern_signals"),
-                        "entry_snapshot": entry_snapshot,
+                        "entry_snapshot": _mtf_merge(entry_snapshot, symbol, "LONG"),
                         "alert_source": alert.get("source"),
                         "pattern": alert.get("pattern"),
                     },

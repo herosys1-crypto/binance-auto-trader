@@ -293,8 +293,19 @@ class ChartAnalyzer:
             except Exception:
                 pass
 
+            # 🎯 Fix 131 (2026-08-26): bb_mid / volumes 반환 추가.
+            #   BB 중단(mid)은 49행에서 이미 계산해놓고 「버리고」 있었다.
+            #   사장님 LONG 시나리오 (3) "급등후 조정 볼밴 중단 지지" 는 bb_mid 없이는
+            #   판정 자체가 불가능하다 = 그 사상이 구현될 수 없었던 이유.
+            #   volumes 도 볼륨 확인(사장님 사상 공통 조건)에 필요하다.
+            #   (기존 키는 그대로 두므로 하위 호환 100%)
+            try:
+                volumes = [float(k[5]) for k in kl]
+            except Exception:
+                volumes = []
             return {
                 "closes": closes,
+                "volumes": volumes,
                 "obv": obv,
                 "rsi_now": rsi_now,
                 "rsi_prev": rsi_prev,
@@ -302,6 +313,7 @@ class ChartAnalyzer:
                 "cci_now": cci[-1] if cci else None,
                 "cci_prev": cci[-2] if len(cci) >= 2 else None,
                 "bb_up_last": up[-1] if up else None,
+                "bb_mid_last": mid[-1] if mid else None,
                 "bb_lo_last": lo[-1] if lo else None,
                 "kl_count": len(kl),
             }
