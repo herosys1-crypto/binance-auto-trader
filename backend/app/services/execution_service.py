@@ -1432,6 +1432,41 @@ class ExecutionService:
                 )
             except Exception as e:
                 logger.error("[add_position v53 PRESERVE] FAILED for #%s: %s", strategy.id, e)
+
+        # ═══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 157 (2026-08-26 사장님 실측): 포지션 추가가 total_capital 을
+        #   갱신하지 않아 투입 자본이 과소 기록되고 있었다.
+        #
+        # 사장님 #1493 ZESTUSDT 실측:
+        #   주문 = 10 + 300 + 300 = 610 USDT 투입 (qty 7857, 평단 0.15514657)
+        #   그런데 total_capital = 324.32
+        #
+        # 「증거금 추가」(lifecycle.py:68-69)는 total_capital 을 올리는데
+        # 「포지션 추가」는 올리지 않는 비대칭이었다.
+        # 사장님 사상 capital = margin 이므로 300 을 투입하면 +300 이 맞다.
+        #
+        # 영향: 매매 자체(SL/ROI)는 avg_entry_price 기준이라 무관하지만,
+        #   자본 노출 계산(calc_reserved_for_account)과 화면 표시가 틀어진다.
+        #   = 사장님이 실제보다 적게 쓰고 있다고 오판할 수 있다.
+        #
+        # ⚠️ MARKET 만 즉시 반영한다. LIMIT 은 미체결/취소 가능성이 있어
+        #   지금 올리면 과대 기록이 된다 (v127 이 mode 처리에서 얻은 교훈과 동일).
+        # ═══════════════════════════════════════════════════════════════════
+        if order_type_u == "MARKET":
+            try:
+                _prev_cap = Decimal(str(strategy.total_capital or 0))
+                strategy.total_capital = _prev_cap + Decimal(str(amount_usdt))
+                logger.info(
+                    "[Fix157] #%s %s total_capital %.2f → %.2f (+%.2f 포지션 추가)",
+                    strategy.id, strategy.symbol,
+                    float(_prev_cap), float(strategy.total_capital), float(amount_usdt),
+                )
+            except Exception as _ce:
+                logger.warning(
+                    "[Fix157] #%s total_capital 갱신 실패 (주문은 정상): %s",
+                    strategy.id, _ce,
+                )
+
         self.db.commit()
         self.db.refresh(order)
         return order
