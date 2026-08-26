@@ -97,6 +97,125 @@ BB_PERIOD = 20                    # BB(20, 2) 표준!
 BB_STD = 2.0
 BB_NEAR_BAND_PCT = 0.10           # 밴드 폭의 10% 이내 = "밴드 근접"!
 
+# 🚨🚨 Fix 103 (2026-08-26): 재진입 = 「신규 진입」 아님! = 마틴게일 2단계!
+# 사장님 verbatim: "손절후 2단계 진입이 없는것 같이 이것도 보조지표를 최대한 활용해"
+#
+# 근본 원인 (진단 결과):
+#  (1) daily_limit = db.get("sajangnim_top_short_daily_limit") 직접 읽기
+#      → row 없음/빈 값 = 0 = 무로그 즉시 return = 워커 전면 OFF! (미호출과 구별 불가!)
+#      → auto_short_at_top/_auto_long_at_bottom 은 fallback 체인 사용 = 대칭 붕괴!
+#  (2) remaining = daily_limit - _count_used_slots(db)
+#      → _count_used_slots = 신규 진입 워커 3종 공유 카운터 (bb4h/top_short/bottom_long)
+#      → 신규 진입이 하루 한도(20)를 채우면 = 재진입(마틴게일 2단계) 도 동반 차단!
+#      → auto_bb_breakdown_worker.py:827 주석은 이미 "손절 재진입 = 별도 카운트!" 라고
+#        선언했으나 코드는 공유 카운터를 그대로 사용 = 선언 ↔ 구현 불일치!
+#
+# Fix 103 C: 재진입 전용 한도 + 전용 카운터 (신규 진입 슬롯 완전 면제!)
+#  - 카운터 = 오늘 RT_REENTRY suggestion 건수만! (신규 진입 무관!)
+#  - 한도 = sajangnim_reentry_daily_limit (전용, 0 = 명시적 OFF 존중!)
+#           → 없으면 sajangnim_top_short_daily_limit / auto_bb_break_daily_limit 값 참조
+#           → 모두 없으면 DEFAULT (20) = row 누락으로 인한 silent OFF 영구 차단!
+REENTRY_DAILY_LIMIT_DEFAULT = 20
+REENTRY_DAILY_LIMIT_KEY = "sajangnim_reentry_daily_limit"   # 전용 키 (0 = 명시 OFF!)
+REENTRY_DAILY_LIMIT_FALLBACK_KEYS = (
+    "sajangnim_top_short_daily_limit",
+    "auto_bb_break_daily_limit",
+)
+
+
+def _gate_spec() -> str:
+    """🎯 Fix 103 B (2026-08-26): 완료 로그에 gate 파라미터 박제!
+
+    매 실행 로그에 현재 임계값을 남겨야 "왜 진입 안 됐나"를 로그만으로 판정 가능!
+    (Fix 99 ↔ Fix 102 완화 이력이 실 운영에 반영됐는지도 즉시 확인!)
+    """
+    return (
+        f"rebound>={REBOUND_PCT_MIN_SAFETY}% wait>={MIN_STOP_WAIT_MINUTES}min "
+        f"vol>={VOLUME_REVERSAL_MULTIPLIER}x pass=2:{MIN_PASSED_STAGE2}/3:{MIN_PASSED_STAGE3}/"
+        f"last:{MIN_PASSED_STAGE_LAST} of8 hourly_max={MAX_HOURLY_REENTRIES} "
+        f"stage3_wait={STAGE3_MIN_WAIT_HOURS}h last_chance={ENABLE_LAST_CHANCE}"
+    )
+
+
+def _get_reentry_daily_limit(db: Session) -> tuple[int, str]:
+    """🚨 Fix 103 C (2026-08-26): 재진입 전용 일일 한도 (silent OFF 영구 차단!)
+
+    옛 (silent bug!):
+        limit_row = db.get(SystemSetting, "sajangnim_top_short_daily_limit")
+        daily_limit = int(limit_row.value) if limit_row and limit_row.value else 0
+        if daily_limit <= 0: return {...}   # ← 무로그! row 누락 = 워커 전면 OFF!
+
+    신 (Fix 103):
+      1) sajangnim_reentry_daily_limit  = 재진입 전용! (0 = 사장님 명시 OFF = 존중!)
+      2) sajangnim_top_short_daily_limit / auto_bb_break_daily_limit = 값만 참조 (>0)
+      3) REENTRY_DAILY_LIMIT_DEFAULT (20) = row 누락 시 fallback!
+         (auto_short_at_top_worker._get_daily_limit 와 동일 패턴 = 헌법 6 대칭!)
+
+    Return: (limit, source_key)
+    """
+    from app.models.system_setting import SystemSetting
+
+    # 1) 전용 키 = 명시값 우선 (0 도 존중 = 사장님 OFF 스위치!)
+    row = None  # except 절에서 참조 = NameError 방지!
+    try:
+        row = db.get(SystemSetting, REENTRY_DAILY_LIMIT_KEY)
+        if row is not None and str(row.value or "").strip():
+            return int(str(row.value).strip()), REENTRY_DAILY_LIMIT_KEY
+    except (TypeError, ValueError) as e:
+        logger.warning(
+            "[RT_REENTRY] ⚠️ %s 파싱 실패 (value=%r) = fallback 진행: %s",
+            REENTRY_DAILY_LIMIT_KEY, getattr(row, "value", None), e,
+        )
+    except Exception as e:  # DB 접근 실패 = 절대 은폐 X!
+        logger.warning("[RT_REENTRY] ⚠️ %s 조회 실패 = fallback 진행: %s", REENTRY_DAILY_LIMIT_KEY, e)
+
+    # 2) 공유 세팅 = 값만 참조 (0 = 신규 진입 OFF 의미 → 재진입은 면제!)
+    for key in REENTRY_DAILY_LIMIT_FALLBACK_KEYS:
+        try:
+            row = db.get(SystemSetting, key)
+            if row and str(row.value or "").strip():
+                v = int(str(row.value).strip())
+                if v > 0:
+                    return v, key
+        except Exception as e:
+            logger.warning("[RT_REENTRY] ⚠️ %s 조회 실패 = 다음 fallback: %s", key, e)
+            continue
+
+    # 3) 최종 fallback = row 누락으로 인한 silent OFF 영구 차단!
+    return REENTRY_DAILY_LIMIT_DEFAULT, "default"
+
+
+def _count_reentry_used_today(db: Session) -> int:
+    """🚨 Fix 103 C (2026-08-26): 재진입 전용 카운터!
+
+    옛: _count_used_slots(db) = 신규 진입 워커 3종 공유 (bb4h/top_short/bottom_long!)
+        → 신규 진입이 하루 20건 채우면 = 마틴게일 2단계까지 동반 차단! (사장님 사상 위배!)
+    신: 오늘 RT_REENTRY suggestion 건수만! (신규 진입 슬롯 완전 면제!)
+
+    기준 시각 = _auto_bb_reset_at (사장님 리셋 존중 = 헌법 6 단일 진실!)
+    """
+    from app.models.strategy_suggestion import StrategySuggestion
+
+    try:
+        from app.api.v1.strategy_suggestions import _auto_bb_reset_at
+        since = _auto_bb_reset_at(db)
+    except Exception as e:
+        # 🚨 절대 은폐 X = 로그 남기고 KST 자정 fallback!
+        logger.warning("[RT_REENTRY] ⚠️ reset_at 조회 실패 = KST 자정 fallback: %s", e)
+        _now = datetime.now(timezone.utc)
+        since = (_now + timedelta(hours=9)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        ) - timedelta(hours=9)
+
+    rows = db.execute(
+        select(StrategySuggestion)
+        .where(StrategySuggestion.status == "EXECUTED")
+        .where(StrategySuggestion.execution_mode == "AUTO")
+        .where(StrategySuggestion.executed_at >= since)
+        .where(StrategySuggestion.reason.like("%RT_REENTRY%"))
+    ).scalars().all()
+    return len(rows)
+
 
 def _check_indicator_reversal_for_reentry(
     bc, symbol: str, side: str, use_4h: bool = True, min_passed: int = 2
@@ -409,29 +528,78 @@ def _get_base_capital_from_instance(si: StrategyInstance) -> float:
 
 
 def run_realtime_reentry() -> dict:
-    """매 15분 = 실시간 재진입 감지!"""
+    """매 30초 = 실시간 재진입 감지!
+
+    🚨 Fix 103 (2026-08-26 사장님 verbatim):
+    "손절후 2단계 진입이 없는것 같이 이것도 보조지표를 최대한 활용해"
+
+    Fix A: 모든 조기 return = logger.warning 필수! (silent return 금지 = 헌법!)
+    Fix B: 함수 끝 = 항상 완료 로그! (매 30초 = 로그 1건 = 살아있음 증명!)
+    Fix C: 재진입 = 신규 진입 daily slot 완전 면제 (마틴게일 2단계 = 신 진입 X!)
+    """
     db: Session = SessionLocal()
     entered_fail = 0
     entered_success = 0
     skipped = 0
+    scanned = 0
+    candidates = 0
     results: list[dict] = []
+    skip_reasons: dict[str, int] = {}
+
+    def _bump(reason: str) -> None:
+        """🎯 Fix 103 A: skip 사유 집계 = 완료 로그 1줄로 원인 판정!"""
+        skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+
+    def _finish(note: str, level: str = "warning", **extra) -> dict:
+        """🚨 Fix 103 A+B: 모든 종료 경로 = 반드시 여기로! (silent return 0건!)"""
+        payload: dict = {
+            "scanned": scanned,
+            "candidates": candidates,
+            "entered_fail_reentry": entered_fail,
+            "entered_success_reentry": entered_success,
+            "entered": entered_fail + entered_success,
+            "skipped": skipped,
+            "skip_reasons": dict(skip_reasons),
+            "note": note,
+            "spec": _gate_spec(),
+            "results": results,
+        }
+        payload.update(extra)
+        _log = getattr(logger, level, logger.warning)
+        _log(
+            "[RT_REENTRY] 완료: scanned=%d candidates=%d reentered=%d "
+            "(fail=%d success=%d) skipped=%d note=%s reasons=%s spec=%s",
+            scanned, candidates, entered_fail + entered_success,
+            entered_fail, entered_success, skipped,
+            note, (skip_reasons or "-"), _gate_spec(),
+        )
+        return payload
+
     try:
-        # 1. daily_limit 체크!
-        from app.models.system_setting import SystemSetting
-        limit_row = db.get(SystemSetting, "sajangnim_top_short_daily_limit")
-        daily_limit = int(limit_row.value) if limit_row and limit_row.value else 0
+        # 1. 🚨 Fix 103 C: 재진입 전용 daily_limit (신규 진입 슬롯 면제!)
+        daily_limit, _limit_src = _get_reentry_daily_limit(db)
         if daily_limit <= 0:
-            return {"note": "daily_limit=0 (OFF!)", "entered": 0}
+            # 🚨 Fix 103 A: 옛 = 무로그 return (미호출과 구별 불가!) → 이제 반드시 로그!
+            return _finish(
+                f"재진입 OFF: reentry_daily_limit={daily_limit} (src={_limit_src}) "
+                f"= 사장님 명시 OFF! (켜려면 SystemSetting '{REENTRY_DAILY_LIMIT_KEY}' > 0)"
+            )
 
         from app.workers.auto_bb_breakdown_worker import (
-            _count_used_slots, _create_auto_bb_strategy,
+            _create_auto_bb_strategy,
             _get_reentry_count, _increment_reentry_count,
             _reset_reentry_count, MAX_REENTRY_COUNT,
         )
-        used = _count_used_slots(db)
+        # 🚨 Fix 103 C 근본 fix: _count_used_slots(신규 진입 공유 카운터) 사용 중단!
+        # 재진입 = 이미 손절된 심볼의 마틴게일 2단계 = 「신규 진입」 아님!
+        # → 신규 진입이 하루 한도를 채워도 재진입은 계속 가능해야 함! (사장님 사상!)
+        used = _count_reentry_used_today(db)
         remaining = daily_limit - used
         if remaining <= 0:
-            return {"note": f"daily {used}/{daily_limit}", "entered": 0}
+            return _finish(
+                f"재진입 일일 한도 소진: {used}/{daily_limit} (src={_limit_src}) "
+                f"= 재진입 전용 카운터 (신규 진입 무관!)"
+            )
 
         # 2. 1h 재진입 남발 체크!
         cutoff_1h = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -442,7 +610,9 @@ def run_realtime_reentry() -> dict:
             .where(StrategySuggestion.reason.like("%RT_REENTRY%"))
         ).scalars().all()
         if len(recent_re) >= MAX_HOURLY_REENTRIES:
-            return {"note": f"1h {len(recent_re)}건 (max {MAX_HOURLY_REENTRIES}!)", "entered": 0}
+            return _finish(
+                f"1h 재진입 남발 차단: {len(recent_re)}건 >= max {MAX_HOURLY_REENTRIES}"
+            )
 
         # 3. 최근 24h 청산된 자동 진입 심볼 조회!
         # 🚨 v221 Fix 25 (2026-08-23 사장님 지적!): strategy_type 필터 확장!
@@ -466,7 +636,13 @@ def run_realtime_reentry() -> dict:
                 )
             )
         ).scalars().all()
-        logger.info("[RT_REENTRY] 24h 청산 자동 진입 = %d건 (필터 확장!)", len(closed))
+        logger.info(
+            "[RT_REENTRY] 24h 청산 자동 진입 = %d건 (필터 확장!) | 재진입 슬롯 %d/%d (src=%s)",
+            len(closed), used, daily_limit, _limit_src,
+        )
+        if not closed:
+            # 🎯 Fix 103 A: 후보 0건도 반드시 기록! (미호출과 구별!)
+            return _finish("24h 청산 후보 0건 (재진입 대상 없음)")
 
         # 4. 활성 심볼 skip!
         active = db.execute(
@@ -488,12 +664,22 @@ def run_realtime_reentry() -> dict:
                 and si.stopped_at > latest_by_sym[key].stopped_at
             ):
                 latest_by_sym[key] = si
+        candidates = len(latest_by_sym)
 
         for (symbol, side), si in latest_by_sym.items():
+            scanned += 1
             if remaining <= 0:
+                # 🎯 Fix 103 A: 루프 중단도 무로그 금지!
+                logger.warning(
+                    "[RT_REENTRY] 루프 중단: 재진입 슬롯 소진 (scanned=%d/%d)",
+                    scanned, candidates,
+                )
+                _bump("slot_exhausted_midloop")
                 break
             if symbol in active_syms:
                 skipped += 1
+                _bump("already_active")
+                logger.info("[RT_REENTRY] skip: %s %s 이미 활성 심볼!", symbol, side)
                 continue
 
             # 재진입 카운터 max 2 (기존) or 3 (Fix 53 라스트 챈스!)
@@ -503,6 +689,7 @@ def run_realtime_reentry() -> dict:
             )
             if re_count >= _max_count_effective:
                 skipped += 1
+                _bump("max_reentry_count")
                 logger.info(
                     "[RT_REENTRY] skip: %s %s MAX 재진입 %d회 도달! (max=%d, last_chance=%s)",
                     symbol, side, re_count, _max_count_effective, ENABLE_LAST_CHANCE,
@@ -510,14 +697,31 @@ def run_realtime_reentry() -> dict:
                 continue
 
             # mark_price 조회!
+            # 🎯 Fix 103 A: 옛 = 3개 경로 모두 무로그 continue = 「후보인데 왜 사라졌나」 불명!
             try:
                 mp_raw = redis.get(f"mark_price:{symbol}")
                 if not mp_raw:
+                    skipped += 1
+                    _bump("no_mark_price")
+                    logger.info(
+                        "[RT_REENTRY] skip: %s %s mark_price Redis 키 없음! (mark_price:%s)",
+                        symbol, side, symbol,
+                    )
                     continue
                 mp = float(mp_raw.decode() if isinstance(mp_raw, bytes) else mp_raw)
                 if mp <= 0:
+                    skipped += 1
+                    _bump("mark_price_nonpositive")
+                    logger.warning(
+                        "[RT_REENTRY] skip: %s %s mark_price<=0 (%s)", symbol, side, mp,
+                    )
                     continue
-            except Exception:
+            except Exception as _mpe:
+                skipped += 1
+                _bump("mark_price_error")
+                logger.warning(
+                    "[RT_REENTRY] skip: %s %s mark_price 파싱 실패: %s", symbol, side, _mpe,
+                )
                 continue
 
             # 🎯 v218 fix (2026-08-22): 청산가 우선 = 평단 fallback!
@@ -525,6 +729,14 @@ def run_realtime_reentry() -> dict:
             # last_liquidation_price = SL 발동가! = 반등 시작점 정확!
             _stop_price = float(si.last_liquidation_price or si.avg_entry_price or 0)
             if _stop_price <= 0:
+                # 🎯 Fix 103 A: 옛 = 무로그 continue! (청산가/평단 둘 다 없음 = 데이터 결함!)
+                skipped += 1
+                _bump("no_stop_price")
+                logger.warning(
+                    "[RT_REENTRY] skip: %s %s 기준가 없음! (last_liquidation_price=%s "
+                    "avg_entry_price=%s instance_id=%s) = 반등%% 계산 불가!",
+                    symbol, side, si.last_liquidation_price, si.avg_entry_price, si.id,
+                )
                 continue
 
             pnl = float(si.realized_pnl or 0)
@@ -538,6 +750,7 @@ def run_realtime_reentry() -> dict:
                 _elapsed_min = (datetime.now(timezone.utc) - si.stopped_at).total_seconds() / 60.0
                 if _elapsed_min < MIN_STOP_WAIT_MINUTES:
                     skipped += 1
+                    _bump("stop_wait_too_short")
                     logger.info(
                         "[RT_REENTRY] skip: %s %s 손절/익절 후 대기 부족 (%.1fmin < %.1fmin) = whipsaw 방지!",
                         symbol, side, _elapsed_min, MIN_STOP_WAIT_MINUTES,
@@ -558,6 +771,7 @@ def run_realtime_reentry() -> dict:
             # (a) 최소 안전선 = 역방향 폭주 방지 (0.5% 만!)
             if _rebound_pct < REBOUND_PCT_MIN_SAFETY:
                 skipped += 1
+                _bump("rebound_too_small")
                 logger.info(
                     "[RT_REENTRY] skip: %s %s 역방향 진행 중 (%.2f%% < %.1f%%)",
                     symbol, side, _rebound_pct, REBOUND_PCT_MIN_SAFETY,
@@ -568,6 +782,7 @@ def run_realtime_reentry() -> dict:
             _learn_ok, _learn_msg = _is_symbol_learning_ok(db, symbol, side)
             if not _learn_ok:
                 skipped += 1
+                _bump("learning_gate")
                 logger.info(
                     "[RT_REENTRY] skip: %s %s 학습 실패 심볼 (%s)",
                     symbol, side, _learn_msg,
@@ -599,7 +814,13 @@ def run_realtime_reentry() -> dict:
                     select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
                 ).scalar_one_or_none()
                 if not _acc:
+                    # 🎯 Fix 103 A: 옛 = 무로그! (mainnet 계정 없음 = 전 심볼 조용히 전멸!)
                     skipped += 1
+                    _bump("no_exchange_account")
+                    logger.warning(
+                        "[RT_REENTRY] skip: %s %s mainnet ExchangeAccount 없음 = 지표 조회 불가!",
+                        symbol, side,
+                    )
                     continue
                 _bc = BinanceClient(
                     api_key=decrypt_text(_acc.api_key_enc),
@@ -610,12 +831,16 @@ def run_realtime_reentry() -> dict:
                     _bc, symbol, side, use_4h=True, min_passed=_min_passed,
                 )
             except Exception as _ve:
-                logger.warning("[RT_REENTRY] 지표 조회 실패 = skip 안전: %s", _ve)
+                logger.warning(
+                    "[RT_REENTRY] skip: %s %s 지표 조회 실패 = skip 안전: %s", symbol, side, _ve,
+                )
                 skipped += 1
+                _bump("indicator_fetch_error")
                 continue
 
             if not _ind_ok:
                 skipped += 1
+                _bump(f"indicator_gate_need{_min_passed}")
                 logger.info(
                     "[RT_REENTRY] skip: %s %s 지표 반전 미확인 (%s) [rebound=%.2f%% stage=%d need=%d/8]",
                     symbol, side, _ind_msg, _rebound_pct, _stage_no_for_gate, _min_passed,
@@ -640,6 +865,7 @@ def run_realtime_reentry() -> dict:
                         )
                         if _skip_24h:
                             skipped += 1
+                            _bump("24h_change_limit")
                             logger.warning(
                                 "[RT_REENTRY] 🚨 stage %d skip: %s %s 24h=%.2f%% (한도 ±%.1f%% 초과 = 헌법 64!)",
                                 _stage_no_for_gate, symbol, side, _chg_pct, STAGE3_24H_ABS_LIMIT_PCT,
@@ -662,6 +888,7 @@ def run_realtime_reentry() -> dict:
                     _elapsed_h = (datetime.now(timezone.utc) - si.stopped_at).total_seconds() / 3600
                     if _elapsed_h < STAGE3_MIN_WAIT_HOURS:
                         skipped += 1
+                        _bump("stage3_wait_too_short")
                         logger.info(
                             "[RT_REENTRY] stage %d skip: %s 대기 부족 (%.1fh < %.1fh)",
                             _stage_no, symbol, _elapsed_h, STAGE3_MIN_WAIT_HOURS,
@@ -691,6 +918,7 @@ def run_realtime_reentry() -> dict:
                     )
                     if _stage > MAX_REENTRY_STAGE and not _is_last_chance:
                         skipped += 1
+                        _bump("stage_over_max")
                         logger.info(
                             "[RT_REENTRY] v219 STOP: %s %s stage=%d > MAX=%d (3단계까지!)",
                             symbol, side, _stage, MAX_REENTRY_STAGE,
@@ -706,7 +934,14 @@ def run_realtime_reentry() -> dict:
                         ]
                         _entry_capital_dec = compute_reentry_capital(3, _prev_caps)
                         if _entry_capital_dec is None:
+                            # 🎯 Fix 103 A: 옛 = 무로그!
                             skipped += 1
+                            _bump("capital_none_lastchance")
+                            logger.warning(
+                                "[RT_REENTRY] skip: %s %s 라스트 챈스 자본 계산 None "
+                                "(base=%.2f prev=%s)",
+                                symbol, side, float(_base_capital), _prev_caps,
+                            )
                             continue
                         _entry_capital = float(_entry_capital_dec)
                         _mult = _entry_capital / float(_base_capital)
@@ -723,7 +958,14 @@ def run_realtime_reentry() -> dict:
                             _prev_caps.append(_D(str(_base_capital)) * _D("2"))
                         _entry_capital_dec = compute_reentry_capital(_stage, _prev_caps)
                         if _entry_capital_dec is None:
+                            # 🎯 Fix 103 A: 옛 = 무로그! (stage 상한 초과 = 조용히 사라짐!)
                             skipped += 1
+                            _bump(f"capital_none_stage{_stage}")
+                            logger.warning(
+                                "[RT_REENTRY] skip: %s %s stage=%d 자본 계산 None "
+                                "(base=%.2f prev=%s) = compute_reentry_capital 상한!",
+                                symbol, side, _stage, float(_base_capital), _prev_caps,
+                            )
                             continue
                         _entry_capital = float(_entry_capital_dec)
                         _mult = _entry_capital / float(_base_capital)
@@ -745,7 +987,14 @@ def run_realtime_reentry() -> dict:
                     strategy_type_suffix=_suffix,
                 )
                 if not new_strategy:
+                    # 🚨 Fix 103 A: 옛 = 무로그! = 「gate 전부 통과했는데 진입 0건」 미궁!
                     skipped += 1
+                    _bump("create_strategy_failed")
+                    logger.warning(
+                        "[RT_REENTRY] 🚨 skip: %s %s _create_auto_bb_strategy None 반환! "
+                        "(capital=%.2f suffix=%s) = 전략 생성 단계 차단!",
+                        symbol, side, _entry_capital, _suffix,
+                    )
                     continue
 
                 # 🎓 v218 fix (2026-08-22 사장님!): entry_snapshot 저장 = 학습 데이터!
@@ -829,21 +1078,17 @@ def run_realtime_reentry() -> dict:
             except Exception as e:
                 logger.warning("[RT_REENTRY] %s %s 진입 실패: %s", symbol, side, e)
                 skipped += 1
+                _bump("entry_exception")
                 db.rollback()
 
-        total_entered = entered_fail + entered_success
-        logger.info(
-            "[RT_REENTRY] 완료: fail=%d success=%d skipped=%d",
-            entered_fail, entered_success, skipped,
+        # 🚨 Fix 103 B: 정상 완료 = 반드시 완료 로그! (매 30초 = 살아있음 증명!)
+        # level=warning 고정 = 「재진입 0건」이 warning 필터에서도 반드시 보여야 함!
+        # (사장님 지적 "손절후 2단계 진입이 없는것 같이" = 이 줄 1개로 즉시 판정!)
+        return _finish(
+            f"정상 스캔 완료 (재진입 슬롯 {used}/{daily_limit} src={_limit_src})"
         )
-        return {
-            "entered_fail_reentry": entered_fail,
-            "entered_success_reentry": entered_success,
-            "skipped": skipped,
-            "results": results,
-        }
     except Exception as e:
         logger.exception("[RT_REENTRY] 실행 실패: %s", e)
-        return {"error": str(e), "entered": 0}
+        return _finish(f"실행 예외: {e}", level="error", error=str(e))
     finally:
         db.close()
