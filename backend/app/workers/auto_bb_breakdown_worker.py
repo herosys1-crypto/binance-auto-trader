@@ -1580,6 +1580,7 @@ def _create_auto_bb_strategy(
     # 이전: fail-open = strategy 반환 + caller가 EXECUTED 마킹 = 가짜 진입 = slot 소모!
     # 사장님 사상: "실패는 재시도!" = suggestion PENDING 유지 = 다음 사이클 재도전!
     _entry_success = False
+    _entry_err = ""
     try:
         from app.services.execution_service import ExecutionService
         from app.core.crypto import decrypt_text
@@ -1601,30 +1602,133 @@ def _create_auto_bb_strategy(
                 symbol, side, strategy.id,
             )
     except Exception as _entry_e:
+        _entry_err = str(_entry_e)
         logger.warning(
-            "[auto_bb_breakdown] ❌ 실 진입 실패 (좀비 정리!): %s %s: %s",
+            "[auto_bb_breakdown] ❌ 실 진입 실패: %s %s: %s",
             symbol, side, _entry_e,
         )
 
     if not _entry_success:
-        # 🚨 v218: 좀비 방지 = strategy + template + stage_plans 삭제!
+        # ══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 162 (2026-08-26): 「좀비 정리」가 거꾸로 **고아 포지션을 생산**했다.
+        #
+        # start_stage1 의 순서 (execution_service.py:199-202):
+        #     _place_stage_entry_order()   ← 거래소에 실제 주문 발사
+        #     strategy.status = ...
+        #     self.db.commit()             ← 여기서 예외가 나면 아래로 온다
+        # 게다가 order_repo.create 는 add+flush 만 하고 commit 하지 않으므로
+        # (order_repository.py:6-9) 아래 db.rollback() 이 Order row 까지 지워
+        # **DB 에는 주문 흔적이 하나도 남지 않는다.**
+        #
+        # 그 상태에서 strategy 를 지우면
+        #     거래소 = 포지션/미체결 주문 있음   DB = 매칭 전략 없음   = 고아
+        # → zombie_guardian 이 감지해 **계정 전체 Kill-Switch** 를 건다.
+        #   실제 사고 (2026-08-26): 거래소 CLUSDT SHORT amt=-0.24 (명목가 1 USDT 미만)
+        #   하나 때문에 계정 #1 의 모든 신규 진입이 차단됐다.
+        #
+        # 원칙: 삭제는 파괴적이다 → 「안전하다는 적극적 증거」가 있을 때만 지운다.
+        #       거래소 확인 실패 = 삭제 금지 (fail-SAFE).
+        # ══════════════════════════════════════════════════════════════════
         try:
-            db.rollback()
             _sid = strategy.id
             _tid = tpl.id
-            db.delete(strategy)
-            db.commit()
-            _tpl_row = db.get(StrategyTemplate, _tid)
-            if _tpl_row:
-                db.delete(_tpl_row)
-                db.commit()
-            logger.info(
-                "[auto_bb_breakdown] 🧹 v218 좀비 정리: strategy=%s template=%s 삭제!",
-                _sid, _tid,
-            )
-        except Exception as _cleanup_e:
-            logger.warning("[auto_bb_breakdown] 좀비 정리 실패: %s", _cleanup_e)
+        except Exception:
+            _sid, _tid = None, None
+        try:
             db.rollback()
+        except Exception:
+            pass
+
+        # 거래소 잔재 확인 — 실패 경로에서만 호출되므로 평시 weight 부담 0.
+        # symbol 지정 조회라 weight 도 작다 (openOrders symbol=1).
+        _safe_to_delete = False
+        _residue = "확인 안 함"
+        try:
+            from app.integrations.binance.client import BinanceClient as _BC
+            from app.core.crypto import decrypt_text as _dt
+            from app.models.exchange_account import ExchangeAccount as _EA
+            _acc_c = db.get(_EA, 1)
+            if _acc_c is None:
+                _residue = "ExchangeAccount#1 없음 = 확인 불가"
+            else:
+                _chk = _BC(
+                    api_key=_dt(_acc_c.api_key_enc),
+                    api_secret=_dt(_acc_c.api_secret_enc),
+                    is_testnet=_acc_c.is_testnet,
+                )
+                _pr = _chk.get_position_risk(symbol=symbol)
+                if isinstance(_pr, dict):
+                    _pr = [_pr]
+                _amt = Decimal("0")
+                for _p in (_pr or []):
+                    if _p.get("positionSide") in (side, "BOTH"):
+                        try:
+                            _amt += abs(Decimal(str(_p.get("positionAmt") or 0)))
+                        except Exception:
+                            pass
+                _oo = _chk.list_open_orders(symbol=symbol) or []
+                if _amt == 0 and not _oo:
+                    _safe_to_delete = True
+                    _residue = "포지션 0 + 미체결 0 = 잔재 없음"
+                else:
+                    _residue = f"포지션 {_amt} / 미체결 {len(_oo)}건 = 잔재 있음"
+        except Exception as _chk_e:
+            _residue = f"거래소 확인 실패 ({_chk_e}) = 삭제 보류"
+
+        if _safe_to_delete and _sid is not None:
+            try:
+                _s_row = db.get(StrategyInstance, _sid)
+                if _s_row is not None:
+                    db.delete(_s_row)
+                    db.commit()
+                if _tid is not None:
+                    _tpl_row = db.get(StrategyTemplate, _tid)
+                    if _tpl_row:
+                        db.delete(_tpl_row)
+                        db.commit()
+                logger.info(
+                    "[auto_bb_breakdown] 🧹 좀비 정리: strategy=%s template=%s 삭제 (%s)",
+                    _sid, _tid, _residue,
+                )
+            except Exception as _cleanup_e:
+                logger.warning("[auto_bb_breakdown] 좀비 정리 실패: %s", _cleanup_e)
+                db.rollback()
+        else:
+            # 잔재 있음 (또는 확인 불가) → **절대 삭제하지 않는다**.
+            # STAGE1_OPEN_PENDING 으로 살려두면 양쪽 모두 자가 회복된다:
+            #   - zombie_guardian: ACTIVE_LIKE 매칭됨 → 고아 아님 → Kill-Switch 안 걸림
+            #   - reconcile_worker: 잔재 있으면 qty sync 후 *_OPEN 승격
+            #                       잔재 없으면 stuck 카운터 → 5회 후 정상 escalate
+            try:
+                _s_row = db.get(StrategyInstance, _sid) if _sid is not None else None
+                if _s_row is not None:
+                    _s_row.status = "STAGE1_OPEN_PENDING"
+                    _s_row.current_stage = 1
+                    from app.models.risk_event import RiskEvent as _RE
+                    db.add(_RE(
+                        strategy_instance_id=_sid,
+                        event_type="ENTRY_FAILED_RESIDUE_KEPT",
+                        severity="CRITICAL",
+                        title="🚨 진입 실패 — 거래소 잔재 가능 → 전략 보존 (고아 방지)",
+                        message=(
+                            f"{symbol} {side} 진입 실패: {_entry_err or '(사유 없음)'}\n"
+                            f"거래소 확인: {_residue}\n"
+                            "전략 row 를 삭제하지 않고 STAGE1_OPEN_PENDING 으로 보존했습니다. "
+                            "reconcile 이 다음 사이클에 정정합니다."
+                        ),
+                        event_payload={
+                            "strategy_id": _sid, "symbol": symbol, "side": side,
+                            "residue": _residue, "entry_error": _entry_err,
+                        },
+                    ))
+                    db.commit()
+                logger.critical(
+                    "[auto_bb_breakdown] 🚨 Fix162: %s %s 진입 실패 — 삭제 보류 (%s) strategy=%s 보존",
+                    symbol, side, _residue, _sid,
+                )
+            except Exception as _keep_e:
+                logger.error("[auto_bb_breakdown] Fix162 보존 처리 실패: %s", _keep_e)
+                db.rollback()
         return None  # caller가 skip 판단!
 
     return strategy

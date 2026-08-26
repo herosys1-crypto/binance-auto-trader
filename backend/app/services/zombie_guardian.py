@@ -64,6 +64,27 @@ STUCK_COUNT_TTL_SEC = 300  # 5분 (10 cycles 헤드룸)
 STUCK_THRESHOLD = 5         # 5 사이클 (~2.5분) 연속 mismatch 시 escalate
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# 🚨 Fix 163 (2026-08-26): orphan dust 임계 + 운영자 ack
+#
+# 사고: 거래소 CLUSDT SHORT amt=-0.24 (명목가 1 USDT 미만) **하나**가
+#       계정 #1 전체의 신규 진입을 막았다. 판정이 `if amt == 0: continue` 뿐이라
+#       먼지도 그대로 계정 전체 Kill-Switch 를 발동시켰고, position_reconcile 이
+#       2분 주기라 해제해도 2분 뒤 다시 걸렸다 (= 해제 수단이 사실상 없었다).
+#
+# 정책:
+#   - 명목가 < MIN_ORPHAN_NOTIONAL_USDT → WARN + RiskEvent 만. KS 는 걸지 않는다.
+#     (Binance 최소 주문 명목가가 보통 5 USDT — 그 미만은 정상 거래로 만들 수 없는 먼지)
+#   - 운영자가 ack 한 (symbol, side) → 그동안 KS 보류. 거래소에서 정리할 시간을 준다.
+#
+# ⚠️ fail-SAFE 방향: markPrice 를 못 구해 명목가를 계산할 수 없으면 **먼지로 보지 않는다**
+#    (= KS 발동). 진짜 고아를 조용히 넘기는 것이 훨씬 위험하다.
+# ═══════════════════════════════════════════════════════════════════════
+MIN_ORPHAN_NOTIONAL_USDT = Decimal("5.0")
+ORPHAN_ACK_KEY = "orphan_ack:{symbol}:{side}"
+ORPHAN_ACK_TTL_SEC = 21600   # 6h — 운영자가 거래소에서 정리할 시간
+
+
 def _redis():
     """Redis client. 장애 시 None 반환 (zombie counter 비활성, fail-soft)."""
     try:
@@ -71,6 +92,45 @@ def _redis():
         return get_redis_client()
     except Exception as e:
         logger.warning("Zombie Guardian: Redis unavailable, stuck_count disabled: %s", e)
+        return None
+
+
+def ack_orphan(symbol: str, side: str, *, ttl_sec: int = ORPHAN_ACK_TTL_SEC) -> bool:
+    """운영자가 이 고아 포지션을 인지했음 → 그동안 Kill-Switch 보류 (Fix 163)."""
+    r = _redis()
+    if r is None:
+        return False
+    try:
+        r.setex(ORPHAN_ACK_KEY.format(symbol=symbol, side=side), ttl_sec, "1")
+        logger.warning("orphan ack: %s %s (%ds 동안 KS 보류)", symbol, side, ttl_sec)
+        return True
+    except Exception as e:
+        logger.warning("orphan ack 실패 %s %s: %s", symbol, side, e)
+        return False
+
+
+def is_orphan_acked(symbol: str, side: str) -> bool:
+    """Fix 163 — 운영자 ack 여부. Redis 장애 시 False (= 평소대로 KS 발동)."""
+    r = _redis()
+    if r is None:
+        return False
+    try:
+        return r.get(ORPHAN_ACK_KEY.format(symbol=symbol, side=side)) is not None
+    except Exception:
+        return False
+
+
+def _orphan_notional(p: dict, amt: Decimal) -> Optional[Decimal]:
+    """|amt| × markPrice. 구할 수 없으면 None (= 먼지로 보지 않음 = KS 발동)."""
+    try:
+        mp = p.get("markPrice") or p.get("entryPrice")
+        if mp is None or str(mp).strip() == "":
+            return None
+        v = Decimal(str(mp))
+        if v <= 0:
+            return None
+        return abs(amt) * v
+    except Exception:
         return None
 
 
@@ -378,6 +438,39 @@ def detect_orphan_exchange_positions(
                     ))
                     db.commit()
                     continue  # KS 발동 안 함 — 다음 cycle 재평가
+                # ── Fix 163: 먼지 / 운영자 ack 은 Kill-Switch 대상에서 제외 ──
+                _notional = _orphan_notional(p, amt)
+                _is_dust = _notional is not None and _notional < MIN_ORPHAN_NOTIONAL_USDT
+                _acked = is_orphan_acked(symbol, position_side)
+                if _is_dust or _acked:
+                    _why = (
+                        f"명목가 {_notional:.4f} USDT < {MIN_ORPHAN_NOTIONAL_USDT} (먼지)"
+                        if _is_dust else "운영자 ack 됨"
+                    )
+                    logger.warning(
+                        "Orphan %s %s amt=%s — Kill-Switch 보류 (%s). 거래소에서 정리 필요.",
+                        symbol, position_side, amt, _why,
+                    )
+                    db.add(RiskEvent(
+                        strategy_instance_id=None,
+                        event_type="ZOMBIE_ORPHAN_DUST_OR_ACKED",
+                        severity="WARN",
+                        title="⚠️ 거래소 고아 포지션 — Kill-Switch 보류",
+                        message=(
+                            f"계정 #{acc.id}: {symbol} {position_side} amt={amt} 에 매칭 전략 없음.\n"
+                            f"{_why} → 계정 전체 차단은 하지 않습니다.\n"
+                            "거래소에서 해당 잔량을 청산해 주세요 "
+                            "(청산 방향 주문은 최소주문금액 제한을 받지 않습니다)."
+                        ),
+                        event_payload={
+                            "account_id": acc.id, "symbol": symbol,
+                            "positionSide": position_side, "positionAmt": str(amt),
+                            "notional_usdt": (str(_notional) if _notional is not None else None),
+                            "dust": _is_dust, "acked": _acked,
+                        },
+                    ))
+                    db.commit()
+                    continue
                 # 매칭 없음 — orphan exchange position!
                 found += 1
                 snapshot = {

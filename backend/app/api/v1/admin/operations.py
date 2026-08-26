@@ -303,3 +303,133 @@ def disable_kill_switch(
         row.status = "ACTIVE"
         db.commit()
     return MessageResponse(message=f"Kill switch cleared on account {exchange_account_id}")
+
+
+# =====================================================================
+# 🚨 Fix 163 (2026-08-26): 거래소 고아 포지션 — 조회 / ack
+#
+# 사고: 거래소 CLUSDT SHORT amt=-0.24 (명목가 1 USDT 미만) **하나** 때문에
+#       계정 전체 Kill-Switch 가 걸렸다. position_reconcile 이 2분 주기라
+#       해제해도 2분 뒤 다시 걸렸고, 「인지했음」을 표시할 수단이 없어
+#       사실상 해제가 불가능했다.
+#
+# ⚠️ Fix 115 교훈: 해제 함수를 만들어도 **호출되는 곳이 없으면 기능이 아니다.**
+#    (reset_api_ban() 이 정확히 그랬다.) zombie_guardian.ack_orphan() 이
+#    실제로 도달 가능하도록 여기서 엔드포인트로 노출한다.
+# =====================================================================
+@router.get("/orphan/{exchange_account_id}")
+def list_orphan_positions(
+    exchange_account_id: int,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """거래소엔 있는데 DB 매칭 active 전략이 없는 포지션 + 각각의 먼지/ack 상태."""
+    from decimal import Decimal as _D
+    from sqlalchemy import select as _s
+    from app.core.strategy_status import ACTIVE_LIKE
+    from app.models.exchange_account import ExchangeAccount
+    from app.models.strategy_instance import StrategyInstance
+    from app.services.zombie_guardian import (
+        MIN_ORPHAN_NOTIONAL_USDT, _orphan_notional, is_orphan_acked,
+    )
+
+    _verify_account_ownership(db, exchange_account_id, user_id)
+    acc = db.get(ExchangeAccount, exchange_account_id)
+    if acc is None:
+        raise HTTPException(status_code=404, detail="계정을 찾을 수 없습니다.")
+    client = BinanceClient(
+        api_key=decrypt_text(acc.api_key_enc),
+        api_secret=decrypt_text(acc.api_secret_enc),
+        is_testnet=acc.is_testnet,
+    )
+    risk = client.get_position_risk()
+    if isinstance(risk, dict):
+        risk = [risk]
+    out: list[dict] = []
+    for p in (risk or []):
+        try:
+            amt = _D(str(p.get("positionAmt") or 0))
+        except Exception:
+            continue
+        if amt == 0:
+            continue
+        symbol = p.get("symbol")
+        pside = p.get("positionSide")
+        match = db.execute(
+            _s(StrategyInstance)
+            .where(StrategyInstance.exchange_account_id == acc.id)
+            .where(StrategyInstance.symbol == symbol)
+            .where(StrategyInstance.side == pside)
+            .where(StrategyInstance.status.in_(ACTIVE_LIKE))
+            .where(StrategyInstance.is_archived.is_(False))
+            .limit(1)
+        ).scalar_one_or_none()
+        if match is not None:
+            continue
+        notional = _orphan_notional(p, amt)
+        out.append({
+            "symbol": symbol,
+            "side": pside,
+            "positionAmt": str(amt),
+            "markPrice": p.get("markPrice"),
+            "notional_usdt": (str(notional) if notional is not None else None),
+            "is_dust": bool(notional is not None and notional < MIN_ORPHAN_NOTIONAL_USDT),
+            "acked": is_orphan_acked(symbol, pside),
+        })
+    return {
+        "account_id": acc.id,
+        "count": len(out),
+        "orphans": out,
+        "dust_threshold_usdt": str(MIN_ORPHAN_NOTIONAL_USDT),
+        "note": "is_dust=true 또는 acked=true 인 항목은 Kill-Switch 를 걸지 않습니다.",
+    }
+
+
+@router.post("/orphan/{exchange_account_id}/{symbol}/{side}/ack", response_model=MessageResponse)
+def ack_orphan_position(
+    exchange_account_id: int,
+    symbol: str,
+    side: str,
+    hours: int = 6,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> MessageResponse:
+    """고아 포지션을 「인지했음」으로 표시 → 그동안 Kill-Switch 보류 (기본 6시간).
+
+    ⚠️ 이건 고아를 없애지 않는다 — 거래소에서 해당 잔량을 청산해야 근본 해결이다.
+       (청산 방향 주문은 최소주문금액 제한을 받지 않는다.)
+    """
+    from app.models.risk_event import RiskEvent
+    from app.services.zombie_guardian import ack_orphan
+
+    _verify_account_ownership(db, exchange_account_id, user_id)
+    _side = side.upper()
+    if _side not in ("LONG", "SHORT", "BOTH"):
+        raise HTTPException(
+            status_code=400, detail="side 는 LONG / SHORT / BOTH 중 하나여야 합니다."
+        )
+    _sym = symbol.upper()
+    _h = max(1, min(int(hours), 72))
+    if not ack_orphan(_sym, _side, ttl_sec=_h * 3600):
+        raise HTTPException(
+            status_code=503, detail="Redis 를 사용할 수 없어 ack 를 기록하지 못했습니다."
+        )
+    db.add(RiskEvent(
+        strategy_instance_id=None,
+        event_type="ZOMBIE_ORPHAN_ACKED",
+        severity="INFO",
+        title="✅ 고아 포지션 ack — Kill-Switch 보류",
+        message=(
+            f"운영자(user #{user_id})가 {_sym} {_side} 고아 포지션을 인지했습니다. "
+            f"{_h}시간 동안 Kill-Switch 를 걸지 않습니다. "
+            "거래소에서 잔량을 청산해야 근본 해결입니다."
+        ),
+        event_payload={
+            "account_id": exchange_account_id, "symbol": _sym,
+            "side": _side, "hours": _h,
+        },
+    ))
+    db.commit()
+    return MessageResponse(
+        message=f"{_sym} {_side} ack 완료 — {_h}시간 동안 Kill-Switch 보류"
+    )
