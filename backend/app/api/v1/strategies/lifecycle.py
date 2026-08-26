@@ -837,6 +837,63 @@ def acknowledge_manual_cleanup(
             ),
         )
 
+    # ══════════════════════════════════════════════════════════════════
+    # 🚨 Fix 170 (2026-08-26): 거래소 확인 없이 「청산 완료」를 확정하고 있었다.
+    #
+    # 이 endpoint 는 status 를 STOPPED(=TERMINAL) 로 바꾸고 qty=0 을 찍는다.
+    # 만약 거래소에 포지션이 실제로 남아 있으면 그 순간 ACTIVE_LIKE 매칭이 사라져
+    # **고아 포지션**이 되고, detect_orphan_exchange_positions 가
+    # **계정 전체 Kill-Switch** 를 건다 (실제 사고: CLUSDT -0.24 → 전 계정 차단).
+    #
+    # 게다가 응답 문구는 "reconcile 다음 사이클이 거래소 잔재 포지션 0 을 재확인합니다"
+    # 라고 안내하지만 **사실이 아니다** — reconcile 본 루프는 ACTIVE_LIKE 만 돌고
+    # STOPPED 는 대상이 아니다. 운영자는 재확인이 된다고 믿게 된다.
+    #
+    # 정책: 잔량이 남아 있으면 **막는다** (막지 않으면 계정 전체가 잠긴다).
+    #       조회 자체가 실패하면 **통과시키되 경고를 남긴다** — 운영자의 명시적
+    #       ack 인데 API 장애로 손발을 묶으면 그게 더 해롭다.
+    # ══════════════════════════════════════════════════════════════════
+    _verify_note = "거래소 확인 안 함"
+    try:
+        from app.core.crypto import decrypt_text as _dt
+        from app.integrations.binance.client import BinanceClient as _BC
+        from app.models.exchange_account import ExchangeAccount as _EA
+        _acc = db.get(_EA, strategy.exchange_account_id)
+        if _acc is None:
+            _verify_note = "거래소 계정 없음 = 확인 불가 (통과)"
+        else:
+            _risk = _BC(
+                api_key=_dt(_acc.api_key_enc),
+                api_secret=_dt(_acc.api_secret_enc),
+                is_testnet=_acc.is_testnet,
+            ).get_position_risk(symbol=strategy.symbol)
+            if isinstance(_risk, dict):
+                _risk = [_risk]
+            _left = Decimal("0")
+            for _p in (_risk or []):
+                if _p.get("positionSide") in (strategy.side, "BOTH"):
+                    try:
+                        _left += abs(Decimal(str(_p.get("positionAmt") or 0)))
+                    except Exception:
+                        pass
+            if _left > Decimal("0.00000001"):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"⚠️ 거래소에 {strategy.symbol} {strategy.side} 포지션이 아직 "
+                        f"{_left} 남아 있습니다.\n\n"
+                        "지금 처리 완료로 확정하면 이 포지션이 「고아」가 되어 "
+                        "**계정 전체 Kill-Switch** 가 걸리고 모든 신규 진입이 차단됩니다.\n\n"
+                        "💡 거래소에서 잔량을 청산한 뒤 다시 눌러주세요 "
+                        "(청산 방향 주문은 최소주문금액 제한을 받지 않습니다)."
+                    ),
+                )
+            _verify_note = "거래소 잔량 0 확인됨"
+    except HTTPException:
+        raise
+    except Exception as _ve:
+        _verify_note = f"거래소 확인 실패 ({_ve}) — 운영자 ack 로 통과"
+
     previous_status = strategy.status
     strategy.status = "STOPPED"
     strategy.current_position_qty = Decimal("0")  # 사장님이 거래소에서 청산 완료한 상태
@@ -850,12 +907,14 @@ def acknowledge_manual_cleanup(
         title="✅ 수동 청산 처리 완료 확인 (사장님 ack)",
         message=(
             f"{strategy.symbol} {strategy.side} — 사장님이 거래소에서 직접 청산 후 "
-            f"대시보드에서 처리 완료 확인. {previous_status} → STOPPED 전환."
+            f"대시보드에서 처리 완료 확인. {previous_status} → STOPPED 전환. "
+            f"[Fix170 검증: {_verify_note}]"
         ),
         event_payload={
             "strategy_id": strategy.id,
             "previous_status": previous_status,
             "acknowledged_by_user_id": user_id,
+            "exchange_verify": _verify_note,
         },
     ))
     db.commit()
@@ -864,7 +923,9 @@ def acknowledge_manual_cleanup(
         strategy_id=strategy.id,
         status=strategy.status,
         message=(
-            "수동 청산 처리 완료 확인됨. STOPPED 전환 + 감사 로그 기록. "
-            "(reconcile 다음 사이클이 거래소 잔재 포지션 0 을 재확인합니다)"
+            f"수동 청산 처리 완료 확인됨. STOPPED 전환 + 감사 로그 기록. ({_verify_note})"
+            # Fix 170: 옛 문구 "reconcile 다음 사이클이 재확인합니다" 는 사실이 아니었다 —
+            # reconcile 본 루프는 ACTIVE_LIKE 만 돌고 STOPPED 는 대상이 아니다.
+            # 이제 확정 **전에** 거래소를 직접 확인한다.
         ),
     )

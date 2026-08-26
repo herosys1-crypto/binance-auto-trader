@@ -455,6 +455,12 @@ def _do_reconcile(decrypt_func) -> None:
                     # 자동 sync 로 정합성은 회복되지만, 같은 strategy 가 매 사이클 계속 mismatch 면
                     # 시스템 외부에서 포지션이 변경되고 있다는 신호. 임계 초과 시 escalate.
                     if n_stuck >= STUCK_THRESHOLD:
+                        # 🚨 Fix 166: 이 분기는 matched ≠ None = **거래소에 포지션이 있다**.
+                        # 옛 동작(STOPPED + qty=0)은 그 포지션을 즉시 고아로 만들었고,
+                        # detect_orphan_exchange_positions 가 계정 전체 Kill-Switch 를 걸어
+                        # 해제해도 2분 뒤 또 걸리는 무한 루프가 됐다.
+                        # → preserve_position=True = MANUAL_CLEANUP_REQUIRED (ACTIVE 계열)
+                        #   로 전환해 매칭을 유지한다. 경보는 그대로 뜬다.
                         escalate_stuck_strategy(
                             db,
                             strategy,
@@ -464,6 +470,7 @@ def _do_reconcile(decrypt_func) -> None:
                                 "stream 누락/외부 거래/거래소 장애 의심. Kill-Switch 발동."
                             ),
                             exchange_snapshot=matched,
+                            preserve_position=True,
                         )
                         continue
                 else:

@@ -649,6 +649,17 @@ def _classify_entry_error(msg: str) -> str:
     → 메시지 패턴으로 분류해 완료 로그/응답에 사유를 명시!
     """
     m = str(msg or "")
+    # 🚨 Fix 169 (2026-08-26): kill-switch 분기가 없어 전부 "other" 로 뭉뚱그려졌다.
+    # 2026-08-26 KS 사건 때 진입이 전부 막혔는데 진단 로그는 "other" 만 찍어서
+    # 원인 파악이 늦어졌다. KS 메시지는 두 가지 형태로 온다:
+    #   execution_service.py:192  "Account kill-switch is enabled; new orders are blocked"
+    #   strategy_service.py:222   "🔒 거래소 계정 #N 의 Kill-Switch 가 활성화돼 신규 거래가 차단됐습니다."
+    _low = m.lower()
+    if "kill-switch" in _low or "kill switch" in _low or "killswitch" in _low:
+        return "kill_switch"
+    # 상한(동시보유) 차단 — position_limit.check_position_slot 사유 문자열
+    if "동시보유 상한" in m or "자동 진입 완전 OFF" in m:
+        return "concurrent_cap"
     if "동시 운영 한도" in m or "진행 중인 전략이" in m:
         return "concurrent_limit"
     if "포지션" in m and "이미 있습니다" in m:

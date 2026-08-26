@@ -160,7 +160,43 @@ class StreamService:
                 # → REENTRY_READY 로 잘못 마킹하면 다음 zombie scan 에서 orphan 감지 → KS.
                 # 실제 잔량 > 0 이면 partial 로 처리하고 다음 cycle 에 reconcile 가 정정.
                 actual_remaining = self._fetch_actual_position_qty(strategy)
-                if actual_remaining is not None and actual_remaining > Decimal("0.00000001"):
+                if actual_remaining is None:
+                    # ══════════════════════════════════════════════════════════
+                    # 🚨 Fix 167 (2026-08-26): 조회 실패(None)를 「잔량 0」과 똑같이
+                    # 취급하고 있었다. 옛 조건은
+                    #     if actual_remaining is not None and actual_remaining > 0:
+                    # 이라 None 이면 else 로 떨어져 qty=0 + REENTRY_READY 를 찍었다.
+                    # 즉 **바로 위 주석이 설명하는 그 방어가, API 장애 때 사라진다.**
+                    # (오늘 실제로 418 IP ban 이 있었다 = 이 경로가 살아 있었다.)
+                    # 결과: 거래소엔 포지션이 남았는데 DB 는 종료 → 고아 → 계정 KS.
+                    #
+                    # 확인 못 했으면 아무것도 확정하지 않는다. status/qty 를 그대로 두면
+                    # strategy 가 ACTIVE 로 남아 고아로 오인되지 않고, reconcile(2분)이
+                    # 자기 조회로 정정한다.
+                    # ══════════════════════════════════════════════════════════
+                    logger.warning(
+                        "[Fix167] %s %s EXIT FILLED 전체청산 판정 보류 — 거래소 잔량 확인 실패. "
+                        "status/qty 미변경, reconcile 이 정정 예정 (strategy=%s)",
+                        strategy.symbol, strategy.side, strategy.id,
+                    )
+                    self.db.add(RiskEvent(
+                        strategy_instance_id=strategy.id,
+                        event_type="EXIT_FULL_CLOSE_UNVERIFIED",
+                        severity="WARN",
+                        title="⚠️ 전체청산 판정 보류 — 거래소 잔량 확인 실패",
+                        message=(
+                            "DB 상 잔량 0 이지만 거래소 조회에 실패해 확정하지 않았습니다. "
+                            "확인 없이 종료 처리하면 거래소 포지션이 고아가 되어 "
+                            "계정 전체 Kill-Switch 가 걸립니다. "
+                            "다음 reconcile 사이클(≤2분)이 재평가합니다."
+                        ),
+                        event_payload={
+                            "delta_executed": str(delta_abs),
+                            "db_cur_qty_before": str(cur_qty_abs),
+                            "order_client_id": order.client_order_id,
+                        },
+                    ))
+                elif actual_remaining > Decimal("0.00000001"):
                     # 거래소엔 아직 포지션 있음 — REENTRY_READY 차단, partial 로 처리
                     sign = Decimal("-1") if strategy.side == "SHORT" else Decimal("1")
                     strategy.current_position_qty = (actual_remaining * sign).quantize(Decimal("0.00000001"))

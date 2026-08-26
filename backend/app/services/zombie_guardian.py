@@ -39,6 +39,7 @@ from app.core.strategy_status import (
     ACTIVE_LIKE,
     ACTIVE_WAITING,
     ACTIVE_WITH_POSITION,
+    MANUAL_CLEANUP_REQUIRED,
     TERMINAL_STATUSES,
 )
 from app.models.exchange_account import ExchangeAccount
@@ -253,35 +254,74 @@ def escalate_stuck_strategy(
     reason_code: str,
     reason_detail: str,
     exchange_snapshot: Optional[dict] = None,
+    preserve_position: bool = False,
 ) -> None:
-    """N 사이클 stuck 좀비 → 강제 STOPPED + AccountKillSwitch + Telegram CRITICAL.
+    """N 사이클 stuck 좀비 → 강제 종료 + AccountKillSwitch + Telegram CRITICAL.
 
     호출 후 카운터는 리셋되며, RiskEvent CRITICAL 이 남아 대시보드에서 빨간 배너로 표시.
+
+    ═══════════════════════════════════════════════════════════════════
+    🚨 Fix 166 (2026-08-26): preserve_position — 거래소에 포지션이 **살아있는**
+    상태에서 STOPPED + qty=0 을 찍으면 **스스로 고아를 만든다.**
+
+    호출부는 2곳인데 성격이 정반대다:
+      - reconcile_worker.py:305 PENDING_STUCK_NO_EXCHANGE_POSITION
+        → 5 사이클 연속 거래소 매칭 **없음** = 포지션 없음 → STOPPED + qty=0 이 옳다
+      - reconcile_worker.py:458 QTY_MISMATCH_PERSISTENT
+        → matched ≠ None = 거래소에 포지션이 **있는데** 수량만 다른 경우다.
+          그런데도 STOPPED(=TERMINAL) + qty=0 으로 만들면
+          ACTIVE_LIKE 매칭이 사라져 그 포지션이 즉시 **고아**가 되고,
+          detect_orphan_exchange_positions 가 계정 전체 Kill-Switch 를 건다.
+          해제해도 포지션은 그대로라 2분 뒤 또 걸린다 = 무한 루프.
+
+    preserve_position=True 면 MANUAL_CLEANUP_REQUIRED 로 전환한다:
+      - ACTIVE_WITH_POSITION 에 속하므로 고아로 오인되지 않는다
+      - reconcile 이 MCR 을 stuck 집계에서 제외한다 (reconcile_worker.py:285)
+        → 같은 escalate 를 반복하지 않는다
+      - qty 는 실제 값을 유지해 운영자가 무엇이 남았는지 볼 수 있다
+    ═══════════════════════════════════════════════════════════════════
     """
     old_status = strategy.status
     old_qty = strategy.current_position_qty
 
-    # 1) 강제 STOPPED + qty=0
-    strategy.status = "STOPPED"
-    strategy.current_position_qty = Decimal("0")
-    if not strategy.stopped_at:
-        strategy.stopped_at = datetime.now(timezone.utc)
+    # 1) 강제 종료 — 단, 거래소 포지션이 살아있으면 고아를 만들지 않는다 (Fix 166)
+    if preserve_position:
+        strategy.status = MANUAL_CLEANUP_REQUIRED
+        # qty 는 건드리지 않는다 (실제 잔량 보존 = 운영자가 볼 수 있어야 한다)
+    else:
+        strategy.status = "STOPPED"
+        strategy.current_position_qty = Decimal("0")
+        if not strategy.stopped_at:
+            strategy.stopped_at = datetime.now(timezone.utc)
 
     # 2) RiskEvent CRITICAL
     db.add(RiskEvent(
         strategy_instance_id=strategy.id,
         event_type="ZOMBIE_GUARDIAN_FORCE_STOP",
         severity="CRITICAL",
-        title="🚨🔴 좀비 임계 초과 — 강제종료 + Kill-Switch 발동",
+        title=(
+            "🚨🔴 좀비 임계 초과 — 수동 정리 대기 + Kill-Switch 발동"
+            if preserve_position else
+            "🚨🔴 좀비 임계 초과 — 강제종료 + Kill-Switch 발동"
+        ),
         message=(
             f"#{strategy.id} {strategy.symbol} {strategy.side} "
             f"({old_status}, qty={old_qty}) — {reason_code}: {reason_detail}. "
-            f"강제 STOPPED + qty=0, 해당 계정 Kill-Switch 자동 발동."
+            + (
+                f"거래소에 포지션이 남아 있어 {MANUAL_CLEANUP_REQUIRED} 로 전환했습니다 "
+                "(qty 보존 = 고아 포지션 생성 방지, Fix 166). "
+                "거래소에서 정리 후 「수동 청산 처리 완료」를 눌러주세요. "
+                if preserve_position else
+                "강제 STOPPED + qty=0, "
+            )
+            + "해당 계정 Kill-Switch 자동 발동."
         ),
         event_payload={
             "strategy_id": strategy.id,
             "old_status": old_status,
             "old_qty": str(old_qty),
+            "preserve_position": preserve_position,
+            "new_status": strategy.status,
             "reason_code": reason_code,
             "reason_detail": reason_detail,
             "exchange_snapshot": exchange_snapshot,
