@@ -1181,6 +1181,15 @@ async function loadV219Settings() {
 
 if (typeof window !== 'undefined') {
   window.saveV219Settings = saveV219Settings;
+  // Fix 145: 사다리 입력 시 미리보기/단계수 즉시 반영
+  document.addEventListener('input', (ev) => {
+    if (!ev.target || ev.target.id !== 'v219-ladder') return;
+    const parts = String(ev.target.value || '').split(',').map(x => x.trim()).filter(Boolean);
+    const prev = document.getElementById('v219-ladder-preview');
+    if (prev) prev.textContent = parts.map((v, i) => (i + 1) + '단계 ' + v).join(' · ') || '-';
+    const ms = document.getElementById('v219-max-stage');
+    if (ms) ms.value = String(parts.length || 1);
+  });
   window.loadV219Settings = loadV219Settings;
   document.addEventListener('DOMContentLoaded', () => {
     setTimeout(loadV219Settings, 600);
@@ -1452,7 +1461,10 @@ if (typeof window !== 'undefined') {
 async function saveV219Settings() {
   const limit = parseInt(document.getElementById('v219-daily-limit').value);
   const capital = parseFloat(document.getElementById('v219-capital').value);
-  const maxStage = parseInt(document.getElementById('v219-max-stage').value);
+  // 🎯 Fix 145: 최대 단계는 사다리 칸 수에서 파생 (별도 입력 = 모순 원인)
+  const _ladderRaw = (document.getElementById('v219-ladder') || {}).value || '';
+  const _rungs = String(_ladderRaw).split(',').map(x => x.trim()).filter(Boolean).length;
+  const maxStage = _rungs > 0 ? _rungs : parseInt((document.getElementById('v219-max-stage') || {}).value || '3');
   const msgEl = document.getElementById('v219-settings-msg');
   // 🎯 Fix 144 (2026-08-26 사장님): 자본 사다리도 함께 저장
   const ladderEl = document.getElementById('v219-ladder');

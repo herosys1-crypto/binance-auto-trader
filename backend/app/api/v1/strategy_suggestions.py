@@ -236,12 +236,25 @@ def get_sajangnim_settings(
         "capital_mode": (mode_row.value if mode_row and mode_row.value else "fixed"),
         "entry_pct": float(pct_row.value) if pct_row and pct_row.value else 0.01,
         "daily_limit": int(daily_limit_row.value) if daily_limit_row and daily_limit_row.value else 1,
-        "max_stage": int(max_stage_row.value) if max_stage_row and max_stage_row.value else 2,
+        # 🎯 Fix 145 (2026-08-26 사장님 스크린샷): 사다리 3칸인데 여기가 2 라서 600 이 잘렸다.
+        #   원시 설정값이 아니라 「실제 적용되는 값」을 돌려준다 (헌법 85).
+        #   get_max_stage 는 사다리 길이를 상한으로 clamp 한다.
+        "max_stage": _effective_max_stage(db),
         "top_short_daily_limit": int(top_short_daily_limit_row.value) if top_short_daily_limit_row and top_short_daily_limit_row.value else 0,
         # 🎯 Fix 144 (2026-08-26 사장님): 자본 사다리 (UI 에서 직접 수정 가능하게)
         #   실제 적용값을 그대로 돌려준다 = 화면과 워커가 같은 진실을 본다 (헌법 85)
         "capital_ladder": _current_ladder_str(db),
     }
+
+
+def _effective_max_stage(db) -> int:
+    """실제 적용되는 마틴게일 최대 단계 (사다리 길이가 상한)."""
+    try:
+        from app.services.sajangnim_capital import get_max_stage
+        return int(get_max_stage(db))
+    except Exception as e:
+        logger.warning("[Fix145] max_stage 조회 실패: %s", e)
+        return 2
 
 
 def _current_ladder_str(db) -> str:
@@ -333,6 +346,19 @@ def set_sajangnim_settings(
                 row = SystemSetting(key=key, value=new_val)
                 db.add(row)
             updated[payload_key] = new_val
+            # 🎯 Fix 145: 사다리를 저장하면 최대 단계를 사다리 길이에 「자동 동기화」.
+            #   사장님 스크린샷: 사다리 3칸인데 최대 단계가 2 라서 600 이 잘려 있었다.
+            #   두 설정이 서로 모순될 수 있는 구조 자체가 함정이므로,
+            #   「사다리 길이 = 단계 수」로 못 박는다.
+            if key == "sajangnim_capital_ladder":
+                _n = len([x for x in new_val.split(",") if x.strip()])
+                _ms = db.get(SystemSetting, "sajangnim_max_stage")
+                if _ms:
+                    _ms.value = str(_n)
+                else:
+                    db.add(SystemSetting(key="sajangnim_max_stage", value=str(_n)))
+                updated["max_stage"] = str(_n)
+                logger.info("[Fix145] 사다리 %s 저장 → max_stage 자동 %d 동기화", new_val, _n)
         except Exception as e:
             return {"error": f"{payload_key}: {e}"}
     db.commit()
