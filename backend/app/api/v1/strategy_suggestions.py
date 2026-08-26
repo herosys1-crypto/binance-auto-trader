@@ -1021,13 +1021,18 @@ def get_v219_monitoring(
         logger.warning("[v219-monitoring] reentry_watch_long 조회 실패: %s", e)
 
     # ─── 3) daily_limit (SystemSetting) ───
+    # 🚨 Fix 110 (2026-08-26): UI ↔ 워커 한도 불일치 해소! (헌법 6 단일 진실!)
+    #   옛: sajangnim_top_short_daily_limit 만 직접 조회
+    #       → 키가 없으면 UI 는 0 (= OFF 처럼 보임)
+    #       → 그런데 워커는 fallback 체인(auto_bb_break_daily_limit → DEFAULT 20)
+    #       → 화면은 「0 = 정지」인데 실제로는 20건씩 진입! (사장님 137건 사고!)
+    #   신: 워커의 _get_daily_limit 을 그대로 재사용 = 화면 == 실제!
     daily_limit = 0
     try:
-        row = db.get(SystemSetting, "sajangnim_top_short_daily_limit")
-        if row and row.value:
-            daily_limit = int(row.value)
+        from app.workers.auto_short_at_top_worker import _get_daily_limit as _wk_daily_limit
+        daily_limit = _wk_daily_limit(db)
     except Exception as e:
-        logger.warning("[v219-monitoring] daily_limit 조회 실패: %s", e)
+        logger.warning("[v219-monitoring+Fix110] daily_limit 조회 실패: %s", e)
 
     # ─── 4) daily_used (오늘 v219 실행 개수 = KST 기준!) ───
     #    suggestion_type = "sajangnim_top_short" + executed_at 오늘 (KST)!
@@ -1035,21 +1040,25 @@ def get_v219_monitoring(
     try:
         from datetime import timedelta as _td
         now_utc = _dt.now(timezone.utc)
-        # KST 자정 = UTC 15:00 (전일)
-        kst_now = now_utc + _td(hours=9)
-        kst_midnight_utc = (
-            kst_now.replace(hour=0, minute=0, second=0, microsecond=0) - _td(hours=9)
-        )
-        cnt_row = db.execute(
-            select(StrategySuggestion).where(
-                StrategySuggestion.suggestion_type == "sajangnim_top_short",
-                StrategySuggestion.executed_at.is_not(None),
-                StrategySuggestion.executed_at >= kst_midnight_utc,
-            )
-        ).scalars().all()
-        daily_used = len(cnt_row)
+        # 🚨 Fix 110 (2026-08-26 CRITICAL): UI ↔ 워커 카운터 불일치 해소! (헌법 6 단일 진실!)
+        #
+        # 사장님 실측: UI 「오늘 자동 진입 137/0」 인데
+        #             워커는 슬롯 여유가 있다고 판단해 계속 진입 가능 상태!
+        #             = 사장님이 화면을 봐도 실제 상태를 알 수 없었음!
+        #
+        # 옛 UI 쿼리 (아래 주석 = 폐기!):
+        #   suggestion_type == "sajangnim_top_short" 만  → 다른 SHORT 소스 누락
+        #   status / execution_mode / side 필터 없음      → 미실행 제안까지 카운트
+        #   outcome_status 필터 없음                      → 익절 성공 건도 카운트!
+        #   KST 자정 고정                                 → 사장님 수동 리셋 무시
+        #
+        # 신: 워커의 _count_v219_used_slots 를 그대로 재사용!
+        #     = 화면 숫자 == 워커 판정 근거 (100% 동일 진실!)
+        #     사장님 사상: "익절 = 카운트 X (성공 = 재도전 가능!)" 도 자동 반영!
+        from app.workers.auto_short_at_top_worker import _count_v219_used_slots
+        daily_used = _count_v219_used_slots(db)
     except Exception as e:
-        logger.warning("[v219-monitoring] daily_used 집계 실패: %s", e)
+        logger.warning("[v219-monitoring+Fix110] daily_used 집계 실패: %s", e)
 
     return {
         # ─── SHORT (기존, 호환성 유지!) ───
