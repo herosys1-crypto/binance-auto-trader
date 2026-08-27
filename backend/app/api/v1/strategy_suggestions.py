@@ -227,9 +227,8 @@ def get_sajangnim_settings(
     # 사장님 verbatim: "3단계까지 갈수 있다야 가능하면 가지않는 관리가 필요"
     # 1 = 재진입 X (1단계에서 종료) / 2 = 1→2단계까지 (사장님 추천!) / 3 = 1→2→3단계까지 (매우 신중!)
     max_stage_row = db.get(SystemSetting, "sajangnim_max_stage")
-    # 🎯 v219 (2026-08-23 사장님!): 7중 정점 SHORT 일일 한도 (auto_short_at_top 워커!)
-    # 0 = 자동 SHORT 비활성 / 30 = 최대 (auto_bb_break_daily_limit 와 공유 슬롯!)
-    top_short_daily_limit_row = db.get(SystemSetting, "sajangnim_top_short_daily_limit")
+    # 🎯 v219 → Fix 112 로 의미 변경: 「하루 건수」가 아니라 「동시 보유 상한」.
+    # 🚨 Fix 188: 여기서 원시 키를 직접 읽지 않는다 — _effective_concurrent_limit 참조.
 
     return {
         "default_capital": float(default_cap_row.value) if default_cap_row and default_cap_row.value else 300.0,
@@ -240,7 +239,11 @@ def get_sajangnim_settings(
         #   원시 설정값이 아니라 「실제 적용되는 값」을 돌려준다 (헌법 85).
         #   get_max_stage 는 사다리 길이를 상한으로 clamp 한다.
         "max_stage": _effective_max_stage(db),
-        "top_short_daily_limit": int(top_short_daily_limit_row.value) if top_short_daily_limit_row and top_short_daily_limit_row.value else 0,
+        # 🚨 Fix 188 (2026-08-28 사장님 "30개에서 10개로 자동 변경"):
+        #   원시 키가 아니라 **워커가 실제로 쓰는 값**을 돌려준다 (헌법 85).
+        #   옛 코드는 sajangnim_top_short_daily_limit 만 읽어서,
+        #   더 우선순위 높은 키가 있으면 화면과 실제가 영구히 어긋났다.
+        "top_short_daily_limit": _effective_concurrent_limit(db),
         # 🎯 Fix 144 (2026-08-26 사장님): 자본 사다리 (UI 에서 직접 수정 가능하게)
         #   실제 적용값을 그대로 돌려준다 = 화면과 워커가 같은 진실을 본다 (헌법 85)
         "capital_ladder": _current_ladder_str(db),
@@ -284,6 +287,38 @@ def _current_pyramid_capital(db) -> str:
         return s.rstrip("0").rstrip(".") if "." in s else s
     except Exception:
         return "300"
+
+
+def _effective_concurrent_limit(db) -> int:
+    """🚨 Fix 188 (2026-08-28 사장님): 실제 적용되는 「최대 동시 포지션」.
+
+    사장님 증상: "최대 포지션 30개에서 10개로 자동으로 변경되었어"
+
+    원인 = 화면이 읽는 키와 워커가 읽는 키가 달랐다 (헌법 85/101).
+      워커 get_max_concurrent() 우선순위:
+        ① sajangnim_max_concurrent_positions   ← 최우선인데 **쓰는 코드가 없다**
+        ② sajangnim_top_short_daily_limit      ← UI 가 읽고 쓰던 유일한 키
+        ③ auto_bb_break_daily_limit
+      → ① 이 DB 에 한 번이라도 들어가 있으면 (과거 수동 DB 명령 등)
+        UI 에서 아무리 바꿔도 워커는 계속 ① 을 본다.
+        화면은 ② 를 보여주므로 **화면과 실제가 영구히 어긋난다.**
+
+    → 워커와 **같은 함수**를 써서 「지금 실제로 적용되는 값」을 돌려준다.
+    """
+    try:
+        from app.services.position_limit import get_max_concurrent
+        limit, src = get_max_concurrent(db)
+        if src not in ("sajangnim_top_short_daily_limit", "default"):
+            logger.warning(
+                "[Fix188] 동시 상한이 UI 키가 아닌 '%s' 에서 결정되고 있습니다 (값=%s). "
+                "PUT 시 두 키를 함께 동기화합니다.", src, limit,
+            )
+        return int(limit)
+    except Exception as e:
+        # fail-safe 하지 않고 raw 값으로 떨어지면 화면이 또 거짓말을 한다.
+        logger.warning("[Fix188] 동시 상한 조회 실패: %s", e)
+        row = db.get(SystemSetting, "sajangnim_top_short_daily_limit")
+        return int(row.value) if row and row.value else 0
 
 
 def _effective_max_stage(db) -> int:
@@ -452,6 +487,27 @@ def set_sajangnim_settings(
                     db.add(SystemSetting(key="sajangnim_max_stage", value=str(_n)))
                 updated["max_stage"] = str(_n)
                 logger.info("[Fix145] 사다리 %s 저장 → max_stage 자동 %d 동기화", new_val, _n)
+            # 🚨 Fix 188 (2026-08-28 사장님): 동시 상한은 키가 3개인데 UI 는 1개만 썼다.
+            #   get_max_concurrent 는 sajangnim_max_concurrent_positions 를 **먼저** 보므로,
+            #   그 키가 남아 있으면 사장님이 화면에서 바꾼 값이 조용히 무시된다.
+            #   → 저장할 때 우선순위 키도 **같은 값으로** 맞춰서
+            #     "어느 키가 이기든 화면과 같다" 를 보장한다 (헌법 102: 모순 가능한 설정 금지).
+            if key == "sajangnim_top_short_daily_limit":
+                _pk = "sajangnim_max_concurrent_positions"
+                _pr = db.get(SystemSetting, _pk)
+                if _pr:
+                    if str(_pr.value).strip() != new_val:
+                        logger.warning(
+                            "[Fix188] 그림자 키 %s=%s 가 화면값 %s 를 덮고 있었습니다 → 동기화",
+                            _pk, _pr.value, new_val,
+                        )
+                    _pr.value = new_val
+                else:
+                    db.add(SystemSetting(
+                        key=_pk, value=new_val,
+                        description="Fix188: 동시 보유 상한 (UI 최대 동시 포지션과 항상 동일)",
+                    ))
+                updated["max_concurrent_positions"] = new_val
         except Exception as e:
             # 🚨 Fix 181: 옛 코드는 `return {"error": ...}` = **HTTP 200** 이었다.
             #   프론트 api() 는 200 을 성공으로 통과시키고, saveV219Settings 는

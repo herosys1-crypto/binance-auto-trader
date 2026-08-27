@@ -1498,7 +1498,27 @@ function renderBbSplitPreview() {
 // ⚠️ 이 파일에는 saveV219Settings 가 **두 번** 정의돼 있고 (위쪽 하나 + 여기),
 //    JS 는 나중 정의가 이깁니다 = **이 함수가 실제로 동작하는 쪽**입니다.
 //    위쪽 정의는 죽은 코드이므로 수정해도 아무 효과가 없습니다 (헌법 63).
+// 🚨 Fix 189 (2026-08-28 사장님 "켬으로 했는데 껌으로 변해 있었어"):
+//   loadV219Settings 가 실패해도 화면엔 아무 표시가 없었고 (catch(e){} 완전 침묵),
+//   그 상태의 화면은 **HTML 기본값**을 그대로 들고 있다.
+//   특히 볼밴 「사용」 select 는 첫 옵션이 ⏹️ 끔 이라, 그 화면에서 저장을 누르면
+//   켜져 있던 전략이 꺼진다. 최대 동시 포지션도 HTML 기본값으로 덮인다.
+//   → 「한 번이라도 서버 값을 받아온 화면」에서만 저장을 허용한다.
+let _v219Loaded = false;
+
 async function saveV219Settings() {
+  const msgEl0 = document.getElementById('v219-settings-msg');
+  if (!_v219Loaded) {
+    // 저장을 막는 편이 안전하다 — 못 누르는 것보다 조용히 꺼지는 게 훨씬 위험하다.
+    if (msgEl0) {
+      msgEl0.innerHTML = '<span style="color:#ef4444;font-weight:bold;">'
+        + '❌ 아직 서버 설정을 불러오지 못했습니다 — 저장하지 않았습니다.<br>'
+        + '지금 저장하면 화면의 기본값이 실제 설정을 덮어씁니다 '
+        + '(볼밴 「사용」이 꺼질 수 있음). 새로고침 후 다시 시도하세요.</span>';
+    }
+    try { await loadV219Settings(); } catch (_e) {}
+    return;
+  }
   const limit = parseInt(document.getElementById('v219-daily-limit').value);
   const capital = parseFloat(document.getElementById('v219-capital').value);
   // 🎯 Fix 145: 최대 단계는 사다리 칸 수에서 파생 (별도 입력 = 모순 원인)
@@ -1524,16 +1544,30 @@ async function saveV219Settings() {
   if (bbCap && String(bbCap.value).trim()) payload.bbsplit_capitals = String(bbCap.value).trim();
   try {
     await api('/strategy-suggestions/sajangnim-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-    if (msgEl) msgEl.innerHTML = '<span style="color:#22c55e;font-weight:bold;">✅ 저장 완료! 값=' + payload.top_short_daily_limit + ' (2초 후 재로드!)</span>';
-    setTimeout(() => {
-      loadV219Settings();
-      // 값 세팅 후 = 확실히 UI 반영!
-      setTimeout(() => {
-        const limitEl = document.getElementById('v219-daily-limit');
-        if (limitEl) limitEl.value = String(payload.top_short_daily_limit);
-        console.log('✅ 강제 세팅:', payload.top_short_daily_limit);
-      }, 1000);
-    }, 500);
+    // 🚨 Fix 189: 옛 코드는 저장 직후 화면을 **보낸 값으로 강제 세팅**했다.
+    //   서버가 clamp 하거나 다른 키가 이겨서 실제 값이 달라도 화면은 성공처럼 보인다
+    //   = 「저장은 됐는데 반영 안 됨」을 눈으로 볼 수 없게 만드는 코드였다 (헌법 85).
+    //   → 서버에서 **다시 읽어** 대조하고, 다르면 그 자리에서 알린다.
+    await loadV219Settings();
+    const _now = {
+      '최대 동시 포지션': [payload.top_short_daily_limit,
+        parseInt((document.getElementById('v219-daily-limit') || {}).value)],
+      '볼밴 사용': [String(payload.bbsplit_enabled),
+        String((document.getElementById('bbsplit-enabled') || {}).value)],
+      '볼밴 전용 상한': [payload.bbsplit_max,
+        parseInt((document.getElementById('bbsplit-max') || {}).value)],
+    };
+    const _diff = Object.keys(_now).filter((k) => {
+      const [sent, got] = _now[k];
+      return sent !== undefined && String(sent) !== String(got);
+    });
+    if (msgEl) {
+      msgEl.innerHTML = _diff.length
+        ? '<span style="color:#f59e0b;font-weight:bold;">⚠️ 저장했지만 서버 값이 다릅니다: '
+          + _diff.map((k) => k + ' (보냄 ' + _now[k][0] + ' → 실제 ' + _now[k][1] + ')').join(', ')
+          + '</span>'
+        : '<span style="color:#22c55e;font-weight:bold;">✅ 저장 완료 (서버 값으로 재확인함)</span>';
+    }
   } catch(e) {
     if (msgEl) msgEl.innerHTML = '<span style="color:#ef4444;">❌ 실패: ' + e.message + '</span>';
   }
@@ -1577,7 +1611,22 @@ async function loadV219Settings(retry = 0) {
       const parts = String(r.capital_ladder).split(',').map(x => x.trim()).filter(Boolean);
       prev.textContent = parts.map((v, i) => (i + 1) + '단계 ' + v).join(' · ');
     }
-  } catch(e) {}
+    // 🚨 Fix 189: 여기까지 와야 「서버 값을 실제로 받은 화면」이다. 이때만 저장을 허용한다.
+    _v219Loaded = true;
+  } catch(e) {
+    // 🚨 Fix 189: 옛 코드는 `catch(e){}` = 완전 침묵이었다 (헌법 80).
+    //   로드 실패를 모른 채 저장하면 HTML 기본값(볼밴 = 첫 옵션 ⏹️ 끔)이 DB 를 덮어쓴다.
+    _v219Loaded = false;
+    const msgEl = document.getElementById('v219-settings-msg');
+    if (msgEl) {
+      msgEl.innerHTML = '<span style="color:#ef4444;font-weight:bold;">'
+        + '❌ 설정을 불러오지 못했습니다 — 아래 값은 <b>실제 설정이 아닙니다</b>.<br>'
+        + '이 상태에서 저장하지 마세요 (저장은 차단됩니다). 사유: '
+        + ((e && e.message) || e) + '</span>';
+    }
+    console.warn('[v219/settings] 로드 실패:', e);
+    if (retry < 5) setTimeout(() => loadV219Settings(retry + 1), 2000);
+  }
 }
 if (typeof window !== 'undefined') {
   window.saveV219Settings = saveV219Settings;
