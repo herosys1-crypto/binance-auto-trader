@@ -44,7 +44,7 @@ class TestTp10TrailingArmedStatuses:
         import inspect
         src = inspect.getsource(RiskService.evaluate_take_profit_level)
         # TRAILING_MIN_TP_INDEX (=4) ~ 10 까지 dynamic range 가 코드에 있어야
-        expected_pattern = f"range(TRAILING_MIN_TP_INDEX, 11)"
+        expected_pattern = "range(TRAILING_MIN_TP_INDEX, TOTAL_TP_LEVELS + 1)"
         assert expected_pattern in src, (
             f"TRAILING_ARMED_STATUSES 는 range(TRAILING_MIN_TP_INDEX={TRAILING_MIN_TP_INDEX}, 11) 로 "
             f"동적 산출돼야 함. 직접 범위 변경 시 정책 정합성 깨짐."
@@ -58,7 +58,7 @@ class TestTp10LevelDetection:
         import inspect
         src = inspect.getsource(RiskService.evaluate_take_profit_level)
         # range(10, 0, -1) 또는 range(1, 11) 패턴 검증
-        assert "range(10, 0, -1)" in src or "range(1, 11)" in src, (
+        assert "range(_MAX_TP, 0, -1)" in src or "range(1, _MAX_TP + 1)" in src, (
             "tp_levels 가 TP1~TP10 동적 검출되어야 함"
         )
 
@@ -66,7 +66,7 @@ class TestTp10LevelDetection:
         from app.services.risk_service import RiskService
         import inspect
         src = inspect.getsource(RiskService.evaluate_take_profit_level)
-        assert "range(1, 11)" in src, (
+        assert "range(1, TOTAL_TP_LEVELS + 1)" in src, (
             "TP_DONE_INDEX dict 가 TP1~10 모두 포함해야 함"
         )
 
@@ -78,7 +78,7 @@ class TestTp10OrchestratorRatio:
         import inspect
         src = inspect.getsource(TPSLOrchestratorService._execute_take_profit)
         # range(1, 11) 패턴 또는 TP10 직접 명시
-        assert "range(1, 11)" in src or '"TP10"' in src, (
+        assert "range(1, TOTAL_TP_LEVELS + 1)" in src or "range(1, 21)" in src, (
             "ratio_attr 가 TP1~10 모두 매핑해야 함"
         )
 
@@ -87,7 +87,7 @@ class TestTp10OrchestratorRatio:
         from app.services.tp_sl_orchestrator import TPSLOrchestratorService
         import inspect
         src = inspect.getsource(TPSLOrchestratorService.run_for_strategy)
-        assert "range(1, 11)" in src, (
+        assert "range(1, TOTAL_TP_LEVELS + 1)" in src, (
             "done_levels_progression 이 TP1~10_DONE_PARTIAL 모두 포함해야 함"
         )
 
@@ -96,7 +96,7 @@ class TestTp10OrchestratorRatio:
         from app.services.tp_sl_orchestrator import TPSLOrchestratorService
         import inspect
         src = inspect.getsource(TPSLOrchestratorService._execute_take_profit)
-        assert "range(1, 11)" in src, (
+        assert "range(1, TOTAL_TP_LEVELS + 1)" in src, (
             "active_tps 스캔이 tp1~tp10_percent 까지 확장돼야 함"
         )
 
@@ -115,6 +115,14 @@ class TestTp10ModelColumns:
 
 
 class TestTp10CountActiveTps:
+    """⚠️ Fix 186 (2026-08-27): 이 클래스는 **v121 이후 계속 실패하고 있었다.**
+
+    app/api/v1/strategies/helpers.py:41 `_count_active_tps` 는
+    "2026-07-22 v121 사장님 최종 요구: **무조건 20 반환**" 으로 바뀌었는데
+    (모든 카드를 20 슬롯으로 표시하기 위함) 이 테스트만 == 5 로 남아 있었다.
+    낡은 건 코드가 아니라 테스트다 → 실제 의도(항상 20)에 맞춘다.
+    TP20 확장(Fix 186)과는 무관한 기존 부채이며, 이번에 같이 정리한다.
+    """
     def test_count_active_tps_scans_to_10(self):
         from app.api.v1.strategies import _count_active_tps
         # mock template — TP1~3 + TP6 + TP10 채움
@@ -126,7 +134,7 @@ class TestTp10CountActiveTps:
         tpl.tp3_percent = Decimal("20")
         tpl.tp6_percent = Decimal("35")
         tpl.tp10_percent = Decimal("55")
-        assert _count_active_tps(tpl) == 5, (
+        assert _count_active_tps(tpl) == 20, (   # v121: 무조건 20 (카드 슬롯 표시용)
             "활성 TP 카운트가 tp1~tp10 까지 NULL 검사해야 함"
         )
 
@@ -140,4 +148,4 @@ class TestTp10CountActiveTps:
         tpl.tp3_percent = Decimal("20")
         tpl.tp4_percent = Decimal("25")
         tpl.tp5_percent = Decimal("30")
-        assert _count_active_tps(tpl) == 5
+        assert _count_active_tps(tpl) == 20   # v121: 무조건 20

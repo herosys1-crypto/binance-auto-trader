@@ -5,6 +5,7 @@ from decimal import Decimal
 from app.core.redis_client import get_redis_client
 
 logger = logging.getLogger(__name__)
+from app.core.strategy_status import TOTAL_TP_LEVELS   # Fix 186: TP 단계 수 단일 진실
 from app.models.risk_event import RiskEvent
 from app.observability.metrics import strategy_stop_loss_total
 from app.repositories.position_repository import PositionRepository
@@ -430,15 +431,32 @@ class RiskService:
             if val is not None:
                 _tpl_vals[n] = Decimal(str(val))
         # 2) auto-extend: 마지막 명시된 TP 이후 = 5%씩 자동 증가!
-        _all_tps: dict[int, Decimal] = dict(_tpl_vals)
-        if _tpl_vals:
-            _last_n = max(_tpl_vals.keys())
-            _last_v = _tpl_vals[_last_n]
-            for n in range(_last_n + 1, 21):
+        # ══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 184 (2026-08-27): 생성 범위를 20 → TOTAL_TP_LEVELS(10) 로 좁힌다.
+        #
+        # 시스템 전체가 TP10 까지만 지원한다:
+        #   strategy_status.py:21  TOTAL_TP_LEVELS = 10
+        #   상태값도 TP1_DONE_PARTIAL ~ TP10_DONE_PARTIAL 뿐이고,
+        #   :581 TP_LABEL_TO_IDX 도 TP1~TP10 만 담는다.
+        # → TP11~TP20 은 만들어져도 `.get(label, -1)` = -1 이 되어
+        #   **어떤 ROI 에서도 절대 선택되지 않는다** (실측 확인: TP10 완료 후
+        #   ROI 200% 에서도 TP11 이 나오지 않음).
+        # 죽은 항목을 20개까지 만들어 로그를 채우면 진단이 어려워지므로 끊는다.
+        # ⚠️ TP11+ 를 진짜로 쓰려면 TOTAL_TP_LEVELS 와 상태값 정의를 함께 늘려야 한다
+        #    (reconcile / zombie_guardian / daily_loss 가 모두 그 상수를 참조한다).
+        # ══════════════════════════════════════════════════════════════════
+        from app.core.strategy_status import TOTAL_TP_LEVELS as _MAX_TP
+        _all_tps: dict[int, Decimal] = {
+            n: v for n, v in _tpl_vals.items() if n <= _MAX_TP
+        }
+        if _all_tps:
+            _last_n = max(_all_tps.keys())
+            _last_v = _all_tps[_last_n]
+            for n in range(_last_n + 1, _MAX_TP + 1):
                 _last_v = _last_v + Decimal("5")
                 _all_tps[n] = _last_v
-        # 3) TP20..TP1 순 (내림차순) — 옛 로직과 동일하게 tp_levels 채움
-        for n in range(20, 0, -1):
+        # 3) TP10..TP1 순 (내림차순) — 옛 로직과 동일하게 tp_levels 채움
+        for n in range(_MAX_TP, 0, -1):
             if n in _all_tps:
                 tp_levels.append((f"TP{n}", _all_tps[n]))
 
@@ -508,15 +526,41 @@ class RiskService:
                 #     TP2~TP20 은 v131 의도대로 template 원값을 유지한다
                 #     (= v105 의 max() 로 되돌리지 않는다 → #838 동시청산 재발 없음).
                 # ══════════════════════════════════════════════════════════════
-                tp_levels = [
-                    (label, _override if label == "TP1" else val)
-                    for label, val in tp_levels
-                ]
+                # ══════════════════════════════════════════════════════════════
+                # 🚨 Fix 184 (2026-08-27 사장님): 사다리 **전체를 TP1 기준으로 이동**.
+                #
+                # 사장님: "지금 기본 tp1 ~ tp20 단계를 사용하면 안될까?"
+                #
+                # TP1 만 바꾸면 사다리가 뒤집혀 **연쇄 발동**이 난다 (실측 시뮬레이션):
+                #     TP1=20(설정) TP2=15 TP3=20 …  → ROI 20% 에서
+                #     TP1 → TP2 → TP3 가 **45초 안에 연달아** 나간다.
+                #     TP2·TP3 임계가 이미 지나 있기 때문. = #838 동시청산과 같은 결과.
+                #
+                # 해법: TP1 을 사장님 설정값으로 옮기고 **나머지도 같은 폭만큼 이동**한다.
+                #     template 10/15/20/25, 설정 20  →  shift +10  →  20/25/30/35
+                #   · TP1 = 정확히 사장님 설정값 (절대 우선)
+                #   · 단계 간격은 template 그대로 유지 (사장님이 정한 간격 존중)
+                #   · 단조 증가가 보장되어 연쇄 발동이 원천 차단된다
+                # ══════════════════════════════════════════════════════════════
+                _tp1_base = _all_tps.get(1)
+                if _tp1_base is not None:
+                    _shift = _override - Decimal(str(_tp1_base))
+                    tp_levels = [(label, val + _shift) for label, val in tp_levels]
+                else:
+                    # template 에 TP1 이 없으면 TP1 만 지정 (이동 기준이 없다)
+                    tp_levels = [
+                        (label, _override if label == "TP1" else val)
+                        for label, val in tp_levels
+                    ]
+                    _shift = None
                 logger.info(
-                    "[risk] Fix183 TP1 옵션 적용 (label 기준) strategy=%s "
-                    "TP1_override=%s → TP1=%s",
-                    strategy.id, _override,
-                    next((v for l, v in tp_levels if l == "TP1"), None),
+                    "[risk] Fix183/184 TP1 옵션 적용 strategy=%s TP1_override=%s "
+                    "shift=%s → %s",
+                    strategy.id, _override, _shift,
+                    ", ".join(
+                        f"{l}={v}" for l, v in
+                        sorted(tp_levels, key=lambda x: int(x[0][2:]))[:5]
+                    ),
                 )
 
         # 2026-05-04 critical fix (사용자 #98 LABUSDT 사례):
@@ -530,7 +574,8 @@ class RiskService:
         #   ② 진입 단계 3 이상 (current_stage >= 3)
         # 2단계까지만 진입한 strategy 의 짧은 잔량 trailing 청산 무력화 (사용자 의도).
         TRAILING_ARMED_STATUSES = (
-            {f"TP{n}_DONE_PARTIAL" for n in range(TRAILING_MIN_TP_INDEX, 11)}
+            {f"TP{n}_DONE_PARTIAL"
+             for n in range(TRAILING_MIN_TP_INDEX, TOTAL_TP_LEVELS + 1)}   # Fix 186
             | {"TRAILING_ARMED"}
         )
         # 🌟 2026-06-08 사장님 trailing retrace 옵션 (alembic 0017):
@@ -563,7 +608,7 @@ class RiskService:
         )
         # 첫 TP 발동 status (TP1~TP10)
         _TP_ANY_TRIGGERED = (
-            {f"TP{n}_DONE_PARTIAL" for n in range(1, 11)}
+            {f"TP{n}_DONE_PARTIAL" for n in range(1, TOTAL_TP_LEVELS + 1)}   # Fix 186
             | {"TRAILING_ARMED"}
         )
         _any_tp_triggered = (strategy.status or "").upper() in _TP_ANY_TRIGGERED
@@ -601,9 +646,10 @@ class RiskService:
         # status 의 cur_done_idx 를 여기서 직접 참고해 다음 단계 TP 1개씩 반환.
         # 한 tick 1회 발동, 다음 tick 다음 TP — 점진적이지만 누락 없음.
         # 2026-05-06: TP1~10 단계 동적 (사용자 요청 10단계 확장).
-        TP_DONE_INDEX = {f"TP{n}_DONE_PARTIAL": n - 1 for n in range(1, 11)}
+        TP_DONE_INDEX = {f"TP{n}_DONE_PARTIAL": n - 1
+                         for n in range(1, TOTAL_TP_LEVELS + 1)}   # Fix 186
         TP_DONE_INDEX["TP2_DONE"] = 1  # legacy 호환
-        TP_LABEL_TO_IDX = {f"TP{n}": n - 1 for n in range(1, 11)}
+        TP_LABEL_TO_IDX = {f"TP{n}": n - 1 for n in range(1, TOTAL_TP_LEVELS + 1)}   # Fix 186
         cur_done_idx = TP_DONE_INDEX.get((strategy.status or "").upper(), -1)
 
         # ══════════════════════════════════════════════════════════════════

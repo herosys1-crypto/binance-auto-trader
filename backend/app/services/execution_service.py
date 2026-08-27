@@ -357,7 +357,8 @@ class ExecutionService:
         # 무조건 STOPPING 으로 덮어쓰지 않게 — current status 가 STAGE_X_OPEN 류일 때만.
         # 2026-05-06: TP1~10_DONE_PARTIAL 모두 보호 (10단계 익절 확장).
         # 🌟 2026-06-08: is_full_close 검증 추가 (부분 청산 = 옛 status 유지 = 사장님 의도)
-        _TP_PARTIAL_SET = {f"TP{n}_DONE_PARTIAL" for n in range(1, 11)}
+        from app.core.strategy_status import TOTAL_TP_LEVELS as _TPMAX   # Fix 186
+        _TP_PARTIAL_SET = {f"TP{n}_DONE_PARTIAL" for n in range(1, _TPMAX + 1)}
         if strategy.status not in ({"COMPLETED", "REENTRY_READY", "STOPPED"} | _TP_PARTIAL_SET):
             if is_full_close:
                 strategy.status = "STOPPING"  # 풀 청산 = STOPPING 정상

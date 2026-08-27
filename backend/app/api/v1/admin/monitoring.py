@@ -10,6 +10,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.strategy_status import TOTAL_TP_LEVELS   # Fix 186
 from app.api.deps import get_current_user_id, get_db
 
 import logging
@@ -738,7 +739,8 @@ def diagnose_strategy(
 
     # Trailing 발동 조건 자체 평가 (real-time)
     TRAILING_ARMED_STATUSES = (
-        {f"TP{n}_DONE_PARTIAL" for n in range(TRAILING_MIN_TP_INDEX, 11)}
+        {f"TP{n}_DONE_PARTIAL"
+         for n in range(TRAILING_MIN_TP_INDEX, TOTAL_TP_LEVELS + 1)}   # Fix 186
         | {"TRAILING_ARMED"}
     )
     status_upper = (s.status or "").upper()
