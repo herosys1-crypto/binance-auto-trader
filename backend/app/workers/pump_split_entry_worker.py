@@ -33,18 +33,24 @@
 
     「긴 추세」= 4H 종가가 4H 중단선 위(LONG)/아래(SHORT)로 LONG_TREND_BARS(6봉=24h) 연속 유지.
 
-    분할 차수 = 기준선을 **얼마나 더 벗어났는가**:
-        1차 100 : 기준선 이탈 (0%)
-        2차 200 : 기준선 대비 -1% (SHORT 는 +1%)
-        3차 300 : 기준선 대비 -2% (SHORT 는 +2%)
+    분할 차수 = 기준선을 **얼마나 더 벗어났는가** (SHORT 는 부호 반대):
+        1차 100 : 기준선 -3%
+        2차 200 : 기준선 -5%
+        3차 300 : 기준선 -7%
     → 2·3차는 stage_plan.trigger_price 로 심어두고 **기존 stage_trigger_worker 가
       가격 트리거로 처리**한다. 새 진입 경로를 만들지 않는다 (헌법 6).
 
 ■ 청산 규칙
 
-    손절   : 평단 ROI **-5%** → 전량 (1·2·3차 어느 시점이든. Fix 178 이 보장)
-    익절   : TP1 **+5%** 부터 **25%씩 4회** = +5 / +10 / +15 / +20
+    손절   : 평단 ROI **-10%** → 전량 (1·2·3차 어느 시점이든. Fix 178 이 보장)
+    익절   : TP1 **+15%** 부터 **25%씩 4회** = +15 / +20 / +25 / +30
     트레일링: 고점 대비 **-3%** 회귀 시 잔량 청산
+
+■ 손실 규모 (2x 기준)
+
+    1차만 물림  : 투입 100U → 손절 시 -10U
+    2차까지     : 투입 300U → -30U
+    3차까지     : 투입 600U → **-60U**  (최악)
 
 ■ 안전장치
 
@@ -73,11 +79,26 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["run_pump_split_entry_once"]
 
-# ── 사장님 지정 파라미터 ────────────────────────────────────────────────
+# ── 사장님 확정 파라미터 (2026-08-27) ──────────────────────────────────
+#   "볼밴 하단 -3% 이탈하면 100 진입 / -5% 이탈하면 200 / -7% 이탈하면 300
+#    손절가는 -10% ... tp1 15% 부터"
+#
+# 실측 계산 (볼밴 기준선=1.0, 2x, 1차 진입가를 0% 로 두고):
+#   1차 100U @ -3%  → 평단  0.00% (진입가대비)
+#   2차 200U @ -5%  → 평단 -1.38%   누적 300U
+#   3차 300U @ -7%  → 평단 -2.77%   누적 600U
+#   손절 ROI -10%   → 진입가대비 -7.63% = 볼밴 -10.41%  손실 60U
+#   TP1 15%         → 진입가대비 +4.52% (3차까지) / +7.50% (1차만)
+#
+# ⚠️ 왜 손절이 ROI 인가: 시스템 force SL 은 ROI 기준이다(risk_service).
+#    ROI -10% 를 넣으면 3차까지 물렸을 때 볼밴 -10.41% 에서 잘려
+#    사장님이 지정한 「-10%」와 사실상 일치하고, 2·3차 트리거보다 항상 뒤에 온다
+#    (1차보유 손절 -7.85% / 2차보유 -9.13% → 3차 트리거 -7% 가 먼저).
+#    = 어느 차수도 「죽은 단계」가 되지 않는다. 이 정합성은 검증 테스트로 고정한다.
 CAPITALS = [Decimal("100"), Decimal("200"), Decimal("300")]   # 총 600
-SPLIT_STEP_PCT = [Decimal("0"), Decimal("1"), Decimal("2")]   # 기준선 대비 이탈 심도
-FORCE_SL_ROI = Decimal("5")        # 평단 ROI -5% 전량 청산
-TP_PERCENTS = [5, 10, 15, 20]      # +5% 부터
+SPLIT_STEP_PCT = [Decimal("3"), Decimal("5"), Decimal("7")]   # 기준선 대비 이탈 심도
+FORCE_SL_ROI = Decimal("10")       # 평단 ROI -10% 전량 청산
+TP_PERCENTS = [15, 20, 25, 30]     # TP1 +15% 부터
 TP_QTY_RATIOS = [25, 25, 25, 25]   # 25% 씩
 TRAILING_RETRACE_PCT = Decimal("3")  # 익절 회귀 -3% (짧게)
 LEVERAGE = 2
@@ -129,23 +150,40 @@ def _is_long_trend(a4: dict, side: str) -> tuple[bool, str]:
 
 
 def _entry_plan(a15: dict, side: str, long_trend: bool) -> tuple[Decimal | None, str]:
-    """기준선(base)과 사유를 반환. 이탈 안 했으면 (None, 사유)."""
+    """기준선(base)과 사유를 반환. 1차 진입 조건 미충족이면 (None, 사유).
+
+    ⚠️ 1차는 「기준선 이탈 즉시」가 아니라 **기준선 대비 SPLIT_STEP_PCT[0](-3%)
+       까지 밀렸을 때** 진입한다 (사장님 확정: "볼밴 하단 -3% 이탈하면 100 진입").
+       기준선을 스치고 바로 되돌리는 가짜 이탈을 걸러내기 위함이다.
+    """
     up, mid, lo = a15.get("bb_up_last"), a15.get("bb_mid_last"), a15.get("bb_lo_last")
     closes = a15.get("closes") or []
     if not closes or up is None or mid is None or lo is None:
         return None, "15m 밴드/종가 없음"
     close = Decimal(str(closes[-1]))
+    step1 = SPLIT_STEP_PCT[0] / Decimal("100")
     if side == "LONG":
         base = Decimal(str(mid)) if long_trend else Decimal(str(lo))
         label = "중단" if long_trend else "하단"
-        if close >= base:
-            return None, f"{label} 미이탈 (close {_fmt(close)} >= {label} {_fmt(base)})"
+        need = base * (Decimal("1") - step1)          # 기준선 -3%
+        if close > need:
+            return None, (
+                f"{label} -{SPLIT_STEP_PCT[0]}% 미도달 "
+                f"(close {_fmt(close)} > 목표 {_fmt(need)} / {label} {_fmt(base)})"
+            )
     else:
         base = Decimal(str(mid)) if long_trend else Decimal(str(up))
         label = "중단" if long_trend else "상단"
-        if close <= base:
-            return None, f"{label} 미이탈 (close {_fmt(close)} <= {label} {_fmt(base)})"
-    return base, f"{label} 이탈 (close {_fmt(close)} / {label} {_fmt(base)})"
+        need = base * (Decimal("1") + step1)          # 기준선 +3%
+        if close < need:
+            return None, (
+                f"{label} +{SPLIT_STEP_PCT[0]}% 미도달 "
+                f"(close {_fmt(close)} < 목표 {_fmt(need)} / {label} {_fmt(base)})"
+            )
+    return base, (
+        f"{label} {SPLIT_STEP_PCT[0]}% 이탈 확인 "
+        f"(close {_fmt(close)} / {label} {_fmt(base)} / 목표 {_fmt(need)})"
+    )
 
 
 def _build_template(db, symbol: str, side: str, base: Decimal) -> StrategyTemplate:
