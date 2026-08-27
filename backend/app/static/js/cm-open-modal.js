@@ -177,6 +177,7 @@ async function openCreateModal(editStrategyId) {
   } catch (_e) {}
   document.getElementById('cm-preview').classList.add('hidden');
   document.getElementById('cm-submit').disabled = true;
+  { const _s = document.getElementById('cm-submit-scheduled'); if (_s) _s.disabled = true; }  // Fix 182
   // 🚨 2026-06-22 사장님 critical v6: scroll guard 강력 모니터링!
   // 사장님 보고: v1~v5 모두 부족 = 「바로 아래로 내려감」!
   // 진짜 원인: 모달 open 후 = await 비동기 (loadCmAccounts, loadPrevBlueprint, _refreshLiveCalc)

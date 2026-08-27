@@ -22,7 +22,10 @@
  *   - DOM: #cm-symbol, #cm-start-price, #cm-leverage, #cm-submit, #cm-multi-symbol-toggle
  */
 
-async function submitCreate() {
+// 📅 Fix 182 (2026-08-27 사장님): scheduled=true 면 「예약」 —
+//   전략을 만들되 /start 를 부르지 않는다. status=WAITING 으로 남고
+//   scheduled_entry_worker 가 운영 진입 로직 조건이 맞을 때 대신 시작한다.
+async function submitCreate(scheduled = false) {
   // 2026-05-12 v2 (사용자 UX 개선): 다중 심볼 모드면 batch 처리로 우회.
   // 단일 모드는 기존 로직 그대로.
   const isMulti = document.getElementById('cm-multi-symbol-toggle')?.checked;
@@ -147,7 +150,18 @@ async function submitCreate() {
   const confirmMsg = editingId
     ? `🔄 전략 #${editingId} 수정\n\n1. 기존 미체결 주문 자동 취소\n2. 새 설정으로 ${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략 시작\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요?`
     : `${symbol} ${cmState.side==='SHORT'?'📉 숏':'📈 롱'} 전략을 시작합니다.\n\n시작가: ${fmtNum(startPrice)}\n총 자본: ${fmtNum(cmState.preview.stages.reduce((s,x)=>s+Number(x.planned_capital||0),0))} USDT\n\n진행할까요? (testnet 거래소면 실거래 발생)`;
-  if (!confirm(confirmMsg)) return;
+  // 📅 Fix 182: 예약은 「지금 주문이 나가지 않는다」는 걸 확인 문구에서 분명히 한다.
+  const _finalMsg = scheduled
+    ? `📅 ${symbol} ${cmState.side === 'SHORT' ? '📉 숏' : '📈 롱'} 전략을 「예약」합니다.\n\n`
+      + `총 자본: ${fmtNum(cmState.preview.stages.reduce((s, x) => s + Number(x.planned_capital || 0), 0))} USDT\n\n`
+      + `⚠️ 지금은 주문이 나가지 않습니다.\n`
+      + `시스템이 운영 진입 로직(15분 정점·저점 확인 + OBV 게이트)을 감시하다가\n`
+      + `조건이 맞으면 그때 1단계를 넣습니다.\n\n`
+      + `· 동시보유 상한과 중복 진입은 진입 직전에 다시 확인합니다\n`
+      + `· 기본 7일 후 만료되어 자동 보관 처리됩니다\n\n`
+      + `예약할까요?`
+    : confirmMsg;
+  if (!confirm(_finalMsg)) return;
   try {
     document.getElementById('cm-submit').disabled = true;
     document.getElementById('cm-submit').textContent = editingId ? '⏳ 종료 + 재시작 중...' : '⏳ 생성 중...';
@@ -212,7 +226,7 @@ async function submitCreate() {
     // = 단계별 개별 트리거 (하이브리드 = 사장님 시장 분석!)
     let _retryAfterLiqEnabled = false;
     let _retryTriggerPct = 10;
-    const _capitalMgmtMode = 'fixed';  // 항상 세팅 그대로 (사장님 사고!)
+    const _capitalMgmtMode = scheduled ? 'scheduled' : 'fixed';  // Fix 182: 예약 마커
     let _retryStagePcts = {};  // 단계별 개별 override!
     try {
       const _retryEl = document.getElementById('cm-retry-after-liq-enabled');
@@ -258,6 +272,17 @@ async function submitCreate() {
       const _stageCount = Object.keys(_retryStagePcts).length;
       const _overrides = _stageCount > 0 ? ` + ${_stageCount}단계 개별!` : '';
       _retryLabel = ` + 🔄 청산 후 재진입 (기본 ${_retryTriggerPct}%${_overrides})`;
+    }
+    // 📅 Fix 182: 예약이면 여기서 끝. /start 를 부르지 않아 status=WAITING 으로 남고,
+    //   scheduled_entry_worker 가 운영 진입 로직 조건이 맞을 때 대신 시작한다.
+    if (scheduled) {
+      toast(
+        `📅 전략 #${created.id} 예약 완료 — 조건 충족 시 시스템이 자동 진입합니다.`,
+        'success',
+      );
+      closeCreateModal();
+      try { refreshStrategies(); } catch (_e) {}
+      return;
     }
     toast(`✅ 전략 #${created.id} 생성됨! [${_modeLabel}${_retryLabel}] 1단계 주문 발송 중...`, 'success');
     try {

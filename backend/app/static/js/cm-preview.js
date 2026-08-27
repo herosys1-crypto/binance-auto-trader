@@ -36,6 +36,7 @@ function updateCmSubmit() {
     const validCount = (typeof _cmMultiSymbols !== 'undefined' ? _cmMultiSymbols.filter(s => s.status === 'valid').length : 0);
     okMulti = okMulti && (validCount > 0);
     document.getElementById('cm-submit').disabled = !okMulti;
+    { const _s = document.getElementById('cm-submit-scheduled'); if (_s) _s.disabled = !okMulti; }  // Fix 182
     if (typeof _refreshSubmitBtnLabel === 'function') _refreshSubmitBtnLabel();
     return;
   }
@@ -49,6 +50,7 @@ function updateCmSubmit() {
   // 중복 활성 전략 감지된 경우도 차단 (2026-05-03)
   if (cmState._duplicateActive) ok = false;
   document.getElementById('cm-submit').disabled = !ok;
+  { const _s = document.getElementById('cm-submit-scheduled'); if (_s) _s.disabled = !ok; }  // Fix 182
 }
 
 // 미리보기 단계의 잔액/마진 비교 (2026-05-03 추가)

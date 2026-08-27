@@ -2559,6 +2559,11 @@
         <!-- 2026-05-04: 수정 모드일 때만 노출 — TP/SL + capital/trigger 만 in-place 갱신 (시작가/포지션/단계 유지) -->
         <!-- 🌟 2026-06-15 사장님 critical: 옵션 명확화 = '시작가 유지' 안내! -->
         <button id="cm-submit-inplace" onclick="submitInPlaceSettings()" class="btn-ghost btn hidden" title="🛡 옛 시작가 + 옛 진입 단계 유지 + 신 capital/trigger/TP/SL 만 갱신! (= 「💲 현재가」 클릭 무시!) 사장님 진행 중 strategy 수정용.">↻ 설정만 수정 (시작가 유지)</button>
+        <!-- 📅 Fix 182 (2026-08-27 사장님): 예약 전략
+             "예약 전략으로 만들면 시스템이 진입가능할때 예약해 놓은 전략으로 진행" -->
+        <button id="cm-submit-scheduled" onclick="submitCreate(true)" class="btn-ghost btn" disabled
+          style="border-color:#a78bfa;color:#c4b5fd"
+          title="지금 진입하지 않고 「예정」 상태로 저장합니다. 시스템이 운영 진입 로직(15분 정점확인 등)을 감시하다가 조건이 맞으면 자동으로 1단계를 넣습니다. 기본 7일 후 만료.">📅 예약으로 저장</button>
         <button id="cm-submit" onclick="submitCreate()" class="btn-success btn" disabled>🚀 전략 시작</button>
       </div>
     </div>
