@@ -300,11 +300,23 @@ class RiskService:
         # ══════════════════════════════════════════════════════════════════
         if is_force:
             _retry_flow = bool(getattr(strategy, "retry_after_liquidation_enabled", False))
-            if _retry_flow:
+            # 🎯 Fix 178 (2026-08-27 사장님): 급등락 분할 매수 전략도 단계 게이트 제외.
+            #   사장님 verbatim: "1-3번 매수 했는데 -5% 청산"
+            #   = 1·2·3차 **어느 시점이든** 평단 -5% 면 전량 청산이다.
+            #   v130 게이트(단계 남으면 손절 보류)를 두면 3차까지 다 채워야 손절이 열려
+            #   #1488 과 똑같은 교착이 재현된다.
+            #   capital_management_mode 는 지금 저장만 되고 로직에 안 쓰이므로
+            #   마이그레이션 없이 모드 마커로 재사용한다 (헌법 127).
+            _split_mode = (
+                str(getattr(strategy, "capital_management_mode", "") or "").lower()
+                == "split_entry"
+            )
+            if _retry_flow or _split_mode:
                 logger.info(
-                    "[force_sl Fix177] #%s 청산 후 재진입 모드 = 단계 게이트 건너뜀 "
-                    "(-%s%% 청산 → 다음 단계 모니터링)",
-                    strategy.id, threshold,
+                    "[force_sl Fix177/178] #%s %s = 단계 게이트 건너뜀 (-%s%% 청산)",
+                    strategy.id,
+                    "분할매수(split_entry)" if _split_mode else "청산 후 재진입",
+                    threshold,
                 )
             else:
                 from app.api.v1.strategies.helpers import _count_active_stages
