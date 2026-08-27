@@ -543,6 +543,14 @@ def start_scheduler() -> None:
         from app.workers.pump_split_entry_worker import run_pump_split_entry_once
         run_pump_split_entry_once()
     scheduler.add_job(guarded_job("pump_split", 780, _pump_split), trigger=IntervalTrigger(seconds=900), id="pump_split", replace_existing=True, max_instances=1, coalesce=True)
+    # 📅 Fix 182 (2026-08-27 사장님): 예약 전략 — 조건 맞을 때 시스템이 대신 진입
+    #   사장님 verbatim: "예약 전략으로 만들면 시스템이 진입가능할때
+    #                     예약해 놓은 전략으로 진행할수 있게 예약기능을 만들어줘"
+    #   판정이 15분 봉 기준(confirm_peak)이라 5분 주기면 충분. 기본 OFF.
+    def _scheduled_entry():
+        from app.workers.scheduled_entry_worker import run_scheduled_entry_once
+        run_scheduled_entry_once()
+    scheduler.add_job(guarded_job("scheduled_entry", 240, _scheduled_entry), trigger=IntervalTrigger(seconds=300), id="scheduled_entry", replace_existing=True, max_instances=1, coalesce=True)
     # Daily loss limit 체크 — 매 1분 (settings.daily_loss_limit_usdt 미설정 시 no-op).
     # audit 2026-05-04: AccountDailyLossLimiter 가 호출되는 곳 0건이라 안전장치 무력 상태였음.
     scheduler.add_job(guarded_job("daily_loss_check", 50, run_daily_loss_check_once), trigger=IntervalTrigger(minutes=1), id="daily_loss_check", replace_existing=True, max_instances=1, coalesce=True)

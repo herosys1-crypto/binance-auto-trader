@@ -1168,6 +1168,49 @@
                 <span style="color:#94a3b8">※ 1단계를 작게(10) 두면 방향이 틀렸을 때 손실이 작습니다.<br>
                 &nbsp;&nbsp;&nbsp;맞을 때만 큰 금액으로 키우는 구조입니다.</span>
               </div>
+              <!-- 📊 Fix 181 (2026-08-27 사장님): 볼밴 분할 전략 세팅
+                   "볼밴 전략시스템은 어디서 세팅을 하고 볼수 있나요?"
+                   → 설정 키는 있는데 화면이 없어서 DB 명령으로만 바꿀 수 있었다.
+                     조정 수단이 없으면 기능이 아니다 (Fix 115 교훈). -->
+              <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(148,163,184,0.25)">
+                <div class="text-xs font-bold mb-2" style="color:#5eead4">
+                  📊 볼밴 분할 전략 <span style="color:#94a3b8;font-weight:normal">(급등락 심볼 · 물타기)</span>
+                </div>
+                <label class="flex items-center justify-between gap-2 mb-1">
+                  <span class="text-slate-300" title="끄면 이 전략만 멈춥니다. 다른 자동매매는 그대로 동작합니다.">사용</span>
+                  <select id="bbsplit-enabled"
+                          class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:110px">
+                    <option value="0">⏹️ 끔</option>
+                    <option value="1">▶️ 켬</option>
+                  </select>
+                </label>
+                <label class="flex items-center justify-between gap-2 mb-1">
+                  <span class="text-slate-300"
+                        title="이 전략 전용 상한입니다. 위의 「최대 동시 포지션」과 별개로 동작하므로 계정 전체 = 두 값의 합이 됩니다.">
+                    전용 동시 상한
+                  </span>
+                  <input type="number" id="bbsplit-max" min="0" max="100" step="1" value="3"
+                         class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1 text-center"
+                         style="width:90px" title="0 = 이 전략만 OFF" />
+                </label>
+                <label class="flex items-center justify-between gap-2 mb-1">
+                  <span class="text-slate-300" title="쉼표로 구분한 3칸. 예: 100,200,300">단계 자본 (USDT)</span>
+                  <input type="text" id="bbsplit-capitals" placeholder="100,200,300" value="100,200,300"
+                         class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:130px" />
+                </label>
+                <div class="text-xs text-slate-500" style="line-height:1.5">
+                  <span id="bbsplit-preview" style="color:#cbd5e1">1차 100 · 2차 200 · 3차 300 (총 600)</span><br>
+                  <b style="color:#93c5fd">진입</b>: 볼밴 기준선 <b>-3% / -5% / -7%</b> 이탈마다 분할
+                  (숏은 +방향)<br>
+                  &nbsp;&nbsp;기준선 = 하단(일반) · <b>중단(긴 추세)</b> · 상단(숏)<br>
+                  <b style="color:#f87171">손절</b>: 평단 ROI <b>-10%</b> 전량 &nbsp;
+                  <b style="color:#86efac">익절</b>: TP1 <b>+15%</b> 부터 25%씩 4회<br>
+                  &nbsp;&nbsp;익절 회귀 <b>-3%</b> 시 잔량 정리<br>
+                  <span id="bbsplit-risk" style="color:#fbbf24"></span><br>
+                  <span style="color:#94a3b8">⚠️ 이 전략은 <b>물타기</b>입니다 — 3차까지 가면 총액이 동시에 물립니다.
+                  위 사다리(청산 후 대체)와 자본 모델이 반대입니다.</span>
+                </div>
+              </div>
               <div class="flex justify-end">
                 <button onclick="saveV219Settings()"
                         class="text-xs bg-pink-600 hover:bg-pink-500 text-white px-3 py-1 rounded font-bold">
@@ -2516,6 +2559,11 @@
         <!-- 2026-05-04: 수정 모드일 때만 노출 — TP/SL + capital/trigger 만 in-place 갱신 (시작가/포지션/단계 유지) -->
         <!-- 🌟 2026-06-15 사장님 critical: 옵션 명확화 = '시작가 유지' 안내! -->
         <button id="cm-submit-inplace" onclick="submitInPlaceSettings()" class="btn-ghost btn hidden" title="🛡 옛 시작가 + 옛 진입 단계 유지 + 신 capital/trigger/TP/SL 만 갱신! (= 「💲 현재가」 클릭 무시!) 사장님 진행 중 strategy 수정용.">↻ 설정만 수정 (시작가 유지)</button>
+        <!-- 📅 Fix 182 (2026-08-27 사장님): 예약 전략
+             "예약 전략으로 만들면 시스템이 진입가능할때 예약해 놓은 전략으로 진행" -->
+        <button id="cm-submit-scheduled" onclick="submitCreate(true)" class="btn-ghost btn" disabled
+          style="border-color:#a78bfa;color:#c4b5fd"
+          title="지금 진입하지 않고 「예정」 상태로 저장합니다. 시스템이 운영 진입 로직(15분 정점확인 등)을 감시하다가 조건이 맞으면 자동으로 1단계를 넣습니다. 기본 7일 후 만료.">📅 예약으로 저장</button>
         <button id="cm-submit" onclick="submitCreate()" class="btn-success btn" disabled>🚀 전략 시작</button>
       </div>
     </div>

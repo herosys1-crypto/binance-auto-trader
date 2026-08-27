@@ -248,7 +248,31 @@ def get_sajangnim_settings(
         #   "초기 1단계 상관없이 300으로 고정하고 300도 차후에 선택옵션으로"
         #   워커와 같은 함수를 써서 화면과 실제가 어긋나지 않게 한다 (헌법 85)
         "pyramid_capital": _current_pyramid_capital(db),
+        # 📊 Fix 181 (2026-08-27 사장님): 볼밴 분할 전략 설정
+        #   "볼밴 전략시스템은 어디서 세팅을 하고 볼수 있나요?"
+        #   → 설정 키만 있고 화면이 없어 DB 명령으로만 바꿀 수 있었다 (Fix 115 교훈).
+        #   워커와 **같은 로더**를 써서 화면과 실제가 어긋나지 않게 한다 (헌법 85).
+        **_current_bbsplit(db),
     }
+
+
+def _current_bbsplit(db) -> dict:
+    """볼밴 분할 전략의 「실제 적용값」 — 워커의 _load_config 를 그대로 사용."""
+    out = {"bbsplit_enabled": 0, "bbsplit_max": 3, "bbsplit_capitals": "100,200,300"}
+    try:
+        from app.models.system_setting import SystemSetting
+        from app.workers.pump_split_entry_worker import _load_config
+        row = db.get(SystemSetting, "pump_split_enabled")
+        out["bbsplit_enabled"] = 1 if (row and str(row.value).strip() == "1") else 0
+        caps, max_n, _src = _load_config(db)
+        out["bbsplit_max"] = max_n
+        out["bbsplit_capitals"] = ",".join(
+            (format(c, "f").rstrip("0").rstrip(".") if "." in format(c, "f") else format(c, "f"))
+            for c in caps
+        )
+    except Exception as e:
+        logger.warning("[bbsplit] 설정 조회 실패 → 기본값: %s", e)
+    return out
 
 
 def _current_pyramid_capital(db) -> str:
@@ -287,6 +311,31 @@ def _current_ladder_str(db) -> str:
     except Exception as e:
         logger.warning("[Fix144] 사다리 조회 실패: %s", e)
         return ""
+
+
+def _sanitize_bbsplit_capitals(raw) -> str:
+    """📊 Fix 181: 볼밴 분할 자본 3칸 + **죽은 단계 검산** (헌법 130).
+
+    자본 비중을 바꾸면 평단이 달라지고 → 손절가가 움직여서
+    「손절이 다음 차수 트리거보다 먼저 오는」 상태가 될 수 있다.
+    그러면 그 차수는 **영원히 진입되지 않고 로그에도 안 남는다.**
+    → 저장 단계에서 막는다. 워커가 쓰는 것과 **같은 함수**로 검산한다 (헌법 85/101).
+    """
+    from app.workers.pump_split_entry_worker import (
+        FORCE_SL_ROI, LEVERAGE, SPLIT_STEP_PCT, _parse_capitals, check_no_dead_stage,
+    )
+    caps = _parse_capitals(raw)   # 3칸 / 양수 / 상한 검증
+    ok, why = check_no_dead_stage(caps, SPLIT_STEP_PCT, FORCE_SL_ROI, LEVERAGE)
+    if not ok:
+        raise ValueError(
+            f"이 자본 조합은 사용할 수 없습니다 — {why}. "
+            "그 단계는 진입 조건에 도달하기 전에 손절이 먼저 발동해 "
+            "영원히 사용되지 않습니다."
+        )
+    return ",".join(
+        (format(c, "f").rstrip("0").rstrip(".") if "." in format(c, "f") else format(c, "f"))
+        for c in caps
+    )
 
 
 def _sanitize_pyramid_capital(raw) -> str:
@@ -372,6 +421,10 @@ def set_sajangnim_settings(
         #   0 을 넣으면 「끄기」가 아니라 잘못된 입력이다 — 피라미딩 ON/OFF 는
         #   sajangnim_pyramid_enabled 로 따로 있다 (Fix 138 / 헌법 102).
         "sajangnim_pyramid_capital": ("pyramid_capital", lambda v: _sanitize_pyramid_capital(v)),
+        # 📊 Fix 181: 볼밴 분할 전략
+        "pump_split_enabled": ("bbsplit_enabled", lambda v: "1" if str(v).strip() in ("1", "true", "True") else "0"),
+        "pump_split_max_concurrent": ("bbsplit_max", lambda v: str(max(0, min(100, int(v))))),
+        "pump_split_capitals": ("bbsplit_capitals", lambda v: _sanitize_bbsplit_capitals(v)),
     }
     updated = {}
     for key, (payload_key, sanitizer) in fields.items():
@@ -400,7 +453,15 @@ def set_sajangnim_settings(
                 updated["max_stage"] = str(_n)
                 logger.info("[Fix145] 사다리 %s 저장 → max_stage 자동 %d 동기화", new_val, _n)
         except Exception as e:
-            return {"error": f"{payload_key}: {e}"}
+            # 🚨 Fix 181: 옛 코드는 `return {"error": ...}` = **HTTP 200** 이었다.
+            #   프론트 api() 는 200 을 성공으로 통과시키고, saveV219Settings 는
+            #   r.error 를 읽지 않은 채 「✅ 저장 완료」를 띄운다.
+            #   → 검증 실패인데 사장님은 저장됐다고 믿고, db.commit() 은 건너뛰어
+            #     **그 요청의 다른 필드까지 전부 소실**된다 (감사에서 확인된 결함).
+            #   4xx 로 바꾸면 프론트의 catch 가 실제 사유를 화면에 띄운다.
+            db.rollback()
+            logger.warning("[sajangnim-settings] 저장 거부 %s: %s", payload_key, e)
+            raise HTTPException(status_code=400, detail=f"{payload_key}: {e}")
     db.commit()
     return {"updated": updated, "ok": True}
 

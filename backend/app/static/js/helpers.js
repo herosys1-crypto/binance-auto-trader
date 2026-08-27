@@ -79,6 +79,34 @@ function renderStageBar(current, total) {
  * @param {object} s - Strategy row (strategy_type, side, total_capital 필드 사용!)
  * @returns {string} HTML 배지 (fallback = 빈 문자열)
  */
+/**
+ * 📅 Fix 182b (2026-08-27): 「예정(예약)」 배지.
+ *
+ * WAITING 에는 두 종류가 섞인다 — 사장님이 곧 「시작」을 누를 것과,
+ * 시스템이 조건 보고 넣어야 할 예약. 화면에서 구별되지 않으면 관리가 안 된다.
+ * 구별자 = capital_management_mode === 'scheduled' (scheduled_entry_worker 와 동일).
+ *
+ * @param {object} s - Strategy row
+ * @returns {string} HTML 배지 (해당 없으면 빈 문자열)
+ */
+function scheduledBadge(s) {
+  if (!s) return '';
+  if (String(s.capital_management_mode || '') !== 'scheduled') return '';
+  const st = String(s.status || '').toUpperCase();
+  if (st === 'WAITING') {
+    return '<span style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#a78bfa);'
+      + 'color:#fff;padding:2px 6px;border-radius:4px;font-size:var(--font-badge);font-weight:bold;'
+      + 'margin-left:4px;box-shadow:0 0 8px rgba(124,58,237,0.5)" '
+      + 'title="📅 예정 — 아직 주문이 나가지 않았습니다. 시스템이 운영 진입 로직'
+      + '(15분 정점·저점 확인 + OBV 게이트)을 감시하다가 조건이 맞으면 자동으로 1단계를 넣습니다. '
+      + '기본 7일 후 만료.">📅 예정</span>';
+  }
+  // 예약이 실제로 진입된 뒤에도 어디서 온 전략인지 보이게 한다
+  return '<span style="display:inline-block;background:#3730a3;color:#c7d2fe;padding:2px 6px;'
+    + 'border-radius:4px;font-size:var(--font-badge);margin-left:4px" '
+    + 'title="📅 예약으로 만들어져 시스템이 조건 충족 시 자동 진입한 전략입니다.">📅 예약진입</span>';
+}
+
 function parseMartingaleBadge(s) {
   if (!s) return '';
   const st = String(s.strategy_type || '');
