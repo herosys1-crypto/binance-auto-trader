@@ -2823,6 +2823,10 @@ function openBBMiddleRanking(direction) {
 <!--   ranking-modal.js: 시장 순위 모달 (helpers.js 의 fmtNum 의존) -->
 <!--   trade-history-modal.js: 거래 실적 상세 모달 (api/helpers 의존) -->
 <script src="/static/js/constants.js?v=20260722v119-grid-align"></script>
+<!-- 🚨 Fix 190 (2026-08-28): 아래 `?v=...` 값들은 **손으로 고치지 마세요.**
+     /admin-ui 로 나갈 때 서버가 각 파일의 내용 해시로 자동 교체합니다
+     (app/main.py 의 _rewrite_asset_versions). 여기 적힌 문자열은 무시됩니다.
+     이 자동화 이전에는 18개 파일의 버전이 낡은 채로 방치돼 있었습니다. -->
 <script src="/static/js/api.js?v=20260826-fix107-content-type"></script>
 <script src="/static/js/helpers.js?v=20260825-fix96-stage-2lines"></script>
 <script src="/static/js/stats-modals.js?v=20260722v119-grid-align"></script>

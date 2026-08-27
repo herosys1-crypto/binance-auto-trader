@@ -1,10 +1,12 @@
 import asyncio
+import hashlib
 import logging
+import re
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_fastapi_instrumentator import Instrumentator
 
@@ -71,22 +73,73 @@ class _NoCacheStaticFiles(StaticFiles):
 
 # Static admin dashboard (single-page HTML)
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+# 🚨 Fix 190 (2026-08-28): index.html 의 `?v=...` 를 **자동 생성**한다.
+#
+# 왜: `?v=` 는 손으로 적는 규칙이었고 **반드시 잊힌다.** 실측으로 18개 파일이
+#   낡아 있었다 (cm-open-modal / cm-submit / strategies-list / helpers /
+#   strategy-suggestions ... 전부 이번 세션에 고친 파일들이다).
+#   지금은 _NoCacheStaticFiles 의 no-cache 헤더가 막아주고 있지만,
+#   「있는데 안 맞는 버전 문자열」은 없느니만 못하다 — 최신인 줄 착각하게 만든다.
+#   파일 내용 해시로 바꾸면 사람이 개입할 여지가 사라진다 (헌법 6: 한 곳에서 보장).
+_ASSET_REF_RE = re.compile(r'(src|href)="(/static/[^"?]+)(?:\?[^"]*)?"')
+_ASSET_VER_CACHE: dict[str, tuple[float, int, str]] = {}
+
+
+def _asset_version(rel_path: str) -> str | None:
+    """/static/<rel_path> 의 내용 해시 12자. mtime+size 가 같으면 재계산 X."""
+    target = (_STATIC_DIR / rel_path).resolve()
+    # 경로 탈출 방어 — index.html 이 아무 경로나 가리켜도 static 밖은 읽지 않는다.
+    if not str(target).startswith(str(_STATIC_DIR.resolve())):
+        return None
+    try:
+        st = target.stat()
+    except OSError:
+        return None                      # 파일이 없으면 손대지 않는다
+    hit = _ASSET_VER_CACHE.get(rel_path)
+    if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
+        return hit[2]
+    try:
+        digest = hashlib.sha1(target.read_bytes()).hexdigest()[:12]
+    except OSError:
+        return None
+    _ASSET_VER_CACHE[rel_path] = (st.st_mtime, st.st_size, digest)
+    return digest
+
+
+def _rewrite_asset_versions(html: str) -> str:
+    """`src="/static/js/a.js?v=옛날"` → `?v=<내용해시>`. 실패하면 원문 유지."""
+    def _sub(m: "re.Match[str]") -> str:
+        attr, path = m.group(1), m.group(2)
+        ver = _asset_version(path[len("/static/"):])
+        return f'{attr}="{path}"' if ver is None else f'{attr}="{path}?v={ver}"'
+    return _ASSET_REF_RE.sub(_sub, html)
+
+
 if _STATIC_DIR.exists():
     app.mount("/static", _NoCacheStaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     @app.get("/admin-ui", include_in_schema=False)
-    def admin_ui_root() -> FileResponse:
+    def admin_ui_root():
         # 브라우저 캐시 무력화 — localhost / ngrok 양쪽 모두 항상 최신 HTML 받도록.
         # HTML 자체는 작아서 매 요청 갱신해도 부하 적음. 정적 자산 (/static/*) 은
         # 별도 mount 라 영향 없음.
-        return FileResponse(
-            str(_STATIC_DIR / "index.html"),
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0",
-            },
-        )
+        _headers = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+        _index = _STATIC_DIR / "index.html"
+        try:
+            # Fix 190: 자산 버전을 내용 해시로 갱신해서 내보낸다.
+            return HTMLResponse(
+                _rewrite_asset_versions(_index.read_text(encoding="utf-8")),
+                headers=_headers,
+            )
+        except Exception as e:
+            # 화면이 안 뜨는 것보다는 옛 방식으로라도 뜨는 게 낫다 (fail-open).
+            logger.warning("[Fix190] 자산 버전 재작성 실패 → 원본 그대로: %s", e)
+            return FileResponse(str(_index), headers=_headers)
 
     @app.get("/", include_in_schema=False)
     def root_redirect() -> RedirectResponse:
