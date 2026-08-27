@@ -62,6 +62,13 @@ MAX_PYRAMID_COUNT = 2              # 🌟 Fix 98 (2026-08-25 사장님 verbatim!
 # 🚨 v220 사장님: 원본 필터 확장! (사장님 지적 root cause!)
 # 이전: auto_bb_break* 만 → sajangnim_top_short/realtime_reentry = skip!
 # 신: 모든 자동 진입 소스 = 익절중 pyramid 가능!
+# 🚨 Fix 185 (2026-08-27): 한 사이클에 추가할 최대 건수.
+#   동시보유 상한 게이트를 뺀 자리를 대신한다 (그 상한은 「새 종목 수」의 문제이지
+#   「이기는 포지션을 키울까」의 문제가 아니다). 30초 주기라 소량이면 충분하다.
+MAX_PYRAMID_PER_CYCLE = 3
+
+# ⚠️ Fix 185 로 **더 이상 진입 필터로 쓰지 않는다** (사장님: "모든 전략").
+#   로그/참조용으로만 남긴다.
 AUTO_ENTRY_TYPES_PYRAMID = (
     "auto_bb_break",        # BB SUSTAINED / PENDING_HC / OBV_REVERSE / REENTRY_QUEUE
     "sajangnim_top",        # v219 정점 SHORT!
@@ -198,30 +205,34 @@ def run_success_pyramiding() -> dict:
         from app.workers.auto_bb_breakdown_worker import (
             _count_used_slots, _create_auto_bb_strategy,
         )
-        # 🎯 Fix 112b (2026-08-26): 동시 보유 상한 = 이 워커도 신규 포지션을 만든다!
-        #   최초 Fix 112 는 4개 워커에만 걸었는데, 이 워커는 30초마다 돌면서
-        #   _create_auto_bb_strategy 로 「새 StrategyInstance」를 만든다 = 상한 우회!
-        #   특히 사장님이 상한을 0으로 내려도 이 워커는 auto_bb_break_daily_limit 만
-        #   보므로 계속 진입 = 정지 스위치까지 우회 (헌법 83 위반!)
-        from app.services.position_limit import check_position_slot
-        _slot_ok, _slot_why, _act, _cap = check_position_slot(db, "success_pyramiding")
-        if not _slot_ok:
-            logger.warning("[success_pyramiding+Fix112b] SKIP: %s", _slot_why)
-            return {"note": _slot_why, "entered": 0}
-
-        # Fix 138: 예산 = 동시 보유 여유 (하루 카운터는 Fix 112 로 의미가 바뀌어 제외)
+        # ══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 185 (2026-08-27): 동시보유 상한 게이트를 **제거**한다 — 내 판단 착오.
+        #
+        # Fix 112b 는 "이 워커도 _create_auto_bb_strategy 로 새 StrategyInstance 를
+        # 만든다" 는 전제로 상한을 걸었다. 그런데 **Fix 156 에서 그 전제가 바뀌었다** —
+        # 지금은 `add_position_now` 로 **기존 포지션에 증거금을 추가**한다.
+        #   → 동시 보유 **건수가 늘지 않는다.** 포지션 수 상한으로 막을 이유가 없다.
+        #
+        # 실제 피해 (사장님 #1581 BTRUSDT, 2026-08-27):
+        #   동시보유가 10/10 으로 꽉 차 있어 이 워커가 **통째로 return** 했다.
+        #   → 18분간 ROI +22% 까지 올라갔는데 수익 피라미딩이 한 번도 안 들어갔다.
+        #   상한은 「새 종목을 몇 개까지 잡을까」의 문제이지,
+        #   「이기고 있는 포지션을 키울까」의 문제가 아니다.
+        #
+        # 남는 안전장치: pyramid_enabled 스위치 / MAX_PYRAMID_COUNT(2) /
+        #   ROI >= +5% / 쿨다운 / peak 되돌림 검사 — 자본 폭주는 이쪽이 막는다.
+        # ══════════════════════════════════════════════════════════════════
         used = _count_used_slots(db)     # 참고 로그용
-        remaining = _cap - _act
-        if remaining <= 0:
-            # Fix 139: 무로그 return 금지 (헌법 80)
-            logger.info(
-                "[success_pyramiding] SKIP: 동시보유 여유 없음 %d/%d (오늘 신규 %d)",
-                _act, _cap, used,
-            )
-            return {
-                "note": f"동시보유 {_act}/{_cap} (오늘 신규 {used})",
-                "entered": 0,
-            }
+        # ⚠️ 상한 게이트를 없앤 자리에 **한 사이클 예산**을 둔다.
+        #   `remaining` 은 아래 루프(:243, :559)가 그대로 쓰므로 반드시 정의해야 한다.
+        #   (정의만 지우면 NameError 로 워커가 통째로 죽는다 — Fix 129 와 같은 사고)
+        #   30초마다 도는 워커라 한 번에 몰아 넣지 않도록 소량으로 제한한다.
+        remaining = MAX_PYRAMID_PER_CYCLE
+        logger.info(
+            "[success_pyramiding] 시작 (Fix185: 동시보유 상한 미적용 — 기존 포지션 "
+            "추가라 건수가 늘지 않음 | 이번 사이클 예산 %d건, 오늘 신규 %d)",
+            remaining, used,
+        )
 
         # 2. 활성 심볼 조회 (익절중 후보!)
         active = db.execute(
@@ -263,13 +274,24 @@ def run_success_pyramiding() -> dict:
                 _bump("is_pyramid_strategy")
                 continue
 
-            # 🚨 v220 사장님 (2026-08-22): 자동 진입 소스 확장! (root cause fix!)
-            # 이전: auto_bb_break* 만 = sajangnim_top_short 등 = 100% skip!
-            # 신: 모든 자동 진입 소스 = pyramid 가능!
-            if not any(stype.startswith(t) for t in AUTO_ENTRY_TYPES_PYRAMID):
-                skipped += 1
-                _bump("not_auto_entry_type")
-                continue
+            # ══════════════════════════════════════════════════════════════
+            # 🚨 Fix 185 (2026-08-27 사장님): strategy_type 필터 **제거** — 「모든 전략」.
+            #
+            # 사장님 verbatim: "모든 전략 — 수동/모달 전략도 수익 나면 추가 진입"
+            #                 "수익구간에서 추가하는건 좋은 전략같아"
+            #
+            # 옛 코드는 AUTO_ENTRY_TYPES_PYRAMID(auto_bb_break / sajangnim_top /
+            # realtime_reentry / chart_pattern) 4종만 허용했다.
+            #   → 모달로 만든 전략(`_quick_*`)과 볼밴 분할(`pump_split`)은 전부 탈락.
+            #   → 사장님 #1581 BTRUSDT 가 ROI +22% 까지 갔는데 피라미딩 0회.
+            # 이 필터는 v220 에서 "소스 확장" 하며 넓혔지만 여전히 화이트리스트였고,
+            # 그 뒤에 생긴 전략 종류가 자동으로 빠지는 구조였다 (헌법 121 패턴).
+            #
+            # 이제 종류를 가리지 않는다. 위 `_pyramid` 자기 자신 제외는 그대로 둔다
+            # (피라미딩으로 만든 것에 또 피라미딩하면 무한 증식).
+            # 자본 폭주는 MAX_PYRAMID_COUNT(2) + ROI>=5% + 쿨다운이 막는다.
+            # ══════════════════════════════════════════════════════════════
+            _ = AUTO_ENTRY_TYPES_PYRAMID   # 상수는 로그/참조용으로 남겨둔다
 
             # cooldown 체크
             if _cooldown_active(si.symbol, si.side):
