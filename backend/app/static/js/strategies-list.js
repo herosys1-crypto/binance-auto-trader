@@ -862,7 +862,7 @@ async function refreshStrategies() {
             }${s.retry_after_liquidation_enabled
               ? `<span style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#a855f7);color:#fff;padding:2px 6px;border-radius:4px;font-size:var(--font-badge);font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(245,158,11,0.6)" title="🔄 청산 후 자동 재진입 활성! (트리거 ${s.retry_trigger_pct || 10}%) — 손절 후 = 다음 단계 자동 대기 + 트리거 도달 시 자동 진입!">🔄 재진입 ${s.retry_trigger_pct || 10}%</span>`
               : ''
-            }<br>
+            }${scheduledBadge(s)}<br>
             <span class="text-slate-500" style="font-size:var(--font-badge)" title="전략 생성 일시">${createdShort}</span>
           </div>
         </td>

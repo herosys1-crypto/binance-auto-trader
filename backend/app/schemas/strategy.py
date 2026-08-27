@@ -141,3 +141,7 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # 사장님 지적: "구분을 할수 있게 해줘"
     retry_after_liquidation_enabled: bool = False
     retry_trigger_pct: Decimal | None = None
+    # 📅 Fix 182b (2026-08-27): 목록에서 「예정(예약)」을 구별하려면 이 값이 필요하다.
+    #   WAITING 에는 「곧 시작 누를 것」과 「예약」이 섞이는데, 구별자가
+    #   capital_management_mode == "scheduled" 다. 응답에 없으면 화면이 알 수 없다.
+    capital_management_mode: str = "fixed"
