@@ -18,7 +18,7 @@ from __future__ import annotations
 # ===== 핵심 차원 상수 =====
 # 옵션 C 1~10단계 / TP1~10. 변경 시 이 값만 갱신하면 모든 set 자동 재계산.
 TOTAL_STAGES_MAX = 10
-TOTAL_TP_LEVELS = 10
+TOTAL_TP_LEVELS = 20   # 🚀 Fix 186 (2026-08-27 사장님): TP10 → TP20 확장
 
 
 # ===== TERMINAL =====

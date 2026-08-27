@@ -4,6 +4,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
+from app.core.strategy_status import TOTAL_TP_LEVELS   # Fix 186: TP 단계 수 단일 진실
 
 # 🚨 2026-06-07 hotfix: 자동 TP total_capital 차감 fix (어제 PR) 에서 logger 사용했으나
 # 모듈 level logger 정의 누락 → NameError: name 'logger' is not defined
@@ -102,8 +103,12 @@ class TPSLOrchestratorService:
                 # progression 추적이 끊어지는 미세 버그. 이전엔 TP5 발동 후 status="COMPLETED" 만
                 # 처리되어 TP5_DONE_PARTIAL 상태가 빠져있었음.
                 # 2026-05-06: TP1~10 progression 동적 (10단계 익절 확장).
-                done_levels_progression = [f"TP{n}_DONE_PARTIAL" for n in range(1, 11)] + ["COMPLETED"]
-                tp_level_index = {f"TP{n}": n - 1 for n in range(1, 11)}.get(tp_level, -1)
+                done_levels_progression = [
+                    f"TP{n}_DONE_PARTIAL" for n in range(1, TOTAL_TP_LEVELS + 1)
+                ] + ["COMPLETED"]   # Fix 186
+                tp_level_index = {
+                    f"TP{n}": n - 1 for n in range(1, TOTAL_TP_LEVELS + 1)
+                }.get(tp_level, -1)   # Fix 186
                 cur_status = (strategy.status or "").upper()
                 cur_index = -1
                 for i, lab in enumerate(done_levels_progression):
@@ -126,11 +131,12 @@ class TPSLOrchestratorService:
         current_qty = abs(Decimal(str(strategy.current_position_qty)))
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
         # 템플릿의 qty_ratio 우선 사용. 없으면 기본값 폴백.
-        ratio_attr = {f"TP{n}": f"tp{n}_qty_ratio" for n in range(1, 21)}  # 🚀 v118: TP20 확장!
+        # Fix 186: 상수 참조로 통일 — 같은 파일에 10 기준과 20 기준이 공존하던 것을 정리 (헌법 101)
+        ratio_attr = {f"TP{n}": f"tp{n}_qty_ratio" for n in range(1, TOTAL_TP_LEVELS + 1)}
         # 🚀 v118 (2026-07-22): TP20 확장 + 균일 25% (사장님 자율!)
         # v117: TP10 = 100% 제거!
         # v118: 20단계 확장 = TP1~20 모두 균일 25%!
-        default_ratio = {f"TP{n}": DEFAULT_TP_QTY_RATIO_PCT for n in range(1, 21)}
+        default_ratio = {f"TP{n}": DEFAULT_TP_QTY_RATIO_PCT for n in range(1, TOTAL_TP_LEVELS + 1)}
         # 크라이시스 모드 qty ratio (사용자 기획 default):
         # TP1=25%, TP2=25%, TP3=50% of remaining, TP4=100% of remaining
         # 2026-05-04 (alembic 0009): template.crisis_qty_ratios JSONB override 가능.
@@ -182,11 +188,12 @@ class TPSLOrchestratorService:
             #   = 사장님이 옛 "마지막 100% 세팅" 그대로 유지 → TP20 도달 전에 조기 종료!
             #   fix: 최종 명시 TP (level_n) 이 20 아니고 (auto-extend로 뒤에 더 있음) + qty_ratio 100%면
             #        = 옛 잔재로 판단 → default (25%) override!
-            if level_n is not None and level_n < 20 and ratio_pct >= Decimal("100") and tpl is not None:
+            if (level_n is not None and level_n < TOTAL_TP_LEVELS
+                    and ratio_pct >= Decimal("100") and tpl is not None):
                 # 이 TP 이후 auto-extended TP 있는지 확인 (다음 TP가 tp{n+1}_percent = NULL 인지)
                 has_extended_after = any(
                     getattr(tpl, f"tp{nn}_percent", None) is None
-                    for nn in range(level_n + 1, 21)
+                    for nn in range(level_n + 1, TOTAL_TP_LEVELS + 1)
                 )
                 if has_extended_after:
                     logger.warning(
@@ -396,7 +403,9 @@ class TPSLOrchestratorService:
             strategy.status = "COMPLETED"
         elif level.startswith("TP") and level[2:].isdigit():
             n = int(level[2:])
-            if 1 <= n <= 10:
+            if 1 <= n <= TOTAL_TP_LEVELS:   # 🚨 Fix 186: 10 이면 TP11 체결이
+                #   else → COMPLETED + total_capital=0 인데 거래소엔 잔량이 남아
+                #   SL·트레일링이 전부 정지하고 고아 판정 → Kill-Switch 로 이어진다.
                 strategy.status = f"TP{n}_DONE_PARTIAL" if not is_final else "COMPLETED"
             else:
                 strategy.status = "COMPLETED"  # 알 수 없는 level → safe COMPLETED

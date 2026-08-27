@@ -5,6 +5,7 @@ from decimal import Decimal
 from app.core.redis_client import get_redis_client
 
 logger = logging.getLogger(__name__)
+from app.core.strategy_status import TOTAL_TP_LEVELS   # Fix 186: TP 단계 수 단일 진실
 from app.models.risk_event import RiskEvent
 from app.observability.metrics import strategy_stop_loss_total
 from app.repositories.position_repository import PositionRepository
@@ -573,7 +574,8 @@ class RiskService:
         #   ② 진입 단계 3 이상 (current_stage >= 3)
         # 2단계까지만 진입한 strategy 의 짧은 잔량 trailing 청산 무력화 (사용자 의도).
         TRAILING_ARMED_STATUSES = (
-            {f"TP{n}_DONE_PARTIAL" for n in range(TRAILING_MIN_TP_INDEX, 11)}
+            {f"TP{n}_DONE_PARTIAL"
+             for n in range(TRAILING_MIN_TP_INDEX, TOTAL_TP_LEVELS + 1)}   # Fix 186
             | {"TRAILING_ARMED"}
         )
         # 🌟 2026-06-08 사장님 trailing retrace 옵션 (alembic 0017):
@@ -606,7 +608,7 @@ class RiskService:
         )
         # 첫 TP 발동 status (TP1~TP10)
         _TP_ANY_TRIGGERED = (
-            {f"TP{n}_DONE_PARTIAL" for n in range(1, 11)}
+            {f"TP{n}_DONE_PARTIAL" for n in range(1, TOTAL_TP_LEVELS + 1)}   # Fix 186
             | {"TRAILING_ARMED"}
         )
         _any_tp_triggered = (strategy.status or "").upper() in _TP_ANY_TRIGGERED
@@ -644,9 +646,10 @@ class RiskService:
         # status 의 cur_done_idx 를 여기서 직접 참고해 다음 단계 TP 1개씩 반환.
         # 한 tick 1회 발동, 다음 tick 다음 TP — 점진적이지만 누락 없음.
         # 2026-05-06: TP1~10 단계 동적 (사용자 요청 10단계 확장).
-        TP_DONE_INDEX = {f"TP{n}_DONE_PARTIAL": n - 1 for n in range(1, 11)}
+        TP_DONE_INDEX = {f"TP{n}_DONE_PARTIAL": n - 1
+                         for n in range(1, TOTAL_TP_LEVELS + 1)}   # Fix 186
         TP_DONE_INDEX["TP2_DONE"] = 1  # legacy 호환
-        TP_LABEL_TO_IDX = {f"TP{n}": n - 1 for n in range(1, 11)}
+        TP_LABEL_TO_IDX = {f"TP{n}": n - 1 for n in range(1, TOTAL_TP_LEVELS + 1)}   # Fix 186
         cur_done_idx = TP_DONE_INDEX.get((strategy.status or "").upper(), -1)
 
         # ══════════════════════════════════════════════════════════════════

@@ -22,6 +22,7 @@ from decimal import Decimal
 from sqlalchemy import select, desc
 
 from app.core.database import SessionLocal
+from app.core.strategy_status import TOTAL_TP_LEVELS   # Fix 186
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_template import StrategyTemplate
 from app.models.position import Position
@@ -38,11 +39,11 @@ TP_AUTO_GRACE_MINUTES = 5
 
 # TP 단계 매핑
 TP_DONE_LEVELS = {
-    "TP1_DONE_PARTIAL": 1,
-    "TP2_DONE_PARTIAL": 2,
-    "TP3_DONE_PARTIAL": 3,
-    "TP4_DONE_PARTIAL": 4,
-    "TP5_DONE_PARTIAL": 5,
+    # 🚨 Fix 186 (2026-08-27): TP1~TP5 만 하드코딩돼 있어 **TP6 이상이 이미
+    #   감시에서 빠져 있었다** (TP20 확장 이전부터). status 가 TP6_DONE_PARTIAL 인
+    #   전략은 :87 `status.in_(TP_DONE_LEVELS.keys())` 에 걸리지 않아
+    #   「트리거 도달했는데 자동 진입 X」 감지 대상에서 통째로 제외됐다.
+    **{f"TP{n}_DONE_PARTIAL": n for n in range(1, TOTAL_TP_LEVELS + 1)},
 }
 
 
