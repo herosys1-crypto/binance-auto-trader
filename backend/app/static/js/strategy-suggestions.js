@@ -1117,6 +1117,9 @@ if (typeof window !== 'undefined') {
 }
 
 // 🎯 v219 (2026-08-23): 카드형 세팅 UI (v219-daily-limit / v219-capital / v219-max-stage 필드!)
+// ⚠️⚠️ 죽은 코드입니다 (2026-08-27 확인). 이 파일 아래쪽에 같은 이름의 함수가
+//    다시 정의돼 있고 JS 는 **나중 정의가 이깁니다**. 여기를 고쳐도 아무 효과가 없습니다.
+//    수정하려면 아래쪽 「Fix 35 ... v219 세팅 폼!」 정의를 고치세요 (헌법 63).
 async function saveV219Settings() {
   const limitEl = document.getElementById('v219-daily-limit');
   const capitalEl = document.getElementById('v219-capital');
@@ -1183,7 +1186,12 @@ if (typeof window !== 'undefined') {
   window.saveV219Settings = saveV219Settings;
   // Fix 145: 사다리 입력 시 미리보기/단계수 즉시 반영
   document.addEventListener('input', (ev) => {
-    if (!ev.target || ev.target.id !== 'v219-ladder') return;
+    // 📊 Fix 181: 볼밴 분할 자본을 고치면 미리보기 + 최대 손실을 즉시 갱신
+  if (ev.target && (ev.target.id === 'bbsplit-capitals' || ev.target.id === 'bbsplit-max')) {
+    renderBbSplitPreview();
+    return;
+  }
+  if (!ev.target || ev.target.id !== 'v219-ladder') return;
     const parts = String(ev.target.value || '').split(',').map(x => x.trim()).filter(Boolean);
     const prev = document.getElementById('v219-ladder-preview');
     if (prev) prev.textContent = parts.map((v, i) => (i + 1) + '단계 ' + v).join(' · ') || '-';
@@ -1457,7 +1465,39 @@ if (typeof window !== 'undefined') {
   });
 }
 
+// 📊 Fix 181: 볼밴 분할 미리보기 — 입력한 자본으로 총액·최대 손실을 즉시 보여준다.
+//   손절이 ROI -10% 이므로 최대 손실 = 총 투입 × 10%. 숫자가 눈앞에 있어야
+//   2000,4000,6000 같은 값을 무심코 넣는 사고를 막을 수 있다 (실제로 한 번 났다).
+function renderBbSplitPreview() {
+  try {
+    const capEl = document.getElementById('bbsplit-capitals');
+    const prev = document.getElementById('bbsplit-preview');
+    const risk = document.getElementById('bbsplit-risk');
+    if (!capEl || !prev) return;
+    const parts = String(capEl.value || '').split(',')
+      .map(x => parseFloat(String(x).trim())).filter(v => !isNaN(v) && v > 0);
+    if (parts.length !== 3) {
+      prev.textContent = '⚠️ 자본은 쉼표로 구분한 3칸이어야 합니다 (예: 100,200,300)';
+      prev.style.color = '#f87171';
+      if (risk) risk.textContent = '';
+      return;
+    }
+    const total = parts.reduce((a, b) => a + b, 0);
+    prev.textContent = `1차 ${parts[0]} · 2차 ${parts[1]} · 3차 ${parts[2]} (총 ${total})`;
+    prev.style.color = '#cbd5e1';
+    if (risk) {
+      const maxN = parseInt((document.getElementById('bbsplit-max') || {}).value || '0') || 0;
+      const one = Math.round(total * 0.10);
+      risk.textContent =
+        `최대 손실: 1건 ${one} USDT · 상한 ${maxN}건 모두 물리면 ${one * maxN} USDT`;
+    }
+  } catch (_e) { /* 미리보기 실패는 저장에 영향 없음 */ }
+}
+
 // Fix 35 (2026-08-23): v219 세팅 폼!
+// ⚠️ 이 파일에는 saveV219Settings 가 **두 번** 정의돼 있고 (위쪽 하나 + 여기),
+//    JS 는 나중 정의가 이깁니다 = **이 함수가 실제로 동작하는 쪽**입니다.
+//    위쪽 정의는 죽은 코드이므로 수정해도 아무 효과가 없습니다 (헌법 63).
 async function saveV219Settings() {
   const limit = parseInt(document.getElementById('v219-daily-limit').value);
   const capital = parseFloat(document.getElementById('v219-capital').value);
@@ -1475,6 +1515,13 @@ async function saveV219Settings() {
   const pyrEl = document.getElementById('v219-pyramid-capital');
   const pyr = pyrEl ? parseFloat(pyrEl.value) : NaN;
   if (!isNaN(pyr) && pyr > 0) payload.pyramid_capital = pyr;
+  // 📊 Fix 181 (2026-08-27 사장님): 볼밴 분할 전략 설정
+  const bbEn = document.getElementById('bbsplit-enabled');
+  const bbMax = document.getElementById('bbsplit-max');
+  const bbCap = document.getElementById('bbsplit-capitals');
+  if (bbEn) payload.bbsplit_enabled = bbEn.value;
+  if (bbMax && bbMax.value !== '') payload.bbsplit_max = parseInt(bbMax.value);
+  if (bbCap && String(bbCap.value).trim()) payload.bbsplit_capitals = String(bbCap.value).trim();
   try {
     await api('/strategy-suggestions/sajangnim-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     if (msgEl) msgEl.innerHTML = '<span style="color:#22c55e;font-weight:bold;">✅ 저장 완료! 값=' + payload.top_short_daily_limit + ' (2초 후 재로드!)</span>';
@@ -1508,6 +1555,14 @@ async function loadV219Settings(retry = 0) {
     // 🎯 Fix 176: 피라미딩 1회 금액 (서버가 돌려주는 「실제 적용값」 — 헌법 85)
     const pyrEl2 = document.getElementById('v219-pyramid-capital');
     if (pyrEl2 && r.pyramid_capital != null) pyrEl2.value = r.pyramid_capital;
+    // 📊 Fix 181: 볼밴 분할 전략 — 서버의 실제 적용값 (워커와 같은 로더)
+    const bbEn2 = document.getElementById('bbsplit-enabled');
+    if (bbEn2 && r.bbsplit_enabled != null) bbEn2.value = String(r.bbsplit_enabled);
+    const bbMax2 = document.getElementById('bbsplit-max');
+    if (bbMax2 && r.bbsplit_max != null) bbMax2.value = r.bbsplit_max;
+    const bbCap2 = document.getElementById('bbsplit-capitals');
+    if (bbCap2 && r.bbsplit_capitals) bbCap2.value = r.bbsplit_capitals;
+    renderBbSplitPreview();
     // 🎯 Fix 144: 사다리 값 + 미리보기 (실제 적용값을 화면에서 확인 가능하게)
     const ladderEl2 = document.getElementById('v219-ladder');
     if (ladderEl2 && r.capital_ladder) ladderEl2.value = r.capital_ladder;
