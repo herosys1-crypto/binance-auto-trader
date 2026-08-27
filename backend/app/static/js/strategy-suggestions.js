@@ -1539,7 +1539,9 @@ async function saveV219Settings() {
   const bbEn = document.getElementById('bbsplit-enabled');
   const bbMax = document.getElementById('bbsplit-max');
   const bbCap = document.getElementById('bbsplit-capitals');
-  if (bbEn) payload.bbsplit_enabled = bbEn.value;
+  // Fix 192: 「불러오는 중…」(빈 값) 은 절대 보내지 않는다 — 서버 sanitizer 가 "0"(끔)으로
+  //   해석해 켜져 있던 전략을 꺼버린다. 저장은 이미 _v219Loaded 로 막지만 두 겹으로 둔다.
+  if (bbEn && bbEn.value !== '') payload.bbsplit_enabled = bbEn.value;
   if (bbMax && bbMax.value !== '') payload.bbsplit_max = parseInt(bbMax.value);
   if (bbCap && String(bbCap.value).trim()) payload.bbsplit_capitals = String(bbCap.value).trim();
   try {
@@ -1590,8 +1592,25 @@ async function loadV219Settings(retry = 0) {
     const pyrEl2 = document.getElementById('v219-pyramid-capital');
     if (pyrEl2 && r.pyramid_capital != null) pyrEl2.value = r.pyramid_capital;
     // 📊 Fix 181: 볼밴 분할 전략 — 서버의 실제 적용값 (워커와 같은 로더)
+    // 🚨 Fix 192 (2026-08-28): 옛 코드는 `if (r.bbsplit_enabled != null)` 로 감싸서
+    //   **서버가 이 필드를 모른다** 를 조용히 통과시켰다. 그러면 select 는 첫 옵션인
+    //   ⏹️ 끔 에 그대로 남고, 사장님은 DB 가 「켬」인데 화면에서 「끔」을 보게 된다.
+    //   = 「모름」이 「꺼짐」으로 표시된 것. 여기서 던지면 아래 catch 가
+    //   빨간 경고 + 저장 차단(_v219Loaded=false)까지 자동으로 해준다.
     const bbEn2 = document.getElementById('bbsplit-enabled');
-    if (bbEn2 && r.bbsplit_enabled != null) bbEn2.value = String(r.bbsplit_enabled);
+    if (bbEn2) {
+      if (r.api_features && r.api_features.indexOf('bbsplit') < 0) {
+        throw new Error('api 서버가 볼밴 설정을 모릅니다 — 옛 코드로 떠 있습니다. '
+          + '서버에서 `docker compose restart api` 가 필요합니다.');
+      }
+      if (r.bbsplit_enabled == null) {
+        throw new Error('서버 응답에 bbsplit_enabled 가 없습니다'
+          + (r.bbsplit_error ? ' (' + r.bbsplit_error + ')' : '')
+          + ' — api 가 옛 코드이거나 설정 조회에 실패했습니다.');
+      }
+      bbEn2.value = String(r.bbsplit_enabled);
+    }
+    if (r.bbsplit_error) throw new Error('볼밴 설정 조회 실패: ' + r.bbsplit_error);
     const bbMax2 = document.getElementById('bbsplit-max');
     if (bbMax2 && r.bbsplit_max != null) bbMax2.value = r.bbsplit_max;
     const bbCap2 = document.getElementById('bbsplit-capitals');

@@ -1178,8 +1178,12 @@
                 </div>
                 <label class="flex items-center justify-between gap-2 mb-1">
                   <span class="text-slate-300" title="끄면 이 전략만 멈춥니다. 다른 자동매매는 그대로 동작합니다.">사용</span>
+                  <!-- 🚨 Fix 192 (2026-08-28): 첫 옵션이 「끔」이면 **로드 전 화면이 거짓말**을 한다.
+                       사장님이 겪은 증상이 정확히 이것 — DB 는 켬(1) 인데 화면은 끔.
+                       「모름」칸을 앞에 둬서 아직 안 불러온 상태를 눈으로 구별하게 한다. -->
                   <select id="bbsplit-enabled"
                           class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:110px">
+                    <option value="" selected disabled>⏳ 불러오는 중…</option>
                     <option value="0">⏹️ 끔</option>
                     <option value="1">▶️ 켬</option>
                   </select>

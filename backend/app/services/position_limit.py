@@ -31,10 +31,23 @@ import logging
 logger = logging.getLogger(__name__)
 
 MAX_CONCURRENT_DEFAULT = 20        # 사장님 default (설정 없을 때만!)
+
+# 🚨 Fix 191 (2026-08-28): sajangnim_max_concurrent_positions 를 **퇴역**시켰다.
+#
+# 이 키는 「최우선」으로 읽히면서 **쓰는 코드가 어디에도 없었다.**
+# 실측(2026-08-28)에서도 행 자체가 존재하지 않았다 = 한 번도 쓰인 적 없는 키가
+# UI 값을 언제든 덮을 수 있는 자리에 앉아 있었다는 뜻이다.
+# 화면은 2순위 키를 보여주는데 워커는 1순위를 보므로, 그 행이 어떤 경로로든
+# 한 번 생기면 사장님 수정이 **영구히 조용히 무시된다.**
+# 실제로 이번 조사에서 내가 이 키를 원인으로 오진했고, 고친다며 넣은 코드가
+# 오히려 그 행을 생성하고 있었다 (Fix 188 → 철회).
+# → 상한 키를 하나로 못 박는다 (헌법 102: 모순 가능한 설정 2개 금지).
+RETIRED_LIMIT_KEY = "sajangnim_max_concurrent_positions"
+_retired_warned = False            # 퇴역 키 경고는 프로세스당 1회
+
 LIMIT_KEYS = (
-    "sajangnim_max_concurrent_positions",   # 전용 키 (있으면 최우선!)
-    "sajangnim_top_short_daily_limit",      # 사장님이 UI 에서 쓰던 값
-    "auto_bb_break_daily_limit",
+    "sajangnim_top_short_daily_limit",      # UI 「최대 동시 포지션」이 읽고 쓰는 단 하나의 키
+    "auto_bb_break_daily_limit",            # 옛 카드 (UI 「BB 이탈 자동 진입」)
 )
 
 
@@ -44,6 +57,23 @@ def get_max_concurrent(db) -> tuple[int, str]:
     Returns: (limit, source_key)
     """
     from app.models.system_setting import SystemSetting
+
+    # Fix 191: 퇴역 키가 DB 에 남아 있으면 「무시되고 있다」는 사실을 반드시 알린다.
+    #   조용히 무시하면 이 키를 설정한 사람은 적용된 줄 안다 (헌법 80).
+    #   더는 읽지 않으므로 동작에는 영향이 없다. 프로세스당 1회만 확인 (hot path).
+    global _retired_warned
+    if not _retired_warned:
+        _retired_warned = True
+        try:
+            if db.get(SystemSetting, RETIRED_LIMIT_KEY) is not None:
+                logger.warning(
+                    "[Fix191] 설정 '%s' 이 DB 에 남아 있지만 **더는 사용되지 않습니다**. "
+                    "동시 상한은 '%s' 로만 결정됩니다. 이 행은 지우셔도 됩니다.",
+                    RETIRED_LIMIT_KEY, LIMIT_KEYS[0],
+                )
+        except Exception:
+            pass          # 알림 실패가 진입을 막아서는 안 된다
+
     for key in LIMIT_KEYS:
         try:
             row = db.get(SystemSetting, key)
