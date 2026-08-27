@@ -10,8 +10,10 @@
 
 사장님 선택 (2026-08-27):
   · 「긴 상승」 판정 = 가격이 4H 중단선 위(LONG)/아래(SHORT) **24시간 유지**
-  · 2·3차 분할 = **더 깊은 이탈** (기준선 대비 -1%, -2%)
+  · 분할 = **더 깊은 이탈** (기준선 대비 -3% / -5% / -7%)
+  · 손절 -10%, TP1 15% 부터 25%씩, 트레일링 -3%
   · 기존 사다리(10/300/600 청산 후 대체)와 **병행** — 별도 전략으로 공존
+  · (Fix 180) **전용 상한 + 자본 금액을 설정으로 변경 가능**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ■ 기존 사다리와 자본 모델이 **정반대**다 (그래서 별도 전략이다)
@@ -54,12 +56,24 @@
 
 ■ 안전장치
 
-    · 동시보유 상한(check_position_slot) 적용 — 기존 자동 진입과 예산을 공유한다
+    · **전용 상한** (`pump_split_max_concurrent`, 기본 3) — 전역 상한과 **독립**이다.
+      ⚠️ 계정 전체 동시 보유 = 「전역 상한 + 이 전략 상한」의 합이 된다.
+         이 전략이 다른 워커의 슬롯에 굶지 않게 하려는 사장님 의도(Fix 180)이므로
+         그렇게 두되, 로그에 두 숫자를 함께 찍어 합계가 보이게 한다.
+    · **자본 변경 시 정합성 검산** (`check_no_dead_stage`) — 자본을 바꾸면 평단이
+      달라져 「손절이 다음 차수 트리거보다 먼저 오는」 상태가 될 수 있다.
+      그렇게 되면 그 차수는 **조용히 죽는다**. 매 사이클 검산하고, 실패하면 진입 중단.
     · 같은 심볼/방향 활성 전략이 있으면 skip (중복 진입 금지)
     · API ban / 계정 없음 / 현재가 없음 = 진입 보류 (fail-SAFE)
     · 진입하지 못한 이유는 항상 집계해 로그로 남긴다 (헌법 80)
-    · ⚠️ 이 전략은 **물타기**다. 방향이 틀리면 600 전부가 물린다.
-      -5% 손절이 반드시 살아 있어야 하므로 force_sl_enabled_override=True 를 강제한다.
+    · ⚠️ 이 전략은 **물타기**다. 방향이 틀리면 총액 전부가 물린다.
+      -10% 손절이 반드시 살아 있어야 하므로 force_sl_enabled_override=True 를 강제한다.
+
+■ 설정 (SystemSetting)
+
+    pump_split_enabled        "1" 이어야 동작 (기본 OFF)
+    pump_split_max_concurrent 이 전략 전용 동시 보유 상한 (기본 3, 0=OFF)
+    pump_split_capitals       "100,200,300" 형식 3칸 (기본 100/200/300)
 """
 from __future__ import annotations
 
@@ -112,6 +126,93 @@ KLINE_15M = 60
 
 STRATEGY_TYPE = "pump_split"
 MODE_MARKER = "split_entry"   # Fix 178 이 읽는 값
+
+# ── Fix 180 (2026-08-27 사장님): 이 전략 **전용** 상한 + 자본 설정 ─────────
+#   "이건 별도로 상한 전략을 설정할수 있게 하고 포지션금액도 100 200 300도 변경가능하게"
+#
+# ⚠️ 상한이 **전역 상한과 독립**이다. 즉 계정 전체 동시 보유는
+#      기존 자동 진입 상한(sajangnim_top_short_daily_limit) + 이 전략 상한
+#    의 합이 된다. 이 전략이 다른 워커의 슬롯에 굶지 않게 하려는 사장님 의도이므로
+#    그렇게 만들되, 로그에 두 숫자를 함께 찍어 합계가 보이게 한다.
+MAX_CONCURRENT_KEY = "pump_split_max_concurrent"
+DEFAULT_MAX_CONCURRENT = 3
+CAPITALS_KEY = "pump_split_capitals"
+
+
+def _parse_capitals(raw: str) -> list[Decimal]:
+    """\"100,200,300\" → [100, 200, 300]. 3칸 고정, 각 1~100000."""
+    vals: list[Decimal] = []
+    for part in str(raw).split(","):
+        p = part.strip()
+        if not p:
+            continue
+        v = Decimal(p)
+        if v <= 0:
+            raise ValueError(f"자본은 0보다 커야 합니다: {p}")
+        if v > Decimal("100000"):
+            raise ValueError(f"자본 상한 100000 초과: {p}")
+        vals.append(v)
+    if len(vals) != 3:
+        raise ValueError(f"자본은 3칸이어야 합니다 (입력 {len(vals)}칸)")
+    return vals
+
+
+def check_no_dead_stage(
+    caps: list[Decimal], steps: list[Decimal], sl_roi: Decimal, lev: int,
+) -> tuple[bool, str]:
+    """🚨 헌법 130 — 각 차수 트리거가 손절가보다 **먼저** 오는지 검산.
+
+    어긋나면 그 단계는 영원히 진입되지 않고 **로그에도 안 남는다**.
+    실제로 -1/-3/-5% 안을 검토할 때 3차가 이렇게 죽는 걸 발견했다.
+    사장님이 자본을 바꾸면 평단이 달라져 이 관계가 깨질 수 있으므로
+    **매 사이클 진입 전에 검산**한다.
+    """
+    try:
+        px = [Decimal("1") - s / Decimal("100") for s in steps]
+        for n in (1, 2):
+            q = sum(caps[i] * lev / px[i] for i in range(n))
+            if q <= 0:
+                return False, "수량 계산 불가"
+            avg = sum(caps[i] * lev for i in range(n)) / q
+            stop = avg * (Decimal("1") - sl_roi / Decimal("100") / lev)
+            if stop >= px[n]:
+                return False, (
+                    f"{n + 1}차 트리거({float(px[n]):.5f})보다 "
+                    f"손절({float(stop):.5f})이 먼저 = {n + 1}차가 죽은 단계"
+                )
+        return True, "정합성 OK (모든 차수 진입 가능)"
+    except Exception as e:
+        return False, f"정합성 검산 실패: {e}"
+
+
+def _load_config(db) -> tuple[list[Decimal], int, str]:
+    """(자본 3칸, 이 전략 전용 상한, 설명) — 설정 손상 시 기본값으로 fail-SAFE."""
+    from app.models.system_setting import SystemSetting
+    caps = list(CAPITALS)
+    src = "기본값"
+    try:
+        row = db.get(SystemSetting, CAPITALS_KEY)
+        if row is not None and row.value is not None and str(row.value).strip():
+            caps = _parse_capitals(row.value)
+            src = f"설정({row.value})"
+    except Exception as e:
+        logger.warning(
+            "[pump_split] %s 파싱 실패 → 기본값 %s 사용: %s",
+            CAPITALS_KEY, [str(c) for c in CAPITALS], e,
+        )
+        caps = list(CAPITALS)
+        src = "기본값(설정 손상)"
+
+    cap_n = DEFAULT_MAX_CONCURRENT
+    try:
+        row = db.get(SystemSetting, MAX_CONCURRENT_KEY)
+        if row is not None and row.value is not None and str(row.value).strip():
+            v = int(str(row.value).strip())
+            cap_n = max(0, min(v, 100))   # 0 = 이 전략만 OFF
+    except Exception as e:
+        logger.warning("[pump_split] %s 파싱 실패 → 기본 %d: %s",
+                       MAX_CONCURRENT_KEY, DEFAULT_MAX_CONCURRENT, e)
+    return caps, cap_n, src
 
 
 def _fmt(v) -> str:
@@ -186,8 +287,10 @@ def _entry_plan(a15: dict, side: str, long_trend: bool) -> tuple[Decimal | None,
     )
 
 
-def _build_template(db, symbol: str, side: str, base: Decimal) -> StrategyTemplate:
-    """100/200/300 3단계 + TP 25%×4 + 트레일링 -3% 템플릿."""
+def _build_template(
+    db, symbol: str, side: str, base: Decimal, caps: list[Decimal],
+) -> StrategyTemplate:
+    """3단계 분할 + TP 25%×4 + 트레일링 -3% 템플릿. caps 는 설정에서 온 자본 3칸."""
     now = datetime.now(timezone.utc)
     # 2·3차 트리거 = 기준선 대비 -1%, -2% (SHORT 는 반대)
     trig = [None, float(SPLIT_STEP_PCT[1]), float(SPLIT_STEP_PCT[2])]
@@ -196,17 +299,17 @@ def _build_template(db, symbol: str, side: str, base: Decimal) -> StrategyTempla
         strategy_type=STRATEGY_TYPE,
         side=side,
         leverage=LEVERAGE,
-        total_capital=sum(CAPITALS),
+        total_capital=sum(caps),
         stages_config={
-            "capitals": [float(c) for c in CAPITALS],
+            "capitals": [float(c) for c in caps],
             "trigger_percents": trig,
             "stages_count": 3,
             "base_price": float(base),
             "split_entry": True,
         },
-        stage1_capital=CAPITALS[0],
-        stage2_capital=CAPITALS[1],
-        stage3_capital=CAPITALS[2],
+        stage1_capital=caps[0],
+        stage2_capital=caps[1],
+        stage3_capital=caps[2],
         stage4_capital=None,
         # 기준선 대비 이탈 심도 = 가격 트리거 % (stage_trigger_worker 가 처리)
         stage2_trigger_percent=SPLIT_STEP_PCT[1],
@@ -247,6 +350,27 @@ def run_pump_split_entry_once() -> dict:
                 "[pump_split] ⏹️ OFF (pump_split_enabled != 1) — 켜려면 이 설정을 1 로",
             )
             return {"note": "OFF (기본값)", **stat}
+
+        # ── Fix 180: 자본/상한 설정 로드 + 정합성 검산 ──
+        caps, max_concurrent, cfg_src = _load_config(db)
+        if max_concurrent <= 0:
+            logger.info("[pump_split] ⏹️ %s=0 = 이 전략 OFF", MAX_CONCURRENT_KEY)
+            return {"note": "전용 상한 0", **stat}
+        _ok, _why = check_no_dead_stage(caps, SPLIT_STEP_PCT, FORCE_SL_ROI, LEVERAGE)
+        if not _ok:
+            # 죽은 단계가 생기는 설정으로는 **진입하지 않는다**.
+            # 조용히 죽는 단계를 만드는 것이 가장 위험하다 (헌법 130).
+            logger.error(
+                "[pump_split] ⛔ 자본 설정 정합성 실패 → 진입 중단: %s "
+                "| 자본=%s 심도=%s SL=-%s%% | %s 를 조정하세요",
+                _why, [str(c) for c in caps], [str(s) for s in SPLIT_STEP_PCT],
+                FORCE_SL_ROI, CAPITALS_KEY,
+            )
+            return {"note": f"정합성 실패: {_why}", **stat}
+        logger.info(
+            "[pump_split] 설정: 자본 %s (%s) | 전용 상한 %d | %s",
+            "/".join(str(c) for c in caps), cfg_src, max_concurrent, _why,
+        )
 
         account = db.execute(
             select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
@@ -299,7 +423,25 @@ def run_pump_split_entry_once() -> dict:
         ).scalars().all()
         active_keys = {(s.symbol, s.side) for s in active}
 
-        from app.services.position_limit import check_position_slot
+        # ── Fix 180: 이 전략 **전용** 상한 (전역 상한과 독립) ──
+        #   전역 상한에 굶지 않게 하려는 사장님 의도. 대신 계정 전체 동시 보유는
+        #   「전역 상한 + 이 전략 상한」의 합이 되므로 두 숫자를 함께 찍는다.
+        _tpl_ids = {s.strategy_template_id for s in active if s.strategy_template_id}
+        _split_tpls = set()
+        if _tpl_ids:
+            _split_tpls = {
+                t.id for t in db.execute(
+                    select(StrategyTemplate)
+                    .where(StrategyTemplate.id.in_(list(_tpl_ids)))
+                    .where(StrategyTemplate.strategy_type == STRATEGY_TYPE)
+                ).scalars().all()
+            }
+        n_split = sum(1 for s in active if s.strategy_template_id in _split_tpls)
+        logger.info(
+            "[pump_split] 현재 이 전략 %d/%d 건 (계정 전체 활성 %d건)",
+            n_split, max_concurrent, len(active),
+        )
+
         from app.services.strategy_service import StrategyService
 
         for sym, chg in cands:
@@ -309,16 +451,13 @@ def run_pump_split_entry_once() -> dict:
                 _skip("already_active")
                 continue
 
-            # 상한은 **진입 직전마다** 재확인 (헌법 119)
-            try:
-                slot_ok, slot_why, _a, _c = check_position_slot(db, "pump_split")
-            except Exception as e:
-                logger.error("[pump_split] 상한 검사 실패 → 보류: %s", e)
-                _skip("slot_error")
-                break
-            if not slot_ok:
-                logger.info("[pump_split] SKIP: %s", slot_why)
-                _skip("slot_full")
+            # 전용 상한을 **진입 직전마다** 재확인 (헌법 119)
+            if n_split >= max_concurrent:
+                logger.info(
+                    "[pump_split] SKIP: 이 전략 상한 도달 %d/%d (%s 로 조정)",
+                    n_split, max_concurrent, MAX_CONCURRENT_KEY,
+                )
+                _skip("split_cap_full")
                 break
 
             try:
@@ -345,7 +484,7 @@ def run_pump_split_entry_once() -> dict:
 
             # 3) 전략 생성 — 1차는 MARKET 즉시, 2·3차는 가격 트리거로 대기
             try:
-                tpl = _build_template(db, sym, side, base)
+                tpl = _build_template(db, sym, side, base, caps)
                 strategy = StrategyService(db).create_strategy_instance(
                     user_id=1,
                     exchange_account_id=account.id,
@@ -382,12 +521,13 @@ def run_pump_split_entry_once() -> dict:
                 ).start_stage1(strategy.id)
 
                 active_keys.add((sym, side))
+                n_split += 1          # Fix 180: 전용 상한 즉시 반영
                 stat["entered"] += 1
                 logger.warning(
                     "[pump_split] ✅ 진입! #%s %s %s 1차 %s USDT "
                     "(2차 %s@-%s%% / 3차 %s@-%s%%) SL -%s%% TP %s%% 25%%×4 트레일 -%s%%",
-                    strategy.id, sym, side, CAPITALS[0], CAPITALS[1], SPLIT_STEP_PCT[1],
-                    CAPITALS[2], SPLIT_STEP_PCT[2], FORCE_SL_ROI, TP_PERCENTS[0],
+                    strategy.id, sym, side, caps[0], caps[1], SPLIT_STEP_PCT[1],
+                    caps[2], SPLIT_STEP_PCT[2], FORCE_SL_ROI, TP_PERCENTS[0],
                     TRAILING_RETRACE_PCT,
                 )
             except Exception as e:
