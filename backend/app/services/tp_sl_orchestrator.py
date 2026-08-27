@@ -6,6 +6,10 @@ from app.core.redis_client import get_redis_client
 from app.core.redis_lock import redis_lock, RedisLockError
 from app.core.strategy_status import TOTAL_TP_LEVELS   # Fix 186: TP 단계 수 단일 진실
 
+# 🚨 Fix 187: 거래소 최소 주문 명목가 (Binance USD-M 선물 기준 5 USDT).
+#   이보다 작은 청산은 거절되어 TP 사다리가 그 자리에서 멈춘다.
+MIN_CLOSE_NOTIONAL = Decimal("5")
+
 # 🚨 2026-06-07 hotfix: 자동 TP total_capital 차감 fix (어제 PR) 에서 logger 사용했으나
 # 모듈 level logger 정의 누락 → NameError: name 'logger' is not defined
 # → 모든 자동 TP 평가 실패 → 사장님 자본 보호 critical 영향!
@@ -320,6 +324,35 @@ class TPSLOrchestratorService:
             # 「3단계 익절」 같은 사용자 기획대로 진행 안 됨 (TP partial close 누락).
             # 잔량이 step_size 이상이면 최소 1 step 보장 — 사용자 「3건 익절」 의도 충족.
             # 잔량 자체가 1 step 미만이면 (이미 거의 청산됨) close 진행 안 함 (current_qty 부족).
+            # ══════════════════════════════════════════════════════════════
+            # 🚨 Fix 187 (2026-08-27): 잔량이 **최소 주문 명목가 미만**이면 전량 청산.
+            #
+            # 각 TP 는 「잔량의 25%」를 청산하므로 명목가가 복리로 줄어든다:
+            #     투입 600U × 2x = 명목 1200U → TP15 5.35U → TP16 4.0U → …
+            # 거래소 최소 주문 명목가(≈5 USDT) 아래로 내려가면 주문이 거절되고,
+            # 그 TP 는 **영원히 완료되지 않아 사다리가 그 자리에서 멈춘다**
+            # (예외는 run_workers:65 가 삼키므로 조용히 멈춘다).
+            # TP20 확장(Fix 186) 으로 뒤쪽 단계를 실제로 쓰게 되면서 현실 문제가 됐다.
+            #
+            # 남은 조각을 더 쪼개는 것은 의미가 없으므로 **그 자리에서 전량 청산**한다.
+            # 청산분 또는 청산 후 잔량 중 하나라도 최소 명목가 미만이면 적용.
+            # ══════════════════════════════════════════════════════════════
+            try:
+                from app.services.mark_price_cache import get_mark_price
+                _px = get_mark_price(strategy.symbol)
+                if _px and _px > 0 and close_qty > 0:
+                    _close_nom = close_qty * Decimal(str(_px))
+                    _rest_nom = (current_qty - close_qty) * Decimal(str(_px))
+                    if _close_nom < MIN_CLOSE_NOTIONAL or _rest_nom < MIN_CLOSE_NOTIONAL:
+                        logger.info(
+                            "[tp_sl Fix187] %s %s: 잔량이 최소 주문 명목가 미만 "
+                            "(청산 %.2fU / 잔여 %.2fU < %s) → 전량 청산",
+                            strategy.symbol, level, float(_close_nom), float(_rest_nom),
+                            MIN_CLOSE_NOTIONAL,
+                        )
+                        close_qty = current_qty
+            except Exception as _mn_e:   # 가격 조회 실패 = 기존 동작 유지 (fail-open)
+                logger.debug("[tp_sl Fix187] 최소 명목가 검사 skip: %s", _mn_e)
             if close_qty <= 0 and current_qty >= step:
                 close_qty = step  # 최소 1 lot 보장
                 # WARN 기록 — fee 손실 인지 + 사용자 알림
