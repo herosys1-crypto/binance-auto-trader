@@ -484,14 +484,39 @@ class RiskService:
                 # = TP2-10은 = template 원값 그대로!
                 # = 사장님 template 세팅 = 자율 존중!
                 # = 각 TP = 순차 발동 (tp_sl_orchestrator!)
+                #
+                # ══════════════════════════════════════════════════════════════
+                # 🚨 Fix 183 (2026-08-27): v131 이 **엉뚱한 칸**에 override 를 넣고 있었다.
+                #
+                # tp_levels 는 :441 에서 **TP20 → TP1 내림차순**으로 채워진다.
+                #   → tp_levels[0] 은 TP1 이 아니라 **TP20** 이다.
+                # 그런데 `idx == 0` 에 override 를 넣었다 = TP20 을 덮어썼다.
+                # 게다가 :581 `TP_LABEL_TO_IDX` 는 **TP1~TP10 만** 담고 있어
+                # TP20 은 `.get(label, -1)` 로 -1 이 되고, 조건이 `-1 > cur_done_idx(-1)`
+                # = False → **TP20 은 어떤 경우에도 선택되지 않는다.**
+                #   = 사장님이 화면에서 고른 TP1 % 가 **완전히 죽어 있었다.**
+                #
+                # 실측 (배포 로그):
+                #   strategy=1577 TP1_override=20.00 → tp_levels=[('TP20', 20.00), ...
+                #                                                  ..., ('TP1', 10.0000)]
+                #   → ROI 10% 에서 TP1 발동. 사장님이 지정한 20% 는 무시.
+                #
+                # 사장님 지시 (2026-08-27): "전략 인스턴스에 설정하는 옵션이 우선으로
+                #   적용되어야 해 지금까지 절대적인 로직이야"
+                #
+                # 신: **label 로** 찾아 TP1 에 넣는다 (인덱스 위치에 의존하지 않는다).
+                #     TP2~TP20 은 v131 의도대로 template 원값을 유지한다
+                #     (= v105 의 max() 로 되돌리지 않는다 → #838 동시청산 재발 없음).
+                # ══════════════════════════════════════════════════════════════
                 tp_levels = [
-                    (label, _override if idx == 0 else val)
-                    for idx, (label, val) in enumerate(tp_levels)
+                    (label, _override if label == "TP1" else val)
+                    for label, val in tp_levels
                 ]
                 logger.info(
-                    "[risk] v131 사장님 TP1 옵션 = TP1만 override (v105 → v131 fix!)! "
-                    "strategy=%s TP1_override=%s → tp_levels=%s",
-                    strategy.id, _override, tp_levels
+                    "[risk] Fix183 TP1 옵션 적용 (label 기준) strategy=%s "
+                    "TP1_override=%s → TP1=%s",
+                    strategy.id, _override,
+                    next((v for l, v in tp_levels if l == "TP1"), None),
                 )
 
         # 2026-05-04 critical fix (사용자 #98 LABUSDT 사례):
@@ -581,10 +606,32 @@ class RiskService:
         TP_LABEL_TO_IDX = {f"TP{n}": n - 1 for n in range(1, 11)}
         cur_done_idx = TP_DONE_INDEX.get((strategy.status or "").upper(), -1)
 
-        # ascending — 가장 낮은 임계 먼저
-        for label, threshold in sorted(tp_levels, key=lambda x: x[1]):
-            if pnl_ratio >= threshold and TP_LABEL_TO_IDX.get(label, -1) > cur_done_idx:
+        # ══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 183 (2026-08-27): 「임계 오름차순」이 아니라 **TP 번호 순**으로 본다.
+        #
+        # 옛 코드는 `sorted(tp_levels, key=lambda x: x[1])` = 임계가 낮은 것부터였다.
+        # TP1 override 가 살아나면 사다리가 단조롭지 않을 수 있다:
+        #     TP1=20(override)  TP2=15(template)  TP3=20 ...
+        # 이때 임계 오름차순이면 ROI 15% 에서 **TP2 가 TP1 보다 먼저** 발동하고,
+        # 그러면 cur_done_idx=1 이 되어 TP1(idx 0)은 `0 > 1` 이 거짓 →
+        # **TP1 이 영원히 건너뛰어진다.**
+        #
+        # TP 는 원래 번호 순으로 차례차례 나가는 것이므로 번호 순으로 판정한다:
+        #   「아직 안 끝난 것 중 가장 앞 번호」가 임계를 넘었으면 그것을 낸다.
+        #
+        # ⚠️ 정상 사다리(TP1<TP2<TP3…)에서는 두 방식의 결과가 **완전히 같다**.
+        #    달라지는 건 위처럼 뒤집힌 경우뿐이다 (검증 테스트로 고정).
+        # ══════════════════════════════════════════════════════════════════
+        for label, threshold in sorted(
+            tp_levels, key=lambda x: TP_LABEL_TO_IDX.get(x[0], 999)
+        ):
+            idx = TP_LABEL_TO_IDX.get(label, -1)
+            if idx <= cur_done_idx:
+                continue          # 이미 끝난 단계
+            if pnl_ratio >= threshold:
                 return label
+            # 아직 이 단계 임계에 못 미쳤다 → 뒤 단계도 보지 않는다 (순차 발동)
+            return None
 
         return None
 
