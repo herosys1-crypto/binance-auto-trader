@@ -535,6 +535,14 @@ def start_scheduler() -> None:
         from app.workers.ladder_restart_worker import run_ladder_restart_once
         run_ladder_restart_once()
     scheduler.add_job(guarded_job("ladder_restart", 240, _ladder_restart), trigger=IntervalTrigger(seconds=300), id="ladder_restart", replace_existing=True, max_instances=1, coalesce=True)
+    # 📊 Fix 179 (2026-08-27 사장님): 급등락 심볼 볼밴 이탈 분할 매수 (100/200/300)
+    #   사장님 verbatim: "상승중인 심볼은 볼밴 하단 이탈 하면 분할 매수 1-3번 ...
+    #                     긴상승에는 중단 이탈시 ... -5% 청산하고 tp1 익절도 5%부터 25%씩"
+    #   15분 봉 기준 판정이므로 15분 주기. 기본 OFF (pump_split_enabled=1 로 켠다).
+    def _pump_split():
+        from app.workers.pump_split_entry_worker import run_pump_split_entry_once
+        run_pump_split_entry_once()
+    scheduler.add_job(guarded_job("pump_split", 780, _pump_split), trigger=IntervalTrigger(seconds=900), id="pump_split", replace_existing=True, max_instances=1, coalesce=True)
     # Daily loss limit 체크 — 매 1분 (settings.daily_loss_limit_usdt 미설정 시 no-op).
     # audit 2026-05-04: AccountDailyLossLimiter 가 호출되는 곳 0건이라 안전장치 무력 상태였음.
     scheduler.add_job(guarded_job("daily_loss_check", 50, run_daily_loss_check_once), trigger=IntervalTrigger(minutes=1), id="daily_loss_check", replace_existing=True, max_instances=1, coalesce=True)
