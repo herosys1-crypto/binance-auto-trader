@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
-from app.core.strategy_status import ACTIVE_LIKE
+from app.core.strategy_status import ACTIVE_WITH_POSITION   # Fix 196: ACTIVE_LIKE 미사용
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_template import StrategyTemplate
 
@@ -67,6 +67,32 @@ MAX_PYRAMID_COUNT = 2              # 🌟 Fix 98 (2026-08-25 사장님 verbatim!
 #   「이기는 포지션을 키울까」의 문제가 아니다). 30초 주기라 소량이면 충분하다.
 MAX_PYRAMID_PER_CYCLE = 3
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 🚨 Fix 196 (2026-08-28): 후보를 ACTIVE_LIKE 로 고르면 안 된다.
+#
+# ACTIVE_LIKE 는 「신규 전략 진입을 **차단**해야 할 상태」 집합이지
+# 「거래소에 포지션이 살아 있는 상태」 집합이 아니다 (strategy_status.py 주석이 그렇게 정의).
+# 거기엔 포지션이 없는 상태가 셋 들어 있다:
+#   LIQUIDATED_WAITING_RETRY  = 청산 완료, 잔량 0, 다음 단계 트리거 대기
+#   STOPPING                  = 사장님이 정지를 눌러 청산 진행 중
+#   MANUAL_CLEANUP_REQUIRED   = 사장님 확인 대기 (자동 정리에서 제외돼 무기한 지속)
+#
+# 그리고 청산 시 stream_service 는 qty/unrealized 만 0 으로 만들고
+# **avg_entry_price 는 남긴다** → 옛 평단 + 살아있는 mark_price 로 ROI 가 계산돼
+# 게이트를 통과할 수 있다. 통과하면 add_position_now(mode="reset") 가
+#   ① 시장가로 **새 포지션을 연다** (= Fix 185 가 상한을 뺀 근거 「건수가 안 는다」가 깨진다)
+#   ② execution_service 가 status 를 STAGE{n}_OPEN 으로 덮어쓴다
+# → stage_trigger_worker 는 재진입을 status=="LIQUIDATED_WAITING_RETRY" 일 때만 진행하므로
+#   **계획된 다음 단계가 영구히 차단된다** = 사장님이 원하신 「손실 구간 재반응」이 죽는다.
+#   MANUAL_CLEANUP_REQUIRED 였다면 「확인 필요」 표식까지 조용히 지워진다.
+#
+# → 실제로 포지션을 들고 있는 상태만 고르고, **잔량으로 한 번 더** 확인한다.
+#   (집합만 믿지 않는다 — 나중에 누가 상태를 추가하면 또 새는 자리다, 헌법 138)
+# ═══════════════════════════════════════════════════════════════════════════
+PYRAMID_ELIGIBLE_STATUSES = frozenset(
+    ACTIVE_WITH_POSITION - {"STOPPING", "MANUAL_CLEANUP_REQUIRED"}
+)
+
 # ⚠️ Fix 185 로 **더 이상 진입 필터로 쓰지 않는다** (사장님: "모든 전략").
 #   로그/참조용으로만 남긴다.
 AUTO_ENTRY_TYPES_PYRAMID = (
@@ -90,16 +116,27 @@ def _rget(key: str) -> str | None:
         return None
 
 
-def _get_pyramid_count(symbol: str, side: str) -> int:
-    v = _rget(f"pyramid_count:{symbol}:{side}")
+def _get_pyramid_count(strategy_id: int) -> int:
+    """🚨 Fix 196 (2026-08-28): 카운터를 **전략 단위**로 센다.
+
+    옛 키는 `pyramid_count:{symbol}:{side}` + 7일 TTL 이고 **지우는 코드가 없었다.**
+    이 시스템은 realtime_reentry / ladder_restart / pump_split 이 같은 심볼·방향으로
+    반복 재진입하는 구조라, A 전략이 2회 쓰고 종료하면 몇 시간 뒤 만들어진 B 전략이
+    **첫 진입부터 max_pyramid_count 로 조용히 탈락**했다.
+    사장님 의도는 「이 포지션에 최대 2회」이지 「이 심볼에 7일간 2회」가 아니다.
+    (반대로 7일이 지나면 카운터가 사라져 평생 상한도 아니었다.)
+
+    TTL 은 남겨 둔다 — 종료된 전략의 키가 영원히 쌓이는 것을 막는 청소 용도다.
+    """
+    v = _rget(f"pyramid_count:sid:{strategy_id}")
     return int(v) if v else 0
 
 
-def _increment_pyramid_count(symbol: str, side: str) -> int:
+def _increment_pyramid_count(strategy_id: int) -> int:
     try:
-        new_count = _get_pyramid_count(symbol, side) + 1
+        new_count = _get_pyramid_count(strategy_id) + 1
         _redis().setex(
-            f"pyramid_count:{symbol}:{side}",
+            f"pyramid_count:sid:{strategy_id}",
             PYRAMID_COUNT_TTL_DAYS * 86400, str(new_count),
         )
         return new_count
@@ -239,7 +276,10 @@ def run_success_pyramiding() -> dict:
             select(StrategyInstance)
             .join(StrategyTemplate,
                   StrategyInstance.strategy_template_id == StrategyTemplate.id)
-            .where(StrategyInstance.status.in_(list(ACTIVE_LIKE)))
+            # 🚨 Fix 196: 포지션을 실제로 들고 있는 상태 + 잔량 확인 (위 상수 주석 참조)
+            .where(StrategyInstance.status.in_(list(PYRAMID_ELIGIBLE_STATUSES)))
+            .where(StrategyInstance.current_position_qty.isnot(None))
+            .where(StrategyInstance.current_position_qty != 0)
             .where(StrategyInstance.is_archived.is_(False))   # Fix 158
             .where(StrategyInstance.current_stage >= 1)
         ).scalars().all()
@@ -300,7 +340,7 @@ def run_success_pyramiding() -> dict:
                 continue
 
             # pyramid count 체크
-            pyr_count = _get_pyramid_count(si.symbol, si.side)
+            pyr_count = _get_pyramid_count(si.id)          # Fix 196: 전략 단위
             if pyr_count >= MAX_PYRAMID_COUNT:
                 skipped += 1
                 _bump("max_pyramid_count")
@@ -566,7 +606,7 @@ def run_success_pyramiding() -> dict:
                 db.add(sugg)
                 db.commit()
 
-                _increment_pyramid_count(si.symbol, si.side)
+                _increment_pyramid_count(si.id)            # Fix 196: 전략 단위
                 _set_cooldown(si.symbol, si.side)
                 entered += 1
                 remaining -= 1

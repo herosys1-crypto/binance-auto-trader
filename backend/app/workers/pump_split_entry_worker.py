@@ -287,13 +287,94 @@ def _entry_plan(a15: dict, side: str, long_trend: bool) -> tuple[Decimal | None,
     )
 
 
+def base_multipliers(side: str, steps: list[Decimal]) -> list[Decimal]:
+    """기준선 대비 각 차수의 목표 가격 배수. LONG 은 아래로, SHORT 는 위로."""
+    sign = Decimal("-1") if side == "LONG" else Decimal("1")
+    return [Decimal("1") + sign * Decimal(str(s)) / Decimal("100") for s in steps]
+
+
+def compounded_trigger_pcts(side: str, steps: list[Decimal]) -> list[Decimal | None]:
+    """🚨 Fix 195 (2026-08-28): 「기준선 대비 심도」를 계산기가 쓰는 「직전 단계 대비」로 변환.
+
+    StrategyCalculator 는 앵커를 **직전 단계 가격으로 이어붙인다**(복리):
+        price_i = price_(i-1) × multiplier(pct_i)
+    그래서 기준선 대비 -3/-5/-7% 를 그대로 넣으면 3차가 엉뚱한 곳에 걸린다.
+
+    실측(2026-08-28, 계산기 직접 실행):
+        LONG  3차 = base × 0.95 × 0.80 = base × 0.76 = 기준선 **-24%** (의도 -7%)
+        SHORT 3차 = base × 1.05 × 1.20 = base × 1.26 = 기준선 **+26%** (의도 +7%)
+    2차까지 물렸을 때 손절가가 기준선 -9.13% 이므로 **손절이 압도적으로 먼저 온다**
+    → 계획 자본 600 중 **300(절반)이 영원히 진입되지 않았다** (헌법 130 「죽은 단계」).
+
+    원인 2겹:
+      ① stages_config 에 last_stage_trigger_percent 를 안 넘겨서 마지막 단계가
+         DEFAULT_LAST_*_TRIGGER_PCT = 20% 로 떨어졌다 (trigger_percents[2]=7 은 읽히지도 않음)
+      ② 설령 7 을 넘겨도 복리 앵커 때문에 base×0.95×0.93 = -11.65% 라 여전히 죽는다
+    → 두 겹을 한 번에 없애려면 **비율을 복리 기준으로 환산**해야 한다.
+
+    1차는 기준선에서 IMMEDIATE 로 잡히고(start_price=base) 앵커가 base 이므로,
+    2차는 기준선 대비 값이 그대로 맞고 3차부터 환산이 필요하다.
+    """
+    mult = base_multipliers(side, steps)
+    out: list[Decimal | None] = [None]          # 1차 = 즉시 진입 (트리거 없음)
+    prev = Decimal("1")                          # 앵커 시작 = 기준선(start_price)
+    for i in range(1, len(steps)):
+        ratio = mult[i] / prev
+        out.append((Decimal("1") - ratio) * 100 if side == "LONG" else (ratio - Decimal("1")) * 100)
+        prev = mult[i]
+    return out
+
+
+def verify_stage_plans(plans, base, side: str, caps: list[Decimal],
+                       sl_roi=FORCE_SL_ROI, lev=LEVERAGE) -> tuple[bool, str]:
+    """🚨 Fix 195: **DB 에 실제로 저장된 트리거 가격**으로 죽은 단계를 검산한다.
+
+    check_no_dead_stage 는 워커의 「의도값」으로 계산하므로, 계산기가 다른 가격을
+    만들어내면 그 어긋남을 못 잡는다 — 실제로 3차가 기준선 -24% 인데도
+    「정합성 OK (모든 차수 진입 가능)」를 찍고 있었다 (헌법 101: 읽는 함수가
+    여러 개면 어긋난다 / 헌법 132: 검사가 실제로 잡는지 증명할 것).
+
+    여기서는 저장된 trigger_price 를 그대로 읽어, n차까지 체결된 평단의 손절가보다
+    (n+1)차 트리거가 **먼저 오는지**를 본다. 먼저 오지 않으면 그 차수는 영원히
+    진입되지 않는다 = 계획한 자본이 조용히 죽는다.
+    """
+    # 1차는 stage plan 에 트리거가 없다(MARKET). 진입 조건이 「기준선 -3% 도달」이므로
+    # 체결가는 기준선 × (1-3%) 이하다. 가장 불리한 쪽(= 정확히 -3%)으로 잡아 보수적으로 본다.
+    px: dict[int, Decimal] = {
+        1: Decimal(str(base)) * base_multipliers(side, SPLIT_STEP_PCT)[0],
+    }
+    for p in plans:
+        if p.stage_no != 1 and p.trigger_price is not None:
+            px[p.stage_no] = Decimal(str(p.trigger_price))
+    for k in range(1, len(caps) + 1):
+        if k not in px:
+            return False, f"{k}차 트리거 가격이 저장되지 않았습니다"
+    lev_d = Decimal(str(lev))
+    drop = Decimal(str(sl_roi)) / Decimal("100") / lev_d
+    for n in range(1, len(caps)):          # n차까지 체결됐을 때 (n+1)차에 닿는가
+        qty = sum(Decimal(str(caps[i])) * lev_d / px[i + 1] for i in range(n))
+        avg = sum(Decimal(str(caps[i])) * lev_d for i in range(n)) / qty
+        stop = avg * (Decimal("1") - drop) if side == "LONG" else avg * (Decimal("1") + drop)
+        nxt = px[n + 1]
+        ok = (stop < nxt) if side == "LONG" else (stop > nxt)
+        if not ok:
+            return False, (
+                f"{n+1}차 트리거 {_fmt(nxt)} 보다 손절 {_fmt(stop)} 이 먼저 도달 "
+                f"= {n+1}차({caps[n]} USDT)가 죽은 단계"
+            )
+    return True, "저장된 트리거로 검산 OK (" + " / ".join(
+        f"{k}차 {_fmt(px[k])}" for k in sorted(px)
+    ) + ")"
+
+
 def _build_template(
     db, symbol: str, side: str, base: Decimal, caps: list[Decimal],
 ) -> StrategyTemplate:
     """3단계 분할 + TP 25%×4 + 트레일링 -3% 템플릿. caps 는 설정에서 온 자본 3칸."""
     now = datetime.now(timezone.utc)
-    # 2·3차 트리거 = 기준선 대비 -1%, -2% (SHORT 는 반대)
-    trig = [None, float(SPLIT_STEP_PCT[1]), float(SPLIT_STEP_PCT[2])]
+    # Fix 195: 기준선 대비 심도 → 계산기의 복리 앵커 기준으로 환산
+    _pcts = compounded_trigger_pcts(side, SPLIT_STEP_PCT)
+    trig = [None] + [float(p) for p in _pcts[1:]]
     tpl = StrategyTemplate(
         name=f"PUMPSPLIT_{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S')}",
         strategy_type=STRATEGY_TYPE,
@@ -303,6 +384,10 @@ def _build_template(
         stages_config={
             "capitals": [float(c) for c in caps],
             "trigger_percents": trig,
+            # 🚨 Fix 195: 마지막 단계는 계산기가 trigger_percents 를 **읽지 않고**
+            #   last_stage_* 를 쓴다. 안 넘기면 기본 20% 로 떨어져 3차가 죽는다.
+            "last_stage_trigger_mode": "PRICE_DOWN_PCT" if side == "LONG" else "PRICE_UP_PCT",
+            "last_stage_trigger_percent": float(_pcts[-1]),
             "stages_count": 3,
             "base_price": float(base),
             "split_entry": True,
@@ -511,6 +596,30 @@ def run_pump_split_entry_once() -> dict:
                 if s1 is not None:
                     s1.trigger_price = None
                     db.commit()
+
+                # 🚨 Fix 195: 주문을 내기 **전에** 저장된 트리거로 죽은 단계를 재검산한다.
+                #   의도값 검산(check_no_dead_stage)은 통과했는데 실제 저장값이
+                #   기준선 -24% 였던 사고가 있었다. 여기서 막지 못하면
+                #   계획 자본의 절반이 영원히 안 들어간 채로 손절만 맞는다.
+                _plans = db.execute(
+                    select(StrategyStagePlan)
+                    .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+                ).scalars().all()
+                _ok, _why = verify_stage_plans(_plans, base, side, caps)
+                if not _ok:
+                    strategy.status = "STOPPED"
+                    strategy.is_archived = True
+                    strategy.last_error_code = "SPLIT_DEAD_STAGE"
+                    strategy.last_error_message = _why[:500]
+                    db.commit()
+                    logger.error(
+                        "[pump_split] ⛔ #%s %s %s 진입 취소 — %s "
+                        "(주문 전에 막았으므로 자본 손실 없음)",
+                        strategy.id, sym, side, _why,
+                    )
+                    stat["skipped"] = stat.get("skipped", 0) + 1
+                    continue
+                logger.info("[pump_split] #%s 단계 검산: %s", strategy.id, _why)
 
                 from app.services.execution_service import ExecutionService
                 ExecutionService(
