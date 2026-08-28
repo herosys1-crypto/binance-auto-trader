@@ -1117,6 +1117,10 @@
           <div id="v219-reentry-watch-long" style="margin-top:8px"></div>
           <div style="border-top:1px solid #334155;padding-top:12px;margin-top:12px;">
             <h4 class="text-sm font-bold mb-2" style="color:#f9a8d4">⚙ 세팅</h4>
+            <!-- 🚨 Fix 199 (2026-08-28): 이 알림은 **맨 위**에 있어야 한다.
+                 원래 저장 버튼 아래에 있어서, 로드가 실패해 「불러오는 중」으로 멈춰도
+                 사장님 화면에서는 사유가 보이지 않았다 (스크롤 밖). -->
+            <div id="v219-settings-msg" class="text-xs mb-2" style="min-height:14px"></div>
             <div class="flex flex-col gap-2" style="font-size:12px;">
               <label class="flex items-center justify-between gap-2">
                 <span class="text-slate-300" title="하루 신규 건수가 아니라 「동시에 열려 있는 포지션」 상한! (사장님 Fix 112)">최대 동시 포지션</span>
@@ -1225,7 +1229,6 @@
                   💾 저장
                 </button>
               </div>
-              <div id="v219-settings-msg" class="text-xs" style="min-height:14px"></div>
             </div>
           </div>
         </details>

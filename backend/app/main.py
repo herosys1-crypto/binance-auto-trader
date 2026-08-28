@@ -52,6 +52,34 @@ app = FastAPI(title=settings.app_name)
 # - 위험 = 0 (FastAPI 표준 middleware)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(IdempotencyMiddleware)
+
+
+# 🚨 Fix 199 (2026-08-28): API 응답은 **절대 캐시되면 안 된다.**
+#
+# 사장님 증상: ⚙세팅 카드의 자본 사다리·피라미딩·볼밴 칸이 영원히 「불러오는 중」.
+# 채워진 칸(최대 동시 포지션·초기 자본·최대 단계)과 빈 칸의 경계를 보면,
+# 화면이 받는 응답에 capital_ladder(Fix144) / pyramid_capital(Fix176) /
+# bbsplit_*(Fix181) 키가 **아예 없다** = 08-26 이전 형태의 응답이다.
+# 서버 디스크는 최신인데 화면만 옛 응답을 보는 상태.
+#
+# 그런데 지금까지 Cache-Control 을 붙이는 곳은 /static 과 /admin-ui 뿐이었고
+# /api/* 응답에는 **아무 캐시 지시가 없었다.** 지시가 없으면 브라우저·중간 프록시가
+# 자기 판단으로 캐시할 수 있다(RFC 7234 휴리스틱 캐싱). 설정·잔고·포지션처럼
+# 매번 달라지는 값에서 이건 「낡은 값을 진짜로 착각하는」 사고로 직결된다.
+#
+# → 모든 API 응답에 no-store 를 명시한다. 성능 영향은 없다 —
+#   어차피 캐시하면 안 되는 값들이고, 지금도 사실상 캐시되지 않아야 정상이다.
+@app.middleware("http")
+async def _no_store_api(request, call_next):
+    response = await call_next(request)
+    try:
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+    except Exception:      # 헤더 설정 실패가 응답 자체를 막아서는 안 된다
+        pass
+    return response
 app.include_router(api_router)
 
 

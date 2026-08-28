@@ -790,11 +790,45 @@ def run_stage_trigger_once(decrypt_text) -> None:
                         # 신: 24h 는 로그/기록용 참고값. 실 게이트는 정점 확인.
                         #     (아래 (B) 지표 반전 STRICT 게이트는 그대로 유지!)
                         # ══════════════════════════════════════════════════
-                        _ok24, _chg = _check_stage_24h_filter(_bc55, strategy.symbol, strategy.side)
-                        from app.services.peak_confirmation import confirm_peak as _cp114
-                        _pk114_ok, _pk114_why, _pk114_det = _cp114(
-                            _bc55, strategy.symbol, strategy.side,
-                        )
+                        # ══════════════════════════════════════════════════
+                        # 🚨 Fix 200 (2026-08-28 사장님 지시): 「지정한 가격에 반드시
+                        #   들어가게」 — 전략 단위 정점 게이트 예외.
+                        #
+                        # 사장님 절대 원칙: "전략 인스턴스에 설정하는 옵션이 우선".
+                        # 그런데 모달에서 **직접 지정한 가격 트리거**를 정점 게이트가
+                        # 덮으면, 사장님이 정한 가격에 영원히 안 들어갈 수 있다.
+                        # 실제 사례 #1637 AKEUSDT SHORT — 마크가 2단계 트리거를
+                        # 넘었는데도 "지표 꺾임 1/2" 로 1분마다 계속 차단됐다.
+                        #
+                        # → 기본은 게이트 유지(자동 진입 보호). **명시적으로 켠 전략만**
+                        #   건너뛴다. 켜면 로그에 매번 WARNING 을 남겨 숨지 않게 한다.
+                        #   Redis: stage_peak_bypass:strategy:{id} (값=사유, 7일 TTL)
+                        # ══════════════════════════════════════════════════
+                        _peak_bypass = None
+                        try:
+                            _bp = _redis.get(f"stage_peak_bypass:strategy:{strategy.id}") if _redis else None
+                            if _bp:
+                                _peak_bypass = _bp.decode() if isinstance(_bp, bytes) else str(_bp)
+                        except Exception:
+                            _peak_bypass = None
+
+                        if _peak_bypass:
+                            logger.warning(
+                                "[Fix200/peak-bypass] #%s %s %s stage=%s = 정점 확인을 "
+                                "**건너뜁니다** (사장님 지정 가격 우선 / 사유=%s)",
+                                strategy.id, strategy.symbol, strategy.side,
+                                next_stage_no, _peak_bypass,
+                            )
+                            _ok24, _chg = True, None
+                            _pk114_ok = True
+                            _pk114_why = f"정점 게이트 건너뜀 ({_peak_bypass})"
+                            _pk114_det = {"bypass": _peak_bypass}
+                        else:
+                            _ok24, _chg = _check_stage_24h_filter(_bc55, strategy.symbol, strategy.side)
+                            from app.services.peak_confirmation import confirm_peak as _cp114
+                            _pk114_ok, _pk114_why, _pk114_det = _cp114(
+                                _bc55, strategy.symbol, strategy.side,
+                            )
                         if not _pk114_ok:
                             _reason114 = (
                                 f"Fix114 정점 미확인 (stage={next_stage_no} "

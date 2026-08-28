@@ -1656,6 +1656,26 @@ async function loadV219Settings(retry = 0) {
         + ((e && e.message) || e) + '</span>';
     }
     console.warn('[v219/settings] 로드 실패:', e);
+    // 🚨 Fix 199 (2026-08-28 사장님 "뭘 불러오는중인지?"):
+    //   실패했는데 칸에는 계속 「불러오는 중…」이 떠 있었다 = **글자가 거짓말**을 했다.
+    //   사장님은 기다리면 될 줄 알고 계셨는데 실제로는 이미 멈춘 상태였다.
+    //   비어 있는 칸의 안내 문구를 「불러오지 못함」으로 바꿔, 화면만 봐도 알 수 있게 한다.
+    ['v219-daily-limit', 'v219-capital', 'v219-ladder', 'v219-pyramid-capital',
+     'v219-max-stage', 'bbsplit-max', 'bbsplit-capitals'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && !el.value) el.placeholder = '불러오지 못함';
+    });
+    ['v219-ladder-preview', 'bbsplit-preview'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && String(el.textContent || '').indexOf('불러오는') >= 0) {
+        el.textContent = '불러오지 못함';
+        el.style.color = '#ef4444';
+      }
+    });
+    const _bb = document.getElementById('bbsplit-enabled');
+    if (_bb && _bb.value === '' && _bb.options.length && _bb.options[0].value === '') {
+      _bb.options[0].textContent = '⚠️ 불러오지 못함';
+    }
     if (retry < 5) setTimeout(() => loadV219Settings(retry + 1), 2000);
   }
 }
