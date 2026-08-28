@@ -27,6 +27,15 @@ from app.models.system_setting import SystemSetting
 
 logger = logging.getLogger(__name__)
 
+# 🚨 Fix 192 (2026-08-28): 이 api 프로세스가 제공하는 기능 목록.
+#   화면이 「내가 기대하는 기능이 응답에 없다 = api 가 옛 코드다」를 스스로 판단하게 한다.
+#   새 UI 기능을 추가할 때 여기에 이름을 더할 것.
+API_FEATURES = (
+    "bbsplit",              # Fix 181: 볼밴 분할 전략 설정
+    "bbsplit_tristate",     # Fix 192: 모르면 None (fail-OFF 금지)
+    "concurrent_limit_v2",  # Fix 188/191: 실효 동시 상한 반환
+)
+
 router = APIRouter(prefix="/strategy-suggestions", tags=["strategy-suggestions"])
 
 
@@ -255,18 +264,43 @@ def get_sajangnim_settings(
         #   "볼밴 전략시스템은 어디서 세팅을 하고 볼수 있나요?"
         #   → 설정 키만 있고 화면이 없어 DB 명령으로만 바꿀 수 있었다 (Fix 115 교훈).
         #   워커와 **같은 로더**를 써서 화면과 실제가 어긋나지 않게 한다 (헌법 85).
+        # 🚨 Fix 192: 「git pull 은 했는데 재시작을 안 했다」가 화면에서 즉시 드러나게.
+        #   이 프로젝트의 상습 실패모드다 (Fix 185 도 같은 이유로 하루를 잃었다).
+        #   화면은 여기에 자기가 기대하는 기능이 없으면 「api 가 옛 코드」라고 말할 수 있다.
+        "api_features": list(API_FEATURES),
         **_current_bbsplit(db),
     }
 
 
 def _current_bbsplit(db) -> dict:
-    """볼밴 분할 전략의 「실제 적용값」 — 워커의 _load_config 를 그대로 사용."""
-    out = {"bbsplit_enabled": 0, "bbsplit_max": 3, "bbsplit_capitals": "100,200,300"}
+    """볼밴 분할 전략의 「실제 적용값」 — 워커의 _load_config 를 그대로 사용.
+
+    🚨 Fix 192 (2026-08-28 사장님 "켬으로 했는데 껌으로 변해 있었어"): **fail-OFF 금지.**
+
+    옛 코드는 초기값이 `bbsplit_enabled: 0`(끔) 이고 예외를 통째로 삼켰다.
+    그래서 DB 가 '1'(켬) 이어도 조회 중 무엇 하나만 실패하면
+    **HTTP 200 으로 「끔」을 돌려주고**, 화면은 그것을 그대로 믿었다.
+    「모름」을 표현할 수단이 없어서 **「모름」이 「꺼짐」으로 표시**된 것이다.
+    돈을 쓰는 전략의 ON/OFF 에서 이 방향의 침묵은 특히 위험하다 (헌법 83 의 표시판 판).
+
+    → 모르면 None. 0 은 **정말로 꺼져 있을 때만.** 실패 사유도 함께 돌려준다.
+    → import 와 DB 조회를 **분리**해서, 한쪽이 죽어도 다른 쪽 값은 살린다.
+    """
+    out: dict = {
+        "bbsplit_enabled": None,
+        "bbsplit_max": None,
+        "bbsplit_capitals": None,
+        "bbsplit_error": None,
+    }
+    errs = []
     try:
-        from app.models.system_setting import SystemSetting
-        from app.workers.pump_split_entry_worker import _load_config
         row = db.get(SystemSetting, "pump_split_enabled")
         out["bbsplit_enabled"] = 1 if (row and str(row.value).strip() == "1") else 0
+    except Exception as e:
+        errs.append(f"enabled: {e}")
+        logger.warning("[bbsplit] enabled 조회 실패: %s", e)
+    try:
+        from app.workers.pump_split_entry_worker import _load_config
         caps, max_n, _src = _load_config(db)
         out["bbsplit_max"] = max_n
         out["bbsplit_capitals"] = ",".join(
@@ -274,7 +308,10 @@ def _current_bbsplit(db) -> dict:
             for c in caps
         )
     except Exception as e:
-        logger.warning("[bbsplit] 설정 조회 실패 → 기본값: %s", e)
+        errs.append(f"config: {e}")
+        logger.warning("[bbsplit] config 조회 실패: %s", e)
+    if errs:
+        out["bbsplit_error"] = " / ".join(errs)
     return out
 
 
@@ -468,10 +505,22 @@ def set_sajangnim_settings(
         try:
             new_val = sanitizer(payload[payload_key])
             row = db.get(SystemSetting, key)
+            # 🚨 Fix 193 (2026-08-28): 설정 변경 감사 기록.
+            #   사장님 "30개에서 10개로 자동으로 변경되었어" 를 코드로 되짚을 수 없었던
+            #   근본 이유 = 이력 테이블도 없고, user_id 를 받아놓고 updated_by 를
+            #   채우지도 않았다. 누가·무엇을·무엇에서 바꿨는지 남는 게 하나도 없었다.
+            #   ※ 값이 바뀔 때만 대입한다 — 같은 값을 대입하면 SQLAlchemy 가 UPDATE 를
+            #     내지 않아 updated_at 이 안 움직이는데, 굳이 건드려 오염시킬 이유가 없다.
             if row:
-                row.value = new_val
+                if str(row.value).strip() != new_val:
+                    logger.info(
+                        "[settings] %s: %r → %r (user=%s)", key, row.value, new_val, user_id,
+                    )
+                    row.value = new_val
+                    row.updated_by = user_id
             else:
-                row = SystemSetting(key=key, value=new_val)
+                logger.info("[settings] %s 신규=%r (user=%s)", key, new_val, user_id)
+                row = SystemSetting(key=key, value=new_val, updated_by=user_id)
                 db.add(row)
             updated[payload_key] = new_val
             # 🎯 Fix 145: 사다리를 저장하면 최대 단계를 사다리 길이에 「자동 동기화」.
@@ -487,27 +536,14 @@ def set_sajangnim_settings(
                     db.add(SystemSetting(key="sajangnim_max_stage", value=str(_n)))
                 updated["max_stage"] = str(_n)
                 logger.info("[Fix145] 사다리 %s 저장 → max_stage 자동 %d 동기화", new_val, _n)
-            # 🚨 Fix 188 (2026-08-28 사장님): 동시 상한은 키가 3개인데 UI 는 1개만 썼다.
-            #   get_max_concurrent 는 sajangnim_max_concurrent_positions 를 **먼저** 보므로,
-            #   그 키가 남아 있으면 사장님이 화면에서 바꾼 값이 조용히 무시된다.
-            #   → 저장할 때 우선순위 키도 **같은 값으로** 맞춰서
-            #     "어느 키가 이기든 화면과 같다" 를 보장한다 (헌법 102: 모순 가능한 설정 금지).
-            if key == "sajangnim_top_short_daily_limit":
-                _pk = "sajangnim_max_concurrent_positions"
-                _pr = db.get(SystemSetting, _pk)
-                if _pr:
-                    if str(_pr.value).strip() != new_val:
-                        logger.warning(
-                            "[Fix188] 그림자 키 %s=%s 가 화면값 %s 를 덮고 있었습니다 → 동기화",
-                            _pk, _pr.value, new_val,
-                        )
-                    _pr.value = new_val
-                else:
-                    db.add(SystemSetting(
-                        key=_pk, value=new_val,
-                        description="Fix188: 동시 보유 상한 (UI 최대 동시 포지션과 항상 동일)",
-                    ))
-                updated["max_concurrent_positions"] = new_val
+            # 🚨 Fix 191 (2026-08-28): Fix 188 의 그림자 키 동기화를 **철회**한다.
+            #   실측 결과 sajangnim_max_concurrent_positions 행은 **존재한 적이 없었고**
+            #   (30→10 의 원인도 아니었다), 그런데 Fix 188 은 저장할 때마다 그 행을
+            #   **새로 만들고** 있었다 = 원래 없던 1순위 키를 내 손으로 설치한 셈이다.
+            #   그 뒤로 누가 top_short_daily_limit 만 DB 로 바꾸면 그때부터 조용히 무시된다
+            #   — **막으려던 함정을 스스로 파는** 코드였다.
+            #   해법은 동기화가 아니라 **키를 하나로 못 박는 것** (헌법 102).
+            #   → position_limit.LIMIT_KEYS 에서 그 키를 퇴역시켰다.
         except Exception as e:
             # 🚨 Fix 181: 옛 코드는 `return {"error": ...}` = **HTTP 200** 이었다.
             #   프론트 api() 는 200 을 성공으로 통과시키고, saveV219Settings 는
