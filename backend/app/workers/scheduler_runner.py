@@ -601,17 +601,38 @@ def start_scheduler() -> None:
     )
 
     # Fix 31 v230 (2026-08-23): 4h + 반대 신뢰도 청산!
-    def _time_reverse_exit():
-        from app.workers.time_reverse_exit_worker import run_time_reverse_exit_once
-        run_time_reverse_exit_once()
-
-    scheduler.add_job(
-        guarded_job("time_reverse_exit", 240, _time_reverse_exit),
-        trigger=IntervalTrigger(minutes=5),
-        id="time_reverse_exit",
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,
+    # ═══════════════════════════════════════════════════════════════════════
+    # 🚨 Fix 198 (2026-08-28): 사장님 결정으로 **명시적으로 끕니다.**
+    #
+    # 이 워커는 2026-08-23 배포 이후 **한 번도 동작한 적이 없습니다.**
+    #   후보 조회에 `started_at.isnot(None)` 이 있는데 StrategyInstance.started_at 은
+    #   채우는 코드가 아예 없어 전 1160건 NULL → 항상 0건 → 무로그 return.
+    #   = 「등록은 됐는데 조건 때문에 우연히 안 도는」 상태였습니다.
+    #
+    # 그 상태가 가장 위험합니다 — 학습용으로 started_at 을 채우는 순간
+    # 이 워커가 **아무 예고 없이 살아나** 4시간 경과 1단계 포지션을
+    # 시장가 전량청산하기 시작합니다 (최대 50건/사이클).
+    # 그래서 「기록을 채우는 것」과 「청산을 켜는 것」을 분리했고,
+    # 사장님이 「끈다 + 학습용 기록만」을 선택하셨습니다.
+    #
+    # 다시 켜려면: 이 블록의 주석을 풀기 전에 4시간 규칙이 실제로 성과에
+    # 도움이 되는지 데이터로 확인할 것 (지금은 근거가 없습니다).
+    # ═══════════════════════════════════════════════════════════════════════
+    # def _time_reverse_exit():
+    #     from app.workers.time_reverse_exit_worker import run_time_reverse_exit_once
+    #     run_time_reverse_exit_once()
+    #
+    # scheduler.add_job(
+    #     guarded_job("time_reverse_exit", 240, _time_reverse_exit),
+    #     trigger=IntervalTrigger(minutes=5),
+    #     id="time_reverse_exit",
+    #     replace_existing=True,
+    #     max_instances=1,
+    #     coalesce=True,
+    # )
+    logger.warning(
+        "[scheduler] time_reverse_exit = 사장님 결정으로 비활성 (Fix 198). "
+        "4시간 시간청산/반대신뢰도 청산은 동작하지 않습니다."
     )
 
     # Fix 42 (2026-08-23 사장님!): v219 재등록! (auto_short_at_top + pump_top_detector)
