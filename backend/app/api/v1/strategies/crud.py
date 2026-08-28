@@ -5,6 +5,8 @@ create / list / get one + 상세 조회 endpoint 모음.
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -22,6 +24,8 @@ from app.schemas.strategy import (
     StrategyDetailResponse,
 )
 from app.services.strategy_service import StrategyService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
@@ -94,6 +98,95 @@ def list_strategies(
     # 캐시 miss 인 심볼은 stored 값 유지 — backward-compat.
     apply_live_unrealized_pnl_batch(out)
     return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🚨 Fix 201 (2026-08-28 사장님): 「가격은 넘었는데 왜 안 들어가지?」를 화면에서 보이게
+#
+# 사장님 실제 사례 #1637 AKEUSDT SHORT — 마크가 2단계 트리거를 넘었는데도
+# 1분마다 "Fix114 정점 미확인 (지표 꺾임 1/2)" 로 차단됐다. 사유는 Redis 와 로그에
+# 정확히 남고 있었지만 **화면 어디에도 안 보여서**, 사장님이 물어보셔야만 알 수 있었다.
+# 그건 차단을 기록하는 의미가 없다 (헌법 8 = silent 차단 금지의 취지).
+#
+# ⚠️ 이 라우트는 반드시 `/{strategy_id}` **앞에** 있어야 한다 —
+#    뒤에 두면 "block-reasons" 가 strategy_id(int) 로 해석돼 422 가 난다.
+# ═══════════════════════════════════════════════════════════════════════════
+_BLOCK_KEY = "stage_trigger_block:strategy:{sid}"
+_BYPASS_KEY = "stage_peak_bypass:strategy:{sid}"
+
+
+def _short_label(reason: str) -> str:
+    """긴 사유 문자열 → 배지에 넣을 짧은 라벨.
+
+    실측 예: "Fix114 정점 미확인 (stage=2 side=SHORT 24h=4.424%): 지표 꺾임 1/2 (아직 진행 중 = 정점 아님!)"
+    """
+    import re
+    r = reason or ""
+    if "정점 미확인" in r:
+        m = re.search(r"지표 꺾임 (\d+/\d+)", r)
+        return f"정점 미확인 {m.group(1)}" if m else "정점 미확인"
+    if "24h" in r and "필터" in r:
+        return "24h 필터"
+    if "mark_price" in r:
+        return "가격 없음"
+    if "지표 반전" in r:
+        return "지표 반전 대기"
+    # 콜론 앞부분만, 너무 길면 자른다
+    head = r.split(":")[0].strip()
+    return (head[:18] + "…") if len(head) > 18 else (head or "차단됨")
+
+
+@router.get("/block-reasons")
+def list_block_reasons(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """전략별 「단계 진행이 막힌 사유」 + 「지정가 우선」 예외 상태를 한 번에.
+
+    Redis 만 읽는다 (매매 로직에 전혀 관여하지 않음). 파이프라인 1회로 N+1 을 피한다.
+    """
+    import json as _json
+    rows = StrategyRepository(db).list_strategies(user_id=user_id, include_archived=False)
+    ids = [r.id for r in rows]
+    out: dict[str, dict] = {}
+    if not ids:
+        return {"items": out, "count": 0}
+    try:
+        from app.core.redis_client import get_redis_client
+        rc = get_redis_client()
+        pipe = rc.pipeline()
+        for sid in ids:
+            pipe.get(_BLOCK_KEY.format(sid=sid))
+            pipe.get(_BYPASS_KEY.format(sid=sid))
+        vals = pipe.execute()
+    except Exception as e:
+        logger.warning("[Fix201] 차단 사유 조회 실패: %s", e)
+        return {"items": out, "count": 0, "error": str(e)}
+
+    for i, sid in enumerate(ids):
+        raw_block, raw_bypass = vals[2 * i], vals[2 * i + 1]
+
+        def _s(v):
+            return (v.decode() if isinstance(v, bytes) else v) if v else None
+
+        blk, byp = _s(raw_block), _s(raw_bypass)
+        if not blk and not byp:
+            continue
+        item: dict = {"bypass": byp}
+        if blk:
+            try:
+                d = _json.loads(blk)
+                item.update({
+                    "reason": d.get("reason"),
+                    "stage_no": d.get("stage_no"),
+                    "blocked_at": d.get("blocked_at"),
+                    "detail": d.get("detail") or {},
+                    "label": _short_label(d.get("reason") or ""),
+                })
+            except Exception:
+                item.update({"reason": blk, "label": "차단됨", "detail": {}})
+        out[str(sid)] = item
+    return {"items": out, "count": len(out)}
 
 
 @router.get("/{strategy_id}", response_model=StrategyDetailResponse)
