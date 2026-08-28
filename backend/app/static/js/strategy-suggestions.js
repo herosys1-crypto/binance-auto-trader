@@ -1521,6 +1521,18 @@ async function saveV219Settings() {
   }
   const limit = parseInt(document.getElementById('v219-daily-limit').value);
   const capital = parseFloat(document.getElementById('v219-capital').value);
+  // 🚨 Fix 194 (2026-08-28): 빈 칸을 그대로 보내지 않는다.
+  //   HTML 기본값을 없앴으므로(=로드 전엔 빈 칸) NaN 이 실려 나갈 수 있다.
+  //   숫자가 아니면 서버가 400 을 내지만, 그 전에 화면에서 명확히 막는 편이 낫다.
+  if (!Number.isFinite(limit) || !Number.isFinite(capital)) {
+    const _m = document.getElementById('v219-settings-msg');
+    if (_m) {
+      _m.innerHTML = '<span style="color:#ef4444;font-weight:bold;">'
+        + '❌ 값이 비어 있습니다 — 저장하지 않았습니다. '
+        + '설정을 아직 불러오지 못했을 수 있으니 새로고침 후 다시 시도하세요.</span>';
+    }
+    return;
+  }
   // 🎯 Fix 145: 최대 단계는 사다리 칸 수에서 파생 (별도 입력 = 모순 원인)
   const _ladderRaw = (document.getElementById('v219-ladder') || {}).value || '';
   const _rungs = String(_ladderRaw).split(',').map(x => x.trim()).filter(Boolean).length;

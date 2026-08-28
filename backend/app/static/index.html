@@ -1124,14 +1124,18 @@
                      옵션에 없는 값(40)은 표시되지 않아 화면은 20, 실제는 40 이었다.
                      그 상태로 저장하면 20 으로 되돌아간다 = 헌법 85 위반.
                      자유 입력(number)으로 바꿔 어떤 값이든 그대로 보이게 한다. -->
-                <input type="number" id="v219-daily-limit" min="0" max="200" step="1" value="20"
+                <!-- 🚨 Fix 194 (2026-08-28): value="20" 을 제거. 실제로 이 기본값이
+                     DB 에 써졌다 (10 → 20). 로드 안 된 화면이 「그럴듯한 숫자」를
+                     들고 있으면 사장님은 그게 실설정인 줄 알고 저장을 누른다.
+                     비어 있으면 「아직 안 불러왔다」가 눈에 보인다. -->
+                <input type="number" id="v219-daily-limit" min="0" max="200" step="1" placeholder="…"
                        class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1 text-center"
                        style="width:90px" title="0 = 자동 진입 완전 OFF / 최대 200" />
               </label>
               <!-- 🎯 Fix 144 (2026-08-26 사장님): 자본 「사다리」 직접 수정 -->
               <label class="flex items-center justify-between gap-2">
                 <span class="text-slate-300" title="쉼표로 구분한 단계별 자본. 예: 10,300,600">자본 사다리 (USDT)</span>
-                <input type="text" id="v219-ladder" placeholder="10,300,600" value="10,300,600"
+                <input type="text" id="v219-ladder" placeholder="불러오는 중…"
                        class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:130px" />
               </label>
               <!-- 🎯 Fix 176 (2026-08-27 사장님): 피라미딩 1회 금액 = 사다리와 독립!
@@ -1142,26 +1146,26 @@
                       title="수익 중 +5% 마다 추가 진입하는 1회 금액. 사다리(1단계 금액)와 무관한 고정값. 최대 2회.">
                   피라미딩 1회 (USDT)
                 </span>
-                <input type="number" id="v219-pyramid-capital" min="1" max="100000" step="10" value="300"
+                <input type="number" id="v219-pyramid-capital" min="1" max="100000" step="10" placeholder="…"
                        class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:110px"
                        title="끄시려면 이 값이 아니라 「피라미딩 사용」 스위치를 내리세요." />
               </label>
               <label class="flex items-center justify-between gap-2">
                 <span class="text-slate-300" title="사다리를 비웠을 때만 쓰이는 예비값">초기 자본 (예비)</span>
-                <input type="number" id="v219-capital" min="1" max="100000" step="10" value="10"
+                <input type="number" id="v219-capital" min="1" max="100000" step="10" placeholder="…"
                        class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:110px" />
               </label>
               <!-- 🎯 Fix 145: 사다리 길이 = 단계 수. 별도 설정이면 서로 모순되어
                    사다리 3칸인데 2 로 잘리는 사고가 난다 (사장님 스크린샷). -->
               <label class="flex items-center justify-between gap-2">
                 <span class="text-slate-300" title="사다리 칸 수에서 자동 결정됩니다">마틴게일 최대 단계</span>
-                <input type="text" id="v219-max-stage" readonly value="3"
+                <input type="text" id="v219-max-stage" readonly placeholder="…"
                        class="bg-slate-900 border border-slate-700 text-slate-300 rounded px-2 py-1 text-center"
                        style="width:90px;cursor:not-allowed" title="자본 사다리 칸 수에서 자동 계산" />
               </label>
               <div class="text-xs text-slate-500" style="line-height:1.5">
                 💡 <b style="color:#f9a8d4">사장님 마틴게일 (2026-08-26 사다리 방식)</b><br>
-                <span id="v219-ladder-preview" style="color:#cbd5e1">1단계 10 · 2단계 300 · 3단계 600</span><br>
+                <span id="v219-ladder-preview" style="color:#64748b">불러오는 중…</span><br>
                 <b style="color:#93c5fd">손실</b>: 1단계 진입 → −5% 청산 → 조건 충족 시 다음 단계 진입<br>
                 &nbsp;&nbsp;마지막 단계까지 소진 → <b>1단계 모니터링으로 복귀</b><br>
                 <b style="color:#86efac">수익</b>: ROI +5% → 2단계 금액 추가 → 지속 시 한번 더 (<b>최대 2회</b>)<br>
@@ -1193,17 +1197,17 @@
                         title="이 전략 전용 상한입니다. 위의 「최대 동시 포지션」과 별개로 동작하므로 계정 전체 = 두 값의 합이 됩니다.">
                     전용 동시 상한
                   </span>
-                  <input type="number" id="bbsplit-max" min="0" max="100" step="1" value="3"
+                  <input type="number" id="bbsplit-max" min="0" max="100" step="1" placeholder="…"
                          class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1 text-center"
                          style="width:90px" title="0 = 이 전략만 OFF" />
                 </label>
                 <label class="flex items-center justify-between gap-2 mb-1">
                   <span class="text-slate-300" title="쉼표로 구분한 3칸. 예: 100,200,300">단계 자본 (USDT)</span>
-                  <input type="text" id="bbsplit-capitals" placeholder="100,200,300" value="100,200,300"
+                  <input type="text" id="bbsplit-capitals" placeholder="불러오는 중…"
                          class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:130px" />
                 </label>
                 <div class="text-xs text-slate-500" style="line-height:1.5">
-                  <span id="bbsplit-preview" style="color:#cbd5e1">1차 100 · 2차 200 · 3차 300 (총 600)</span><br>
+                  <span id="bbsplit-preview" style="color:#64748b">불러오는 중…</span><br>
                   <b style="color:#93c5fd">진입</b>: 볼밴 기준선 <b>-3% / -5% / -7%</b> 이탈마다 분할
                   (숏은 +방향)<br>
                   &nbsp;&nbsp;기준선 = 하단(일반) · <b>중단(긴 추세)</b> · 상단(숏)<br>
