@@ -447,6 +447,15 @@ class StreamService:
                 strategy.avg_entry_price = _ep_dec
             # else: 평단 보존! (청산 ep=0 로 삭제 금지 = Fix 105 C!)
             strategy.current_position_qty = Decimal(str(pos.get("pa"))) if pos.get("pa") else Decimal("0")
+            # 🚨 Fix 198 (2026-08-28): 진입 시각 기록 — **학습 전용**.
+            #   StrategyInstance.started_at 은 지금까지 **채우는 코드가 없어 전건 NULL** 이었고,
+            #   그래서 보유 시간을 한 번도 잴 수 없었다 (「짧게 살고 죽은 거래」 판별 불가).
+            #   포지션이 실제로 열린 순간(잔량 > 0)에 한 번만 기록한다. 덮어쓰지 않는다.
+            #   ⚠️ 이 값을 읽는 time_reverse_exit_worker(4시간 강제청산)는 Fix 198 에서
+            #     스케줄러 등록을 제거했다 — 그래서 이 기록이 매매를 켜지 않는다.
+            #     grace period(stage_trigger:546)는 양쪽 분기 모두 continue 라 동작 무변경.
+            if strategy.started_at is None and strategy.current_position_qty != 0:
+                strategy.started_at = datetime.now(timezone.utc)
             strategy.unrealized_pnl = Decimal(str(pos.get("up"))) if pos.get("up") else Decimal("0")
         self.db.commit()
 

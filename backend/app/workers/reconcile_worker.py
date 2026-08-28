@@ -478,6 +478,11 @@ def _do_reconcile(decrypt_func) -> None:
                 strategy.avg_entry_price = exchange_entry_price if exchange_entry_price > 0 else strategy.avg_entry_price
                 strategy.current_position_qty = exchange_position_amt
                 strategy.unrealized_pnl = exchange_unrealized_pnl
+                # Fix 198: user-stream 이 체결을 놓쳤을 때의 보완 (이 프로젝트의 상습 실패모드).
+                #   진입 시각이 없으면 여기서라도 남긴다 — 학습 전용이고 덮어쓰지 않는다.
+                #   ※ 실제 체결보다 최대 2분(reconcile 주기) 늦을 수 있다.
+                if strategy.started_at is None and exchange_position_amt != 0:
+                    strategy.started_at = datetime.now(timezone.utc)
                 strategy.liquidation_price = exchange_liquidation_price if exchange_liquidation_price > 0 else strategy.liquidation_price
                 # 자가 회복: *_OPEN_PENDING + 거래소에 실 포지션 → *_OPEN 전이.
                 # 2026-05-04 fix v2 (사용자 #96 TSTUSDT 사례):
