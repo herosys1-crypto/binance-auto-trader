@@ -75,10 +75,17 @@ _BLOCK_ALERT_DEDUP_KEY = "stage_trigger_block_alert:strategy:{sid}:reason:{r}"
 _BLOCK_ALERT_DEDUP_TTL = 3600  # 1시간 (= 알림 spam 차단)
 
 
-def _record_block_reason(redis_client, sid: int, reason: str, stage_no: int = 0) -> None:
+def _record_block_reason(
+    redis_client, sid: int, reason: str, stage_no: int = 0, detail: dict | None = None,
+) -> None:
     """차단 이유 Redis 기록 (= 진단 endpoint + 화면 표시).
 
     사장님 헌법 8번 (= silent 차단 금지): 모든 차단 = 사장님이 즉시 알 수 있어야 함.
+
+    🚨 Fix 201 (2026-08-28): `detail` 추가.
+      지금까지 지표 상세(rsi/macd/cci 의 now·prev·turn)는 **로그에만** 있었다.
+      그래서 사장님이 「왜 안 들어가지?」를 알려면 서버 로그를 봐야 했다.
+      화면 배지를 눌렀을 때 근거를 보여주려면 사유와 **같이** 저장돼 있어야 한다.
     """
     if redis_client is None:
         return
@@ -89,7 +96,8 @@ def _record_block_reason(redis_client, sid: int, reason: str, stage_no: int = 0)
             "reason": reason,
             "stage_no": stage_no,
             "blocked_at": datetime.now(timezone.utc).isoformat(),
-        })
+            "detail": detail or {},
+        }, default=str)          # Decimal 등이 섞여도 기록이 통째로 날아가지 않게
         redis_client.setex(_BLOCK_REASON_KEY.format(sid=sid), _BLOCK_REASON_TTL, payload)
     except Exception:
         pass
@@ -839,7 +847,11 @@ def run_stage_trigger_once(decrypt_text) -> None:
                                 strategy.id, next_stage_no, strategy.symbol, strategy.side,
                                 _pk114_why, _pk114_det,
                             )
-                            _record_block_reason(_redis, strategy.id, _reason114, next_stage_no)
+                            # Fix 201: 지표 상세를 사유와 **함께** 남긴다 (화면 배지 근거)
+                            _record_block_reason(
+                                _redis, strategy.id, _reason114, next_stage_no,
+                                detail=_pk114_det if isinstance(_pk114_det, dict) else None,
+                            )
                             _alert_silent_block_once(_redis, db, strategy, _reason114, next_stage_no)
                             continue
                         if not _ok24:

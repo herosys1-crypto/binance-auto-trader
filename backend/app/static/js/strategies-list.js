@@ -224,6 +224,16 @@ async function refreshStrategies() {
   try {
     const url = '/strategies' + (_showArchivedStrategies ? '?include_archived=true' : '');
     const data = await api(url);
+    // 🚨 Fix 201 (2026-08-28 사장님): 「가격은 넘었는데 왜 안 들어가지?」를 화면에서 보이게.
+    //   차단 사유는 Redis 와 로그에 정확히 남고 있었는데 화면에 없어서,
+    //   사장님이 물어보셔야만 알 수 있었다 (#1637 AKEUSDT 실사례).
+    //   목록과 **별도 호출**이라 실패해도 목록은 그대로 뜬다 (fail-safe).
+    try {
+      const br = await api('/strategies/block-reasons');
+      window.__BLOCK_REASONS = (br && br.items) || {};
+    } catch (_e) {
+      window.__BLOCK_REASONS = window.__BLOCK_REASONS || {};
+    }
     // 인덱스 갱신 (activity 필터용)
     window._strategiesById = {};
     for (const s of data) {
@@ -862,7 +872,7 @@ async function refreshStrategies() {
             }${s.retry_after_liquidation_enabled
               ? `<span style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#a855f7);color:#fff;padding:2px 6px;border-radius:4px;font-size:var(--font-badge);font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(245,158,11,0.6)" title="🔄 청산 후 자동 재진입 활성! (트리거 ${s.retry_trigger_pct || 10}%) — 손절 후 = 다음 단계 자동 대기 + 트리거 도달 시 자동 진입!">🔄 재진입 ${s.retry_trigger_pct || 10}%</span>`
               : ''
-            }${scheduledBadge(s)}<br>
+            }${scheduledBadge(s)}${blockBadge(s)}<br>
             <span class="text-slate-500" style="font-size:var(--font-badge)" title="전략 생성 일시">${createdShort}</span>
           </div>
         </td>

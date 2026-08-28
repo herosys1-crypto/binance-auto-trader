@@ -288,3 +288,155 @@ function hideAlert() { document.getElementById('alert-bar').classList.add('hidde
 function dismissAlert() { hideAlert(); }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]); }
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🚨 Fix 201 (2026-08-28 사장님): 「가격은 넘었는데 왜 안 들어가지?」를 화면에서
+//
+// 실사례 #1637 AKEUSDT SHORT — 마크가 2단계 트리거를 넘었는데 1분마다
+// "Fix114 정점 미확인 (지표 꺾임 1/2)" 로 차단됐다. 사유는 Redis·로그에 정확히
+// 남고 있었지만 화면 어디에도 없어서, 사장님이 물어보셔야만 알 수 있었다.
+// 차단을 기록만 하고 보여주지 않으면 기록한 의미가 없다 (헌법 8 취지).
+//
+// 데이터: window.__BLOCK_REASONS (strategies-list.js 가 GET /strategies/block-reasons 로 채움)
+// ═══════════════════════════════════════════════════════════════════════════
+function blockBadge(s) {
+  if (!s) return '';
+  const info = (window.__BLOCK_REASONS || {})[String(s.id)];
+  if (!info) return '';
+  let out = '';
+  if (info.label) {
+    const full = escapeHtml(info.reason || '');
+    const when = info.blocked_at ? String(info.blocked_at).slice(11, 19) : '';
+    out += '<span onclick="event.stopPropagation(); openBlockDetail(' + s.id + ')"'
+      + ' style="display:inline-block;background:linear-gradient(135deg,#b45309,#78350f);'
+      + 'color:#fde68a;padding:2px 6px;border-radius:4px;font-size:var(--font-badge);'
+      + 'font-weight:bold;margin-left:4px;cursor:pointer;border:1px solid #f59e0b"'
+      + ' title="다음 단계가 막혀 있습니다 (' + when + ' UTC) — ' + full
+      + ' / 눌러서 근거 지표 보기 + 지정가 우선 켜기">&#9208; ' + escapeHtml(info.label) + '</span>';
+  }
+  if (info.bypass) {
+    out += '<span onclick="event.stopPropagation(); openBlockDetail(' + s.id + ')"'
+      + ' style="display:inline-block;background:linear-gradient(135deg,#0ea5e9,#6366f1);'
+      + 'color:#fff;padding:2px 6px;border-radius:4px;font-size:var(--font-badge);'
+      + 'font-weight:bold;margin-left:4px;cursor:pointer;box-shadow:0 0 8px rgba(14,165,233,0.5)"'
+      + ' title="지정가 우선 ON — 지표 확인 없이 지정한 가격에 진입합니다. '
+      + escapeHtml(String(info.bypass)) + ' / 7일 후 자동 해제. 눌러서 끌 수 있습니다.">'
+      + '&#127919; 지정가 우선</span>';
+  }
+  return out;
+}
+
+function _fmtSig(v) {
+  if (v === null || v === undefined) return '-';
+  const n = Number(v);
+  if (!isFinite(n)) return String(v);
+  if (Math.abs(n) >= 1) return n.toFixed(2);
+  return n.toPrecision(3);
+}
+
+function _blockIndicatorRows(det) {
+  const ind = (det && det.indicators) || {};
+  const names = Object.keys(ind);
+  if (!names.length) {
+    return '<div style="color:#94a3b8;font-size:12px">지표 상세가 아직 기록되지 않았습니다 '
+      + '(다음 차단부터 표시됩니다).</div>';
+  }
+  let html = '<table style="width:100%;font-size:12px;border-collapse:collapse">'
+    + '<tr style="color:#94a3b8"><th style="text-align:left">지표</th>'
+    + '<th style="text-align:right">이전</th><th style="text-align:right">현재</th>'
+    + '<th style="text-align:center">꺾임</th></tr>';
+  for (const n of names) {
+    const v = ind[n] || {};
+    const turned = !!v.turn;
+    html += '<tr style="border-top:1px solid #334155">'
+      + '<td style="padding:3px 0;color:#e2e8f0">' + escapeHtml(n.toUpperCase()) + '</td>'
+      + '<td style="text-align:right;color:#94a3b8">' + escapeHtml(_fmtSig(v.prev)) + '</td>'
+      + '<td style="text-align:right;color:#e2e8f0">' + escapeHtml(_fmtSig(v.now)) + '</td>'
+      + '<td style="text-align:center;font-weight:bold;color:' + (turned ? '#22c55e' : '#ef4444')
+      + '">' + (turned ? 'O' : 'X') + '</td></tr>';
+  }
+  return html + '</table>';
+}
+
+function openBlockDetail(sid) {
+  const info = (window.__BLOCK_REASONS || {})[String(sid)] || {};
+  const s = (window._strategiesById || {})[sid] || {};
+  const on = !!info.bypass;
+  const html =
+    '<div class="modal-overlay" onclick="closeBlockDetail()" style="position:fixed;top:0;left:0;'
+    + 'right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;'
+    + 'justify-content:center;">'
+    + '<div onclick="event.stopPropagation()" style="background:#1e293b;padding:18px;'
+    + 'border-radius:12px;max-width:520px;width:92%;color:#e2e8f0;border:2px solid #f59e0b;'
+    + 'max-height:86vh;overflow:auto">'
+    + '<h3 style="color:#fbbf24;margin:0 0 10px 0;font-size:17px">&#9208; 다음 단계가 막혀 있습니다</h3>'
+    + '<div style="font-size:12px;color:#cbd5e1;margin-bottom:10px"><b>#' + sid + ' '
+    + escapeHtml(s.symbol || '') + ' ' + escapeHtml(s.side || '') + '</b>'
+    + (info.stage_no ? ' &mdash; ' + info.stage_no + '단계 진입 대기' : '') + '</div>'
+    + '<div style="background:#0f172a;padding:9px;border-radius:6px;font-size:12px;line-height:1.6;'
+    + 'color:#fde68a;margin-bottom:12px">' + escapeHtml(info.reason || '(사유 없음)') + '</div>'
+    + '<div style="font-size:12px;color:#94a3b8;margin-bottom:4px">15분봉 지표 '
+    + '(2개 이상 꺾여야 진입)</div>'
+    + _blockIndicatorRows(info.detail || {})
+    + '<div style="font-size:11px;color:#64748b;margin-top:8px;line-height:1.5">'
+    + '이 확인은 <b>아직 오르는(내리는) 중인데 다음 단계를 넣는 것</b>을 막습니다. '
+    + '#1488 이 그렇게 -6,981 USDT 까지 갔습니다.</div>'
+    + '<div style="border-top:1px solid #334155;margin:12px 0 10px 0;padding-top:10px">'
+    + '<div style="font-size:12px;color:#e2e8f0;margin-bottom:6px"><b>&#127919; 지정가 우선</b>'
+    + ' <span style="color:#94a3b8">&mdash; 지표 확인 없이 지정한 가격에 진입합니다 '
+    + '(7일 후 자동 해제)</span></div>'
+    + '<div style="display:flex;gap:8px;align-items:center">'
+    + '<button onclick="togglePeakBypass(' + sid + ',' + (on ? 'false' : 'true') + ')"'
+    + ' style="padding:6px 12px;border:0;border-radius:5px;cursor:pointer;font-weight:bold;'
+    + 'color:#fff;background:' + (on ? '#475569' : 'linear-gradient(135deg,#0ea5e9,#6366f1)') + '">'
+    + (on ? '끄기 (게이트 복원)' : '켜기 (지정가에 바로 진입)') + '</button>'
+    + '<span style="font-size:11px;color:' + (on ? '#38bdf8' : '#64748b') + '">'
+    + (on ? '현재 ON' : '현재 OFF - 게이트 적용 중') + '</span></div>'
+    + (on ? '<div style="font-size:11px;color:#94a3b8;margin-top:6px">'
+      + escapeHtml(String(info.bypass)) + '</div>' : '')
+    + '</div>'
+    + '<div id="block-detail-msg" style="font-size:12px;min-height:16px"></div>'
+    + '<div style="display:flex;justify-content:flex-end;margin-top:8px">'
+    + '<button onclick="closeBlockDetail()" style="padding:6px 14px;background:#475569;color:#fff;'
+    + 'border:0;border-radius:5px;cursor:pointer">닫기</button></div></div></div>';
+  const div = document.createElement('div');
+  div.id = 'block-detail-modal';
+  div.innerHTML = html;
+  document.body.appendChild(div);
+}
+
+function closeBlockDetail() {
+  const el = document.getElementById('block-detail-modal');
+  if (el) el.remove();
+}
+
+async function togglePeakBypass(sid, enabled) {
+  const msg = document.getElementById('block-detail-msg');
+  if (msg) msg.innerHTML = '<span style="color:#94a3b8">처리 중...</span>';
+  try {
+    const r = await api('/strategies/' + sid + '/peak-bypass', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: !!enabled, reason: '화면에서 켬' }),
+    });
+    if (msg) {
+      msg.innerHTML = '<span style="color:#22c55e;font-weight:bold">OK '
+        + escapeHtml((r && r.message) || '완료') + '</span>';
+    }
+    // 캐시를 즉시 갱신해 배지가 바로 바뀌게 (다음 폴링까지 기다리지 않게)
+    const cache = window.__BLOCK_REASONS || (window.__BLOCK_REASONS = {});
+    const cur = cache[String(sid)] || {};
+    cur.bypass = enabled ? '화면에서 켬 (방금)' : null;
+    cache[String(sid)] = cur;
+    setTimeout(function () {
+      closeBlockDetail();
+      if (window.refreshStrategies) window.refreshStrategies();
+    }, 900);
+  } catch (e) {
+    if (msg) {
+      msg.innerHTML = '<span style="color:#ef4444;font-weight:bold">실패: '
+        + escapeHtml((e && e.message) || String(e)) + '</span>';
+    }
+  }
+}

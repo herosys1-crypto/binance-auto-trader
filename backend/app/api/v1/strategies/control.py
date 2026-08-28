@@ -1614,3 +1614,88 @@ def recalc_untriggered_from_current(
         if strategy.strategy_template_id else None
     )
     return _enrich_response(StrategyDetailResponse.model_validate(strategy), tpl)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🚨 Fix 201 (2026-08-28 사장님): 「🎯 지정가 우선」 토글
+#
+# 사장님 절대 원칙: "전략 인스턴스에 설정하는 옵션이 우선".
+# 그런데 모달에서 **직접 지정한 가격 트리거**를 Fix 55/114 의 지표 게이트가 덮어서,
+# 사장님이 정한 가격에 영원히 안 들어가는 일이 실제로 있었다 (#1637 AKEUSDT).
+#
+# 그 예외를 지금까지는 Redis 키를 직접 넣어야만 켤 수 있었다 = 사장님이 나를 거쳐야 했다.
+# 화면 버튼으로 직접 켜고 끌 수 있게 한다. **기본은 꺼짐**(게이트 유지).
+#
+# ⚠️ 이 토글은 매매 동작을 바꾼다 — 켜면 지표 확인 없이 지정가에 진입한다.
+#    그래서 켤 때마다 RiskEvent 로 감사 기록을 남기고, 켜져 있는 동안
+#    stage_trigger_worker 가 매 사이클 WARNING 을 찍는다 (조용히 잊히지 않게).
+# ═══════════════════════════════════════════════════════════════════════════
+_PEAK_BYPASS_KEY = "stage_peak_bypass:strategy:{sid}"
+_PEAK_BYPASS_TTL = 7 * 86400          # 7일 — 무기한으로 켜두지 않는다
+
+
+class PeakBypassRequest(BaseModel):
+    enabled: bool = Field(..., description="True = 지표 게이트 건너뛰고 지정가에 진입")
+    reason: str | None = Field(None, max_length=200, description="켠 이유 (기록용)")
+
+
+@router.post("/{strategy_id}/peak-bypass", response_model=StrategyActionResponse)
+def set_peak_bypass(
+    strategy_id: int,
+    payload: PeakBypassRequest,
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> StrategyActionResponse:
+    """정점 확인 게이트를 이 전략만 건너뛰게 한다 (7일 후 자동 해제)."""
+    import logging as _logging
+    from datetime import datetime as _dt, timezone as _tz
+    from app.models.risk_event import RiskEvent
+
+    _log = _logging.getLogger(__name__)
+    strategy = StrategyRepository(db).get_strategy(strategy_id)
+    if strategy is None or strategy.user_id != user_id:
+        raise HTTPException(status_code=404, detail="strategy not found")
+
+    key = _PEAK_BYPASS_KEY.format(sid=strategy_id)
+    note = (payload.reason or "").strip() or "화면에서 켬"
+    try:
+        from app.core.redis_client import get_redis_client
+        rc = get_redis_client()
+        if payload.enabled:
+            rc.setex(key, _PEAK_BYPASS_TTL, f"{note} (user={user_id}, {_dt.now(_tz.utc).isoformat()})")
+        else:
+            rc.delete(key)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Redis 실패: {e}") from e
+
+    _log.warning(
+        "[Fix201/peak-bypass] #%s %s %s = %s (user=%s, 사유=%s)",
+        strategy_id, strategy.symbol, strategy.side,
+        "켬 (지표 게이트 건너뜀)" if payload.enabled else "끔 (게이트 복원)", user_id, note,
+    )
+    try:
+        db.add(RiskEvent(
+            strategy_instance_id=strategy_id,
+            event_type="PEAK_BYPASS_CHANGED",
+            severity="WARNING" if payload.enabled else "INFO",
+            title=f"지정가 우선 {'ON' if payload.enabled else 'OFF'} — {strategy.symbol} {strategy.side}",
+            message=(
+                f"정점 확인 게이트를 {'건너뜁니다' if payload.enabled else '다시 적용합니다'}. "
+                f"사유={note} / user={user_id}"
+            ),
+            event_payload={"enabled": payload.enabled, "reason": note, "ttl_days": 7},
+        ))
+        db.commit()
+    except Exception as e:      # 감사 기록 실패가 토글 자체를 막지는 않는다
+        db.rollback()
+        _log.warning("[Fix201] RiskEvent 기록 실패 sid=%s: %s", strategy_id, e)
+
+    return StrategyActionResponse(
+        strategy_id=strategy_id,
+        status=strategy.status or "",
+        message=(
+            "🎯 지정가 우선 ON — 지표 확인 없이 지정 가격에 진입합니다 (7일 후 자동 해제)"
+            if payload.enabled else
+            "지정가 우선 OFF — 정점 확인 게이트가 다시 적용됩니다"
+        ),
+    )
