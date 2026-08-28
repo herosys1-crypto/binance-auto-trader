@@ -168,7 +168,11 @@ class TradeLearningService:
         """종료 시 update + insights. 성공 여부를 반환 (v139!)."""
         try:
             record = self._get_or_create(strategy)
-            record.exit_price = _dec(getattr(strategy, "avg_entry_price", None))
+            # 🚨 Fix 197: 옛 코드는 **진입 평단을 청산가로** 적었다.
+            #   StrategyInstance 에 청산가 컬럼이 없어서 그 자리를 평단으로 메운 것인데,
+            #   그러면 「가격 이동」이 항상 0% 로 계산돼 **조용히 틀린 결론**을 만든다.
+            #   모르는 값은 비워 두는 편이 낫다 (헌법 146 의 숫자판).
+            record.exit_price = None
             record.exit_time = datetime.now(timezone.utc)
             record.pnl_usdt = _dec(getattr(strategy, "realized_pnl", None))
             record.pnl_pct = self._pnl_pct(strategy, realized=True) or Decimal("0")
@@ -311,3 +315,89 @@ class TradeLearningService:
             "close_reason": record.close_reason,
             "lessons": lessons,
         }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🚨 Fix 197 (2026-08-28): 종료 사유를 RiskEvent 에서 유도한다.
+#
+# 왜 필요한가: learning_sync_worker 가 `getattr(s, "close_reason", None)` 로 사유를
+# 넘기는데 **StrategyInstance 에 close_reason 컬럼이 없다** → 100% None 이었다.
+# 이 파일 상단 docstring 이 이미 「모델에 존재하지 않음」이라 적어두고도
+# 호출부만 안 고친 v139 잔재다.
+#
+# status 로는 구분이 안 된다 (실측):
+#   FORCE SL 도 STOPPING, 일반 SL 도 STOPPING
+#   트레일링 익절도 COMPLETED, 최종 TP 도 COMPLETED
+#   CLOSED_BY_SL / STOPPED_BY_SL / CLOSED_BY_TP 는 **어디서도 대입되지 않는다** (dead)
+# Order 테이블도 불가 — 모든 청산이 purpose="EXIT" 단일 라벨이다.
+# → RiskEvent 가 유일하게 「왜 끝났나」를 직접 말한다. **과거분에도 소급된다.**
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 사유 이벤트 = 「왜 끝났나」를 직접 말하는 것만.
+_EXIT_EVENT_MAP = {
+    "FORCE_STOP_LOSS_TRIGGERED":  "FORCE_SL",
+    "STOP_LOSS_TRIGGERED":        "SL",
+    "ZOMBIE_GUARDIAN_FORCE_STOP": "ZOMBIE_FORCE_STOP",
+    "RECONCILE_AUTO_STOP_ORPHAN": "EXTERNAL_CLOSE",
+    "MANUAL_TP":                  "MANUAL_TP",
+}
+# 🚨 정리(cleanup) 이벤트는 「사유」가 아니다 — 사유 이벤트가 하나도 없을 때만 2차로 쓴다.
+#    user-stream 이 체결을 놓치면 정리 이벤트의 id 가 더 커서 SL 을 덮어쓴다.
+_CLEANUP_EVENT_MAP = {
+    "RECONCILE_STOPPING_ZOMBIE_CLEANUP": "STOPPING_CLEANUP",
+    "RECONCILE_FLAT_POSITION_CLEANUP":   "FLAT_CLEANUP",
+}
+
+
+def _resolve_from_row(etype: str, payload: dict | None) -> str:
+    if etype != "TP_EXECUTION_AUDIT":
+        return _EXIT_EVENT_MAP.get(etype) or _CLEANUP_EVENT_MAP.get(etype, "UNKNOWN")
+    p = payload or {}
+    lvl = p.get("level")
+    if lvl == "TRAILING_TP":
+        return "TRAILING_TP"
+    if not lvl:
+        return "TP_UNKNOWN"
+    # 최종 여부는 status 가 아니라 payload 로 판정한다
+    # (호출자가 status 를 좁혀놓으면 status 비교는 항상 거짓이 된다)
+    try:
+        final = (
+            float(p.get("expected_pct") or 0) >= 100.0
+            or Decimal(str(p.get("remaining_qty") or 0)) == 0
+        )
+    except Exception:
+        final = False
+    return f"TP_{lvl}" if final else f"AFTER_{lvl}"
+
+
+def resolve_close_reason(db, strategy) -> str:
+    """StrategyInstance 에 close_reason 컬럼이 없으므로 RiskEvent 로 유도한다."""
+    from sqlalchemy import select as _select
+    from app.models.risk_event import RiskEvent
+    try:
+        reason_types = list(_EXIT_EVENT_MAP) + ["TP_EXECUTION_AUDIT"]
+        row = db.execute(
+            _select(RiskEvent.event_type, RiskEvent.event_payload)
+            .where(RiskEvent.strategy_instance_id == strategy.id)
+            .where(RiskEvent.event_type.in_(reason_types))
+            .order_by(RiskEvent.id.desc()).limit(1)
+        ).first()
+        if row is None:      # 사유 이벤트가 없을 때만 정리 이벤트로 2차 판정
+            row = db.execute(
+                _select(RiskEvent.event_type, RiskEvent.event_payload)
+                .where(RiskEvent.strategy_instance_id == strategy.id)
+                .where(RiskEvent.event_type.in_(list(_CLEANUP_EVENT_MAP)))
+                .order_by(RiskEvent.id.desc()).limit(1)
+            ).first()
+        if row is not None:
+            return _resolve_from_row(row[0], row[1])
+    except Exception as e:
+        logger.warning("[TradeLearning] close_reason 유도 실패 sid=%s: %s",
+                       getattr(strategy, "id", "?"), e)
+    # RiskEvent 가 없거나 조회가 깨졌을 때만 status fallback (기록을 비우지 않는다)
+    st = (getattr(strategy, "status", "") or "").upper()
+    if st == "COMPLETED":
+        return "TP_UNKNOWN"
+    if st in ("STOPPED", "REENTRY_READY", "CLOSED"):
+        return "CLOSED_UNKNOWN"
+    return "UNKNOWN"

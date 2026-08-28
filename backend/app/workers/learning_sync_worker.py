@@ -22,11 +22,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.crypto import decrypt_text
 from app.core.database import SessionLocal
+from app.core.strategy_status import ACTIVE_WITH_POSITION, TERMINAL_STATUSES
 from app.integrations.binance.client import BinanceClient
 from app.models.exchange_account import ExchangeAccount
 from app.models.strategy_instance import StrategyInstance
@@ -44,7 +45,7 @@ from app.services.pump_dump_live_analyzer import PumpDumpLiveAnalyzer
 from app.services.pump_dump_live_analyzer import to_learning_context as pump_context
 from app.services.sar_ichimoku_analyzer import SARIchimokuAnalyzer
 from app.services.sar_ichimoku_analyzer import to_learning_context as sar_context
-from app.services.trade_learning_service import TradeLearningService
+from app.services.trade_learning_service import TradeLearningService, resolve_close_reason
 
 logger = logging.getLogger(__name__)
 
@@ -141,17 +142,27 @@ def run_learning_sync() -> dict:
         client = _make_client(db)  # v137/v138! 셋업 등급 + 합의 저장용!
 
         # 1. 활성 전략 = on_entry or snapshot!
-        open_statuses = [
-            "STAGE_1_OPEN", "STAGE_2_OPEN", "STAGE_3_OPEN",
-            "STAGE_4_OPEN", "STAGE_5_OPEN", "STAGE_6_OPEN",
-            "STAGE_7_OPEN", "STAGE_8_OPEN", "STAGE_9_OPEN",
-            "STAGE_10_OPEN",
-        ]
+        # 🚨 Fix 197 (2026-08-28): 여기가 **오타 하나로 5개월간 죽어 있었다.**
+        #   `STAGE_1_OPEN`(언더스코어)로 적혀 있는데 실제 저장값은 `STAGE1_OPEN` 이다
+        #   (strategy_status.py / stream_service / execution_service 가 f"STAGE{n}_OPEN" 로 만든다).
+        #   → active_strategies 가 **항상 빈 리스트** → _entry_context() 가 한 번도 실행된 적 없음
+        #   → entry_context 전건 `{}` → 「진입 당시 지표가 무엇이었나」가 통째로 비어 있다.
+        #   같은 오타를 strategy_suggestions.py 는 주석으로 지적해 뒀는데 여기만 안 고쳤다.
+        #   → 하드코딩 대신 상수에서 유도한다 (또 어긋나지 않게, 헌법 101).
+        open_statuses = sorted(
+            st for st in ACTIVE_WITH_POSITION
+            if st.startswith("STAGE") or st.startswith("TP") or st == "TRAILING_ARMED"
+        )
         active_strategies = db.execute(
             select(StrategyInstance)
             .where(StrategyInstance.status.in_(open_statuses))
             .where(StrategyInstance.current_position_qty != 0)
         ).scalars().all()
+
+        # 🚨 진입 스냅샷은 「방금 진입한 건」에만 붙인다.
+        #   이미 열려 있던 backlog 에 「지금 차트」를 붙이면 아래 :199-201 이 스스로
+        #   금지한 「가짜 셋업 등급」이 승률 통계를 오염시킨다. 배포 직후가 특히 위험하다.
+        fresh_cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
 
         for s in active_strategies:
             try:
@@ -164,7 +175,13 @@ def run_learning_sync() -> dict:
                 if record is None:
                     # 신규 = on_entry! (v137/v138: 진입 당시 2대 전략 등급 + 합의 저장!)
                     # v139: 성공한 것만 카운트! (기존엔 실패해도 세서 로그가 거짓말했음!)
-                    if tls.on_entry(s, market_context=_entry_context(client, s)):
+                    # Fix 197: 방금 진입한 건에만 「지금 차트」를 붙인다 (backlog 오염 방지)
+                    _created = getattr(s, "created_at", None)
+                    _fresh = bool(
+                        _created and _created >= fresh_cutoff
+                        and str(s.status or "").startswith("STAGE")
+                    )
+                    if tls.on_entry(s, market_context=_entry_context(client, s) if _fresh else {}):
                         entered += 1
                     else:
                         failed += 1
@@ -179,12 +196,22 @@ def run_learning_sync() -> dict:
 
         db.commit()
 
-        # 2. 최근 STOPPED 전략 = on_exit (누락 방지!)
+        # 2. 최근 종료 전략 = on_exit
+        # 🚨 Fix 197: 옛 조건은 `status == "STOPPED"` **단일 문자열** AND `stopped_at >= cutoff` 였다.
+        #   그런데 익절 완주는 COMPLETED 이고 (tp_sl_orchestrator), 그 경로는 stopped_at 을
+        #   **채우지 않는다**. → 이긴 거래가 **두 번** 걸러졌다
+        #   (실측: COMPLETED SHORT 163건 +17,294 / LONG 71건 +6,008 이 전부 누락).
+        #   = TradeLearningRecord 가 사실상 **패배 거래 전용 데이터셋**이었다.
+        #   「LONG 이 왜 실패하는가」는 성공군과 대조해야 답이 나오는데 대조군이 없었다.
+        #   → 종료 상태 전체 + 종료 시각은 coalesce(stopped_at, updated_at) 로 보정.
+        #     stopped_at 을 **새로 채우지 않는** 방식이라 재진입 게이트는 1비트도 안 바뀐다
+        #     (그 컬럼은 realtime_reentry/auto_reentry/ladder_restart 의 진입 조건이다).
         cutoff = datetime.now(timezone.utc) - timedelta(hours=CLOSED_LOOKBACK_HOURS)
+        _closed_at = func.coalesce(StrategyInstance.stopped_at, StrategyInstance.updated_at)
         stopped = db.execute(
             select(StrategyInstance)
-            .where(StrategyInstance.status == "STOPPED")
-            .where(StrategyInstance.stopped_at >= cutoff)
+            .where(StrategyInstance.status.in_(sorted(TERMINAL_STATUSES)))
+            .where(_closed_at >= cutoff)
         ).scalars().all()
 
         for s in stopped:
@@ -200,10 +227,11 @@ def run_learning_sync() -> dict:
                     #   = 이미 끝난 거래 = 지금 차트는 「진입 당시」가 아님!
                     #   = 가짜 셋업 등급이 승률 통계를 오염시킴 = 금지!
                     tls.on_entry(s)
-                    ok = tls.on_exit(s, close_reason=getattr(s, "close_reason", None))
+                    # Fix 197: StrategyInstance 에 close_reason 컬럼이 없다 → RiskEvent 로 유도
+                    ok = tls.on_exit(s, close_reason=resolve_close_reason(db, s))
                 elif record.status == "OPEN":
                     # 진행 중 → 종료 mark!
-                    ok = tls.on_exit(s, close_reason=getattr(s, "close_reason", None))
+                    ok = tls.on_exit(s, close_reason=resolve_close_reason(db, s))
                 else:
                     continue  # 이미 CLOSED = 할 일 없음!
 

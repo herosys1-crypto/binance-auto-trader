@@ -414,8 +414,11 @@ def learning_summary(
     ).scalars().all()
 
     total = len(rows)
-    wins = sum(1 for r in rows if (r.pnl_pct or 0) > 0)
-    losses = sum(1 for r in rows if (r.pnl_pct or 0) < 0)
+    # 🚨 Fix 197: COMPLETED 는 total_capital 이 0 으로 정리돼 pnl_pct 가 0 으로 저장된다.
+    #   그 상태로 pnl_pct 로 승패를 세면 **익절 완주가 전부 BREAKEVEN** 이 된다.
+    #   승패는 realized_pnl 직결인 pnl_usdt 로 센다 (_generate_insights 와 같은 기준).
+    wins = sum(1 for r in rows if (r.pnl_usdt or 0) > 0)
+    losses = sum(1 for r in rows if (r.pnl_usdt or 0) < 0)
     breakeven = total - wins - losses
     total_pnl = sum(float(r.pnl_pct or 0) for r in rows)
     avg_pnl = total_pnl / total if total else 0
@@ -425,7 +428,7 @@ def learning_summary(
     for r in rows:
         s = symbol_stats.setdefault(r.symbol, {"count": 0, "wins": 0, "total_pnl": 0})
         s["count"] += 1
-        if (r.pnl_pct or 0) > 0:
+        if (r.pnl_usdt or 0) > 0:          # Fix 197: 금액 기준
             s["wins"] += 1
         s["total_pnl"] += float(r.pnl_pct or 0)
 
@@ -481,12 +484,13 @@ def tp_sl_advisor(
     )
 
     # 활성 전략 조회!
-    open_statuses = [
-        "STAGE_1_OPEN", "STAGE_2_OPEN", "STAGE_3_OPEN",
-        "STAGE_4_OPEN", "STAGE_5_OPEN", "STAGE_6_OPEN",
-        "STAGE_7_OPEN", "STAGE_8_OPEN", "STAGE_9_OPEN",
-        "STAGE_10_OPEN",
-    ]
+    # 🚨 Fix 197: 같은 오타 (`STAGE_1_OPEN` 언더스코어) — 실제 값은 `STAGE1_OPEN`.
+    #   learning_sync_worker 와 짝을 이루는 두 번째 자리다. 상수에서 유도한다 (헌법 101).
+    from app.core.strategy_status import ACTIVE_WITH_POSITION
+    open_statuses = sorted(
+        st for st in ACTIVE_WITH_POSITION
+        if st.startswith("STAGE") or st.startswith("TP") or st == "TRAILING_ARMED"
+    )
     active = db.execute(
         select(StrategyInstance)
         .where(StrategyInstance.status.in_(open_statuses))

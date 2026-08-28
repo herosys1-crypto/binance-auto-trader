@@ -107,10 +107,13 @@ def run_time_reverse_exit_once():
     try:
         acc = db.query(ExchangeAccount).filter(ExchangeAccount.is_testnet == False).first()
         if acc is None:
+            logger.warning("[Fix31] mainnet 계정 없음 = skip")   # Fix 197: 헌법 80
             return result
         try:
             from app.core.api_backoff import is_account_banned
-            if is_account_banned(acc.id): return result
+            if is_account_banned(acc.id):
+                logger.warning("[Fix31] API ban 중 = skip")      # Fix 197: 헌법 80
+                return result
         except Exception: pass
         try:
             from app.core.crypto import decrypt_text
@@ -130,9 +133,10 @@ def run_time_reverse_exit_once():
                               StrategyInstance.started_at.isnot(None))
                       .limit(MAX_STRATEGIES_PER_CYCLE).all())
         result["scanned"] = len(candidates)
-        
-        if not candidates:
-            return result
+        # 🚨 Fix 197: 옛 코드는 여기서 무로그 return 이라 **실행 흔적조차 없었다.**
+        #   started_at 이 전 행 NULL 이라 위 필터가 항상 0건을 만들어,
+        #   이 워커는 등록만 되고 2026-08-23 이후 한 번도 동작한 적이 없다.
+        #   빈 리스트 for 는 no-op 이므로 그대로 아래 DONE 로그까지 흘려보낸다 (헌법 80).
         
         now = datetime.now(timezone.utc)
         threshold = timedelta(hours=TIME_EXIT_HOURS)

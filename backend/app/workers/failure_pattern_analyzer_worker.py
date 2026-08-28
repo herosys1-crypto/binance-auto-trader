@@ -62,17 +62,26 @@ def _categorize_indicator(name: str, value: float) -> str:
 
 def _analyze_failures(db):
     """실패 진입 분석 = 지표 패턴!"""
+    from sqlalchemy import func as _sa_func
     cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
+    # 🚨 Fix 197: COMPLETED/REENTRY_READY 는 stopped_at 이 NULL 이라 **성공 표본이 전멸**했다.
+    #   TERMINAL_STATUSES 로 넓게 잡아놓고 두 번째 조건이 그걸 다 잘라냈다 (헌법 106).
+    #   → 종료 시각은 coalesce(stopped_at, updated_at) 로 보정한다.
+    #     (stopped_at 을 새로 채우지 않으므로 재진입 게이트는 그대로다.)
+    _closed_at = _sa_func.coalesce(StrategyInstance.stopped_at, StrategyInstance.updated_at)
     rows = db.execute(
         select(StrategyInstance)
         .where(StrategyInstance.status.in_(TERMINAL_STATUSES))
-        .where(StrategyInstance.stopped_at >= cutoff)
+        .where(_closed_at >= cutoff)
     ).scalars().all()
 
     # 통계
     total = len(rows)
     fail_rows = [r for r in rows if r.realized_pnl and float(r.realized_pnl) < 0]
     succ_rows = [r for r in rows if r.realized_pnl and float(r.realized_pnl) > 0]
+    # Fix 197 (헌법 105): 표본 쏠림을 스스로 감시한다. succ=0 이면 필터 결함을 의심하라.
+    logger.info("[failure_pattern] 표본 total=%d fail=%d succ=%d (succ==0 이면 필터 결함 의심)",
+                total, len(fail_rows), len(succ_rows))
 
     # 지표 패턴 카운트
     pattern_stats = defaultdict(lambda: {"total": 0, "fail": 0})

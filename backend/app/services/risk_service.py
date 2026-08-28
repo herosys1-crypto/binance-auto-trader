@@ -338,6 +338,11 @@ class RiskService:
             else:
                 price_change_pct = ((avg_entry - mark_price) / avg_entry) * PERCENT_DENOMINATOR
             roi = price_change_pct * leverage
+            # 🚨 Fix 197: 청산 **순간**의 최종 극값을 남긴다.
+            #   판정은 이미 위에서 끝났으므로 되먹임이 없고, force SL 시 roi 는 반드시
+            #   음수라 max_loss_pct 만 갱신된다 — 트레일링의 입력인 max_profit_pct 는
+            #   건드리지 않는다. 「진입 직후 즉시 손절」 표본의 극값 결손을 메운다.
+            self._update_pnl_extremes(strategy, roi)
             self.db.add(RiskEvent(
                 strategy_instance_id=strategy.id,
                 event_type="FORCE_STOP_LOSS_TRIGGERED",
