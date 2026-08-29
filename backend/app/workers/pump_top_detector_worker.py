@@ -400,7 +400,11 @@ def run_pump_top_detector() -> dict:
         candidates = [
             t for (t, _d, _r) in _ranked
             if abs(float(t.get("priceChangePercent", 0) or 0)) >= MIN_24H_CHANGE
-        ]
+        # Fix 222: 상한을 **명시**한다. Fix 217 이 옛 [:MAX_SYMBOLS] 를 지우면서
+        #   대체 상한을 안 넣었다. rank_map 이 구조적으로 2N 을 넘지 않지만,
+        #   호출부가 상한을 못 박아야 나중에 rank_map 이 바뀌어도 안전하다
+        #   (market_movers 모듈 주석이 스스로 요구하는 계약이다).
+        ][:MAX_SYMBOLS * 2]
         _usdt_n = sum(
             1 for t in tickers if str(t.get("symbol") or "").endswith("USDT")
         )

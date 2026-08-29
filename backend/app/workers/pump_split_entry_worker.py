@@ -815,6 +815,16 @@ def run_pump_split_entry_once() -> dict:
                     StrategyInstance.capital_management_mode == MODE_MARKER,
                     StrategyInstance.created_at
                     >= datetime.now(timezone.utc) - timedelta(hours=24),
+                    # 🚨 Fix 222 (2026-08-30): **실제로 진입한 사이클만** 센다.
+                    #   Fix 218 은 필터가 없어서 「주문 한 번 안 나간 행」까지 예산을
+                    #   먹었다. 그런 행이 실제로 생긴다:
+                    #     · verify_stage_plans 실패 → STOPPED + is_archived=True
+                    #       + SPLIT_DEAD_STAGE (주문 전에 취소되므로 current_stage=0)
+                    #     · create 는 commit 됐는데 start_stage1 이 예외 → 진입 0 인 행이 남음
+                    #   그러면 그 심볼은 24시간 내내 재진입 불가가 된다
+                    #   (「다시 한번더」가 「한 번도 못 함」이 된다).
+                    StrategyInstance.is_archived.is_(False),
+                    StrategyInstance.current_stage >= 1,
                 )
             ).scalar() or 0
             if _cycles >= SPLIT_MAX_CYCLES_PER_DAY:
