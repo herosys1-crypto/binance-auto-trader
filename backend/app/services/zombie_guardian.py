@@ -42,6 +42,7 @@ from app.core.strategy_status import (
     MANUAL_CLEANUP_REQUIRED,
     TERMINAL_STATUSES,
 )
+from app.models.account_kill_switch import AccountKillSwitch   # Fix 221
 from app.models.exchange_account import ExchangeAccount
 from app.models.risk_event import RiskEvent
 from app.models.strategy_instance import StrategyInstance
@@ -403,6 +404,9 @@ def detect_orphan_exchange_positions(
     ).scalars().all()
     found = 0
     for acc in accounts:
+        # 🚨 Fix 221 (2026-08-30): 이 계정에서 이번 사이클에 orphan 을 찾았는가.
+        #   못 찾았고 Kill-Switch 가 orphan 사유로 켜져 있으면 **자동 해제**한다.
+        _orphan_here = 0
         try:
             # cache hit 시 거래소 재호출 X (rate limit 부담 감소)
             if positions_cache is not None and acc.id in positions_cache:
@@ -521,6 +525,7 @@ def detect_orphan_exchange_positions(
                     continue
                 # 매칭 없음 — orphan exchange position!
                 found += 1
+                _orphan_here += 1          # Fix 221
                 snapshot = {
                     "symbol": symbol,
                     "positionSide": position_side,
@@ -586,6 +591,57 @@ def detect_orphan_exchange_positions(
                     extras={"exchange_snapshot": snapshot, "amount": str(amt)},
                     tags={"event_type": "ZOMBIE_ORPHAN_EXCHANGE_POSITION"},
                 )
+            # ═══════════════════════════════════════════════════════
+            # 🚨 Fix 221 (2026-08-30): orphan 이 사라졌으면 Kill-Switch **자동 해제**.
+            #
+            #   실측 2026-08-29: INJUSDT SHORT amt=-3.9 (명목 20~40 USDT) 하나로
+            #   17:02 에 계정 전체가 차단됐다. 그 포지션은 곧 사라졌는데
+            #   Kill-Switch 는 `cleared_at=None` 인 채 **44분간 그대로 걸려 있었고**,
+            #   그동안 모든 신규 진입이 막혔다 (UNIUSDT SHORT 는 정점확인까지
+            #   통과해놓고 30초마다 튕겼다). 사장님이 "자동 전략이 하나도 없어"라고
+            #   하신 이유가 이것이다.
+            #
+            #   같은 사고가 세 번째다 (07-21 ACEUSDT / 08-26 CLUSDT / 08-29 INJUSDT).
+            #   발동은 자동인데 **해제만 수동**이라 구조적으로 반복될 수밖에 없었다.
+            #
+            #   ⚠️ 좁게 연다: 이 사이클에서 이 계정의 orphan 이 **0건**이고,
+            #      Kill-Switch 가 **바로 그 사유(ORPHAN_EXCHANGE_POSITION)** 로 켜진
+            #      경우만. 사장님이 수동으로 켰거나 다른 사유(손실한도 등)면 손대지 않는다.
+            # ═══════════════════════════════════════════════════════
+            if _orphan_here == 0:
+                try:
+                    _ks_row = db.execute(
+                        select(AccountKillSwitch).where(
+                            AccountKillSwitch.exchange_account_id == acc.id
+                        )
+                    ).scalar_one_or_none()
+                    if (
+                        _ks_row is not None
+                        and _ks_row.is_enabled
+                        and str(_ks_row.reason_code or "") == "ZOMBIE:ORPHAN_EXCHANGE_POSITION"
+                    ):
+                        AccountKillSwitchService(db).clear(acc.id)
+                        logger.warning(
+                            "[Fix221] 🔓 Kill-Switch 자동 해제 — account #%s: "
+                            "orphan 포지션이 더 이상 없음 (원 사유: %s / 발동 %s)",
+                            acc.id, _ks_row.reason_message, _ks_row.triggered_at,
+                        )
+                        db.add(RiskEvent(
+                            event_type="KILL_SWITCH_AUTO_CLEARED",
+                            severity="WARN",
+                            title=f"🔓 Kill-Switch 자동 해제 — account #{acc.id}",
+                            message=(
+                                "orphan 포지션이 사라져 자동 해제했습니다 (Fix 221). "
+                                f"원 사유: {_ks_row.reason_message} / "
+                                f"발동 시각: {_ks_row.triggered_at} / "
+                                "발동은 자동인데 해제만 수동이라, 먼지 하나로 "
+                                "계정 전체가 장시간 멈추는 사고가 세 번 반복됐습니다."
+                            ),
+                            event_payload={"account_id": acc.id},
+                        ))
+                        db.commit()
+                except Exception as _e221:
+                    logger.error("[Fix221] Kill-Switch 자동 해제 실패 acc=%s: %s", acc.id, _e221)
         except Exception as e:
             logger.error("Orphan exchange detect 실패 acc=%s: %s", acc.id, e)
             capture_strategy_event(
