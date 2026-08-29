@@ -34,7 +34,7 @@ def _get_obv_direction_4h(bc, symbol) -> tuple:
 
     Returns: (direction, ratio, obv_now)
         direction = "up" / "down" / "flat"
-        ratio = OBV / avg_volume (절대값!)
+        ratio = OBV / (avg_volume x bars)  — **부호 있음** (Fix 227)
         obv_now = 현재 OBV 값
     """
     try:
@@ -91,10 +91,26 @@ def _get_obv_direction_4h(bc, symbol) -> tuple:
         else:
             direction = "flat"
 
-        # 절대값 상대 비율
-        # Fix 141: 봉 수로 정규화 → 0~1 (전체 거래량 대비 방향성 비율)
+        # 🚨 Fix 227 (2026-08-30): **부호를 지킨다.**
+        #
+        #   옛 코드는 abs(obv_now) 였다. 그런데 이 파일의 명세(맨 위 docstring)는
+        #       "4H OBV 매우 큰 **음수** = LONG 금지 (세력 이탈)"
+        #       "4H OBV 매우 큰 **양수** = SHORT 금지 (세력 매집)"
+        #   이다. 절대값을 쓰면 **부호가 사라져** 명세가 뒤집힌다:
+        #
+        #     obv_now = +49,000,000 (13일 매집 극단 = 세력이 사 모으는 중)
+        #     direction = 'down'    (최근 20봉 기울기만 하락)
+        #     → 옛 코드: ratio 0.61 >= 0.6 → **LONG 차단**
+        #        로그: "LONG skip: 4H OBV 극단 하락 (obv=+49000000)"  ← 양수인데 「하락」
+        #
+        #   사장님 2026-08-30 원칙과 정면으로 충돌한다:
+        #     "볼밴 하단까지 갔다가도 **obv가 강하면 이것도 다시 상승으로 전환**된다고 봐야해"
+        #   OBV 가 가장 강할 때가 LONG 자리인데, 바로 그때 시스템이 LONG 을 막고 있었다.
+        #
+        #   방향(20봉)과 크기(전체 누적)의 창이 다른 것도 원인이다. 부호를 살리면
+        #   「누적은 +인데 최근만 하락」이 자연히 통과한다.
         _bars = max(len(_obv), 1)
-        ratio = abs(obv_now) / max(abs(avg_vol) * _bars, 1.0)
+        ratio = obv_now / max(abs(avg_vol) * _bars, 1.0)
 
         return (direction, ratio, float(obv_now))
     except Exception as e:
@@ -123,8 +139,9 @@ def check_obv_gate(bc, symbol: str, side: str) -> tuple:
         # LONG 진입 시:
         if side == "LONG":
             # 4H OBV 매우 큰 음수 = 세력 이탈 = LONG 금지!
-            if direction == "down" and ratio >= OBV_EXTREME_RATIO:
-                reason = f"LONG skip: 4H OBV 극단 하락 (ratio={ratio:.3f} obv={obv_now:.0f})"
+            # Fix 227: 누적 OBV 가 **음수 극단**일 때만 = 진짜 세력 이탈
+            if direction == "down" and ratio <= -OBV_EXTREME_RATIO:
+                reason = f"LONG skip: 4H OBV 극단 하락 (ratio={ratio:+.3f} obv={obv_now:.0f})"
                 logger.warning("[Fix65/gate] %s %s: %s", symbol, side, reason)
                 return (False, reason)
             # 🚨 Fix 141: 「방향만으로 무조건 차단」 제거!
@@ -142,8 +159,9 @@ def check_obv_gate(bc, symbol: str, side: str) -> tuple:
         # SHORT 진입 시:
         elif side == "SHORT":
             # 4H OBV 매우 큰 양수 = 세력 매집 = SHORT 금지!
+            # Fix 227: 누적 OBV 가 **양수 극단**일 때만 = 진짜 세력 매집
             if direction == "up" and ratio >= OBV_EXTREME_RATIO:
-                reason = f"SHORT skip: 4H OBV 극단 상승 (ratio={ratio:.3f} obv={obv_now:.0f})"
+                reason = f"SHORT skip: 4H OBV 극단 상승 (ratio={ratio:+.3f} obv={obv_now:.0f})"
                 logger.warning("[Fix65/gate] %s %s: %s", symbol, side, reason)
                 return (False, reason)
             # 🚨 Fix 141: 헌법 72 = "급등해서 볼밴 상단돌파 했을때 마틴게일 진입"
@@ -157,7 +175,7 @@ def check_obv_gate(bc, symbol: str, side: str) -> tuple:
                 )
 
         # 통과!
-        return (True, f"pass:{direction}_ratio_{ratio:.1f}")
+        return (True, f"pass:{direction}_ratio_{ratio:+.2f}")
     except Exception as e:
         logger.warning("[Fix65/gate] %s: %s", symbol, e)
         return (True, "error_pass")  # fail-open (안전!)
