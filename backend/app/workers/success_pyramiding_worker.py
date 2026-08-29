@@ -93,6 +93,10 @@ PYRAMID_ELIGIBLE_STATUSES = frozenset(
     ACTIVE_WITH_POSITION - {"STOPPING", "MANUAL_CLEANUP_REQUIRED"}
 )
 
+# 🚨 Fix 213: 볼밴 분할 마커. pump_split_entry_worker.MODE_MARKER 와 같은 값이어야 한다
+#   (거기서 import 하면 워커 → 워커 의존이 생기므로 값만 맞춘다 — 아래 테스트가 고정한다).
+SPLIT_ENTRY_MODE = "split_entry"
+
 # ⚠️ Fix 185 로 **더 이상 진입 필터로 쓰지 않는다** (사장님: "모든 전략").
 #   로그/참조용으로만 남긴다.
 AUTO_ENTRY_TYPES_PYRAMID = (
@@ -282,6 +286,29 @@ def run_success_pyramiding() -> dict:
             .where(StrategyInstance.current_position_qty != 0)
             .where(StrategyInstance.is_archived.is_(False))   # Fix 158
             .where(StrategyInstance.current_stage >= 1)
+            # ═══════════════════════════════════════════════════════════
+            # 🚨 Fix 213 (2026-08-30): 볼밴 분할(split_entry)은 **제외**한다.
+            #   두 전략은 방향이 정반대다:
+            #     볼밴   = 내려갈수록 더 산다 (평단 개선이 목적)
+            #     피라미딩 = 올라갈수록 더 산다 (평단 악화를 감수한 추세 추종)
+            #   한 포지션에 둘 다 걸면 평단이 **불리한 쪽으로** 밀린다.
+            #
+            #   실측 2026-08-29 (볼밴 4건이 이걸로 죽었다):
+            #     #1711 볼밴1차 399개 @0.50110  → 피라미딩 300씩 2회
+            #                    1146개 @0.52345 + 1119개 @0.53621 (물량 5.7배)
+            #           → 평단 0.50110 → 0.52546. 손절선이 **1차 진입가보다 위**로 올라와
+            #             가격이 진입가로 되돌아오기만 해도 -10% 손절.
+            #     #1721 / #1699(SHORT) / #1629 동일 패턴. 4건 합계 실현 -252.18 USDT.
+            #
+            #   게다가 mode=reset 이라 max_profit_pct 가 지워진다
+            #   (#1629 는 +6.83% 기록이 None 이 됐다) = 트레일링 익절도 리셋.
+            #   결정타: 볼밴 TP1 은 **+5% 부터 익절**인데 피라미딩 발동선도 ROI +5% 다.
+            #   익절해야 할 바로 그 지점에서 추가 매수가 나간다 = 사장님 설계와 정면 충돌.
+            #
+            #   ⚠️ 다른 전략의 피라미딩은 **그대로 둔다** (사장님 "이익일때 추가 300씩").
+            #      이 예외는 split_entry 뿐이다 — Fix 203 과 같은 성격.
+            # ═══════════════════════════════════════════════════════════
+            .where(StrategyInstance.capital_management_mode != SPLIT_ENTRY_MODE)
         ).scalars().all()
 
         # 3. 심볼별 이미 pyramid 활성 = skip 집합!
@@ -300,6 +327,17 @@ def run_success_pyramiding() -> dict:
             if key in seen:
                 continue
             seen.add(key)
+
+            # 🚨 Fix 213: 쿼리 필터를 한 번 더 확인한다 (헌법 138 — 집합만 믿지 않는다).
+            #   이 자리가 새면 볼밴 평단이 조용히 망가지고, 그건 -252 USDT 짜리 실패였다.
+            if str(getattr(si, "capital_management_mode", "") or "").lower() == SPLIT_ENTRY_MODE:
+                logger.info(
+                    "[success_pyramiding] SKIP #%s %s %s = 볼밴 분할(split_entry) — "
+                    "내려가며 사는 전략에 올라가며 사는 피라미딩을 얹지 않는다 (Fix 213)",
+                    si.id, si.symbol, si.side,
+                )
+                _bump("split_entry_excluded")
+                continue
 
             # 이미 pyramid 활성 = skip
             if key in pyramid_active_syms:
