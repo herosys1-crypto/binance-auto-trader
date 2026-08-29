@@ -1120,7 +1120,8 @@ if (typeof window !== 'undefined') {
   // Fix 145: 사다리 입력 시 미리보기/단계수 즉시 반영
   document.addEventListener('input', (ev) => {
     // 📊 Fix 181: 볼밴 분할 자본을 고치면 미리보기 + 최대 손실을 즉시 갱신
-  if (ev.target && (ev.target.id === 'bbsplit-capitals' || ev.target.id === 'bbsplit-max')) {
+  if (ev.target && ['bbsplit-capitals', 'bbsplit-max', 'bbsplit-steps', 'bbsplit-sl-roi']
+      .indexOf(ev.target.id) >= 0) {
     renderBbSplitPreview();
     return;
   }
@@ -1412,13 +1413,37 @@ function renderBbSplitPreview() {
       return;
     }
     const total = parts.reduce((a, b) => a + b, 0);
-    prev.textContent = `1차 ${parts[0]} · 2차 ${parts[1]} · 3차 ${parts[2]} (총 ${total})`;
+    // 🚨 Fix 206: 트리거·손절도 설정값이 됐으므로, **바꾼 값의 결과**를 즉시 보여준다.
+    //   숫자를 바꿨을 때 평단·손절선이 어디로 가는지 눈앞에 없으면
+    //   「3차가 죽는 조합」을 저장 버튼을 눌러봐야만 알게 된다 (헌법 131).
+    const LEV = 2;
+    const st = String((document.getElementById('bbsplit-steps') || {}).value || '3,5,7')
+      .split(',').map(x => parseFloat(String(x).trim())).filter(v => !isNaN(v) && v > 0);
+    const slRoi = parseFloat((document.getElementById('bbsplit-sl-roi') || {}).value) || 10;
+    prev.textContent = `1차 ${parts[0]}@-${st[0]}% · 2차 ${parts[1]}@-${st[1]}% `
+      + `· 3차 ${parts[2]}@-${st[2]}% (총 ${total})`;
     prev.style.color = '#cbd5e1';
     if (risk) {
       const maxN = parseInt((document.getElementById('bbsplit-max') || {}).value || '0') || 0;
-      const one = Math.round(total * 0.10);
+      const one = Math.round(total * slRoi / 100);
+      let extra = '';
+      if (st.length === 3) {
+        // 기준선=1 로 두고 3차까지 채웠을 때의 평단·손절가·TP1 도달가
+        const px = st.map(v => 1 - v / 100);
+        const qty = parts.reduce((a, c, i) => a + c * LEV / px[i], 0);
+        const avg = (total * LEV) / qty;
+        const stop = avg * (1 - slRoi / 100 / LEV);
+        const tp1 = avg * (1 + 5 / 100 / LEV);
+        const dead = stop >= px[2];      // 3차 트리거보다 손절이 먼저 = 죽은 단계
+        extra = ` | 3차까지 평단 ${((avg - 1) * 100).toFixed(2)}% `
+          + `· 손절 ${((stop - 1) * 100).toFixed(2)}% · TP1 ${((tp1 - 1) * 100).toFixed(2)}%`;
+        if (dead) {
+          extra += ' ⛔ 3차가 죽습니다 (손절이 먼저)';
+        }
+        risk.style.color = dead ? '#ef4444' : '#fbbf24';
+      }
       risk.textContent =
-        `최대 손실: 1건 ${one} USDT · 상한 ${maxN}건 모두 물리면 ${one * maxN} USDT`;
+        `최대 손실: 1건 ${one} USDT · 상한 ${maxN}건 모두 물리면 ${one * maxN} USDT` + extra;
     }
   } catch (_e) { /* 미리보기 실패는 저장에 영향 없음 */ }
 }
@@ -1485,6 +1510,11 @@ async function saveV219Settings() {
   if (bbEn && bbEn.value !== '') payload.bbsplit_enabled = bbEn.value;
   if (bbMax && bbMax.value !== '') payload.bbsplit_max = parseInt(bbMax.value);
   if (bbCap && String(bbCap.value).trim()) payload.bbsplit_capitals = String(bbCap.value).trim();
+  // Fix 206: 트리거 / 손절
+  const bbSt = document.getElementById('bbsplit-steps');
+  if (bbSt && String(bbSt.value).trim()) payload.bbsplit_steps = String(bbSt.value).trim();
+  const bbSl = document.getElementById('bbsplit-sl-roi');
+  if (bbSl && String(bbSl.value).trim()) payload.bbsplit_sl_roi = String(bbSl.value).trim();
   try {
     await api('/strategy-suggestions/sajangnim-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     // 🚨 Fix 189: 옛 코드는 저장 직후 화면을 **보낸 값으로 강제 세팅**했다.
@@ -1556,6 +1586,11 @@ async function loadV219Settings(retry = 0) {
     if (bbMax2 && r.bbsplit_max != null) bbMax2.value = r.bbsplit_max;
     const bbCap2 = document.getElementById('bbsplit-capitals');
     if (bbCap2 && r.bbsplit_capitals) bbCap2.value = r.bbsplit_capitals;
+    // Fix 206: 진입 트리거 / 손절도 설정값
+    const bbSt2 = document.getElementById('bbsplit-steps');
+    if (bbSt2 && r.bbsplit_steps) bbSt2.value = r.bbsplit_steps;
+    const bbSl2 = document.getElementById('bbsplit-sl-roi');
+    if (bbSl2 && r.bbsplit_sl_roi != null) bbSl2.value = r.bbsplit_sl_roi;
     renderBbSplitPreview();
     // 🎯 Fix 144: 사다리 값 + 미리보기 (실제 적용값을 화면에서 확인 가능하게)
     const ladderEl2 = document.getElementById('v219-ladder');
@@ -1615,7 +1650,8 @@ async function loadV219Settings(retry = 0) {
     //   사장님은 기다리면 될 줄 알고 계셨는데 실제로는 이미 멈춘 상태였다.
     //   비어 있는 칸의 안내 문구를 「불러오지 못함」으로 바꿔, 화면만 봐도 알 수 있게 한다.
     ['v219-daily-limit', 'v219-capital', 'v219-ladder', 'v219-pyramid-capital',
-     'v219-max-stage', 'bbsplit-max', 'bbsplit-capitals'].forEach((id) => {
+     'v219-max-stage', 'bbsplit-max', 'bbsplit-capitals',
+     'bbsplit-steps', 'bbsplit-sl-roi'].forEach((id) => {
       const el = document.getElementById(id);
       if (el && !el.value) el.placeholder = '불러오지 못함';
     });

@@ -9,9 +9,9 @@
    운영하는 방식이야 익절 회기도 -3% 짧게"
 
 사장님 선택 (2026-08-27):
-  · 「긴 상승」 판정 = 가격이 4H 중단선 위(LONG)/아래(SHORT) **24시간 유지**
+  · 「긴 상승」 판정 = 15분 종가가 15분 중단선 위(LONG)/아래(SHORT) **연속 유지** (Fix204)
   · 분할 = **더 깊은 이탈** (기준선 대비 -3% / -5% / -7%)
-  · 손절 -10%, TP1 15% 부터 25%씩, 트레일링 -3%
+  · 손절 -10%, TP1 5% 부터 25%씩, 트레일링 -3%
   · 기존 사다리(10/300/600 청산 후 대체)와 **병행** — 별도 전략으로 공존
   · (Fix 180) **전용 상한 + 자본 금액을 설정으로 변경 가능**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -33,7 +33,7 @@
     │ 긴 추세       │ close < BB 중단       │ close > BB 중단       │
     └──────────────┴──────────────────────┴──────────────────────┘
 
-    「긴 추세」= 4H 종가가 4H 중단선 위(LONG)/아래(SHORT)로 LONG_TREND_BARS(6봉=24h) 연속 유지.
+    「긴 추세」= 15분 종가가 15분 중단선 위(LONG)/아래(SHORT)로 LONG_TREND_BARS(6봉=1.5h) 연속 유지.
 
     분할 차수 = 기준선을 **얼마나 더 벗어났는가** (SHORT 는 부호 반대):
         1차 100 : 기준선 -3%
@@ -45,7 +45,7 @@
 ■ 청산 규칙
 
     손절   : 평단 ROI **-10%** → 전량 (1·2·3차 어느 시점이든. Fix 178 이 보장)
-    익절   : TP1 **+15%** 부터 **25%씩 4회** = +15 / +20 / +25 / +30
+    익절   : TP1 **+5%** 부터 **25%씩 4회** = +5 / +10 / +15 / +20  (Fix 205)
     트레일링: 고점 대비 **-3%** 회귀 시 잔량 청산
 
 ■ 손실 규모 (2x 기준)
@@ -74,6 +74,10 @@
     pump_split_enabled        "1" 이어야 동작 (기본 OFF)
     pump_split_max_concurrent 이 전략 전용 동시 보유 상한 (기본 3, 0=OFF)
     pump_split_capitals       "100,200,300" 형식 3칸 (기본 100/200/300)
+    pump_split_steps          "3,5,7" 형식 3칸 = 기준선 대비 이탈 심도 (Fix 206)
+    pump_split_sl_roi         "10" = 평단 ROI 손절 % (Fix 206)
+    ⚠️ 이 셋은 서로 얽혀 있다 — 손절을 얕게 하면 뒤 차수가 죽는다.
+       저장 시·매 사이클 check_no_dead_stage 로 검산한다.
 """
 from __future__ import annotations
 
@@ -95,14 +99,16 @@ __all__ = ["run_pump_split_entry_once"]
 
 # ── 사장님 확정 파라미터 (2026-08-27) ──────────────────────────────────
 #   "볼밴 하단 -3% 이탈하면 100 진입 / -5% 이탈하면 200 / -7% 이탈하면 300
-#    손절가는 -10% ... tp1 15% 부터"
+#    손절가는 -10% ... tp1 익절도 5%부터 분할로 25%씩"
 #
 # 실측 계산 (볼밴 기준선=1.0, 2x, 1차 진입가를 0% 로 두고):
 #   1차 100U @ -3%  → 평단  0.00% (진입가대비)
 #   2차 200U @ -5%  → 평단 -1.38%   누적 300U
 #   3차 300U @ -7%  → 평단 -2.77%   누적 600U
 #   손절 ROI -10%   → 진입가대비 -7.63% = 볼밴 -10.41%  손실 60U
-#   TP1 15%         → 진입가대비 +4.52% (3차까지) / +7.50% (1차만)
+#   TP1 5%          → 평단 대비 +2.5% (2x). 단계와 무관하게 **같은 수익률**이고,
+#                     평단이 낮을수록 그 수익률에 닿는 가격이 낮아진다:
+#                     1차만 기준선 -0.58% / 2차까지 -1.95% / 3차까지 -3.33%
 #
 # ⚠️ 왜 손절이 ROI 인가: 시스템 force SL 은 ROI 기준이다(risk_service).
 #    ROI -10% 를 넣으면 3차까지 물렸을 때 볼밴 -10.41% 에서 잘려
@@ -112,7 +118,7 @@ __all__ = ["run_pump_split_entry_once"]
 CAPITALS = [Decimal("100"), Decimal("200"), Decimal("300")]   # 총 600
 SPLIT_STEP_PCT = [Decimal("3"), Decimal("5"), Decimal("7")]   # 기준선 대비 이탈 심도
 FORCE_SL_ROI = Decimal("10")       # 평단 ROI -10% 전량 청산
-TP_PERCENTS = [15, 20, 25, 30]     # TP1 +15% 부터
+TP_PERCENTS = [5, 10, 15, 20]      # Fix 205: TP1 +5% 부터 (사장님 원문 복원)
 TP_QTY_RATIOS = [25, 25, 25, 25]   # 25% 씩
 TRAILING_RETRACE_PCT = Decimal("3")  # 익절 회귀 -3% (짧게)
 LEVERAGE = 2
@@ -120,8 +126,8 @@ LEVERAGE = 2
 # ── 대상 선정 ──────────────────────────────────────────────────────────
 MIN_ABS_24H_CHANGE = 15.0   # 급등락 = |24h 변동| 이상
 MAX_CANDIDATES = 40
-LONG_TREND_TF = "4h"
-LONG_TREND_BARS = 6         # 4H 6봉 = 24시간
+# Fix 204: 긴 추세 판정도 15분봉 (사장님 정정). 별도 4H 조회는 없앴다.
+LONG_TREND_BARS = 6         # 15분 6봉 = 1시간 30분 (사장님이 바꾸실 수 있는 값)
 KLINE_15M = 60
 
 STRATEGY_TYPE = "pump_split"
@@ -137,6 +143,9 @@ MODE_MARKER = "split_entry"   # Fix 178 이 읽는 값
 MAX_CONCURRENT_KEY = "pump_split_max_concurrent"
 DEFAULT_MAX_CONCURRENT = 3
 CAPITALS_KEY = "pump_split_capitals"
+# Fix 206 (2026-08-29 사장님): 트리거·손절도 변경 가능하게
+STEPS_KEY = "pump_split_steps"        # "3,5,7" (기준선 대비 이탈 심도)
+SL_ROI_KEY = "pump_split_sl_roi"      # "10"   (평단 ROI 손절 %)
 
 
 def _parse_capitals(raw: str) -> list[Decimal]:
@@ -185,8 +194,47 @@ def check_no_dead_stage(
         return False, f"정합성 검산 실패: {e}"
 
 
-def _load_config(db) -> tuple[list[Decimal], int, str]:
-    """(자본 3칸, 이 전략 전용 상한, 설명) — 설정 손상 시 기본값으로 fail-SAFE."""
+def _parse_steps(raw: str) -> list[Decimal]:
+    """\"3,5,7\" → [3, 5, 7]. 3칸 고정 · 오름차순 · 0 < s < 50.
+
+    🚨 Fix 206 (2026-08-29 사장님): 진입 트리거도 변경 가능하게.
+      오름차순이 아니면 「2차보다 3차가 얕다」가 되어 3차가 먼저 닿아버린다.
+      50% 를 상한으로 둔 이유 = 그보다 깊으면 2x 에서 이미 청산가에 가깝다.
+    """
+    vals: list[Decimal] = []
+    for part in str(raw).split(","):
+        p = part.strip()
+        if not p:
+            continue
+        v = Decimal(p)
+        if v <= 0:
+            raise ValueError(f"트리거는 0보다 커야 합니다: {p}")
+        if v >= Decimal("50"):
+            raise ValueError(f"트리거 상한 50% 미만: {p}")
+        vals.append(v)
+    if len(vals) != 3:
+        raise ValueError(f"트리거는 3칸이어야 합니다 (입력 {len(vals)}칸)")
+    for i in range(1, 3):
+        if vals[i] <= vals[i - 1]:
+            raise ValueError(
+                f"트리거는 갈수록 깊어져야 합니다 "
+                f"({i}차 {vals[i-1]}% → {i+1}차 {vals[i]}%)"
+            )
+    return vals
+
+
+def _parse_sl_roi(raw) -> Decimal:
+    """손절 ROI. 1 ~ 90% 사이만 (0 = 손절 없음 = 물타기에서 금지)."""
+    v = Decimal(str(raw).strip())
+    if v <= 0:
+        raise ValueError("손절은 0보다 커야 합니다 (물타기 전략에 손절 없음 = 금지)")
+    if v > Decimal("90"):
+        raise ValueError(f"손절 상한 90%: {v}")
+    return v
+
+
+def _load_config(db) -> tuple[list[Decimal], int, list[Decimal], Decimal, str]:
+    """(자본 3칸, 전용 상한, 트리거 3칸, 손절 ROI, 설명) — 손상 시 기본값 fail-SAFE."""
     from app.models.system_setting import SystemSetting
     caps = list(CAPITALS)
     src = "기본값"
@@ -212,24 +260,55 @@ def _load_config(db) -> tuple[list[Decimal], int, str]:
     except Exception as e:
         logger.warning("[pump_split] %s 파싱 실패 → 기본 %d: %s",
                        MAX_CONCURRENT_KEY, DEFAULT_MAX_CONCURRENT, e)
-    return caps, cap_n, src
+
+    # Fix 206: 진입 트리거 (기준선 대비 이탈 심도)
+    steps = list(SPLIT_STEP_PCT)
+    try:
+        row = db.get(SystemSetting, STEPS_KEY)
+        if row is not None and row.value is not None and str(row.value).strip():
+            steps = _parse_steps(row.value)
+            src += f" 트리거({row.value})"
+    except Exception as e:
+        logger.warning("[pump_split] %s 파싱 실패 → 기본값 %s: %s",
+                       STEPS_KEY, [str(s) for s in SPLIT_STEP_PCT], e)
+        steps = list(SPLIT_STEP_PCT)
+
+    # Fix 206: 손절 ROI
+    sl_roi = Decimal(str(FORCE_SL_ROI))
+    try:
+        row = db.get(SystemSetting, SL_ROI_KEY)
+        if row is not None and row.value is not None and str(row.value).strip():
+            sl_roi = _parse_sl_roi(row.value)
+            src += f" 손절({row.value}%)"
+    except Exception as e:
+        logger.warning("[pump_split] %s 파싱 실패 → 기본 %s%%: %s",
+                       SL_ROI_KEY, FORCE_SL_ROI, e)
+        sl_roi = Decimal(str(FORCE_SL_ROI))
+
+    return caps, cap_n, steps, sl_roi, src
 
 
 def _fmt(v) -> str:
     return f"{float(v):.6f}"
 
 
-def _is_long_trend(a4: dict, side: str) -> tuple[bool, str]:
-    """4H 종가가 4H 중단선 위(LONG)/아래(SHORT)로 LONG_TREND_BARS 연속 유지했는가.
+def _is_long_trend(a15: dict, side: str) -> tuple[bool, str]:
+    """15분 종가가 15분 중단선 위(LONG)/아래(SHORT)로 LONG_TREND_BARS 연속 유지했는가.
 
-    사장님 선택: 「긴 상승 = 가격이 4H 중단선 위 24시간 유지」
+    🚨 Fix 204 (2026-08-29 사장님 정정): "긴 추세도 그냥 15분봉이야"
+      옛 코드는 4H 로 판정했다(4H 6봉 = 24시간). 그런데 이 전략은 사장님 원문부터
+      **"15분차트로 상승중인 심볼"** 이 전제다 — 진입 밴드도 15분이다.
+      판정만 4H 로 하면 「15분에서는 추세인데 4H 에서는 아니다」로 중단선 모드가
+      거의 안 켜진다 = 사장님이 의도한 「긴 상승엔 중단 이탈에 분할」이 사실상 죽는다.
+      → 진입과 **같은 15분봉**으로 판정한다. 덤으로 4H 호출이 사라져 weight 도 준다.
+
     ⚠️ analyze_timeframe 은 마지막 봉의 밴드값만 준다. 과거 봉마다의 중단선을
        다시 계산하는 대신, 20MA(=중단선) 를 직접 산출해 봉별로 비교한다.
     """
-    closes = a4.get("closes") or []
+    closes = a15.get("closes") or []
     n = len(closes)
     if n < 20 + LONG_TREND_BARS:
-        return False, f"4H 봉 부족({n})"
+        return False, f"15m 봉 부족({n})"
     ok = 0
     # i=1 이 마지막 봉. 각 봉의 20MA 는 **그 봉을 포함한** 직전 20봉 평균이다
     # (볼린저 중단선 정의와 동일). 음수 슬라이스는 i=1 에서 빈 배열이 되므로
@@ -238,7 +317,7 @@ def _is_long_trend(a4: dict, side: str) -> tuple[bool, str]:
         end = n - i + 1          # exclusive
         start = end - 20
         if start < 0:
-            return False, "4H 20MA 창 부족"
+            return False, "15m 20MA 창 부족"
         window = closes[start:end]
         mb = sum(float(x) for x in window) / 20.0
         c = float(closes[n - i])
@@ -247,10 +326,11 @@ def _is_long_trend(a4: dict, side: str) -> tuple[bool, str]:
         else:
             break
     return (ok >= LONG_TREND_BARS,
-            f"4H 중단선 {'위' if side == 'LONG' else '아래'} 연속 {ok}/{LONG_TREND_BARS}봉")
+            f"15m 중단선 {'위' if side == 'LONG' else '아래'} 연속 {ok}/{LONG_TREND_BARS}봉")
 
 
-def _entry_plan(a15: dict, side: str, long_trend: bool) -> tuple[Decimal | None, str]:
+def _entry_plan(a15: dict, side: str, long_trend: bool,
+                steps: list[Decimal] | None = None) -> tuple[Decimal | None, str]:
     """기준선(base)과 사유를 반환. 1차 진입 조건 미충족이면 (None, 사유).
 
     ⚠️ 1차는 「기준선 이탈 즉시」가 아니라 **기준선 대비 SPLIT_STEP_PCT[0](-3%)
@@ -262,14 +342,15 @@ def _entry_plan(a15: dict, side: str, long_trend: bool) -> tuple[Decimal | None,
     if not closes or up is None or mid is None or lo is None:
         return None, "15m 밴드/종가 없음"
     close = Decimal(str(closes[-1]))
-    step1 = SPLIT_STEP_PCT[0] / Decimal("100")
+    _steps = steps or SPLIT_STEP_PCT          # Fix 206
+    step1 = _steps[0] / Decimal("100")
     if side == "LONG":
         base = Decimal(str(mid)) if long_trend else Decimal(str(lo))
         label = "중단" if long_trend else "하단"
         need = base * (Decimal("1") - step1)          # 기준선 -3%
         if close > need:
             return None, (
-                f"{label} -{SPLIT_STEP_PCT[0]}% 미도달 "
+                f"{label} -{_steps[0]}% 미도달 "
                 f"(close {_fmt(close)} > 목표 {_fmt(need)} / {label} {_fmt(base)})"
             )
     else:
@@ -278,11 +359,11 @@ def _entry_plan(a15: dict, side: str, long_trend: bool) -> tuple[Decimal | None,
         need = base * (Decimal("1") + step1)          # 기준선 +3%
         if close < need:
             return None, (
-                f"{label} +{SPLIT_STEP_PCT[0]}% 미도달 "
+                f"{label} +{_steps[0]}% 미도달 "
                 f"(close {_fmt(close)} < 목표 {_fmt(need)} / {label} {_fmt(base)})"
             )
     return base, (
-        f"{label} {SPLIT_STEP_PCT[0]}% 이탈 확인 "
+        f"{label} {_steps[0]}% 이탈 확인 "
         f"(close {_fmt(close)} / {label} {_fmt(base)} / 목표 {_fmt(need)})"
     )
 
@@ -326,6 +407,7 @@ def compounded_trigger_pcts(side: str, steps: list[Decimal]) -> list[Decimal | N
 
 
 def verify_stage_plans(plans, base, side: str, caps: list[Decimal],
+                       steps: list[Decimal] | None = None,
                        sl_roi=FORCE_SL_ROI, lev=LEVERAGE) -> tuple[bool, str]:
     """🚨 Fix 195: **DB 에 실제로 저장된 트리거 가격**으로 죽은 단계를 검산한다.
 
@@ -341,7 +423,7 @@ def verify_stage_plans(plans, base, side: str, caps: list[Decimal],
     # 1차는 stage plan 에 트리거가 없다(MARKET). 진입 조건이 「기준선 -3% 도달」이므로
     # 체결가는 기준선 × (1-3%) 이하다. 가장 불리한 쪽(= 정확히 -3%)으로 잡아 보수적으로 본다.
     px: dict[int, Decimal] = {
-        1: Decimal(str(base)) * base_multipliers(side, SPLIT_STEP_PCT)[0],
+        1: Decimal(str(base)) * base_multipliers(side, steps or SPLIT_STEP_PCT)[0],
     }
     for p in plans:
         if p.stage_no != 1 and p.trigger_price is not None:
@@ -369,11 +451,13 @@ def verify_stage_plans(plans, base, side: str, caps: list[Decimal],
 
 def _build_template(
     db, symbol: str, side: str, base: Decimal, caps: list[Decimal],
+    steps: list[Decimal] | None = None,
 ) -> StrategyTemplate:
     """3단계 분할 + TP 25%×4 + 트레일링 -3% 템플릿. caps 는 설정에서 온 자본 3칸."""
     now = datetime.now(timezone.utc)
     # Fix 195: 기준선 대비 심도 → 계산기의 복리 앵커 기준으로 환산
-    _pcts = compounded_trigger_pcts(side, SPLIT_STEP_PCT)
+    _steps = steps or SPLIT_STEP_PCT          # Fix 206
+    _pcts = compounded_trigger_pcts(side, _steps)
     trig = [None] + [float(p) for p in _pcts[1:]]
     tpl = StrategyTemplate(
         name=f"PUMPSPLIT_{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S')}",
@@ -397,8 +481,8 @@ def _build_template(
         stage3_capital=caps[2],
         stage4_capital=None,
         # 기준선 대비 이탈 심도 = 가격 트리거 % (stage_trigger_worker 가 처리)
-        stage2_trigger_percent=SPLIT_STEP_PCT[1],
-        stage3_trigger_percent=SPLIT_STEP_PCT[2],
+        stage2_trigger_percent=_steps[1],
+        stage3_trigger_percent=_steps[2],
         stage4_trigger_percent=None,
         tp1_percent=Decimal(str(TP_PERCENTS[0])),
         tp2_percent=Decimal(str(TP_PERCENTS[1])),
@@ -437,19 +521,19 @@ def run_pump_split_entry_once() -> dict:
             return {"note": "OFF (기본값)", **stat}
 
         # ── Fix 180: 자본/상한 설정 로드 + 정합성 검산 ──
-        caps, max_concurrent, cfg_src = _load_config(db)
+        caps, max_concurrent, steps, sl_roi, cfg_src = _load_config(db)
         if max_concurrent <= 0:
             logger.info("[pump_split] ⏹️ %s=0 = 이 전략 OFF", MAX_CONCURRENT_KEY)
             return {"note": "전용 상한 0", **stat}
-        _ok, _why = check_no_dead_stage(caps, SPLIT_STEP_PCT, FORCE_SL_ROI, LEVERAGE)
+        _ok, _why = check_no_dead_stage(caps, steps, sl_roi, LEVERAGE)
         if not _ok:
             # 죽은 단계가 생기는 설정으로는 **진입하지 않는다**.
             # 조용히 죽는 단계를 만드는 것이 가장 위험하다 (헌법 130).
             logger.error(
                 "[pump_split] ⛔ 자본 설정 정합성 실패 → 진입 중단: %s "
                 "| 자본=%s 심도=%s SL=-%s%% | %s 를 조정하세요",
-                _why, [str(c) for c in caps], [str(s) for s in SPLIT_STEP_PCT],
-                FORCE_SL_ROI, CAPITALS_KEY,
+                _why, [str(c) for c in caps], [str(s) for s in steps],
+                sl_roi, CAPITALS_KEY,
             )
             return {"note": f"정합성 실패: {_why}", **stat}
         logger.info(
@@ -547,17 +631,17 @@ def run_pump_split_entry_once() -> dict:
 
             try:
                 a15 = ChartAnalyzer.analyze_timeframe(bc, sym, "15m", limit=KLINE_15M)
-                a4 = ChartAnalyzer.analyze_timeframe(bc, sym, LONG_TREND_TF, limit=40)
+                # Fix 204: 4H 조회 제거 — 긴 추세도 15분봉으로 본다 (weight 절감)
             except Exception as e:
                 logger.warning("[pump_split] %s 분석 실패: %s", sym, e)
                 _skip("analyze_error")
                 continue
-            if not a15 or not a4:
+            if not a15:
                 _skip("no_analysis")
                 continue
 
-            long_trend, trend_why = _is_long_trend(a4, side)
-            base, why = _entry_plan(a15, side, long_trend)
+            long_trend, trend_why = _is_long_trend(a15, side)
+            base, why = _entry_plan(a15, side, long_trend, steps)
             if base is None:
                 _skip("no_break")
                 continue
@@ -569,7 +653,7 @@ def run_pump_split_entry_once() -> dict:
 
             # 3) 전략 생성 — 1차는 MARKET 즉시, 2·3차는 가격 트리거로 대기
             try:
-                tpl = _build_template(db, sym, side, base, caps)
+                tpl = _build_template(db, sym, side, base, caps, steps)
                 strategy = StrategyService(db).create_strategy_instance(
                     user_id=1,
                     exchange_account_id=account.id,
@@ -582,8 +666,14 @@ def run_pump_split_entry_once() -> dict:
                 )
                 # -5% 전량 손절 강제 + 트레일링 -3%
                 strategy.force_sl_enabled_override = True
-                strategy.force_sl_roi_override = FORCE_SL_ROI
+                strategy.force_sl_roi_override = sl_roi      # Fix 206: 설정값
                 strategy.trailing_retrace_pct = TRAILING_RETRACE_PCT
+                # 🚨 Fix 205 (2026-08-29 사장님): TP1 을 **전략 인스턴스에도** 박는다.
+                #   strategy_service 가 생성 시 tp1_pct_override = TP1_PCT_DEFAULT(15) 를
+                #   모든 전략에 넣는다. 템플릿만 5 로 바꾸면 이 override 가 이겨서
+                #   (Fix 183/184 가 label 로 TP1 을 덮고 사다리를 통째로 shift 한다)
+                #   사장님이 지정한 5% 가 무효가 된다.
+                strategy.tp1_pct_override = Decimal(str(TP_PERCENTS[0]))
                 db.commit()
 
                 # 1차 = MARKET 즉시 진입 (지정가로 걸어두면 미체결 위험)
@@ -605,7 +695,7 @@ def run_pump_split_entry_once() -> dict:
                     select(StrategyStagePlan)
                     .where(StrategyStagePlan.strategy_instance_id == strategy.id)
                 ).scalars().all()
-                _ok, _why = verify_stage_plans(_plans, base, side, caps)
+                _ok, _why = verify_stage_plans(_plans, base, side, caps, steps, sl_roi)
                 if not _ok:
                     strategy.status = "STOPPED"
                     strategy.is_archived = True
@@ -635,8 +725,8 @@ def run_pump_split_entry_once() -> dict:
                 logger.warning(
                     "[pump_split] ✅ 진입! #%s %s %s 1차 %s USDT "
                     "(2차 %s@-%s%% / 3차 %s@-%s%%) SL -%s%% TP %s%% 25%%×4 트레일 -%s%%",
-                    strategy.id, sym, side, caps[0], caps[1], SPLIT_STEP_PCT[1],
-                    caps[2], SPLIT_STEP_PCT[2], FORCE_SL_ROI, TP_PERCENTS[0],
+                    strategy.id, sym, side, caps[0], caps[1], steps[1],
+                    caps[2], steps[2], sl_roi, TP_PERCENTS[0],
                     TRAILING_RETRACE_PCT,
                 )
             except Exception as e:
