@@ -25,6 +25,12 @@ from app.api.deps import get_current_user_id, get_db
 from app.models.strategy_suggestion import StrategySuggestion
 from app.models.system_setting import SystemSetting
 
+# 🚨 Fix 219 (2026-08-30): v219 감시 화면 표시 개수.
+#   워커는 「당일 상승 50위 ∪ 하락 50위」(Fix 217)를 보는데 화면은 20 에서 잘려
+#   사장님이 넓힌 결과를 확인할 방법이 없었다 (헌법 161 — 보여줄 것).
+#   Redis 에서 읽은 목록을 자르는 것뿐이라 API weight 증가는 **0** 이다.
+V219_MONITOR_LIMIT = 50
+
 logger = logging.getLogger(__name__)
 
 # 🚨 Fix 192 (2026-08-28): 이 api 프로세스가 제공하는 기능 목록.
@@ -1212,7 +1218,9 @@ def get_v219_monitoring(
             ),
             reverse=True,
         )
-        monitoring_symbols = monitoring_symbols[:20]
+        # Fix 219: 워커가 상승 50 ∪ 하락 50 을 보는데 화면만 20 에서 잘렸다
+        #   (사장님 "50위까지 모니터링" 이 화면에서 확인 불가). Redis 읽기라 weight 0.
+        monitoring_symbols = monitoring_symbols[:V219_MONITOR_LIMIT]
     except Exception as e:
         logger.warning("[v219-monitoring] scanned scan 실패: %s", e)
 
@@ -1256,7 +1264,7 @@ def get_v219_monitoring(
             ),
             reverse=True,
         )
-        monitoring_symbols_long = _lst[:20]
+        monitoring_symbols_long = _lst[:V219_MONITOR_LIMIT]   # Fix 219
     except Exception as e:
         logger.warning("[v219-monitoring] monitoring_symbols_long 정렬 실패: %s", e)
 

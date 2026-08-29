@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timedelta, timezone   # Fix 219: 발화 시각 오프셋
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -411,9 +412,18 @@ def start_scheduler() -> None:
     def _long_bottom_detector():
         from app.workers.long_bottom_detector_worker import run_long_bottom_detector
         run_long_bottom_detector()
+    # 🚨 Fix 219 (2026-08-30): pump_top_detector(:652) 와 **같은 분에 발화하지 않게** 민다.
+    #   둘 다 5분 주기라 프로세스 시작 시각 기준으로 항상 같은 분에 함께 돌았다.
+    #   Fix 217 로 감시 대상이 50 → 최대 100 심볼이 되면서 그 분의 weight 가
+    #   심볼당 7(pump_top) + 6(long_bottom) 로 겹쳐 몰린다.
+    #   150초 오프셋만 주면 피크가 그대로 반으로 갈라진다 — 동작 변화 0, 비용 0.
+    #   ⚠️ 이 프로젝트는 2026-08-26 IP ban(418) 이력이 있다. 피크를 낮추는 게 최우선이다.
     scheduler.add_job(
         guarded_job("long_bottom_detector", 240, _long_bottom_detector),
-        trigger=IntervalTrigger(minutes=5),
+        trigger=IntervalTrigger(
+            minutes=5,
+            start_date=datetime.now(timezone.utc) + timedelta(seconds=150),
+        ),
         id="long_bottom_detector",
         replace_existing=True, max_instances=1, coalesce=True,
     )
