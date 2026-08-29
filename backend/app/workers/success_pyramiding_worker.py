@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
 from app.core.strategy_status import ACTIVE_WITH_POSITION   # Fix 196: ACTIVE_LIKE 미사용
+from app.core.strategy_status import SPLIT_ENTRY_MODE as _SPLIT_ENTRY_MODE
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_template import StrategyTemplate
 
@@ -93,9 +94,9 @@ PYRAMID_ELIGIBLE_STATUSES = frozenset(
     ACTIVE_WITH_POSITION - {"STOPPING", "MANUAL_CLEANUP_REQUIRED"}
 )
 
-# 🚨 Fix 213: 볼밴 분할 마커. pump_split_entry_worker.MODE_MARKER 와 같은 값이어야 한다
-#   (거기서 import 하면 워커 → 워커 의존이 생기므로 값만 맞춘다 — 아래 테스트가 고정한다).
-SPLIT_ENTRY_MODE = "split_entry"
+# 🚨 Fix 213/214: 볼밴 분할 마커 — 값은 app.core.strategy_status 하나에만 둔다.
+#   (워커마다 문자열을 복사하면 한 곳만 오타나도 조용히 샌다 = -252 USDT 짜리 실패였다)
+SPLIT_ENTRY_MODE = _SPLIT_ENTRY_MODE
 
 # ⚠️ Fix 185 로 **더 이상 진입 필터로 쓰지 않는다** (사장님: "모든 전략").
 #   로그/참조용으로만 남긴다.

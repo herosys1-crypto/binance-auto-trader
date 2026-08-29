@@ -139,6 +139,22 @@ LIQUIDATED_WAITING_RETRY: str = "LIQUIDATED_WAITING_RETRY"
 STOPPED_CAPITAL_EXHAUSTED: str = "STOPPED_CAPITAL_EXHAUSTED"
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 🚨 Fix 214 (2026-08-30) — 볼밴 분할 전략 마커 (capital_management_mode 값).
+#
+# 볼밴 분할은 **자기 진입 계획을 스스로 가진** 전략이다
+# (기준선 -3/-5/-7% 에서 100/200/300, 평단 ROI -10% 에서 전량 청산).
+# 다른 워커가 여기에 계획 밖 진입을 얹으면 평단이 설계와 반대로 밀린다.
+#   실측 2026-08-29: 피라미딩이 4건에 300씩 얹어 **-252.18 USDT** (Fix 213).
+#
+# 그래서 「볼밴을 건드리지 않는다」 판정을 여러 워커가 해야 하는데,
+# 각자 문자열을 복사하면 한 곳만 오타나도 **조용히 샌다**.
+# → 값은 여기 하나만 둔다. pump_split_entry_worker.MODE_MARKER 와 같아야 하고
+#   그 동기화는 tests/unit/test_pyramiding_excludes_bbsplit.py 가 고정한다.
+# ═══════════════════════════════════════════════════════════════════════════
+SPLIT_ENTRY_MODE: str = "split_entry"
+
+
 __all__ = [
     "TOTAL_STAGES_MAX",
     "TOTAL_TP_LEVELS",
@@ -155,4 +171,6 @@ __all__ = [
     # v131 청산 후 재진입
     "LIQUIDATED_WAITING_RETRY",
     "STOPPED_CAPITAL_EXHAUSTED",
+    # Fix 214 볼밴 분할 마커 (단일 출처)
+    "SPLIT_ENTRY_MODE",
 ]
