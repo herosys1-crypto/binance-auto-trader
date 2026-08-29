@@ -1515,6 +1515,36 @@ async function saveV219Settings() {
   if (bbSt && String(bbSt.value).trim()) payload.bbsplit_steps = String(bbSt.value).trim();
   const bbSl = document.getElementById('bbsplit-sl-roi');
   if (bbSl && String(bbSl.value).trim()) payload.bbsplit_sl_roi = String(bbSl.value).trim();
+  // ═══════════════════════════════════════════════════════════════════
+  // 🚨 Fix 224 (2026-08-30): **안 건드린 필드는 보내지 않는다.**
+  //
+  //   실측 사고: 사장님 지시로 pump_split_sl_roi 를 DB 에서 10 → 15 로 바꿨는데,
+  //   4분 뒤 세팅 카드 저장 한 번에 **다시 10 으로 덮였다**
+  //   (updated_at=17:48:58 by=1, sl_roi 만 바뀜 = 화면에 남아 있던 옛 값이 이겼다).
+  //   그 결과 볼밴 #1787 이 사장님이 지정한 -15% 가 아니라 -10% 로 돌았다.
+  //
+  //   이 카드는 필드 하나만 바꿔도 **전 필드를 함께 보낸다**. 그래서 화면이 낡아
+  //   있으면 다른 설정을 조용히 되돌린다. 로드 시점 값과 같은 항목은 빼서
+  //   「내가 바꾼 것만 저장」이 되게 한다 (헌법 85 — 조용히 되돌리지 말 것).
+  // ═══════════════════════════════════════════════════════════════════
+  try {
+    const _loaded = (window.__V219_LAST || {}).응답 || null;
+    if (_loaded) {
+      const _dropped = [];
+      Object.keys(payload).forEach((k) => {
+        if (!(k in _loaded)) return;                 // 서버가 안 주는 키는 그대로 보낸다
+        if (String(_loaded[k]) === String(payload[k])) {
+          _dropped.push(k);
+          delete payload[k];
+        }
+      });
+      if (_dropped.length) {
+        console.info('[v219/settings] Fix224 — 변경 없는 필드 제외:', _dropped);
+      }
+    }
+  } catch (_e224) {
+    console.warn('[v219/settings] Fix224 비교 실패 — 전체 전송으로 진행', _e224);
+  }
   try {
     await api('/strategy-suggestions/sajangnim-settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     // 🚨 Fix 189: 옛 코드는 저장 직후 화면을 **보낸 값으로 강제 세팅**했다.
