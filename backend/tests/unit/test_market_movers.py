@@ -9,10 +9,21 @@
 """
 from __future__ import annotations
 
-from app.services.market_movers import DEFAULT_TOP_N, change_pct, rank_map, top_movers
+from app.services.market_movers import (
+    DEFAULT_TOP_N,
+    MIN_QUOTE_VOLUME,
+    change_pct,
+    quote_volume,
+    rank_map,
+    top_movers,
+)
 
 
-def _t(sym, chg, vol=1.0):
+V_OK = 9_000_000.0        # 유동성 하한(5M) 통과
+V_LOW = 1_000_000.0       # 하한 미달
+
+
+def _t(sym, chg, vol=V_OK):
     return {"symbol": sym, "priceChangePercent": str(chg), "quoteVolume": str(vol)}
 
 
@@ -21,8 +32,12 @@ def _universe(n=200):
 
     거래대금 순으로 고르면 가장 많이 오른 종목이 **꼴찌**가 되도록 만들어,
     옛 기준과 새 기준을 확실히 갈라 놓는다.
+    (전부 유동성 하한은 통과하도록 V_OK 위에서만 흔든다.)
     """
-    return [_t(f"S{i}USDT", i - n // 2, vol=n - i) for i in range(n)]
+    return [
+        _t(f"S{i}USDT", i - n // 2, vol=V_OK + (n - i))
+        for i in range(n)
+    ]
 
 
 def test_gainers_and_losers_are_ranked_by_change():
@@ -42,7 +57,8 @@ def test_volume_does_not_decide_anything():
     """
     ups, _ = top_movers(_universe(200), 50)
     assert ups[0]["symbol"] == "S199USDT", "변동률 1위가 뽑히지 않았다 = 거래대금이 개입했다"
-    assert float(ups[0]["quoteVolume"]) == 1.0, "대조군 무효 — 거래대금이 최소가 아니다"
+    vols = [float(t["quoteVolume"]) for t in _universe(200)]
+    assert float(ups[0]["quoteVolume"]) == min(vols), "대조군 무효 — 거래대금이 최소가 아니다"
 
 
 def test_rank_map_is_up_first_then_down_and_deduped():
@@ -65,10 +81,11 @@ def test_small_universe_does_not_duplicate():
 
 def test_non_usdt_and_broken_tickers_are_safe():
     """USDT 아닌 것 제외 / 값이 깨져도 죽지 않는다 (워커가 여기서 멈추면 안 된다)."""
+    # 유동성 하한은 끄고(0) **깨진 값에 죽지 않는지**만 본다 — 하한은 별도 시험.
     rows = rank_map(
         [_t("AUSDT", 10), _t("BBTC", 99), {"symbol": "CUSDT"},
          {"symbol": "DUSDT", "priceChangePercent": "없음"}],
-        50,
+        50, min_quote_volume=0,
     )
     syms = [t["symbol"] for t, _, _ in rows]
     assert "BBTC" not in syms, "USDT 아닌 심볼이 들어왔다"
@@ -84,3 +101,35 @@ def test_zero_top_n_is_empty_not_everything():
 
 def test_default_is_50_as_instructed():
     assert DEFAULT_TOP_N == 50, "사장님 지시 = 상승 50위 / 하락 50위"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Fix 220 — 유동성 하한 (거래대금 정렬을 없앤 부작용 차단)
+# ═══════════════════════════════════════════════════════════════════════════
+def test_illiquid_symbols_are_excluded():
+    """거래대금 정렬을 없앤 뒤 잡코인이 자동매매 대상이 되면 안 된다.
+
+    +80% 급등했지만 거래대금 100만 USDT 인 종목은 슬리피지·부분체결·청산가
+    왜곡 위험이 크다 (2026-08-21 급등 SHORT -849 사고와 같은 계열, 헌법 64).
+    """
+    rows = rank_map([_t("THINUSDT", 80, vol=V_LOW), _t("FATUSDT", 20, vol=V_OK)], 50)
+    syms = [t["symbol"] for t, _, _ in rows]
+    assert syms == ["FATUSDT"], f"유동성 없는 종목이 들어왔다: {syms}"
+
+
+def test_liquidity_floor_can_be_turned_off():
+    """0 이면 하한 없음 — 되돌리는 방법이 실제로 동작하는지 고정한다."""
+    rows = rank_map([_t("THINUSDT", 80, vol=V_LOW)], 50, min_quote_volume=0)
+    assert [t["symbol"] for t, _, _ in rows] == ["THINUSDT"]
+
+
+def test_floor_value_is_sane():
+    """하한이 너무 높으면 사장님이 잡고 싶어 하는 급등 종목까지 걸러낸다."""
+    assert 0 < MIN_QUOTE_VOLUME <= 20_000_000, MIN_QUOTE_VOLUME
+
+
+def test_broken_volume_is_treated_as_zero_and_excluded():
+    """거래대금 파싱 실패는 **제외**(안전측) — 통과시키면 하한이 무의미해진다."""
+    assert quote_volume({"quoteVolume": "없음"}) == 0.0
+    rows = rank_map([{"symbol": "XUSDT", "priceChangePercent": "50"}], 50)
+    assert rows == []

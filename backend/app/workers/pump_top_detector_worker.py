@@ -394,17 +394,22 @@ def run_pump_top_detector() -> dict:
         #   같은 함수를 long_bottom_detector 도 쓴다 — 한쪽만 고쳐 어긋나면
         #   「상승은 넓어졌는데 하락은 그대로」가 된다 (헌법 101).
         # ═══════════════════════════════════════════════════════════════════
-        from app.services.market_movers import rank_map
+        from app.services.market_movers import MIN_QUOTE_VOLUME, rank_map
         _ranked = rank_map(tickers, MAX_SYMBOLS)
         # 🌟 v222/v223: SHORT (chg≥+5) + LONG (chg≤-5) = 대칭!
         candidates = [
             t for (t, _d, _r) in _ranked
             if abs(float(t.get("priceChangePercent", 0) or 0)) >= MIN_24H_CHANGE
         ]
+        _usdt_n = sum(
+            1 for t in tickers if str(t.get("symbol") or "").endswith("USDT")
+        )
         logger.info(
             "[pump_top_v223] 감시 대상 = 당일 상승 %d위 ∪ 하락 %d위 = %d개 "
-            "→ |24h|>=%.0f%% 통과 %d개 (Fix 217)",
-            MAX_SYMBOLS, MAX_SYMBOLS, len(_ranked), MIN_24H_CHANGE, len(candidates),
+            "(USDT %d개 중 거래대금 %.0fM 하한 통과분에서 선정) "
+            "→ |24h|>=%.0f%% 통과 %d개 (Fix 217/220)",
+            MAX_SYMBOLS, MAX_SYMBOLS, len(_ranked), _usdt_n,
+            MIN_QUOTE_VOLUME / 1_000_000, MIN_24H_CHANGE, len(candidates),
         )
 
         if not candidates:

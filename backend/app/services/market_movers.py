@@ -25,10 +25,27 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-__all__ = ["change_pct", "top_movers", "rank_map"]
+__all__ = ["change_pct", "quote_volume", "top_movers", "rank_map", "MIN_QUOTE_VOLUME"]
 
 # 사장님 확정 기본값 — 상승 50 / 하락 50 (합쳐서 최대 100 심볼)
 DEFAULT_TOP_N: int = 50
+
+# 🚨 Fix 220 (2026-08-30): 24h 거래대금 하한 (USDT).
+#
+#   옛 코드는 **거래대금 순으로 정렬**해 상위 100~150개만 봤다. 그 자체는 사장님이
+#   요구한 적 없는 기준이라 Fix 217 로 없앴는데, 없애고 나니 **부작용**이 생겼다:
+#   거래대금 정렬이 사실상 **유동성 필터** 노릇을 하고 있었다.
+#   이제 거래대금 500위 잡코인도 +80% 면 자동매매 대상이 된다
+#   → 슬리피지 / 부분 체결 / 청산가 왜곡. 2026-08-21 급등 SHORT -849 USDT 사고와
+#     같은 계열의 노출이다 (헌법 64).
+#
+#   그래서 **순위는 변동률로 매기되, 죽은 시장만 걷어내는 최소 하한**을 둔다.
+#   5,000,000 USDT 는 바이낸스 USD-M 영구선물에서 「거래가 실제로 되는」 최소선이고,
+#   급등한 종목은 그날 거래대금이 이보다 훨씬 크므로 사장님이 잡고 싶어 하는
+#   급등 종목을 걸러내지 않는다.
+#   ⚠️ 감으로 정한 값이다. 몇 개가 이 하한에 걸리는지 호출부가 로그로 남기므로,
+#      하루 데이터를 보고 조정할 것. 끄려면 0 으로 두면 된다.
+MIN_QUOTE_VOLUME: float = 5_000_000.0
 
 
 def change_pct(ticker: dict[str, Any]) -> float:
@@ -39,11 +56,20 @@ def change_pct(ticker: dict[str, Any]) -> float:
         return 0.0
 
 
+def quote_volume(ticker: dict[str, Any]) -> float:
+    """24h 거래대금(USDT). 파싱 실패는 0.0 = 하한에 걸려 제외된다 (안전측)."""
+    try:
+        return float(ticker.get("quoteVolume") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def top_movers(
     tickers: Iterable[dict[str, Any]],
     top_n: int = DEFAULT_TOP_N,
     *,
     quote: str = "USDT",
+    min_quote_volume: float = MIN_QUOTE_VOLUME,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(상승 top_n, 하락 top_n) 을 24h 변동률 순으로 돌려준다.
 
@@ -57,6 +83,8 @@ def top_movers(
     pool = [
         t for t in (tickers or [])
         if str(t.get("symbol") or "").endswith(quote)
+        # Fix 220: 순위는 변동률로 매기되 **죽은 시장만** 걷어낸다 (유동성 하한).
+        and (min_quote_volume <= 0 or quote_volume(t) >= min_quote_volume)
     ]
     ranked = sorted(pool, key=change_pct, reverse=True)
     gainers = ranked[:top_n]
@@ -69,6 +97,7 @@ def rank_map(
     top_n: int = DEFAULT_TOP_N,
     *,
     quote: str = "USDT",
+    min_quote_volume: float = MIN_QUOTE_VOLUME,
 ) -> list[tuple[dict[str, Any], str, int]]:
     """감시 대상 = 상승 N위 ∪ 하락 N위. `(ticker, "UP"|"DOWN", 순위)` 로 돌려준다.
 
@@ -78,7 +107,9 @@ def rank_map(
     - 순위(1부터)를 같이 주므로 로그·화면에 「상승 3위」처럼 남길 수 있다
       (차단 사유를 화면에 보여줄 것 — 헌법 161).
     """
-    gainers, losers = top_movers(tickers, top_n, quote=quote)
+    gainers, losers = top_movers(
+        tickers, top_n, quote=quote, min_quote_volume=min_quote_volume,
+    )
     out: list[tuple[dict[str, Any], str, int]] = []
     seen: set[str] = set()
     for side, group in (("UP", gainers), ("DOWN", losers)):

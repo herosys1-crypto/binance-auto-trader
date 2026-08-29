@@ -81,7 +81,18 @@ TREND_CONFIDENCE_PENALTY = 0.05  # strong_bear LONG confidence 감소량!
 SPEC_VERSION = "long_bottom_detector_v3_fix87_dump_only_2026-08-25"
 PATTERN_A_MIN_CHG = 5.0     # 패턴 A: 24h 최소 +5% (Fix 87 = 진입 skip!)
 PATTERN_A_MAX_CHG = 15.0    # 패턴 A: 24h 최대 +15% (Fix 87 = 진입 skip!)
-PATTERN_B_MIN_CHG = -15.0   # 패턴 B: 24h 최소 -15%
+# 🚨 Fix 220 (2026-08-30 사장님 "당일 상승 50위와 하락 50위로 해줘"):
+#   -15.0 → -100.0 = **하한 개방.**
+#   옛 값이면 24h -20% 로 떨어진 「하락 1위권」이 후보에서 통째로 탈락했다.
+#   즉 사장님이 보라고 한 하락 상위 종목이 감시 대상에도 못 들어왔다 —
+#   「하락 50위 감시」라는 지시와 정면으로 어긋난다.
+#   ⚠️ 이건 진입 조건이 아니라 **감시 후보 조건**이다. 실제 진입은 여전히
+#      obv_gate + 양방향차단 + confirm_peak(15m 반복 저점 + 지표 꺾임) 를 전부
+#      통과해야 하고, 진입 후에는 force SL 이 받친다.
+#   ⚠️ 그래도 -40% 폭락 종목까지 감시 대상이 된다 = 떨어지는 칼을 보게 된다.
+#      후보 수가 늘어 weight 도 오르므로(심볼당 6), Fix 219 의 발화 오프셋과
+#      함께여야 한다. 되돌리려면 이 한 줄을 -15.0 으로 되돌리면 된다.
+PATTERN_B_MIN_CHG = -100.0  # 패턴 B: 하한 없음 (하락 50위 전부 감시)
 PATTERN_B_MAX_CHG = -3.0    # 🌟 Fix 87: 0 → -3.0 (급락 확실!)
 
 
@@ -538,7 +549,7 @@ def run_long_bottom_detector() -> dict:
         #   패턴을 골랐다 = 거래대금 작은 급등락 종목은 감시망 밖이었다.
         #   pump_top_detector 와 **같은 함수**를 쓴다 (헌법 101 — 한쪽만 고치면 어긋난다).
         # ═══════════════════════════════════════════════════════════════════
-        from app.services.market_movers import rank_map
+        from app.services.market_movers import MIN_QUOTE_VOLUME, rank_map
         _ranked = rank_map(tickers, MAX_SYMBOLS)
 
         # 🌟 Fix 50 v2 (2026-08-24 사장님 verbatim!):
@@ -548,10 +559,16 @@ def run_long_bottom_detector() -> dict:
             t for (t, _d, _r) in _ranked
             if _classify_pattern(float(t.get("priceChangePercent", 0) or 0)) is not None
         ]
+        _usdt_n = sum(
+            1 for t in tickers if str(t.get("symbol") or "").endswith("USDT")
+        )
         logger.info(
             "[Fix50v2/long] 감시 대상 = 당일 상승 %d위 ∪ 하락 %d위 = %d개 "
-            "→ 패턴 통과 %d개 (Fix 217)",
-            MAX_SYMBOLS, MAX_SYMBOLS, len(_ranked), len(candidates),
+            "(USDT %d개 중 거래대금 %.0fM 하한 통과분에서 선정) "
+            "→ 패턴 B[%.0f%%~%.0f%%] 통과 %d개 (Fix 217/220)",
+            MAX_SYMBOLS, MAX_SYMBOLS, len(_ranked), _usdt_n,
+            MIN_QUOTE_VOLUME / 1_000_000,
+            PATTERN_B_MIN_CHG, PATTERN_B_MAX_CHG, len(candidates),
         )
 
         if not candidates:
