@@ -12,7 +12,7 @@ from decimal import Decimal
 from statistics import mean
 
 from app.core.database import SessionLocal
-from app.core.strategy_status import ACTIVE_LIKE
+from app.core.strategy_status import ACTIVE_LIKE, SPLIT_ENTRY_MODE
 from app.models.exchange_account import ExchangeAccount
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_suggestion import StrategySuggestion
@@ -354,6 +354,13 @@ def _query_candidates(db):
                     StrategyInstance.current_stage == 1,
                     StrategyInstance.resistance_reversal_triggered_at.is_(None),
                     StrategyInstance.status.in_(list(ACTIVE_LIKE)),
+                    # 🚨 Fix 214 (2026-08-30): 볼밴 분할 제외.
+                    #   볼밴은 기준선 -3/-5/-7% 라는 **자기 진입 계획**을 갖는다.
+                    #   여기서 enter_stage_at_market 를 부르면 stage_no 가 채워져
+                    #   「계획된 단계 진입」처럼 보이지만 실제로는 볼밴 트리거와
+                    #   무관한 가격에 들어간 것이라, 평단과 손절선이 설계에서 어긋난다.
+                    #   (Fix 213 과 같은 성격 — 볼밴에 남의 로직을 얹지 않는다)
+                    StrategyInstance.capital_management_mode != SPLIT_ENTRY_MODE,
                     StrategyInstance.is_archived.is_(False))  # Fix 171: 보관 전략에 발주 금지
             .limit(MAX_STRATEGIES_PER_CYCLE).all())
 

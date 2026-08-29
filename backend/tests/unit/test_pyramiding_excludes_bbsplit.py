@@ -27,6 +27,15 @@ from pathlib import Path
 WORKERS = Path(__file__).resolve().parents[2] / "app" / "workers"
 PYRAMID = WORKERS / "success_pyramiding_worker.py"
 
+# 🚨 Fix 214 — **이미 열려 있는 전략에 계획 밖 진입을 얹을 수 있는** 워커들.
+#   전부 볼밴(split_entry)을 제외해야 한다. 하나라도 새면 평단이 설계와 반대로 밀린다.
+#   여기에 워커를 추가할 때는 그 워커도 같은 가드를 넣어야 한다.
+MUST_EXCLUDE_BBSPLIT = (
+    "success_pyramiding_worker.py",     # Fix 213 — 실제로 -252.18 USDT 를 냈다
+    "resistance_reversal_worker.py",    # Fix 214 — SHORT 전략에 enter_stage_at_market
+    "peak_break_reversal_worker.py",    # Fix 214 — 동일
+)
+
 
 def _attr_refs(path: Path, name: str) -> int:
     """모듈에서 `something.<name>` 참조 횟수 (주석·문자열은 세지 않는다 = 헌법 122)."""
@@ -52,12 +61,35 @@ def test_marker_value_stays_in_sync():
     )
 
 
-def test_candidate_query_filters_capital_management_mode():
-    """후보 쿼리에서 `capital_management_mode` 필터가 사라지면 안 된다."""
-    n = _attr_refs(PYRAMID, "capital_management_mode")
-    assert n >= 1, (
-        "success_pyramiding_worker 에서 capital_management_mode 필터가 사라졌다 = "
-        "볼밴에 다시 피라미딩이 얹힌다 (실측 -252.18 USDT)"
+def test_single_source_of_truth_for_the_marker():
+    """🚨 Fix 214 — 마커 문자열은 **한 곳**에만 있어야 한다.
+
+    워커마다 "split_entry" 를 복사하면 한 곳만 오타나도 조용히 샌다.
+    """
+    from app.core.strategy_status import SPLIT_ENTRY_MODE
+    from app.workers.pump_split_entry_worker import MODE_MARKER
+
+    assert SPLIT_ENTRY_MODE == MODE_MARKER, (
+        f"단일 출처가 어긋났다: strategy_status={SPLIT_ENTRY_MODE!r} "
+        f"pump_split={MODE_MARKER!r}"
+    )
+
+
+def test_every_unplanned_entry_worker_excludes_bbsplit():
+    """계획 밖 진입을 얹을 수 있는 워커는 **전부** 볼밴을 제외해야 한다.
+
+    🚨 Fix 213 은 피라미딩만 막았다. 그런데 resistance_reversal / peak_break_reversal
+       도 SHORT 전략에 enter_stage_at_market 를 부른다 — 그건 stage_no 가 채워져
+       「계획된 단계 진입」처럼 보이지만 볼밴 트리거와 무관한 가격이다.
+       볼밴 SHORT 가 드물어서 아직 안 터졌을 뿐, 구멍은 같은 종류다.
+    """
+    missing = [
+        name for name in MUST_EXCLUDE_BBSPLIT
+        if _attr_refs(WORKERS / name, "capital_management_mode") == 0
+    ]
+    assert not missing, (
+        "볼밴 제외 가드가 없는 워커: " + ", ".join(missing)
+        + " → 볼밴 평단이 설계와 반대로 밀린다 (실측 -252.18 USDT)"
     )
 
 
