@@ -874,6 +874,79 @@ def _create_long_strategy(
         return None
 
 
+def _flatten_learning_keys(snap: dict | None) -> dict | None:
+    """🚨 Fix 208 (2026-08-29 사장님): 진입 지표를 **학습이 읽는 모양**으로 맞춘다.
+
+    사장님: "포지션 진입시 기록 메모리해서 차후에 분석하고 활용할수 있게 꼭만들어서 활용해"
+
+    ■ 왜 필요한가 — 생산자와 소비자가 서로 다른 모양을 쓰고 있었다
+        생산자 long_bottom_detector:237  →  {"15m": {"rsi_now":.., "cci_now":..}, "4h": {..}}
+        생산자 macd_reversal_15m:368     →  {"rsi_15m":.., "cci_15m":.., "obv_slope_15m":..}
+        생산자 mtf_snapshot.capture      →  {"tf": {"15m": {"rsi":.., "cci":..}, "4h": {..}}}
+        소비자 pattern_learning:300      →  snap.get("rsi") / .get("cci") / .get("obv_slope_pct")
+        소비자 failure_pattern_analyzer  →  같은 평탄 키
+
+      그리고 알림 소비 경로(:1154)는 upstream dict 를 그대로 복사한 뒤
+      regime/source/... 만 setdefault 하고 **rsi·cci·obv_slope_pct 를 채우는 줄이 없다.**
+      → 값이 None 인 게 아니라 **키 자체가 없어서** 학습 리더가 통째로 건너뛴다.
+      실측(2026-08-29): 종료 LONG 137건 중 cci 를 가진 건 22건뿐이었다.
+
+    ■ 해법 — 저장 직전에 **이 함수 하나**를 반드시 통과시킨다 (헌법 101: 쓰는 함수를 하나로).
+      기존 값은 절대 덮지 않는다. 비어 있을 때만 채운다.
+
+    ⚠️ 기록이 실패해도 **진입을 막지 않는다** — 통째로 try 로 감싸고 원본을 돌려준다.
+    """
+    if not isinstance(snap, dict):
+        return snap
+    try:
+        tf = snap.get("tf") if isinstance(snap.get("tf"), dict) else {}
+        s15 = tf.get("15m") if isinstance(tf.get("15m"), dict) else {}
+        s4h = tf.get("4h") if isinstance(tf.get("4h"), dict) else {}
+        # detector 는 tf 없이 최상위에 "15m"/"4h" 를 둔다
+        d15 = snap.get("15m") if isinstance(snap.get("15m"), dict) else {}
+
+        def _pick(*vals):
+            for v in vals:
+                if v is not None:
+                    return v
+            return None
+
+        if snap.get("rsi") is None:
+            snap["rsi"] = _pick(s15.get("rsi"), s15.get("rsi_now"),
+                                d15.get("rsi_now"), d15.get("rsi"),
+                                snap.get("rsi_15m"))
+        if snap.get("cci") is None:
+            snap["cci"] = _pick(s15.get("cci"), s15.get("cci_now"),
+                                d15.get("cci_now"), d15.get("cci"),
+                                snap.get("cci_15m"))
+        if snap.get("obv_slope_pct") is None:
+            _obv = _pick(s4h.get("obv_slope_pct"), s15.get("obv_slope_pct"),
+                         snap.get("obv_slope_15m"))
+            # ⚠️ 값이 없어도 **키는 반드시 남긴다** (None 으로).
+            #   키가 아예 없으면 저장된 기록만 봐서는 「기록이 빠진 것」과
+            #   「원래 값이 없던 것」을 구별할 수 없다. 스키마를 고정해야
+            #   나중에 "결손률" 을 셀 수 있다.
+            snap["obv_slope_pct"] = _obv
+            if _obv is not None:
+                # 단위를 함께 남긴다 — 워커마다 정규화 방식이 달라 섞이면 해석이 깨진다
+                snap.setdefault("obv_slope_unit", "pct_of_window_amplitude")
+        # rsi/cci 도 같은 이유로 키를 고정한다
+        snap.setdefault("rsi", None)
+        snap.setdefault("cci", None)
+        snap.setdefault("snapshot_path", snap.get("source"))
+
+        # 🚨 누락을 조용히 넘기지 않는다 (헌법 80) — 며칠 뒤 "왜 표본이 없지?" 를 막는다
+        _missing = [k for k in ("rsi", "cci", "obv_slope_pct") if snap.get(k) is None]
+        if _missing:
+            logger.warning(
+                "[Fix208/학습결손] entry_snapshot 빈 키=%s src=%s (분석 표본에서 빠집니다)",
+                _missing, snap.get("source"),
+            )
+    except Exception as e:      # 기록 실패가 진입을 막아서는 안 된다
+        logger.warning("[Fix208] 학습 키 평탄화 실패 (진입은 계속): %s", e)
+    return snap
+
+
 def _notify_entry(strategy: StrategyInstance, confidence: float, snapshot: dict) -> None:
     """텔레그램 알림 (v219 SHORT 대칭!)"""
     try:
@@ -1199,7 +1272,8 @@ def run_auto_long_at_bottom_once() -> dict:
                         "confidence": confidence,
                         "signals":
                             alert.get("signals") or alert.get("pattern_signals"),
-                        "entry_snapshot": _mtf_merge(entry_snapshot, symbol, "LONG"),
+                        "entry_snapshot": _flatten_learning_keys(
+                            _mtf_merge(entry_snapshot, symbol, "LONG")),   # Fix 208
                         "alert_source": alert.get("source"),
                         "pattern": alert.get("pattern"),
                     },
@@ -1459,7 +1533,7 @@ def run_auto_long_at_bottom_once() -> dict:
                         "sajangnim_bottom": True,
                         "confidence": confidence,
                         "signals": result.get("signals"),
-                        "entry_snapshot": snapshot,
+                        "entry_snapshot": _flatten_learning_keys(snapshot),  # Fix 208
                     },
                     confidence_score=Decimal(str(round(confidence, 4))),
                     reason=(

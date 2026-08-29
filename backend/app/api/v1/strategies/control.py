@@ -668,19 +668,40 @@ def trigger_next_stage_manually(
                 detail=f"Stage {next_stage_no} plan 없음 + fallback plan도 없음! 「✏️ 수정」으로 단계 추가하세요.",
             )
         # 신 plan 생성 = 마지막 plan의 capital 재사용
+        # 🚨 Fix 207 (2026-08-29 사장님 "다음단계 강제진입이 안되는것 같아"):
+        #   옛 코드는 side / trigger_mode 를 넣지 않았다. 둘 다 **NOT NULL** 이라
+        #   INSERT 가 IntegrityError 로 터지고, 버튼은 500 을 받는다.
+        #   실측(#1731 龙虾USDT SHORT, 단계계획이 2단계까지만 있음):
+        #     null value in column "side" of relation "strategy_stage_plans"
+        #   = 「계획에 없는 단계를 강제로 넣는」 기능이 **한 번도 동작한 적이 없었다.**
+        #   (v130 에서 「plan 없어도 되게」 만들었는데 컬럼 두 개를 빠뜨렸다)
+        #
+        #   side 는 전략 방향 그대로, trigger_mode 는 「강제 진입」임을 남긴다 —
+        #   None 을 넣을 수 없고, 어차피 아래에서 시장가로 즉시 체결하므로
+        #   가격 트리거 모드가 아니라는 사실 자체를 기록하는 게 맞다.
         plan = StrategyStagePlan(
             strategy_instance_id=strategy.id,
             stage_no=next_stage_no,
-            trigger_mode=None,  # 강제 진입이라 trigger 무관
+            side=strategy.side,                  # Fix 207: NOT NULL
+            trigger_mode="IMMEDIATE",            # Fix 207: NOT NULL (수동 강제 = 즉시)
+            trigger_percent=None,
             trigger_price=None,
             planned_capital=_prev_plans.planned_capital,
             planned_qty=None,  # execution_service가 재계산
             additional_margin_usdt=None,
+            is_enabled=True,
             is_triggered=False,
         )
         db.add(plan)
         db.commit()
         db.refresh(plan)
+        _log = __import__("logging").getLogger(__name__)
+        _log.warning(
+            "[Fix207] #%s %s %s 단계%s 계획이 없어 새로 만듦 "
+            "(마지막 단계 자본 %s 재사용) — 수동 강제 진입",
+            strategy.id, strategy.symbol, strategy.side,
+            next_stage_no, _prev_plans.planned_capital,
+        )
     # 2026-05-04 fix v2 (사용자 #96 사례): 거래소 NEW LIMIT 중복 방지.
     # 자동 워커가 LIMIT 을 placed (NEW 상태) 한 stage 에 사용자가 ▶ (MARKET) 추가 시
     # 가격 도달 시 자동 LIMIT 도 fill → 포지션 더블링. 이 가드로 차단.
