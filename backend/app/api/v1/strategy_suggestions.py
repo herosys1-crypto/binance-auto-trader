@@ -423,7 +423,9 @@ def _assert_bbsplit_consistent(caps, steps, sl_roi) -> None:
     각 항목을 따로 검사하면 「자본만 보고 통과」가 되어 이 조합을 못 잡는다.
     → 저장 직전에 실제 적용될 세 값으로 한 번에 본다.
     """
-    from app.workers.pump_split_entry_worker import LEVERAGE, check_no_dead_stage
+    from app.workers.pump_split_entry_worker import (
+        LEVERAGE, check_no_dead_stage, mid_steps,
+    )
     ok, why = check_no_dead_stage(caps, steps, sl_roi, LEVERAGE)
     if not ok:
         raise ValueError(
@@ -431,6 +433,16 @@ def _assert_bbsplit_consistent(caps, steps, sl_roi) -> None:
             f"(자본 {_fmt_dec_list(caps)} / 트리거 {_fmt_dec_list(steps)}% / 손절 {sl_roi}%) "
             "그 단계는 진입 조건에 도달하기 전에 손절이 먼저 발동해 "
             "영원히 사용되지 않습니다."
+        )
+    # 🚨 Fix 215: 긴 추세(중단선) 모드는 단계표가 다르다 (3/5/7 → 0/2/4).
+    #   하단 기준만 검산하면 「중단 3차만 죽은」 설정을 통과시킨다.
+    _ms = mid_steps(steps)
+    ok2, why2 = check_no_dead_stage(caps, _ms, sl_roi, LEVERAGE)
+    if not ok2:
+        raise ValueError(
+            f"긴 추세(중단선) 모드에서 사용할 수 없습니다 — {why2}. "
+            f"(자본 {_fmt_dec_list(caps)} / 중단 단계 {_fmt_dec_list(_ms)}% / 손절 {sl_roi}%) "
+            "중단선 이탈 진입은 1차가 0%(이탈 즉시)라 손절선이 더 가깝습니다."
         )
 
 

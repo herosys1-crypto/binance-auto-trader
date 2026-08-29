@@ -338,43 +338,73 @@ def _is_long_trend(a15: dict, side: str) -> tuple[bool, str]:
             f"직전 {ok}/{LONG_TREND_BARS}봉 연속 (현재봉 제외 — Fix 212)")
 
 
-def _entry_plan(a15: dict, side: str, long_trend: bool,
-                steps: list[Decimal] | None = None) -> tuple[Decimal | None, str]:
-    """기준선(base)과 사유를 반환. 1차 진입 조건 미충족이면 (None, 사유).
+def mid_steps(steps: list[Decimal] | None = None) -> list[Decimal]:
+    """긴 추세(중단선) 모드의 단계 심도 — 1차는 **이탈 즉시**, 간격은 그대로.
 
-    ⚠️ 1차는 「기준선 이탈 즉시」가 아니라 **기준선 대비 SPLIT_STEP_PCT[0](-3%)
-       까지 밀렸을 때** 진입한다 (사장님 확정: "볼밴 하단 -3% 이탈하면 100 진입").
+    🚨 Fix 215 (2026-08-30 사장님 「b」): 사장님 원문이 하단과 중단을 **다르게** 말한다.
+        "볼밴 하단 **-3%**일때 100 진입"   → 하단은 -3% 명시
+        "긴상승에는 중단 **이탈시**"        → 중단은 「이탈(통과)」
+
+    실측 2026-08-29 16:19 사이클 — 중단에도 -3% 를 요구하면 1차 목표가가
+    현재가에서 **중앙값 -7.2%, 최대 -15.1%**(PROMUSDT) 나 떨어져 있다.
+    급등 종목은 가격이 중단선보다 한참 위(PROMUSDT 는 +14.2%)라서
+    「중단 -3%」가 실제로는 「현재가 -15%」가 된다. 그건 눌림목이 아니라 추세 붕괴다.
+    그래서 후보 9~14건이 몇 시간째 전부 no_break 였다.
+
+    → 1차는 중단선 이탈(0%), 2·3차는 **원 간격 그대로**.
+      3/5/7 이면 [0, 2, 4] (간격 2.00% / 2.04% ≈ 원래 2.06% / 2.11%).
+      사장님이 트리거를 3/6/9 로 바꾸면 중단은 [0, 3, 6] 으로 따라간다.
+    """
+    s = steps or SPLIT_STEP_PCT
+    return [Decimal("0"), s[1] - s[0], s[2] - s[0]]
+
+
+def _entry_plan(a15: dict, side: str, long_trend: bool,
+                steps: list[Decimal] | None = None,
+                ) -> tuple[Decimal | None, str, list[Decimal]]:
+    """기준선(base)·사유·**이 진입에 쓸 steps** 를 반환. 미충족이면 base=None.
+
+    ⚠️ 하단/상단 모드의 1차는 「기준선 이탈 즉시」가 아니라 **기준선 대비
+       SPLIT_STEP_PCT[0](-3%) 까지 밀렸을 때** 진입한다
+       (사장님 확정: "볼밴 하단 -3% 이탈하면 100 진입").
        기준선을 스치고 바로 되돌리는 가짜 이탈을 걸러내기 위함이다.
+    ⚠️ 긴 추세(중단선) 모드는 Fix 215 로 **이탈 즉시**다 — mid_steps 참조.
+
+    반환하는 steps 를 템플릿·검산·재앵커가 **전부 같이** 써야 한다 (헌법 101).
     """
     up, mid, lo = a15.get("bb_up_last"), a15.get("bb_mid_last"), a15.get("bb_lo_last")
     closes = a15.get("closes") or []
+    _base_steps = steps or SPLIT_STEP_PCT     # Fix 206
+    _steps = mid_steps(_base_steps) if long_trend else _base_steps   # Fix 215
     if not closes or up is None or mid is None or lo is None:
-        return None, "15m 밴드/종가 없음"
+        return None, "15m 밴드/종가 없음", _steps
     close = Decimal(str(closes[-1]))
-    _steps = steps or SPLIT_STEP_PCT          # Fix 206
     step1 = _steps[0] / Decimal("100")
+    # 중단 모드는 step1=0 이므로 need == base = 「이탈(통과)」 판정이 된다.
+    _cond = "이탈" if long_trend else f"-{_base_steps[0]}%"
     if side == "LONG":
         base = Decimal(str(mid)) if long_trend else Decimal(str(lo))
         label = "중단" if long_trend else "하단"
-        need = base * (Decimal("1") - step1)          # 기준선 -3%
+        need = base * (Decimal("1") - step1)
         if close > need:
             return None, (
-                f"{label} -{_steps[0]}% 미도달 "
+                f"{label} {_cond} 미도달 "
                 f"(close {_fmt(close)} > 목표 {_fmt(need)} / {label} {_fmt(base)})"
-            )
+            ), _steps
     else:
         base = Decimal(str(mid)) if long_trend else Decimal(str(up))
         label = "중단" if long_trend else "상단"
-        need = base * (Decimal("1") + step1)          # 기준선 +3%
+        need = base * (Decimal("1") + step1)
         if close < need:
             return None, (
-                f"{label} +{_steps[0]}% 미도달 "
+                f"{label} {'이탈' if long_trend else f'+{_base_steps[0]}%'} 미도달 "
                 f"(close {_fmt(close)} < 목표 {_fmt(need)} / {label} {_fmt(base)})"
-            )
+            ), _steps
     return base, (
-        f"{label} {_steps[0]}% 이탈 확인 "
-        f"(close {_fmt(close)} / {label} {_fmt(base)} / 목표 {_fmt(need)})"
-    )
+        f"{label} {_cond} 확인 "
+        f"(close {_fmt(close)} / {label} {_fmt(base)} / 목표 {_fmt(need)} "
+        f"/ 단계 {'/'.join(str(x) for x in _steps)}%)"
+    ), _steps
 
 
 def base_multipliers(side: str, steps: list[Decimal]) -> list[Decimal]:
@@ -636,9 +666,23 @@ def run_pump_split_entry_once() -> dict:
                 sl_roi, CAPITALS_KEY,
             )
             return {"note": f"정합성 실패: {_why}", **stat}
+        # 🚨 Fix 215: 중단(긴 추세) 모드는 단계표가 다르다(0/2/4) — **따로** 검산한다.
+        #   여기서 안 보면 「하단은 멀쩡한데 중단 3차만 죽은」 상태를 못 잡는다.
+        _mok, _mwhy = check_no_dead_stage(caps, mid_steps(steps), sl_roi, LEVERAGE)
+        if not _mok:
+            logger.error(
+                "[pump_split] ⛔ 중단(긴추세) 단계 정합성 실패 → 진입 중단: %s "
+                "| 자본=%s 중단심도=%s SL=-%s%%",
+                _mwhy, [str(c) for c in caps],
+                [str(s) for s in mid_steps(steps)], sl_roi,
+            )
+            return {"note": f"중단 정합성 실패: {_mwhy}", **stat}
         logger.info(
-            "[pump_split] 설정: 자본 %s (%s) | 전용 상한 %d | %s",
-            "/".join(str(c) for c in caps), cfg_src, max_concurrent, _why,
+            "[pump_split] 설정: 자본 %s (%s) | 전용 상한 %d | 하단 %s | 중단 %s | %s",
+            "/".join(str(c) for c in caps), cfg_src, max_concurrent,
+            "/".join(str(s) for s in steps),
+            "/".join(str(s) for s in mid_steps(steps)),
+            _why,
         )
 
         account = db.execute(
@@ -741,7 +785,9 @@ def run_pump_split_entry_once() -> dict:
                 continue
 
             long_trend, trend_why = _is_long_trend(a15, side)
-            base, why = _entry_plan(a15, side, long_trend, steps)
+            # Fix 215: 긴 추세면 「이탈 즉시」 단계표(0/2/4)를 쓴다. 이후 템플릿·검산·
+            #   재앵커가 **모두 이 eff_steps 하나**를 봐야 한다 (헌법 101).
+            base, why, eff_steps = _entry_plan(a15, side, long_trend, steps)
             if base is None:
                 # 🚨 Fix 211 (2026-08-30): 옛 코드는 사유를 `no_break` 한 단어로만 뭉갰다.
                 #   그래서 「후보 12건 전부 no_break」 만 남고 **어느 조건이 막았는지**
@@ -761,7 +807,7 @@ def run_pump_split_entry_once() -> dict:
 
             # 3) 전략 생성 — 1차는 MARKET 즉시, 2·3차는 가격 트리거로 대기
             try:
-                tpl = _build_template(db, sym, side, base, caps, steps)
+                tpl = _build_template(db, sym, side, base, caps, eff_steps)
                 strategy = StrategyService(db).create_strategy_instance(
                     user_id=1,
                     exchange_account_id=account.id,
@@ -803,7 +849,7 @@ def run_pump_split_entry_once() -> dict:
                     select(StrategyStagePlan)
                     .where(StrategyStagePlan.strategy_instance_id == strategy.id)
                 ).scalars().all()
-                _ok, _why = verify_stage_plans(_plans, base, side, caps, steps, sl_roi)
+                _ok, _why = verify_stage_plans(_plans, base, side, caps, eff_steps, sl_roi)
                 if not _ok:
                     strategy.status = "STOPPED"
                     strategy.is_archived = True
@@ -835,10 +881,11 @@ def run_pump_split_entry_once() -> dict:
                 n_split += 1          # Fix 180: 전용 상한 즉시 반영
                 stat["entered"] += 1
                 logger.warning(
-                    "[pump_split] ✅ 진입! #%s %s %s 1차 %s USDT "
-                    "(2차 %s@-%s%% / 3차 %s@-%s%%) SL -%s%% TP %s%% 25%%×4 트레일 -%s%%",
-                    strategy.id, sym, side, caps[0], caps[1], steps[1],
-                    caps[2], steps[2], sl_roi, TP_PERCENTS[0],
+                    "[pump_split] ✅ 진입! #%s %s %s [%s] 1차 %s USDT@%s%% "
+                    "(2차 %s@%s%% / 3차 %s@%s%%) SL -%s%% TP %s%% 25%%×4 트레일 -%s%%",
+                    strategy.id, sym, side, "중단이탈" if long_trend else "밴드-3%",
+                    caps[0], eff_steps[0], caps[1], eff_steps[1],
+                    caps[2], eff_steps[2], sl_roi, TP_PERCENTS[0],
                     TRAILING_RETRACE_PCT,
                 )
             except Exception as e:
