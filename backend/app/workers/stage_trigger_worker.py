@@ -873,8 +873,14 @@ def run_stage_trigger_once(decrypt_text) -> None:
                             api_secret=decrypt_text(account.api_secret_enc),
                             is_testnet=account.is_testnet,
                         )
+                        # 🚨 Fix 223: 반복 저점 요구를 **뺀다**(min_swings=0).
+                        #   사장님 원문은 "차트와 보조지표가 조정으로 바뀌면" =
+                        #   지표 꺾임이지 「2번 오르내린 저점」이 아니다.
+                        #   볼밴은 급락 초입에 나눠 사는 전략이라 반복 저점이 안 나온다.
+                        #   남는 게이트: obv_gate + 양방향차단 + 지표 꺾임 2/3.
                         _ok218, _why218, _det218 = _sig218(
                             _bc218, db, strategy.symbol, strategy.side,
+                            min_swings=0,
                         )
                         if not _ok218:
                             logger.info(

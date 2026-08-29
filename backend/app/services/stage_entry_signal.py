@@ -55,7 +55,9 @@ __all__ = ["check_stage_entry_signal", "SIGNAL_MODE_LABEL"]
 SIGNAL_MODE_LABEL = "운영 진입 로직 (obv_gate + 15m 정점확인)"
 
 
-def check_stage_entry_signal(bc, db, symbol: str, side: str) -> tuple[bool, str, dict]:
+def check_stage_entry_signal(
+    bc, db, symbol: str, side: str, *, min_swings: int | None = None,
+) -> tuple[bool, str, dict]:
     """단계 진입 가능 여부 — 자동 진입 워커와 동일한 게이트.
 
     Args:
@@ -111,7 +113,7 @@ def check_stage_entry_signal(bc, db, symbol: str, side: str) -> tuple[bool, str,
     #                  rsi macd obv cci 등등 고점에 이란 신호를 보고 진입"
     try:
         from app.services.peak_confirmation import confirm_peak
-        _ok, _why, _det = confirm_peak(bc, symbol, _side)
+        _ok, _why, _det = confirm_peak(bc, symbol, _side, min_swings=min_swings)
         detail["gates"]["confirm_peak"] = {"ok": bool(_ok), "why": _why}
         detail["peak_detail"] = _det
         if not _ok:

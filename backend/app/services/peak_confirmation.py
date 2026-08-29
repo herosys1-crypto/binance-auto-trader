@@ -149,8 +149,21 @@ def _turns_for_long(a15: dict) -> tuple[int, dict]:
     return turns, d
 
 
-def confirm_peak(bc, symbol: str, side: str) -> tuple[bool, str, dict]:
+def confirm_peak(
+    bc, symbol: str, side: str, *, min_swings: int | None = None,
+) -> tuple[bool, str, dict]:
     """🎯 정점(SHORT) / 저점(LONG) 확인 = 모든 진입 경로 공통 게이트!
+
+    Args:
+        min_swings: [A] 반복 상승/하락 요구 횟수. None = MIN_PEAK_COUNT_15M(기본 2).
+            🚨 Fix 223 (2026-08-30): 볼밴 분할 2·3차만 **0** 을 넘긴다.
+              사장님 원문은 "차트와 보조지표가 **조정으로 바뀌면**" 이다 =
+              [B] 지표 꺾임(RSI/MACD/CCI)이지, [A] 반복 저점 2회가 아니다.
+              볼밴은 **급락 초입에 나눠 사는** 전략이라 「2번 오르내린 저점」이
+              구조적으로 안 나온다. 실측 2026-08-29 21:54~21:56:
+                "#1751 OPGUSDT LONG 단계2 대기 — 반복하락 0회 < 2 (단일 추세 = 초입!)"
+              전날에도 같은 이유로 3차 체결이 0건이었다.
+            ⚠️ 다른 호출자는 기본값 그대로다 — 이 완화는 볼밴 전용이다.
 
     Returns:
         (allowed, reason, detail)
@@ -158,6 +171,7 @@ def confirm_peak(bc, symbol: str, side: str) -> tuple[bool, str, dict]:
 
     fail-open: 데이터 부족·예외 = (True, "faildata_open", ...) 통과!
     """
+    _need_swings = MIN_PEAK_COUNT_15M if min_swings is None else int(min_swings)
     detail: dict[str, Any] = {"tf": PEAK_TF, "side": side}
     try:
         from app.services.chart_analyzer import ChartAnalyzer
@@ -175,8 +189,9 @@ def confirm_peak(bc, symbol: str, side: str) -> tuple[bool, str, dict]:
             swings = count_swing_valleys(closes)
             label = "반복하락"
         detail["swings_15m"] = swings
-        if swings < MIN_PEAK_COUNT_15M:
-            return False, f"{label} {swings}회 < {MIN_PEAK_COUNT_15M} (단일 추세 = 초입!)", detail
+        detail["min_swings"] = _need_swings
+        if swings < _need_swings:
+            return False, f"{label} {swings}회 < {_need_swings} (단일 추세 = 초입!)", detail
 
         # ── [B] 지표 「극단 + 꺾임」 (사장님 「고점에 이란 신호」!) ──
         if side == "SHORT":
