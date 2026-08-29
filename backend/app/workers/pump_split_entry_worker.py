@@ -313,7 +313,15 @@ def _is_long_trend(a15: dict, side: str) -> tuple[bool, str]:
     # i=1 이 마지막 봉. 각 봉의 20MA 는 **그 봉을 포함한** 직전 20봉 평균이다
     # (볼린저 중단선 정의와 동일). 음수 슬라이스는 i=1 에서 빈 배열이 되므로
     # 양수 인덱스로 계산한다.
-    for i in range(1, LONG_TREND_BARS + 1):
+    #
+    # 🚨 Fix 212 (2026-08-30 사장님 승인): **현재 봉(i=1)은 판정에서 뺀다.**
+    #   옛 코드는 i=1 부터 봤는데, 그러면 「긴 추세」가 참이려면 현재 종가가
+    #   중단선 **위**여야 한다. 그런데 그때 _entry_plan 은 base=중단선 으로
+    #   `종가 <= 중단선 × 0.97` 을 요구한다 — 같은 봉이 중단선 위이면서 동시에
+    #   3% 아래일 수는 없다. **긴 추세 모드는 진입이 수학적으로 불가능했다.**
+    #   (사장님 확정 "볼밴 중단은 지속 상승일때 같은 전략으로" 가 한 번도 안 돌았다)
+    #   → 직전 LONG_TREND_BARS 봉으로 추세를 보고, 현재 봉의 눌림목에서 산다.
+    for i in range(2, LONG_TREND_BARS + 2):
         end = n - i + 1          # exclusive
         start = end - 20
         if start < 0:
@@ -326,7 +334,8 @@ def _is_long_trend(a15: dict, side: str) -> tuple[bool, str]:
         else:
             break
     return (ok >= LONG_TREND_BARS,
-            f"15m 중단선 {'위' if side == 'LONG' else '아래'} 연속 {ok}/{LONG_TREND_BARS}봉")
+            f"15m 중단선 {'위' if side == 'LONG' else '아래'} "
+            f"직전 {ok}/{LONG_TREND_BARS}봉 연속 (현재봉 제외 — Fix 212)")
 
 
 def _entry_plan(a15: dict, side: str, long_trend: bool,
