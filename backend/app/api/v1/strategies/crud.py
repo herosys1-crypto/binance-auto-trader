@@ -130,7 +130,9 @@ def _short_label(reason: str) -> str:
     if "mark_price" in r:
         return "가격 없음"
     if "지표 반전" in r:
-        return "지표 반전 대기"
+        # Fix 201b: 실측 "Fix55 지표 반전 미달 (stage=2 passed=1/2)" 에서 진행도를 살린다
+        m = re.search(r"passed=(\d+)/(\d+)", r)
+        return f"지표 반전 {m.group(1)}/{m.group(2)}" if m else "지표 반전 대기"
     # 콜론 앞부분만, 너무 길면 자른다
     head = r.split(":")[0].strip()
     return (head[:18] + "…") if len(head) > 18 else (head or "차단됨")
