@@ -28,6 +28,80 @@ TOP_PUMP = 50
 TOP_DUMP = 50
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 🚨 Fix 226 (2026-08-30 사장님): 관찰 시점의 **지표까지** 남긴다.
+#
+# 사장님 verbatim:
+#   "다시 상승하기 힘들다지 없다는건 아니야. 찾으면 너무 좋은데 많이 학습이 필요해.
+#    **초기에 상승하는 심볼들의 차트와 보조지표를 찾아서 학습해서 수치화** 해야해"
+#
+# 이 워커는 이미 4시간마다 **급등 50 / 급락 50** 을 저장하고(사장님이 원하신 그 기준),
+# 1시간마다 1h/4h/24h **결과**를 채운다. 즉 「관찰 → 결과」 파이프라인은 이미 있다.
+# 빠진 것은 **관찰 시점의 지표**뿐이었다 — market_context 에 24h 변동률과 거래대금만
+# 있어서 "어떤 지표 조합이 그 뒤 상승으로 이어졌나" 를 물어볼 수가 없었다.
+#
+# 여기서 남기면 그대로 학습 표본이 된다:
+#     관찰 시점 지표  ×  그 뒤 1h/4h/24h 결과  =  수치화의 근거
+#
+# ⚠️ OBV 는 **비율로** 저장한다. 기존 obv_slope_pct 는 (끝-처음)/|처음| 형태라
+#    시작값이 0 근처면 폭발한다 — 실측에서 **2,249,160** 이 나온 원인으로 의심된다.
+#    여기서는 창 안 총거래량으로 나눠 항상 -1~+1 로 묶는다(obv_gate 와 같은 발상).
+# ═══════════════════════════════════════════════════════════════════════════
+_IND_TFS = (("15m", 60), ("4h", 60))
+
+
+def _indicator_snapshot(bc, symbol: str) -> dict:
+    """관찰 시점 지표 — 학습용. 실패해도 관찰 저장 자체를 막지 않는다."""
+    from app.services.chart_analyzer import ChartAnalyzer
+
+    out: dict = {}
+    for tf, limit in _IND_TFS:
+        try:
+            a = ChartAnalyzer.analyze_timeframe(bc, symbol, tf, limit=limit)
+            if not a:
+                continue
+            closes = a.get("closes") or []
+            hist = a.get("macd_hist") or []
+            obv = a.get("obv") or []
+            vols = a.get("volumes") or []
+            up, mid, lo = a.get("bb_up_last"), a.get("bb_mid_last"), a.get("bb_lo_last")
+            c = float(closes[-1]) if closes else None
+            d: dict = {
+                "close": c,
+                "rsi": a.get("rsi_now"),
+                "rsi_prev": a.get("rsi_prev"),
+                "cci": a.get("cci_now"),
+                "cci_prev": a.get("cci_prev"),
+                "bb_up": up, "bb_mid": mid, "bb_lo": lo,
+            }
+            # 밴드 내 위치: 0=하단 / 0.5=중단 / 1=상단. 밖이면 0 미만·1 초과.
+            if c is not None and up is not None and lo is not None and up > lo:
+                d["bb_pos"] = (c - float(lo)) / (float(up) - float(lo))
+            if len(hist) >= 20:
+                h20 = [float(x) for x in hist[-20:]]
+                mx, mn = max(h20), min(h20)
+                d["macd_hist"] = float(hist[-1])
+                d["macd_hist_prev"] = float(hist[-2])
+                d["macd_hist_max20"] = mx
+                d["macd_hist_min20"] = mn
+                # 사장님 "macd 막대 최고점 대비 조정 수치" — 1.0=최고점, 0.5=절반으로 축소
+                if mx > 0:
+                    d["macd_from_peak"] = float(hist[-1]) / mx
+                if mn < 0:
+                    d["macd_from_trough"] = float(hist[-1]) / mn
+            if len(obv) >= 20 and len(vols) >= 20:
+                v = sum(abs(float(x)) for x in vols[-20:]) or 1.0
+                # -1 ~ +1 로 묶인 OBV 방향. 사장님 "obv 가 하락하지 않으면" 의 측정치.
+                d["obv_dir_20"] = (float(obv[-1]) - float(obv[-20])) / v
+                o20 = [float(x) for x in obv[-20:]]
+                d["obv_is_max20"] = bool(o20[-1] >= max(o20))
+                d["obv_is_min20"] = bool(o20[-1] <= min(o20))
+            out[tf] = d
+        except Exception as e:      # 한 심볼 실패가 전체 관찰을 막으면 안 된다
+            logger.debug("[market_obs] %s %s 지표 수집 실패: %s", symbol, tf, e)
+    return out
+
+
 def run_market_observation_snapshot() -> dict:
     """매 4시간 = 상위 100 심볼 snapshot!"""
     db: Session = SessionLocal()
@@ -74,6 +148,8 @@ def run_market_observation_snapshot() -> dict:
                     market_context={
                         "change_24h_at_obs": change_24h,
                         "volume_24h": float(t.get("quoteVolume", 0) or 0),
+                        # Fix 226: 관찰 시점 지표 = 학습 표본의 X 값
+                        "ind": _indicator_snapshot(bc, symbol),
                     },
                 )
                 db.add(obs)
@@ -94,6 +170,8 @@ def run_market_observation_snapshot() -> dict:
                     market_context={
                         "change_24h_at_obs": change_24h,
                         "volume_24h": float(t.get("quoteVolume", 0) or 0),
+                        # Fix 226: 관찰 시점 지표 = 학습 표본의 X 값
+                        "ind": _indicator_snapshot(bc, symbol),
                     },
                 )
                 db.add(obs)
