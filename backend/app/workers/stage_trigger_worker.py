@@ -841,12 +841,72 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     str(getattr(strategy, "capital_management_mode", "") or "").lower()
                     == "split_entry"
                 )
+                # ══════════════════════════════════════════════════════════
+                # 🚨 Fix 218 (2026-08-30 사장님) — **Fix 203 을 뒤집는다.**
+                #
+                # 사장님 verbatim:
+                #   "볼밴 하단 -3%에 100 진입하고 2단계부터는 차트와 보조지표가
+                #    조정으로 바뀌면 2단계 진입하고 그리고 다시 하락하면 다시 차트와
+                #    보조지표가 조정을 보이면 3단계 진입해서 -15%되면 청산"
+                #
+                # 즉 2·3차는 「가격이 더 내려감」 **AND** 「차트·보조지표가 조정 신호」다.
+                # 가격 트리거는 위에서 이미 통과했으므로 여기서 신호만 본다.
+                #
+                # 판정은 check_stage_entry_signal — **자동 진입 워커가 쓰는 그 로직**이다
+                # (obv_gate + 양방향차단 + confirm_peak = 15m 반복 저점 2회 + 지표 꺾임 2/3).
+                # LONG 이면 저점 확인 = 「하락이 조정으로 바뀌었다」. 헌법 6 단일 진실.
+                #
+                # ⚠️ 위험을 알고 켠다 — 이 계열 게이트(Fix114 정점확인)가 2026-08-29
+                #    실측에서 볼밴 3차를 **100% 차단**했다(체결 0건). 그래서 Fix 203 으로
+                #    뺐던 것을 사장님 지시로 되돌리는 것이다.
+                #    → 차단될 때마다 **사유를 남긴다**(로그 + Redis). 하루면 판단이 선다.
+                #      또 0건이면 이 블록만 되돌리면 된다 (헌법 161).
+                # ══════════════════════════════════════════════════════════
                 if _is_split and next_stage_no >= 2:
-                    logger.info(
-                        "[Fix203/split] #%s %s %s 단계%s = 지표 게이트 건너뜀 "
-                        "(볼밴 분할은 하락 중 분할 매수 = 사장님 설계)",
-                        strategy.id, strategy.symbol, strategy.side, next_stage_no,
-                    )
+                    try:
+                        from app.integrations.binance.client import BinanceClient as _BC218
+                        from app.services.stage_entry_signal import (
+                            check_stage_entry_signal as _sig218,
+                        )
+                        _bc218 = _BC218(
+                            api_key=decrypt_text(account.api_key_enc),
+                            api_secret=decrypt_text(account.api_secret_enc),
+                            is_testnet=account.is_testnet,
+                        )
+                        _ok218, _why218, _det218 = _sig218(
+                            _bc218, db, strategy.symbol, strategy.side,
+                        )
+                        if not _ok218:
+                            logger.info(
+                                "[Fix218/split] ⏳ #%s %s %s 단계%s 대기 — 조정 신호 미충족: %s",
+                                strategy.id, strategy.symbol, strategy.side,
+                                next_stage_no, _why218,
+                            )
+                            _record_block_reason(
+                                _redis, strategy.id,
+                                f"조정 신호 대기: {_why218}", next_stage_no,
+                                detail=_det218,
+                            )
+                            continue
+                        logger.info(
+                            "[Fix218/split] 🎯 #%s %s %s 단계%s 조정 확인 — %s",
+                            strategy.id, strategy.symbol, strategy.side,
+                            next_stage_no, _why218,
+                        )
+                    except Exception as _e218:
+                        # 신호 판정 자체가 실패 = 자본을 넣지 않는다 (보류) + 사유 기록.
+                        logger.warning(
+                            "[Fix218/split] #%s 조정 신호 판정 실패 (보류): %s",
+                            strategy.id, _e218,
+                        )
+                        try:
+                            _record_block_reason(
+                                _redis, strategy.id,
+                                f"조정 신호 판정 실패: {_e218}", next_stage_no,
+                            )
+                        except Exception:
+                            pass
+                        continue
                 # 🌟 Fix 55 사장님 critical (2026-08-24): 마틴게일 2단계+ 지표 반전 확인 필수!
                 # 사장님 verbatim: "충분히 상승/하락 반복 → 조정 시점 진입 → 3단계까지 실패는 말이 안돼!"
                 # = 옛 로직 (가격 도달만) → 신 로직 (가격 도달 + 지표 반전 + 24h 필터)!

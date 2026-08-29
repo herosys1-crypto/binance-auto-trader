@@ -82,10 +82,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.database import SessionLocal
 from app.core.strategy_status import ACTIVE_LIKE
@@ -117,7 +117,11 @@ __all__ = ["run_pump_split_entry_once"]
 #    = 어느 차수도 「죽은 단계」가 되지 않는다. 이 정합성은 검증 테스트로 고정한다.
 CAPITALS = [Decimal("100"), Decimal("200"), Decimal("300")]   # 총 600
 SPLIT_STEP_PCT = [Decimal("3"), Decimal("5"), Decimal("7")]   # 기준선 대비 이탈 심도
-FORCE_SL_ROI = Decimal("10")       # 평단 ROI -10% 전량 청산
+# 🚨 Fix 218 (2026-08-30 사장님): "-15%되면 청산"  (옛 -10%)
+#   ⚠️ 이 상수는 **fallback** 이다. 운영은 SystemSetting `pump_split_sl_roi` 가 이긴다.
+#      DB 값이 10 이면 코드를 15 로 바꿔도 바뀌지 않는다 (헌법 167).
+#   건당 최대 손실: 800 USDT × 15% = 120 (옛 80). 상한 10건이면 1,200 (옛 800).
+FORCE_SL_ROI = Decimal("15")       # 평단 ROI -15% 전량 청산
 TP_PERCENTS = [5, 10, 15, 20]      # Fix 205: TP1 +5% 부터 (사장님 원문 복원)
 TP_QTY_RATIOS = [25, 25, 25, 25]   # 25% 씩
 TRAILING_RETRACE_PCT = Decimal("3")  # 익절 회귀 -3% (짧게)
@@ -132,6 +136,12 @@ KLINE_15M = 60
 
 STRATEGY_TYPE = "pump_split"
 MODE_MARKER = "split_entry"   # Fix 178 이 읽는 값
+
+# 🚨 Fix 218 (2026-08-30 사장님): "다시 조정받으면 1단계부터 다시 **한번더** 해줘"
+#   = 청산 후 재시작은 **1회**. 최초 1 + 재시작 1 = 24시간 안에 같은 심볼·방향 최대 2건.
+#   지금까지 상한이 **없었다** — 계속 떨어지는 종목에 무한히 들어갈 수 있었고,
+#   실측(2026-08-29)에서 MAGMA/SKR/ARIA/DEXE 가 각각 2회씩 생성돼 있었다.
+SPLIT_MAX_CYCLES_PER_DAY = 2
 
 # ── Fix 180 (2026-08-27 사장님): 이 전략 **전용** 상한 + 자본 설정 ─────────
 #   "이건 별도로 상한 전략을 설정할수 있게 하고 포지션금액도 100 200 300도 변경가능하게"
@@ -792,6 +802,27 @@ def run_pump_split_entry_once() -> dict:
             side = "LONG" if chg > 0 else "SHORT"
             if (sym, side) in active_keys:
                 _skip("already_active")
+                continue
+
+            # 🚨 Fix 218: 청산 후 재시작은 **1회** (사장님 "다시 한번더 해줘").
+            #   활성 전략만 막으면(위 active_keys) 죽은 뒤 곧바로 다시 들어간다 —
+            #   실측 #1711(08:35 청산) → #1721(08:42 생성) = 7분 만에 재진입.
+            #   24시간 창으로 세어 최초 1 + 재시작 1 까지만 허용한다.
+            _cycles = db.execute(
+                select(func.count()).select_from(StrategyInstance).where(
+                    StrategyInstance.symbol == sym,
+                    StrategyInstance.side == side,
+                    StrategyInstance.capital_management_mode == MODE_MARKER,
+                    StrategyInstance.created_at
+                    >= datetime.now(timezone.utc) - timedelta(hours=24),
+                )
+            ).scalar() or 0
+            if _cycles >= SPLIT_MAX_CYCLES_PER_DAY:
+                logger.info(
+                    "[pump_split] ⏹️ %s %s 재시작 상한 — 24h 내 %d회 (상한 %d)",
+                    sym, side, _cycles, SPLIT_MAX_CYCLES_PER_DAY,
+                )
+                _skip("restart_limit")
                 continue
 
             # 전용 상한을 **진입 직전마다** 재확인 (헌법 119)
