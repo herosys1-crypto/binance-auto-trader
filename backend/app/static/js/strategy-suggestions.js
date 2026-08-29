@@ -1116,74 +1116,7 @@ if (typeof window !== 'undefined') {
   window._snToggleModeUI = _snToggleModeUI;
 }
 
-// 🎯 v219 (2026-08-23): 카드형 세팅 UI (v219-daily-limit / v219-capital / v219-max-stage 필드!)
-// ⚠️⚠️ 죽은 코드입니다 (2026-08-27 확인). 이 파일 아래쪽에 같은 이름의 함수가
-//    다시 정의돼 있고 JS 는 **나중 정의가 이깁니다**. 여기를 고쳐도 아무 효과가 없습니다.
-//    수정하려면 아래쪽 「Fix 35 ... v219 세팅 폼!」 정의를 고치세요 (헌법 63).
-async function saveV219Settings() {
-  const limitEl = document.getElementById('v219-daily-limit');
-  const capitalEl = document.getElementById('v219-capital');
-  const maxStageEl = document.getElementById('v219-max-stage');
-  if (!limitEl || !capitalEl || !maxStageEl) {
-    alert('❌ v219 세팅 UI를 찾을 수 없습니다.');
-    return;
-  }
-  const limit = parseInt(limitEl.value);
-  const capital = parseFloat(capitalEl.value);
-  const maxStageRaw = parseInt(maxStageEl.value);
-  const maxStage = Math.max(1, Math.min(3, isNaN(maxStageRaw) ? 2 : maxStageRaw));
-  const payload = {
-    top_short_daily_limit: isNaN(limit) ? 5 : limit,
-    default_capital: isNaN(capital) ? 300 : capital,
-    max_stage: maxStage,
-  };
-  try { localStorage.setItem('v219_settings_backup', JSON.stringify(payload)); } catch(_) {}
-  try {
-    const r = await api('/strategy-suggestions/sajangnim-settings', {
-      method: 'PUT',
-      body: JSON.stringify(payload),
-    });
-    if (r && r.ok === false) {
-      alert('❌ 저장 실패: ' + (r.error || 'unknown'));
-      return;
-    }
-    if (typeof toast === 'function') {
-      toast('✅ v219 세팅 저장 완료! (마틴게일 최대 ' + maxStage + '단계)', 'success');
-    } else {
-      alert('✅ v219 세팅 저장 완료!');
-    }
-    loadV219Settings();  // 재로드
-  } catch (e) {
-    alert('❌ 저장 실패: ' + (e && e.message ? e.message : e));
-  }
-}
-
-async function loadV219Settings() {
-  const limitEl = document.getElementById('v219-daily-limit');
-  const capitalEl = document.getElementById('v219-capital');
-  const maxStageEl = document.getElementById('v219-max-stage');
-  if (!limitEl && !capitalEl && !maxStageEl) return;  // 카드 미표시 = skip
-  try {
-    const resp = await api('/strategy-suggestions/sajangnim-settings');
-    if (limitEl) limitEl.value = resp.top_short_daily_limit ?? 5;
-    if (capitalEl) capitalEl.value = resp.default_capital ?? 300;
-    if (maxStageEl) maxStageEl.value = resp.max_stage ?? 2;
-  } catch (e) {
-    // 서버 실패 = localStorage backup 복원!
-    try {
-      const backup = localStorage.getItem('v219_settings_backup');
-      if (backup) {
-        const s = JSON.parse(backup);
-        if (limitEl) limitEl.value = s.top_short_daily_limit ?? 5;
-        if (capitalEl) capitalEl.value = s.default_capital ?? 300;
-        if (maxStageEl) maxStageEl.value = s.max_stage ?? 2;
-      }
-    } catch(_) {}
-  }
-}
-
 if (typeof window !== 'undefined') {
-  window.saveV219Settings = saveV219Settings;
   // Fix 145: 사다리 입력 시 미리보기/단계수 즉시 반영
   document.addEventListener('input', (ev) => {
     // 📊 Fix 181: 볼밴 분할 자본을 고치면 미리보기 + 최대 손실을 즉시 갱신
@@ -1197,10 +1130,6 @@ if (typeof window !== 'undefined') {
     if (prev) prev.textContent = parts.map((v, i) => (i + 1) + '단계 ' + v).join(' · ') || '-';
     const ms = document.getElementById('v219-max-stage');
     if (ms) ms.value = String(parts.length || 1);
-  });
-  window.loadV219Settings = loadV219Settings;
-  document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(loadV219Settings, 600);
   });
 }
   window.resetAutoBBCounter = resetAutoBBCounter;  // 🔄 v163 리셋!
@@ -1642,6 +1571,31 @@ async function loadV219Settings(retry = 0) {
       const parts = String(r.capital_ladder).split(',').map(x => x.trim()).filter(Boolean);
       prev.textContent = parts.map((v, i) => (i + 1) + '단계 ' + v).join(' · ');
     }
+    // 🚨 Fix 202 (2026-08-28): 「채워진 칸 / 안 채워진 칸」을 스스로 보고한다.
+    //   사장님 증상 = 위 3칸만 채워지고 사다리·피라미딩·볼밴은 「불러오는 중」에서 멈춤.
+    //   예외가 안 나서 오류 표시도 없었다 = 어디서 끊겼는지 알 방법이 없었다.
+    //   추론을 반복하지 않도록, 각 칸이 (요소를 찾았는가 / 서버가 값을 줬는가 / 넣었는가)
+    //   를 콘솔에 한 줄로 남긴다. 진단 전용이라 매매·표시에 영향 없다.
+    try {
+      const _diag = {};
+      [['최대동시', 'v219-daily-limit', 'top_short_daily_limit'],
+       ['초기자본', 'v219-capital', 'default_capital'],
+       ['최대단계', 'v219-max-stage', 'max_stage'],
+       ['피라미딩', 'v219-pyramid-capital', 'pyramid_capital'],
+       ['사다리', 'v219-ladder', 'capital_ladder'],
+       ['볼밴사용', 'bbsplit-enabled', 'bbsplit_enabled'],
+       ['볼밴상한', 'bbsplit-max', 'bbsplit_max'],
+       ['볼밴자본', 'bbsplit-capitals', 'bbsplit_capitals']].forEach(([ko, id, key]) => {
+        const el = document.getElementById(id);
+        _diag[ko] = {
+          요소: !!el,
+          서버값: r[key] === undefined ? '(응답에 없음)' : r[key],
+          화면값: el ? el.value : null,
+        };
+      });
+      window.__V219_LAST = { 응답: r, 결과: _diag };
+      console.info('[v219/settings] Fix202 진단 — window.__V219_LAST 로 전체 확인', _diag);
+    } catch (_d) { /* 진단 실패가 로드를 막지 않는다 */ }
     // 🚨 Fix 189: 여기까지 와야 「서버 값을 실제로 받은 화면」이다. 이때만 저장을 허용한다.
     _v219Loaded = true;
   } catch(e) {
