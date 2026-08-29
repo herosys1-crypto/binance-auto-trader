@@ -875,7 +875,29 @@ def run_stage_trigger_once(decrypt_text) -> None:
                                 "[Fix55/reversal] skip strategy=%s stage=%s %s %s detail=%s",
                                 strategy.id, next_stage_no, strategy.symbol, strategy.side, _rev_detail,
                             )
-                            _record_block_reason(_redis, strategy.id, _reason55b, next_stage_no)
+                            # 🚨 Fix 201b: 이 경로도 배지 상세를 채운다.
+                            #   _rev_detail 은 평평한 bool 이라 화면 규약(indicators)과 모양이
+                            #   다르다 — 그냥 넘기면 표가 빈다. 여기서 변환해서 넘긴다.
+                            #   (prev 가 없는 칸은 화면이 「-」로 그린다)
+                            _rev_ind = {
+                                "rsi": {"now": _rev_detail.get("rsi_now"),
+                                        "prev": _rev_detail.get("rsi_prev"),
+                                        "turn": bool(_rev_detail.get("rsi"))},
+                                "macd": {"now": _rev_detail.get("macd_hist_now"),
+                                         "prev": None,
+                                         "turn": bool(_rev_detail.get("macd"))},
+                                "obv": {"now": _rev_detail.get("obv_slope"),
+                                        "prev": None,
+                                        "turn": bool(_rev_detail.get("obv"))},
+                            }
+                            _record_block_reason(
+                                _redis, strategy.id, _reason55b, next_stage_no,
+                                detail={
+                                    "indicators": _rev_ind,
+                                    "turns": _rev_detail.get("passed"),
+                                    "required": _rev_detail.get("required"),
+                                },
+                            )
                             _alert_silent_block_once(_redis, db, strategy, _reason55b, next_stage_no)
                             continue
                         logger.info(
