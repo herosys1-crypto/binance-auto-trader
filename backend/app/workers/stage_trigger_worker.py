@@ -414,6 +414,55 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 _is_obv_mode = _tpl_trigger_mode == "OBV_REVERSE"
                 _is_liqbuf_mode = _plan_mode == "LIQUIDATION_BUFFER"
 
+                # ══════════════════════════════════════════════════════════
+                # 🚨 Fix 209 (2026-08-30 사장님 「b」): 볼밴 분할은 남은 단계 트리거를
+                #   **직전 단계의 실체결가** 기준으로 다시 깐다.
+                #
+                #   1차는 MARKET 이라 「기준선 -3% 도달」을 감지한 순간 가격에 체결된다.
+                #   15분 주기 사이에 더 빠지면 1차가 -5.5% 에 체결되고, 기준선 기준으로
+                #   미리 깔아둔 2차(-5%)는 **이미 지나간 가격** = 영원히 미진입이 된다.
+                #     실측 2026-08-29: #1639 1차 -5.49% / 2차 -5.01% (2차가 위)
+                #                      #1727 1차 -5.02% / 2차 -5.03% (간격 0.01%p)
+                #                      → 볼밴 17건 중 3차 체결 **0건**
+                #   간격(-2.06%/-2.11%)은 생성 시 템플릿에 저장된 원 설계 그대로 쓰고,
+                #   **앵커만** 기준선 → 실체결가로 옮긴다. 이미 체결된 단계는 안 건드린다.
+                # ══════════════════════════════════════════════════════════
+                if str(getattr(strategy, "capital_management_mode", "") or "").lower() == "split_entry":
+                    try:
+                        from app.workers.pump_split_entry_worker import (
+                            SPLIT_STEP_PCT as _SS209,
+                            reanchor_from_fill as _reanchor209,
+                        )
+                        _cfg209 = getattr(_tpl_row0, "stages_config", None) or {}
+                        # 생성 당시의 트리거 심도를 그대로 쓴다 (설정이 바뀌어도 소급 X).
+                        # 옛 전략은 stages_config 에 steps 가 없으므로 템플릿 컬럼에서 복원한다.
+                        _steps209 = _cfg209.get("steps") or [
+                            _SS209[0],
+                            getattr(_tpl_row0, "stage2_trigger_percent", None) or _SS209[1],
+                            getattr(_tpl_row0, "stage3_trigger_percent", None) or _SS209[2],
+                        ]
+                        _all209 = db.execute(
+                            select(StrategyStagePlan)
+                            .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+                        ).scalars().all()
+                        _n209, _why209 = _reanchor209(
+                            _all209, strategy.side, [Decimal(str(s)) for s in _steps209],
+                        )
+                        if _n209:
+                            db.commit()
+                            logger.warning(
+                                "[Fix209/재앵커] #%s %s %s — %s",
+                                strategy.id, strategy.symbol, strategy.side, _why209,
+                            )
+                            db.refresh(next_plan)
+                    except Exception as _e209:
+                        # 재앵커 실패가 단계 진입 자체를 막으면 안 된다 = 기존 트리거로 계속.
+                        db.rollback()
+                        logger.warning(
+                            "[Fix209/재앵커] #%s 실패 — 기존 트리거 유지: %s",
+                            strategy.id, _e209,
+                        )
+
                 _trigger_px = next_plan.trigger_price
                 if not _trigger_px:
                     if _is_liqbuf_mode:

@@ -449,6 +449,94 @@ def verify_stage_plans(plans, base, side: str, caps: list[Decimal],
     ) + ")"
 
 
+def stage_gap_pcts(side: str, steps: list[Decimal]) -> list:
+    """각 차수가 **직전 차수 대비** 얼마나 더 밀렸는가. 3/5/7 → [None, 2.06, 2.11].
+
+    ⚠️ compounded_trigger_pcts 와 헷갈리면 안 된다. 저건 앵커가 **기준선**이라
+       2차가 5.00% 로 나온다 (계산기가 start_price 부터 복리로 접기 때문).
+       재앵커(Fix 209)는 앵커가 **1차 체결가**라 「1차 대비」 간격이 필요하다.
+       실제로 처음에 compounded 값을 그대로 썼다가 간격이 5% 로 벌어졌고,
+       테스트가 그걸 잡았다 (tests/unit/test_pump_split_reanchor.py).
+    """
+    mult = base_multipliers(side, steps)
+    out: list = [None]
+    for i in range(1, len(steps)):
+        ratio = mult[i] / mult[i - 1]
+        out.append(
+            (Decimal("1") - ratio) * 100 if str(side).upper() == "LONG"
+            else (ratio - Decimal("1")) * 100
+        )
+    return out
+
+
+def reanchor_from_fill(plans, side: str, steps: list[Decimal] | None = None) -> tuple[int, str]:
+    """🚨 Fix 209 (2026-08-30 사장님 「b」): 남은 단계를 **실제 체결가** 기준으로 다시 깐다.
+
+    1차는 MARKET 이라 「기준선 -3% 도달」을 감지한 **그 순간** 가격에 체결된다.
+    워커 주기(15분) 사이에 더 빠지면 1차가 -5.5% 에 체결되고, 그때 기준선 기준으로
+    미리 계산해 둔 2차(-5%)는 **이미 지나간 가격**이 된다. 실측 (2026-08-29):
+
+        #1727  1차 -5.02% / 2차 -5.03%   = 간격 0.01%p (사실상 같은 자리)
+        #1639  1차 -5.49% / 2차 -5.01%   = 2차가 1차보다 **위** = 태어날 때 이미 죽음
+
+    17건 중 3차 체결 **0건**, 12건이 1차 100 USDT 만 물린 채 손절.
+
+    사장님 선택(2026-08-30 「b」): 앵커를 기준선 → **실체결가** 로 바꾼다.
+    단계 간 간격은 원 설계 그대로다 — stage_gap_pcts(side, steps)
+    (3/5/7 이면 -2.06% / -2.11%). 즉 **간격 불변, 앵커만 이동.**
+
+    앵커 = 체결된 **마지막** 단계의 체결가. 2차가 체결되면 3차는 2차 체결가에서 다시 깐다
+    (「내려갈수록 더 크게」가 1차가 어디서 잡히든 항상 성립).
+
+    안전:
+      - 이미 체결된 단계는 절대 건드리지 않는다.
+      - 값이 사실상 같으면 쓰지 않는다 (헌법 148 — 같은 값 대입은 UPDATE 도 안 나간다).
+      - 앵커가 없으면(1차 미체결) 아무것도 하지 않는다.
+      - 순수 함수 + 계산만 한다. commit 은 호출자 책임.
+
+    반환: (바뀐 단계 수, 사유/내역)
+    """
+    by_no = {p.stage_no: p for p in plans if getattr(p, "stage_no", None)}
+    if not by_no:
+        return 0, "단계 계획 없음"
+    pcts = stage_gap_pcts(side, steps or SPLIT_STEP_PCT)
+    filled = [
+        n for n in sorted(by_no)
+        if by_no[n].is_triggered and by_no[n].trigger_price
+        and Decimal(str(by_no[n].trigger_price)) > 0
+    ]
+    if not filled:
+        return 0, "체결된 단계 없음 = 앵커 없음 (재계산 안 함)"
+    anchor_no = filled[-1]
+    px = Decimal(str(by_no[anchor_no].trigger_price))
+    sign = Decimal("-1") if str(side).upper() == "LONG" else Decimal("1")
+    changed, detail = 0, []
+    for n in range(anchor_no + 1, max(by_no) + 1):
+        p = by_no.get(n)
+        if p is None or p.is_triggered:
+            continue
+        try:
+            gap = pcts[n - 1]
+        except (IndexError, TypeError):
+            gap = None
+        if gap is None:
+            continue
+        px = px * (Decimal("1") + sign * Decimal(str(gap)) / Decimal("100"))
+        old = Decimal(str(p.trigger_price)) if p.trigger_price is not None else None
+        # 0.01% 이내면 같은 값으로 본다 (부동소수 반올림으로 매 사이클 UPDATE 되는 것 방지)
+        if old is not None and abs(old - px) <= px * Decimal("0.0001"):
+            continue
+        p.trigger_price = px
+        changed += 1
+        detail.append(
+            f"{n}차 {_fmt(old) if old is not None else 'None'}→{_fmt(px)}"
+            f"({float(gap):+.2f}% from {anchor_no}차 체결 {_fmt(Decimal(str(by_no[anchor_no].trigger_price)))})"
+        )
+    if not changed:
+        return 0, f"{anchor_no}차 체결가 기준으로 이미 정렬됨"
+    return changed, " / ".join(detail)
+
+
 def _build_template(
     db, symbol: str, side: str, base: Decimal, caps: list[Decimal],
     steps: list[Decimal] | None = None,
@@ -475,6 +563,9 @@ def _build_template(
             "stages_count": 3,
             "base_price": float(base),
             "split_entry": True,
+            # Fix 209: 생성 당시의 트리거 심도. 재앵커가 「1차 대비 간격」을 복원할 때 쓴다.
+            #   설정이 나중에 바뀌어도 이미 열린 전략에는 소급되지 않아야 한다.
+            "steps": [float(s) for s in _steps],
         },
         stage1_capital=caps[0],
         stage2_capital=caps[1],
@@ -643,7 +734,15 @@ def run_pump_split_entry_once() -> dict:
             long_trend, trend_why = _is_long_trend(a15, side)
             base, why = _entry_plan(a15, side, long_trend, steps)
             if base is None:
-                _skip("no_break")
+                # 🚨 Fix 211 (2026-08-30): 옛 코드는 사유를 `no_break` 한 단어로만 뭉갰다.
+                #   그래서 「후보 12건 전부 no_break」 만 남고 **어느 조건이 막았는지**
+                #   알 수 없었다 (중단선 모드인지 하단 모드인지조차). 헌법 93 위반.
+                #   후보는 사이클당 10건 안팎이라 전건 INFO 로 남겨도 시끄럽지 않다.
+                _skip("no_break_중단" if long_trend else "no_break_하단")
+                logger.info(
+                    "[pump_split] ⏳ %s %s 24h=%+.1f%% — %s | %s",
+                    sym, side, chg, why, trend_why,
+                )
                 continue
 
             logger.info(
@@ -707,7 +806,11 @@ def run_pump_split_entry_once() -> dict:
                         "(주문 전에 막았으므로 자본 손실 없음)",
                         strategy.id, sym, side, _why,
                     )
-                    stat["skipped"] = stat.get("skipped", 0) + 1
+                    # 🚨 Fix 210 (2026-08-30): 옛 코드는 `stat.get("skipped", 0) + 1` 로
+                    #   **dict + int** 를 해 TypeError 를 냈다. 그 예외는 바깥 except 가
+                    #   삼켜 `create_failed` 로 기록되므로, 죽은 단계 취소가 진입 실패로
+                    #   둔갑해 사유 통계가 거짓이 됐다 (헌법 93 — 차단은 정확히 남긴다).
+                    _skip("dead_stage_cancelled")
                     continue
                 logger.info("[pump_split] #%s 단계 검산: %s", strategy.id, _why)
 
