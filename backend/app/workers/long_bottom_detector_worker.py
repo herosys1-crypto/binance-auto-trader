@@ -532,22 +532,27 @@ def run_long_bottom_detector() -> dict:
         if not isinstance(tickers, list):
             return {"error": "ticker 실패!", "detected": 0}
 
-        usdt = [t for t in tickers if str(t.get("symbol", "")).endswith("USDT")]
-        try:
-            usdt.sort(key=lambda x: float(x.get("quoteVolume", 0) or 0), reverse=True)
-        except Exception:
-            pass
+        # ═══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 217 (2026-08-30 사장님): "당일 상승 50위와 하락 50위로 해줘"
+        #   옛 코드는 **거래대금(quoteVolume)** 순으로 상위 150개를 자른 뒤 그 안에서
+        #   패턴을 골랐다 = 거래대금 작은 급등락 종목은 감시망 밖이었다.
+        #   pump_top_detector 와 **같은 함수**를 쓴다 (헌법 101 — 한쪽만 고치면 어긋난다).
+        # ═══════════════════════════════════════════════════════════════════
+        from app.services.market_movers import rank_map
+        _ranked = rank_map(tickers, MAX_SYMBOLS)
 
         # 🌟 Fix 50 v2 (2026-08-24 사장님 verbatim!):
         # "1-2일 10% 전후 상승" (패턴 A: +5%~+15%) OR
         # "급상승후 큰조정" (패턴 B: -15%~0%)
-        candidates = []
-        for t in usdt[:MAX_SYMBOLS * 3]:  # 후보 pool 확대 (2 패턴이라!)
-            chg = float(t.get("priceChangePercent", 0) or 0)
-            if _classify_pattern(chg) is not None:
-                candidates.append(t)
-            if len(candidates) >= MAX_SYMBOLS:
-                break
+        candidates = [
+            t for (t, _d, _r) in _ranked
+            if _classify_pattern(float(t.get("priceChangePercent", 0) or 0)) is not None
+        ]
+        logger.info(
+            "[Fix50v2/long] 감시 대상 = 당일 상승 %d위 ∪ 하락 %d위 = %d개 "
+            "→ 패턴 통과 %d개 (Fix 217)",
+            MAX_SYMBOLS, MAX_SYMBOLS, len(_ranked), len(candidates),
+        )
 
         if not candidates:
             logger.info(
