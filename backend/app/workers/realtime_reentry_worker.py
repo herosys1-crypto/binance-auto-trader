@@ -299,6 +299,14 @@ def _check_indicator_reversal_for_reentry(
         obv_slope_now = obv[-1] - obv[-4] if len(obv) >= 4 else 0
         obv_slope_prev = obv[-4] - obv[-7] if len(obv) >= 7 else 0
         snapshot["obv_slope"] = obv_slope_now
+        # 🚨 Fix 228: 위 obv_slope 는 **원 계약수량 델타**다(정규화 없음).
+        #   아래 반전 판정(obv_rev)은 같은 단위끼리 비교하므로 그대로 두고,
+        #   **기록용 % 필드에는 정규화된 값**을 따로 담는다.
+        #   옛 코드는 이 원단위를 그대로 "obv_slope_pct" 로 저장해
+        #   실측 최대 2,249,160 같은 값을 30초마다 새로 만들고 있었다.
+        from app.services.obv_metrics import obv_direction_ratio
+        snapshot["obv_dir"] = obv_direction_ratio(obv, vols)
+        snapshot["obv_slope_raw_3bar"] = obv_slope_now
         obv_rev = (
             (obv_slope_now > 0 and obv_slope_now > obv_slope_prev)
             if side == "LONG"
@@ -1392,7 +1400,9 @@ def run_realtime_reentry() -> dict:
                 _rt_entry_snapshot = {
                     "rsi": _ind_snap.get("rsi"),
                     "cci": _ind_snap.get("cci"),  # 🎯 Fix 99 A: CCI 실 측정값!
-                    "obv_slope_pct": _ind_snap.get("obv_slope"),
+                    # Fix 228: 원단위(obv_slope) 대신 정규화된 obv_dir(-1~+1)
+                    "obv_slope_pct": _ind_snap.get("obv_dir"),
+                    "obv_slope_raw_3bar": _ind_snap.get("obv_slope_raw_3bar"),
                     "macd_hist": _ind_snap.get("macd_hist"),
                     "rsi_4h": _ind_snap.get("rsi_4h"),
                     "macd_hist_4h": _ind_snap.get("macd_hist_4h"),  # 🎯 Fix 99 B!

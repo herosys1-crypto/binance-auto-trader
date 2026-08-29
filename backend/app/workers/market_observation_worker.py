@@ -90,9 +90,9 @@ def _indicator_snapshot(bc, symbol: str) -> dict:
                 if mn < 0:
                     d["macd_from_trough"] = float(hist[-1]) / mn
             if len(obv) >= 20 and len(vols) >= 20:
-                v = sum(abs(float(x)) for x in vols[-20:]) or 1.0
-                # -1 ~ +1 로 묶인 OBV 방향. 사장님 "obv 가 하락하지 않으면" 의 측정치.
-                d["obv_dir_20"] = (float(obv[-1]) - float(obv[-20])) / v
+                # Fix 228: 공통 함수로 통일 (워커마다 산식이 갈리면 단위가 또 섞인다)
+                from app.services.obv_metrics import obv_direction_ratio
+                d["obv_dir_20"] = obv_direction_ratio(obv, vols)
                 o20 = [float(x) for x in obv[-20:]]
                 d["obv_is_max20"] = bool(o20[-1] >= max(o20))
                 d["obv_is_min20"] = bool(o20[-1] <= min(o20))

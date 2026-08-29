@@ -240,12 +240,18 @@ class LongBottomDetector:
                 own_score = (
                     ChartAnalyzer.compute_reversal_score(a, want_score_side) if a else 0
                 )
+                # 🚨 Fix 228: OBV 방향을 -1~+1 로 남긴다 (obv_metrics = 단일 출처).
+                #   사장님 "obv가 하락하지 않으면 결국은 obv 방향으로 간다" 의 측정치.
+                #   여기서 안 남기면 하류(unified_15m_entry)가 None 으로 기록하게 된다.
+                from app.services.obv_metrics import obv_direction_ratio
                 return {
                     "close": closes[-1] if closes else None,
                     "rsi_now": a.get("rsi_now"),
                     "cci_now": a.get("cci_now"),
                     "bb_up": a.get("bb_up_last"),
+                    "bb_mid": a.get("bb_mid_last"),
                     "bb_lo": a.get("bb_lo_last"),
+                    "obv_dir": obv_direction_ratio(a.get("obv"), a.get("volumes")),
                     "score_side": own_score,
                 }
 

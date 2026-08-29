@@ -920,8 +920,17 @@ def _flatten_learning_keys(snap: dict | None) -> dict | None:
                                 d15.get("cci_now"), d15.get("cci"),
                                 snap.get("cci_15m"))
         if snap.get("obv_slope_pct") is None:
-            _obv = _pick(s4h.get("obv_slope_pct"), s15.get("obv_slope_pct"),
-                         snap.get("obv_slope_15m"))
+            # 🚨 Fix 228: 세 번째 후보 `obv_slope_15m` 을 **뺀다.**
+            #   그 값은 macd_reversal_15m 이 만드는 `obv[-1]-obv[-6]` = **원 계약수량**인데,
+            #   여기서 % 필드로 승격되고 아래 라벨까지 "pct_of_window_amplitude" 로 붙어
+            #   **거짓 단위**가 기록됐다. 이 함수는 저장 직전 단일 통과점이라
+            #   오염이 여기서 전 경로로 퍼진다.
+            _obv = _pick(s4h.get("obv_slope_pct"), s15.get("obv_slope_pct"))
+            if _obv is None:
+                # 정규화된 값이 없으면 원단위를 **그 이름 그대로** 남긴다 (섞지 않는다)
+                _raw = snap.get("obv_slope_15m")
+                if _raw is not None:
+                    snap.setdefault("obv_slope_raw_15m", _raw)
             # ⚠️ 값이 없어도 **키는 반드시 남긴다** (None 으로).
             #   키가 아예 없으면 저장된 기록만 봐서는 「기록이 빠진 것」과
             #   「원래 값이 없던 것」을 구별할 수 없다. 스키마를 고정해야

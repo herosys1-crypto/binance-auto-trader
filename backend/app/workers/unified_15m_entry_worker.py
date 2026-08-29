@@ -315,7 +315,11 @@ def run_unified_15m_entry() -> dict:
                     "symbol": symbol,
                     "rsi": snap15.get("rsi_now"),
                     "cci": snap15.get("cci_now"),
-                    "obv_slope_pct": None,   # 15m OBV slope는 계산 X (필터만!)
+                    # 🚨 Fix 228: 옛 코드는 None 이라 **현재 주 진입 워커가 OBV 를**
+                    #   **한 번도 기록하지 않았다.** 사장님이 OBV 를 최종 판단으로
+                    #   올리셨는데 정작 매매를 만드는 자리에 값이 없었다.
+                    #   detector 의 entry_snapshot 이 이제 obv_dir(-1~+1)을 담는다.
+                    "obv_slope_pct": snap15.get("obv_dir"),
                     "regime": "NEUTRAL",     # 15m 기반 = regime 판정 X → NEUTRAL로 fail-open!
                     "change_24h": float(t.get("priceChangePercent", 0) or 0),
                     "source": "UNIFIED_15M",
@@ -368,7 +372,7 @@ def run_unified_15m_entry() -> dict:
                 entry_snapshot = {
                     "rsi": snap15.get("rsi_now"),
                     "cci": snap15.get("cci_now"),
-                    "obv_slope_pct": None,
+                    "obv_slope_pct": snap15.get("obv_dir"),   # Fix 228
                     "regime": "NEUTRAL",
                     "sustained_bars": 0,
                     "change_24h": float(t.get("priceChangePercent", 0) or 0),
