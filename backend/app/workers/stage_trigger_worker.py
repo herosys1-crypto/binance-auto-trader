@@ -765,11 +765,44 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     should_fire = (mark >= trigger) if strategy.side == "SHORT" else (mark <= trigger)
                 if not should_fire:
                     continue
+                # ══════════════════════════════════════════════════════════
+                # 🚨 Fix 203 (2026-08-29 사장님 지시): 볼밴 분할은 지표 게이트 **제외**
+                #
+                # 사장님 verbatim:
+                #   "나는 분명히 볼밴 하단 -3%일때 100 진입 그리고 하락해서 -5% 일때
+                #    추가 200 진입 그리고 -7% 하락하면 300 진입이고 모두 진입한 상태에서
+                #    전체금액의 -10% 일때 청산한다고 했어 이건 그냥 이렇게 진행하고 해"
+                #
+                # 왜 빼야 하는가 — 아래 게이트(Fix55 지표반전 / Fix114 정점확인)는
+                # 「하락이 멈춘 뒤에 사라」는 뜻이다. 그런데 볼밴 분할은 **하락하는 동안
+                # 나눠 사서 평단을 낮추는** 전략이다. 두 요구가 정면으로 충돌한다.
+                #
+                # 실측 피해 (2026-08-29): 볼밴 17건 중 **3차 체결 0건**.
+                #   Fix 195 로 트리거를 -24% → -7% 로 고쳤는데도 0건이었고,
+                #   사유는 전부 "Fix114 정점 미확인" 이었다 (#1729 BEATUSDT 단계3 알림).
+                #   그 결과 「작게 넣고(100) 얕은 손절(-7.85%)」이라는 최악의 조합이 됐다.
+                #   설계대로 3차까지 채우면 손절선이 기준선 -10.41% 로 내려가,
+                #   손실 10건 중 최소 6건은 애초에 손절당하지 않았을 깊이였다.
+                #
+                # ⚠️ 다른 전략은 게이트를 그대로 받는다 — 이 예외는 split_entry 뿐이다.
+                #    (#1488 이 -6,981 간 뒤 만든 안전망을 통째로 걷어내는 게 아니다)
+                #    손실 상한은 손절이 맡는다: 평단 ROI -10% = 600 투입 시 -60 USDT.
+                # ══════════════════════════════════════════════════════════
+                _is_split = (
+                    str(getattr(strategy, "capital_management_mode", "") or "").lower()
+                    == "split_entry"
+                )
+                if _is_split and next_stage_no >= 2:
+                    logger.info(
+                        "[Fix203/split] #%s %s %s 단계%s = 지표 게이트 건너뜀 "
+                        "(볼밴 분할은 하락 중 분할 매수 = 사장님 설계)",
+                        strategy.id, strategy.symbol, strategy.side, next_stage_no,
+                    )
                 # 🌟 Fix 55 사장님 critical (2026-08-24): 마틴게일 2단계+ 지표 반전 확인 필수!
                 # 사장님 verbatim: "충분히 상승/하락 반복 → 조정 시점 진입 → 3단계까지 실패는 말이 안돼!"
                 # = 옛 로직 (가격 도달만) → 신 로직 (가격 도달 + 지표 반전 + 24h 필터)!
                 # 1단계는 대상 아님 (원 진입 = 신 진입 워커 별도!)
-                if next_stage_no >= 2:
+                if next_stage_no >= 2 and not _is_split:
                     try:
                         from app.integrations.binance.client import BinanceClient as _BC55
                         _bc55 = _BC55(

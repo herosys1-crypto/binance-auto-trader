@@ -290,6 +290,8 @@ def _current_bbsplit(db) -> dict:
         "bbsplit_enabled": None,
         "bbsplit_max": None,
         "bbsplit_capitals": None,
+        "bbsplit_steps": None,      # Fix 206
+        "bbsplit_sl_roi": None,     # Fix 206
         "bbsplit_error": None,
     }
     errs = []
@@ -301,7 +303,15 @@ def _current_bbsplit(db) -> dict:
         logger.warning("[bbsplit] enabled 조회 실패: %s", e)
     try:
         from app.workers.pump_split_entry_worker import _load_config
-        caps, max_n, _src = _load_config(db)
+        caps, max_n, steps, sl_roi, _src = _load_config(db)
+        out["bbsplit_steps"] = ",".join(
+            (format(s, "f").rstrip("0").rstrip(".") if "." in format(s, "f") else format(s, "f"))
+            for s in steps
+        )
+        out["bbsplit_sl_roi"] = (
+            format(sl_roi, "f").rstrip("0").rstrip(".")
+            if "." in format(sl_roi, "f") else format(sl_roi, "f")
+        )
         out["bbsplit_max"] = max_n
         out["bbsplit_capitals"] = ",".join(
             (format(c, "f").rstrip("0").rstrip(".") if "." in format(c, "f") else format(c, "f"))
@@ -385,29 +395,54 @@ def _current_ladder_str(db) -> str:
         return ""
 
 
-def _sanitize_bbsplit_capitals(raw) -> str:
-    """📊 Fix 181: 볼밴 분할 자본 3칸 + **죽은 단계 검산** (헌법 130).
-
-    자본 비중을 바꾸면 평단이 달라지고 → 손절가가 움직여서
-    「손절이 다음 차수 트리거보다 먼저 오는」 상태가 될 수 있다.
-    그러면 그 차수는 **영원히 진입되지 않고 로그에도 안 남는다.**
-    → 저장 단계에서 막는다. 워커가 쓰는 것과 **같은 함수**로 검산한다 (헌법 85/101).
-    """
-    from app.workers.pump_split_entry_worker import (
-        FORCE_SL_ROI, LEVERAGE, SPLIT_STEP_PCT, _parse_capitals, check_no_dead_stage,
+def _fmt_dec_list(vals) -> str:
+    return ",".join(
+        (format(v, "f").rstrip("0").rstrip(".") if "." in format(v, "f") else format(v, "f"))
+        for v in vals
     )
-    caps = _parse_capitals(raw)   # 3칸 / 양수 / 상한 검증
-    ok, why = check_no_dead_stage(caps, SPLIT_STEP_PCT, FORCE_SL_ROI, LEVERAGE)
+
+
+def _sanitize_bbsplit_steps(raw) -> str:
+    """🚨 Fix 206: 진입 트리거 3칸 (형식만). 조합 검산은 저장 직전에 따로 한다."""
+    from app.workers.pump_split_entry_worker import _parse_steps
+    return _fmt_dec_list(_parse_steps(raw))
+
+
+def _sanitize_bbsplit_sl_roi(raw) -> str:
+    """🚨 Fix 206: 손절 ROI (형식만). 조합 검산은 저장 직전에 따로 한다."""
+    from app.workers.pump_split_entry_worker import _parse_sl_roi
+    v = _parse_sl_roi(raw)
+    return format(v, "f").rstrip("0").rstrip(".") if "." in format(v, "f") else format(v, "f")
+
+
+def _assert_bbsplit_consistent(caps, steps, sl_roi) -> None:
+    """🚨 Fix 206: 자본·트리거·손절을 **조합으로** 검산한다 (헌법 130/131).
+
+    세 값은 서로 얽혀 있다. 예: 손절을 -10% → -5% 로 낮추면
+    2차까지 물린 평단의 손절가가 3차 트리거보다 **먼저** 와서 3차가 죽는다.
+    각 항목을 따로 검사하면 「자본만 보고 통과」가 되어 이 조합을 못 잡는다.
+    → 저장 직전에 실제 적용될 세 값으로 한 번에 본다.
+    """
+    from app.workers.pump_split_entry_worker import LEVERAGE, check_no_dead_stage
+    ok, why = check_no_dead_stage(caps, steps, sl_roi, LEVERAGE)
     if not ok:
         raise ValueError(
-            f"이 자본 조합은 사용할 수 없습니다 — {why}. "
+            f"이 조합은 사용할 수 없습니다 — {why}. "
+            f"(자본 {_fmt_dec_list(caps)} / 트리거 {_fmt_dec_list(steps)}% / 손절 {sl_roi}%) "
             "그 단계는 진입 조건에 도달하기 전에 손절이 먼저 발동해 "
             "영원히 사용되지 않습니다."
         )
-    return ",".join(
-        (format(c, "f").rstrip("0").rstrip(".") if "." in format(c, "f") else format(c, "f"))
-        for c in caps
-    )
+
+
+def _sanitize_bbsplit_capitals(raw) -> str:
+    """📊 Fix 181: 볼밴 분할 자본 3칸 (형식만).
+
+    ⚠️ Fix 206 이전에는 여기서 하드코딩된 트리거/손절로 검산했다. 이제 그 둘도
+       설정값이라, 여기서 검사하면 「지금 저장 중인 다른 값」을 못 본다.
+       → 죽은 단계 검산은 _assert_bbsplit_consistent 로 옮겼다 (저장 직전 조합 검사).
+    """
+    from app.workers.pump_split_entry_worker import _parse_capitals
+    return _fmt_dec_list(_parse_capitals(raw))   # 3칸 / 양수 / 상한 검증
 
 
 def _sanitize_pyramid_capital(raw) -> str:
@@ -497,6 +532,9 @@ def set_sajangnim_settings(
         "pump_split_enabled": ("bbsplit_enabled", lambda v: "1" if str(v).strip() in ("1", "true", "True") else "0"),
         "pump_split_max_concurrent": ("bbsplit_max", lambda v: str(max(0, min(100, int(v))))),
         "pump_split_capitals": ("bbsplit_capitals", lambda v: _sanitize_bbsplit_capitals(v)),
+        # 🚨 Fix 206 (2026-08-29 사장님): 트리거·손절도 변경 가능하게
+        "pump_split_steps": ("bbsplit_steps", lambda v: _sanitize_bbsplit_steps(v)),
+        "pump_split_sl_roi": ("bbsplit_sl_roi", lambda v: _sanitize_bbsplit_sl_roi(v)),
     }
     updated = {}
     for key, (payload_key, sanitizer) in fields.items():
@@ -554,6 +592,24 @@ def set_sajangnim_settings(
             db.rollback()
             logger.warning("[sajangnim-settings] 저장 거부 %s: %s", payload_key, e)
             raise HTTPException(status_code=400, detail=f"{payload_key}: {e}")
+    # 🚨 Fix 206: 볼밴 3값(자본·트리거·손절)을 **조합으로** 검산한다.
+    #   각 sanitizer 는 형식만 본다 — 셋이 서로 얽혀 있어서 따로 보면 못 잡는다.
+    #   예: 손절 -10% → -5% 로만 바꾸면 2차까지 물린 평단의 손절가가
+    #       3차 트리거보다 먼저 와서 **3차가 조용히 죽는다** (헌법 130).
+    if any(k in updated for k in ("bbsplit_capitals", "bbsplit_steps", "bbsplit_sl_roi")):
+        try:
+            from app.workers.pump_split_entry_worker import (
+                _parse_capitals, _parse_sl_roi, _parse_steps,
+            )
+            _cur = _current_bbsplit(db)      # 저장 안 된 값은 현재값으로 채운다
+            _caps = _parse_capitals(updated.get("bbsplit_capitals") or _cur["bbsplit_capitals"])
+            _steps = _parse_steps(updated.get("bbsplit_steps") or _cur["bbsplit_steps"])
+            _sl = _parse_sl_roi(updated.get("bbsplit_sl_roi") or _cur["bbsplit_sl_roi"])
+            _assert_bbsplit_consistent(_caps, _steps, _sl)
+        except Exception as e:
+            db.rollback()
+            logger.warning("[Fix206] 볼밴 조합 검산 실패 → 저장 거부: %s", e)
+            raise HTTPException(status_code=400, detail=f"볼밴 설정: {e}")
     db.commit()
     return {"updated": updated, "ok": True}
 

@@ -1210,13 +1210,34 @@
                   <input type="text" id="bbsplit-capitals" placeholder="불러오는 중…"
                          class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:130px" />
                 </label>
+                <!-- 🚨 Fix 206 (2026-08-29 사장님): 트리거·손절도 변경 가능하게.
+                     세 값(자본·트리거·손절)은 서로 얽혀 있어서 저장 시 조합으로 검산한다.
+                     예) 손절을 -5% 로 낮추면 3차 트리거(-7%)보다 손절이 먼저 와 3차가 죽는다. -->
+                <label class="flex items-center justify-between gap-2 mb-1">
+                  <span class="text-slate-300"
+                        title="기준선 대비 이탈 심도. 쉼표 3칸, 갈수록 깊어져야 합니다. 예: 3,5,7 (숏은 +방향)">
+                    진입 트리거 (%)
+                  </span>
+                  <input type="text" id="bbsplit-steps" placeholder="불러오는 중…"
+                         class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:130px" />
+                </label>
+                <label class="flex items-center justify-between gap-2 mb-1">
+                  <span class="text-slate-300"
+                        title="평단 ROI 기준 전량 손절. 총 투입액의 이 비율만큼 잃으면 정리합니다 (600 투입 · 10% = -60 USDT).">
+                    손절 (평단 ROI %)
+                  </span>
+                  <input type="number" id="bbsplit-sl-roi" min="1" max="90" step="1" placeholder="…"
+                         class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1 text-center"
+                         style="width:90px" />
+                </label>
                 <div class="text-xs text-slate-500" style="line-height:1.5">
                   <span id="bbsplit-preview" style="color:#64748b">불러오는 중…</span><br>
                   <b style="color:#93c5fd">진입</b>: 볼밴 기준선 <b>-3% / -5% / -7%</b> 이탈마다 분할
                   (숏은 +방향)<br>
                   &nbsp;&nbsp;기준선 = 하단(일반) · <b>중단(긴 추세)</b> · 상단(숏)<br>
                   <b style="color:#f87171">손절</b>: 평단 ROI <b>-10%</b> 전량 &nbsp;
-                  <b style="color:#86efac">익절</b>: TP1 <b>+15%</b> 부터 25%씩 4회<br>
+                  <b style="color:#86efac">익절</b>: TP1 <b>+5%</b> 부터 25%씩 4회
+                  <span style="color:#94a3b8">(수익률 기준 — 몇 차까지 진입했든 동일)</span><br>
                   &nbsp;&nbsp;익절 회귀 <b>-3%</b> 시 잔량 정리<br>
                   <span id="bbsplit-risk" style="color:#fbbf24"></span><br>
                   <span style="color:#94a3b8">⚠️ 이 전략은 <b>물타기</b>입니다 — 3차까지 가면 총액이 동시에 물립니다.
