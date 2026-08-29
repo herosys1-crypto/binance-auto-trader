@@ -82,10 +82,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.database import SessionLocal
 from app.core.strategy_status import ACTIVE_LIKE
@@ -117,7 +117,11 @@ __all__ = ["run_pump_split_entry_once"]
 #    = 어느 차수도 「죽은 단계」가 되지 않는다. 이 정합성은 검증 테스트로 고정한다.
 CAPITALS = [Decimal("100"), Decimal("200"), Decimal("300")]   # 총 600
 SPLIT_STEP_PCT = [Decimal("3"), Decimal("5"), Decimal("7")]   # 기준선 대비 이탈 심도
-FORCE_SL_ROI = Decimal("10")       # 평단 ROI -10% 전량 청산
+# 🚨 Fix 218 (2026-08-30 사장님): "-15%되면 청산"  (옛 -10%)
+#   ⚠️ 이 상수는 **fallback** 이다. 운영은 SystemSetting `pump_split_sl_roi` 가 이긴다.
+#      DB 값이 10 이면 코드를 15 로 바꿔도 바뀌지 않는다 (헌법 167).
+#   건당 최대 손실: 800 USDT × 15% = 120 (옛 80). 상한 10건이면 1,200 (옛 800).
+FORCE_SL_ROI = Decimal("15")       # 평단 ROI -15% 전량 청산
 TP_PERCENTS = [5, 10, 15, 20]      # Fix 205: TP1 +5% 부터 (사장님 원문 복원)
 TP_QTY_RATIOS = [25, 25, 25, 25]   # 25% 씩
 TRAILING_RETRACE_PCT = Decimal("3")  # 익절 회귀 -3% (짧게)
@@ -132,6 +136,12 @@ KLINE_15M = 60
 
 STRATEGY_TYPE = "pump_split"
 MODE_MARKER = "split_entry"   # Fix 178 이 읽는 값
+
+# 🚨 Fix 218 (2026-08-30 사장님): "다시 조정받으면 1단계부터 다시 **한번더** 해줘"
+#   = 청산 후 재시작은 **1회**. 최초 1 + 재시작 1 = 24시간 안에 같은 심볼·방향 최대 2건.
+#   지금까지 상한이 **없었다** — 계속 떨어지는 종목에 무한히 들어갈 수 있었고,
+#   실측(2026-08-29)에서 MAGMA/SKR/ARIA/DEXE 가 각각 2회씩 생성돼 있었다.
+SPLIT_MAX_CYCLES_PER_DAY = 2
 
 # ── Fix 180 (2026-08-27 사장님): 이 전략 **전용** 상한 + 자본 설정 ─────────
 #   "이건 별도로 상한 전략을 설정할수 있게 하고 포지션금액도 100 200 300도 변경가능하게"
@@ -307,7 +317,8 @@ def _is_long_trend(a15: dict, side: str) -> tuple[bool, str]:
     """
     closes = a15.get("closes") or []
     n = len(closes)
-    if n < 20 + LONG_TREND_BARS:
+    # Fix 216: 진행 중 봉(-1)과 진입 판정봉(-2)을 뺀 만큼 창이 한 칸 더 필요하다.
+    if n < 21 + LONG_TREND_BARS:
         return False, f"15m 봉 부족({n})"
     ok = 0
     # i=1 이 마지막 봉. 각 봉의 20MA 는 **그 봉을 포함한** 직전 20봉 평균이다
@@ -321,7 +332,14 @@ def _is_long_trend(a15: dict, side: str) -> tuple[bool, str]:
     #   3% 아래일 수는 없다. **긴 추세 모드는 진입이 수학적으로 불가능했다.**
     #   (사장님 확정 "볼밴 중단은 지속 상승일때 같은 전략으로" 가 한 번도 안 돌았다)
     #   → 직전 LONG_TREND_BARS 봉으로 추세를 보고, 현재 봉의 눌림목에서 산다.
-    for i in range(2, LONG_TREND_BARS + 2):
+    #
+    # 🚨 Fix 216 (2026-08-30): 한 칸 **더** 민다 — i=3 부터.
+    #   closes[-1] 은 **진행 중인 봉**이다 (chart_analyzer:274 가 klines 를 안 자른다).
+    #   Fix 215 로 중단 모드 진입 판정을 「마지막 **완료봉**」(closes[-2])으로 바꿨으므로,
+    #   그 봉이 추세 판정에도 들어가면 Fix 212 의 자기모순이 그대로 재발한다
+    #   (같은 봉이 중단선 위이면서 동시에 아래일 수 없다).
+    #   → 추세는 진입 판정봉 **이전** 6봉으로 본다.
+    for i in range(3, LONG_TREND_BARS + 3):
         end = n - i + 1          # exclusive
         start = end - 20
         if start < 0:
@@ -379,9 +397,31 @@ def _entry_plan(a15: dict, side: str, long_trend: bool,
     if not closes or up is None or mid is None or lo is None:
         return None, "15m 밴드/종가 없음", _steps
     close = Decimal(str(closes[-1]))
+    # ═══════════════════════════════════════════════════════════════════
+    # 🚨 Fix 216 (2026-08-30): 중단 모드는 **완료봉**으로 판정한다.
+    #   chart_analyzer:274 는 klines 를 자르지 않는다 → closes[-1] 과 bb_*_last 는
+    #   **아직 안 끝난 15분봉**이다. 하단 모드는 -3% 버퍼가 있어 덜 위험했지만,
+    #   중단 모드는 Fix 215 로 여유가 **0(이탈 즉시)** 이라 봉 안의 틱 하나로
+    #   시장가가 나가고, 그 봉이 되돌리면 「완료봉 기준으로는 없던 이탈」 위에
+    #   2·3차 트리거와 손절이 앵커된다 (= 가짜 이탈에 자본이 물린다).
+    #   → 마지막 완료봉(closes[-2])의 종가와 그 시점 밴드로 본다.
+    #   ⚠️ 하단/상단 모드는 **건드리지 않는다** — 지금까지의 동작을 바꾸지 않는다.
+    # ═══════════════════════════════════════════════════════════════════
+    if long_trend and len(closes) >= 21:
+        try:
+            from app.services.bb_4h_band_analyzer import BB4HBandAnalyzer
+            _m, _u, _l = BB4HBandAnalyzer.bollinger([float(x) for x in closes])
+            if _m[-2] is not None:
+                mid, up, lo = _m[-2], _u[-2], _l[-2]
+                close = Decimal(str(closes[-2]))
+        except Exception as _e:      # 밴드 재계산 실패 = 진행 중 봉으로 내려가지 않는다
+            return None, f"완료봉 밴드 계산 실패 (보류): {_e}", _steps
     step1 = _steps[0] / Decimal("100")
     # 중단 모드는 step1=0 이므로 need == base = 「이탈(통과)」 판정이 된다.
-    _cond = "이탈" if long_trend else f"-{_base_steps[0]}%"
+    # Fix 216: 부호는 방향을 따른다 (SHORT 를 -3% 로 찍던 것 정정).
+    _cond = "이탈" if long_trend else (
+        f"{'-' if side == 'LONG' else '+'}{_base_steps[0]}%"
+    )
     if side == "LONG":
         base = Decimal(str(mid)) if long_trend else Decimal(str(lo))
         label = "중단" if long_trend else "하단"
@@ -397,7 +437,7 @@ def _entry_plan(a15: dict, side: str, long_trend: bool,
         need = base * (Decimal("1") + step1)
         if close < need:
             return None, (
-                f"{label} {'이탈' if long_trend else f'+{_base_steps[0]}%'} 미도달 "
+                f"{label} {_cond} 미도달 "
                 f"(close {_fmt(close)} < 목표 {_fmt(need)} / {label} {_fmt(base)})"
             ), _steps
     return base, (
@@ -764,6 +804,27 @@ def run_pump_split_entry_once() -> dict:
                 _skip("already_active")
                 continue
 
+            # 🚨 Fix 218: 청산 후 재시작은 **1회** (사장님 "다시 한번더 해줘").
+            #   활성 전략만 막으면(위 active_keys) 죽은 뒤 곧바로 다시 들어간다 —
+            #   실측 #1711(08:35 청산) → #1721(08:42 생성) = 7분 만에 재진입.
+            #   24시간 창으로 세어 최초 1 + 재시작 1 까지만 허용한다.
+            _cycles = db.execute(
+                select(func.count()).select_from(StrategyInstance).where(
+                    StrategyInstance.symbol == sym,
+                    StrategyInstance.side == side,
+                    StrategyInstance.capital_management_mode == MODE_MARKER,
+                    StrategyInstance.created_at
+                    >= datetime.now(timezone.utc) - timedelta(hours=24),
+                )
+            ).scalar() or 0
+            if _cycles >= SPLIT_MAX_CYCLES_PER_DAY:
+                logger.info(
+                    "[pump_split] ⏹️ %s %s 재시작 상한 — 24h 내 %d회 (상한 %d)",
+                    sym, side, _cycles, SPLIT_MAX_CYCLES_PER_DAY,
+                )
+                _skip("restart_limit")
+                continue
+
             # 전용 상한을 **진입 직전마다** 재확인 (헌법 119)
             if n_split >= max_concurrent:
                 logger.info(
@@ -883,7 +944,9 @@ def run_pump_split_entry_once() -> dict:
                 logger.warning(
                     "[pump_split] ✅ 진입! #%s %s %s [%s] 1차 %s USDT@%s%% "
                     "(2차 %s@%s%% / 3차 %s@%s%%) SL -%s%% TP %s%% 25%%×4 트레일 -%s%%",
-                    strategy.id, sym, side, "중단이탈" if long_trend else "밴드-3%",
+                    strategy.id, sym, side,
+                    "중단이탈" if long_trend
+                    else f"밴드{'-' if side == 'LONG' else '+'}{eff_steps[0]}%",
                     caps[0], eff_steps[0], caps[1], eff_steps[1],
                     caps[2], eff_steps[2], sl_roi, TP_PERCENTS[0],
                     TRAILING_RETRACE_PCT,

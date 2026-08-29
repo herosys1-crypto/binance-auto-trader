@@ -36,20 +36,22 @@ from app.workers.pump_split_entry_worker import (
 LEV = 2
 
 
-def _uptrend_then_dip(dip: float, n: int = 60):
-    """마지막 봉만 눌린 상승 추세 15m 시리즈 + 그 시리즈로 계산한 실제 중단선.
+def _uptrend_then_dip(dip: float, live: float | None = None, n: int = 62):
+    """상승 추세 → **완료봉**에서 눌림 → 마지막에 진행 중 봉.
 
-    bb_mid_last 를 임의값으로 주면 시험이 거짓말을 한다 —
-    분석기의 중단선은 **마지막 20봉 종가의 평균**이므로 그대로 계산해서 넣는다.
+    🚨 Fix 216 이후 중단 모드의 판정 봉은 `closes[-2]`(마지막 완료봉)다.
+       실제 `analyze_timeframe` 은 klines 를 자르지 않아 `closes[-1]` 이
+       **아직 안 끝난 봉**이므로, 시험 데이터도 그 모양이어야 한다.
     """
-    closes = [100.0 + 0.5 * k for k in range(n - 1)] + [dip]
-    mid = sum(closes[-20:]) / 20.0
+    body = [100.0 + 0.5 * k for k in range(n - 2)]
+    closes = body + [dip, dip if live is None else live]
+    mid_completed = sum(closes[-21:-1]) / 20.0     # closes[-2] 시점의 20MA
     return {
         "closes": closes,
-        "bb_mid_last": mid,
-        "bb_up_last": mid * 1.05,
-        "bb_lo_last": mid * 0.95,
-    }, mid
+        "bb_mid_last": sum(closes[-20:]) / 20.0,   # 진행 중 봉 포함 (하단 모드용)
+        "bb_up_last": mid_completed * 1.05,
+        "bb_lo_last": mid_completed * 0.95,
+    }, mid_completed
 
 
 def _a15(close, mid):
@@ -66,35 +68,41 @@ def _a15(close, mid):
 # Fix 212 — 추세 판정에서 현재 봉을 뺀다
 # ═══════════════════════════════════════════════════════════════════════════
 def test_uptrend_pullback_is_a_trend():
-    """상승 추세 중 눌림 = 사장님이 사겠다고 한 바로 그 자리."""
-    a15, mid = _uptrend_then_dip(118.0)
+    """상승 추세 중 **완료봉** 눌림 = 사장님이 사겠다고 한 바로 그 자리."""
+    # 진행 중 봉은 일부러 한참 위(130)에 둔다 — 판정에 끼면 안 된다.
+    a15, mid = _uptrend_then_dip(120.0, live=130.0)
     long_trend, why = _is_long_trend(a15, "LONG")
     assert long_trend, f"직전 6봉이 전부 중단선 위인데 추세로 안 본다: {why}"
 
     base, why2, _ = _entry_plan(a15, "LONG", long_trend, SPLIT_STEP_PCT)
     assert base is not None, f"긴 추세 모드인데 진입 불가: {why2}"
-    assert base == Decimal(str(mid)), "긴 추세면 기준선은 중단선이어야 한다"
+    assert abs(float(base) - mid) < 1e-6, "긴 추세면 기준선은 **완료봉** 중단선이어야 한다"
 
 
-def test_old_behaviour_was_a_contradiction():
-    """음성 대조군 (헌법 170) — 옛 판정(현재 봉 포함)이 실제로 모순이었는가."""
-    a15, mid = _uptrend_then_dip(118.0)
-    closes = a15["closes"]
-    n = len(closes)
-    mb = sum(closes[n - 20:n]) / 20.0
-    c = closes[n - 1]
-    assert c <= mb, f"현재 봉이 중단선 위다 = 대조군 무효. c={c} mb={mb}"
-    assert abs(mb - mid) < 1e-9, "중단선 정의가 분석기와 어긋났다"
+def test_in_progress_bar_alone_must_not_trigger_entry():
+    """🚨 Fix 216 음성 대조군 — 진행 중 봉만 이탈하면 **진입하지 않는다**.
+
+    chart_analyzer:274 가 klines 를 자르지 않아 closes[-1] 은 아직 안 끝난 봉이다.
+    중단 모드는 여유가 0(이탈 즉시)이라, 이걸 믿으면 봉 안의 틱 하나로 시장가가
+    나가고 그 봉이 되돌리면 「없던 이탈」 위에 2·3차와 손절이 앵커된다.
+    """
+    # 완료봉은 중단선 **위**(130), 진행 중 봉만 아래로 100 까지 찍었다.
+    a15, _ = _uptrend_then_dip(130.0, live=100.0)
+    long_trend, _ = _is_long_trend(a15, "LONG")
+    assert long_trend, "대조군 전제(긴 추세)가 안 만들어졌다"
+    base, why, _ = _entry_plan(a15, "LONG", long_trend, SPLIT_STEP_PCT)
+    assert base is None, f"진행 중 봉만으로 진입했다 = Fix 216 이 안 먹는다: {why}"
 
 
 def test_short_side_is_symmetric():
     """SHORT = 지속 하락 중 중단선 되돌림 (사장님 「지속 하락 할때도 중단으로」)."""
-    n = 60
-    closes = [200.0 - 0.5 * k for k in range(n - 1)]
-    bump = 195.0                                   # 중단선 위로 튕긴 봉
-    mid = (sum(closes[-19:]) + bump) / 20.0
+    n = 62
+    body = [200.0 - 0.5 * k for k in range(n - 2)]
+    bump = 180.0                                   # 완료봉이 중단선 위로 튕김
+    closes = body + [bump, 170.0]                  # 마지막은 진행 중 봉
+    mid = sum(closes[-21:-1]) / 20.0
     a15 = {
-        "closes": closes + [bump],
+        "closes": closes,
         "bb_mid_last": mid,
         "bb_up_last": mid * 1.05,
         "bb_lo_last": mid * 0.95,

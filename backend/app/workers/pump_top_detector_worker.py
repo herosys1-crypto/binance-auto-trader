@@ -383,16 +383,29 @@ def run_pump_top_detector() -> dict:
         if not isinstance(tickers, list):
             return {"error": "ticker 실패!", "detected": 0}
 
-        usdt = [t for t in tickers if str(t.get("symbol", "")).endswith("USDT")]
-        try:
-            usdt.sort(key=lambda x: float(x.get("quoteVolume", 0) or 0), reverse=True)
-        except Exception:
-            pass
+        # ═══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 217 (2026-08-30 사장님): "당일 상승 50위와 하락 50위로 해줘"
+        #
+        #   옛 코드는 **거래대금(quoteVolume)** 순으로 상위 100개를 자른 뒤
+        #   그 안에서 급등락을 골랐다. 사장님이 요구한 적 없는 기준이고,
+        #   그래서 오늘 +80% 급등해도 거래대금이 작으면 감시 대상에
+        #   **아예 들어오지 못했다**.
+        #   → 24h 변동률 순위로 바꾼다: 상승 N위 ∪ 하락 N위 (중복 제거).
+        #   같은 함수를 long_bottom_detector 도 쓴다 — 한쪽만 고쳐 어긋나면
+        #   「상승은 넓어졌는데 하락은 그대로」가 된다 (헌법 101).
+        # ═══════════════════════════════════════════════════════════════════
+        from app.services.market_movers import rank_map
+        _ranked = rank_map(tickers, MAX_SYMBOLS)
         # 🌟 v222/v223: SHORT (chg≥+5) + LONG (chg≤-5) = 대칭!
         candidates = [
-            t for t in usdt[:MAX_SYMBOLS * 2]
+            t for (t, _d, _r) in _ranked
             if abs(float(t.get("priceChangePercent", 0) or 0)) >= MIN_24H_CHANGE
-        ][:MAX_SYMBOLS]
+        ]
+        logger.info(
+            "[pump_top_v223] 감시 대상 = 당일 상승 %d위 ∪ 하락 %d위 = %d개 "
+            "→ |24h|>=%.0f%% 통과 %d개 (Fix 217)",
+            MAX_SYMBOLS, MAX_SYMBOLS, len(_ranked), MIN_24H_CHANGE, len(candidates),
+        )
 
         if not candidates:
             logger.info("[pump_top_v223] 급등락 심볼 (>=+%.0f%%) 없음!", MIN_24H_CHANGE)
