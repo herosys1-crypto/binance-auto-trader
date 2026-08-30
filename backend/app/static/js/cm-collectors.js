@@ -87,8 +87,17 @@ function _collectDirectInputs() {
   let last_stage_trigger_percent = null;
   if (triggers.length > 1) {
     const last = triggers[triggers.length - 1];
-    last_stage_trigger_percent = last;  // 사용자 입력값 (null 이면 backend 기본 20%)
-    triggers[triggers.length - 1] = null;  // trigger_percents 배열에선 last 는 무시되므로 null
+    last_stage_trigger_percent = last;  // 구 저장 형식 호환 (null 이면 backend 기본 20%)
+    // 🚨 Fix 234 (2026-08-31): 예전엔 여기서 `triggers[last] = null` 로 **지웠다**.
+    //
+    //   그 결과 마지막 단계 트리거가 last_stage_trigger_percent 에만 남는데,
+    //   「↻ 설정만 수정」은 그 값이 null 이면 전송조차 하지 않고(cm-preview.js)
+    //   backend 도 null 이면 갱신하지 않는다(control.py:362).
+    //   → 옛 값이 영구히 살아남아 **화면과 다른 진입가**를 만든다.
+    //
+    //   실측 (#1873 SKRUSDT): 화면 2단계 30% (0.14919) / 실제 120% (0.252472).
+    //   이제 배열에도 그대로 남긴다 = **화면에 보이는 값이 곧 저장되는 값**이다.
+    //   (엔진은 strategy_calculator 의 Fix 234 로 배열값을 우선 적용한다)
   }
   return { capitals: caps, trigger_percents: triggers, additional_margins: additionalMargins, last_stage_trigger_percent };
 }

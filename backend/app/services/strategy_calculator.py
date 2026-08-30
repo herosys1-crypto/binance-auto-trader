@@ -11,11 +11,14 @@ stages_config 또는 (호환용) 4-단계 dataclass 둘 다 처리한다.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from decimal import Decimal, getcontext
 from typing import Any, Literal
 
 from app.core.risk_constants import PERCENT_DENOMINATOR
+
+logger = logging.getLogger(__name__)
 
 getcontext().prec = 28
 Side = Literal["LONG", "SHORT"]
@@ -261,7 +264,29 @@ class StrategyCalculator:
             if is_last:
                 # 마지막 단계: SHORT 의 경우 청산가 기반이라 trigger_price 는 후속 산출 (None).
                 # LONG 또는 last_mode == PRICE_DOWN_PCT/UP_PCT 면 가격을 미리 산출.
-                pct = last_pct
+                #
+                # 🚨 Fix 234 (2026-08-31) — 마지막 단계 트리거의 **단일 진실** (헌법 6).
+                #
+                #   실측 사고 (#1873 SKRUSDT SHORT):
+                #     화면(수정 모달)   2단계 트리거  30%  → 진입가 0.14919
+                #     엔진(이 함수)     last_pct     120%  → 진입가 0.252472
+                #
+                #   같은 칸의 값이 `trigger_percents[last]` 와 `last_stage_trigger_percent`
+                #   **두 곳에** 저장되는데, 화면은 앞을 읽고 엔진은 뒤만 읽었다.
+                #   게다가 PATCH /settings 는 last_stage_trigger_percent 가 null 이면
+                #   전송 자체를 하지 않으므로(cm-preview.js + control.py:362)
+                #   한 번 잘못 들어간 옛 값이 **지워지지 않고 영구히 진입가를 지배한다**.
+                #
+                #   → 명시된 trigger_percents[i] 가 있으면 **그것이 이긴다**.
+                #     (없을 때만 last_stage_trigger_percent = 구 저장 형식 호환)
+                _explicit = trigger_percents[i] if i < len(trigger_percents) else None
+                pct = _explicit if _explicit is not None else last_pct
+                if _explicit is not None and last_pct is not None and _explicit != last_pct:
+                    logger.warning(
+                        "[Fix234] 마지막 단계 트리거 불일치 — 화면값 %s%% 적용 "
+                        "(last_stage_trigger_percent=%s%% 는 옛 잔재). stage=%s",
+                        _explicit, last_pct, stage_no,
+                    )
                 mode = last_mode
                 if mode == "LIQUIDATION_BUFFER":
                     stages.append(

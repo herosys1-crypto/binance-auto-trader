@@ -361,6 +361,25 @@ def update_strategy_settings_in_place(
         old_cfg["trigger_percents"] = new_triggers
         if payload.last_stage_trigger_percent is not None:
             old_cfg["last_stage_trigger_percent"] = str(payload.last_stage_trigger_percent)
+
+        # 🚨 Fix 234 (2026-08-31): 마지막 단계 트리거 **잔재 자동 소거** (헌법 6).
+        #
+        #   사고 (#1873 SKRUSDT SHORT): 화면은 2단계 30% (0.14919) 를 보여주는데
+        #   엔진은 last_stage_trigger_percent = 120% (0.252472) 로 진입가를 깔았다.
+        #   위 `if ... is not None` 때문에 **null 이면 갱신을 건너뛴다** = 옛 값이
+        #   영원히 남는다. 화면에서는 그 값을 볼 수도, 지울 수도 없다.
+        #
+        #   → 배열의 마지막 값이 명시돼 있으면 그것을 정본으로 삼아 덮어쓴다.
+        #     (엔진도 strategy_calculator Fix 234 로 배열을 우선 읽는다)
+        if new_triggers and new_triggers[-1] is not None:
+            _sync = str(new_triggers[-1])
+            if str(old_cfg.get("last_stage_trigger_percent") or "") != _sync:
+                logger.info(
+                    "[Fix234] 마지막 단계 트리거 잔재 소거 — strategy=%s %s%% -> %s%%",
+                    strategy_id, old_cfg.get("last_stage_trigger_percent"), _sync,
+                )
+            old_cfg["last_stage_trigger_percent"] = _sync
+
         new_tpl.stages_config = old_cfg
 
         # 🚨🚨🚨 2026-06-11 사장님 critical 영구 fix v3 (BEATUSDT #110 강제 청산 + 사전 차단!):
