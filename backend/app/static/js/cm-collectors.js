@@ -42,8 +42,23 @@ function _collectDirectInputs() {
     const tNum = Number(tVal) || 0;
 
     if (valEmpty) {
-      // 빈 자본 단계 — trigger 가 있으면 다음 채워진 단계에 누적
-      if (i > 1 && tNum > 0) {
+      // 🚨 Fix 233 (2026-08-31): **사용자가 직접 입력한 트리거만** 누적한다.
+      //
+      //   실측 사고 (#1873): stages_config.last_stage_trigger_percent = '120'.
+      //   사장님은 30 을 넣으셨는데 2차 트리거가 0.11476 × 2.2 = 0.252472 (+120%)
+      //   로 깔렸다. 원인은 화면이 2단계에 10, 3~10단계에 20 을 **실제 값으로**
+      //   미리 채워두는 것이다(_defaultTriggerPct). 자본을 비운 단계의 그 값들이
+      //   누적돼 120 이 됐다 — 사장님은 그 20 들을 입력한 적이 없다.
+      //
+      //   2026-06-03 사장님 사상(빈 단계 트리거를 다음 단계에 누적)은 **의도적으로
+      //   넣은 값**에 대한 것이다. 화면이 자동으로 채운 값까지 누적하면
+      //   「내가 넣지 않은 조건」이 진입가를 바꾼다.
+      //
+      //   → data-default 가 남아 있으면 = 손댄 적 없는 기본값 = 누적하지 않는다.
+      //     (사용자가 그 칸을 한 번이라도 수정하면 oninput 이 표식을 지운다)
+      const _trgEl = document.getElementById('cm-trg-' + i);
+      const _untouched = !!(_trgEl && _trgEl.getAttribute('data-default'));
+      if (i > 1 && tNum > 0 && !_untouched) {
         pendingTriggerPct += tNum;
       }
       continue;  // 자본 없는 단계는 skip (자동 압축)

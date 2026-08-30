@@ -917,7 +917,45 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 # 사장님 verbatim: "충분히 상승/하락 반복 → 조정 시점 진입 → 3단계까지 실패는 말이 안돼!"
                 # = 옛 로직 (가격 도달만) → 신 로직 (가격 도달 + 지표 반전 + 24h 필터)!
                 # 1단계는 대상 아님 (원 진입 = 신 진입 워커 별도!)
-                if next_stage_no >= 2 and not _is_split:
+                # ══════════════════════════════════════════════════════════
+                # 🚨 Fix 232 (2026-08-31 사장님): **기본방식은 가격만 본다.**
+                #
+                # 사장님 verbatim:
+                #   "기본방식은 OBV전략 다르게 운영을 해야해.
+                #    기본전략은 「기본방식은 가격만 본다」로 진행해줘"
+                #
+                # 사장님이 짚으신 모순: 기본방식은 「내가 정한 가격에 진입」인데,
+                # 가격이 도달해도 아래 confirm_peak 가 또 막았다.
+                # 그래서 「왜 안 들어가는지 알 수 없는」 상태가 됐다 (#1873).
+                #
+                # 이제 모드마다 **한 가지만** 판정한다:
+                #   PRICE_DOWN_PCT / PRICE_UP_PCT  →  가격 도달만          (여기 제외)
+                #   OBV_REVERSE                    →  stage_entry_signal   (위 분기에서 이미 판정)
+                #   split_entry(볼밴)               →  조정 신호            (Fix 218/223)
+                #
+                # ⚠️ OBV 모드는 **중복 게이트**였다 — stage_entry_signal 안에 이미
+                #    confirm_peak 가 들어 있는데 아래에서 또 돌았다. 그 중복도 없앤다.
+                #
+                # ⚠️ 이것은 Fix 55(2026-08-24)를 되돌리는 것이다. 그때 사장님 요청은
+                #    "충분히 상승/하락 반복 → 조정 시점 진입" 이었는데, 그 안전장치가
+                #    「가격 지정」이라는 기본방식의 약속과 충돌했다.
+                #    떨어지는 칼에도 지정가에 들어가게 되므로, 손절이 그만큼 중요해진다.
+                #
+                # 아래 블록은 알 수 없는 trigger_mode 에 대한 안전망으로 남겨둔다.
+                # ══════════════════════════════════════════════════════════
+                _is_price_mode = _tpl_trigger_mode in ("PRICE_DOWN_PCT", "PRICE_UP_PCT")
+                if _is_price_mode and next_stage_no >= 2:
+                    logger.info(
+                        "[Fix232/price] #%s %s %s 단계%s = 가격 도달로 진입 "
+                        "(지표 게이트 제외 — 기본방식은 가격만 본다)",
+                        strategy.id, strategy.symbol, strategy.side, next_stage_no,
+                    )
+                if (
+                    next_stage_no >= 2
+                    and not _is_split
+                    and not _is_price_mode
+                    and not _is_obv_mode
+                ):
                     try:
                         from app.integrations.binance.client import BinanceClient as _BC55
                         _bc55 = _BC55(

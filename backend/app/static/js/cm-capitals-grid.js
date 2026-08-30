@@ -76,7 +76,8 @@ function buildCapitalsGrid() {
       <div class="col-span-1">
         <input type="number" min="0" step="1" maxlength="4" id="cm-trg-${i}" placeholder="${triggerPlaceholder}" value="${triggerValue}" ${triggerDisabled}
           title="${triggerTitle}"
-          oninput="onCapitalsChange(); _refreshLiveCalc()"
+          ${i > 1 ? 'data-default="1"' : ''}
+          oninput="this.removeAttribute('data-default'); onCapitalsChange(); _refreshLiveCalc()"
           style="min-width:46px"
           class="w-full px-1 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm ${triggerDisabled?'opacity-50 cursor-not-allowed':''}" />
       </div>
@@ -171,7 +172,10 @@ function _refreshLiveCalc() {
       const tNum = Number(trgEl ? trgEl.value : 0) || 0;
       // 빈 자본 단계 — '-' 표시 + trigger 누적 (다음 채워진 단계에 합산)
       if (!cap || cap <= 0) {
-        if (i > 1 && tNum > 0) pendingTriggerPct += tNum;
+        // Fix 233: 손대지 않은 기본값은 누적 X (_collectDirectInputs 와 동일 규칙).
+        //   화면 계산과 실제 전송이 어긋나면 사장님이 본 숫자가 거짓이 된다.
+        const _untouched = !!(trgEl && trgEl.getAttribute('data-default'));
+        if (i > 1 && tNum > 0 && !_untouched) pendingTriggerPct += tNum;
         if (entryEl) { entryEl.textContent = '-'; entryEl.className = 'col-span-2 text-xs text-purple-300 text-right'; }
         if (avgEl) { avgEl.textContent = '-'; avgEl.className = 'col-span-1 text-xs text-cyan-300 text-right'; }
         if (liqEl) { liqEl.textContent = '-'; liqEl.innerHTML = '-'; liqEl.className = 'col-span-1 text-xs text-orange-300 text-right'; }
