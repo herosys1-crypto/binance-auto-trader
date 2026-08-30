@@ -42,14 +42,30 @@ def _check_15m_dump_signals(bc, symbol):
         if not result:
             return None, "no_analysis", None
 
+        # ═══════════════════════════════════════════════════════════════
+        # 🚨 Fix 229 (2026-08-30): **키 이름이 전부 틀려 이 워커는 산출이 0 이었다.**
+        #
+        #   ChartAnalyzer.analyze_timeframe 이 실제로 주는 키는 12개다:
+        #     closes / volumes / obv / rsi_now / rsi_prev / macd_hist /
+        #     cci_now / cci_prev / bb_up_last / bb_mid_last / bb_lo_last / kl_count
+        #
+        #   그런데 옛 코드는 bb_up / bb_mb / bb_lo / close_now / macd_hist_now /
+        #   obv_slope 를 읽었다 — **전부 없는 키**라 항상 None → 신호 4개가 영구 False.
+        #   살아 있는 신호는 rsi / cci / vol **3개뿐인데 MIN_PASSED = 5** 였다.
+        #   = 5분마다 API weight 를 쓰면서 **알람을 한 건도 낼 수 없었다.**
+        #   (raw_values 로 학습 스냅샷에도 None 이 박혔다)
+        # ═══════════════════════════════════════════════════════════════
         # 6중 지표
         signals = {}
 
+        _closes = result.get("closes") or []
+        _hist = result.get("macd_hist") or []
+
         # 1. BB 상단 밀림 or MB 하회
-        bb_up = result.get("bb_up")
-        bb_mb = result.get("bb_mb")
-        bb_lo = result.get("bb_lo")
-        close_now = result.get("close_now")
+        bb_up = result.get("bb_up_last")
+        bb_mb = result.get("bb_mid_last")
+        bb_lo = result.get("bb_lo_last")
+        close_now = float(_closes[-1]) if _closes else None
         signals["bb_dump"] = bool(close_now and bb_mb and close_now < bb_mb)
 
         # 2. RSI(6) 급락
@@ -57,15 +73,17 @@ def _check_15m_dump_signals(bc, symbol):
         signals["rsi_dump"] = bool(rsi6 is not None and rsi6 < RSI_DUMP_THRESHOLD)
 
         # 3. MACD Hist 음전환
-        macd_hist = result.get("macd_hist_now")
+        macd_hist = float(_hist[-1]) if _hist else None
         signals["macd_dump"] = bool(macd_hist is not None and macd_hist < 0)
 
         # 4. CCI 극단
         cci = result.get("cci_now")
         signals["cci_dump"] = bool(cci is not None and cci < CCI_DUMP_THRESHOLD)
 
-        # 5. OBV 감소 시작 (2봉 이상!)
-        obv_slope = result.get("obv_slope")
+        # 5. OBV 감소 시작
+        #   Fix 228 공통 함수(-1~+1). 워커마다 산식이 갈리면 단위가 또 섞인다.
+        from app.services.obv_metrics import obv_direction_ratio
+        obv_slope = obv_direction_ratio(result.get("obv"), result.get("volumes"))
         signals["obv_dump"] = bool(obv_slope is not None and obv_slope < 0)
 
         # 6. 볼륨 감소
@@ -105,8 +123,12 @@ def _check_multi_tf_obv_consistency(bc, symbol):
         r1h = ChartAnalyzer.analyze_timeframe(bc, symbol, "1h")
         r4h = ChartAnalyzer.analyze_timeframe(bc, symbol, "4h")
 
-        obv_1h = r1h.get("obv_slope") if r1h else None
-        obv_4h = r4h.get("obv_slope") if r4h else None
+        # 🚨 Fix 229: 여기도 없는 키였다 — 항상 None → 항상 "unknown" 을 반환했다.
+        #   즉 「1h+4h OBV 방향 일치 확인」이라는 이 함수 전체가 무의미했다.
+        #   Fix 228 공통 함수로 -1~+1 방향을 실제로 계산한다.
+        from app.services.obv_metrics import obv_direction_ratio
+        obv_1h = obv_direction_ratio(r1h.get("obv"), r1h.get("volumes")) if r1h else None
+        obv_4h = obv_direction_ratio(r4h.get("obv"), r4h.get("volumes")) if r4h else None
 
         if obv_1h is None or obv_4h is None:
             return "unknown"
