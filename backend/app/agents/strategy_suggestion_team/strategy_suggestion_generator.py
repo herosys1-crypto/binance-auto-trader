@@ -231,12 +231,15 @@ class StrategySuggestionGenerator(BaseAgent):
             cci_series = ChartAnalyzer.compute_cci(kl, period=20)
             cci_v = cci_series[-1] if cci_series else None
             obv_series = ChartAnalyzer.compute_obv(kl)
-            obv_slope_v: float | None = None
-            if len(obv_series) >= 10:
-                _o0 = float(obv_series[-10])
-                _o1 = float(obv_series[-1])
-                if _o0 != 0:
-                    obv_slope_v = round((_o1 - _o0) / abs(_o0) * 100, 2)
+            # 🚨 Fix 230 (2026-08-30): 옛 산식 `(o[-1]-o[-10]) / |o[-10]| * 100` 은
+            #   분모가 **10봉 전 누적 레벨**이라 0 근처면 폭발한다.
+            #   `!= 0` 가드는 **근사 0** 을 못 막는다 (실측 재현 3,600,000).
+            #   compute_obv 는 창의 첫 봉을 0 으로 놓으므로 그 레벨 자체가 임의값이다.
+            #   → Fix 228 공통 함수(-1~+1). 이 값이 obv_slope_pct 로 저장된다.
+            from app.services.obv_metrics import obv_direction_ratio
+            _vols = [float(k[5]) for k in kl]
+            _r = obv_direction_ratio(obv_series, _vols, 10)
+            obv_slope_v = round(_r, 4) if _r is not None else None
             result = (
                 round(float(rsi_v), 2) if rsi_v is not None else None,
                 round(float(cci_v), 2) if cci_v is not None else None,

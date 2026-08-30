@@ -81,7 +81,22 @@ def _calc_macd(closes: list[float], fast: int = 12, slow: int = 26, signal: int 
 
 
 def _calc_obv_slope(closes: list[float], volumes: list[float], lookback: int = 10) -> float | None:
-    """OBV 최근 lookback 봉 기울기 (%)"""
+    """OBV 방향 — **-1 ~ +1** (창 안 총거래량 대비 순방향 비율).
+
+    🚨 Fix 230 (2026-08-30): 옛 산식은 `(o[-1]-o[-10]) / |o[-10]|` 였다.
+      분모가 **10봉 전 누적 레벨**인데, compute_obv 는 창의 첫 봉을 0 으로 놓으므로
+      그 레벨은 fetch 시작점에 좌우되는 **임의값**이다. 0 근처면 값이 폭발하고,
+      정확히 0 이면 `else 1.0` 분기가 발동해 **원 거래량 델타 그대로**가 반환된다.
+      호출부가 다시 ×100 하므로 진입 스냅샷에 백만 단위가 찍혔다
+      (실측 재현 2,249,159.9 — `obv_slope_pct` 오염원 중 하나).
+
+      → Fix 228 의 공통 함수로 통일한다. 분모가 0 이 될 수 없고 항상 -1~+1 이다.
+
+    ⚠️ 의미가 바뀌었다: 이제 「창 안 거래량 중 순방향 비율」이다.
+       0.2 = 그 구간 거래의 20% 가 순매수 쪽. 호출부의 ±0.05 임계는 그대로 두되
+       (작은 값이라 방향 판정 용도로는 여전히 유효), 화면 표시
+       `OBV ±N%` 는 이제 **거래량 대비 비율**로 정확히 읽힌다.
+    """
     if len(closes) < lookback + 1 or len(volumes) < lookback + 1:
         return None
     obv = [0.0]
@@ -92,9 +107,8 @@ def _calc_obv_slope(closes: list[float], volumes: list[float], lookback: int = 1
             obv.append(obv[-1] - volumes[i])
         else:
             obv.append(obv[-1])
-    recent = obv[-lookback:]
-    base = abs(recent[0]) if recent[0] != 0 else 1.0
-    return (recent[-1] - recent[0]) / base
+    from app.services.obv_metrics import obv_direction_ratio
+    return obv_direction_ratio(obv, volumes, lookback)
 
 
 def _calc_vol_trend(volumes: list[float], lookback: int = 10) -> float:
