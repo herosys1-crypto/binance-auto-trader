@@ -110,6 +110,58 @@ class RiskService:
         capitals = cfg.get("capitals") or []
         return len(capitals) if capitals else 4
 
+    def _roi_if_next_stage_reached(self, strategy, side, avg_entry, leverage):
+        """다음 **미발동** 단계에 가격이 도달했을 때의 ROI. 계획이 없으면 None.
+
+        🚨 Fix 235 (2026-08-31) — v130 게이트의 교착 안전판.
+
+        v130 게이트는 「다음 단계가 남아 있으면 강제 손절을 보류한다」이다.
+        의도는 「물타기 기회를 남긴다」인데, 그 단계가 **도달 불가능한 자리**에
+        깔려 있으면 이렇게 굳는다:
+
+            손절  ->  단계가 남아서 잠김
+            단계  ->  도달 불가로 영원히 안 열림
+                 =>  손절이 영원히 안 걸린다 = 청산까지 보유
+
+        실측 #1873 SKRUSDT SHORT: force_sl 5% 인데 미실현 -746.
+        평단 0.01981778 인데 2단계 트리거가 0.2525 = 평단의 **12.7배**.
+        숏이라 그 가격까지 **올라가야** 2단계가 열리므로 살아서 도달할 수 없다.
+        #1488 이 -6,981 까지 갔던 구조와 같다.
+
+        판정은 **임의 상수가 아니라 산술**로 한다 — 그 단계에 도달했을 때의
+        ROI 가 -100% 를 넘으면 증거금이 이미 전부 없어졌다는 뜻이라
+        **그 전에 거래소 청산이 먼저 온다**. 즉 그 단계는 증명 가능하게
+        도달 불가다. 정상적인 물타기 단계(ROI -20%, -50% 등)는 영향받지 않으므로
+        살아 있는 다른 전략의 손절 동작은 바뀌지 않는다.
+        """
+        if avg_entry is None or avg_entry <= 0:
+            return None
+        try:
+            from app.models.strategy_stage_plan import StrategyStagePlan as _SP
+
+            plan = (
+                self.db.query(_SP)
+                .filter(
+                    _SP.strategy_instance_id == strategy.id,
+                    _SP.is_triggered.is_(False),
+                    _SP.trigger_price.isnot(None),
+                )
+                .order_by(_SP.stage_no)
+                .first()
+            )
+            if plan is None:
+                return None
+            trg = Decimal(str(plan.trigger_price))
+            lev = Decimal(str(leverage or 1))
+            if side == "LONG":
+                move = (trg - avg_entry) / avg_entry
+            else:
+                move = (avg_entry - trg) / avg_entry
+            return move * Decimal("100") * lev
+        except Exception:  # noqa: BLE001 - 판정 실패는 옛 동작(보류)으로 떨어뜨린다
+            logger.exception("[Fix235] 다음 단계 ROI 산출 실패 — 게이트는 옛 동작 유지")
+            return None
+
     def evaluate_stop_loss(self, strategy_id: int) -> bool:
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
@@ -326,11 +378,39 @@ class RiskService:
                 _total_stages_fsl = _count_active_stages(_tpl_fsl)
                 _current_stage_fsl = strategy.current_stage or 0
                 if _current_stage_fsl < _total_stages_fsl:
-                    logger.info(
-                        "[force_sl v130] 사장님 사상: 발동 조건 도달 but 다음 단계 남음 (%s/%s) = 발동 X!",
-                        _current_stage_fsl, _total_stages_fsl,
+                    # 🚨 Fix 235: 도달 불가능한 단계는 손절을 잠그지 못한다.
+                    #   그 단계에 도달했을 때의 ROI 가 -100% 를 넘으면 증거금이 이미
+                    #   전부 사라진 뒤라 거래소 청산이 먼저 온다 = 증명 가능한 도달 불가.
+                    #
+                    # 🛡 기본값 OFF (Fix 198 의 교훈).
+                    #   이 게이트를 푸는 순간 해당 전략은 **다음 사이클에 즉시 손절**된다.
+                    #   #1873 은 미실현 -746 이므로 켜는 순간 그 손실이 확정된다.
+                    #   그래서 켜기 전에는 **예고 로그만** 남긴다 — 사장님이 대상 목록을
+                    #   눈으로 보고 결정하신 뒤 설정으로 켠다.
+                    #   설정 키: force_sl_unlock_unreachable_stage
+                    _roi_at_next = self._roi_if_next_stage_reached(
+                        strategy, side, avg_entry, leverage
                     )
-                    return False
+                    _unlock = False
+                    if _roi_at_next is not None and _roi_at_next <= Decimal("-100"):
+                        _unlock = SystemSettingsService(self.db).get_bool(
+                            "force_sl_unlock_unreachable_stage", False
+                        )
+                        logger.warning(
+                            "[force_sl Fix235] #%s %s 다음 단계 도달 불가 "
+                            "(도달 시 ROI %.1f%% <= -100%%, %s/%s) — %s",
+                            strategy.id, strategy.symbol, _roi_at_next,
+                            _current_stage_fsl, _total_stages_fsl,
+                            "게이트 해제 = 손절 진행"
+                            if _unlock
+                            else "설정 OFF = 보류 유지 (켜면 즉시 손절된다)",
+                        )
+                    if not _unlock:
+                        logger.info(
+                            "[force_sl v130] 사장님 사상: 발동 조건 도달 but 다음 단계 남음 (%s/%s) = 발동 X!",
+                            _current_stage_fsl, _total_stages_fsl,
+                        )
+                        return False
         if is_force:
             from app.core.risk_constants import PERCENT_DENOMINATOR
             if side == "LONG":
