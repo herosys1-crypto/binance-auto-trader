@@ -81,8 +81,8 @@ function buildCapitalsGrid() {
           class="w-full px-1 py-1 bg-slate-900 border border-slate-700 rounded text-white text-sm ${triggerDisabled?'opacity-50 cursor-not-allowed':''}" />
       </div>
       <div class="col-span-1">
-        <input type="number" min="0" step="any" id="cm-add-margin-${i}" placeholder="0"
-          title="단계 ${i} 진입 직후 추가로 투입할 isolated 증거금 (USDT). 비우면 추가 안 함."
+        <input type="number" min="0" step="any" id="cm-add-margin-${i}" placeholder="비움"
+          title="단계 ${i} 진입 직후 추가로 투입할 isolated 증거금 (USDT). 비우면 추가 안 함. (Fix 231: placeholder 가 '0' 이라 값이 들어간 것처럼 보였다)"
           oninput="onCapitalsChange(); _refreshLiveCalc()"
           class="w-full px-1 py-1 bg-slate-900 border border-yellow-800 rounded text-yellow-300 text-sm" />
       </div>
@@ -93,6 +93,9 @@ function buildCapitalsGrid() {
       <div class="col-span-2 text-xs text-red-300 text-right" id="cm-stage-lossusd-${i}" title="이 단계 진입 시점의 누적 손실 USDT (단조 증가)">-</div>
     </div>`;
   }
+  // Fix 231: 시작가 없을 때 안내를 띄울 자리 (기본 숨김)
+  html += `<div id="cm-capitals-need-price" style="display:none"
+    class="mt-2 px-2 py-1 rounded text-xs text-amber-300 bg-amber-950/40 border border-amber-800"></div>`;
   grid.innerHTML = html;
 }
 
@@ -109,8 +112,31 @@ function _refreshLiveCalc() {
           if (el) el.textContent = '-';
         });
       }
+      // 🚨 Fix 231 (2026-08-30): 분석 박스도 **같이** 지운다.
+      //   옛 코드는 위 표만 '-' 로 지우고 아래 「단계별 청산 분석」 박스는 그대로 뒀다.
+      //   그래서 심볼을 바꾸거나 시작가를 지우면 **직전 심볼의 진입가·청산가가
+      //   그대로 남아** 지금 종목의 숫자인 것처럼 보였다.
+      //   (사장님이 트리거 20/30 을 넣었는데 박스는 -2% 간격을 보여준 원인)
+      const _box = document.getElementById('cm-stage-analysis-box');
+      if (_box) _box.style.display = 'none';
     };
-    if (!startPrice || startPrice <= 0) { clearAll(); return; }
+    if (!startPrice || startPrice <= 0) {
+      clearAll();
+      // 🚨 Fix 231: 왜 비었는지 **화면에 말한다** (헌법 159 — 실패를 진행 중으로 표시 금지).
+      //   시작가가 없으면 단계 진입가를 계산할 수 없다. 그걸 안 알려주면
+      //   「트리거를 입력했는데 아무 일도 안 일어난다」로 보인다.
+      const _hint = document.getElementById('cm-capitals-need-price');
+      if (_hint) {
+        _hint.style.display = 'block';
+        _hint.textContent = '⚠️ 시작가를 입력하면 단계 진입가 / 평균 / 청산가 / 손실을 계산합니다 '
+          + '(트리거·증거금은 입력한 그대로 적용됩니다).';
+      }
+      return;
+    }
+    {
+      const _hint = document.getElementById('cm-capitals-need-price');
+      if (_hint) _hint.style.display = 'none';
+    }
     const lvInpEl = document.getElementById('cm-leverage');
     const lev = lvInpEl && lvInpEl.value ? Number(lvInpEl.value) : 2;
     const side = (cmState.side || 'SHORT').toUpperCase();
