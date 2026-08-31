@@ -604,7 +604,21 @@ def run_auto_bb_breakdown() -> dict:
                 if _is_reentry:
                     _prev_count = _get_reentry_count(symbol, side)
                     _reentry_count_now = _prev_count + 1  # 이번 진입 후 카운트!
-                    _base = float(cfg.get("capitals", [500])[0])
+                    # 🚨 Fix 236 (2026-08-31 사장님): "우리가 정한거 아닌건 확실하게 찾아서"
+                    #   옛 코드: cfg.get("capitals", [500])[0]
+                    #   = 설정에 자본이 없으면 **코드가 500 USDT 를 지어냈다**.
+                    #   1.5배 규칙 자체는 사장님 지시(2026-08-21)지만, 그 배수의
+                    #   **기준값**이 사장님이 정한 값이 아니면 결과도 사장님 것이 아니다.
+                    #   → 자본이 없으면 **진입하지 않는다** (fail-closed).
+                    _caps_cfg = cfg.get("capitals") or []
+                    if not _caps_cfg:
+                        skipped += 1
+                        logger.warning(
+                            "[Fix236] %s 자본 설정 없음 = 진입 skip "
+                            "(하드코딩 기본값 금지 — 사장님이 정한 값만 쓴다)", key,
+                        )
+                        continue
+                    _base = float(_caps_cfg[0])
                     _reentry_capital = _calc_reentry_capital(symbol, side, _base)
                     if _reentry_capital is None:
                         skipped += 1

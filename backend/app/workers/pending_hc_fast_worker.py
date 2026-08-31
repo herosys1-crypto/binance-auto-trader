@@ -98,7 +98,18 @@ def run_pending_hc_fast() -> dict:
                 continue
 
             _pcfg = ps.strategy_config if isinstance(ps.strategy_config, dict) else {}
-            _capitals = _pcfg.get("capitals", [500])
+            # 🚨 Fix 236 (2026-08-31 사장님): 하드코딩 자본 기본값 제거.
+            #   옛 코드는 설정에 capitals 가 없으면 **500 USDT 를 지어내** 진입했다.
+            #   사장님이 정하지 않은 금액으로 실자금이 나가는 경로다 → fail-closed.
+            _capitals = _pcfg.get("capitals") or []
+            if not _capitals:
+                skipped += 1
+                logger.warning(
+                    "[Fix236] %s %s 자본 설정 없음 = 진입 skip "
+                    "(하드코딩 기본값 금지 — 사장님이 정한 값만 쓴다)",
+                    ps.symbol, ps.side,
+                )
+                continue
             _leverage = _pcfg.get("leverage", 2)
             cfg = {"capitals": _capitals, "leverage": _leverage}
 
