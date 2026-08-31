@@ -249,3 +249,31 @@ def test_failure_keeps_existing_path():
     """판정 실패로 급락 진입이 통째로 멈추면 안 된다 (Fix 252 의 교훈)."""
     src = _LIVE.read_text(encoding="utf-8")
     assert "기존 경로 유지" in src
+
+
+# ── Fix 258: 같은 실수를 두 번 했다 (관측 카운터) ────────────────────
+
+def test_live_worker_counts_evaluations_too():
+    """🚨 Fix 255 에서 배운 것을 auto_long_bottom 에는 적용하지 않았다.
+
+    Fix256 로그가 0 이었는데, 같은 사이클에 급락 후보 14건(B1=8 B2=4 B3=2)이
+    패턴 B 로 들어갔다 = **판정은 돌고 있었다**. 로그를 「적중했을 때만」 남겨서
+    「안 도는 것」과 「조건 미달」이 또 구별되지 않았다.
+    """
+    code = _live_code()
+    assert '"sb_eval"' in code, "평가 횟수를 세지 않는다"
+    assert '"sb_hit"' in code, "적중 횟수를 세지 않는다"
+    assert '"sb_err"' in code, "오류 횟수를 세지 않는다"
+
+
+def test_eval_counted_before_verdict_in_live_worker():
+    """판정 결과와 무관하게 먼저 세야 「돌긴 도는가」를 알 수 있다."""
+    code = _live_code()
+    i_eval = code.index('stats["sb_eval"]')
+    i_ok = code.index("if _v256.ok:")
+    assert i_eval < i_ok
+
+
+def test_counters_in_the_cycle_summary():
+    src = _LIVE.read_text(encoding="utf-8")
+    assert "Fix256 평가=%d 적중=%d 오류=%d" in src, "완료 로그에 카운터가 없다"

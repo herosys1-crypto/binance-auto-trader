@@ -541,7 +541,8 @@ def _surge_pullback_enabled(db) -> bool:
 
 
 def _check_long_entry_conditions(
-    bc, symbol: str, ticker_24h: dict, *, surge_pullback_on: bool = True
+    bc, symbol: str, ticker_24h: dict, *, surge_pullback_on: bool = True,
+    stats: dict | None = None,
 ) -> dict:
     """Fix 50 v2: 사장님 verbatim 2 패턴 분기!
 
@@ -670,12 +671,16 @@ def _check_long_entry_conditions(
                     _od256 = _obv256(_a256.get("obv"), _a256.get("volumes"), 20)
                 except Exception:
                     _od256 = None
+                if stats is not None:
+                    stats["sb_eval"] = stats.get("sb_eval", 0) + 1
                 _v256 = _sb256(
                     closes=[float(x) for x in _c256] if _c256 else None,
                     volumes=_a256.get("volumes"),
                     obv_dir=_od256,
                 )
                 if _v256.ok:
+                    if stats is not None:
+                        stats["sb_hit"] = stats.get("sb_hit", 0) + 1
                     logger.warning(
                         "[Fix256] 🚫 %s 지지 붕괴 = LONG 아님 (사상 ③: 확실한 숏) — %s "
                         "선행급등 %.0f%% 지지 %s -> %s 거래량 %.1fx OBV %s",
@@ -693,6 +698,8 @@ def _check_long_entry_conditions(
                         "support_breakdown": _v256.detail,
                     }
             except Exception as _e256:
+                if stats is not None:
+                    stats["sb_err"] = stats.get("sb_err", 0) + 1
                 logger.warning(
                     "[Fix256] %s 지지붕괴 판정 실패 = 기존 경로 유지: %s", symbol, _e256,
                 )
@@ -1219,6 +1226,10 @@ def run_auto_long_at_bottom_once() -> dict:
     # 🎯 Fix 244 (사장님 선택 「B」): 「급등 중 조정」 1순위 경로 ON/OFF.
     #   기본 ON. 끄려면 SystemSetting surge_pullback_long_enabled = 0.
     _sp_on = _surge_pullback_enabled(db)
+    # 🔎 Fix 258: Fix256(지지 붕괴) 관측 카운터.
+    #   Fix 255 에서 배운 것을 여기엔 적용하지 않아 또 「성공했을 때만 로그」가 됐다.
+    #   0 이 「안 도는 것」인지 「조건 미달」인지 구별되어야 한다 (헌법 93).
+    _sb_stats: dict[str, int] = {}
     logger.info(
         "[Fix244] 급등중 조정 1순위 경로 = %s", "ON" if _sp_on else "OFF(설정)",
     )
@@ -1648,7 +1659,7 @@ def run_auto_long_at_bottom_once() -> dict:
             try:
                 scanned += 1
                 result = _check_long_entry_conditions(
-                    bc, symbol, t, surge_pullback_on=_sp_on,
+                    bc, symbol, t, surge_pullback_on=_sp_on, stats=_sb_stats,
                 )
                 if not result.get("detected"):
                     # 🎯 Fix 151: not_detected 는 단일 버킷이라 「어느 게이트가 막았는지」
@@ -1826,9 +1837,12 @@ def run_auto_long_at_bottom_once() -> dict:
                 continue
 
         logger.info(
-            "[auto_long_bottom] 완료: scanned=%d entered=%d skipped=%d used=%d/%d | 사유: "
+            "[auto_long_bottom] 완료: scanned=%d entered=%d skipped=%d used=%d/%d "
+            "| Fix256 평가=%d 적중=%d 오류=%d | 사유: "
             + (" ".join(f"{k}={v}" for k, v in sorted(_reasons.items(), key=lambda x: -x[1])) or "-"),
             scanned, entered, skipped, used + entered, daily_limit,
+            _sb_stats.get("sb_eval", 0), _sb_stats.get("sb_hit", 0),
+            _sb_stats.get("sb_err", 0),
         )
         return {
             "spec": SPEC_VERSION,
