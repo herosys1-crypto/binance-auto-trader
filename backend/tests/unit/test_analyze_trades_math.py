@@ -20,11 +20,41 @@ from pathlib import Path
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "analyze_trades.py"
 
 
-def _stat_cls():
+def _mod():
     spec = importlib.util.spec_from_file_location("_analyze_trades", _SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod.Stat
+    return mod
+
+
+def _stat_cls():
+    return _mod().Stat
+
+
+def test_worker_grouping_strips_symbol_names():
+    """🚨 심볼이 그룹 이름에 섞이면 워커별 성적을 볼 수 없다.
+
+    실측 사고: 볼밴 분할 22건이 `PUMPSPLIT_BTRUSDT` / `PUMPSPLIT_TACUSDT` ... 처럼
+    **심볼 수만큼 쪼개져** 「건수 2건」짜리 그룹이 줄줄이 나왔다.
+    그 상태로는 「이 워커가 버는가」를 판단할 수 없다.
+    """
+    f = _mod()._normalize_source
+    assert f("PUMPSPLIT_BTRUSDT_20260830") == "PUMPSPLIT"
+    assert f("PUMPSPLIT_TACUSDT_20260829") == "PUMPSPLIT"
+    assert f("PUMPSPLIT_BTRUSDT_1") == f("PUMPSPLIT_ZKPUSDT_2"), "같은 워커로 합쳐야 한다"
+
+
+def test_manual_is_identified_by_quick_prefix():
+    """수동/자동을 가르는 기준 — 이게 틀리면 「자동만 분석」이 무의미해진다."""
+    f = _mod()._normalize_source
+    assert f("_quick_20260831120000") == "수동(직접입력)"
+    assert f("auto_bb_break_SAJANGNIM_BO") != "수동(직접입력)"
+
+
+def test_grouping_never_crashes_on_odd_names():
+    f = _mod()._normalize_source
+    for name in ("", "BTCUSDT", "___", "X" * 60, "auto"):
+        assert isinstance(f(name), str) and f(name)
 
 
 def test_basic_aggregation():

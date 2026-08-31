@@ -80,6 +80,31 @@ def _row(*cells: Any, w: tuple[int, ...] = ()) -> str:
     return "".join(out)
 
 
+def _normalize_source(name: str) -> str:
+    """템플릿 이름 -> **워커 이름**.
+
+    🚨 옛 코드는 앞 두 토큰만 잘라서 `PUMPSPLIT_BTRUSDT` 처럼 **심볼이 섞였다**.
+    그래서 같은 워커가 심볼 수만큼 쪼개져 「건수 2건」짜리 그룹이 줄줄이 나왔고,
+    워커별 성적을 볼 수 없었다. 심볼 토큰을 걷어내고 합친다.
+    """
+    if not name:
+        return "미상"
+    if name.startswith("_quick_"):
+        return "수동(직접입력)"
+    parts = []
+    for tok in name.upper().replace("-", "_").split("_"):
+        if not tok:
+            continue
+        if tok.endswith("USDT") or tok.endswith("BUSD"):
+            break                      # 심볼부터는 이름이 아니다
+        if tok.isdigit() or len(tok) > 14:
+            break                      # 타임스탬프
+        parts.append(tok)
+        if len(parts) >= 3:
+            break
+    return "_".join(parts) or "미상"
+
+
 class Stat:
     """한 그룹의 성적."""
 
@@ -166,17 +191,15 @@ def collect(db, days: int) -> list[dict]:
         pnl = _f(si.realized_pnl) or 0.0
         lr = learn.get(si.id)
         name = (tpl.name if tpl else "") or ""
-        # `_quick_20260830...` = 사장님 수동 생성. 그 외 접두사 = 워커.
-        source = "수동(직접입력)" if name.startswith("_quick_") else (
-            name.split("_")[0] + "_" + name.split("_")[1]
-            if name.count("_") >= 1 else (name or "미상")
-        )
+        is_manual = name.startswith("_quick_")
+        source = _normalize_source(name)
         out.append({
             "id": si.id,
             "symbol": si.symbol,
             "side": (si.side or "").upper(),
             "status": si.status,
             "source": source[:26],
+            "is_manual": is_manual,
             "tpl_name": name,
             "pnl": pnl,
             "capital": _f(si.total_capital) or 0.0,
@@ -382,11 +405,24 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--csv", type=str, default=None)
+    ap.add_argument("--auto-only", action="store_true",
+                    help="수동(직접입력) 전략을 빼고 **자동매매만** 분석")
+    ap.add_argument("--manual-only", action="store_true",
+                    help="수동 전략만 분석 (대조용)")
     args = ap.parse_args()
 
     db = SessionLocal()
     try:
         rows = collect(db, args.days)
+        _all_n = len(rows)
+        if args.auto_only:
+            rows = [r for r in rows if not r["is_manual"]]
+            print()
+            print(f"  🤖 **자동매매만** 분석 — 수동 {_all_n - len(rows)}건 제외")
+        elif args.manual_only:
+            rows = [r for r in rows if r["is_manual"]]
+            print()
+            print(f"  ✋ **수동만** 분석 — 자동 {_all_n - len(rows)}건 제외")
         sec_overview(rows, args.days)
         if rows:
             sec_by_source(rows)
