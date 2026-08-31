@@ -138,6 +138,31 @@ PATTERN_A_MIN_CHG = 5.0       # 패턴 A 하한 (지속 상승 초기!) — Fix 
 PATTERN_A_MAX_CHG = 15.0      # 패턴 A 상한 — Fix 87 = 진입 skip!
 PATTERN_B_MIN_CHG = -15.0     # 패턴 B 하한 (큰 조정!)
 PATTERN_B_MAX_CHG = -3.0      # 🌟 Fix 87: 0 → -3.0 (급락 확실!)
+# 🚨 Fix 253 (2026-09-01) — LONG 강제손절 **10% -> 5%** (사장님 원 지시로 복귀).
+#
+# ## 경위
+#   Fix 49 (2026-08-24)  사장님 verbatim: "단계별 진입후 -5% 손실이면 청산하고 대기"
+#                        -> SHORT 는 지금도 5%
+#   Fix 87 (2026-08-25)  LONG 만 10% 로 상향. 근거: "원 -5% = leverage 2x +
+#                        15m 알트 노이즈 = 자연 노이즈 손절"
+#
+# ## 실측이 그 근거를 반증했다 (2026-09-01)
+#   LONG 은 이틀 연속 **승자 0명** (08-31: 12건 0% / 09-01: 11건 0%).
+#   손절은 설정대로 정확히 작동한다(초과 중앙값 0.2%p, Fix 검증 완료).
+#   즉 느슨한 손절이 승률을 올린 게 아니라 **잃는 크기만 2배로 키웠다**.
+#
+#   그리고 「노이즈에 잘린다」도 사실이 아니었다 —
+#   현재 이익 중인 LONG 13건의 **최저 ROI 가 -0.1 ~ -4.3%**,
+#   즉 **-5% 를 건드린 승자가 한 건도 없다**.
+#   유일하게 -5% 를 넘긴 SUPERUSDT(-6.5%)는 지금도 손실 중이다.
+#
+#   => 5% 로 조여도 **승자를 자르지 않으면서** 패자의 손실만 반감된다.
+#      (09-01 LONG -143 -> 약 -72 로 추정)
+#
+# ⚠️ 되돌리려면 이 값만 10 으로 바꾸면 된다. 바꿀 때는 위 실측을 다시 재고
+#    「이익 중인 LONG 이 -5% 아래로 간 적이 있는가」를 확인할 것.
+LONG_FORCE_SL_ROI = Decimal("5")
+
 TREND_EXTREME_BULL_PCT_3D = 30.0  # 3일 +30%↑ = extreme (skip! 정점 위험!)
 RSI_PATTERN_A_MIN = 35.0      # Fix 61 P1: 30 → 35 (더 엄격!)
 RSI_PATTERN_A_MAX = 55.0      # Fix 61 P1: 60 → 55 (과매수 X! 더 엄격!)
@@ -1352,10 +1377,10 @@ def run_auto_long_at_bottom_once() -> dict:
                 #                        대기 모니터링" → 사장님 요구 상향 반영!
                 try:
                     new_strategy.force_sl_enabled_override = True
-                    new_strategy.force_sl_roi_override = Decimal("10")
+                    new_strategy.force_sl_roi_override = LONG_FORCE_SL_ROI
                     db.commit()
                     logger.info(
-                        "[Fix75/alert-long+Fix87] 🛡️ %s SL override -10%% 적용 "
+                        "[Fix75/alert-long+Fix87] 🛡️ %s SL override -5%% 적용 (Fix253) "
                         "(strategy_id=%s, 2x 상향 = 15m 노이즈 방지!)",
                         symbol, new_strategy.id,
                     )
@@ -1662,10 +1687,10 @@ def run_auto_long_at_bottom_once() -> dict:
                 # 기존 활성 전략은 그대로! 신 진입만 -10%!
                 try:
                     new_strategy.force_sl_enabled_override = True
-                    new_strategy.force_sl_roi_override = Decimal("10")
+                    new_strategy.force_sl_roi_override = LONG_FORCE_SL_ROI
                     db.commit()
                     logger.info(
-                        "[auto_long_bottom+Fix87] 🛡️ %s SL override -10%% 적용 (strategy_id=%s, 2x 상향!)",
+                        "[auto_long_bottom+Fix87] 🛡️ %s SL override -5%% 적용 (Fix253) (strategy_id=%s, 2x 상향!)",
                         symbol, new_strategy.id,
                     )
                 except Exception as _sl_exc:
