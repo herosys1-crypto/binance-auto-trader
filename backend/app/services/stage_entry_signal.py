@@ -108,6 +108,71 @@ def check_stage_entry_signal(
             detail["gates"]["regime"] = {"ok": None, "why": f"오류 fail-open: {e}"}
             logger.warning("[stage_entry_signal] %s regime 오류 (fail-open): %s", symbol, e)
 
+    # ── ③-b 진입 창 (SHORT 전용, Fix 248) — 「너무 빨리」와 「너무 늦게」를 둘 다 막는다 ──
+    #
+    #   사장님 verbatim (2026-08-31, SKRUSDT 차트를 보여주시며):
+    #     "이렇게 큰하락에 포지션진입을 해야 하는데 **너무 빨리 진입하여 큰손실**을 본거야"
+    #
+    #   #1873 실측: 평단 0.019818 에 SHORT -> 정점 0.034856 (+75.9%) -> -724.80 청산.
+    #   그 뒤 실제로 0.023 까지 (-33.8%) 내려왔다. **방향은 맞았고 타이밍만 일렀다.**
+    #
+    #   반대쪽 실패도 있다 (사장님 사상 ④):
+    #     "볼밴 하단까지 갔다가도 obv가 강하면 이것도 다시 상승으로 전환된다고 봐야해"
+    #
+    #   두 실패는 정반대라 **양쪽 끝을 각각 막고 그 사이만 남긴다**.
+    #   기본 OFF — 얼마나 막는지 먼저 본다. OFF 여도 「막았을 것」 로그는 남긴다.
+    if _side == "SHORT":
+        try:
+            from app.services.chart_analyzer import ChartAnalyzer as _CA248
+            from app.services.obv_metrics import obv_direction_ratio as _obv248
+            from app.services.peak_drop_short import evaluate_peak_drop_short as _pd248
+            from app.services.system_settings_service import SystemSettingsService as _SS248
+
+            _a1 = _CA248.analyze_timeframe(bc, symbol, "1h", limit=120) or {}
+            _c1 = _a1.get("closes") or []
+            _bp248 = None
+            _up248, _lo248 = _a1.get("bb_up_last"), _a1.get("bb_lo_last")
+            try:
+                if _c1 and _up248 is not None and _lo248 is not None and float(_up248) != float(_lo248):
+                    _bp248 = (float(_c1[-1]) - float(_lo248)) / (float(_up248) - float(_lo248))
+            except (TypeError, ValueError, ZeroDivisionError):
+                _bp248 = None
+            _mh248 = None
+            _hl248 = _a1.get("macd_hist") or []
+            if _hl248:
+                try:
+                    _mh248 = float(_hl248[-1])
+                except (TypeError, ValueError):
+                    _mh248 = None
+            try:
+                _od248 = _obv248(_a1.get("obv"), _a1.get("volumes"), 20)
+            except Exception:
+                _od248 = None
+
+            _v248 = _pd248(
+                closes=[float(x) for x in _c1] if _c1 else None,
+                bb_pos=_bp248, macd_hist=_mh248, obv_dir=_od248,
+            )
+            detail["gates"]["entry_window"] = {
+                "ok": bool(_v248.allow), "why": _v248.reason, **_v248.detail,
+            }
+            if not _v248.allow:
+                _on248 = False
+                try:
+                    _on248 = _SS248(db).get_bool("entry_window_short_enabled", False) if db else False
+                except Exception:
+                    _on248 = False
+                if _on248:
+                    return False, f"진입창 차단: {_v248.reason}", detail
+                logger.warning(
+                    "[Fix248] ⚠️ %s SHORT 이 진입은 **막았을 것** — %s "
+                    "(설정 OFF 이라 그대로 진행. 켜기: entry_window_short_enabled=1)",
+                    symbol, _v248.reason,
+                )
+        except Exception as e:
+            detail["gates"]["entry_window"] = {"ok": None, "why": f"오류 fail-open: {e}"}
+            logger.warning("[Fix248] %s 진입창 판정 오류 (fail-open): %s", symbol, e)
+
     # ── ④ 정점/저점 확인 (Fix 111) = 핵심 ──
     #     사장님 사상: "한번올랐다 다시 내려오고 이렇게 2-3번 반복하면
     #                  rsi macd obv cci 등등 고점에 이란 신호를 보고 진입"
