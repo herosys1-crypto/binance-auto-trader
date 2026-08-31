@@ -1454,6 +1454,63 @@ def _create_auto_bb_strategy(
 
     # 🌟 v177 사장님 (2026-08-19): 자동 진입 = 1단계만 강제!
     # 🎯 사장님 (2026-08-21): OBV_HOLD 예외! = 3단계 + 오래 버티기!
+    # ══════════════════════════════════════════════════════════════════
+    # 🚫 Fix 247 (2026-08-31) — 합의(confluence) 게이트.
+    #
+    #   두 번의 실측이 같은 것을 말한다:
+    #     v139 백테스트  AVOID 227건 -19,207 = 전체 손실의 87% /
+    #                    CONFLICT 67건 적중률 16.4% (금지보다도 나쁨)
+    #     2026-08-31     confluence.blocked 효과크기 -2.06
+    #                    (승 중앙값 0 / 패 중앙값 1 = 거의 완벽한 분리)
+    #
+    #   그런데 strategy_confluence.evaluate 는 화면 표시와 학습 저장에서만
+    #   불렸다 — **진입 판정에는 한 번도 안 쓰였다.**
+    #   시스템이 「하지 마라」를 계산해 놓고 그대로 들어가고 있었다.
+    #
+    #   여기(모든 자동 진입의 공용 관문)에서, 다른 게이트를 **전부 통과한 뒤**
+    #   생성 직전에만 부른다 — 후보마다 돌리면 캔들 3회 × 40~100 심볼로
+    #   IP ban 위험이 크다(Fix 117/122 의 실제 사고).
+    #
+    #   ⚠️ 기본 OFF. OFF 여도 「막았을 것」 로그는 남긴다.
+    #      켜기: SystemSetting confluence_gate_enabled = 1
+    # ══════════════════════════════════════════════════════════════════
+    try:
+        from app.services.confluence_gate import (
+            check_confluence_gate as _cg,
+            confluence_gate_enabled as _cg_on,
+        )
+        _cg_client = None
+        try:
+            from app.core.crypto import decrypt_text as _dt247
+            from app.integrations.binance.client import BinanceClient as _BC247
+            from app.models.exchange_account import ExchangeAccount as _EA247
+            _acc247 = db.get(_EA247, 1)
+            if _acc247 is not None:
+                _cg_client = _BC247(
+                    api_key=_dt247(_acc247.api_key_enc),
+                    api_secret=_dt247(_acc247.api_secret_enc),
+                    is_testnet=_acc247.is_testnet,
+                )
+        except Exception as _ce:
+            logger.warning("[Fix247] client 생성 실패 = 게이트 통과: %s", _ce)
+        if _cg_client is not None:
+            _allow, _why, _det = _cg(_cg_client, symbol, side)
+            if not _allow:
+                if _cg_on(db):
+                    logger.warning(
+                        "[Fix247] 🚫 %s %s 진입 차단 — %s", symbol, side, _why,
+                    )
+                    return None
+                logger.warning(
+                    "[Fix247] ⚠️ %s %s 이 진입은 **막았을 것** — %s "
+                    "(설정 OFF 이라 그대로 진행. 켜기: %s=1)",
+                    symbol, side, _why, "confluence_gate_enabled",
+                )
+            else:
+                logger.info("[Fix247] ✅ %s %s %s", symbol, side, _why)
+    except Exception as _cge:
+        logger.warning("[Fix247] 합의 게이트 자체 실패 = 통과: %s", _cge)
+
     # 🚨 Fix 237 (2026-08-31 사장님): "우리가 정한거 아닌건 확실하게 찾아서"
     #   옛 코드: cfg.get("capitals") or [500, 500, 500, 500]
     #   이 함수는 자동 진입 워커 **5개가 공유하는 마지막 관문**이다.
