@@ -134,6 +134,7 @@ def run_learning_sync() -> dict:
     """5분마다 실행 = 학습 자동 sync!"""
     db: Session = SessionLocal()
     entered = 0
+    backfilled = 0   # Fix 240: 뒤늦게 채운 entry_context 수
     snapped = 0
     closed = 0
     failed = 0   # v139: 실패 건수 = 더 이상 숨기지 않음!
@@ -186,6 +187,35 @@ def run_learning_sync() -> dict:
                     else:
                         failed += 1
                 elif record.status == "OPEN":
+                    # 🚨 Fix 240 (2026-08-31): entry_context 가 **빈 채로 굳는** 경로를 막는다.
+                    #
+                    #   실측 (1,075건 분석): entry_context 가 채워진 건 **12.1%** 뿐이다.
+                    #   그래서 「이긴 진입과 진 진입의 지표 차이」를 한 줄도 낼 수 없었다.
+                    #
+                    #   원인: on_entry 가 한 번 record 를 만들면 다음 사이클부터는
+                    #   이 elif 분기(snapshot)로 와서 **entry_context 를 다시 시도하지 않는다**.
+                    #   첫 시도에서 Binance 조회가 실패하거나 client 가 없었으면
+                    #   그 전략의 진입 지표는 **영원히 빈 dict** 로 남는다.
+                    #
+                    #   → 아직 fresh 창 안이면 한 번 더 채운다. 창을 넘겼으면
+                    #     「지금 차트」를 붙이는 것이 오히려 오염이므로 건드리지 않는다.
+                    if not (record.entry_context or {}):
+                        _created2 = getattr(s, "created_at", None)
+                        if (_created2 and _created2 >= fresh_cutoff
+                                and str(s.status or "").startswith("STAGE")):
+                            try:
+                                _ctx = _entry_context(client, s)
+                                if _ctx:
+                                    record.entry_context = _ctx
+                                    backfilled += 1
+                                    logger.info(
+                                        "[Fix240] #%s %s entry_context 뒤늦게 채움 "
+                                        "(첫 시도 실패분 복구)", s.id, s.symbol,
+                                    )
+                            except Exception as _bf:
+                                logger.error(
+                                    "[Fix240] #%s entry_context 재시도 실패: %s", s.id, _bf,
+                                )
                     # 진행 중 = snapshot!
                     if tls.snapshot(s):
                         snapped += 1
@@ -255,10 +285,11 @@ def run_learning_sync() -> dict:
             )
         else:
             logger.info(
-                "[learning_sync] 완료: entered=%d snapped=%d closed=%d",
-                entered, snapped, closed,
+                "[learning_sync] 완료: entered=%d snapped=%d closed=%d backfilled=%d",
+                entered, snapped, closed, backfilled,
             )
-        return {"entered": entered, "snapped": snapped, "closed": closed, "failed": failed}
+        return {"entered": entered, "snapped": snapped, "closed": closed,
+                "failed": failed, "backfilled": backfilled}
     except Exception as e:
         logger.warning("[learning_sync] 실행 실패: %s", e)
         db.rollback()
