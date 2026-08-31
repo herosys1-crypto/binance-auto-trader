@@ -258,6 +258,70 @@ def run_unified_15m_entry() -> dict:
                     continue
                 closes = a15.get("closes") or []
                 matched, side, surge_meta = _detect_15m_surge(closes, pct_1h, pct_3h)
+
+                # ═══════════════════════════════════════════════════════════
+                # 📉 Fix 254 (2026-09-01) — 「급락 = LONG」을 뒤집는다 (사장님 사상 ③).
+                #
+                #   위 _detect_15m_surge 는 방향을 **부호만으로** 정한다:
+                #       side = "SHORT" if c1h > 0 else "LONG"
+                #   그래서 BTRUSDT 가 -44% 붕괴하면 「급락」으로 보고 **LONG 을 산다.**
+                #
+                #   사장님 사상 ③: "급락한것은 이전급등에 대한 급락이라 **확실한 숏**"
+                #                  "볼밴 **지지선 붕괴**와 지속하락을 찾아서 분할 진입"
+                #
+                #   BTR #1488 (단일 최대 손실 -6,552.45):
+                #     0.0138 -> 0.224 (+1,523%) -> 4~5일 횡보 -> 0.0823 (-44%)
+                #     정점과 붕괴 사이가 4~5일. 기다렸어야 할 자리가 **붕괴**다.
+                #
+                #   -> 급락으로 잡힌 심볼이 「선행 급등 + 지지선 붕괴 + 거래량 + OBV 하락」
+                #      **전부**를 만족하면 방향을 SHORT 로 뒤집는다.
+                #      (다수결이 아니라 전부 — 방향을 뒤집는 판정이다. Fix 250 의 교훈)
+                #
+                #   ⚠️ 기본 OFF. OFF 여도 「뒤집었을 것」 로그는 남긴다.
+                #      켜기: SystemSetting support_breakdown_short_enabled = 1
+                # ═══════════════════════════════════════════════════════════
+                if matched and side == "LONG":
+                    try:
+                        from app.services.obv_metrics import obv_direction_ratio as _obv254
+                        from app.services.support_breakdown import (
+                            evaluate_support_breakdown as _sb254,
+                        )
+                        _a1h = ChartAnalyzer.analyze_timeframe(bc, symbol, "1h", limit=80) or {}
+                        _c1 = _a1h.get("closes") or []
+                        try:
+                            _od254 = _obv254(_a1h.get("obv"), _a1h.get("volumes"), 20)
+                        except Exception:
+                            _od254 = None
+                        _v254 = _sb254(
+                            closes=[float(x) for x in _c1] if _c1 else None,
+                            volumes=_a1h.get("volumes"),
+                            obv_dir=_od254,
+                        )
+                        if _v254.ok:
+                            _on254 = _get_setting_int(db, "support_breakdown_short_enabled", 0)
+                            if _on254:
+                                logger.warning(
+                                    "[Fix254] 📉 %s 지지 붕괴 = LONG -> **SHORT** 전환 (%s) "
+                                    "선행급등 %.0f%% 지지 %s -> %s 거래량 %.1fx OBV %s",
+                                    symbol, _v254.reason,
+                                    _v254.detail.get("prior_rally_pct") or 0,
+                                    _v254.detail.get("support"), _v254.detail.get("now"),
+                                    _v254.detail.get("vol_ratio") or 0,
+                                    _v254.detail.get("obv_dir"),
+                                )
+                                side = "SHORT"
+                                surge_meta["flipped_by"] = "Fix254_support_breakdown"
+                            else:
+                                logger.warning(
+                                    "[Fix254] ⚠️ %s 지지 붕괴 = LONG 이 아니라 SHORT 였을 것 "
+                                    "(%s) — 설정 OFF 라 LONG 유지. "
+                                    "켜기: support_breakdown_short_enabled=1",
+                                    symbol, _v254.reason,
+                                )
+                    except Exception as _e254:
+                        logger.warning("[Fix254] %s 지지붕괴 판정 실패 = 원 방향 유지: %s",
+                                       symbol, _e254)
+
                 if not matched or side is None:
                     # 대상 심볼 아님! = 무로그 (40개 = 노이즈!)
                     no_surge += 1
