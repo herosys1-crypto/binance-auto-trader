@@ -678,6 +678,61 @@ def _check_long_entry_conditions(
                     volumes=_a256.get("volumes"),
                     obv_dir=_od256,
                 )
+                # ═══════════════════════════════════════════════════════
+                # 🔋 Fix 259 (2026-09-01) — 「소소한 반등」에는 LONG 을 넣지 않는다.
+                #
+                #   사장님 verbatim (AIOUSDT 차트):
+                #     "급등후 급락했을때 obv 같이 급락하면 다시 지지반등 이상을 하려면
+                #      **obv가 강력하게 상승해야해**. 이건 **작은 반등후 하락**하는거야.
+                #      **세력이 모두 떠난후 다시 상승하려면 세력이 다시 들어와야** 하는데
+                #      이차트는 그냥 **소소한 반등**이야"
+                #
+                #   실측 (진입 시점 캔들 복원):
+                #     #1890 SNXXUSDT  **+22.71**   1H OBV 회복률 **0.637**
+                #     #1909 AIOUSDT    실패          0.060
+                #     #1884 XPLUSDT    실패          0.106
+                #
+                #   🚨 **1시간봉이 판별자**다. 4H 는 오히려 뒤집혀 있다(승 0.187/패 0.266).
+                #      그리고 Fix 257(4H obv_dir <= -0.10)은 AIO(4H **+0.3088**)를 못 잡는다
+                #      — 「지금 오르는가」가 아니라 「떨어진 만큼 돌아왔는가」가 기준이다.
+                #
+                #   ⚠️ OBV 가 실제로 떨어진 적이 있을 때만 적용된다 (사장님: "obv 같이 급락하면").
+                #      하락 구간이 없으면 None -> 막지 않는다.
+                # ═══════════════════════════════════════════════════════
+                try:
+                    from app.services.obv_recovery import (
+                        RECOVERY_MIN as _RM259,
+                        obv_recovery_ratio as _rr259,
+                    )
+                    _r259, _d259 = _rr259(_a256.get("obv"), 60)
+                    if _r259 is not None and _r259 < _RM259:
+                        if stats is not None:
+                            stats["ob_hit"] = stats.get("ob_hit", 0) + 1
+                        logger.warning(
+                            "[Fix259] 🚫 %s 소소한 반등 = LONG 아님 — "
+                            "1H OBV 회복률 %.3f < %.2f (고점 %s -> 저점 %s -> 현재 %s) "
+                            "[실측: 승자 0.637 / 패자 0.060·0.106]",
+                            symbol, _r259, _RM259,
+                            _d259.get("peak"), _d259.get("trough"), _d259.get("now"),
+                        )
+                        return {
+                            "detected": False, "passed": 0, "confidence": 0.0,
+                            "reason": (
+                                f"🚫 Fix259 소소한 반등 — 1H OBV 회복률 "
+                                f"{_r259:.3f} < {_RM259:.2f} (세력이 안 돌아왔다)"
+                            ),
+                            "pattern": "WEAK_OBV_REBOUND",
+                            "trend": trend,
+                            "obv_recovery": _d259,
+                        }
+                    if stats is not None:
+                        stats["ob_eval"] = stats.get("ob_eval", 0) + 1
+                except Exception as _e259:
+                    logger.warning(
+                        "[Fix259] %s OBV 회복률 판정 실패 = 기존 경로 유지: %s",
+                        symbol, _e259,
+                    )
+
                 if _v256.ok:
                     if stats is not None:
                         stats["sb_hit"] = stats.get("sb_hit", 0) + 1
@@ -1838,11 +1893,13 @@ def run_auto_long_at_bottom_once() -> dict:
 
         logger.info(
             "[auto_long_bottom] 완료: scanned=%d entered=%d skipped=%d used=%d/%d "
-            "| Fix256 평가=%d 적중=%d 오류=%d | 사유: "
+            "| Fix256 평가=%d 적중=%d 오류=%d | Fix259 평가=%d 차단=%d | 사유: "
             + (" ".join(f"{k}={v}" for k, v in sorted(_reasons.items(), key=lambda x: -x[1])) or "-"),
             scanned, entered, skipped, used + entered, daily_limit,
             _sb_stats.get("sb_eval", 0), _sb_stats.get("sb_hit", 0),
             _sb_stats.get("sb_err", 0),
+            _sb_stats.get("ob_eval", 0) + _sb_stats.get("ob_hit", 0),
+            _sb_stats.get("ob_hit", 0),
         )
         return {
             "spec": SPEC_VERSION,
