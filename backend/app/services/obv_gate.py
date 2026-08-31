@@ -28,6 +28,26 @@ OBV_SLOPE_LOOKBACK = 20
 #   0.6 = 전체의 60% 가 한 방향 = 진짜 극단으로 본다
 OBV_EXTREME_RATIO = 0.6
 
+# 🎯 Fix 245 (2026-08-31) — SHORT 는 **더 일찍** 막아야 한다 (실측).
+#
+#   진입 시점 지표를 캔들에서 복원해 승/패 중앙값을 비교한 결과
+#   (scripts/analyze_entry_patterns.py):
+#
+#       4H OBV 방향        이긴 SHORT   진 SHORT
+#       수동 SHORT            0.331      0.530
+#       자동 SHORT            0.238      0.391
+#
+#   = **OBV 가 강할수록 SHORT 가 진다.** 사장님 사상 ④ 가 실측으로 확인된 것이다:
+#     "obv가 하락하지 않으면 결국은 obv 방향으로 간다"
+#
+#   그런데 공통 임계 0.6 은 패자 중앙값(0.39~0.53)보다 **위**라 한 건도 못 걸렀다.
+#   승/패 중앙값 사이인 **0.35** 로 SHORT 만 조인다.
+#   LONG 은 그대로 0.6 — 사장님 「급락 후 반등」 진입을 막지 않기 위해서다(Fix 141).
+#
+#   ⚠️ SHORT 는 지금 유일하게 버는 전략이다(AUTO_BB S: 손익비 2.60, +126).
+#      과하게 조이면 승자까지 잘려나가므로 승자 중앙값(0.238~0.331)보다는 위에 둔다.
+OBV_SHORT_EXTREME_RATIO = 0.35
+
 
 def _get_obv_direction_4h(bc, symbol) -> tuple:
     """4H OBV 방향 + 절대값 상대 비율 판단!
@@ -160,8 +180,12 @@ def check_obv_gate(bc, symbol: str, side: str) -> tuple:
         elif side == "SHORT":
             # 4H OBV 매우 큰 양수 = 세력 매집 = SHORT 금지!
             # Fix 227: 누적 OBV 가 **양수 극단**일 때만 = 진짜 세력 매집
-            if direction == "up" and ratio >= OBV_EXTREME_RATIO:
-                reason = f"SHORT skip: 4H OBV 극단 상승 (ratio={ratio:+.3f} obv={obv_now:.0f})"
+            if direction == "up" and ratio >= OBV_SHORT_EXTREME_RATIO:
+                reason = (
+                    f"SHORT skip: 4H OBV 상승 강함 "
+                    f"(ratio={ratio:+.3f} >= {OBV_SHORT_EXTREME_RATIO} obv={obv_now:.0f}) "
+                    f"[Fix245 실측: 진 SHORT 중앙값 0.39~0.53]"
+                )
                 logger.warning("[Fix65/gate] %s %s: %s", symbol, side, reason)
                 return (False, reason)
             # 🚨 Fix 141: 헌법 72 = "급등해서 볼밴 상단돌파 했을때 마틴게일 진입"

@@ -60,7 +60,7 @@ def test_strong_accumulation_still_blocks_short(monkeypatch):
     _patch(monkeypatch, "up", +0.61, 49_000_000)
     ok, why = gate.check_obv_gate(object(), "TESTUSDT", "SHORT")
     assert not ok, "매집 극단인데 SHORT 가 통과했다"
-    assert "극단 상승" in why
+    assert "SHORT skip" in why and "OBV" in why
 
 
 def test_strong_distribution_no_longer_blocks_short(monkeypatch):
@@ -99,3 +99,41 @@ def test_old_behaviour_really_was_backwards():
     assert old >= EXTREME, "옛 식이 극단 판정에 걸리지 않는다 = 대조군 무효"
     assert new > 0, "새 식은 매집을 양수로 본다"
     assert not (new <= -EXTREME), "새 식에서는 LONG 차단 조건이 성립하지 않아야 한다"
+
+
+# ── Fix 245: SHORT 만 더 일찍 막는다 (실측) ──────────────────────────
+
+def test_short_threshold_is_tighter_than_long():
+    """🚨 실측 — 진 SHORT 의 4H OBV 중앙값이 0.39~0.53 인데 공통 임계는 0.6 이었다.
+
+    즉 **한 건도 못 걸렀다**. 사장님 사상 ④ ("obv가 하락하지 않으면 결국 obv 방향으로
+    간다")가 데이터로 확인됐으므로 SHORT 만 승/패 중앙값 사이로 조인다.
+    LONG 은 0.6 그대로 — 「급락 후 반등」 진입을 막지 않기 위해서다(Fix 141).
+    """
+    assert gate.OBV_SHORT_EXTREME_RATIO == 0.35
+    assert gate.OBV_SHORT_EXTREME_RATIO < gate.OBV_EXTREME_RATIO
+    # 승자 중앙값(0.238~0.331) 위 / 패자 중앙값(0.391~0.530) 아래
+    assert 0.331 < gate.OBV_SHORT_EXTREME_RATIO < 0.391
+
+
+def test_losing_short_profile_is_now_blocked(monkeypatch):
+    """실측 패자 중앙값(0.39 / 0.53)이 실제로 걸러지는가."""
+    for ratio in (0.391, 0.530):
+        _patch(monkeypatch, "up", ratio, 30_000_000)
+        ok, why = gate.check_obv_gate(object(), "TESTUSDT", "SHORT")
+        assert not ok, f"진 SHORT 프로파일 ratio={ratio} 가 통과했다: {why}"
+
+
+def test_winning_short_profile_still_passes(monkeypatch):
+    """🚨 과하게 조이면 유일하게 버는 전략(AUTO_BB S, 손익비 2.60)이 죽는다."""
+    for ratio in (0.238, 0.331):
+        _patch(monkeypatch, "up", ratio, 20_000_000)
+        ok, why = gate.check_obv_gate(object(), "TESTUSDT", "SHORT")
+        assert ok, f"이긴 SHORT 프로파일 ratio={ratio} 가 막혔다: {why}"
+
+
+def test_long_gate_unchanged_by_the_short_tightening(monkeypatch):
+    """LONG 은 영향받지 않아야 한다 — 급락 후 반등 진입 보호."""
+    _patch(monkeypatch, "down", -0.40, -20_000_000)
+    ok, _why = gate.check_obv_gate(object(), "TESTUSDT", "LONG")
+    assert ok, "LONG 이 SHORT 임계에 잘못 걸렸다"
