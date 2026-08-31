@@ -229,7 +229,23 @@ class ExecutionService:
                 self.db.commit()
         return order
 
-    def trigger_next_stage(self, strategy_id: int, stage_no: int) -> Order:
+    def trigger_next_stage(
+        self, strategy_id: int, stage_no: int, *, force_market: bool = False,
+    ) -> Order:
+        """단계 진입 발주.
+
+        Args:
+            force_market: True 면 trigger_price 가 있어도 **MARKET** 으로 나간다.
+
+        🚨 Fix 260 (2026-09-01): 「정점-주춤」 진입은 반드시 force_market=True 다.
+           그 판정은 「극값에서 되돌아온 순간」에 발동하므로 mark 가 trigger 의
+           **반대편**에 있다. 그대로 LIMIT 을 걸면 체결되지 않는데,
+             - current_stage 는 발주만으로 올라가고 (아래 :250 부근)
+             - reconcile_worker 가 2분 뒤 「포지션 != 0」만 보고 is_triggered=True 로
+               거짓 회복시킨다
+           => **자본은 안 들어갔는데 단계는 소진되고 좀비 LIMIT 이 호가창에 남는다.**
+           stage_plan.trigger_price 는 지우지 않는다 (사다리 기록·재앵커 보존).
+        """
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
             raise ValueError("Strategy not found")
@@ -244,7 +260,7 @@ class ExecutionService:
         stage_plan = next((p for p in strategy.stage_plans if p.stage_no == stage_no), None)
         if not stage_plan:
             raise ValueError(f"Stage {stage_no} plan not found")
-        order = self._place_stage_entry_order(strategy, stage_plan)
+        order = self._place_stage_entry_order(strategy, stage_plan, force_market=force_market)
         strategy.current_stage = stage_no
         # 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 2/3/4 만 dict 있어 5+ stage 진입 시
         # status 변경 안 됨. f-string 으로 N단계 모두 STAGE{N}_OPEN_PENDING 처리.
@@ -1006,15 +1022,18 @@ class ExecutionService:
             pass
         return response
 
-    def _place_stage_entry_order(self, strategy, stage_plan) -> Order:
+    def _place_stage_entry_order(self, strategy, stage_plan, *, force_market: bool = False) -> Order:
         # 🌟 2026-08-08 v130 사장님: 시작가 없으면 (start_price=None) = MARKET 진입!
         #   trigger_price=None → MARKET (현재가 즉시 진입!)
         #   trigger_price=값 → LIMIT (기존 로직!)
+        # 🚨 Fix 260: force_market=True 면 trigger_price 가 있어도 MARKET.
+        #   「정점-주춤」 진입은 mark 가 trigger 반대편이라 LIMIT 이면 미체결인데
+        #   단계만 소진된다 (trigger_next_stage docstring 참조).
         side = "BUY" if strategy.side == "LONG" else "SELL"
         position_side = strategy.side
         client_order_id = self._new_client_order_id(strategy.symbol, f"ENTRY{stage_plan.stage_no}")
         # trigger_price 없음 = MARKET!
-        if stage_plan.trigger_price is None:
+        if stage_plan.trigger_price is None or force_market:
             current_price = self._fetch_current_mark_price(strategy.symbol)
             # ══════════════════════════════════════════════════════════════
             # 🚨 Fix 130 (2026-08-26): MARKET 진입은 「발주 시점 가격」으로 수량 재계산

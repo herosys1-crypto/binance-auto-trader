@@ -17,6 +17,7 @@ LIMIT 주문은 즉시 fill 될 수도, book 에 대기할 수도 있음. fill �
 from __future__ import annotations
 import logging
 import os
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -313,7 +314,17 @@ def run_stage_trigger_once(decrypt_text) -> None:
         # 🎯 Fix 121 (2026-08-26 헌법 80): 완료 로그가 아예 없어서
         #   「정상인데 발동 조건 미달」과 「워커 사망」을 구별할 수 없었다.
         #   사장님이 Fix 113/114 검증하려고 로그를 봤는데 아무것도 없었음.
-        _stat = {"rows": len(rows), "scanned": 0, "fired": 0, "banned": 0, "err": 0}
+        _stat = {
+            "rows": len(rows), "scanned": 0, "fired": 0, "banned": 0, "err": 0,
+            # 📐 Fix 260 정점-주춤 카운터.
+            #   🚨 Fix 255/258 의 교훈 — 「안 도는 것」과 「조건 미달」이 구별돼야 한다.
+            #   성공했을 때만 로그를 남기면 0건의 의미를 영원히 알 수 없다.
+            "ps_eval": 0,    # 판정을 실제로 돌린 횟수
+            "ps_reach": 0,   # 신고점이 트리거에 도달한 횟수 (「최고점으로 가다가」)
+            "ps_hit": 0,     # 전 조건 충족 = 진입 신호
+            "ps_err": 0,     # 판정 실패 (기존 경로로 폴백)
+            "ps_miss": {},   # 미충족 항목별 카운트
+        }
         # 2026-05-17 rate limit ban 스파이럴 사후: account 별 ban skip (tp_sl 와 동일 패턴).
         _banned_accounts: set[int] = set()
         for strategy, account in rows:
@@ -812,7 +823,123 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     # SHORT: 가격 위로 더 갔으면 추가 SHORT 진입 (mark >= trigger)
                     # LONG: 가격 아래로 더 갔으면 추가 LONG 진입 (mark <= trigger)
                     should_fire = (mark >= trigger) if strategy.side == "SHORT" else (mark <= trigger)
+                # ══════════════════════════════════════════════════════════
+                # 📐 Fix 260 (2026-09-01 사장님): 정점-주춤 단계 진입
+                #
+                # 사장님 verbatim:
+                #   "2단계부터는 차트와 보조지표가 조정으로 바뀌면이 아니라
+                #    **최고점에서 들어가야** 하는데 ...
+                #    **최고점으로 가다가 주춤할때 2단계 진입**
+                #    그리고 **다시 최고점으로 가면 다시 대기해서 꺾이면 3단계 진입**"
+                #
+                # 🚨 왜 조건을 「더하지」 않고 판정 **주체**를 바꾸는가:
+                #   바로 위 should_fire 는 **mark** 기준이다. SHORT 이 신고점 H(>=trigger)
+                #   를 찍고 되돌아오면 mark 가 trigger 아래로 내려가 아래 `continue` 에서
+                #   죽는다. 사다리 간격이 1.9~2.1% 라 **어떤 되돌림도 통과 불가**다.
+                #   즉 「주춤을 기다려라」를 얹는 순간 가격 게이트가 그 주춤을 스스로 막는다.
+                #   -> 비교 대상만 mark -> ext(러닝 극값) 로 바꾼다.
+                #      trigger_price 계산(3/5/7·재앵커 Fix 209)은 한 줄도 안 건드린다.
+                #
+                # 실측 (split_entry 18건/4일 재시뮬): 현행 -12.22 USDT -> +97.4 USDT.
+                # 표본 절반씩 나눠도 양쪽 다 개선(+23.30 / +55.13) = 과적합 아님.
+                # 기획서: docs/spec/PEAK_STALL_STAGE_ENTRY_SPEC_2026-09-01.md
+                #
+                # 되돌리기: SystemSetting split_peak_stall_enabled = 0 (재시작 불필요)
+                # ══════════════════════════════════════════════════════════
+                _ps_on = False
+                _ps_force_market = False
+                if _is_split and next_stage_no >= 2:
+                    try:
+                        from app.services.system_settings_service import SystemSettingsService as _SS260
+                        _ps_on = _SS260(db).get_bool("split_peak_stall_enabled", False)
+                    except Exception as _e260:
+                        logger.warning("[Fix260] 설정 조회 실패 (기존 경로 유지): %s", _e260)
+                        _ps_on = False
+                if _ps_on:
+                    try:
+                        from app.services.peak_stall import (
+                            evaluate_peak_stall as _eval260,
+                            gap_pct_between as _gap260,
+                            update_extreme as _upd260,
+                        )
+                        from app.models.strategy_stage_plan import StrategyStagePlan as _SP260
+                        _prev_plan = db.execute(
+                            select(_SP260)
+                            .where(_SP260.strategy_instance_id == strategy.id)
+                            .where(_SP260.stage_no == next_stage_no - 1)
+                        ).scalar_one_or_none()
+                        _gap = _gap260(
+                            getattr(_prev_plan, "trigger_price", None),
+                            next_plan.trigger_price,
+                            strategy.side,
+                        )
+                        # ── 러닝 극값 갱신 (매 15초) ──
+                        _new_ext, _renew = _upd260(
+                            strategy.side, next_plan.peak_price, mark, _gap,
+                        )
+                        _cur_ext = (
+                            float(next_plan.peak_price)
+                            if next_plan.peak_price is not None else None
+                        )
+                        if _new_ext is not None and (_cur_ext is None or _new_ext != _cur_ext):
+                            next_plan.peak_price = Decimal(str(_new_ext))
+                            next_plan.peak_seen_at = datetime.now(timezone.utc)
+                            if _renew:
+                                # 「**다시** 최고점으로 가면」 — 3단계의 필수 조건
+                                next_plan.peak_renewed = True
+                            db.commit()
+                        _v260 = _eval260(
+                            side=strategy.side,
+                            stage_no=next_stage_no,
+                            mark=mark,
+                            trigger_price=next_plan.trigger_price,
+                            ext=next_plan.peak_price,
+                            ext_seen_at=next_plan.peak_seen_at,
+                            renewed=bool(next_plan.peak_renewed),
+                            gap_pct=_gap,
+                        )
+                        _stat["ps_eval"] += 1
+                        if _v260.checks.get("신고점 도달") is True:
+                            _stat["ps_reach"] += 1
+                        should_fire = _v260.ok
+                        _ps_force_market = _v260.ok
+                        if _v260.ok:
+                            _stat["ps_hit"] += 1
+                            logger.info(
+                                "[Fix260/peak-stall] 🎯 #%s %s %s 단계%s 진입 신호 — %s | %s",
+                                strategy.id, strategy.symbol, strategy.side,
+                                next_stage_no, _v260.reason, _v260.detail,
+                            )
+                        else:
+                            for _k, _r in _v260.checks.items():
+                                if _r is not True:
+                                    _stat["ps_miss"][_k] = _stat["ps_miss"].get(_k, 0) + 1
+                            _record_block_reason(
+                                _redis, strategy.id, f"Fix260 {_v260.reason}", next_stage_no,
+                            )
+                    except Exception as _e260:
+                        # 🚨 fail-open — 판정 하나가 진입을 통째로 멈추면 안 된다 (Fix 252).
+                        #   기존 경로(가격 트리거 + Fix 218)로 그대로 흘려보낸다.
+                        _stat["ps_err"] += 1
+                        _ps_on = False
+                        _ps_force_market = False
+                        logger.warning(
+                            "[Fix260/peak-stall] #%s 판정 실패 — 기존 경로 유지: %s",
+                            strategy.id, _e260,
+                        )
                 if not should_fire:
+                    # 🚨 Fix 260: 여기는 원래 **로그도 Redis 기록도 없었다.**
+                    #   그래서 「가격 미도달」이 화면·사이클요약 어디에도 안 남았고
+                    #   「왜 안 들어가는지 알 수 없는」 상태의 한 축이었다 (헌법 93).
+                    if _is_split and next_stage_no >= 2 and not _ps_on:
+                        try:
+                            _record_block_reason(
+                                _redis, strategy.id,
+                                f"가격 미도달 (mark={mark} trig={next_plan.trigger_price})",
+                                next_stage_no,
+                            )
+                        except Exception:
+                            pass
                     continue
                 # ══════════════════════════════════════════════════════════
                 # 🚨 Fix 203 (2026-08-29 사장님 지시): 볼밴 분할은 지표 게이트 **제외**
@@ -862,7 +989,13 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 #    → 차단될 때마다 **사유를 남긴다**(로그 + Redis). 하루면 판단이 선다.
                 #      또 0건이면 이 블록만 되돌리면 된다 (헌법 161).
                 # ══════════════════════════════════════════════════════════
-                if _is_split and next_stage_no >= 2:
+                # 🚨 Fix 260 (2026-09-01): 정점-주춤이 켜져 있으면 이 블록은 **건너뛴다.**
+                #   사장님 지시가 "차트와 보조지표가 조정으로 바뀌면**이 아니라** 최고점에서"
+                #   이므로 두 판정은 **대체 관계**다. 둘 다 걸면 Fix 249 처럼
+                #   앞에서 통과시킨 것을 뒤에서 다시 막아 진입이 0건이 된다.
+                #   (아래 peak_confirmation 은 RSI<=35 / CCI<=-80 을 요구하는데
+                #    볼밴 분할이 다루는 24h 변동 15%+ 급등 종목에서는 구조적으로 거짓이다.)
+                if _is_split and next_stage_no >= 2 and not _ps_on:
                     try:
                         from app.integrations.binance.client import BinanceClient as _BC218
                         from app.services.stage_entry_signal import (
@@ -1215,7 +1348,13 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     next_stage_no, strategy.id, strategy.symbol, strategy.side,
                     _fire_mode, mark, trigger if trigger is not None else "n/a",
                 )
-                exec_service.trigger_next_stage(strategy.id, next_stage_no)
+                # 🚨 Fix 260: 정점-주춤 발동은 **반드시 MARKET**.
+                #   mark 가 trigger 반대편(되돌아온 자리)이라 LIMIT 이면 미체결인데,
+                #   current_stage 는 발주만으로 오르고 reconcile 이 2분 뒤
+                #   is_triggered=True 로 거짓 회복시켜 **자본 없이 단계만 소진**된다.
+                exec_service.trigger_next_stage(
+                    strategy.id, next_stage_no, force_market=_ps_force_market,
+                )
                 _stat["fired"] += 1
                 # 🌟 v18 fix: 정상 진입 = block_reason 정리 (= 화면 알림 해소)
                 _clear_block_reason(_redis, strategy.id)
@@ -1289,9 +1428,22 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 except Exception:
                     pass
         # 🎯 Fix 121: 완료 로그 (헌법 80 = 무로그 종료 금지)
+        # 📐 Fix 260: 정점-주춤 카운터를 **매 사이클** 남긴다.
+        #   🚨 Fix 255/258 의 교훈 — 적중했을 때만 로그를 남기면
+        #   「안 도는 것」과 「조건 미달」이 영원히 구별되지 않는다.
+        _ps_note = ""
+        if _stat["ps_eval"] or _stat["ps_err"]:
+            _miss = " ".join(f"{k}={v}" for k, v in sorted(
+                _stat["ps_miss"].items(), key=lambda kv: -kv[1]))
+            _ps_note = (
+                f" | Fix260 평가={_stat['ps_eval']} 신고점도달={_stat['ps_reach']}"
+                f" 적중={_stat['ps_hit']} 오류={_stat['ps_err']}"
+                + (f" | 미충족: {_miss}" if _miss else "")
+            )
         logger.info(
-            "[stage-trigger] 완료: 활성=%d 검사=%d 발동=%d ban_skip=%d 오류=%d",
+            "[stage-trigger] 완료: 활성=%d 검사=%d 발동=%d ban_skip=%d 오류=%d%s",
             _stat["rows"], _stat["scanned"], _stat["fired"], _stat["banned"], _stat["err"],
+            _ps_note,
         )
     finally:
         db.close()
