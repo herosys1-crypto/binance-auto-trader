@@ -452,7 +452,72 @@ def _check_macd_hist_reversal_up(bc, symbol: str, interval: str = "15m") -> bool
 # ============================================================================
 
 
-def _check_long_entry_conditions(bc, symbol: str, ticker_24h: dict) -> dict:
+def _surge_pullback_probe(bc, symbol: str, enabled: bool = True):
+    """🎯 Fix 244 — 「급등 중 조정 → 다시 급등」 판정 (사장님 LONG 주력 자리).
+
+    사장님 verbatim (2026-08-31):
+      "급등중에 조정은 다시 급등으로 간다고 했어 **바로 수익을 많이 낼수 있고** 했고"
+
+    임계값은 수동 LONG 승자 12건 / 패자 13건의 진입 지표를 캔들에서 복원해
+    유도한 실측이다 (app/services/surge_pullback.py 참조).
+
+    실패해도 None 을 돌려 기존 경로가 그대로 돌게 한다 (fail-safe).
+    """
+    if not enabled:
+        return None
+    try:
+        from app.services.chart_analyzer import ChartAnalyzer as _CA
+        from app.services.obv_metrics import obv_direction_ratio as _obvdir
+        from app.services.surge_pullback import evaluate_surge_pullback as _eval
+
+        a4 = _CA.analyze_timeframe(bc, symbol, "4h", limit=120) or {}
+        a15 = _CA.analyze_timeframe(bc, symbol, "15m", limit=120) or {}
+        c4 = a4.get("closes") or []
+        c15 = a15.get("closes") or []
+        if len(c4) < 25 or len(c15) < 21:
+            return None
+
+        chg3d = (float(c4[-1]) - float(c4[-19])) / float(c4[-19]) * 100.0
+
+        bb_pos = None
+        up, lo = a15.get("bb_up_last"), a15.get("bb_lo_last")
+        try:
+            if up is not None and lo is not None and float(up) != float(lo):
+                bb_pos = (float(c15[-1]) - float(lo)) / (float(up) - float(lo))
+        except (TypeError, ValueError, ZeroDivisionError):
+            bb_pos = None
+
+        obv4 = None
+        try:
+            obv4 = _obvdir(a4.get("obv"), a4.get("volumes"), 20)
+        except Exception:
+            obv4 = None
+
+        return _eval(
+            closes_4h=[float(x) for x in c4],
+            chg_3d_pct=chg3d,
+            cci_15m=a15.get("cci_now"),
+            rsi_15m=a15.get("rsi_now"),
+            bb_pos_15m=bb_pos,
+            obv_dir_4h=obv4,
+        )
+    except Exception as e:
+        logger.warning("[Fix244] %s 급등중조정 판정 실패 (기존 경로 유지): %s", symbol, e)
+        return None
+
+
+def _surge_pullback_enabled(db) -> bool:
+    """사장님 선택 「B」로 기본 ON. 끄려면 설정에 0."""
+    try:
+        from app.services.system_settings_service import SystemSettingsService
+        return SystemSettingsService(db).get_bool("surge_pullback_long_enabled", True)
+    except Exception:
+        return True
+
+
+def _check_long_entry_conditions(
+    bc, symbol: str, ticker_24h: dict, *, surge_pullback_on: bool = True
+) -> dict:
     """Fix 50 v2: 사장님 verbatim 2 패턴 분기!
 
     - 패턴 A: 24h +5~+15% 상승 진행 + OBV/MACD/RSI 지속 신호!
@@ -463,6 +528,51 @@ def _check_long_entry_conditions(bc, symbol: str, ticker_24h: dict) -> dict:
     """
     try:
         chg24 = float(ticker_24h.get("priceChangePercent", 0) or 0)
+
+        # ═══════════════════════════════════════════════════════════════════
+        # 🎯 Fix 244 (2026-08-31, 사장님 선택 「B」) — 「급등 중 조정」이 **1순위**
+        #
+        #   사장님: "급등중에 조정은 다시 급등으로 간다 ... 바로 수익을 많이 낼수 있고"
+        #           "급락한건 ... 포지션 진입을 하지 않는다고 안헀어"
+        #   ⇒ 급락 경로(패턴 B)는 **그대로 살려두고**, 급등 중 조정을 앞에 놓는다.
+        #
+        #   실측 (수동 LONG 승 12 / 패 13, 진입 시점 지표를 캔들에서 복원):
+        #     이긴 진입  3일 +65.5% / CCI15m +110.6 / RSI15m 67.4 / 볼밴 0.877 / 되돌림 0.083
+        #     진 진입    3일 +35.5% / CCI15m  +36.9 / RSI15m 53.9 / 볼밴 0.611 / 되돌림 0.580
+        #
+        #   🚨 이 블록이 **아래 두 차단보다 앞**에 있어야 하는 이유:
+        #      · extreme_bull(3일 +30%↑ skip) 은 이 자리의 조건(3일 +45%↑)과 정면 충돌한다
+        #      · 패턴 A skip(+5~15%) 도 상승 종목을 통째로 버린다
+        #      둘 다 「추격매수 위험」을 막으려던 것인데, 그 판단을 이제
+        #      6개 조건 + 되돌림 하드 차단이 대신한다.
+        # ═══════════════════════════════════════════════════════════════════
+        _sp = _surge_pullback_probe(bc, symbol, enabled=surge_pullback_on)
+        if _sp is not None and _sp.blocked:
+            return {
+                "detected": False, "passed": 0, "confidence": 0.0,
+                "reason": f"🚫 Fix244 하드 차단 — {_sp.blocked}",
+                "pattern": "ROUND_TRIP_BLOCKED", "surge_pullback": _sp.detail,
+            }
+        if _sp is not None and _sp.ok:
+            logger.info(
+                "[Fix244] 🎯 %s 급등중 조정 = LONG 1순위 (%s) 3일 %.1f%% "
+                "CCI15m %.1f RSI15m %.1f 볼밴 %.2f 되돌림 %s",
+                symbol, _sp.reason, _sp.detail.get("chg_3d_pct") or 0,
+                _sp.detail.get("cci_15m") or 0, _sp.detail.get("rsi_15m") or 0,
+                _sp.detail.get("bb_pos_15m") or 0, _sp.detail.get("retrace"),
+            )
+            return {
+                "detected": True,
+                "passed": _sp.passed,
+                "confidence": 0.86,
+                "reason": f"🎯 Fix244 급등중 조정 (1순위) — {_sp.reason}",
+                "pattern": "SURGE_PULLBACK",
+                "priority": 1,
+                "trend": "surge_pullback",
+                "signals": _sp.detail.get("checks") or {},
+                "entry_snapshot": _sp.detail,
+                "surge_pullback": _sp.detail,
+            }
 
         # 트렌드 강도 확인 (extreme_bull = skip = 정점 위험!)
         trend = _check_trend_strength_long(bc, symbol)
@@ -1005,6 +1115,12 @@ def run_auto_long_at_bottom_once() -> dict:
         _reasons[reason] = _reasons.get(reason, 0) + 1
     scanned = 0
     results: list[dict] = []
+    # 🎯 Fix 244 (사장님 선택 「B」): 「급등 중 조정」 1순위 경로 ON/OFF.
+    #   기본 ON. 끄려면 SystemSetting surge_pullback_long_enabled = 0.
+    _sp_on = _surge_pullback_enabled(db)
+    logger.info(
+        "[Fix244] 급등중 조정 1순위 경로 = %s", "ON" if _sp_on else "OFF(설정)",
+    )
     try:
         # 🌟 Fix 87 P0 (2026-08-25 사장님!): BTC 방향 필터 = 하락장 = LONG 전면 skip!
         # (auto_short_at_top BTC 필터 대칭 = SHORT 대칭 정합성!)
@@ -1428,7 +1544,9 @@ def run_auto_long_at_bottom_once() -> dict:
 
             try:
                 scanned += 1
-                result = _check_long_entry_conditions(bc, symbol, t)
+                result = _check_long_entry_conditions(
+                    bc, symbol, t, surge_pullback_on=_sp_on,
+                )
                 if not result.get("detected"):
                     # 🎯 Fix 151: not_detected 는 단일 버킷이라 「어느 게이트가 막았는지」
                     #   알 수 없었다. 판정 함수가 이미 pattern/reason 을 돌려주므로
