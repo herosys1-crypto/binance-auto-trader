@@ -97,6 +97,9 @@ class SurgePullbackScore:
     def reason(self) -> str:
         if self.blocked:
             return f"차단: {self.blocked}"
+        rej = (self.detail or {}).get("reject")
+        if rej:
+            return f"해당 없음: {rej}"
         return f"{self.passed}/{self.total} 통과"
 
 
@@ -151,25 +154,26 @@ def evaluate_surge_pullback(
     c3 = _f(chg_3d_pct)
     d["chg_3d_pct"] = c3
     if c3 is not None and c3 < T["chg_3d_min"]:
-        s.blocked = (
-            f"급등 중이 아니다 — 3일 {c3:+.1f}% < {T['chg_3d_min']:.0f}%"
-        )
+        # 🚨 Fix 252: 여기서 blocked 를 세우면 안 된다.
+        #   blocked 는 「사장님 사상 위반 = LONG 자체 금지」(원점 아래)에만 쓴다.
+        #   「급등 중이 아니다」는 **이 경로가 아니라는 뜻**일 뿐이고,
+        #   급락 경로(패턴 B)는 그대로 봐야 한다 —
+        #   사장님: "급락한건 ... 포지션 진입을 하지 않는다고 안헀어"
+        d["reject"] = f"급등 중이 아니다 (3일 {c3:+.1f}% < {T['chg_3d_min']:.0f}%)"
         return s
 
     # ── 필수 ② 얕은 조정인가 (되돌림) ──
     if retrace is not None and retrace > T["retrace_max"]:
-        s.blocked = (
-            f"조정이 깊다 — 되돌림 {retrace:.3f} > {T['retrace_max']:.2f} "
-            "(실측 패자 중앙값 0.580)"
+        d["reject"] = (
+            f"조정이 깊다 (되돌림 {retrace:.3f} > {T['retrace_max']:.2f})"
         )
         return s
 
     # ── 필수 ③ 추격매수 금지 (상단 밖) ──
     bb = _f(bb_pos_15m)
     if bb is not None and bb > BB_POS_CHASE_MAX:
-        s.blocked = (
-            f"추격매수 — 볼밴 {bb:.3f} > {BB_POS_CHASE_MAX:.2f} (상단 밖). "
-            "실측 승자 중앙값 0.877"
+        d["reject"] = (
+            f"추격매수 (볼밴 {bb:.3f} > {BB_POS_CHASE_MAX:.2f} = 상단 밖)"
         )
         return s
 

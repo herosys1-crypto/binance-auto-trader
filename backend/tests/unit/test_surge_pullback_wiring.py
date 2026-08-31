@@ -105,3 +105,27 @@ def test_snapshot_is_recorded_for_learning():
     """entry_snapshot 에 판정 근거가 들어가야 학습 표본이 된다."""
     code = _code()
     assert '"entry_snapshot": _sp.detail' in code
+
+
+# ── Fix 252: 경로 불일치가 급락 진입을 죽이면 안 된다 ─────────────────
+
+def test_only_hard_block_short_circuits_the_worker():
+    """🚨 실측 회귀 — LONG 진입이 100% 막혔다.
+
+        [auto_long_bottom] 완료: scanned=35 entered=0 | 사유: nd:ROUND_TRIP_BLOCKED0=35
+
+    워커의 조기 return 은 `_sp.blocked` 에만 걸려야 한다.
+    `not _sp.ok`(= 이 경로가 아님)로 return 하면 급락 경로까지 죽는다.
+    """
+    code = _code()
+    assert "if _sp is not None and _sp.blocked:" in code, (
+        "하드 차단 분기가 blocked 를 보지 않는다"
+    )
+    # `not _sp.ok` 로 조기 종료하는 분기가 있으면 안 된다
+    assert "if _sp is not None and not _sp.ok" not in code, (
+        "경로 불일치로 조기 종료한다 = 급락 진입이 사라진다"
+    )
+    # ok 분기는 진입용(detected=True)이어야 한다
+    i_ok = code.index("if _sp is not None and _sp.ok:")
+    window = code[i_ok: i_ok + 800]
+    assert '"detected": True' in window

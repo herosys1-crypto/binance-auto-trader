@@ -102,7 +102,8 @@ def test_deep_pullback_is_hard_blocked():
         closes_4h=closes, chg_3d_pct=65.0,
         cci_15m=200.0, rsi_15m=75.0, bb_pos_15m=0.9, obv_dir_4h=0.3,
     )
-    assert not s.ok and s.blocked and "조정이 깊다" in s.blocked
+    assert not s.ok and not s.blocked, "경로 불일치를 하드 차단으로 만들면 안 된다"
+    assert "조정이 깊다" in s.detail["reject"]
 
 
 # ───────────────────────────────── 결측 처리
@@ -182,7 +183,8 @@ def test_the_real_false_positive_is_blocked():
         cci_15m=240.9, rsi_15m=68.8, bb_pos_15m=1.07, obv_dir_4h=0.2,
     )
     assert not s.ok, s.detail
-    assert s.blocked and "급등 중이 아니다" in s.blocked
+    assert not s.blocked, "🚨 급락 경로까지 막으면 안 된다 (Fix 252)"
+    assert "급등 중이 아니다" in s.detail["reject"]
 
 
 def test_chasing_above_the_band_is_blocked():
@@ -192,7 +194,8 @@ def test_chasing_above_the_band_is_blocked():
         closes_4h=closes, chg_3d_pct=65.0,
         cci_15m=200.0, rsi_15m=70.0, bb_pos_15m=1.18, obv_dir_4h=0.2,
     )
-    assert not s.ok and s.blocked and "추격매수" in s.blocked
+    assert not s.ok and not s.blocked
+    assert "추격매수" in s.detail["reject"]
 
 
 def test_defining_conditions_cannot_be_outvoted():
@@ -206,3 +209,52 @@ def test_defining_conditions_cannot_be_outvoted():
     assert not evaluate_surge_pullback(
         closes_4h=deep, chg_3d_pct=65.0, **perfect_timing
     ).ok, "깊은 조정인데 통과됐다"
+
+
+# ── Fix 252: blocked 는 「LONG 자체 금지」에만 쓴다 ────────────────────
+
+def test_blocked_is_reserved_for_doctrine_violation():
+    """🚨 실측 사고 — 이 구분이 없어 LONG 진입이 **100% 막혔다**.
+
+        [auto_long_bottom] 완료: scanned=35 entered=0 | 사유: nd:ROUND_TRIP_BLOCKED0=35
+
+    워커는 `blocked` 를 보면 **급락 경로(패턴 B)까지 통째로 건너뛴다**.
+    그래서 「3일 +45% 미만」같은 **경로 불일치**를 blocked 로 만들면
+    사장님이 금지하지 않은 급락 진입까지 사라진다.
+
+        사장님: "급락한건 ... **포지션 진입을 하지 않는다고 안헀어**"
+
+    blocked = 원점 아래(되돌림 >= 1.00) = 사장님 사상 ⑤ 위반, **그것만**.
+    """
+    closes = [100.0 + i for i in range(50)] + [147.0, 145.0]
+    # 경로 불일치 3종 — 전부 blocked 가 아니어야 한다
+    for kw in (
+        dict(chg_3d_pct=-18.0, cci_15m=240.0, rsi_15m=68.0, bb_pos_15m=1.02),
+        dict(chg_3d_pct=65.0, cci_15m=240.0, rsi_15m=68.0, bb_pos_15m=1.18),
+    ):
+        s = evaluate_surge_pullback(closes_4h=closes, obv_dir_4h=0.2, **kw)
+        assert not s.ok
+        assert not s.blocked, f"경로 불일치가 하드 차단이 됐다: {s.detail}"
+        assert s.detail.get("reject"), "왜 아닌지 사유가 없다"
+    # 깊은 조정도 마찬가지
+    deep = [100.0 + i for i in range(50)] + [120.0]
+    s = evaluate_surge_pullback(
+        closes_4h=deep, chg_3d_pct=65.0, cci_15m=200.0, rsi_15m=75.0,
+        bb_pos_15m=0.9, obv_dir_4h=0.3,
+    )
+    assert not s.ok and not s.blocked
+
+    # 진짜 차단은 원점 아래 하나뿐
+    rt = [100.0 + i for i in range(50)] + [120.0, 105.0, 95.0]
+    s = evaluate_surge_pullback(
+        closes_4h=rt, chg_3d_pct=99.0, cci_15m=200.0, rsi_15m=80.0,
+        bb_pos_15m=1.0, obv_dir_4h=0.9,
+    )
+    assert s.blocked and "되돌림" in s.blocked
+
+
+def test_reason_explains_path_mismatch():
+    """로그에 「왜 이 경로가 아닌지」가 보여야 한다."""
+    closes = [100.0 + i for i in range(50)] + [147.0, 145.0]
+    s = evaluate_surge_pullback(closes_4h=closes, chg_3d_pct=-18.0)
+    assert "해당 없음" in s.reason
