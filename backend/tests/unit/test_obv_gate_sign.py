@@ -52,7 +52,7 @@ def test_real_distribution_still_blocks_long(monkeypatch):
     _patch(monkeypatch, "down", -0.61, -49_000_000)
     ok, why = gate.check_obv_gate(object(), "TESTUSDT", "LONG")
     assert not ok, "세력 이탈인데 LONG 이 통과했다"
-    assert "극단 하락" in why
+    assert "LONG skip" in why and "OBV" in why
 
 
 def test_strong_accumulation_still_blocks_short(monkeypatch):
@@ -70,15 +70,19 @@ def test_strong_distribution_no_longer_blocks_short(monkeypatch):
     assert ok, f"이탈 극단에서 SHORT 가 막혔다: {why}"
 
 
-def test_non_extreme_passes_both_ways(monkeypatch):
-    """극단이 아니면 방향만으로는 막지 않는다 (Fix 141 의도 유지)."""
+def test_mildly_negative_obv_still_passes(monkeypatch):
+    """🎯 Fix 257 — OBV 가 **멈춘 수준**(0 부근)이면 급락 LONG 은 여전히 통과한다.
+
+    Fix 141 의 우려("급락 종목은 OBV 가 하락 상태라 무조건 막으면
+    사장님 시나리오 1 이 죽는다")를 지키기 위한 경계다.
+    """
     for side, direction, ratio in (
-        ("LONG", "down", -0.30),
-        ("SHORT", "up", +0.30),
+        ("LONG", "down", -0.05),      # 거의 멈춤 -> 통과
+        ("SHORT", "up", +0.30),       # SHORT 임계 0.35 미만 -> 통과
     ):
         _patch(monkeypatch, direction, ratio, 1_000_000)
-        ok, _ = gate.check_obv_gate(object(), "TESTUSDT", side)
-        assert ok, f"{side} 가 극단도 아닌데 막혔다"
+        ok, why = gate.check_obv_gate(object(), "TESTUSDT", side)
+        assert ok, f"{side} ratio={ratio} 가 막혔다: {why}"
 
 
 def test_unknown_is_fail_open(monkeypatch):
@@ -132,8 +136,58 @@ def test_winning_short_profile_still_passes(monkeypatch):
         assert ok, f"이긴 SHORT 프로파일 ratio={ratio} 가 막혔다: {why}"
 
 
-def test_long_gate_unchanged_by_the_short_tightening(monkeypatch):
-    """LONG 은 영향받지 않아야 한다 — 급락 후 반등 진입 보호."""
+def test_long_and_short_thresholds_are_independent(monkeypatch):
+    """두 방향이 서로의 임계에 잘못 걸리면 안 된다."""
+    # SHORT 임계(0.35)에 해당하는 양수 ratio 에서 LONG 은 막히지 않는다
+    _patch(monkeypatch, "up", +0.40, 20_000_000)
+    ok, why = gate.check_obv_gate(object(), "TESTUSDT", "LONG")
+    assert ok, f"LONG 이 SHORT 임계에 걸렸다: {why}"
+    # LONG 임계(-0.10)에 해당하는 음수 ratio 에서 SHORT 는 막히지 않는다
     _patch(monkeypatch, "down", -0.40, -20_000_000)
-    ok, _why = gate.check_obv_gate(object(), "TESTUSDT", "LONG")
-    assert ok, "LONG 이 SHORT 임계에 잘못 걸렸다"
+    ok, why = gate.check_obv_gate(object(), "TESTUSDT", "SHORT")
+    assert ok, f"SHORT 가 LONG 임계에 걸렸다: {why}"
+
+
+# ── Fix 257: LONG 도 대칭으로 조인다 (사장님 XPLUSDT 지적) ──────────
+
+def test_long_threshold_matches_the_measurement():
+    """🚨 실측 근거가 임계와 끊기면 안 된다.
+
+        #1884 XPLUSDT LONG  진입시 4H obv_dir **-0.1274** -> 미실현 -17.19 (최악)
+        수동 LONG 승자 중앙값 **+0.168** / 패자 **+0.020**
+
+    임계 -0.10 은 패자(-0.1274)와 승자(+0.02, +0.168) 사이에 있어야 한다.
+    """
+    assert gate.OBV_LONG_FALLING_MAX == -0.10
+    assert -0.1274 <= gate.OBV_LONG_FALLING_MAX, "XPL 실패 케이스가 안 막힌다"
+    assert 0.020 > gate.OBV_LONG_FALLING_MAX, "패자 중앙값까지 막으면 과하다"
+    assert 0.168 > gate.OBV_LONG_FALLING_MAX, "승자를 자른다"
+
+
+def test_xpl_failure_case_is_blocked(monkeypatch):
+    """실측 실패 케이스가 실제로 차단되는가."""
+    _patch(monkeypatch, "down", -0.1274, -5_000_000)
+    ok, why = gate.check_obv_gate(object(), "XPLUSDT", "LONG")
+    assert not ok, "XPL LONG 진입 조건이 여전히 통과한다"
+    assert "하락 지속" in why
+
+
+def test_winning_long_profile_still_passes(monkeypatch):
+    """🚨 이긴 LONG(OBV +0.168)을 자르면 안 된다."""
+    for ratio in (0.020, 0.168):
+        _patch(monkeypatch, "up", ratio, 5_000_000)
+        ok, why = gate.check_obv_gate(object(), "TESTUSDT", "LONG")
+        assert ok, f"이긴 LONG 프로파일 ratio={ratio} 가 막혔다: {why}"
+
+
+def test_long_gate_uses_ratio_not_direction_string():
+    """🚨 direction 은 ±0.5 의 거친 밴드라 「명확한 하락」을 flat 으로 놓친다.
+
+    ratio(-1~+1)가 방향의 단일 진실이다 (헌법 6).
+    """
+    src = (
+        __import__("pathlib").Path(gate.__file__).read_text(encoding="utf-8")
+    )
+    assert "if ratio <= OBV_LONG_FALLING_MAX:" in src, (
+        "LONG 차단이 여전히 direction 문자열에 의존한다"
+    )

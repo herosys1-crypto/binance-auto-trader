@@ -48,6 +48,32 @@ OBV_EXTREME_RATIO = 0.6
 #      과하게 조이면 승자까지 잘려나가므로 승자 중앙값(0.238~0.331)보다는 위에 둔다.
 OBV_SHORT_EXTREME_RATIO = 0.35
 
+# 🎯 Fix 257 (2026-09-01) — LONG 도 대칭으로 조인다.
+#
+#   사장님 지적 (XPLUSDT 차트):
+#     "급락후 지지반등으로 봐야 했는데 반등으로 판단해서 롱으로 자동매매가 실행되었는데
+#      이건 **숏으로 했어야 했어**. **obv가 지속적으로 하락한 차트**라"
+#
+#   실측 (진입 시점 캔들 복원):
+#     #1884 XPLUSDT LONG  08/30 23:55  4H obv_dir **-0.1274**  -> 미실현 -17.19 (최악)
+#     #1930 XPLUSDT SHORT 08/31 15:32  4H obv_dir -0.0354      -> +0.99
+#
+#   옛 LONG 게이트는 ratio <= **-0.6** 에서만 막았다. -0.1274 는 그냥 통과했다.
+#
+#   수동 LONG 승/패 중앙값 (진입 지표 복원, Fix 242):
+#     이긴 LONG  OBV 4H **+0.168**   /   진 LONG  **+0.020**
+#   즉 **이긴 LONG 은 OBV 가 양수**였다. 임계를 패자(-0.1274)와 승자 사이에 둔다.
+#
+#   사장님 사상 ④ 를 문자 그대로 옮긴 것이다 —
+#     "obv가 하락하지 않으면 결국은 obv 방향으로 간다"
+#     => OBV 가 하락하면 가격도 **OBV 방향(하락)** 으로 간다 = LONG 자리가 아니다.
+#
+#   ⚠️ Fix 141 은 「급락 종목은 OBV 가 하락 상태라 무조건 막으면 사장님 시나리오 1이
+#      죽는다」며 극단만 막게 했다. 그 우려는 타당했지만, 실측상 급락 LONG(패턴 B)은
+#      **30건 넘게 승률 0%** 다. -0.10 은 「극단」이 아니라 「명확한 하락」의 경계이고,
+#      OBV 가 멈췄거나(0 부근) 돌아선 급락 종목은 여전히 통과한다.
+OBV_LONG_FALLING_MAX = -0.10
+
 
 def _get_obv_direction_4h(bc, symbol) -> tuple:
     """4H OBV 방향 + 절대값 상대 비율 판단!
@@ -160,8 +186,16 @@ def check_obv_gate(bc, symbol: str, side: str) -> tuple:
         if side == "LONG":
             # 4H OBV 매우 큰 음수 = 세력 이탈 = LONG 금지!
             # Fix 227: 누적 OBV 가 **음수 극단**일 때만 = 진짜 세력 이탈
-            if direction == "down" and ratio <= -OBV_EXTREME_RATIO:
-                reason = f"LONG skip: 4H OBV 극단 하락 (ratio={ratio:+.3f} obv={obv_now:.0f})"
+            # 🚨 Fix 257: `direction` 문자열이 아니라 **ratio 를 직접** 본다.
+            #   direction 은 ±0.5 의 거친 밴드라 「명확한 하락」인데도 flat 으로
+            #   분류되는 구간이 있었다. ratio(-1~+1)가 방향의 단일 진실이다 (헌법 6).
+            if ratio <= OBV_LONG_FALLING_MAX:
+                reason = (
+                    f"LONG skip: 4H OBV 하락 지속 "
+                    f"(ratio={ratio:+.3f} <= {OBV_LONG_FALLING_MAX} obv={obv_now:.0f}) "
+                    f"[Fix257 실측: XPL LONG 진입시 -0.127 -> -17.19 / "
+                    f"이긴 LONG 중앙값 +0.168]"
+                )
                 logger.warning("[Fix65/gate] %s %s: %s", symbol, side, reason)
                 return (False, reason)
             # 🚨 Fix 141: 「방향만으로 무조건 차단」 제거!
