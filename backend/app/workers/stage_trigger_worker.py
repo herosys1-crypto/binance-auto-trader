@@ -612,7 +612,11 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     # = strategy.started_at = 전략 시작 시각 = grace period 기준 정확!
                     GRACE_PERIOD_SEC = 180  # 3분 = mark-price-stream SUBSCRIBE + 첫 update 충분!
                     if strategy.started_at:
-                        from datetime import datetime, timezone
+                        # 🚨 Fix 260c: 여기 있던 `from datetime import datetime, timezone` 를
+                        #   **지웠다**. 함수 안 어디든 import 가 있으면 그 이름은 **함수 전체의
+                        #   지역변수**가 되어, 이 if 가 안 탄 사이클에서는 아래쪽(Fix 260)의
+                        #   datetime.now() 가 UnboundLocalError 로 죽는다.
+                        #   실측: 게이트를 켜자마자 「평가=0 오류=4」. 모듈 최상단 import 사용.
                         now_utc = datetime.now(timezone.utc)
                         started_utc = strategy.started_at
                         if started_utc.tzinfo is None:

@@ -330,3 +330,25 @@ def test_price_not_reached_now_leaves_a_reason():
     src = WORKER.read_text(encoding="utf-8")
     i = src.index("if not should_fire:")
     assert "가격 미도달" in src[i: i + 700]
+
+
+def test_no_function_local_datetime_import_shadows_module_level():
+    """🚨 실제로 터진 사고 #2 — 함수 안 import 가 이름을 **함수 전체 지역변수**로 만든다.
+
+    run_stage_trigger_once 안에 `from datetime import datetime` 이 있으면,
+    그 줄이 실행되지 않은 사이클에서 아래쪽의 datetime.now() 가
+    UnboundLocalError 로 죽는다. 실측: 게이트를 켜자마자 「평가=0 오류=4」.
+    """
+    src = WORKER.read_text(encoding="utf-8")
+    start = src.index("def run_stage_trigger_once(")
+    body = src[start:]
+    offenders = [
+        ln.strip() for ln in body.splitlines()
+        if ln.strip().startswith("from datetime import")
+    ]
+    assert not offenders, (
+        f"run_stage_trigger_once 안에 datetime import 가 남아 있다: {offenders}"
+    )
+    assert "from datetime import datetime, timezone" in src.split("def ")[0], (
+        "모듈 최상단 datetime import 가 없다"
+    )
