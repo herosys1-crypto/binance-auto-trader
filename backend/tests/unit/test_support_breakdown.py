@@ -195,3 +195,57 @@ def test_evaluated_is_counted_before_the_verdict():
     i_eval = code.index("sb_evaluated += 1")
     i_ok = code.index("if _v254.ok:")
     assert i_eval < i_ok, "성공했을 때만 세면 옛 문제가 그대로다"
+
+
+# ── Fix 256: 살아 있는 워커에 연결됐는가 ─────────────────────────────
+
+_LIVE = (
+    Path(__file__).resolve().parents[2]
+    / "app" / "workers" / "auto_long_at_bottom_worker.py"
+)
+
+
+def _live_code() -> str:
+    return chr(10).join(
+        ln for ln in _LIVE.read_text(encoding="utf-8").splitlines()
+        if not ln.lstrip().startswith("#")
+    )
+
+
+def test_wired_into_the_live_long_worker():
+    """🚨 Fix 254 를 unified_15m_entry 에 넣었는데 그 워커는 **꺼져 있었다**.
+
+    실측: `unified_entry_enabled = 0`, 10분간 **0 사이클**.
+    같은 10분에 auto_long_bottom 은 **17 사이클** 돌았다.
+    = 살아 있는 급락 LONG 경로는 이쪽이다.
+
+    「기능을 만들었는데 그 코드가 도는지 확인하지 않는 것」이
+    이 프로젝트의 반복 사고다 (볼밴 3차 0건 / check_7_signals 도달 불가 / 이번 건).
+    """
+    code = _live_code()
+    assert "evaluate_support_breakdown" in code, (
+        "살아 있는 LONG 워커에 지지붕괴 판정이 없다"
+    )
+
+
+def test_runs_before_the_crash_long_path():
+    """급락 LONG 진입(_check_pattern_B_after_correction)보다 **앞**이어야 한다."""
+    code = _live_code()
+    i_gate = code.index("evaluate_support_breakdown")
+    i_entry = code.index("return _check_pattern_B_after_correction(")
+    assert i_gate < i_entry, "판정이 급락 LONG 진입 뒤에 있다 = 무의미"
+
+
+def test_blocks_long_when_breakdown():
+    """붕괴면 detected=False 로 나가야 한다 (이 워커는 SHORT 를 못 만든다)."""
+    code = _live_code()
+    i = code.index("if _v256.ok:")
+    window = code[i: i + 900]
+    assert '"detected": False' in window
+    assert '"pattern": "SUPPORT_BREAKDOWN"' in window
+
+
+def test_failure_keeps_existing_path():
+    """판정 실패로 급락 진입이 통째로 멈추면 안 된다 (Fix 252 의 교훈)."""
+    src = _LIVE.read_text(encoding="utf-8")
+    assert "기존 경로 유지" in src

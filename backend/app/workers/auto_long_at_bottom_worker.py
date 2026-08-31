@@ -643,6 +643,60 @@ def _check_long_entry_conditions(
 
         # 시나리오 1·2: 급락 (하한 제거 = -22%, -30% 도 후보)
         if chg24 <= PATTERN_B_MAX_CHG:
+            # ═══════════════════════════════════════════════════════════
+            # 📉 Fix 256 (2026-09-01) — 「지지 붕괴」는 LONG 자리가 아니다 (사상 ③).
+            #
+            #   사장님: "급락한것은 **이전급등에 대한 급락**이라 확실한 숏"
+            #           "볼밴 **지지선 붕괴**와 지속하락을 찾아서 분할 진입"
+            #
+            #   🚨 Fix 254 를 unified_15m_entry 에 넣었는데 그 워커는
+            #      `unified_entry_enabled = 0` 으로 **꺼져 있었다**(실측: 10분간 0사이클).
+            #      살아 있는 급락 LONG 경로는 **여기**다
+            #      (auto_long_bottom = 10분에 17사이클).
+            #
+            #   이 워커는 LONG 만 만들 수 있으므로 방향을 뒤집지는 못한다.
+            #   대신 **LONG 을 막는다** — 사상 ③ 상 숏 자리에 롱을 넣지 않는 것만으로도
+            #   BTR #1488 류(-6,552.45)의 반대편에 서지 않게 된다.
+            # ═══════════════════════════════════════════════════════════
+            try:
+                from app.services.chart_analyzer import ChartAnalyzer as _CA256
+                from app.services.obv_metrics import obv_direction_ratio as _obv256
+                from app.services.support_breakdown import (
+                    evaluate_support_breakdown as _sb256,
+                )
+                _a256 = _CA256.analyze_timeframe(bc, symbol, "1h", limit=80) or {}
+                _c256 = _a256.get("closes") or []
+                try:
+                    _od256 = _obv256(_a256.get("obv"), _a256.get("volumes"), 20)
+                except Exception:
+                    _od256 = None
+                _v256 = _sb256(
+                    closes=[float(x) for x in _c256] if _c256 else None,
+                    volumes=_a256.get("volumes"),
+                    obv_dir=_od256,
+                )
+                if _v256.ok:
+                    logger.warning(
+                        "[Fix256] 🚫 %s 지지 붕괴 = LONG 아님 (사상 ③: 확실한 숏) — %s "
+                        "선행급등 %.0f%% 지지 %s -> %s 거래량 %.1fx OBV %s",
+                        symbol, _v256.reason,
+                        _v256.detail.get("prior_rally_pct") or 0,
+                        _v256.detail.get("support"), _v256.detail.get("now"),
+                        _v256.detail.get("vol_ratio") or 0,
+                        _v256.detail.get("obv_dir"),
+                    )
+                    return {
+                        "detected": False, "passed": 0, "confidence": 0.0,
+                        "reason": f"🚫 Fix256 지지 붕괴 = SHORT 자리 — {_v256.reason}",
+                        "pattern": "SUPPORT_BREAKDOWN",
+                        "trend": trend,
+                        "support_breakdown": _v256.detail,
+                    }
+            except Exception as _e256:
+                logger.warning(
+                    "[Fix256] %s 지지붕괴 판정 실패 = 기존 경로 유지: %s", symbol, _e256,
+                )
+
             return _check_pattern_B_after_correction(
                 bc, symbol, ticker_24h, trend, chg24,
             )
