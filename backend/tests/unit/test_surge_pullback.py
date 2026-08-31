@@ -1,0 +1,158 @@
+"""🛡️ Fix 243 — 「급등 중 조정 → 다시 급등」 판정 가드.
+
+## 사장님 verbatim (2026-08-31)
+
+    "급등중에 조정은 다시 급등으로 간다고 했어 바로 수익을 많이 낼수 있고 했고"
+
+## 임계값의 출처 (추측 아님)
+
+수동 LONG 의 진입 시점 지표를 캔들에서 복원한 실측 (Fix 242):
+
+    지표            이긴 진입    진 진입
+    ────────────────────────────────────
+    CCI 15m          +110.6     +36.9
+    3일 변동%          +65.5%    +35.5%
+    RSI 15m            67.4      53.9
+    볼밴위치 15m        0.877     0.611
+    되돌림 4H           0.083     0.580
+    OBV방향 4H         +0.168    +0.020
+
+    되돌림 1.00 초과(원점 아래) = 6건 -1,845.38  ← 하드 차단 근거
+
+🚨 이 파일은 **임계값이 소리 없이 바뀌는 것**을 막는다.
+   숫자를 바꾸려면 새 실측 근거가 있어야 한다.
+"""
+from __future__ import annotations
+
+from app.services.surge_pullback import (
+    MIN_PASSED,
+    THRESHOLDS,
+    evaluate_surge_pullback,
+)
+
+
+def _rally(peak_at_end: bool = True) -> list[float]:
+    """+50% 상승 파동. 끝에서 살짝 조정(되돌림 약 0.1)."""
+    up = [100.0 + i * 1.0 for i in range(50)]      # 100 -> 149
+    return up + [147.0, 145.0] if peak_at_end else up
+
+
+def _round_trip() -> list[float]:
+    """급등 후 원점 아래까지 붕괴 (되돌림 > 1.0)."""
+    return [100.0 + i * 1.0 for i in range(50)] + [120.0, 105.0, 95.0]
+
+
+# ───────────────────────────────── 사장님 자리
+
+def test_winning_profile_passes():
+    """실측 승자 프로파일이 통과하지 않으면 이 게이트는 쓸모가 없다."""
+    s = evaluate_surge_pullback(
+        closes_4h=_rally(),
+        chg_3d_pct=65.5, cci_15m=110.6, rsi_15m=67.4,
+        bb_pos_15m=0.877, obv_dir_4h=0.168,
+    )
+    assert s.ok, s.detail
+    assert s.blocked is None
+
+
+def test_losing_profile_fails():
+    """실측 패자 프로파일이 통과하면 걸러내는 의미가 없다."""
+    s = evaluate_surge_pullback(
+        closes_4h=_rally(),
+        chg_3d_pct=35.5, cci_15m=36.9, rsi_15m=53.9,
+        bb_pos_15m=0.611, obv_dir_4h=0.020,
+    )
+    assert not s.ok, s.detail
+
+
+def test_current_auto_long_entry_is_rejected():
+    """🚨 지금 자동 LONG 이 사는 자리(과매도 바닥)는 반드시 걸러져야 한다.
+
+    실측: CCI 15m 약 -78 / RSI 39.7 / 볼밴 0.284 에서 진입 -> 승률 16.1%.
+    이 게이트의 존재 이유가 바로 이 자리를 막는 것이다.
+    """
+    s = evaluate_surge_pullback(
+        closes_4h=_rally(),
+        chg_3d_pct=24.6, cci_15m=-78.4, rsi_15m=39.7,
+        bb_pos_15m=0.284, obv_dir_4h=0.287,
+    )
+    assert not s.ok, f"과매도 바닥이 통과됐다: {s.detail}"
+
+
+# ───────────────────────────────── 하드 차단
+
+def test_round_trip_is_hard_blocked():
+    """🚨 원점 아래 = 실측 6건 -1,845. 점수와 무관하게 차단해야 한다."""
+    s = evaluate_surge_pullback(
+        closes_4h=_round_trip(),
+        chg_3d_pct=99.0, cci_15m=200.0, rsi_15m=80.0,
+        bb_pos_15m=1.0, obv_dir_4h=0.9,      # 나머지는 전부 만점
+    )
+    assert not s.ok
+    assert s.blocked and "되돌림" in s.blocked
+
+
+def test_deep_pullback_fails_the_soft_check():
+    """되돌림 0.58(패자 중앙값)은 「얕은 조정」 조건을 통과하면 안 된다."""
+    closes = [100.0 + i for i in range(50)] + [120.0]   # 되돌림 약 0.6
+    s = evaluate_surge_pullback(closes_4h=closes, chg_3d_pct=65.0)
+    assert s.detail["checks"]["얕은 조정"] is not True
+
+
+# ───────────────────────────────── 결측 처리
+
+def test_missing_values_do_not_count_as_pass():
+    """🚨 「모르는데 통과」는 이 프로젝트에서 반복된 사고 유형이다 (fail-closed)."""
+    s = evaluate_surge_pullback(closes_4h=None)
+    assert s.passed == 0
+    assert not s.ok
+    assert len(s.detail["missing"]) >= 5
+
+
+def test_partial_data_still_decidable():
+    """일부만 있어도 4개를 넘으면 판정된다 (전부 요구하면 진입이 안 난다)."""
+    s = evaluate_surge_pullback(
+        closes_4h=_rally(),
+        chg_3d_pct=65.0, cci_15m=120.0, rsi_15m=70.0, bb_pos_15m=0.9,
+        obv_dir_4h=None,
+    )
+    assert s.ok and "OBV 안 꺾임" in s.detail["missing"]
+
+
+def test_broken_values_do_not_raise():
+    s = evaluate_surge_pullback(
+        closes_4h=["없음", None, 3], chg_3d_pct="많이", cci_15m=None,
+        rsi_15m=float("nan"), bb_pos_15m="", obv_dir_4h=[],
+    )
+    assert not s.ok
+
+
+# ───────────────────────────────── 임계값 고정
+
+def test_thresholds_match_the_measurement():
+    """🚨 숫자가 소리 없이 바뀌면 실측 근거와 끊긴다.
+
+    바꾸려면 새 실측(analyze_entry_patterns) 결과를 근거로 대야 한다.
+    """
+    assert THRESHOLDS["chg_3d_min"] == 45.0        # 패 35.5 < 45 < 승 65.5
+    assert THRESHOLDS["cci_15m_min"] == 60.0       # 패 36.9 < 60 < 승 110.6
+    assert THRESHOLDS["rsi_15m_min"] == 58.0       # 패 53.9 < 58 < 승 67.4
+    assert THRESHOLDS["bb_pos_15m_min"] == 0.70    # 패 0.611 < 0.70 < 승 0.877
+    assert THRESHOLDS["retrace_max"] == 0.35       # 승 0.083 / 패 0.580
+    assert THRESHOLDS["retrace_hard_block"] == 1.00  # 실측 6건 -1,845
+    assert THRESHOLDS["obv_4h_min"] == 0.08        # 패 0.020 < 0.08 < 승 0.168
+    assert MIN_PASSED == 4
+
+
+def test_thresholds_sit_between_win_and_loss_medians():
+    """과적합 방지 — 임계가 승자 중앙값에 붙으면 표본 12건에 맞춘 것이 된다."""
+    pairs = [
+        ("chg_3d_min", 35.5, 65.5),
+        ("cci_15m_min", 36.9, 110.6),
+        ("rsi_15m_min", 53.9, 67.4),
+        ("bb_pos_15m_min", 0.611, 0.877),
+        ("obv_4h_min", 0.020, 0.168),
+    ]
+    for key, loser, winner in pairs:
+        t = THRESHOLDS[key]
+        assert loser <= t < winner, f"{key}={t} 가 승/패 중앙값 사이에 없다"
