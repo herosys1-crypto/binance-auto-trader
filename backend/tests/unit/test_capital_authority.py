@@ -62,7 +62,23 @@ SANCTIONED: dict[str, list[tuple[str, str]]] = {
         ("MAX_REENTRY_STAGE_WITH_LAST = 4",
          "위와 동일 — 3단계 + 라스트 챈스 1회. 자본은 증액 없이 동일 금액"),
     ],
+    "workers/auto_add_margin_worker.py": [
+        ('DEFAULT_ADD_MARGIN_USDT = Decimal("300.0")',
+         "2026-08-22 v220 verbatim: 손실 30% 넘으면 「초기금액으로」 증거금 추가. "
+         "당시 초기금액 = 300 (v219 마틴게일 300/600/1800) 이라 값이 맞았다. "
+         "⚠️ 2026-08-26 Fix 133 이 사다리를 10/300/600 으로 바꿔 초기금액이 10 이 됐는데 "
+         "이 값은 따라가지 않고 얼어붙었다 = 사장님 문장과 30배 차이. "
+         "변경은 사장님 결정 사항이라 값은 유지하고 여기에 기록해 둔다."),
+        ("ROI_TRIGGER = -30.0",
+         "2026-08-22 v220 verbatim: 전체 손실 30% 넘어가면"),
+    ],
 }
+
+# 자본을 돌려주는 함수가 **리터럴을 지어내는** 형태.
+#   실측 사고: realtime_reentry_worker `return 500.0`
+#   = 사다리가 무너졌을 때 10 이 아니라 500 으로 진입하는 fail-BIG 이었다.
+_LITERAL_RETURN_RE = re.compile(r"^\s*return\s+[0-9]+(?:\.[0-9]+)?\s*$")
+_CAPITAL_FN_RE = re.compile(r"^\s*def\s+\w*capital\w*\s*\(", re.IGNORECASE)
 
 # 자본의 하드코딩 폴백:  get("capitals", [500])  형태
 _FALLBACK_RE = re.compile(r"""get\(\s*["']capitals["']\s*,\s*\[\s*[0-9]""")
@@ -151,6 +167,28 @@ def test_no_unregistered_capital_multiplier():
     )
 
 
+def test_capital_functions_do_not_invent_a_number():
+    """🚨 자본을 돌려주는 함수가 **리터럴 금액을 지어내면** 안 된다.
+
+    실측 사고: `_get_base_capital_from_instance` 가 조회에 다 실패하면
+    `return 500.0` 이었다. 사다리가 무너졌을 때 10 이 아니라 **500 으로 진입**하는
+    fail-BIG. 모르면 큰 금액이 아니라 **None** 을 돌려주고 진입을 막아야 한다.
+    """
+    hits = []
+    for path in sorted(APP.rglob("*.py")):
+        in_capital_fn = False
+        for i, line in enumerate(_code_lines(path), start=1):
+            if line.startswith("def ") or line.startswith("    def "):
+                in_capital_fn = bool(_CAPITAL_FN_RE.match(line))
+            elif in_capital_fn and _LITERAL_RETURN_RE.match(line):
+                hits.append(f"{path.relative_to(APP.parent)}:{i}  {line.strip()[:80]}")
+    assert not hits, (
+        "자본 함수가 금액 리터럴을 지어낸다 (fail-BIG):\n  "
+        + "\n  ".join(hits)
+        + "\n→ 모르면 None 을 돌려주고 호출자가 진입을 skip 하게 하라."
+    )
+
+
 def test_exemptions_are_honest():
     """🚨 면제한 상수가 **정말로** 자본 계산에 안 쓰이는지 매번 확인한다.
 
@@ -192,6 +230,16 @@ def test_detectors_actually_discriminate():
     assert _MULTIPLIER_RE.match("SIZE_MULTIPLIER = 2.0"), "새 배수를 못 잡는다"
     assert _MULTIPLIER_RE.match("MARTINGALE_STEP = 2"), "마틴게일 이름을 못 잡는다"
     assert not _MULTIPLIER_RE.match("MAX_REENTRY_COUNT = 2"), "배수가 아닌 상수를 오탐한다"
+
+    # 실제로 있었던 fail-BIG 형태를 잡는가
+    assert _CAPITAL_FN_RE.match("def _get_base_capital_from_instance(si) -> float:"), (
+        "자본 함수 이름을 못 알아본다"
+    )
+    assert _LITERAL_RETURN_RE.match("    return 500.0"), "금액 리터럴 반환을 못 잡는다"
+    assert not _LITERAL_RETURN_RE.match("    return None"), "고친 코드가 오탐된다"
+    assert not _CAPITAL_FN_RE.match("def _get_mark_price(symbol):"), (
+        "자본과 무관한 함수를 오탐한다"
+    )
 
 
 def test_every_rule_carries_a_dated_reason():

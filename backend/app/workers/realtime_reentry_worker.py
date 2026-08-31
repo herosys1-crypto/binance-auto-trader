@@ -508,7 +508,7 @@ def _is_symbol_learning_ok(db: Session, symbol: str, side: str) -> tuple[bool, s
     return True, "disabled_by_sajangnim_2026-08-25"
 
 
-def _get_base_capital_from_instance(si: StrategyInstance) -> float:
+def _get_base_capital_from_instance(si: StrategyInstance) -> float | None:
     """v218 (2026-08-22): 청산된 원 전략의 base capital 조회!
 
     사장님 사상: 마틴게일 = 이전 포지션 대비 1.5배!
@@ -518,7 +518,7 @@ def _get_base_capital_from_instance(si: StrategyInstance) -> float:
     1. template.stages_config['capitals'][0] (JSONB 구조!)
     2. template.stage1_capital (Decimal fallback!)
     3. template.total_capital (Decimal fallback!)
-    4. 500.0 (최종 fallback!)
+    4. None (Fix 237: 옛 500.0 리터럴 제거 — 모르면 재진입 안 함)
     """
     try:
         tmpl = si.strategy_template
@@ -532,7 +532,10 @@ def _get_base_capital_from_instance(si: StrategyInstance) -> float:
             return float(tmpl.total_capital)
     except Exception:
         pass
-    return 500.0
+    # 🚨 Fix 237 (2026-08-31 사장님): 옛 코드는 여기서 500.0 을 돌려줬다.
+    #   사다리가 무너졌을 때 10 이 아니라 **500 으로 진입**하는 fail-BIG 이었다.
+    #   원 전략의 자본을 모르면 그 자본의 배수도 알 수 없다 → 재진입하지 않는다.
+    return None
 
 
 # 🚨🚨 Fix 104 (2026-08-26): mark_price 결손 = 재진입 구조적 전멸! → 배치 ticker fallback!
@@ -1297,6 +1300,15 @@ def run_realtime_reentry() -> dict:
                 # "3단계까지 갈수 있다야 가능하면 가지않는 관리가 필요"
                 # 🎯 Fix 53 (2026-08-24): 4단계 = 라스트 챈스 (동일 자본!)
                 _base_capital = _get_base_capital_from_instance(si)
+                if _base_capital is None or float(_base_capital) <= 0:
+                    # 🚨 Fix 237: 원 전략의 자본을 모르면 그 배수도 모른다 = 진입 안 함.
+                    skipped += 1
+                    logger.warning(
+                        "[Fix237] #%s %s 원 전략 자본 불명 = 재진입 skip "
+                        "(하드코딩 500 금지 — 사장님이 정한 값만 쓴다)",
+                        si.id, si.symbol,
+                    )
+                    continue
                 _is_last_chance = False  # Fix 53 라스트 챈스 여부!
                 if _use_success_reentry:
                     # 사장님: 익절 후 재진입 = 초기 시작금액!

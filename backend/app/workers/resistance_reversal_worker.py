@@ -23,7 +23,12 @@ SPEC_VERSION = "resistance_reversal_v2_fix72_2026-08-25"
 RESISTANCE_PROXIMITY_RATIO = Decimal("0.01")
 RESISTANCE_AUTO_LOOKBACK_KLINES = 672
 RESISTANCE_AUTO_TTL_HOURS = 24
-MARTINGALE_STAGE2_USDT = Decimal("600")
+# 🚨 Fix 237 (2026-08-31 사장님): 옛 코드는 여기에 MARTINGALE_STAGE2_USDT = 600 이
+#   하드코딩돼 있었고, _enter_stage2 가 그 값으로 **사장님 템플릿의 2단계 자본을
+#   덮어쓰려** 했다. 실제로는 StrategyTemplate 에 stages 속성이 없어 대입이 한 번도
+#   실행되지 않았지만, 그 600 이 StrategySuggestion 과 텔레그램에는 그대로 기록돼
+#   **학습 데이터와 알림이 실제 진입 금액과 달랐다**.
+#   → 상수를 없애고 실제로 나가는 금액(단계 계획의 planned_capital)을 읽는다.
 REDIS_KEY_LOCK = "resistance_reversal:lock:{sid}"
 REDIS_KEY_TRIGGERED = "resistance_reversal:triggered:{sid}"
 RSI_DROP_MIN = 3.0
@@ -222,6 +227,22 @@ def _get_current_price(bc, symbol):
     return None
 
 
+def _stage2_planned_capital(db, strategy_id) -> float | None:
+    """2단계에 **실제로 나가는** 금액 (사장님이 정한 단계 계획 값). 모르면 None."""
+    try:
+        from app.models.strategy_stage_plan import StrategyStagePlan as _SP
+        plan = (
+            db.query(_SP)
+            .filter(_SP.strategy_instance_id == strategy_id, _SP.stage_no == 2)
+            .one_or_none()
+        )
+        if plan is not None and plan.planned_capital is not None:
+            return float(plan.planned_capital)
+    except Exception:
+        logger.exception("[Fix237] 2단계 계획 자본 조회 실패")
+    return None
+
+
 def _save_entry_snapshot_suggestion(db, s, snap, resistance, source, cur):
     """Fix 72 (2026-08-25): stage-2 마틴게일 트리거 지표 학습 데이터 확보!
 
@@ -266,7 +287,8 @@ def _save_entry_snapshot_suggestion(db, s, snap, resistance, source, cur):
             side="SHORT",
             suggestion_type="resistance_reversal_short",
             strategy_config={
-                "capitals": [float(MARTINGALE_STAGE2_USDT)],
+                # Fix 237: 코드 상수 600 이 아니라 **실제로 나간 금액**을 기록한다.
+                "capitals": ([_cap2] if (_cap2 := _stage2_planned_capital(db, s.id)) else []),
                 "symbol": s.symbol,
                 "side": "SHORT",
                 "resistance_reversal": True,
@@ -301,12 +323,9 @@ def _save_entry_snapshot_suggestion(db, s, snap, resistance, source, cur):
 
 def _enter_stage2(db, s, snap, resistance, source, cur=None):
     try:
-        from app.models.strategy_template import StrategyTemplate
-        tpl = db.get(StrategyTemplate, s.strategy_template_id)
-        if tpl and hasattr(tpl, 'stages') and tpl.stages and len(tpl.stages) >= 2:
-            tpl.stages[1].capital_usdt = MARTINGALE_STAGE2_USDT
-            tpl.stages[1].trigger_price = None
-            db.commit()
+        # Fix 237: 사장님 템플릿 자본을 코드 상수로 덮어쓰던 블록 제거.
+        #   실제 진입 금액은 아래 ExecutionService 가 stage_plan.planned_capital
+        #   (= 사장님이 정한 값) 을 읽어 집행한다. 코드가 끼어들지 않는다.
         from app.services.execution_service import ExecutionService
         svc = ExecutionService(db)
         order = None
@@ -339,7 +358,7 @@ def _enter_stage2(db, s, snap, resistance, source, cur=None):
         # Fix 72 (2026-08-25): 학습용 StrategySuggestion INSERT (fail-open!)
         _save_entry_snapshot_suggestion(db, s, snap, resistance, source, cur)
         _notify(f"[저항 반전 2단계 SHORT 진입] {s.symbol}",
-                f"{s.symbol} SHORT #{s.id}\n자본: {MARTINGALE_STAGE2_USDT} USDT\n저항: {resistance} ({source})")
+                f"{s.symbol} SHORT #{s.id}\n자본: {_stage2_planned_capital(db, s.id) or '미상'} USDT\n저항: {resistance} ({source})")
         logger.warning(f"[Fix29] ENTERED #{s.id} {s.symbol}")
         return True
     except Exception as e:

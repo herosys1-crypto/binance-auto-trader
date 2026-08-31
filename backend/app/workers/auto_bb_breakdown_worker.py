@@ -1454,8 +1454,19 @@ def _create_auto_bb_strategy(
 
     # 🌟 v177 사장님 (2026-08-19): 자동 진입 = 1단계만 강제!
     # 🎯 사장님 (2026-08-21): OBV_HOLD 예외! = 3단계 + 오래 버티기!
-    capitals_full = cfg.get("capitals") or [500, 500, 500, 500]
-    stage1_only = float(capitals_full[0]) if capitals_full else 500.0
+    # 🚨 Fix 237 (2026-08-31 사장님): "우리가 정한거 아닌건 확실하게 찾아서"
+    #   옛 코드: cfg.get("capitals") or [500, 500, 500, 500]
+    #   이 함수는 자동 진입 워커 **5개가 공유하는 마지막 관문**이다.
+    #   여기 기본값이 사다리가 아니라 리터럴 500 이면, capitals 를 안 넘기는
+    #   호출자가 하나만 생겨도 사장님이 정한 적 없는 500 USDT 가 나간다.
+    #   → 지어내지 않고 **막는다** (symbol 검증과 같은 fail-closed).
+    capitals_full = cfg.get("capitals") or []
+    if not capitals_full or float(capitals_full[0] or 0) <= 0:
+        raise ValueError(
+            f"{symbol} {side} 자본 설정 없음 = 진입 거부 "
+            "(하드코딩 기본값 금지 — 사장님이 정한 값만 쓴다)"
+        )
+    stage1_only = float(capitals_full[0])
 
     _is_obv_hold = strategy_type_suffix == "_OBV_HOLD"
     if _is_obv_hold:
