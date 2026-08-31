@@ -92,11 +92,17 @@ def test_round_trip_is_hard_blocked():
     assert s.blocked and "되돌림" in s.blocked
 
 
-def test_deep_pullback_fails_the_soft_check():
-    """되돌림 0.58(패자 중앙값)은 「얕은 조정」 조건을 통과하면 안 된다."""
+def test_deep_pullback_is_hard_blocked():
+    """되돌림 0.58(패자 중앙값)은 **필수 조건 실패** = 차단이다 (Fix 250).
+
+    옛 구조에서는 6개 중 1개일 뿐이라 나머지 4개로 통과할 수 있었다.
+    """
     closes = [100.0 + i for i in range(50)] + [120.0]   # 되돌림 약 0.6
-    s = evaluate_surge_pullback(closes_4h=closes, chg_3d_pct=65.0)
-    assert s.detail["checks"]["얕은 조정"] is not True
+    s = evaluate_surge_pullback(
+        closes_4h=closes, chg_3d_pct=65.0,
+        cci_15m=200.0, rsi_15m=75.0, bb_pos_15m=0.9, obv_dir_4h=0.3,
+    )
+    assert not s.ok and s.blocked and "조정이 깊다" in s.blocked
 
 
 # ───────────────────────────────── 결측 처리
@@ -106,7 +112,7 @@ def test_missing_values_do_not_count_as_pass():
     s = evaluate_surge_pullback(closes_4h=None)
     assert s.passed == 0
     assert not s.ok
-    assert len(s.detail["missing"]) >= 5
+    assert len(s.detail["missing"]) >= 3
 
 
 def test_partial_data_still_decidable():
@@ -141,7 +147,7 @@ def test_thresholds_match_the_measurement():
     assert THRESHOLDS["retrace_max"] == 0.35       # 승 0.083 / 패 0.580
     assert THRESHOLDS["retrace_hard_block"] == 1.00  # 실측 6건 -1,845
     assert THRESHOLDS["obv_4h_min"] == 0.08        # 패 0.020 < 0.08 < 승 0.168
-    assert MIN_PASSED == 4
+    assert MIN_PASSED == 3                          # Fix 250: 선택 4개 중 3개
 
 
 def test_thresholds_sit_between_win_and_loss_medians():
@@ -156,3 +162,47 @@ def test_thresholds_sit_between_win_and_loss_medians():
     for key, loser, winner in pairs:
         t = THRESHOLDS[key]
         assert loser <= t < winner, f"{key}={t} 가 승/패 중앙값 사이에 없다"
+
+
+# ── Fix 250: 정의 조건은 **필수**다 ────────────────────────────────
+
+def test_the_real_false_positive_is_blocked():
+    """🚨 배포 첫날 실측 — 이 종목이 1순위로 뽑혔다.
+
+        [Fix244] LIGHTUSDT 급등중 조정 = LONG 1순위 (4/6 통과)
+                 3일 -18.0%  되돌림 0.568  볼밴 1.18  CCI 240  RSI 69
+
+    3일 -18% 는 급등이 아니라 **하락 중**이고 되돌림 0.568 은 얕은 조정이 아니다.
+    「급등 중 조정」을 **정의하는 두 조건을 둘 다 실패**했는데
+    타이밍 지표 4개만으로 4/6 을 채워 통과했다 = 「6중 4」 규칙의 설계 결함.
+    """
+    closes = [100.0 + i for i in range(50)] + [147.0, 145.0]
+    s = evaluate_surge_pullback(
+        closes_4h=closes, chg_3d_pct=-18.0,
+        cci_15m=240.9, rsi_15m=68.8, bb_pos_15m=1.07, obv_dir_4h=0.2,
+    )
+    assert not s.ok, s.detail
+    assert s.blocked and "급등 중이 아니다" in s.blocked
+
+
+def test_chasing_above_the_band_is_blocked():
+    """볼밴 상단 밖(>1.05)에서 사는 것은 추격매수. 실측 승자 중앙값은 0.877."""
+    closes = [100.0 + i for i in range(50)] + [147.0, 145.0]
+    s = evaluate_surge_pullback(
+        closes_4h=closes, chg_3d_pct=65.0,
+        cci_15m=200.0, rsi_15m=70.0, bb_pos_15m=1.18, obv_dir_4h=0.2,
+    )
+    assert not s.ok and s.blocked and "추격매수" in s.blocked
+
+
+def test_defining_conditions_cannot_be_outvoted():
+    """🚨 나머지가 만점이어도 정의 조건 하나만 실패하면 차단이어야 한다."""
+    closes = [100.0 + i for i in range(50)] + [147.0, 145.0]
+    perfect_timing = dict(cci_15m=300.0, rsi_15m=80.0, bb_pos_15m=0.9, obv_dir_4h=0.9)
+    assert not evaluate_surge_pullback(
+        closes_4h=closes, chg_3d_pct=10.0, **perfect_timing
+    ).ok, "급등 실패인데 통과됐다"
+    deep = [100.0 + i for i in range(50)] + [120.0]
+    assert not evaluate_surge_pullback(
+        closes_4h=deep, chg_3d_pct=65.0, **perfect_timing
+    ).ok, "깊은 조정인데 통과됐다"

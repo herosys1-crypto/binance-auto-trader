@@ -65,9 +65,24 @@ THRESHOLDS: dict[str, float] = {
     "obv_4h_min": 0.08,      # 패 0.020 < 0.08 < 승 0.168
 }
 
-# 몇 개를 통과해야 「급등 중 조정」으로 볼 것인가.
-# 6개 조건 중 4개 — 하나가 결측이어도 판정이 되도록.
-MIN_PASSED: int = 4
+# 🚨 Fix 250 (2026-08-31) — **정의 조건은 필수**로 바꾼다.
+#
+#   배포 첫날 실측 로그:
+#     [Fix244] LIGHTUSDT 급등중 조정 = LONG 1순위 (4/6 통과)
+#              3일 **-18.0%**  되돌림 **0.568**  볼밴 **1.18**  CCI 240  RSI 69
+#
+#   3일 -18% 는 급등이 아니라 **하락 중**이고, 되돌림 0.568 은 얕은 조정이 아니다.
+#   즉 「급등 중 조정」을 **정의하는 두 조건을 둘 다 실패**했는데,
+#   타이밍 지표 4개(CCI/RSI/볼밴/OBV)만으로 4/6 을 채워 통과했다.
+#   볼밴 1.18 = 상단 **밖** = 추격매수 자리이기도 하다.
+#
+#   -> 두 축을 나눈다:
+#        필수(둘 다) : 급등 중(3일)  +  얕은 조정(되돌림)   = 「어떤 자리인가」
+#        선택(4중 3) : CCI / RSI / 볼밴 / OBV               = 「지금 들어갈 때인가」
+MIN_PASSED: int = 3          # 선택 4개 중 3개
+
+# 상단 밖에서 사는 것은 추격매수다. 실측 승자 중앙값은 0.877 이었다.
+BB_POS_CHASE_MAX: float = 1.05
 
 
 @dataclass
@@ -132,11 +147,33 @@ def evaluate_surge_pullback(
         )
         return s
 
-    checks: list[tuple[str, bool | None]] = []
+    # ── 필수 ① 급등 중인가 (3일) ──
+    c3 = _f(chg_3d_pct)
+    d["chg_3d_pct"] = c3
+    if c3 is not None and c3 < T["chg_3d_min"]:
+        s.blocked = (
+            f"급등 중이 아니다 — 3일 {c3:+.1f}% < {T['chg_3d_min']:.0f}%"
+        )
+        return s
 
-    v = _f(chg_3d_pct)
-    d["chg_3d_pct"] = v
-    checks.append(("급등중(3일)", None if v is None else v >= T["chg_3d_min"]))
+    # ── 필수 ② 얕은 조정인가 (되돌림) ──
+    if retrace is not None and retrace > T["retrace_max"]:
+        s.blocked = (
+            f"조정이 깊다 — 되돌림 {retrace:.3f} > {T['retrace_max']:.2f} "
+            "(실측 패자 중앙값 0.580)"
+        )
+        return s
+
+    # ── 필수 ③ 추격매수 금지 (상단 밖) ──
+    bb = _f(bb_pos_15m)
+    if bb is not None and bb > BB_POS_CHASE_MAX:
+        s.blocked = (
+            f"추격매수 — 볼밴 {bb:.3f} > {BB_POS_CHASE_MAX:.2f} (상단 밖). "
+            "실측 승자 중앙값 0.877"
+        )
+        return s
+
+    checks: list[tuple[str, bool | None]] = []
 
     v = _f(cci_15m)
     d["cci_15m"] = v
@@ -149,10 +186,6 @@ def evaluate_surge_pullback(
     v = _f(bb_pos_15m)
     d["bb_pos_15m"] = v
     checks.append(("볼밴 위쪽", None if v is None else v >= T["bb_pos_15m_min"]))
-
-    checks.append((
-        "얕은 조정", None if retrace is None else retrace <= T["retrace_max"],
-    ))
 
     v = _f(obv_dir_4h)
     d["obv_dir_4h"] = v
