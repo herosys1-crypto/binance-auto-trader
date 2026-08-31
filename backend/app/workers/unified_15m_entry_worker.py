@@ -137,6 +137,13 @@ def run_unified_15m_entry() -> dict:
     surges_found = 0
     no_candles = 0              # 15m 캔들 없음 (대상 아님!)
     no_surge = 0                # 급등/급락 없음 (대상 아님!)
+    # 🔎 Fix 255: Fix254(지지 붕괴) 관측 카운터.
+    #   옛 코드는 **전환에 성공했을 때만** 로그를 남겨서,
+    #   「평가를 아예 안 한 것」과 「평가했는데 조건 미달」이 구별되지 않았다.
+    #   = 이 프로젝트가 반복해서 당한 「조용한 실패」 형태다 (헌법 93).
+    sb_evaluated = 0            # 급락 LONG 후보 중 지지붕괴 판정을 돌린 수
+    sb_matched = 0              # 그중 5개 조건을 전부 만족한 수
+    sb_error = 0                # 판정 자체가 실패한 수
     skip_reasons: dict[str, int] = {}   # 사장님 검증용!
     results: list[dict] = []
     surges: list[dict] = []             # 감지된 급등/급락 심볼 = UI 모니터링용!
@@ -292,12 +299,14 @@ def run_unified_15m_entry() -> dict:
                             _od254 = _obv254(_a1h.get("obv"), _a1h.get("volumes"), 20)
                         except Exception:
                             _od254 = None
+                        sb_evaluated += 1
                         _v254 = _sb254(
                             closes=[float(x) for x in _c1] if _c1 else None,
                             volumes=_a1h.get("volumes"),
                             obv_dir=_od254,
                         )
                         if _v254.ok:
+                            sb_matched += 1
                             _on254 = _get_setting_int(db, "support_breakdown_short_enabled", 0)
                             if _on254:
                                 logger.warning(
@@ -319,6 +328,7 @@ def run_unified_15m_entry() -> dict:
                                     symbol, _v254.reason,
                                 )
                     except Exception as _e254:
+                        sb_error += 1
                         logger.warning("[Fix254] %s 지지붕괴 판정 실패 = 원 방향 유지: %s",
                                        symbol, _e254)
 
@@ -557,9 +567,11 @@ def run_unified_15m_entry() -> dict:
         _reasons_str = " ".join(f"{k}={v}" for k, v in sorted(skip_reasons.items())) or "-"
         logger.info(
             "[unified_15m_v224] 완료: scanned=%d no_candles=%d no_surge=%d "
-            "surges=%d entered=%d skipped=%d [%s] (daily %d/%d)",
+            "surges=%d entered=%d skipped=%d [%s] (daily %d/%d) "
+            "| Fix254 평가=%d 전환=%d 오류=%d",
             scanned, no_candles, no_surge, surges_found, entered, skipped,
             _reasons_str, used + entered, daily_limit,
+            sb_evaluated, sb_matched, sb_error,
         )
         payload = {
             "last_run_at": datetime.now(timezone.utc).isoformat(),
@@ -571,6 +583,9 @@ def run_unified_15m_entry() -> dict:
             "no_candles": no_candles,
             "no_surge": no_surge,
             "surges_found": surges_found,
+            "sb_evaluated": sb_evaluated,
+            "sb_matched": sb_matched,
+            "sb_error": sb_error,
             "entered": entered,
             "skipped": skipped,
             "skip_reasons": skip_reasons,

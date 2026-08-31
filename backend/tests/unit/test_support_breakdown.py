@@ -159,3 +159,39 @@ def test_thresholds_are_pinned():
     assert THRESHOLDS["bb_pos_break_max"] == 0.45      # BTR 붕괴 시점 1H 0.434
     assert THRESHOLDS["vol_spike_min"] == 1.5
     assert THRESHOLDS["obv_max"] == 0.0                # 사상 ④
+
+
+# ── Fix 255: 관측 가능성 ──────────────────────────────────────────
+
+def test_evaluation_is_counted_even_when_it_does_not_match():
+    """🚨 「평가 안 함」과 「평가했는데 미달」이 구별돼야 한다.
+
+    옛 코드는 **전환에 성공했을 때만** 로그를 남겨서, Fix254 로그가 0건일 때
+    그것이 「코드가 안 도는 것」인지 「조건이 안 맞는 것」인지 알 수 없었다.
+    = 이 프로젝트가 반복해서 당한 「조용한 실패」 형태 (헌법 93).
+    """
+    code = _code()
+    for name in ("sb_evaluated", "sb_matched", "sb_error"):
+        assert f"{name} = 0" in code, f"{name} 카운터가 없다"
+        assert f"{name} += 1" in code, f"{name} 를 세지 않는다"
+
+
+def test_counters_appear_in_the_cycle_summary():
+    """사이클 완료 로그에 보여야 매 30초 확인이 가능하다."""
+    src = WORKER.read_text(encoding="utf-8")
+    assert "Fix254 평가=%d 전환=%d 오류=%d" in src, "완료 로그에 카운터가 없다"
+
+
+def test_counters_are_in_the_returned_payload():
+    """상태 화면/모니터링이 읽을 수 있도록 반환값에도 넣는다."""
+    code = _code()
+    assert '"sb_evaluated": sb_evaluated' in code
+    assert '"sb_matched": sb_matched' in code
+
+
+def test_evaluated_is_counted_before_the_verdict():
+    """🚨 판정 결과와 무관하게 세야 「돌긴 도는가」를 알 수 있다."""
+    code = _code()
+    i_eval = code.index("sb_evaluated += 1")
+    i_ok = code.index("if _v254.ok:")
+    assert i_eval < i_ok, "성공했을 때만 세면 옛 문제가 그대로다"
