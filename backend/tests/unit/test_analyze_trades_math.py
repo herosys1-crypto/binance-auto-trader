@@ -122,3 +122,50 @@ def test_totals_match_sum_of_inputs():
         s.add(v)
     assert abs(s.total - sum(vals)) < 1e-9
     assert s.n == len(vals)
+
+
+# ── Fix 246: 중첩 entry_context 를 자동으로 펼친다 ──────────────────
+
+def test_nested_entry_context_is_flattened():
+    """🚨 실측 사고 — entry_context 가 71.2% 차 있는데 「비어 있습니다」가 나왔다.
+
+    옛 코드는 `rsi_15m` 같은 **평탄 키를 가정**했는데 실제 저장 구조는
+    ema_vcp / sar_ichimoku / confluence / bb_top / pump_dump /
+    pump_continuation / bb_4h 7개 하위 dict 로 **중첩**돼 있다.
+    키 이름을 추측하면 스키마가 바뀔 때마다 조용히 눈이 먼다.
+    """
+    f = _mod()._flatten
+    out = f({"ema_vcp": {"grade": 3, "score": 0.7}, "bb_top": {"rsi": 68.2}})
+    assert out == {"ema_vcp.grade": 3.0, "ema_vcp.score": 0.7, "bb_top.rsi": 68.2}
+
+
+def test_flatten_keeps_only_usable_numbers():
+    """문자열·None·무계값은 버린다 — obv_slope_pct 2,249,160 사고의 재발 방지."""
+    f = _mod()._flatten
+    out = f({"a": "문자열", "b": None, "c": 1.5, "d": True, "e": 1e15,
+             "f": float("nan")})
+    assert out == {"c": 1.5, "d": 1.0}
+
+
+def test_flatten_survives_odd_shapes():
+    f = _mod()._flatten
+    assert f(None) == {}
+    assert f({}) == {}
+    assert f({"a": [1, 2, 3]}) == {}
+    deep = {"a": {"b": {"c": {"d": {"e": {"f": 1.0}}}}}}
+    assert isinstance(f(deep), dict)          # 깊이 제한에 걸려도 죽지 않는다
+
+
+def test_effect_size_is_scale_free():
+    """🚨 척도가 다른 지표를 raw 차이로 줄세우면 RSI(0~100)가 항상 이긴다.
+
+    효과크기(차이/표준편차)로 재야 비율값(0~1)과 공정하게 비교된다.
+    """
+    m = _mod()
+    small = [0.10, 0.12, 0.11, 0.13, 0.12]
+    small_hi = [0.50, 0.52, 0.51, 0.53, 0.52]
+    big = [50.0, 52.0, 51.0, 53.0, 52.0]
+    big_hi = [54.0, 56.0, 55.0, 57.0, 56.0]
+    eff_small = (m._median(small_hi) - m._median(small)) / m._stdev(small + small_hi)
+    eff_big = (m._median(big_hi) - m._median(big)) / m._stdev(big + big_hi)
+    assert eff_small > eff_big, "작은 척도의 뚜렷한 차이가 과소평가된다"

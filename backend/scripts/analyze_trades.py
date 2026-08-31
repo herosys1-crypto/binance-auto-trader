@@ -329,32 +329,81 @@ def sec_close_reason(rows: list[dict]) -> None:
         print("     사유 없이는 「어떤 청산 로직이 좋았나」를 가릴 수 없다.")
 
 
+def _flatten(obj, prefix: str = "", out: dict | None = None, depth: int = 0) -> dict:
+    """중첩 dict 를 `부모.자식` 평탄 키로. 숫자 잎만 남긴다.
+
+    🚨 Fix 246: 옛 코드는 `rsi_15m` 같은 **평탄 키를 가정**했는데,
+    실제 entry_context 는 ema_vcp / bb_top / pump_dump / bb_4h ... 7개
+    하위 dict 로 중첩돼 있다. 그래서 데이터가 71% 차 있는데도
+    「진입 스냅샷이 비어 있습니다」가 나왔다.
+    키 이름을 추측하지 말고 **있는 것을 전부 펼쳐서** 판별력으로 고른다.
+    """
+    if out is None:
+        out = {}
+    if depth > 4 or not isinstance(obj, dict):
+        return out
+    for k, v in obj.items():
+        key = f"{prefix}.{k}" if prefix else str(k)
+        if isinstance(v, dict):
+            _flatten(v, key, out, depth + 1)
+        elif isinstance(v, bool):
+            out[key] = 1.0 if v else 0.0
+        elif isinstance(v, (int, float)):
+            fv = float(v)
+            if fv == fv and abs(fv) < 1e12:      # NaN / 무계값 제외
+                out[key] = fv
+    return out
+
+
+def _median(vals: list[float]) -> float:
+    v = sorted(vals)
+    n = len(v)
+    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
+
+
+def _stdev(vals: list[float]) -> float:
+    n = len(vals)
+    if n < 2:
+        return 0.0
+    m = sum(vals) / n
+    return (sum((x - m) ** 2 for x in vals) / (n - 1)) ** 0.5
+
+
 def sec_entry_indicators(rows: list[dict]) -> None:
-    _hr("6. 진입 지표 — 이긴 진입과 진 진입의 차이")
-    keys = ("rsi_15m", "cci_15m", "macd_hist_15m", "obv_dir_20", "bb_pos_15m",
-            "rsi_4h", "cci_4h", "bb_pos_4h", "obv_slope_pct", "confidence")
-    win = [r for r in rows if r["pnl"] > 0]
-    los = [r for r in rows if r["pnl"] < 0]
-    print(_row("지표", "승 건수", "승 평균", "패 건수", "패 평균", "차이",
-               w=(18, 9, 11, 9, 11, 11)))
-    print("-" * 72)
-    any_row = False
-    for k in keys:
-        wv = [v for r in win if (v := _f((r["entry_ctx"] or {}).get(k))) is not None]
-        lv = [v for r in los if (v := _f((r["entry_ctx"] or {}).get(k))) is not None]
-        if not wv and not lv:
+    _hr("6. 진입 지표 — 이긴 진입과 진 진입의 차이 (자동 탐색)")
+    win = [_flatten(r["entry_ctx"]) for r in rows if r["pnl"] > 0 and r["entry_ctx"]]
+    los = [_flatten(r["entry_ctx"]) for r in rows if r["pnl"] < 0 and r["entry_ctx"]]
+    if not win or not los:
+        print("  진입 스냅샷이 한쪽에 없습니다 — 8번 결손 리포트를 보십시오.")
+        return
+    print(f"  스냅샷이 있는 건: 승 {len(win)} / 패 {len(los)}")
+    print()
+    keys = set()
+    for d in win + los:
+        keys |= set(d)
+    ranked = []
+    for k in sorted(keys):
+        wv = [d[k] for d in win if k in d]
+        lv = [d[k] for d in los if k in d]
+        if len(wv) < 5 or len(lv) < 5:
             continue
-        any_row = True
-        wa = sum(wv) / len(wv) if wv else 0.0
-        la = sum(lv) / len(lv) if lv else 0.0
-        print(_row(k, len(wv), f"{wa:+.3f}", len(lv), f"{la:+.3f}", f"{wa - la:+.3f}",
-                   w=(18, 9, 11, 9, 11, 11)))
-    if not any_row:
-        print("  진입 스냅샷이 비어 있습니다 — 8번 결손 리포트를 보십시오.")
-    else:
-        print()
-        print("  ※ 「차이」가 0 에 가까운 지표는 **변별력이 없다** = 게이트로 써도 소용없다.")
-        print("     표본이 20건 미만이면 우연일 수 있으니 건수를 함께 보십시오.")
+        wm, lm = _median(wv), _median(lv)
+        sd = _stdev(wv + lv)
+        if sd <= 0:
+            continue                       # 값이 하나뿐 = 변별 불가
+        effect = (wm - lm) / sd            # 척도 무관 효과크기
+        ranked.append((abs(effect), k, len(wv), wm, len(lv), lm, effect))
+    if not ranked:
+        print("  비교 가능한 숫자 필드가 없습니다 (표본 5건 미만 또는 상수).")
+        return
+    print(f"{'지표':<38}{'승n':>5}{'승중앙':>10}{'패n':>5}{'패중앙':>10}{'효과크기':>10}")
+    print("-" * 78)
+    for _a, k, nw, wm, nl, lm, eff in sorted(ranked, reverse=True)[:20]:
+        print(f"{k[:38]:<38}{nw:>5}{wm:>10.3f}{nl:>5}{lm:>10.3f}{eff:>+10.2f}")
+    print()
+    print("  ※ **효과크기**로 정렬했다 (중앙값 차이 / 표준편차) — 척도가 달라도 비교된다.")
+    print("     |효과크기| 0.5 이상이면 게이트 후보, 0.2 미만이면 써도 소용없다.")
+    print(f"     상위 20개만 표시 (전체 {len(ranked)}개 필드 비교).")
 
 
 def sec_stage(rows: list[dict]) -> None:
