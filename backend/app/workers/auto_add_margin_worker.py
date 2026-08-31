@@ -47,7 +47,22 @@ from app.models.system_setting import SystemSetting
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ADD_MARGIN_USDT = Decimal("300.0")  # 사장님 default!
+# 🚨 Fix 238 (2026-08-31 사장님 선택 「B」): 옛 코드는 여기에
+#   DEFAULT_ADD_MARGIN_USDT = 300 이 있었고, 모든 전략에 **일괄 300** 을 넣었다.
+#
+#   사장님 verbatim (2026-08-22 v220):
+#     "전체손실이 30% 넘어가면 **초기금액으로** 증거금을 추가해줘"
+#
+#   당시 초기금액은 300 이었다(v219 마틴게일 300/600/1800) — 값이 맞았다.
+#   그런데 2026-08-26 Fix 133 이 사다리를 10/300/600 으로 바꿔 초기금액이
+#   10 이 된 뒤에도 이 300 만 **따라가지 않고 얼어붙었다** = 사장님 문장과 30배 차이.
+#
+#   → 이제 「초기금액」을 **그 전략 자신의 1단계 자본**으로 읽는다.
+#     10 으로 시작한 전략은 10, 500 으로 시작한 전략은 500 을 받는다.
+#     전역 상수는 없다 — 모르면 넣지 않는다(fail-closed).
+#
+#   ⚠️ SystemSetting `auto_add_margin_usdt` 에 양수를 넣으면 그 값으로 **고정**된다
+#     (옛 동작으로 되돌리려면 300 을 넣으면 된다). 0 은 여전히 기능 OFF.
 ROI_TRIGGER = -30.0  # 사장님 verbatim: 전체 손실 30%!
 DEDUP_TTL_SEC = 86400  # 24h dedup!
 
@@ -60,8 +75,14 @@ AUTO_ENTRY_TYPES = (
 )
 
 
-def _get_add_margin_amount(db) -> Decimal | None:
-    """SystemSetting `auto_add_margin_usdt` → 투입 금액. None = 기능 OFF.
+def _resolve_add_margin_mode(db) -> tuple[str, Decimal | None]:
+    """투입 금액 결정 방식.
+
+    Returns:
+        ("off", None)          — 명시적 0 = 기능 OFF
+        ("fixed", Decimal)     — 사장님이 설정에 넣은 고정 금액
+        ("per_strategy", None) — 미설정 = **그 전략의 1단계 자본** (Fix 238, 사장님 선택 B)
+
 
     🚨 Fix 165 (2026-08-26): 헌법 83 (0 = OFF 는 0 을 반환해야 한다) **세 번째 재발**.
 
@@ -69,7 +90,7 @@ def _get_add_margin_amount(db) -> Decimal | None:
         if val > 0:
             return val
         ...
-        return DEFAULT_ADD_MARGIN_USDT     # ← 0 을 넣으면 여기로 떨어져 300 이 됐다
+        return <전역 300 상수>            # ← 0 을 넣으면 여기로 떨어져 300 이 됐다
 
     즉 `auto_add_margin_usdt = 0` 은 「끄기」가 아니라 「300」이었다.
     이 워커엔 별도 ON/OFF 스위치도 없어서 **끌 방법이 존재하지 않았다.**
@@ -83,14 +104,51 @@ def _get_add_margin_amount(db) -> Decimal | None:
         if row is not None and row.value is not None and str(row.value).strip() != "":
             val = Decimal(str(row.value).strip())
             if val <= 0:
-                return None          # 명시적 0 = OFF
-            return val
+                return ("off", None)          # 명시적 0 = OFF
+            return ("fixed", val)
     except Exception as e:
         logger.warning(
-            "[auto_add_margin] auto_add_margin_usdt 파싱 실패 → default %s 사용: %s",
-            DEFAULT_ADD_MARGIN_USDT, e,
+            "[auto_add_margin] auto_add_margin_usdt 파싱 실패 → 전략별 1단계 자본 사용: %s", e,
         )
-    return DEFAULT_ADD_MARGIN_USDT   # 미설정 = 기존 동작 유지
+    return ("per_strategy", None)     # Fix 238: 미설정 = 사장님 「초기금액으로」
+
+
+def _stage1_capital_of(db, si) -> Decimal | None:
+    """그 전략의 **1단계 자본** = 사장님이 말한 「초기금액」 (Fix 238).
+
+    조회 순서 — 전부 **사장님이 정한 값**이다:
+      1. StrategyStagePlan(stage_no=1).planned_capital  ← 실제로 깔린 계획
+      2. template.stages_config["capitals"][0]          ← 화면 입력값
+      3. template.stage1_capital                        ← 구 컬럼
+
+    셋 다 없으면 **None** — 금액을 지어내지 않는다 (Fix 237 과 같은 원칙).
+    """
+    try:
+        from app.models.strategy_stage_plan import StrategyStagePlan as _SP
+        plan = (
+            db.query(_SP)
+            .filter(_SP.strategy_instance_id == si.id, _SP.stage_no == 1)
+            .one_or_none()
+        )
+        if plan is not None and plan.planned_capital:
+            v = Decimal(str(plan.planned_capital))
+            if v > 0:
+                return v
+        tpl = db.get(StrategyTemplate, si.strategy_template_id) if si.strategy_template_id else None
+        if tpl is not None:
+            cfg = tpl.stages_config if isinstance(tpl.stages_config, dict) else {}
+            caps = cfg.get("capitals") or []
+            if caps and caps[0]:
+                v = Decimal(str(caps[0]))
+                if v > 0:
+                    return v
+            if getattr(tpl, "stage1_capital", None):
+                v = Decimal(str(tpl.stage1_capital))
+                if v > 0:
+                    return v
+    except Exception:
+        logger.exception("[Fix238] #%s 1단계 자본 조회 실패", getattr(si, "id", "?"))
+    return None
 
 
 def _redis():
@@ -171,11 +229,16 @@ def run_auto_add_margin() -> dict:
             logger.error("[auto_add_margin] ⛔ Kill-Switch 확인 실패 → 투입 보류: %s", _ks_e)
             return {"note": f"kill-switch 확인 실패 = 보류 ({_ks_e})", "added": 0, "skipped": 0}
 
-        # 2. 증거금 금액 (0 = OFF)
-        add_amount = _get_add_margin_amount(db)
-        if add_amount is None:
+        # 2. 증거금 금액 방식 (0 = OFF)
+        _mode, _fixed_amount = _resolve_add_margin_mode(db)
+        if _mode == "off":
             logger.info("[auto_add_margin] ⏹️ Fix165: auto_add_margin_usdt=0 = 기능 OFF")
             return {"note": "auto_add_margin_usdt=0 = OFF", "added": 0, "skipped": 0}
+        logger.info(
+            "[auto_add_margin] 금액 방식 = %s",
+            "고정 %s USDT" % _fixed_amount if _mode == "fixed"
+            else "Fix238 = 전략별 1단계 자본 (사장님 「초기금액으로」)",
+        )
 
         # 3. 활성 심볼 스캔
         rows = db.execute(
@@ -225,6 +288,19 @@ def run_auto_add_margin() -> dict:
             if roi > ROI_TRIGGER:  # -30보다 크면 (-20, -10 등!) skip
                 skipped += 1
                 continue
+
+            # 🚨 Fix 238 (사장님 선택 B): 「초기금액」 = **그 전략의 1단계 자본**.
+            if _mode == "fixed":
+                add_amount = _fixed_amount
+            else:
+                add_amount = _stage1_capital_of(db, si)
+                if add_amount is None or add_amount <= 0:
+                    skipped += 1
+                    logger.warning(
+                        "[Fix238] #%s %s 1단계 자본 불명 = 증거금 추가 skip "
+                        "(금액을 지어내지 않는다)", si.id, si.symbol,
+                    )
+                    continue
 
             # 실 증거금 추가!
             try:
