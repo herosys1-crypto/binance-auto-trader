@@ -942,7 +942,7 @@ def _get_default_capital(db: Session) -> float:
 
 
 def _create_long_strategy(
-    db: Session, symbol: str, capital: float, bc=None,
+    db: Session, symbol: str, capital: float, bc=None, pattern: str | None = None,
 ) -> StrategyInstance | None:
     """v219 진입 방식 재사용 = _create_auto_bb_strategy!
 
@@ -958,7 +958,29 @@ def _create_long_strategy(
         #   사장님 사상은 LONG 도 동일: 「급락이 2-3회 반복 + 지표 저점 반등」
         #   → 단조 하락 도중(= 하락 초입) LONG 진입을 차단한다.
         #   ZROUSDT(고점 대비 -11% 조정 중 진입) 같은 사고의 대칭 방지책.
-        if bc is not None:
+        # 🚨 Fix 249 (2026-08-31): 「급등 중 조정」은 이 게이트를 **통과할 수 없다**.
+        #
+        #   Fix 111b 는 「급락이 2-3회 반복 + 지표가 **저점에서 반등**」을 요구한다.
+        #   그런데 사장님이 말한 급등 중 조정 종목은 RSI 68 / CCI 248 처럼 **강세**다
+        #   (실측 승자 중앙값 CCI +110.6 / RSI 67.4).
+        #   `_turns_for_long` 은 rsi <= 35 / cci <= -80 에서만 turn 을 세므로
+        #   강세 종목은 **수학적으로 0/2** 가 나온다.
+        #
+        #   실제 로그 (배포 첫날):
+        #     LIGHTUSDT LONG SKIP: 지표 꺾임 0/2 | rsi 67.99 macd +0.0005 cci 248.4
+        #   = Fix 244 가 1순위로 골라도 여기서 전부 죽는다. 볼밴 3차 0건과 같은 함정
+        #   (Fix 203/218/223 이 볼밴에 준 예외와 정확히 같은 성격이다).
+        #
+        #   → SURGE_PULLBACK 경로는 이 게이트를 건너뛴다.
+        #     대신 그 경로 자체가 되돌림 <= 0.35 + 강세 4개 조건 + 원점 아래 하드 차단을
+        #     이미 통과한 것이라 **보호가 없어지는 것이 아니라 다른 보호로 바뀌는 것**이다.
+        _skip_pk = (pattern == "SURGE_PULLBACK")
+        if _skip_pk:
+            logger.info(
+                "[Fix249] %s LONG = 급등중 조정 경로 → Fix111b 저점 게이트 제외 "
+                "(강세 종목은 저점 반등 조건을 만족할 수 없다)", symbol,
+            )
+        if bc is not None and not _skip_pk:
             from app.services.peak_confirmation import confirm_peak
             _pk_ok, _pk_why, _pk_det = confirm_peak(bc, symbol, "LONG")
             if not _pk_ok:
@@ -1312,7 +1334,9 @@ def run_auto_long_at_bottom_once() -> dict:
                     )
 
                 # 실 진입! (_create_long_strategy 재사용 = 헌법 6!)
-                new_strategy = _create_long_strategy(db, symbol, capital, bc)
+                new_strategy = _create_long_strategy(
+                    db, symbol, capital, bc, pattern=None,   # 알람 경로
+                )
                 if not new_strategy:
                     skipped += 1
                     logger.info(
@@ -1621,7 +1645,9 @@ def run_auto_long_at_bottom_once() -> dict:
                     logger.warning("[auto_long_bottom+Fix66] regime error: %s", _rg_exc)
 
                 # 9. 실 진입!
-                new_strategy = _create_long_strategy(db, symbol, capital, bc)
+                new_strategy = _create_long_strategy(
+                    db, symbol, capital, bc, pattern=result.get("pattern"),
+                )
                 if not new_strategy:
                     skipped += 1
                     logger.info(
