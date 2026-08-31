@@ -846,6 +846,14 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 #
                 # 되돌리기: SystemSetting split_peak_stall_enabled = 0 (재시작 불필요)
                 # ══════════════════════════════════════════════════════════
+                # 🚨 Fix 260 hotfix: _is_split 은 원래 **아래쪽**(Fix 203/218 블록)에서
+                #   정의돼 있었다. 이 블록이 그보다 앞이라 UnboundLocalError 가 났다
+                #   (배포 직후 실측: 매 사이클 오류=5). 정의를 여기로 올린다 —
+                #   strategy 만으로 계산되는 순수 값이라 위치를 올려도 의미가 안 변한다.
+                _is_split = (
+                    str(getattr(strategy, "capital_management_mode", "") or "").lower()
+                    == "split_entry"
+                )
                 _ps_on = False
                 _ps_force_market = False
                 if _is_split and next_stage_no >= 2:
@@ -964,10 +972,8 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 #    (#1488 이 -6,981 간 뒤 만든 안전망을 통째로 걷어내는 게 아니다)
                 #    손실 상한은 손절이 맡는다: 평단 ROI -10% = 600 투입 시 -60 USDT.
                 # ══════════════════════════════════════════════════════════
-                _is_split = (
-                    str(getattr(strategy, "capital_management_mode", "") or "").lower()
-                    == "split_entry"
-                )
+                # (_is_split 정의는 Fix 260 블록으로 **올라갔다** — 위쪽 참조.
+                #  여기서 다시 정의하면 두 곳이 갈라질 수 있어 중복을 두지 않는다.)
                 # ══════════════════════════════════════════════════════════
                 # 🚨 Fix 218 (2026-08-30 사장님) — **Fix 203 을 뒤집는다.**
                 #

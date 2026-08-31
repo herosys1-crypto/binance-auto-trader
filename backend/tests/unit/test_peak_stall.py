@@ -269,15 +269,39 @@ def test_forces_market_order():
     assert "if stage_plan.trigger_price is None or force_market:" in e
 
 
-def test_flag_is_assigned_before_every_use():
-    """🚨 NameError 방지 — 과거에 두 진입 경로 중 하나만 고쳐 터뜨린 적이 있다."""
+def test_every_loop_flag_is_assigned_before_use():
+    """🚨 UnboundLocalError 방지 — **실제로 터진 사고**를 잡는 테스트.
+
+    Fix 260 을 처음 배포했을 때 `_is_split` 이 이 블록보다 **아래**에서 정의돼 있어
+    매 사이클 `오류=5` 가 났다 (UnboundLocalError). 나는 `_ps_on` 의 범위만
+    확인하고 `_is_split` 은 보지 않았다.
+
+    => 한 변수만 검사하지 않는다. 루프 안의 **모든** 플래그를 검사한다.
+    """
     lines = WORKER.read_text(encoding="utf-8").splitlines()
-    first_assign = min(i for i, l in enumerate(lines, 1) if "_ps_on = False" in l)
-    uses = [i for i, l in enumerate(lines, 1) if "_ps_on" in l]
-    assert min(uses) >= first_assign
-    fm = [i for i, l in enumerate(lines, 1) if "_ps_force_market" in l]
-    fm_assign = min(i for i, l in enumerate(lines, 1) if "_ps_force_market = False" in l)
-    assert min(fm) >= fm_assign
+    flags = ("_is_split", "_ps_on", "_ps_force_market", "_is_price_mode", "_is_obv_mode")
+    for name in flags:
+        assigns = [
+            i for i, l in enumerate(lines, 1)
+            if l.lstrip().startswith(f"{name} =") or l.lstrip().startswith(f"{name}=")
+        ]
+        uses = [
+            i for i, l in enumerate(lines, 1)
+            if name in l and not l.lstrip().startswith("#") and i not in assigns
+        ]
+        assert assigns, f"{name} 대입을 못 찾았다"
+        if uses:
+            assert min(assigns) < min(uses), (
+                f"🚨 {name} 이 첫 사용({min(uses)}행)보다 늦게 대입된다"
+                f"({min(assigns)}행) = UnboundLocalError"
+            )
+
+
+def test_is_split_is_defined_only_once():
+    """중복 정의는 두 곳이 갈라지는 사고를 낳는다 (Fix 202/헌법 63)."""
+    lines = WORKER.read_text(encoding="utf-8").splitlines()
+    n = sum(1 for l in lines if l.lstrip().startswith("_is_split = "))
+    assert n == 1, f"_is_split 이 {n}번 정의돼 있다"
 
 
 def test_default_off_and_single_switch():
