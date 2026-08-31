@@ -358,7 +358,8 @@ class BinanceClient:
         return self._request("GET", "/fapi/v1/ping", signed=False)
 
     def get_klines(
-        self, *, symbol: str, interval: str = "1d", limit: int = 30
+        self, *, symbol: str, interval: str = "1d", limit: int = 30,
+        start_time: int | None = None, end_time: int | None = None,
     ) -> list[list[Any]]:
         """Binance Futures /fapi/v1/klines — historical candle 데이터.
 
@@ -370,7 +371,25 @@ class BinanceClient:
           period 별 가격 변화율 = (close[-1] - close[0]) / close[0] × 100
           calling: get_klines(symbol="BTCUSDT", interval="1d", limit=8) → 7일 변동률 계산.
         """
-        params = {"symbol": symbol.upper(), "interval": interval, "limit": int(limit)}
+        params: dict[str, Any] = {
+            "symbol": symbol.upper(), "interval": interval, "limit": int(limit),
+        }
+        # 🕐 Fix 242 (2026-08-31): **과거 시점** 조회 지원.
+        #   진입 당시 지표를 복원하려면 「그때까지의 캔들」이 필요한데, 옛 시그니처는
+        #   최신 봉만 줄 수 있었다. entry_context 가 12.1% 밖에 안 채워져 있어
+        #   과거 진입의 차트·지표를 사후 재구성할 방법이 없었다.
+        #   ⚠️ 시점을 지정하면 **캐시를 쓰지 않는다** — 캐시 키가 limit 만 담고 있어
+        #      시점이 다른 요청끼리 서로의 결과를 먹으면 조용히 틀린 지표가 나온다
+        #      (Fix 123 이 정확히 그 종류의 사고였다).
+        _time_scoped = start_time is not None or end_time is not None
+        if start_time is not None:
+            params["startTime"] = int(start_time)
+        if end_time is not None:
+            params["endTime"] = int(end_time)
+        if _time_scoped:
+            return self._request(
+                "GET", "/fapi/v1/klines", signed=False, params=params
+            )
 
         # ══════════════════════════════════════════════════════════════════
         # 🚨 Fix 122 (2026-08-26): klines 공유 캐시 — IP ban 최대 원인 제거
