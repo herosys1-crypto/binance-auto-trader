@@ -1494,6 +1494,51 @@ def _create_auto_bb_strategy(
         except Exception as _ce:
             logger.warning("[Fix247] client 생성 실패 = 게이트 통과: %s", _ce)
         if _cg_client is not None:
+            # ══════════════════════════════════════════════════════════
+            # 🚫 Fix 251 (2026-08-31) — LONG 「원점 회귀」 차단을 공용 관문으로.
+            #
+            #   BTRUSDT #1488 (단일 최대 손실 -6,552.45) 분석에서 나왔다:
+            #     0.0138 -> 0.22400 (+1,523%) -> 4~5일 횡보 -> 0.0823 (-44% 붕괴)
+            #
+            #   `unified_15m_entry._detect_15m_surge` 는 방향을 이렇게 정한다:
+            #       side = "SHORT" if c1h > 0 else "LONG"      # 부호만 본다
+            #   => **-44% 붕괴를 「급락」으로 보고 LONG 을 산다.**
+            #
+            #   사장님 사상 ③ "급락한것은 이전급등에 대한 급락이라 확실한 숏" 과
+            #   사상 ② "급등후 큰조정에 롱" 을 가르는 것이 **되돌림 비율**이다.
+            #   그 게이트가 auto_long_at_bottom 에만 있고 unified_15m 에는 없었다.
+            #
+            #   -> 모든 자동 진입이 지나는 여기로 올린다 (헌법 6 = 단일 진실).
+            #      실측 근거: 되돌림 1.00 초과 = 6건 -1,845.38
+            if (side or "").upper() == "LONG":
+                try:
+                    from app.services.chart_analyzer import ChartAnalyzer as _CA251
+                    from app.services.retracement import (
+                        RETRACE_BLOCK_MIN as _RB251,
+                        retracement_ratio as _rr251,
+                    )
+                    _a251 = _CA251.analyze_timeframe(_cg_client, symbol, "4h", limit=120) or {}
+                    _c251 = _a251.get("closes") or []
+                    _r251, _d251 = _rr251([float(x) for x in _c251] if _c251 else None, 60)
+                    if _r251 is not None and _r251 >= _RB251:
+                        logger.warning(
+                            "[Fix251] 🚫 %s LONG 진입 차단 — 되돌림 %.3f >= %.2f "
+                            "(원점 회귀). 고점 %s 시작 %s 현재 %s "
+                            "[실측: 이 구간 6건 -1,845]",
+                            symbol, _r251, _RB251,
+                            _d251.get("peak"), _d251.get("start"), _d251.get("now"),
+                        )
+                        return None
+                    if _r251 is not None:
+                        logger.info(
+                            "[Fix251] ✅ %s LONG 되돌림 %.3f < %.2f = 추세 중 조정",
+                            symbol, _r251, _RB251,
+                        )
+                except Exception as _re251:
+                    logger.warning(
+                        "[Fix251] %s 되돌림 판정 실패 = 통과: %s", symbol, _re251,
+                    )
+
             _allow, _why, _det = _cg(_cg_client, symbol, side)
             if not _allow:
                 if _cg_on(db):
