@@ -875,11 +875,81 @@ def detect_orphan_db_orders(
             oo.get("clientOrderId") for oo in exchange_open if oo.get("clientOrderId")
         }
 
-        # DB 에 있는데 거래소에 없는 것 = 외부 cancel / expire
+        # ══════════════════════════════════════════════════════════════
+        # 🚨 Fix 272 (2026-09-01): 「openOrders 에 없음」은 **취소가 아니다.**
+        #
+        # 실측 사고 (#1930 XPLUSDT):
+        #   08:23:20  💉 포지션 추가 MARKET 7,187 발송 -> **즉시 체결**
+        #   08:25:43  이 로직이 「openOrders 에 없음」을 보고 **CANCELED 로 정정**
+        #   결과: 거래소 실 포지션 28,932 vs DB 체결합 21,745 (차이 = 그 7,187)
+        #         평단·total_capital 은 4건을 반영했는데 **주문 이력만 어긋났다**
+        #         -> 「포지션 수량 불일치」 알림이 계속 떴고 학습 데이터도 오염됐다
+        #
+        # 원인: **체결되어 사라진 것**과 **취소되어 사라진 것**을 구별하지 않았다.
+        #   - MARKET 은 즉시 체결되므로 openOrders 에 **절대** 안 나타난다 = 항상 거짓 양성
+        #   - LIMIT 도 체결되면 사라진다 = 스트림을 놓치면 같은 오판정
+        #
+        # 수정: 단정하지 말고 **거래소에 그 주문의 실제 상태를 묻는다**(get_order).
+        #   FILLED  -> FILLED 로 정정 + 체결 수량·평균가 복구 (회계 수리)
+        #   CANCELED/EXPIRED -> CANCELED (원래 의도대로)
+        #   조회 실패 -> **건드리지 않는다** (기록을 훼손하느니 그대로 두는 게 낫다)
+        #
+        # API 비용: 후보 1건당 weight 1. 후보는 「60초 넘게 NEW 로 남은 주문」뿐이라 드물다.
+        #   폭주 방지로 사이클당 상한을 둔다.
+        # ══════════════════════════════════════════════════════════════
+        _probe_budget = 20
         for lo in local_orders:
             if lo.client_order_id in exchange_client_oids:
                 continue  # 정상 (양쪽 다 있음)
             old_status = lo.status
+
+            # ── 거래소에 실제 상태를 묻는다 ──
+            _real = None
+            if _probe_budget > 0 and lo.symbol and lo.client_order_id:
+                _probe_budget -= 1
+                try:
+                    _real = client.get_order(
+                        symbol=lo.symbol, orig_client_order_id=lo.client_order_id,
+                    )
+                except Exception as _qe:
+                    logger.warning(
+                        "[Fix272] %s 주문 상태 조회 실패 — 기록을 건드리지 않는다: %s",
+                        lo.client_order_id, _qe,
+                    )
+                    continue          # 🚨 모르면 그대로 둔다
+
+            if _real is not None:
+                _rs = str(_real.get("status") or "").upper()
+                if _rs in ("FILLED", "PARTIALLY_FILLED"):
+                    # 체결되어 사라진 것이었다 — 회계를 수리한다
+                    try:
+                        lo.status = _rs
+                        _eq = _real.get("executedQty")
+                        _ap = _real.get("avgPrice")
+                        if _eq is not None:
+                            lo.executed_qty = Decimal(str(_eq))
+                        if _ap is not None and Decimal(str(_ap)) > 0:
+                            lo.avg_price = Decimal(str(_ap))
+                        lo.updated_at = datetime.now(timezone.utc)
+                    except Exception as _fe:
+                        logger.warning("[Fix272] %s 체결 복구 실패: %s", lo.client_order_id, _fe)
+                    logger.warning(
+                        "[Fix272] ✅ %s 는 **체결**된 주문이었다 (status=%s qty=%s @ %s) — "
+                        "취소로 뒤집지 않고 정정했다. 옛 DB status=%s",
+                        lo.client_order_id, _rs, _real.get("executedQty"),
+                        _real.get("avgPrice"), old_status,
+                    )
+                    fixed += 1
+                    continue
+                if _rs not in ("CANCELED", "EXPIRED", "REJECTED"):
+                    # NEW/기타 = 아직 살아 있다 (openOrders 조회와 경쟁했을 수 있다)
+                    logger.info(
+                        "[Fix272] %s 거래소 status=%s — 취소 아님, 그대로 둔다",
+                        lo.client_order_id, _rs,
+                    )
+                    continue
+                # 여기 오면 진짜 취소/만료다 → 아래 기존 경로
+
             if auto_fix_db:
                 lo.status = "CANCELED"
                 lo.updated_at = datetime.now(timezone.utc)
