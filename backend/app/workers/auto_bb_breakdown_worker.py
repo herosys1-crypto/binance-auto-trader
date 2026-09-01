@@ -1474,6 +1474,56 @@ def _create_auto_bb_strategy(
     #   ⚠️ 기본 OFF. OFF 여도 「막았을 것」 로그는 남긴다.
     #      켜기: SystemSetting confluence_gate_enabled = 1
     # ══════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════
+    # 📐 Fix 270 (2026-09-01): 4H 추세 게이트 — 사상 ⑥ 「4시간봉 = 확정된 흐름」
+    #
+    # 사장님: "장기 4시간 차트 macd 와 cci 움직임을 보면 조정와 지지를 알수 있고 ...
+    #          포지션 진입에 조정인지 하락인지 구분 할때 참고 해줘"
+    #
+    # 실측 (진입 시점 4H 복원, 최근 10일 158건 — 「통과한 것만 진입했다면」):
+    #     게이트 없음(현행)         158건 승률 21.5%  **-3,599.87**  건당 -22.78
+    #     hist 상승중 AND hist>0     33건 승률 57.6%    **+183.32**  건당  +5.56
+    #   방향별: LONG -13.51 -> -0.51 / SHORT **-30.16 -> +12.74**
+    #   과적합 검사: 최근 절반 +181.62(22건) / 이전 절반 +1.70(11건) = **양쪽 다 양수**
+    #
+    # 🚨 MACD hist 는 **원시값이 아니라 방향**으로 써야 한다
+    #    (원시값 효과크기 0.01 / 「상승 중」 2.08 — 가격 단위라 스케일이 제각각).
+    # ⚠️ 통과율 21% = 진입이 약 1/5 로 준다. 지금은 건당 -22.78 로 잃고 있으므로
+    #    줄이는 쪽이 맞지만, 흑자 전환 후에는 「기회를 너무 줄이는가」를 다시 볼 것.
+    # ⚠️ fail-open — 이건 좋은 자리를 고르는 필터이지 안전장치가 아니다.
+    # ══════════════════════════════════════════════════════════════════
+    try:
+        from app.services.trend_4h_gate import (
+            check_trend_4h as _t4,
+            trend_4h_gate_enabled as _t4_on,
+        )
+        if _t4_on(db):
+            _t4_client = None
+            try:
+                from app.core.crypto import decrypt_text as _dt270
+                from app.integrations.binance.client import BinanceClient as _BC270
+                from app.models.exchange_account import ExchangeAccount as _EA270
+                _acc270 = db.get(_EA270, 1)
+                if _acc270 is not None:
+                    _t4_client = _BC270(
+                        api_key=_dt270(_acc270.api_key_enc),
+                        api_secret=_dt270(_acc270.api_secret_enc),
+                        is_testnet=_acc270.is_testnet,
+                    )
+            except Exception as _e270c:
+                logger.debug("[Fix270] 클라이언트 생성 실패 (fail-open): %s", _e270c)
+            if _t4_client is not None:
+                _t4_ok, _t4_why, _t4_det = _t4(_t4_client, symbol, side)
+                if not _t4_ok:
+                    logger.info(
+                        "[Fix270/4H] ⛔ %s %s 차단 — %s | %s",
+                        symbol, side, _t4_why, _t4_det,
+                    )
+                    return None
+                logger.info("[Fix270/4H] ✅ %s %s — %s", symbol, side, _t4_why)
+    except Exception as _e270:
+        logger.warning("[Fix270] 4H 게이트 오류 (fail-open, 진입 계속): %s", _e270)
+
     try:
         from app.services.confluence_gate import (
             check_confluence_gate as _cg,

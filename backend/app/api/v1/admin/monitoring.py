@@ -1570,3 +1570,115 @@ def get_binance_load(
             "usage_pct 가 50%% 를 넘으면 워커 주기/심볼 수를 줄이는 것을 검토하십시오."
         ),
     }
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 💉 Fix 271 (2026-09-01 사장님): 수익구간 포지션 추가 모니터링
+#
+# 사장님: "수익구간에서 꼭 포지션 추가를 할수 있는 모니터링을 만들어줘.
+#          수익구간에 2번은 포지션 추가를 할수 있는걸로 되어있는데
+#          **이것이 잘되고 있는지도 분석**해서 만들어줘"
+#
+# 워커 로그로만 알 수 있던 것을 화면에서 볼 수 있게 한다:
+#   - 지금 활성 포지션 각각이 추가 자격에 **얼마나 가까운지** (ROI vs 트리거)
+#   - 이미 몇 번 썼는지 (상한 2회)
+#   - 못 하는 **이유**가 무엇인지
+#
+# 🚨 Fix 269 와 함께 봐야 한다 — 추가는 손실을 3~5배로 키우던 원인이었고
+#    (추가 없음 건당 -13.28 / 1회 -42.92 / 2회 -64.27),
+#    이제 손절 금액을 고정해서 그 위험을 묶었다. 이 화면은 그 효과를 확인하는 자리다.
+# ══════════════════════════════════════════════════════════════════════
+@router.get("/pyramid-status")
+def pyramid_status(db: Session = Depends(get_db)) -> dict:
+    """수익구간 포지션 추가 현황 — 자격/진행/차단 사유."""
+    # ⚠️ 이 파일은 sqlalchemy 를 **함수 안에서** import 하는 관행이다 (모듈 상단에 없다).
+    from sqlalchemy import select, text
+
+    from app.core.strategy_status import ACTIVE_LIKE
+    from app.models.strategy_instance import StrategyInstance
+
+    from app.workers.success_pyramiding_worker import (
+        MAX_PYRAMID_COUNT,
+        MIN_UNREALIZED_ROI_PCT as _TRIG,
+        _cap_loss_enabled,
+        _get_pyramid_count,
+    )
+
+    rows = db.execute(
+        select(StrategyInstance)
+        .where(StrategyInstance.status.in_(tuple(ACTIVE_LIKE)))
+        .order_by(StrategyInstance.id.desc())
+    ).scalars().all()
+
+    items = []
+    ready = maxed = below = 0
+    for s in rows:
+        try:
+            cap = float(s.total_capital or 0)
+            roi = (float(s.unrealized_pnl or 0) / cap * 100) if cap > 0 else None
+            used = _get_pyramid_count(s.id)
+            if used >= MAX_PYRAMID_COUNT:
+                why, cls = f"상한 도달 ({used}/{MAX_PYRAMID_COUNT})", "maxed"
+                maxed += 1
+            elif roi is None:
+                why, cls = "ROI 계산 불가 (자본 0)", "unknown"
+            elif roi < float(_TRIG):
+                why, cls = f"ROI {roi:.2f}% < 트리거 {float(_TRIG):.1f}%", "below"
+                below += 1
+            else:
+                why, cls = "추가 자격 충족", "ready"
+                ready += 1
+            items.append({
+                "strategy_id": s.id, "symbol": s.symbol, "side": s.side,
+                "status": s.status, "capital": cap,
+                "unrealized_pnl": float(s.unrealized_pnl or 0),
+                "roi_pct": roi, "trigger_pct": float(_TRIG),
+                "gap_pct": (None if roi is None else round(float(_TRIG) - roi, 2)),
+                "pyramid_used": used, "pyramid_max": MAX_PYRAMID_COUNT,
+                "force_sl_roi": (
+                    float(s.force_sl_roi_override)
+                    if s.force_sl_roi_override is not None else None
+                ),
+                "reason": why, "state": cls,
+            })
+        except Exception as e:  # 한 건이 화면 전체를 죽이지 않게
+            items.append({"strategy_id": getattr(s, "id", None), "error": str(e)[:200]})
+
+    # 추가가 실제로 있었던 전략의 성적 (Fix 269 효과 확인용)
+    perf = []
+    try:
+        perf = [
+            {"adds": r[0], "count": r[1], "wins": r[2],
+             "total_pnl": float(r[3] or 0), "avg_pnl": float(r[4] or 0)}
+            for r in db.execute(text("""
+                WITH adds AS (
+                  SELECT strategy_instance_id sid, COUNT(*) n FROM orders
+                  WHERE purpose='ENTRY' AND stage_no IS NULL AND status='FILLED'
+                  GROUP BY 1)
+                SELECT COALESCE(a.n,0) adds, COUNT(*) cnt,
+                       SUM(CASE WHEN si.realized_pnl>0 THEN 1 ELSE 0 END) w,
+                       ROUND(SUM(si.realized_pnl)::numeric,2),
+                       ROUND(AVG(si.realized_pnl)::numeric,2)
+                FROM strategy_instances si LEFT JOIN adds a ON a.sid=si.id
+                WHERE si.stopped_at > now() - interval '7 days'
+                  AND si.status IN ('STOPPED','COMPLETED')
+                GROUP BY 1 ORDER BY 1
+            """)).all()
+        ]
+    except Exception as e:
+        logger.warning("[Fix271] 추가 성적 집계 실패: %s", e)
+
+    return {
+        "summary": {
+            "active": len(rows), "ready": ready, "maxed": maxed, "below_trigger": below,
+            "trigger_pct": float(_TRIG), "max_per_position": MAX_PYRAMID_COUNT,
+            "cap_loss_enabled": _cap_loss_enabled(db),   # Fix 269
+        },
+        "items": items,
+        "performance_7d": perf,
+        "note": (
+            "🚨 Fix 269 실측: 추가 없음 건당 -13.28 / 1회 -42.92 / 2회 -64.27. "
+            "추가가 손실을 3~5배로 키우고 있었다. 이제 추가 시 손절 **금액**을 "
+            "고정한다(cap_loss). performance_7d 로 효과를 확인할 것."
+        ),
+    }
