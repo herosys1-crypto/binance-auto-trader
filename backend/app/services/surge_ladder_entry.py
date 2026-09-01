@@ -64,20 +64,27 @@ MAX_CONCURRENT_KEY = "surge_ladder_max_concurrent"
 MAX_CONCURRENT_DEFAULT = 5          # 표본 없음 — 보수적 초기값. 실적 보고 조정.
 
 
-def get_surge_max_concurrent(db: Session) -> int:
-    """이 전략 **전용** 동시 슬롯. 0 이하 = 진입 OFF (명시 존중)."""
+def get_surge_max_concurrent(db: Session, key: str = MAX_CONCURRENT_KEY,
+                             default: int = MAX_CONCURRENT_DEFAULT) -> int:
+    """이 전략 **전용** 동시 슬롯. 0 이하 = 진입 OFF (명시 존중).
+
+    🚨 Fix 278: key/default 를 인자로 뺐다 — 중단선 전략이 같은 진입 경로를
+       **자기 상한**으로 쓰기 위해서다. 기본값은 그대로라 급등 사다리는 무변경.
+    """
+    MAX_CONCURRENT_DEFAULT_ = default
     try:
         from app.models.system_setting import SystemSetting
-        row = db.get(SystemSetting, MAX_CONCURRENT_KEY)
+        row = db.get(SystemSetting, key)
         if row is not None and row.value is not None and str(row.value).strip():
             return int(str(row.value).strip())
     except Exception as e:
         logger.warning("[surge_entry] %s 조회 실패 = default %d: %s",
-                       MAX_CONCURRENT_KEY, MAX_CONCURRENT_DEFAULT, e)
-    return MAX_CONCURRENT_DEFAULT
+                       key, MAX_CONCURRENT_DEFAULT_, e)
+    return MAX_CONCURRENT_DEFAULT_
 
 
-def count_surge_active(db: Session) -> int:
+def count_surge_active(db: Session, prefix: str = TEMPLATE_PREFIX,
+                       fallback: int = MAX_CONCURRENT_DEFAULT) -> int:
     """지금 살아 있는 이 전략의 포지션 수.
 
     🚨 집계 실패는 **상한으로 간주**한다 (fail-closed) — 자본이 나가는 판정이다.
@@ -89,12 +96,12 @@ def count_surge_active(db: Session) -> int:
             .join(StrategyTemplate,
                   StrategyTemplate.id == StrategyInstance.strategy_template_id)
             .where(StrategyInstance.status.in_(tuple(ACTIVE_LIKE)))
-            .where(StrategyTemplate.name.ilike(f"{TEMPLATE_PREFIX}%"))
+            .where(StrategyTemplate.name.ilike(f"{prefix}%"))
         ).scalars().all()
         return len(rows)
     except Exception as e:
         logger.warning("[surge_entry] 활성 수 조회 실패 = 상한으로 간주: %s", e)
-        return MAX_CONCURRENT_DEFAULT
+        return fallback
 
 
 def _has_active_same_symbol(db: Session, symbol: str, side: str) -> bool:
@@ -112,7 +119,10 @@ def _has_active_same_symbol(db: Session, symbol: str, side: str) -> bool:
         return True                       # fail-closed
 
 
-def _guards_ok(db: Session, acc: ExchangeAccount, symbol: str, side: str) -> tuple[bool, str]:
+def _guards_ok(db: Session, acc: ExchangeAccount, symbol: str, side: str,
+               *, prefix: str = TEMPLATE_PREFIX,
+               cap_key: str = MAX_CONCURRENT_KEY,
+               cap_default: int = MAX_CONCURRENT_DEFAULT) -> tuple[bool, str]:
     """우회하지 **않는** 안전장치들. 하나라도 실패하면 진입하지 않는다."""
     try:
         from app.services.account_kill_switch_service import AccountKillSwitchService
@@ -140,8 +150,8 @@ def _guards_ok(db: Session, acc: ExchangeAccount, symbol: str, side: str) -> tup
     if _has_active_same_symbol(db, symbol, side):
         return False, "같은 심볼·방향 활성 전략 존재"
 
-    _act = count_surge_active(db)
-    _cap = get_surge_max_concurrent(db)
+    _act = count_surge_active(db, prefix, cap_default)
+    _cap = get_surge_max_concurrent(db, cap_key, cap_default)
     if _act >= _cap:
         return False, f"전용 동시 슬롯 소진 {_act}/{_cap}"
 
@@ -157,6 +167,10 @@ def create_surge_position(
     attempt_no: int,
     leverage: int = 2,
     side: str = "SHORT",
+    template_prefix: str = TEMPLATE_PREFIX,
+    strategy_type: str = STRATEGY_TYPE,
+    cap_key: str = MAX_CONCURRENT_KEY,
+    cap_default: int = MAX_CONCURRENT_DEFAULT,
 ) -> StrategyInstance | None:
     """급등 정점 사다리 1회분 진입. 실패하면 None (예외를 밖으로 안 던진다).
 
@@ -171,7 +185,8 @@ def create_surge_position(
         logger.warning("[surge_entry] mainnet 계정 없음")
         return None
 
-    ok, why = _guards_ok(db, acc, symbol, side)
+    ok, why = _guards_ok(db, acc, symbol, side, prefix=template_prefix,
+                         cap_key=cap_key, cap_default=cap_default)
     if not ok:
         logger.info("[surge_entry] ⛔ %s %s %d시도 차단: %s", symbol, side, attempt_no, why)
         return None
@@ -190,8 +205,8 @@ def create_surge_position(
     now = datetime.now(timezone.utc)
     cap = Decimal(str(capital))
     tpl = StrategyTemplate(
-        name=f"{TEMPLATE_PREFIX}_{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S')}_A{attempt_no}",
-        strategy_type=STRATEGY_TYPE,
+        name=f"{template_prefix}_{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S')}_A{attempt_no}",
+        strategy_type=strategy_type,
         side=side,
         leverage=int(leverage),
         total_capital=cap,

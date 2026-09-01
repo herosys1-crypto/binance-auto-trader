@@ -553,6 +553,16 @@ def start_scheduler() -> None:
         from app.workers.pump_split_entry_worker import run_pump_split_entry_once
         run_pump_split_entry_once()
     scheduler.add_job(guarded_job("pump_split", 780, _pump_split), trigger=IntervalTrigger(seconds=900), id="pump_split", replace_existing=True, max_instances=1, coalesce=True)
+
+    # 📐 Fix 278 (2026-09-02 사장님): 볼밴 **중단선** 4종 = 별도 전략.
+    #   "상승중 볼밴 중단지지와 중단저항 그리고 중단돌파 중단하락돌파에도
+    #    우리 시스템로직이 상승과 하락이 판단되면 이것도 포지션에 진입해줘"
+    #   "이전략은 15분 차트를 기준이야 1시간과 4시간은 참고용으로"
+    #   15분봉 판정이므로 15분 주기. **기본 shadow**(자금 안 나감) — 헌법 161.
+    def _bb_mid_line():
+        from app.workers.bb_mid_line_worker import run_bb_mid_line_once
+        run_bb_mid_line_once()
+    scheduler.add_job(guarded_job("bb_mid_line", 780, _bb_mid_line), trigger=IntervalTrigger(seconds=900), id="bb_mid_line", replace_existing=True, max_instances=1, coalesce=True)
     # 📅 Fix 182 (2026-08-27 사장님): 예약 전략 — 조건 맞을 때 시스템이 대신 진입
     #   사장님 verbatim: "예약 전략으로 만들면 시스템이 진입가능할때
     #                     예약해 놓은 전략으로 진행할수 있게 예약기능을 만들어줘"
