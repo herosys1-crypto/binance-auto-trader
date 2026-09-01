@@ -1257,6 +1257,7 @@ class ExecutionService:
         order_type: str,
         limit_price: Decimal | None = None,
         mode: str = "reset",
+        cap_loss: bool = False,
     ) -> Order:
         """사용자 지정 USDT 금액으로 즉시 포지션 추가.
 
@@ -1264,6 +1265,10 @@ class ExecutionService:
             amount_usdt: 추가 자본 (margin, USDT). 양수.
             order_type: "MARKET" 또는 "LIMIT".
             limit_price: order_type=LIMIT 일 때 지정가. MARKET 이면 무시.
+            cap_loss: 🚨 Fix 269 — True 면 추가 직후 force_sl_roi_override 를 낮춰
+                「손절 시 잃는 USDT」를 추가 전과 같게 유지한다.
+                실측: 추가 없음 건당 -13.28 / 추가 1회 -42.92 / 2회 -64.27.
+                자동 워커는 True, 사장님 수동 「💉 포지션 추가」는 False(의도적 증액).
             mode: 🌟 2026-07-01 사장님 헌법 51 (옵션 A!):
                 - "preserve" = 청산 방지 모드 (평단 + qty + total_capital 갱신, TP/SL 유지!)
                 - "reset" = 신 진입 모드 (= default!) (TP/SL 초기화 = TP1 부터 다시!)
@@ -1485,6 +1490,61 @@ class ExecutionService:
                 logger.warning(
                     "[Fix157] #%s total_capital 갱신 실패 (주문은 정상): %s",
                     strategy.id, _ce,
+                )
+
+        # ══════════════════════════════════════════════════════════════
+        # 🚨 Fix 269 (2026-09-01): 포지션 추가가 **손절 금액**을 키우지 않게 한다.
+        #
+        # 실측 (최근 3일, 종료 전략 151건):
+        #     추가 없음   97건  건당 **-13.28**
+        #     추가 1회    34건  건당 **-42.92**   (3.2배)
+        #     추가 2회    15건  건당 **-64.27**   (4.8배)
+        #     추가 7회     1건  건당 -724.80      (#1873, 자본 6,800)
+        #
+        # 원인은 산수다. 손절은 ROI(%) 기준인데 추가로 **자본이 커지면**
+        # 같은 ROI 라도 손실 **금액**이 그만큼 커진다.
+        #   #1890 SNXXUSDT: 1단계 자본 10 -> 이익 구간에서 300 두 번 추가 -> 610
+        #     평단 12.67 -> 13.15 로 밀린 뒤 12.45 청산 = **-65.75**
+        #     추가가 없었다면 -0.5 였다. **131배**.
+        #
+        # Fix 213 이 볼밴 분할에서 같은 사고를 잡았지만(피라미딩 제외), 나머지 경로는
+        # 그대로였다. 여기서 막으면 add_position_now 를 쓰는 **모든 경로**가 보호된다
+        # (헌법 6 = 한 곳에서 보장).
+        #
+        # cap_loss=True 면 추가 직후 force_sl_roi_override 를 낮춰
+        # 「손절 시 잃는 USDT」를 추가 전과 같게 유지한다.
+        #     이전 손실 = prev_capital x prev_roi / 100
+        #     새 ROI   = 이전 손실 / new_capital x 100
+        #
+        # ⚠️ override 가 없으면(=전역 기본 손절) 건드리지 않는다 — 무엇을 고정할지
+        #    기준이 없기 때문이다. 그 경우 로그로 알린다.
+        # ══════════════════════════════════════════════════════════════
+        if cap_loss:
+            try:
+                _prev_roi = strategy.force_sl_roi_override
+                _new_cap = Decimal(str(strategy.total_capital or 0))
+                _old_cap = _new_cap - Decimal(str(amount_usdt))
+                if _prev_roi is None:
+                    logger.warning(
+                        "[Fix269] #%s 손절 override 가 없어 손실 고정 불가 — "
+                        "추가 %s 만큼 손절 금액이 커진다",
+                        strategy.id, amount_usdt,
+                    )
+                elif _new_cap > 0 and _old_cap > 0:
+                    _base_loss = _old_cap * Decimal(str(_prev_roi)) / Decimal("100")
+                    _new_roi = _base_loss / _new_cap * Decimal("100")
+                    strategy.force_sl_roi_override = _new_roi.quantize(Decimal("0.0001"))
+                    logger.warning(
+                        "[Fix269] #%s %s 손실 고정: 자본 %.2f→%.2f 이므로 "
+                        "손절 ROI %.2f%%→%.4f%% (손절 시 손실 %.2f USDT 유지)",
+                        strategy.id, strategy.symbol, float(_old_cap), float(_new_cap),
+                        float(_prev_roi), float(_new_roi), float(_base_loss),
+                    )
+            except Exception as _cl_e:
+                # 🚨 여기서 실패하면 손실 상한이 깨진 상태다 — 반드시 error 로 남긴다.
+                logger.error(
+                    "[Fix269] 🚨 #%s 손실 고정 실패 — 추가는 됐고 손절 금액이 커졌다: %s",
+                    strategy.id, _cl_e,
                 )
 
         self.db.commit()

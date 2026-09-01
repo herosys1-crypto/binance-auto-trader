@@ -203,6 +203,25 @@ def _strategy_type_of(si) -> str:
     return getattr(tpl, "strategy_type", "") or "" if tpl is not None else ""
 
 
+# 🚨 Fix 269 (2026-09-01): 포지션 추가 시 손절 **금액** 고정 스위치.
+#   기본 **ON** — 손실을 줄이는 방향이고 실측 근거가 명확하다
+#   (추가 없음 -13.28 / 1회 -42.92 / 2회 -64.27 건당).
+#   끄려면 SystemSetting pyramid_cap_loss_enabled = 0.
+CAP_LOSS_KEY = "pyramid_cap_loss_enabled"
+
+
+def _cap_loss_enabled(db) -> bool:
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, CAP_LOSS_KEY)
+        if row is None or row.value is None or str(row.value).strip() == "":
+            return True                      # 기본 ON
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:
+        logger.warning("[Fix269] %s 조회 실패 = ON 유지: %s", CAP_LOSS_KEY, e)
+        return True                          # fail-safe = 손실을 묶는 쪽
+
+
 def run_success_pyramiding() -> dict:
     """매 30초 = 익절중 심볼 = 강한 지속 신호 시 = 원 자본으로 추가 진입!"""
     db: Session = SessionLocal()
@@ -587,11 +606,24 @@ def run_success_pyramiding() -> dict:
                     api_secret=_dt(_acc.api_secret_enc),
                     is_testnet=False,
                 )
+                # 🚨 Fix 269 (2026-09-01): 추가가 **손절 금액**을 키우지 않게 한다.
+                #
+                # 실측 (최근 3일, 종료 151건):
+                #     추가 없음 97건 건당 **-13.28**
+                #     추가 1회  34건 건당 **-42.92**  (3.2배)
+                #     추가 2회  15건 건당 **-64.27**  (4.8배)
+                #
+                # 손절은 ROI 기준인데 추가로 자본이 커지면 같은 ROI 라도 손실
+                # **금액**이 그만큼 커진다. #1890 SNXXUSDT 는 1단계 10 에
+                # 300 을 두 번 얹어 610 이 됐고 -65.75 를 잃었다 (추가가 없었다면 -0.5).
+                # cap_loss=True 면 추가 직후 손절 ROI 를 낮춰 손실 금액을 유지한다.
+                _cap_loss = _cap_loss_enabled(db)
                 _add_order = _exec.add_position_now(
                     si.id,
                     amount_usdt=Decimal(str(base_capital)),
                     order_type="MARKET",
                     mode="reset",
+                    cap_loss=_cap_loss,
                 )
                 if not _add_order:
                     skipped += 1
