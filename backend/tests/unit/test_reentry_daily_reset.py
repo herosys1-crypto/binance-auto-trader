@@ -165,3 +165,18 @@ def test_evidence_is_recorded_next_to_the_change():
     api = API.read_text(encoding="utf-8")
     for token in ("Fix 262", "8.7일 전", "영구 소진", "max(stored, kst_midnight)"):
         assert token in api, f"근거 주석에 '{token}' 이 없다"
+
+
+def test_template_match_is_case_insensitive():
+    """🚨 실제로 터진 버그 — 템플릿 이름은 **대문자**로 저장된다.
+
+        AUTO_BB_BROCCOLIF3BUSDT_LONG_20260901_001407_REENTRY1
+
+    `.like("%_reentry%")` 로 짰더니 **항상 0** 을 돌려줬고, 전용 슬롯(10)이
+    사실상 무제한으로 열려 있었다. 실측: LIKE 0건 / ILIKE 1건 (같은 시점).
+    """
+    src = WORKER.read_text(encoding="utf-8")
+    i = src.index("def _count_active_reentry")
+    body = src[i: i + 1600]
+    assert ".ilike(" in body, "대소문자 무시(ilike)가 아니다"
+    assert 'name.like("%_reentry%")' not in body, "대소문자 구분 like 가 남아 있다"

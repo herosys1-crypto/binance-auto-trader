@@ -209,6 +209,13 @@ def _count_active_reentry(db: Session) -> int:
 
     템플릿 이름의 suffix(_reentry1 / _reentry2 / _lastchance / _success)로 센다 —
     재진입 전략을 만들 때 _create_auto_bb_strategy 에 넘기는 그 값이다.
+
+    🚨 Fix 265: 반드시 **ilike**(대소문자 무시)여야 한다.
+       실제 저장 형태는 **대문자**다:
+           AUTO_BB_BROCCOLIF3BUSDT_LONG_20260901_001407_REENTRY1
+       처음에 `.like("%_reentry%")` 로 짰더니 **항상 0** 을 돌려줬고,
+       그 결과 전용 슬롯(10)이 사실상 **무제한**으로 열려 있었다.
+       실측으로 갈렸다: LIKE 0건 / ILIKE 1건 (같은 시점, 같은 조건).
     """
     from app.core.strategy_status import ACTIVE_LIKE
     from app.models.strategy_template import StrategyTemplate
@@ -219,9 +226,9 @@ def _count_active_reentry(db: Session) -> int:
                   StrategyTemplate.id == StrategyInstance.strategy_template_id)
             .where(StrategyInstance.status.in_(tuple(ACTIVE_LIKE)))
             .where(
-                StrategyTemplate.name.like("%_reentry%")
-                | StrategyTemplate.name.like("%_lastchance%")
-                | StrategyTemplate.name.like("%_success%")
+                StrategyTemplate.name.ilike("%_reentry%")
+                | StrategyTemplate.name.ilike("%_lastchance%")
+                | StrategyTemplate.name.ilike("%_success%")
             )
         ).scalars().all()
         return len(rows)
