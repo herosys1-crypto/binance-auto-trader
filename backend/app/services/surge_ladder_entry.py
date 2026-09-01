@@ -171,6 +171,8 @@ def create_surge_position(
     strategy_type: str = STRATEGY_TYPE,
     cap_key: str = MAX_CONCURRENT_KEY,
     cap_default: int = MAX_CONCURRENT_DEFAULT,
+    tp_percents: tuple[float, float, float, float] = (15.0, 20.0, 25.0, 30.0),
+    trailing_pct: float | None = None,
 ) -> StrategyInstance | None:
     """급등 정점 사다리 1회분 진입. 실패하면 None (예외를 밖으로 안 던진다).
 
@@ -215,8 +217,10 @@ def create_surge_position(
         #   매 시도는 독립 포지션이므로 1단계가 맞다.
         stages_config={"capitals": [float(cap)], "trigger_percents": [None], "stages_count": 1},
         stage1_capital=cap,
-        tp1_percent=Decimal("15"), tp2_percent=Decimal("20"),
-        tp3_percent=Decimal("25"), tp4_percent=Decimal("30"),
+        # 🚨 Fix 281: TP 를 인자로 뺀다. 기본값은 옛 값(15/20/25/30) 이라
+        #   급등 사다리는 무변경이고, 중단선 전략은 백테스트에 맞춰 5/10/15/20 을 넘긴다.
+        tp1_percent=Decimal(str(tp_percents[0])), tp2_percent=Decimal(str(tp_percents[1])),
+        tp3_percent=Decimal(str(tp_percents[2])), tp4_percent=Decimal(str(tp_percents[3])),
         tp1_qty_ratio=Decimal("25"), tp2_qty_ratio=Decimal("25"),
         tp3_qty_ratio=Decimal("25"), tp4_qty_ratio=Decimal("25"),
         stop_loss_percent_of_capital=Decimal("90"),
@@ -264,6 +268,12 @@ def create_surge_position(
     try:
         strategy.force_sl_enabled_override = True
         strategy.force_sl_roi_override = Decimal(str(round(sl_roi, 4)))
+        # 🚨 Fix 281 (Fix 205 교훈 재적용): TP1 을 **전략 인스턴스에도** 박아야 한다.
+        #   strategy_service 가 생성 시 tp1_pct_override = TP1_PCT_DEFAULT(15) 를
+        #   모든 전략에 넣는다. 템플릿만 바꾸면 그 override 가 이겨서 무효가 된다.
+        strategy.tp1_pct_override = Decimal(str(tp_percents[0]))
+        if trailing_pct is not None:
+            strategy.trailing_retrace_pct = Decimal(str(trailing_pct))
         db.commit()
     except Exception as e:
         logger.warning("[surge_entry] 손절 설정 실패: %s", e)

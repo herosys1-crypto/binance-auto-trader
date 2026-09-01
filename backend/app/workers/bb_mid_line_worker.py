@@ -50,6 +50,9 @@ SL_PRICE_PCT_DEFAULT = 5.0                     # 가격 -5% = 레버 2 에서 RO
 TOP_N_KEY = "bb_mid_line_top_n"
 TOP_N_DEFAULT = 30
 LEVERAGE = 2
+# 🚨 Fix 281: 백테스트 가정(TP +5% ROI)에 맞춘다. pump_split(Fix 205)과 같은 모양.
+TP_PERCENTS = (5.0, 10.0, 15.0, 20.0)
+TRAILING_PCT = 3.0
 
 STRATEGY_TYPE = "bb_mid_line"
 TEMPLATE_PREFIX = "BB_MIDLINE"
@@ -232,6 +235,11 @@ def run_bb_mid_line_once() -> dict:
                         attempt_no=1, leverage=LEVERAGE, side=side,
                         template_prefix=TEMPLATE_PREFIX, strategy_type=STRATEGY_TYPE,
                         cap_key=MAX_CONCURRENT_KEY, cap_default=cap_n,
+                        # 🚨 Fix 281: 백테스트가 **TP +5% ROI** 가정이었다.
+                        #   기본값(15/20/25/30)을 그대로 두면 측정한 규칙과 다른 매매가
+                        #   된다 (+15% 를 가야 첫 익절 = 레버 2 에서 가격 7.5%).
+                        #   pump_split 과 같은 검증된 모양(5/10/15/20 + 트레일링 -3%)을 쓴다.
+                        tp_percents=TP_PERCENTS, trailing_pct=TRAILING_PCT,
                     )
                     if st is not None:
                         out["entered"] += 1

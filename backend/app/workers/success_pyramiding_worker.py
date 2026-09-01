@@ -98,6 +98,26 @@ PYRAMID_ELIGIBLE_STATUSES = frozenset(
 #   (워커마다 문자열을 복사하면 한 곳만 오타나도 조용히 샌다 = -252 USDT 짜리 실패였다)
 SPLIT_ENTRY_MODE = _SPLIT_ENTRY_MODE
 
+# ═══════════════════════════════════════════════════════════════════════
+# 🚨 Fix 282 (2026-09-02): 피라미딩에서 **제외**할 전략 타입.
+#
+#   위 -252.18 사고와 **정확히 같은 구조**가 새 전략들에도 있다:
+#     • 발동선이 ROI +5% 인데, 이 전략들의 **TP1 도 +5%** 다.
+#       → 익절해야 할 바로 그 지점에서 300 USDT 추가 매수가 나간다.
+#     • 자본 100 짜리 포지션에 300 이 얹히면 물량이 4배가 되고 평단이 밀려
+#       손절선이 진입가보다 불리한 쪽으로 올라온다.
+#     • 두 전략 모두 **1회 진입**을 전제로 성과를 측정했다. 물량이 바뀌면
+#       측정한 규칙과 다른 매매가 된다.
+#
+#   surge_peak_ladder 는 게다가 **자기 추가 로직**을 이미 갖고 있다
+#   (add_to_surge_position: 가격 2.5% 유리하면 50% 추가, 최대 2회, 손실액 고정).
+#   범용 피라미딩이 같이 들어오면 두 규칙이 서로 싸운다.
+#
+#   ⚠️ 다른 전략의 피라미딩은 **그대로 둔다** (사장님 "이익일때 추가 300씩").
+# ═══════════════════════════════════════════════════════════════════════
+NO_PYRAMID_STRATEGY_TYPES = frozenset({"bb_mid_line", "surge_peak_ladder"})
+NO_PYRAMID_TEMPLATE_PREFIXES = ("BB_MIDLINE", "SURGE_LADDER")
+
 # ⚠️ Fix 185 로 **더 이상 진입 필터로 쓰지 않는다** (사장님: "모든 전략").
 #   로그/참조용으로만 남긴다.
 AUTO_ENTRY_TYPES_PYRAMID = (
@@ -183,6 +203,25 @@ def _get_mark_price(symbol: str) -> float | None:
         return p if p > 0 else None
     except (ValueError, TypeError):
         return None
+
+
+def _is_no_pyramid(si) -> bool:
+    """Fix 282 — 이 전략은 범용 피라미딩 대상이 아닌가.
+
+    strategy_type 과 템플릿 **이름** 둘 다 본다. 이름 접두사까지 보는 이유는
+    strategy_type 에 접미사가 붙는 전략이 있기 때문이다 (auto_bb_break{suffix}).
+    판정 실패는 **제외로 간주**한다 (fail-closed) — 자본이 늘어나는 판정이다.
+    """
+    try:
+        stype = _strategy_type_of(si) or ""
+        if stype in NO_PYRAMID_STRATEGY_TYPES:
+            return True
+        tpl = getattr(si, "strategy_template", None) or getattr(si, "template", None)
+        name = (getattr(tpl, "name", "") or "").upper()
+        return any(name.startswith(p) for p in NO_PYRAMID_TEMPLATE_PREFIXES)
+    except Exception as e:
+        logger.warning("[pyramid] Fix282 판정 실패 = 제외로 간주: %s", e)
+        return True
 
 
 def _strategy_type_of(si) -> str:
@@ -348,7 +387,16 @@ def run_success_pyramiding() -> dict:
             #      이 예외는 split_entry 뿐이다 — Fix 203 과 같은 성격.
             # ═══════════════════════════════════════════════════════════
             .where(StrategyInstance.capital_management_mode != SPLIT_ENTRY_MODE)
+            # 🚨 Fix 282: 1회 진입 전략 제외 (TP1 과 발동선이 둘 다 ROI +5% 라 충돌)
+            .where(~StrategyTemplate.strategy_type.in_(tuple(NO_PYRAMID_STRATEGY_TYPES)))
         ).scalars().all()
+
+        # 🚨 Fix 282 이중 방어: strategy_type 에 접미사가 붙는 전략이 있어서
+        #   (auto_bb_break{suffix} 처럼) DB 필터만 믿지 않는다. 템플릿 **이름**으로도 거른다.
+        _before = len(active)
+        active = [si for si in active if not _is_no_pyramid(si)]
+        if len(active) != _before:
+            logger.info("[pyramid] Fix282 제외 %d건 (1회 진입 전략)", _before - len(active))
 
         # 3. 심볼별 이미 pyramid 활성 = skip 집합!
         pyramid_active_syms: set[tuple[str, str]] = set()
