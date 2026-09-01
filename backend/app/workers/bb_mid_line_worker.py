@@ -192,10 +192,17 @@ def run_bb_mid_line_once() -> dict:
                 # ── 4H 확인을 **필수**로 거는 패턴만 차단한다 ────────────
                 if need4h.get(pat):
                     ok4 = ref.get("4h", {}).get("my_side_rising")
-                    if ok4 is False:          # None = 판정 불가 → fail-open
-                        _blk(f"{pat}_no_4h")
-                        logger.info("[bb_mid] ⏳ %s %s %s — 4H 미지지 (참고 필수 규칙)",
-                                    sym, side, label)
+                    # 🚨 Fix 286 (2026-09-02): **fail-CLOSED** 로 바꾼다.
+                    #   이 패턴은 4H 확인이 없으면 실측 전반이 -166.11 = 과적합 실패다
+                    #   (이 파일 윗부분에 그렇게 적어 뒀다). 그런데 옛 코드는 4H 판정이
+                    #   None(캔들 부족·API 실패·MACD 계산 불가)이면 통과시켰다 =
+                    #   API 가 흔들리는 순간마다 「측정에서 탈락한 규칙」으로 실자금이 나간다.
+                    #   자본이 나가는 판정은 모르면 **안 하는** 쪽이 맞다.
+                    if ok4 is not True:
+                        _blk(f"{pat}_no_4h" if ok4 is False else f"{pat}_4h_unknown")
+                        logger.info("[bb_mid] ⏳ %s %s %s — 4H %s (필수 규칙)",
+                                    sym, side, label,
+                                    "미지지" if ok4 is False else "판정 불가")
                         continue
 
                 logger.info(

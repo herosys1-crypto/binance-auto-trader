@@ -115,8 +115,12 @@ SPLIT_ENTRY_MODE = _SPLIT_ENTRY_MODE
 #
 #   ⚠️ 다른 전략의 피라미딩은 **그대로 둔다** (사장님 "이익일때 추가 300씩").
 # ═══════════════════════════════════════════════════════════════════════
-NO_PYRAMID_STRATEGY_TYPES = frozenset({"bb_mid_line", "surge_peak_ladder"})
-NO_PYRAMID_TEMPLATE_PREFIXES = ("BB_MIDLINE", "SURGE_LADDER")
+# Fix 283: 목록을 services/single_entry_guard.py 한 곳으로 옮겼다 (여기서 재수출).
+from app.services.single_entry_guard import (  # noqa: E402
+    SINGLE_ENTRY_STRATEGY_TYPES as NO_PYRAMID_STRATEGY_TYPES,
+    SINGLE_ENTRY_TEMPLATE_PREFIXES as NO_PYRAMID_TEMPLATE_PREFIXES,
+    is_single_entry as _is_single_entry_shared,
+)
 
 # ⚠️ Fix 185 로 **더 이상 진입 필터로 쓰지 않는다** (사장님: "모든 전략").
 #   로그/참조용으로만 남긴다.
@@ -212,16 +216,7 @@ def _is_no_pyramid(si) -> bool:
     strategy_type 에 접미사가 붙는 전략이 있기 때문이다 (auto_bb_break{suffix}).
     판정 실패는 **제외로 간주**한다 (fail-closed) — 자본이 늘어나는 판정이다.
     """
-    try:
-        stype = _strategy_type_of(si) or ""
-        if stype in NO_PYRAMID_STRATEGY_TYPES:
-            return True
-        tpl = getattr(si, "strategy_template", None) or getattr(si, "template", None)
-        name = (getattr(tpl, "name", "") or "").upper()
-        return any(name.startswith(p) for p in NO_PYRAMID_TEMPLATE_PREFIXES)
-    except Exception as e:
-        logger.warning("[pyramid] Fix282 판정 실패 = 제외로 간주: %s", e)
-        return True
+    return _is_single_entry_shared(si)      # Fix 283: 공통 가드 (fail-closed)
 
 
 def _strategy_type_of(si) -> str:

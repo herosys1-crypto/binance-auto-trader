@@ -368,7 +368,7 @@ def _enter_stage2(db, s, snap, resistance, source, cur=None):
 
 
 def _query_candidates(db):
-    return (db.query(StrategyInstance)
+    _rows2 = (db.query(StrategyInstance)
             .filter(StrategyInstance.side == 'SHORT',
                     StrategyInstance.current_stage == 1,
                     StrategyInstance.resistance_reversal_triggered_at.is_(None),
@@ -382,6 +382,10 @@ def _query_candidates(db):
                     StrategyInstance.capital_management_mode != SPLIT_ENTRY_MODE,
                     StrategyInstance.is_archived.is_(False))  # Fix 171: 보관 전략에 발주 금지
             .limit(MAX_STRATEGIES_PER_CYCLE).all())
+    # 🚨 Fix 283: 볼밴만 예외였던 것을 「1회 진입 전략」 전체로 넓힌다.
+    #   이 워커도 stage_no=2 시장가 진입 + force_sl_roi_override=5 덮어쓰기를 한다.
+    from app.services.single_entry_guard import drop_single_entry
+    return drop_single_entry(_rows2, tag="[resistance_reversal]")
 
 
 def run_resistance_reversal_once():

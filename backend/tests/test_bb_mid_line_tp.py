@@ -137,3 +137,87 @@ def test_판정_실패는_제외로_간주된다():
             raise RuntimeError("db detached")
 
     assert _is_no_pyramid(_Boom()) is True
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fix 283/286 — 1회 진입 전략 보호 + 필수 게이트 fail-closed
+# ═══════════════════════════════════════════════════════════════════════
+
+class _Tpl:
+    def __init__(self, st="x", nm="X"):
+        self.strategy_type, self.name = st, nm
+
+
+class _SI:
+    def __init__(self, st="x", nm="X"):
+        self.strategy_template = _Tpl(st, nm)
+
+
+def test_공통가드가_1회진입전략을_잡는다():
+    from app.services.single_entry_guard import drop_single_entry, is_single_entry
+    assert is_single_entry(_SI("bb_mid_line", "BB_MIDLINE_A")) is True
+    assert is_single_entry(_SI("surge_peak_ladder", "SURGE_LADDER_A")) is True
+    assert is_single_entry(_SI("zzz", "BB_MIDLINE_A")) is True          # 이름으로도
+    # 다른 전략은 **그대로 둔다** (사장님 "이익일때 추가 300씩")
+    assert is_single_entry(_SI("auto_bb_break_SAJANGNIM", "AUTO_BB")) is False
+    rows = [_SI("bb_mid_line", "BB_MIDLINE_A"), _SI("auto_bb_break", "AUTO_BB")]
+    assert len(drop_single_entry(rows)) == 1
+
+
+def test_공통가드_판정실패는_제외():
+    from app.services.single_entry_guard import is_single_entry
+
+    class _Boom:
+        @property
+        def strategy_template(self):
+            raise RuntimeError("detached")
+
+    assert is_single_entry(_Boom()) is True
+
+
+def test_남의_전략에_단계를_얹는_워커는_가드를_써야_한다():
+    """🚨 이 사고가 세 번 반복됐다 (Fix 213 / 214 / 282).
+
+    위험 신호는 **남의 전략을 id 로 받아 행동하는 호출**이다:
+      enter_stage_at_market / add_position_now / trigger_next_stage
+    (자기가 방금 만든 전략에 force_sl_roi_override 를 거는 것은 정상이다 —
+     auto_bb_breakdown 등 생성 워커가 그렇게 한다.)
+    """
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "app" / "workers"
+    DANGEROUS = ("enter_stage_at_market", "add_position_now", "trigger_next_stage")
+    # 자기 전략만 다루는 워커 = 그 전략의 주인
+    OWNERS = {
+        "pump_split_entry_worker.py",     # 볼밴 분할 = 자기 사다리
+        "bb_mid_line_worker.py",          # 중단선 = 자기 전략
+        "surge_peak_ladder_worker.py",    # 급등 사다리 = 자기 전략
+        "stage_trigger_worker.py",        # 계획된 단계 진행 = 각 전략의 자기 계획대로
+        "ladder_restart_worker.py",       # 자기 사다리 재시작
+    }
+    offenders = []
+    for p in sorted(root.glob("*.py")):
+        if p.name in OWNERS:
+            continue
+        src = p.read_text(encoding="utf-8", errors="replace")
+        if not any(d in src for d in DANGEROUS):
+            continue
+        if "single_entry_guard" not in src:
+            offenders.append(p.name)
+    assert not offenders, (
+        "이 워커들이 **남의 전략**에 단계를 얹을 수 있는데 공통 가드를 안 쓴다: "
+        "app/services/single_entry_guard.py 의 drop_single_entry 를 후보 목록에 적용해라: %s"
+        % offenders
+    )
+
+
+def test_필수_4H게이트는_fail_closed():
+    """판정 불가(None)면 진입하지 않아야 한다 — 자본이 나가는 판정."""
+    import ast
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1]
+           / "app" / "workers" / "bb_mid_line_worker.py").read_text(encoding="utf-8")
+    assert "if ok4 is not True:" in src, (
+        "4H 필수 패턴이 fail-open 이면 API 흔들릴 때마다 측정에서 탈락한 규칙으로 진입한다"
+    )
+    assert "if ok4 is False:" not in src
+    ast.parse(src)

@@ -505,7 +505,7 @@ def _enter_next_stage(db, s, next_stage, snap, bc=None):
 
 
 def _get_active_short_strategies(db):
-    return db.query(StrategyInstance).filter(
+    _rows = db.query(StrategyInstance).filter(
         StrategyInstance.side == "SHORT",
         StrategyInstance.status.in_(list(ACTIVE_LIKE)),
         StrategyInstance.is_archived.is_(False),  # Fix 171: 보관 전략에 발주 금지
@@ -518,6 +518,12 @@ def _get_active_short_strategies(db):
         StrategyInstance.capital_management_mode != SPLIT_ENTRY_MODE,
         StrategyInstance.current_stage >= 1
     ).all()
+    # 🚨 Fix 283 (2026-09-02): 볼밴만 예외였던 것을 「1회 진입 전략」 전체로 넓힌다.
+    #   이 워커는 force_sl_roi_override 를 **무조건 5** 로 덮어쓰고(:455) 2단계를
+    #   시장가로 얹는다. bb_mid_line(ROI -10% 손절, 1단계 템플릿)에 그게 들어가면
+    #   손절선이 반토막 나고 1단계 plan 이 재사용돼 물량이 2배가 된다.
+    from app.services.single_entry_guard import drop_single_entry
+    return drop_single_entry(_rows, tag="[peak_break_reversal]")
 
 
 def run_peak_break_reversal_once():
