@@ -185,6 +185,52 @@ def _get_reentry_daily_limit(db: Session) -> tuple[int, str]:
     return REENTRY_DAILY_LIMIT_DEFAULT, "default"
 
 
+REENTRY_CONCURRENT_SLOTS_KEY = "sajangnim_reentry_concurrent_slots"
+REENTRY_CONCURRENT_SLOTS_DEFAULT = 10   # 사장님 2026-09-01 「동시 포지션에서 10개」
+
+
+def _get_reentry_concurrent_slots(db: Session) -> int:
+    """재진입 전용 동시 슬롯 (Fix 263). 0 이하 = 재진입 OFF (명시 존중)."""
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, REENTRY_CONCURRENT_SLOTS_KEY)
+        if row is not None and row.value is not None and str(row.value).strip() != "":
+            return int(str(row.value).strip())
+    except Exception as e:
+        logger.warning(
+            "[RT_REENTRY] ⚠️ %s 조회 실패 = default %d: %s",
+            REENTRY_CONCURRENT_SLOTS_KEY, REENTRY_CONCURRENT_SLOTS_DEFAULT, e,
+        )
+    return REENTRY_CONCURRENT_SLOTS_DEFAULT
+
+
+def _count_active_reentry(db: Session) -> int:
+    """지금 살아 있는 **재진입** 전략 수.
+
+    템플릿 이름의 suffix(_reentry1 / _reentry2 / _lastchance / _success)로 센다 —
+    재진입 전략을 만들 때 _create_auto_bb_strategy 에 넘기는 그 값이다.
+    """
+    from app.core.strategy_status import ACTIVE_LIKE
+    from app.models.strategy_template import StrategyTemplate
+    try:
+        rows = db.execute(
+            select(StrategyInstance.id)
+            .join(StrategyTemplate,
+                  StrategyTemplate.id == StrategyInstance.strategy_template_id)
+            .where(StrategyInstance.status.in_(tuple(ACTIVE_LIKE)))
+            .where(
+                StrategyTemplate.name.like("%_reentry%")
+                | StrategyTemplate.name.like("%_lastchance%")
+                | StrategyTemplate.name.like("%_success%")
+            )
+        ).scalars().all()
+        return len(rows)
+    except Exception as e:
+        # 🚨 fail-closed — 셀 수 없으면 슬롯이 꽉 찬 것으로 본다 (자본이 나가는 판정).
+        logger.warning("[RT_REENTRY] 활성 재진입 수 조회 실패 = 상한으로 간주: %s", e)
+        return REENTRY_CONCURRENT_SLOTS_DEFAULT
+
+
 def _count_reentry_used_today(db: Session) -> int:
     """🚨 Fix 103 C (2026-08-26): 재진입 전용 카운터!
 
@@ -821,14 +867,42 @@ def run_realtime_reentry() -> dict:
         #   (재진입 전용 일일 한도와 별개 = 둘 다 통과해야 진입!)
         from app.services.position_limit import check_position_slot
         _slot_ok, _slot_why, _act, _cap = check_position_slot(db, "RT_REENTRY")
+
+        # ══════════════════════════════════════════════════════════════
+        # 🎯 Fix 263 (2026-09-01 사장님): 재진입 **전용 동시 슬롯**
+        #
+        # 사장님 verbatim:
+        #   "재진입은 일 10개로 해줘 **일 최대 동시 포지션에서 10개는 가능하게** 해줘"
+        #
+        # 옛 동작: 전체 동시보유 상한(50)이 차면 재진입도 **통째로** 막혔다.
+        #   신규 진입이 슬롯을 다 먹으면 재진입은 영원히 차례가 오지 않는다.
+        # 신 동작: 현재 활성인 **재진입 전략** 수가 전용 슬롯 미만이면
+        #   전체 상한과 무관하게 진행한다.
+        #
+        # ⚠️ 최악의 경우 총 활성 = 전체상한 + 전용슬롯 이 될 수 있다.
+        #    자본은 1건당 1단계 금액이므로 상한이 명확하고, 사장님이
+        #    슬롯 수를 SystemSetting 으로 바로 줄일 수 있다.
+        # ══════════════════════════════════════════════════════════════
+        _re_slots = _get_reentry_concurrent_slots(db)
+        _re_active = _count_active_reentry(db)
+        _re_room = _re_slots - _re_active
+        if _re_room <= 0:
+            return _finish(
+                f"재진입 전용 동시 슬롯 소진: {_re_active}/{_re_slots} "
+                f"(전체 동시보유 {_act}/{_cap})"
+            )
         if not _slot_ok:
-            return _finish(f"동시보유 상한 (Fix112): {_slot_why}")
+            logger.info(
+                "[RT_REENTRY+Fix263] 전체 동시보유 상한(%s) 이지만 재진입 전용 슬롯 "
+                "%d/%d 남음 → 진행 (사장님 「동시 포지션에서 10개는 가능하게」)",
+                _slot_why, _re_room, _re_slots,
+            )
 
         # 🚨 Fix 112b: 위 체크는 「루프 시작 전 1회」 뿐!
         #   remaining 은 재진입 「일일」 예산이라 루프를 그것만으로 돌면
-        #   active=19/cap=20 인데 한 번에 10건 재진입 → 29건 = 상한 45% 초과!
-        #   → 루프 예산을 두 한도의 「작은 쪽」으로 묶는다.
-        _slot_room = _cap - _act
+        #   한 번에 여러 건이 나가 상한을 넘는다.
+        #   → 루프 예산을 **전용 슬롯 여유**로 묶는다 (Fix 263).
+        _slot_room = _re_room
         if _slot_room < remaining:
             logger.info(
                 "[RT_REENTRY+Fix112b] 루프 예산 축소: 재진입일일 %d → 동시보유여유 %d (%d/%d)",

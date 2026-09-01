@@ -151,19 +151,42 @@ def _auto_bb_reset_at(db: Session) -> datetime:
     원인: UTC 자정 기준 = KST 아침 9시 = 사장님 관점 어제!
     Fix: KST 00:00 = UTC 15:00 (전날!) 기준!
     """
-    row = db.get(SystemSetting, "auto_bb_break_reset_at")
-    if row and row.value:
-        try:
-            return datetime.fromisoformat(row.value)
-        except Exception:
-            pass
     # 🌟 v205: KST 자정 기준!
     from datetime import timedelta as _td
     now_utc = datetime.now(timezone.utc)
     now_kst = now_utc + _td(hours=9)
     kst_today_naive = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
     # KST 자정 → UTC 변환!
-    return (kst_today_naive - _td(hours=9)).replace(tzinfo=timezone.utc)
+    kst_midnight = (kst_today_naive - _td(hours=9)).replace(tzinfo=timezone.utc)
+
+    # ══════════════════════════════════════════════════════════════════
+    # 🚨 Fix 262 (2026-09-01): 저장된 리셋 시각이 **영원히** 이겼다.
+    #
+    # 옛 코드는 `auto_bb_break_reset_at` 행이 있으면 그 값을 **그대로** 돌려줬다.
+    # 그 행에는 2026-08-23 07:34 가 들어 있었고, 사장님이 그 뒤로 리셋을 안
+    # 누르셨으므로 「오늘」의 기준이 **8.7일 전에 멈춰** 있었다.
+    #
+    # 실측 피해 (2026-09-01):
+    #   _count_reentry_used_today() = 20 / 한도 20  → 재진입 **영구 소진**
+    #   RT_REENTRY suggestion 은 전 기간 통틀어 딱 20건이고, 그게 전부
+    #   「오늘 것」으로 세어졌다. 그래서 재진입 전략은 **5일간 0건**이었다.
+    #   _count_used_slots() = 591 / 하루 20 → 신규 진입 카운터도 같은 상태.
+    #
+    # docstring 이 말하는 의도는 "사용자 리셋 **or** 오늘 00:00 KST" 이고,
+    # 그 둘 중 **나중 것**이 맞다:
+    #   - 오늘 리셋을 눌렀으면 그 시각부터 (사장님 리셋 존중)
+    #   - 리셋이 어제 이전이면 오늘 자정부터 (진짜 「일일」)
+    # ══════════════════════════════════════════════════════════════════
+    row = db.get(SystemSetting, "auto_bb_break_reset_at")
+    if row and row.value:
+        try:
+            stored = datetime.fromisoformat(row.value)
+            if stored.tzinfo is None:
+                stored = stored.replace(tzinfo=timezone.utc)
+            return max(stored, kst_midnight)
+        except Exception:
+            pass
+    return kst_midnight
 
 
 def _count_auto_bb_used(db: Session) -> dict:
