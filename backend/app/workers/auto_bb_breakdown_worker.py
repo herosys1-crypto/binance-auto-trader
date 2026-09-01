@@ -1492,6 +1492,55 @@ def _create_auto_bb_strategy(
     #    줄이는 쪽이 맞지만, 흑자 전환 후에는 「기회를 너무 줄이는가」를 다시 볼 것.
     # ⚠️ fail-open — 이건 좋은 자리를 고르는 필터이지 안전장치가 아니다.
     # ══════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════
+    # 📈 Fix 274 (2026-09-01): LONG 은 **「급등 중」에만** — 사장님 사상
+    #
+    # 사장님: "급등중에 조정은 **다시 급등**으로 간다 ... 급락한건 언제 어떤 심볼이
+    #          급등하는 찾는게 **힘들다**"
+    # 그런데 LONG 경로는 24h 변동을 제한하지 않아 평범한 종목(24h +2%)의 저점 LONG 이
+    # 대부분이었고, 그게 손실의 거의 전부였다.
+    #
+    # 실측 (LONG 130건/12일, Fix 270 4H 게이트가 켜진 위에):
+    #     Fix270 만               30건 승률 43.3%   +12.15  건당 +0.40
+    #     **Fix270 + 24h>=15%**   20건 승률 65.0%  **+80.07**  건당 **+4.00**
+    #   차단: 24h<15% 85건 승률 **8.2%** -803.25 / 4H hist<=0 37건 승률 2.7% -665.22
+    #   과적합: 15% 만 양쪽 절반 양수 (최근 +8.89 / 이전 +71.18).
+    #           10%·20% 는 한쪽이 음수라 탈락.
+    #   현행 전체 130건 -947.45 -> 게이트 적용 20건 **+80.07**
+    #
+    # ⚠️ 레인지 위치·15m 조정 조건을 **더하면 오히려 나빠진다**(-3.02 -> -12.85).
+    #    효과크기가 있어도 손익은 다르다. 조건은 24h 급등 **하나만** 더한다.
+    # ⚠️ LONG 진입이 1/6.5 로 준다. 지금 건당 -7.29 로 잃고 있어 줄이는 쪽이 맞다.
+    # ══════════════════════════════════════════════════════════════════
+    try:
+        from app.services.long_surge_gate import (
+            check_long_surge as _ls274,
+            long_surge_gate_enabled as _ls_on274,
+        )
+        if str(side).upper() == "LONG" and _ls_on274(db):
+            _ls_client = None
+            try:
+                from app.core.crypto import decrypt_text as _dt274
+                from app.integrations.binance.client import BinanceClient as _BC274
+                from app.models.exchange_account import ExchangeAccount as _EA274
+                _acc274 = db.get(_EA274, 1)
+                if _acc274 is not None:
+                    _ls_client = _BC274(
+                        api_key=_dt274(_acc274.api_key_enc),
+                        api_secret=_dt274(_acc274.api_secret_enc),
+                        is_testnet=_acc274.is_testnet,
+                    )
+            except Exception as _e274c:
+                logger.debug("[Fix274] 클라이언트 생성 실패 (fail-open): %s", _e274c)
+            if _ls_client is not None:
+                _ok274, _why274, _det274 = _ls274(_ls_client, symbol, side)
+                if not _ok274:
+                    logger.info("[Fix274/LONG급등] ⛔ %s 차단 — %s", symbol, _why274)
+                    return None
+                logger.info("[Fix274/LONG급등] ✅ %s — %s", symbol, _why274)
+    except Exception as _e274:
+        logger.warning("[Fix274] LONG 급등 게이트 오류 (fail-open): %s", _e274)
+
     try:
         from app.services.trend_4h_gate import (
             check_trend_4h as _t4,
