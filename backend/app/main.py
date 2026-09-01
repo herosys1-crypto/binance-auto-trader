@@ -92,6 +92,39 @@ async def _start_health_poller() -> None:
 # ETag conditional GET → 변경 없으면 304 (효율 OK), 변경 있으면 즉시 새 파일.
 class _NoCacheStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
+        # ══════════════════════════════════════════════════════════════
+        # 🚨 Fix 266 (2026-09-01): index.html 은 **여기서도** 재작성한다.
+        #
+        # Fix 190 이 `?v=` 를 내용 해시로 자동 생성하게 만들었는데, 그 재작성이
+        # `/admin-ui` **라우트에만** 걸려 있었다. StaticFiles mount 로 들어오는
+        # `/static/index.html` 은 원본을 그대로 내보낸다. 실측:
+        #
+        #   /admin-ui          -> strategy-suggestions.js?v=eada1d9a0632  (해시 ✓)
+        #   /static/index.html -> strategy-suggestions.js?v=20260826-...  (원본 ✗)
+        #
+        # 그 URL 로 들어온 브라우저는 8/26 자 JS 를 계속 쓴다. 사장님이
+        # 「최대 동시 포지션이 30 으로 바뀌어 있다」고 하신 날, 엔진은 내내 50
+        # 이었다 — 화면만 옛 파일이었다.
+        #
+        # 헌법 6(단일 진실): 재작성을 **한 곳**에서 보장한다. 라우트가 늘어도
+        # 이 클래스를 거치면 항상 최신 해시가 나간다.
+        # ══════════════════════════════════════════════════════════════
+        _p = str(path or "").replace("\\", "/").strip("/").lower()
+        if _p in ("index.html", ""):
+            try:
+                _idx = _STATIC_DIR / "index.html"
+                return HTMLResponse(
+                    _rewrite_asset_versions(_idx.read_text(encoding="utf-8")),
+                    headers={
+                        "Cache-Control": "no-cache, no-store, must-revalidate",
+                        "Pragma": "no-cache",
+                        "Expires": "0",
+                    },
+                )
+            except Exception as e:
+                # 화면이 안 뜨는 것보다는 옛 방식으로라도 뜨는 게 낫다 (fail-open).
+                logger.warning("[Fix266] index.html 재작성 실패 → 원본 그대로: %s", e)
+
         response = await super().get_response(path, scope)
         # 304 응답은 헤더 추가 X (이미 캐시된 것 그대로 사용)
         if hasattr(response, "headers") and response.status_code != 304:
@@ -110,38 +143,21 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 #   지금은 _NoCacheStaticFiles 의 no-cache 헤더가 막아주고 있지만,
 #   「있는데 안 맞는 버전 문자열」은 없느니만 못하다 — 최신인 줄 착각하게 만든다.
 #   파일 내용 해시로 바꾸면 사람이 개입할 여지가 사라진다 (헌법 6: 한 곳에서 보장).
-_ASSET_REF_RE = re.compile(r'(src|href)="(/static/[^"?]+)(?:\?[^"]*)?"')
-_ASSET_VER_CACHE: dict[str, tuple[float, int, str]] = {}
+# Fix 266: 재작성 로직은 app/core/asset_version.py 로 **분리**했다.
+#   main.py 는 import 만으로 설정·암호키를 요구해서 이 로직의 단위 테스트가
+#   CryptoError 로 죽고 있었다. 규칙은 한 곳에만 둔다 (헌법 6).
+from app.core.asset_version import (            # noqa: E402
+    asset_version as _asset_version_impl,
+    rewrite_asset_versions as _rewrite_impl,
+)
 
 
 def _asset_version(rel_path: str) -> str | None:
-    """/static/<rel_path> 의 내용 해시 12자. mtime+size 가 같으면 재계산 X."""
-    target = (_STATIC_DIR / rel_path).resolve()
-    # 경로 탈출 방어 — index.html 이 아무 경로나 가리켜도 static 밖은 읽지 않는다.
-    if not str(target).startswith(str(_STATIC_DIR.resolve())):
-        return None
-    try:
-        st = target.stat()
-    except OSError:
-        return None                      # 파일이 없으면 손대지 않는다
-    hit = _ASSET_VER_CACHE.get(rel_path)
-    if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
-        return hit[2]
-    try:
-        digest = hashlib.sha1(target.read_bytes()).hexdigest()[:12]
-    except OSError:
-        return None
-    _ASSET_VER_CACHE[rel_path] = (st.st_mtime, st.st_size, digest)
-    return digest
+    return _asset_version_impl(_STATIC_DIR, rel_path)
 
 
 def _rewrite_asset_versions(html: str) -> str:
-    """`src="/static/js/a.js?v=옛날"` → `?v=<내용해시>`. 실패하면 원문 유지."""
-    def _sub(m: "re.Match[str]") -> str:
-        attr, path = m.group(1), m.group(2)
-        ver = _asset_version(path[len("/static/"):])
-        return f'{attr}="{path}"' if ver is None else f'{attr}="{path}?v={ver}"'
-    return _ASSET_REF_RE.sub(_sub, html)
+    return _rewrite_impl(html, _STATIC_DIR)
 
 
 if _STATIC_DIR.exists():
