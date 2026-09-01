@@ -222,6 +222,25 @@ def _cap_loss_enabled(db) -> bool:
         return True                          # fail-safe = 손실을 묶는 쪽
 
 
+# 💉 Fix 273: 피라미딩 보조지표 조건 스위치.
+#   사장님이 **원래 요청하신 조건**이고 실측이 강하게 지지하므로 기본 **ON**.
+#   (조건 없음 -5,832 / 4H+15m 상승 +1,359 — 과적합 검사도 양쪽 절반 통과)
+#   끄려면 SystemSetting pyramid_indicator_gate_enabled = 0.
+INDICATOR_GATE_KEY = "pyramid_indicator_gate_enabled"
+
+
+def _indicator_gate_enabled(db) -> bool:
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, INDICATOR_GATE_KEY)
+        if row is None or row.value is None or str(row.value).strip() == "":
+            return True                      # 기본 ON
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:
+        logger.warning("[Fix273] %s 조회 실패 = ON 유지: %s", INDICATOR_GATE_KEY, e)
+        return True                          # fail-safe = 조건을 거는 쪽
+
+
 def run_success_pyramiding() -> dict:
     """매 30초 = 익절중 심볼 = 강한 지속 신호 시 = 원 자본으로 추가 진입!"""
     db: Session = SessionLocal()
@@ -618,11 +637,58 @@ def run_success_pyramiding() -> dict:
                 # 300 을 두 번 얹어 610 이 됐고 -65.75 를 잃었다 (추가가 없었다면 -0.5).
                 # cap_loss=True 면 추가 직후 손절 ROI 를 낮춰 손실 금액을 유지한다.
                 _cap_loss = _cap_loss_enabled(db)
+
+                # ══════════════════════════════════════════════════════
+                # 💉 Fix 273 (2026-09-01 사장님): 「계속 상승하는 차트와 **보조지표**」
+                #
+                # 사장님 원 요청은 「차트 **와 보조지표**」였는데 코드에는 **차트만**
+                # 있었다(peak 되돌림 2.5% / 시작가 대비 지속 0.5%). RSI·CCI·OBV 는
+                # 학습 기록에 None 으로 저장만 하고 판정에 안 썼다 = 요청의 절반.
+                #
+                # 실측 (추가 시점 88건, 그 전략의 최종 손익):
+                #   조건 없음(현행)           88건 승률 20.5%  **-5,832.19** 건당 -66.27
+                #   4H AND 15m 둘 다 상승     45건      33.3%  **+1,359.23**     +30.21
+                #   4H hist 상승 **아님**     34건       2.9%    -7,049.40    -207.34
+                #   과적합 검사: 최근 -871->+234 / 이전 -4,961->+1,125 (양쪽 다 양수)
+                #
+                # 🚨 진입 게이트(Fix 270)와 조건이 **다르다** — 거기선 `hist>0` 을
+                #    더하는 게 최고였지만 여기선 +22.54 -> +0.31 로 무너진다.
+                #    용도가 다르면 반드시 그 용도로 다시 잰다.
+                # ══════════════════════════════════════════════════════
+                if _indicator_gate_enabled(db):
+                    try:
+                        from app.integrations.binance.client import BinanceClient as _BC273
+                        from app.services.trend_4h_gate import check_pyramid_trend as _pt273
+                        _bc273 = _BC273(
+                            api_key=_dt(_acc.api_key_enc),
+                            api_secret=_dt(_acc.api_secret_enc),
+                            is_testnet=False,
+                        )
+                        _ok273, _why273, _det273 = _pt273(_bc273, si.symbol, si.side)
+                        if not _ok273:
+                            skipped += 1
+                            _bump("indicator_not_rising")
+                            logger.info(
+                                "[Fix273] ⛔ %s %s 추가 차단 — %s | %s",
+                                si.symbol, si.side, _why273, _det273,
+                            )
+                            continue
+                        logger.info("[Fix273] ✅ %s %s — %s", si.symbol, si.side, _why273)
+                    except Exception as _e273:
+                        # fail-open — 판정 하나가 피라미딩을 통째로 멈추면 안 된다 (Fix 252)
+                        logger.warning("[Fix273] 지표 판정 오류 (fail-open): %s", _e273)
+
+                # 🚨 Fix 273: mode="reset" -> **"preserve"**
+                #   사장님 요청: "300usdt 씩 최대 2번 진입을 하고 **tp1 단계 익절**"
+                #   reset 은 추가할 때마다 TP/SL 을 초기화해 TP1 을 처음부터 다시 노리게
+                #   만든다. 실제로 #1930 XPLUSDT 에서 max_profit_pct 가 4.04 -> None,
+                #   3.08 -> None 로 두 번 지워졌다 = 익절 목표가 매번 리셋.
+                #   preserve = 평단·qty·total_capital 은 갱신하되 TP/SL 진행은 유지한다.
                 _add_order = _exec.add_position_now(
                     si.id,
                     amount_usdt=Decimal(str(base_capital)),
                     order_type="MARKET",
-                    mode="reset",
+                    mode="preserve",
                     cap_loss=_cap_loss,
                 )
                 if not _add_order:

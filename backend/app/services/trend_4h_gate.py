@@ -134,3 +134,80 @@ def check_trend_4h(bc, symbol: str, side: str) -> tuple[bool, str, dict[str, Any
         logger.debug("[Fix270] %s %s 4H 판정 실패 (fail-open): %s", symbol, side, e)
         d["error"] = str(e)[:200]
         return True, f"판정 실패 (fail-open): {e}", d
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 💉 Fix 273 (2026-09-01 사장님): 피라미딩용 「계속 상승 중인가」
+#
+# 사장님 원 요청:
+#   "익절구간에서 **계속 상승하는 차트와 보조지표**면 300usdt 씩 최대 2번 진입을 하고
+#    tp1 단계 익절을 할수 있게 요청했다고 기억하는데"
+#
+# 코드에는 **차트(가격)만** 있었다 — peak 되돌림 2.5% / 시작가 대비 지속 0.5%.
+# **보조지표 조건이 통째로 빠져 있었다** (RSI·CCI·OBV 를 학습 기록에 None 으로
+# 저장만 하고 판정에 안 썼다). 사장님 요청의 절반만 구현돼 있던 것이다.
+#
+# 실측 (추가 시점 88건, 그 전략의 최종 손익으로 판정):
+#     조건 없음(현행)          88건 승률 20.5%  **-5,832.19**  건당 -66.27
+#     4H hist 상승중           54건      31.5%    +1,217.21       +22.54
+#     **4H AND 15m 둘 다 상승** 45건    33.3%  **+1,359.23**    **+30.21**  <- 채택
+#     4H hist 상승 **아님**     34건      2.9%    -7,049.40      -207.34   <- 이게 손실원
+#
+#   과적합 검사: 최근 절반 -871 -> +234 / 이전 절반 -4,961 -> +1,125 (양쪽 다 양수)
+#
+# 🚨 진입 선정용 게이트(Fix 270)와 **조건이 다르다**:
+#    진입에서는 `hist 상승 AND hist>0` 이 최고였는데(+5.56/건),
+#    피라미딩에서 `hist>0` 을 더하면 +22.54 -> **+0.31** 로 무너진다.
+#    「같은 지표라도 용도가 다르면 결과가 다르다」의 세 번째 사례다.
+#    -> 여기서는 **방향(상승 중)만** 본다.
+#
+# ⚠️ 방향별로 효과가 갈린다 (사장님께 보고 필요):
+#     SHORT  조건없음 -91.32/건 -> 지표조건 **+99.28/건** (승률 34.8% -> 66.7%)
+#     LONG   조건없음 -38.84/건 -> 지표조건  -30.23/건   (**여전히 적자**)
+# ══════════════════════════════════════════════════════════════════════
+
+PYRAMID_TFS: tuple[str, ...] = ("4h", "15m")
+
+
+def check_hist_rising(bc, symbol: str, side: str, tf: str) -> tuple[bool | None, dict[str, Any]]:
+    """해당 봉의 MACD hist 가 **내 편 방향으로 상승 중**인가.
+
+    Returns:
+        (rising, detail). 판정 불가면 rising=None (호출자가 막지 않는다).
+    """
+    d: dict[str, Any] = {"tf": tf}
+    try:
+        kl = bc.get_klines(symbol=symbol, interval=tf, limit=LIMIT)
+        if not kl or len(kl) < 40:
+            d["reason"] = "봉 부족"
+            return None, d
+        h = _macd_hist([float(k[4]) for k in kl])
+        if h is None or len(h) < 2:
+            d["reason"] = "MACD 계산 불가"
+            return None, d
+        sgn = 1.0 if str(side).upper() == "LONG" else -1.0
+        delta = (h[-1] - h[-2]) * sgn
+        d.update(delta=delta, hist_signed=h[-1] * sgn)
+        return delta > 0, d
+    except Exception as e:
+        d["reason"] = f"조회 실패: {e}"
+        return None, d
+
+
+def check_pyramid_trend(bc, symbol: str, side: str) -> tuple[bool, str, dict[str, Any]]:
+    """「계속 상승하는 차트와 **보조지표**」 — 4H·15m 둘 다 hist 가 내 편으로 상승 중인가.
+
+    ⚠️ **fail-open** — 판정 불가(데이터 없음)면 통과시킨다.
+       이건 좋은 자리를 고르는 필터이지 안전장치가 아니다.
+       (자본을 늘리는 판정이라 fail-closed 로 하고 싶지만, 그러면 API 한 번 실패에
+        피라미딩이 통째로 멈춘다 — Fix 252 의 교훈. 대신 사유를 반드시 로그에 남긴다.)
+    """
+    det: dict[str, Any] = {}
+    for tf in PYRAMID_TFS:
+        rising, d = check_hist_rising(bc, symbol, side, tf)
+        det[tf] = d
+        if rising is None:
+            return True, f"{tf} 판정 불가 (fail-open): {d.get('reason')}", det
+        if not rising:
+            return False, f"{tf} MACD hist 가 내 편으로 상승 중이 아님", det
+    return True, "4H·15m 둘 다 상승 중", det
