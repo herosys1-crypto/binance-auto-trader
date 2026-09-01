@@ -272,12 +272,54 @@ def test_state_is_persisted_in_db_not_redis():
     assert "setex" not in src[max(0, i - 400): i], "시도 카운터를 Redis 에 두고 있다"
 
 
-def test_on_mode_is_explicitly_not_implemented():
-    """🚨 구조적 차단 5건을 풀기 전에 on 을 켜면 「켰는데 0건」이 되고
-    그 이유가 로그에 안 남는다. 그래서 지금은 명시적으로 막고 사유를 남긴다."""
-    src = WORKER.read_text(encoding="utf-8")
-    assert "on 미구현" in src
-    assert "구조적 차단 5건" in src
+ENTRY = BACKEND / "app" / "services" / "surge_ladder_entry.py"
+
+
+def test_on_uses_dedicated_entry_not_the_shared_funnel():
+    """🚨 공용 관문(_create_auto_bb_strategy)을 타면 구조적 차단 5건에 걸려 0건이 된다."""
+    code = _code(WORKER)
+    assert "create_surge_position" in code
+    # 문서(주석·docstring)에는 이름이 나올 수 있으니 **호출 형태**로 검사한다
+    assert "_create_auto_bb_strategy(db" not in code, "공용 관문을 호출하고 있다"
+
+
+def test_dedicated_path_still_keeps_the_real_guards():
+    """우회하는 것은 차단 5건뿐 — 안전장치는 전부 통과해야 한다."""
+    code = _code(ENTRY)
+    for token in ("AccountKillSwitchService", "is_account_banned",
+                  "check_balance_block", "_has_active_same_symbol",
+                  "get_surge_max_concurrent"):
+        assert token in code, f"{token} 검사가 없다"
+
+
+def test_guard_failures_are_fail_closed():
+    """자본이 나가는 판정이므로 확인 실패는 「막는다」로 떨어져야 한다."""
+    src = ENTRY.read_text(encoding="utf-8")
+    i = src.index("킬스위치 확인 실패")
+    assert "return False" in src[max(0, i - 200): i + 200]
+    j = src.index("def count_surge_active")
+    assert "MAX_CONCURRENT_DEFAULT" in src[j: j + 1200], "집계 실패가 fail-open 이다"
+
+
+def test_template_name_match_is_case_insensitive():
+    """🚨 Fix 265 재발 방지 — 템플릿 이름은 대문자로 저장된다."""
+    code = _code(ENTRY)
+    assert ".ilike(" in code and ".like(f\"{TEMPLATE_PREFIX}" not in code
+
+
+def test_add_resets_the_stop_loss():
+    """🚨 추가 후 손절 ROI 를 안 낮추면 손실 상한(250)이 깨진다."""
+    code = _code(ENTRY)
+    i = code.index("def add_to_surge_position")
+    body = code[i:]
+    assert "force_sl_roi_override" in body
+    assert "손실 상한이 깨졌다" in ENTRY.read_text(encoding="utf-8")
+
+
+def test_template_is_single_stage():
+    """🚨 다단계면 risk_service v130 가드에 걸려 강제손절이 보류된다."""
+    code = _code(ENTRY)
+    assert '"stages_count": 1' in code
 
 
 def test_counters_and_reasons_exist():
