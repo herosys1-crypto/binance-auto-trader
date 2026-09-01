@@ -440,3 +440,57 @@ async function togglePeakBypass(sid, enabled) {
     }
   }
 }
+
+/**
+ * 📁 Fix 275 (2026-09-01 사장님): 긴 리스트를 접는다.
+ *
+ * 사장님: "왼쪽 메뉴들 간략하게 노출하고 나머진 선택하면 보이게 해서
+ *          아래로 긴 리스트를 아주 많이 줄여줘"
+ *
+ * 화면이 아래로 끝없이 길어지던 원인은 리스트를 **전부 펼쳐서** 그렸기 때문이다
+ * (감시 심볼 23개 + 재진입 대기 15개 + 손실 심볼 37건 + 급등 top50 …).
+ *
+ * 이 헬퍼는 그 자리를 **한 줄 요약**으로 바꾸고, 클릭해야 펼쳐지게 한다.
+ * 이미 이 코드베이스가 쓰던 <details>/<summary> 패턴을 그대로 쓴다
+ * (strategy-suggestions.js:131, index.html:1098 선례).
+ *
+ * @param {string} title    요약에 보일 제목 (이모지 포함 가능)
+ * @param {number} count    항목 수 — 접힌 상태에서도 규모가 보이게 한다
+ * @param {string} bodyHtml 펼쳤을 때 보일 내용
+ * @param {object} opt      { open, color, preview, maxHeight }
+ *   - open      기본 false. true 면 처음부터 펼침
+ *   - color     요약 글자색
+ *   - preview   요약 오른쪽에 붙일 짧은 미리보기 (접힌 상태에서 핵심만)
+ *   - maxHeight 펼친 내용의 최대 높이(px). 넘으면 그 안에서 스크롤 —
+ *               펼쳐도 페이지가 통째로 길어지지 않게 한다
+ */
+function foldList(title, count, bodyHtml, opt) {
+  const o = opt || {};
+  if (!count) return '';
+  const color = o.color || '#cbd5e1';
+  const open = o.open ? ' open' : '';
+  const maxH = o.maxHeight == null ? 260 : o.maxHeight;
+  const preview = o.preview
+    ? `<span style="color:#64748b;font-weight:normal;margin-left:6px;">${o.preview}</span>`
+    : '';
+  const inner = maxH
+    ? `<div style="max-height:${maxH}px;overflow-y:auto;padding-right:2px;">${bodyHtml}</div>`
+    : bodyHtml;
+  return `<details style="margin-top:6px;"${open}>
+    <summary style="cursor:pointer;color:${color};font-size:12px;font-weight:bold;list-style:none;">
+      <span style="display:inline-block;width:10px;">▸</span>${title}
+      <span style="background:rgba(148,163,184,0.25);color:#e2e8f0;padding:0 6px;border-radius:8px;font-size:11px;margin-left:4px;">${count}</span>${preview}
+    </summary>
+    ${inner}
+  </details>`;
+}
+
+/** 접힌 상태에서 보여줄 짧은 미리보기 문자열 (상위 N개 심볼명). */
+function foldPreview(items, key, n) {
+  if (!items || !items.length) return '';
+  const k = key || 'symbol';
+  const take = items.slice(0, n || 3)
+    .map(x => String((x && x[k]) || x).replace(/USDT$/, ''));
+  const rest = items.length - take.length;
+  return take.join(', ') + (rest > 0 ? ` 외 ${rest}` : '');
+}

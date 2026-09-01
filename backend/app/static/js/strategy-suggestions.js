@@ -114,13 +114,15 @@ async function loadRecentAutoOutcomes() {
     // 손실 심볼 리스트 (사장님 즉시 파악!)
     let lossesHtml = '';
     if (losses.length > 0) {
+      // 📁 Fix 275: 접는다 (손실 37건이 그대로 펼쳐져 화면이 길어지던 자리)
       lossesHtml = `
         <div style="background:#7f1d1d; padding:6px 8px; border-radius:6px; margin:4px 0; font-size:11px;">
-          <div style="font-weight:bold; color:#fca5a5; margin-bottom:2px;">🚨 손실 심볼 ${losses.length}건:</div>
-          ${losses.map(l => `
-            <div style="color:#fecaca; margin-left:8px;">
-              🔴 ${l.symbol} ${l.side} = ${l.pnl.toFixed(2)} USDT
-            </div>`).join('')}
+          ${foldList('🚨 손실 심볼', losses.length,
+            losses.map(l => `
+              <div style="color:#fecaca; margin-left:8px;">
+                🔴 ${l.symbol} ${l.side} = ${l.pnl.toFixed(2)} USDT
+              </div>`).join(''),
+            { color: '#fca5a5', preview: foldPreview(losses, 'symbol', 3) })}
         </div>`;
     }
 
@@ -1289,21 +1291,26 @@ if (typeof window !== 'undefined') {
       }
       // 🔍 SHORT 실시간 감시 심볼 (사장님 요구 2026-08-24 복원: 정의2 삭제 시 유실 방지!)
       if (r.monitoring_symbols && r.monitoring_symbols.length) {
-        html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🔍 v219 감시 심볼 (SHORT 정점) ${r.monitoring_symbols.length}개:</b></div>`;
-        r.monitoring_symbols.forEach(m => {
+        // 📁 Fix 275: 23개가 통째로 펼쳐지던 자리 -> 접는다
+        const _msBody = r.monitoring_symbols.map(m => {
           const color = m.passed_v219 ? '#22c55e' : (m.change_24h >= 10 ? '#f97316' : '#94a3b8');
           const badge = m.passed_v219 ? '✅통과' : '👀감시';
-          html += `<div style="padding:3px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:11px;">${m.symbol} 24h=<span style="color:${color};font-weight:bold;">${m.change_24h}%</span> ${badge} vol=${m.volume_24h_m||"?"}M</div>`;
-        });
+          return `<div style="padding:3px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:11px;">${m.symbol} 24h=<span style="color:${color};font-weight:bold;">${m.change_24h}%</span> ${badge} vol=${m.volume_24h_m||"?"}M</div>`;
+        }).join('');
+        const _msPassed = r.monitoring_symbols.filter(m => m.passed_v219).length;
+        html += foldList('🔍 v219 감시 심볼 (SHORT 정점)', r.monitoring_symbols.length, _msBody,
+          { color: '#f1f5f9', preview: `✅통과 ${_msPassed}` });
       }
       // 🔄 SHORT 재진입 대기 (24h 내 청산 이력, 사장님 요구 2026-08-24 복원!)
       if (r.reentry_watch && r.reentry_watch.length) {
-        html += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🔄 SHORT 재진입 대기 (24h 청산!) ${r.reentry_watch.length}개:</b></div>`;
-        r.reentry_watch.forEach(w => {
+        // 📁 Fix 275: 15개가 통째로 펼쳐지던 자리 -> 접는다
+        const _rwBody = r.reentry_watch.map(w => {
           const pnl = parseFloat(w.realized_pnl || 0);
           const c = pnl >= 0 ? '#22c55e' : '#ef4444';
-          html += `<div style="padding:3px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:11px;">${w.symbol} ${w.status||w.reason||''} <span style="color:${c};">${pnl.toFixed(2)}</span></div>`;
-        });
+          return `<div style="padding:3px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;color:#f1f5f9;font-size:11px;">${w.symbol} ${w.status||w.reason||''} <span style="color:${c};">${pnl.toFixed(2)}</span></div>`;
+        }).join('');
+        html += foldList('🔄 SHORT 재진입 대기 (24h 청산)', r.reentry_watch.length, _rwBody,
+          { color: '#f1f5f9', preview: foldPreview(r.reentry_watch, 'symbol', 3) });
       }
       // 진입 슬롯 (SHORT + LONG 활성 합산 표시)
       const shortCnt = (r.active_shorts && r.active_shorts.length) || 0;
@@ -1317,29 +1324,31 @@ if (typeof window !== 'undefined') {
       if (longSymEl) {
         let lh = '';
         if (r.active_longs && r.active_longs.length) {
-          lh += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>📉 활성 LONG ${r.active_longs.length}건:</b><br>`;
-          r.active_longs.forEach(s => {
+          // 📁 Fix 275: 활성 LONG 은 **펼쳐 둔다** (보유 중이라 바로 봐야 한다)
+          const _alBody = r.active_longs.map(s => {
             const pnlVal = Number(s.unrealized_pnl) || 0;
             const pnlColor = pnlVal >= 0 ? '#22c55e' : '#ef4444';
-            lh += `<div style="padding:4px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;">${s.symbol} stage${s.stage} avg=${s.avg_price} <span style="color:${pnlColor};">${pnlVal.toFixed(2)} USDT</span></div>`;
-          });
-          lh += '</div>';
+            return `<div style="padding:4px 8px;background:rgba(30,41,59,0.6);margin:2px 0;border-radius:4px;">${s.symbol} stage${s.stage} avg=${s.avg_price} <span style="color:${pnlColor};">${pnlVal.toFixed(2)} USDT</span></div>`;
+          }).join('');
+          const _alSum = r.active_longs.reduce((a, s) => a + (Number(s.unrealized_pnl) || 0), 0);
+          lh += foldList('📉 활성 LONG', r.active_longs.length, _alBody,
+            { open: true, color: '#f1f5f9',
+              preview: `${_alSum >= 0 ? '+' : ''}${_alSum.toFixed(2)} USDT` });
         }
         if (r.long_bottom_alerts && r.long_bottom_alerts.length) {
-          lh += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>🟢 저점 감지 후보 ${r.long_bottom_alerts.length}건:</b><br>`;
-          r.long_bottom_alerts.forEach(a => {
-            lh += `<div style="padding:4px 8px;background:rgba(34,197,94,0.15);margin:2px 0;border-radius:4px;">${a.symbol} ${a.side} conf=${a.confidence} 24h=${a.change_24h}%</div>`;
-          });
-          lh += '</div>';
+          const _lbBody = r.long_bottom_alerts.map(a =>
+            `<div style="padding:4px 8px;background:rgba(34,197,94,0.15);margin:2px 0;border-radius:4px;">${a.symbol} ${a.side} conf=${a.confidence} 24h=${a.change_24h}%</div>`).join('');
+          lh += foldList('🟢 저점 감지 후보', r.long_bottom_alerts.length, _lbBody,
+            { color: '#86efac', preview: foldPreview(r.long_bottom_alerts, 'symbol', 3) });
         }
         if (r.monitoring_symbols_long && r.monitoring_symbols_long.length) {
-          lh += `<div style="color:#f1f5f9;font-size:12px;margin-top:8px;"><b>📉 v219 감시 심볼 (LONG 저점) ${r.monitoring_symbols_long.length}건:</b><br>`;
-          r.monitoring_symbols_long.forEach(s => {
+          const _mslBody = r.monitoring_symbols_long.map(s => {
             const sym = (s && s.symbol) ? s.symbol : String(s);
             const extra = (s && s.change_24h !== undefined) ? ` 24h=${s.change_24h}%` : '';
-            lh += `<div style="padding:4px 8px;background:rgba(34,197,94,0.10);margin:2px 0;border-radius:4px;">${sym}${extra}</div>`;
-          });
-          lh += '</div>';
+            return `<div style="padding:4px 8px;background:rgba(34,197,94,0.10);margin:2px 0;border-radius:4px;">${sym}${extra}</div>`;
+          }).join('');
+          lh += foldList('📉 v219 감시 심볼 (LONG 저점)', r.monitoring_symbols_long.length, _mslBody,
+            { color: '#f1f5f9', preview: foldPreview(r.monitoring_symbols_long, 'symbol', 3) });
         }
         longSymEl.innerHTML = lh;
       }
