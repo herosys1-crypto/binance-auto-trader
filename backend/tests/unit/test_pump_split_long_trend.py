@@ -164,17 +164,80 @@ def test_short_mid_mode_enters_on_upward_break():
     assert _entry_plan(_a15(99.5, 100.0), "SHORT", True, SPLIT_STEP_PCT)[0] is None
 
 
-def test_band_mode_still_requires_minus_3pct():
-    """🚨 하단/상단 모드는 **바뀌면 안 된다** (사장님 원문 "하단 -3%일때 100 진입")."""
-    mid = 100.0
-    lo = mid * 0.95            # _a15 의 하단
-    # 하단 바로 아래 = 아직 -3% 미달 → 진입 X
-    base, why, steps = _entry_plan(_a15(lo - 0.01, mid), "LONG", False, SPLIT_STEP_PCT)
-    assert base is None, f"하단 모드가 이탈만으로 진입했다 = Fix 215 가 새어나갔다: {why}"
+def test_band_mode_needs_extreme_turn_fix276():
+    """🚨 Fix 276 (2026-09-02 사장님) — 하단/상단 모드의 진입 규칙이 **바뀌었다**.
+
+    옛 이름: test_band_mode_still_requires_minus_3pct
+    옛 규칙: 기준선(하단/상단) 대비 **심도 3%** 도달 시 진입.
+
+    사장님 정정:
+      "꼭 3-5번 2-4번 -10% +10% 고정은 아니야. 이렇게 급락과 급등하면
+       우리 시스템 로직이 **최고점 최저점이라 판단되면** 진입하고
+       정말 그렇게 되면 **무조건** 포지션 진입하는거야"
+
+    → 심도는 보조 경로로 남고, 본 규칙은 「밴드 밖 지속 → **극값에서 꺾임**」이다.
+      실측(130심볼 x 10.4일): 꺾임 판정을 넣으면 SHORT 건당 +0.673 → **+1.800**.
+    """
+    flat = [100.0] * 40
+
+    def _snap(tail):
+        closes = flat + tail
+        mid = sum(closes[-20:]) / 20.0
+        return {"closes": closes, "bb_mid_last": mid,
+                "bb_up_last": mid * 1.05, "bb_lo_last": mid * 0.95}
+
+    # ① 하단 밖으로 나갔지만 **아직 내려가는 중** = 최저점이 아니다 → 진입 X
+    base, why, steps = _entry_plan(
+        _snap([94, 88, 82, 76, 70, 70]), "LONG", False, SPLIT_STEP_PCT)
+    assert base is None, f"극값 갱신 중인데 진입했다: {why}"
+    assert "극값" in why, why
     assert steps == SPLIT_STEP_PCT
-    # 하단 -3% 도달 → 진입 O
-    base2, _, _ = _entry_plan(_a15(lo * 0.97 - 0.01, mid), "LONG", False, SPLIT_STEP_PCT)
-    assert base2 is not None
+
+    # ② 최저점에서 반등 = 「최저점이라 판단」 → 진입 O
+    base2, why2, _ = _entry_plan(
+        _snap([94, 88, 82, 76, 78, 78]), "LONG", False, SPLIT_STEP_PCT)
+    assert base2 is not None, f"최저점 확인인데 진입 못 했다: {why2}"
+    assert "최저점 확인" in why2, why2
+
+    # ③ SHORT 은 거울상 — 신고점에서 꺾여야 한다
+    up, _, _ = _entry_plan(
+        _snap([106, 112, 118, 124, 130, 130]), "SHORT", False, SPLIT_STEP_PCT)
+    assert up is None, "신고점 갱신 중인데 SHORT 진입했다"
+    up2, why3, _ = _entry_plan(
+        _snap([106, 112, 118, 124, 121, 121]), "SHORT", False, SPLIT_STEP_PCT)
+    assert up2 is not None, why3
+    assert "최고점 확인" in why3, why3
+
+
+def test_long_trend_mode_is_off_by_default_fix277():
+    """🚨 Fix 277 (2026-09-02 사장님 "이전략은 빼줘") — 중단선 모드는 기본 OFF.
+
+    실측(10.4일): 현행 중단 모드가 실제로 하던 동작 = 「중단 하락돌파 → LONG」
+      -215.46 USDT (전반 +347.26 / 후반 -554.86) = 과적합 검사도 실패.
+    사장님이 중단선을 **별도 전략**으로 빼라고 하셨으므로 여기서는 꺼 둔다.
+    """
+    from app.workers.pump_split_entry_worker import _long_trend_enabled
+
+    class _DB:
+        def __init__(self, val):
+            self.val = val
+
+        def get(self, _model, _key):
+            if self.val is None:
+                return None
+            return type("R", (), {"value": self.val})()
+
+    assert _long_trend_enabled(_DB(None)) is False, "설정이 없으면 OFF 여야 한다"
+    assert _long_trend_enabled(_DB("0")) is False
+    assert _long_trend_enabled(_DB("1")) is True
+    assert _long_trend_enabled(_DB("true")) is True
+
+    class _Boom:
+        def get(self, *_a):
+            raise RuntimeError("db down")
+
+    # 조회가 깨져도 켜지면 안 된다 (fail-closed: 꺼진 쪽이 안전)
+    assert _long_trend_enabled(_Boom()) is False
 
 
 def test_mid_steps_have_no_dead_stage():

@@ -157,6 +157,21 @@ CAPITALS_KEY = "pump_split_capitals"
 STEPS_KEY = "pump_split_steps"        # "3,5,7" (기준선 대비 이탈 심도)
 SL_ROI_KEY = "pump_split_sl_roi"      # "10"   (평단 ROI 손절 %)
 
+# 🚨 Fix 276 (2026-09-02 사장님): 1차 진입 = 「밴드 밖 → 극값에서 꺾임」
+#   "꼭 3-5번 2-4번 -10% +10% 고정은 아니야. 이렇게 급락과 급등하면 우리 시스템
+#    로직이 최고점 최저점이라 판단되면 진입하고 정말 그렇게 되면 무조건 진입"
+#   → 봉수·심도·되돌림을 **전부 설정**으로 뺀다. 판정 본체는 bb_entry_rules.py.
+PERSIST_LONG_KEY = "pump_split_persist_bars_long"    # 하단 밖 연속 봉수 (기본 2)
+PERSIST_SHORT_KEY = "pump_split_persist_bars_short"  # 상단 밖 연속 봉수 (기본 4)
+RETRACE_LONG_KEY = "pump_split_retrace_long"         # 최저점 대비 반등 % (기본 0.6)
+RETRACE_SHORT_KEY = "pump_split_retrace_short"       # 최고점 대비 하락 % (기본 0.0)
+DEPTH_KEY = "pump_split_depth_pct"                   # 심도 경로 % (기본 10)
+LONG_CHG24_KEY = "pump_split_long_min_chg24"         # LONG 24h 급등 하한 (0=미적용)
+# 🚨 Fix 277 (2026-09-02 사장님 "이전략은 빼줘"): 중단선은 별도 전략으로 뺀다.
+#   실측(10.4일): 현행 중단 모드 동작 = 「중단 하락돌파 → LONG」 -215.46
+#   (전반 +347.26 / 후반 -554.86). 기본 OFF 로 두고 설정으로만 켠다.
+LONG_TREND_KEY = "pump_split_long_trend_enabled"
+
 
 def _parse_capitals(raw: str) -> list[Decimal]:
     """\"100,200,300\" → [100, 200, 300]. 3칸 고정, 각 1~100000."""
@@ -298,6 +313,50 @@ def _load_config(db) -> tuple[list[Decimal], int, list[Decimal], Decimal, str]:
     return caps, cap_n, steps, sl_roi, src
 
 
+def _f(db, key, default, lo, hi):
+    """설정 하나를 float 로. 손상/범위밖이면 기본값 (fail-SAFE, 헌법 167)."""
+    from app.models.system_setting import SystemSetting
+    try:
+        row = db.get(SystemSetting, key)
+        if row is None or row.value is None or not str(row.value).strip():
+            return default
+        v = float(str(row.value).strip())
+        if v < lo or v > hi:
+            logger.warning("[pump_split] %s=%s 범위밖(%s~%s) → 기본 %s",
+                           key, v, lo, hi, default)
+            return default
+        return v
+    except Exception as e:
+        logger.warning("[pump_split] %s 파싱 실패 → 기본 %s: %s", key, default, e)
+        return default
+
+
+def _load_entry_rules(db) -> dict:
+    """Fix 276 진입 규칙 (사장님 "고정은 아니야" → 전부 설정)."""
+    from app.services import bb_entry_rules as _ber
+    return {
+        "persist_long": int(_f(db, PERSIST_LONG_KEY, _ber.PERSIST_BARS_LONG, 0, 20)),
+        "persist_short": int(_f(db, PERSIST_SHORT_KEY, _ber.PERSIST_BARS_SHORT, 0, 20)),
+        "retrace_long": _f(db, RETRACE_LONG_KEY, _ber.RETRACE_PCT_LONG, 0.0, 50.0),
+        "retrace_short": _f(db, RETRACE_SHORT_KEY, _ber.RETRACE_PCT_SHORT, 0.0, 50.0),
+        "depth": _f(db, DEPTH_KEY, _ber.DEPTH_PCT, 0.0, 90.0),
+        "long_min_chg24": _f(db, LONG_CHG24_KEY, _ber.LONG_MIN_CHG24, 0.0, 500.0),
+    }
+
+
+def _long_trend_enabled(db) -> bool:
+    """Fix 277: 중단선 모드. **기본 OFF** — 사장님이 별도 전략으로 빼라 하셨다."""
+    from app.models.system_setting import SystemSetting
+    try:
+        row = db.get(SystemSetting, LONG_TREND_KEY)
+        if row is None or row.value is None:
+            return False
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:
+        logger.warning("[pump_split] %s 조회 실패 = OFF: %s", LONG_TREND_KEY, e)
+        return False
+
+
 def _fmt(v) -> str:
     return f"{float(v):.6f}"
 
@@ -379,72 +438,88 @@ def mid_steps(steps: list[Decimal] | None = None) -> list[Decimal]:
 
 def _entry_plan(a15: dict, side: str, long_trend: bool,
                 steps: list[Decimal] | None = None,
+                *, rules: dict | None = None, chg_24h: float | None = None,
                 ) -> tuple[Decimal | None, str, list[Decimal]]:
     """기준선(base)·사유·**이 진입에 쓸 steps** 를 반환. 미충족이면 base=None.
 
-    ⚠️ 하단/상단 모드의 1차는 「기준선 이탈 즉시」가 아니라 **기준선 대비
-       SPLIT_STEP_PCT[0](-3%) 까지 밀렸을 때** 진입한다
-       (사장님 확정: "볼밴 하단 -3% 이탈하면 100 진입").
-       기준선을 스치고 바로 되돌리는 가짜 이탈을 걸러내기 위함이다.
-    ⚠️ 긴 추세(중단선) 모드는 Fix 215 로 **이탈 즉시**다 — mid_steps 참조.
+    🚨 Fix 276 (2026-09-02 사장님) — 1차 진입 판정이 바뀌었다.
+
+      옛 규칙: 기준선(하단/상단) 대비 **심도 3%** 를 넘으면 진입.
+      새 규칙: 밴드 **밖으로 나가** 머물다가(지속 N봉 또는 심도 D%),
+               그 구간 **극값에서 꺾이면** 진입.
+
+      사장님 원문:
+        "꼭 3-5번 2-4번 -10% +10% 고정은 아니야. 이렇게 급락과 급등하면
+         우리 시스템 로직이 **최고점 최저점이라 판단되면** 진입하고
+         정말 그렇게 되면 **무조건** 포지션 진입하는거야"
+
+      실측(130심볼 x 10.4일) — 「꺾임」이 만드는 차이 (SHORT, 상단 밖 4봉+):
+        꺾임 없음  413건 승률 70.0% 건당 +0.673
+        꺾임 있음  174건 승률 77.0% 건당 **+1.800**   <- 2.7배
+
+      판정 본체는 `app/services/bb_entry_rules.py` 에 있다 (순수 함수 = 단위 테스트).
+
+    ⚠️ 긴 추세(중단선) 모드는 **Fix 277 로 기본 OFF** 다 — 사장님 "이전략은 빼줘".
+       설정 `pump_split_long_trend_enabled=1` 로만 켜지며, 켜지면 옛 동작 그대로다.
 
     반환하는 steps 를 템플릿·검산·재앵커가 **전부 같이** 써야 한다 (헌법 101).
     """
-    up, mid, lo = a15.get("bb_up_last"), a15.get("bb_mid_last"), a15.get("bb_lo_last")
     closes = a15.get("closes") or []
     _base_steps = steps or SPLIT_STEP_PCT     # Fix 206
     _steps = mid_steps(_base_steps) if long_trend else _base_steps   # Fix 215
-    if not closes or up is None or mid is None or lo is None:
-        return None, "15m 밴드/종가 없음", _steps
-    close = Decimal(str(closes[-1]))
-    # ═══════════════════════════════════════════════════════════════════
-    # 🚨 Fix 216 (2026-08-30): 중단 모드는 **완료봉**으로 판정한다.
-    #   chart_analyzer:274 는 klines 를 자르지 않는다 → closes[-1] 과 bb_*_last 는
-    #   **아직 안 끝난 15분봉**이다. 하단 모드는 -3% 버퍼가 있어 덜 위험했지만,
-    #   중단 모드는 Fix 215 로 여유가 **0(이탈 즉시)** 이라 봉 안의 틱 하나로
-    #   시장가가 나가고, 그 봉이 되돌리면 「완료봉 기준으로는 없던 이탈」 위에
-    #   2·3차 트리거와 손절이 앵커된다 (= 가짜 이탈에 자본이 물린다).
-    #   → 마지막 완료봉(closes[-2])의 종가와 그 시점 밴드로 본다.
-    #   ⚠️ 하단/상단 모드는 **건드리지 않는다** — 지금까지의 동작을 바꾸지 않는다.
-    # ═══════════════════════════════════════════════════════════════════
-    if long_trend and len(closes) >= 21:
-        try:
-            from app.services.bb_4h_band_analyzer import BB4HBandAnalyzer
-            _m, _u, _l = BB4HBandAnalyzer.bollinger([float(x) for x in closes])
-            if _m[-2] is not None:
-                mid, up, lo = _m[-2], _u[-2], _l[-2]
-                close = Decimal(str(closes[-2]))
-        except Exception as _e:      # 밴드 재계산 실패 = 진행 중 봉으로 내려가지 않는다
-            return None, f"완료봉 밴드 계산 실패 (보류): {_e}", _steps
-    step1 = _steps[0] / Decimal("100")
-    # 중단 모드는 step1=0 이므로 need == base = 「이탈(통과)」 판정이 된다.
-    # Fix 216: 부호는 방향을 따른다 (SHORT 를 -3% 로 찍던 것 정정).
-    _cond = "이탈" if long_trend else (
-        f"{'-' if side == 'LONG' else '+'}{_base_steps[0]}%"
+
+    # ═══ 긴 추세(중단선) 모드 — Fix 277 로 기본 OFF, 켜면 옛 동작 그대로 ═══
+    if long_trend:
+        up, mid, lo = a15.get("bb_up_last"), a15.get("bb_mid_last"), a15.get("bb_lo_last")
+        if not closes or up is None or mid is None or lo is None:
+            return None, "15m 밴드/종가 없음", _steps
+        close = Decimal(str(closes[-1]))
+        # 🚨 Fix 216: 중단 모드는 **완료봉**으로 판정한다 (여유가 0 이라 틱 하나에 나간다)
+        if len(closes) >= 21:
+            try:
+                from app.services.bb_4h_band_analyzer import BB4HBandAnalyzer
+                _m, _u, _l = BB4HBandAnalyzer.bollinger([float(x) for x in closes])
+                if _m[-2] is not None:
+                    mid, up, lo = _m[-2], _u[-2], _l[-2]
+                    close = Decimal(str(closes[-2]))
+            except Exception as _e:
+                return None, f"완료봉 밴드 계산 실패 (보류): {_e}", _steps
+        step1 = _steps[0] / Decimal("100")     # 중단 모드는 0 = 「이탈 즉시」
+        base = Decimal(str(mid))
+        if side == "LONG":
+            need = base * (Decimal("1") - step1)
+            if close > need:
+                return None, (
+                    f"중단 이탈 미도달 (close {_fmt(close)} > 목표 {_fmt(need)} "
+                    f"/ 중단 {_fmt(base)})"
+                ), _steps
+        else:
+            need = base * (Decimal("1") + step1)
+            if close < need:
+                return None, (
+                    f"중단 이탈 미도달 (close {_fmt(close)} < 목표 {_fmt(need)} "
+                    f"/ 중단 {_fmt(base)})"
+                ), _steps
+        return base, (
+            f"중단 이탈 확인 (close {_fmt(close)} / 중단 {_fmt(base)} "
+            f"/ 단계 {'/'.join(str(x) for x in _steps)}%)"
+        ), _steps
+
+    # ═══ Fix 276: 밴드 밖 → 극값에서 꺾임 ═══════════════════════════════
+    from app.services import bb_entry_rules as _ber
+    r = rules or {}
+    _L = str(side).upper() == "LONG"
+    base, path, why, detail = _ber.evaluate_first_entry(
+        closes, side,
+        persist_bars=r.get("persist_long" if _L else "persist_short"),
+        retrace_pct=r.get("retrace_long" if _L else "retrace_short"),
+        depth_pct=r.get("depth", _ber.DEPTH_PCT),
+        chg_24h=chg_24h,
+        long_min_chg24=r.get("long_min_chg24", _ber.LONG_MIN_CHG24),
     )
-    if side == "LONG":
-        base = Decimal(str(mid)) if long_trend else Decimal(str(lo))
-        label = "중단" if long_trend else "하단"
-        need = base * (Decimal("1") - step1)
-        if close > need:
-            return None, (
-                f"{label} {_cond} 미도달 "
-                f"(close {_fmt(close)} > 목표 {_fmt(need)} / {label} {_fmt(base)})"
-            ), _steps
-    else:
-        base = Decimal(str(mid)) if long_trend else Decimal(str(up))
-        label = "중단" if long_trend else "상단"
-        need = base * (Decimal("1") + step1)
-        if close < need:
-            return None, (
-                f"{label} {_cond} 미도달 "
-                f"(close {_fmt(close)} < 목표 {_fmt(need)} / {label} {_fmt(base)})"
-            ), _steps
-    return base, (
-        f"{label} {_cond} 확인 "
-        f"(close {_fmt(close)} / {label} {_fmt(base)} / 목표 {_fmt(need)} "
-        f"/ 단계 {'/'.join(str(x) for x in _steps)}%)"
-    ), _steps
+    if base is not None:
+        why = f"{why} / 단계 {'/'.join(str(x) for x in _steps)}%"
+    return base, why, _steps
 
 
 def base_multipliers(side: str, steps: list[Decimal]) -> list[Decimal]:
@@ -692,6 +767,17 @@ def run_pump_split_entry_once() -> dict:
 
         # ── Fix 180: 자본/상한 설정 로드 + 정합성 검산 ──
         caps, max_concurrent, steps, sl_roi, cfg_src = _load_config(db)
+        # Fix 276/277: 진입 규칙 + 중단모드 스위치 (사이클마다 다시 읽는다)
+        _rules = _load_entry_rules(db)
+        _lt_on = _long_trend_enabled(db)
+        cfg_src += (
+            f" | Fix276 지속 L{_rules['persist_long']}/S{_rules['persist_short']}봉"
+            f" 되돌림 L{_rules['retrace_long']:g}/S{_rules['retrace_short']:g}%"
+            f" 심도{_rules['depth']:g}%"
+            + (f" LONG24h>={_rules['long_min_chg24']:g}%"
+               if _rules['long_min_chg24'] > 0 else "")
+            + (" | 중단모드 ON" if _lt_on else "")
+        )
         if max_concurrent <= 0:
             logger.info("[pump_split] ⏹️ %s=0 = 이 전략 OFF", MAX_CONCURRENT_KEY)
             return {"note": "전용 상한 0", **stat}
@@ -855,10 +941,15 @@ def run_pump_split_entry_once() -> dict:
                 _skip("no_analysis")
                 continue
 
-            long_trend, trend_why = _is_long_trend(a15, side)
+            # Fix 277: 중단선 모드는 기본 OFF (사장님 "이전략은 빼줘")
+            if _lt_on:
+                long_trend, trend_why = _is_long_trend(a15, side)
+            else:
+                long_trend, trend_why = False, "중단모드 OFF(Fix 277)"
             # Fix 215: 긴 추세면 「이탈 즉시」 단계표(0/2/4)를 쓴다. 이후 템플릿·검산·
             #   재앵커가 **모두 이 eff_steps 하나**를 봐야 한다 (헌법 101).
-            base, why, eff_steps = _entry_plan(a15, side, long_trend, steps)
+            base, why, eff_steps = _entry_plan(
+                a15, side, long_trend, steps, rules=_rules, chg_24h=chg)
             if base is None:
                 # 🚨 Fix 211 (2026-08-30): 옛 코드는 사유를 `no_break` 한 단어로만 뭉갰다.
                 #   그래서 「후보 12건 전부 no_break」 만 남고 **어느 조건이 막았는지**

@@ -912,12 +912,18 @@ function openManualTPModal(strategyId, symbol, side, currentQty, avgEntry, lever
       <label style="color:#cbd5e1; font-size:var(--font-md); display:block; margin-bottom:8px">
         ⚡ 빠른 선택 (보유 포지션 의 N%):
       </label>
-      <div style="display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap">
-        <button onclick="_setManualTPPercent(10, ${currentQty})" class="btn btn-ghost" style="padding:6px 12px; font-size:var(--font-md)">10%</button>
-        <button onclick="_setManualTPPercent(25, ${currentQty})" class="btn btn-ghost" style="padding:6px 12px; font-size:var(--font-md); background:#16a34a; color:white">25%</button>
-        <button onclick="_setManualTPPercent(50, ${currentQty})" class="btn btn-ghost" style="padding:6px 12px; font-size:var(--font-md)">50%</button>
-        <button onclick="_setManualTPPercent(75, ${currentQty})" class="btn btn-ghost" style="padding:6px 12px; font-size:var(--font-md)">75%</button>
-        <button onclick="_setManualTPPercent(100, ${currentQty})" class="btn btn-ghost" style="padding:6px 12px; font-size:var(--font-md); background:#dc2626; color:white">100% (전체)</button>
+      <!-- 🚨 Fix 279 (2026-09-02 사장님): "5% 10% 15% 이렇게 100%까지" +
+           "선택하면 선택한게 반전되어야 하는데" — 옛 코드는 25% 버튼에만 초록색이
+           **HTML 에 박혀 있어서** 다른 버튼을 눌러도 하이라이트가 움직이지 않았다
+           (파란 테두리는 브라우저 포커스링일 뿐, 선택 표시가 아니었다).
+           → 버튼을 배열에서 생성하고, 선택 표시는 _syncManualTPButtons 한 곳에서만 칠한다. -->
+      <div id="manual-tp-quick"
+           style="display:grid; grid-template-columns:repeat(5, 1fr); gap:5px; margin-bottom:12px">
+        ${_MTP_STEPS.map(p => `
+        <button type="button" data-mtp="${p}" aria-pressed="false"
+                onclick="_setManualTPPercent(${p}, ${currentQty})"
+                class="btn btn-ghost mtp-quick"
+                style="padding:6px 4px; font-size:var(--font-md)">${p === 100 ? '100% 전체' : p + '%'}</button>`).join('')}
       </div>
       <label style="color:#cbd5e1; font-size:var(--font-md); display:block; margin-bottom:4px">
         🎯 또는 직접 입력 (1~100%):
@@ -948,15 +954,37 @@ function openManualTPModal(strategyId, symbol, side, currentQty, avgEntry, lever
     </div>
   `;
   document.body.appendChild(modal);
+  _syncManualTPButtons(25);             // Fix 279: 초기 선택 표시
 }
+
+// Fix 279 사장님: "5% 10% 15% 이렇게 100%까지"
+const _MTP_STEPS = Array.from({ length: 20 }, (_, i) => (i + 1) * 5);
 
 function _setManualTPPercent(percent, currentQty) {
   document.getElementById('manual-tp-percent').value = percent;
-  _updateManualTPPreview(currentQty);
+  _updateManualTPPreview(currentQty);   // 선택 반전은 여기 한 곳에서만 (단일 진실)
+}
+
+// 🚨 Fix 279: 선택된 버튼 **하나만** 칠한다. 직접 입력해도 같은 함수가 돌므로
+//   버튼과 입력칸이 항상 같은 값을 가리킨다 (옛 버그 = 25% 가 계속 초록).
+function _syncManualTPButtons(percent) {
+  const p0 = Number(percent);
+  document.querySelectorAll('#manual-tp-quick .mtp-quick').forEach(b => {
+    const p = Number(b.dataset.mtp);
+    const on = p === p0;
+    const full = p === 100;
+    b.style.background = on ? (full ? '#dc2626' : '#16a34a')
+                            : (full ? 'rgba(220,38,38,0.22)' : '');
+    b.style.color = on ? '#ffffff' : (full ? '#fca5a5' : '');
+    b.style.fontWeight = on ? 'bold' : '';
+    b.style.boxShadow = on ? '0 0 0 2px #86efac inset' : '';
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
 }
 
 function _updateManualTPPreview(currentQty) {
   const percent = Number(document.getElementById('manual-tp-percent').value || 0);
+  _syncManualTPButtons(percent);        // Fix 279: 버튼 선택 표시를 값에 맞춘다
   const target = currentQty * percent / 100;
   const remaining = currentQty - target;
   document.getElementById('manual-tp-preview-content').textContent =

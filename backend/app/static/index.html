@@ -1116,11 +1116,20 @@
           <div id="v219-monitoring-symbols-long" style="margin-top:8px"></div>
           <div id="v219-reentry-watch-long" style="margin-top:8px"></div>
           <div style="border-top:1px solid #334155;padding-top:12px;margin-top:12px;">
-            <h4 class="text-sm font-bold mb-2" style="color:#f9a8d4">⚙ 세팅</h4>
+            <!-- 📁 Fix 280 (2026-09-02 사장님): "이 메뉴도 간략하게 표시하고
+                 선택하면 볼수 있게 해줘" — 카드 전체를 접는다.
+                 ⚠️ 오류 알림(v219-settings-msg)은 **접힘 밖**에 둔다 (Fix 199):
+                    로드가 실패했는데 사유가 접혀 있으면 화면이 거짓말을 한다. -->
             <!-- 🚨 Fix 199 (2026-08-28): 이 알림은 **맨 위**에 있어야 한다.
                  원래 저장 버튼 아래에 있어서, 로드가 실패해 「불러오는 중」으로 멈춰도
                  사장님 화면에서는 사유가 보이지 않았다 (스크롤 밖). -->
             <div id="v219-settings-msg" class="text-xs mb-2" style="min-height:14px"></div>
+            <details id="v219-settings-fold">
+              <summary style="cursor:pointer;list-style:none;color:#f9a8d4;font-weight:bold;font-size:13px;margin-bottom:6px">
+                <span style="display:inline-block;width:10px">▸</span>⚙ 세팅
+                <span id="v219-settings-sum"
+                      style="color:#64748b;font-weight:normal;font-size:11px;margin-left:6px">불러오는 중…</span>
+              </summary>
             <div class="flex flex-col gap-2" style="font-size:12px;">
               <label class="flex items-center justify-between gap-2">
                 <span class="text-slate-300" title="하루 신규 건수가 아니라 「동시에 열려 있는 포지션」 상한! (사장님 Fix 112)">최대 동시 포지션</span>
@@ -1187,9 +1196,13 @@
                    → 설정 키는 있는데 화면이 없어서 DB 명령으로만 바꿀 수 있었다.
                      조정 수단이 없으면 기능이 아니다 (Fix 115 교훈). -->
               <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(148,163,184,0.25)">
-                <div class="text-xs font-bold mb-2" style="color:#5eead4">
-                  📊 볼밴 분할 전략 <span style="color:#94a3b8;font-weight:normal">(급등락 심볼 · 물타기)</span>
-                </div>
+                <!-- 📁 Fix 280: 볼밴 카드도 통째로 접는다 -->
+                <details id="bbsplit-fold">
+                  <summary style="cursor:pointer;list-style:none;color:#5eead4;font-weight:bold;font-size:12px;margin-bottom:6px">
+                    <span style="display:inline-block;width:10px">▸</span>📊 볼밴 분할 전략
+                    <span id="bbsplit-sum"
+                          style="color:#94a3b8;font-weight:normal;font-size:11px;margin-left:6px">불러오는 중…</span>
+                  </summary>
                 <label class="flex items-center justify-between gap-2 mb-1">
                   <span class="text-slate-300" title="끄면 이 전략만 멈춥니다. 다른 자동매매는 그대로 동작합니다.">사용</span>
                   <!-- 🚨 Fix 192 (2026-08-28): 첫 옵션이 「끔」이면 **로드 전 화면이 거짓말**을 한다.
@@ -1221,8 +1234,8 @@
                      예) 손절을 -5% 로 낮추면 3차 트리거(-7%)보다 손절이 먼저 와 3차가 죽는다. -->
                 <label class="flex items-center justify-between gap-2 mb-1">
                   <span class="text-slate-300"
-                        title="기준선 대비 이탈 심도. 쉼표 3칸, 갈수록 깊어져야 합니다. 예: 3,5,7 (숏은 +방향)">
-                    진입 트리거 (%)
+                        title="🚨 Fix 276 이후 이 값은 **2·3차 물타기 목표가**입니다. 1차 진입은 「밴드 밖 지속 → 극값에서 꺾임」으로 판정하므로 첫 칸은 쓰이지 않습니다. 쉼표 3칸, 갈수록 깊어져야 합니다.">
+                    2·3차 트리거 (%)
                   </span>
                   <input type="text" id="bbsplit-steps" placeholder="불러오는 중…"
                          class="bg-slate-800 border border-slate-600 text-white rounded px-2 py-1" style="width:130px" />
@@ -1242,9 +1255,17 @@
                     <span style="display:inline-block;width:10px;">▸</span>📊 진입·손절·익절 규칙
                     <span id="bbsplit-preview" style="color:#64748b;font-weight:normal;margin-left:6px;">불러오는 중…</span>
                   </summary>
-                  <b style="color:#93c5fd">진입</b>: 볼밴 기준선 <b>-3% / -5% / -7%</b> 이탈마다 분할
-                  (숏은 +방향)<br>
-                  &nbsp;&nbsp;기준선 = 하단(일반) · <b>중단(긴 추세)</b> · 상단(숏)<br>
+                  <b style="color:#93c5fd">1차 진입</b> (Fix 276 · 사장님 2026-09-02):
+                  밴드 <b>밖으로 나가 머물다가</b> 그 구간
+                  <b style="color:#fbbf24">극값에서 꺾이면</b> 진입<br>
+                  &nbsp;&nbsp;• <b style="color:#f87171">숏</b> = 상단 밖 <b>4봉</b> 지속 →
+                  <b>신고점</b>에서 하락 시작 = 「최고점 판단」<br>
+                  &nbsp;&nbsp;• <b style="color:#86efac">롱</b> = 하단 밖 <b>2봉</b> 지속 →
+                  <b>신저점</b>에서 <b>+0.6%</b> 반등 = 「최저점 판단」<br>
+                  &nbsp;&nbsp;• 또는 밴드 대비 <b>±10%</b> 심도(큰 하락/급등)로도 열린다<br>
+                  &nbsp;&nbsp;<span style="color:#94a3b8">봉수·되돌림·심도는 전부 설정값입니다
+                  (사장님 "고정은 아니야"). 중단선 모드는 <b>별도 전략</b>으로 분리됐습니다.</span><br>
+                  &nbsp;&nbsp;<b>2·3차</b>: 위 트리거(%)만큼 더 밀리면 분할<br>
                   <b style="color:#f87171">손절</b>: 평단 ROI <b>-10%</b> 전량 &nbsp;
                   <b style="color:#86efac">익절</b>: TP1 <b>+5%</b> 부터 25%씩 4회
                   <span style="color:#94a3b8">(수익률 기준 — 몇 차까지 진입했든 동일)</span><br>
@@ -1252,6 +1273,7 @@
                   <span id="bbsplit-risk" style="color:#fbbf24"></span><br>
                   <span style="color:#94a3b8">⚠️ 이 전략은 <b>물타기</b>입니다 — 3차까지 가면 총액이 동시에 물립니다.
                   위 사다리(청산 후 대체)와 자본 모델이 반대입니다.</span>
+                </details>
                 </details>
               </div>
               <div class="flex justify-end">
@@ -1261,6 +1283,7 @@
                 </button>
               </div>
             </div>
+            </details>
           </div>
         </details>
       </div>

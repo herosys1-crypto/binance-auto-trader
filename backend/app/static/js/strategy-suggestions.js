@@ -1127,6 +1127,11 @@ if (typeof window !== 'undefined') {
     renderBbSplitPreview();
     return;
   }
+  // Fix 280: 세팅 값이 바뀌면 접힌 요약도 같이 바뀌어야 한다
+  if (ev.target && ['v219-daily-limit', 'v219-ladder', 'v219-pyramid-capital',
+      'v219-capital', 'bbsplit-enabled'].indexOf(ev.target.id) >= 0) {
+    renderSettingsFoldSummary();
+  }
   if (!ev.target || ev.target.id !== 'v219-ladder') return;
     const parts = String(ev.target.value || '').split(',').map(x => x.trim()).filter(Boolean);
     const prev = document.getElementById('v219-ladder-preview');
@@ -1404,10 +1409,40 @@ if (typeof window !== 'undefined') {
   });
 }
 
+// 📁 Fix 280 (2026-09-02 사장님 "이 메뉴도 간략하게 표시하고 선택하면 볼수 있게"):
+//   접힌 세팅 카드의 **요약 한 줄**. 접은 채로도 지금 값이 보여야 한다 —
+//   안 보이면 사장님이 매번 펴서 확인해야 하고, 그러면 접은 의미가 없다.
+function renderSettingsFoldSummary() {
+  try {
+    const val = (id) => {
+      const el = document.getElementById(id);
+      return el && el.value != null ? String(el.value).trim() : '';
+    };
+    const s1 = document.getElementById('v219-settings-sum');
+    if (s1) {
+      const p = [];
+      if (val('v219-daily-limit')) p.push('동시 ' + val('v219-daily-limit'));
+      if (val('v219-ladder')) p.push('사다리 ' + val('v219-ladder'));
+      if (val('v219-pyramid-capital')) p.push('피라미딩 ' + val('v219-pyramid-capital'));
+      s1.textContent = p.length ? p.join(' · ') : '불러오는 중…';
+    }
+    const s2 = document.getElementById('bbsplit-sum');
+    if (s2) {
+      const en = val('bbsplit-enabled');
+      const p = [en === '1' ? '▶️ 켬' : (en === '0' ? '⏹️ 끔' : '⏳')];
+      if (val('bbsplit-max')) p.push('상한 ' + val('bbsplit-max'));
+      if (val('bbsplit-capitals')) p.push(val('bbsplit-capitals'));
+      if (val('bbsplit-sl-roi')) p.push('손절 -' + val('bbsplit-sl-roi') + '%');
+      s2.textContent = p.join(' · ');
+    }
+  } catch (e) { /* 요약은 보조 정보 — 실패해도 세팅 화면을 막지 않는다 */ }
+}
+
 // 📊 Fix 181: 볼밴 분할 미리보기 — 입력한 자본으로 총액·최대 손실을 즉시 보여준다.
 //   손절이 ROI -10% 이므로 최대 손실 = 총 투입 × 10%. 숫자가 눈앞에 있어야
 //   2000,4000,6000 같은 값을 무심코 넣는 사고를 막을 수 있다 (실제로 한 번 났다).
 function renderBbSplitPreview() {
+  renderSettingsFoldSummary();   // Fix 280
   try {
     const capEl = document.getElementById('bbsplit-capitals');
     const prev = document.getElementById('bbsplit-preview');
