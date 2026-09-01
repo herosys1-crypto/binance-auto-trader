@@ -656,6 +656,22 @@ def start_scheduler() -> None:
         id="auto_short_at_top", replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🎯 Fix 267 (2026-09-01 사장님): 급등 정점 SHORT 사다리 — 이기면 늘리고 지면 다시
+    #   사장님: "당일 급등하는 1위 10위까지만 모니터링 ... 최고점에 조정 시작할 심볼에
+    #            1단계 500 진입 ... 당연히 첫진입부터 성공해서 포지션 추가를 하고 싶은거야"
+    #   🚨 **기본 OFF** (SystemSetting surge_ladder_mode = off|shadow|on).
+    #      랭킹 계열 워커 7종에 enable 게이트가 하나도 없어서, 명시하지 않으면
+    #      배포 즉시 자금이 나간다. 이 워커는 스스로 모드를 확인하고 off 면 즉시 반환한다.
+    #   신고점 추적이 필요하므로 30초 주기 (15m 봉 안에서 극값을 놓치지 않도록).
+    def _surge_peak_ladder():
+        from app.workers.surge_peak_ladder_worker import run_surge_peak_ladder_once
+        run_surge_peak_ladder_once()
+    scheduler.add_job(
+        guarded_job("surge_peak_ladder", 25, _surge_peak_ladder),
+        trigger=IntervalTrigger(seconds=30),
+        id="surge_peak_ladder", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     def _pump_top_detector_v219():
         from app.workers.pump_top_detector_worker import run_pump_top_detector
         run_pump_top_detector()
