@@ -883,6 +883,21 @@ def run_realtime_reentry() -> dict:
         #    자본은 1건당 1단계 금액이므로 상한이 명확하고, 사장님이
         #    슬롯 수를 SystemSetting 으로 바로 줄일 수 있다.
         # ══════════════════════════════════════════════════════════════
+        # 💰 Fix 264: 잔액이 바닥나면 후보를 훑어봐야 전부 실패한다.
+        #   조기 종료해 캔들·지표 API 낭비를 멈춘다. 플래그는 TTL 로 저절로 풀린다.
+        try:
+            from app.core.redis_client import get_redis_client as _grc264
+            from app.services.balance_guard import check_balance_block as _bal_block
+            _blocked, _bal_d = _bal_block(_grc264())
+            if _blocked:
+                return _finish(
+                    f"💰 가용 잔액 부족 — 필요 {_bal_d.get('required')} / "
+                    f"가용 {_bal_d.get('available')} USDT "
+                    f"(출처 {_bal_d.get('source')}) = 진입 시도 일시 중단"
+                )
+        except Exception as _bg_e:
+            logger.debug("[RT_REENTRY+Fix264] 잔액 가드 조회 실패 (계속): %s", _bg_e)
+
         _re_slots = _get_reentry_concurrent_slots(db)
         _re_active = _count_active_reentry(db)
         _re_room = _re_slots - _re_active

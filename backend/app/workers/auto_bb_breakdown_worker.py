@@ -1682,20 +1682,53 @@ def _create_auto_bb_strategy(
         logger.warning("[auto_bb_breakdown] %s %s: 현재가 없음 = skip", symbol, side)
         return None
 
-    strategy = svc.create_strategy_instance(
-        user_id=1,
-        exchange_account_id=1,
-        strategy_template_id=tpl.id,
-        symbol=symbol,
-        side=side,
-        start_price=start_price,  # 필수 (preview 계산!)
-        leverage_override=int(cfg.get("leverage", 2)),
-        retry_after_liquidation_enabled=bool(cfg.get("retry_after_liquidation_enabled", False)),
-        retry_trigger_pct=(
-            Decimal(str(cfg.get("retry_trigger_pct", 10)))
-            if cfg.get("retry_trigger_pct") else None
-        ),
-    )
+    # ══════════════════════════════════════════════════════════════════
+    # 💰 Fix 264 (2026-09-01): 잔액 부족은 **예외가 아니라 상태**다.
+    #
+    # 실측: availableBalance 46.73 USDT 인데 재진입이 150 을 시도 →
+    #   ValueError 가 매 사이클 전체 스택트레이스와 함께 올라왔고,
+    #   워커 집계에는 `entry_exception` 으로만 잡혀 원인이 안 보였다.
+    #   (사이클 요약의 `fail=0` 은 사실이 아니었다.)
+    #
+    # 이제: 짧은 TTL 플래그를 남기고 None 을 돌려준다. 호출자는 이미
+    #   `if not new_strategy` 경로를 갖고 있으므로 정상 skip 으로 흐른다.
+    #   워커는 사이클 앞에서 그 플래그를 보고 조기 종료해 API 낭비를 멈춘다.
+    # ══════════════════════════════════════════════════════════════════
+    try:
+        strategy = svc.create_strategy_instance(
+            user_id=1,
+            exchange_account_id=1,
+            strategy_template_id=tpl.id,
+            symbol=symbol,
+            side=side,
+            start_price=start_price,  # 필수 (preview 계산!)
+            leverage_override=int(cfg.get("leverage", 2)),
+            retry_after_liquidation_enabled=bool(cfg.get("retry_after_liquidation_enabled", False)),
+            retry_trigger_pct=(
+                Decimal(str(cfg.get("retry_trigger_pct", 10)))
+                if cfg.get("retry_trigger_pct") else None
+            ),
+        )
+    except ValueError as _bal_e:
+        from app.services.balance_guard import (
+            is_insufficient_balance_error as _is_bal,
+            mark_insufficient_balance as _mark_bal,
+        )
+        if not _is_bal(_bal_e):
+            raise
+        try:
+            from app.core.redis_client import get_redis_client
+            _mark_bal(
+                get_redis_client(), _bal_e,
+                source=f"_create_auto_bb_strategy {symbol} {side}", db=db,
+            )
+        except Exception as _mk_e:
+            logger.warning("[Fix264] 잔액 부족 기록 실패 (진입은 어차피 skip): %s", _mk_e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None
 
     # 🌟 Fix 52 P1 사장님 (2026-08-24): 신 자동 진입 = SL 강제 -5%!
     # 사장님 verbatim (v219+ 스마트 마틴게일 사상): "짧은 손절후 적당히 시점에

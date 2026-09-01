@@ -1319,6 +1319,25 @@ def run_auto_long_at_bottom_once() -> dict:
         remaining = daily_limit - active_cnt
         logger.info("[auto_long_bottom+Fix112] %s", _why)
 
+        # 💰 Fix 264: 가용 잔액이 바닥나면 스캔해봐야 전부 생성 실패다.
+        #   조기 종료해 캔들·지표 API 낭비를 멈춘다 (플래그는 TTL 로 자동 해제).
+        try:
+            from app.core.redis_client import get_redis_client as _grc264
+            from app.services.balance_guard import check_balance_block as _bal_block
+            _blocked264, _bal_d264 = _bal_block(_grc264())
+            if _blocked264:
+                _note264 = (
+                    f"💰 가용 잔액 부족 — 필요 {_bal_d264.get('required')} / "
+                    f"가용 {_bal_d264.get('available')} USDT = 스캔 중단"
+                )
+                logger.warning("[auto_long_bottom+Fix264] %s", _note264)
+                return {
+                    "note": _note264, "entered": 0, "spec": SPEC_VERSION,
+                    "active": active_cnt, "limit": daily_limit,
+                }
+        except Exception as _bg_e264:
+            logger.debug("[auto_long_bottom+Fix264] 잔액 가드 조회 실패 (계속): %s", _bg_e264)
+
         # 2. mainnet 계정!
         account = db.execute(
             select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
