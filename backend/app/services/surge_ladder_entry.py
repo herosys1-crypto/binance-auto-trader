@@ -207,7 +207,10 @@ def create_surge_position(
     now = datetime.now(timezone.utc)
     cap = Decimal(str(capital))
     tpl = StrategyTemplate(
-        name=f"{template_prefix}_{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S')}_A{attempt_no}",
+        # 🚨 Fix 290 (감사 발견): 이름이 UNIQUE 인데 **초 단위**라 같은 초에 같은 심볼로
+        #   두 번 불리면 flush 가 IntegrityError 를 던지고, 롤백이 없어 세션이 오염돼
+        #   그 사이클의 남은 진입이 전멸한다. 마이크로초까지 넣어 충돌을 없앤다.
+        name=f"{template_prefix}_{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S_%f')}_A{attempt_no}",
         strategy_type=strategy_type,
         side=side,
         leverage=int(leverage),
@@ -227,7 +230,13 @@ def create_surge_position(
         is_active=True,
     )
     db.add(tpl)
-    db.flush()
+    try:
+        db.flush()
+    except Exception as e:
+        # Fix 290: 템플릿 생성 실패는 이 심볼만 건너뛴다 — 세션을 오염된 채 두지 않는다
+        db.rollback()
+        logger.warning("[surge_entry] %s 템플릿 생성 실패 (건너뜀): %s", symbol, e)
+        return None
 
     try:
         from app.services.strategy_service import StrategyService
@@ -302,6 +311,20 @@ def create_surge_position(
         ).start_stage1(strategy.id)
     except Exception as e:
         logger.warning("[surge_entry] ❌ %s 실 진입 실패 (좀비 정리): %s", symbol, e)
+        # 🚨 Fix 289 (감사 발견): 진짜 마진 부족은 여기로 올라온다 (PreflightCheckFailed).
+        #   위쪽 ValueError 핸들러만 잔액 가드를 켰기 때문에, 이 경로에서는 Fix 264 가
+        #   **한 번도 발동하지 않았다** = 가용잔액이 바닥나도 15분마다 무한 재시도하며
+        #   트레이스백만 쌓인다 (2026-08-31 「가용잔액 46.73」 사건과 같은 모양).
+        try:
+            from app.services.balance_guard import (
+                is_insufficient_balance_error, mark_insufficient_balance,
+            )
+            if is_insufficient_balance_error(e):
+                from app.core.redis_client import get_redis_client
+                mark_insufficient_balance(
+                    get_redis_client(), e, source=f"surge_entry {symbol}", db=db)
+        except Exception as _ge:
+            logger.debug("[surge_entry] 잔액 가드 기록 실패: %s", _ge)
         try:
             strategy.status = "STOPPED"
             strategy.last_error_message = str(e)[:500]

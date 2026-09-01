@@ -53,6 +53,16 @@ LEVERAGE = 2
 # 🚨 Fix 281: 백테스트 가정(TP +5% ROI)에 맞춘다. pump_split(Fix 205)과 같은 모양.
 TP_PERCENTS = (5.0, 10.0, 15.0, 20.0)
 TRAILING_PCT = 3.0
+# 🚨 Fix 287 (2026-09-02, 감사 발견): 백테스트는 **최대 48시간 보유**를 가정했는데
+#   시스템에 시간 기반 청산이 하나도 없다 (time_reverse_exit 는 스케줄러에서 주석 처리).
+#   TP(+5%)에도 SL(-10%)에도 안 닿는 포지션이 전용 슬롯 3개를 영구 점유한다.
+MAX_HOLD_HOURS_KEY = "bb_mid_line_max_hold_hours"
+MAX_HOLD_HOURS_DEFAULT = 48.0
+# 🚨 Fix 288: 백테스트 하네스는 같은 심볼 재진입에 **32봉(=8시간) 쿨다운**을 뒀다.
+#   실서비스에 그게 없으면 손절당한 심볼에 다음 15분봉에서 곧바로 다시 들어간다
+#   = 측정한 표본과 다른 매매가 된다.
+COOLDOWN_HOURS_KEY = "bb_mid_line_cooldown_hours"
+COOLDOWN_HOURS_DEFAULT = 8.0
 
 STRATEGY_TYPE = "bb_mid_line"
 TEMPLATE_PREFIX = "BB_MIDLINE"
@@ -83,6 +93,101 @@ def _setting(db, key: str, default):
 def _mode(db) -> str:
     v = str(_setting(db, MODE_KEY, MODE_DEFAULT)).lower()
     return v if v in ("off", "shadow", "on") else MODE_DEFAULT
+
+
+def _close_expired(db, max_hold_hours: float) -> int:
+    """Fix 287 — 보유 시간이 지난 BB_MIDLINE 포지션을 전량 시장가 청산한다.
+
+    ⚠️ **이 전략 전용**이다. time_reverse_exit(4시간)를 그냥 켜면 전 전략에 적용돼
+       다른 전략들이 통째로 다른 매매가 된다 (그래서 꺼져 있다 — Fix 198).
+    """
+    if not max_hold_hours or max_hold_hours <= 0:
+        return 0
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from app.core.strategy_status import ACTIVE_LIKE
+    from app.models.strategy_instance import StrategyInstance
+    from app.models.strategy_template import StrategyTemplate
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=float(max_hold_hours))
+    closed = 0
+    try:
+        rows = db.execute(
+            select(StrategyInstance)
+            .join(StrategyTemplate,
+                  StrategyTemplate.id == StrategyInstance.strategy_template_id)
+            .where(StrategyTemplate.name.ilike(f"{TEMPLATE_PREFIX}%"))
+            .where(StrategyInstance.status.in_(tuple(ACTIVE_LIKE)))
+            .where(StrategyInstance.current_position_qty.isnot(None))
+            .where(StrategyInstance.current_position_qty != 0)
+        ).scalars().all()
+    except Exception as e:
+        logger.warning("[bb_mid] Fix287 조회 실패: %s", e)
+        return 0
+
+    for si in rows:
+        started = getattr(si, "started_at", None)
+        if started is None:
+            continue                       # 아직 체결 전 = 시간 판정 불가
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        if started > cutoff:
+            continue
+        qty = abs(float(si.current_position_qty or 0))
+        if qty <= 0:
+            continue
+        try:
+            from decimal import Decimal
+
+            from app.services.execution_service import ExecutionService
+            ExecutionService(db).emergency_close_position(
+                si.id, quantity=Decimal(str(qty)))
+            si.last_error_message = (
+                f"[Fix287] 최대 보유 {max_hold_hours:g}시간 초과 청산 ({SPEC})")
+            db.commit()
+            closed += 1
+            logger.warning("[bb_mid] ⏰ #%s %s %s — 보유 %.1f시간 초과 전량 청산",
+                           si.id, si.symbol, si.side,
+                           (datetime.now(timezone.utc) - started).total_seconds() / 3600)
+        except Exception as e:
+            db.rollback()
+            logger.warning("[bb_mid] Fix287 #%s 청산 실패: %s", si.id, e)
+    return closed
+
+
+def _in_cooldown(db, symbol: str, side: str, hours: float) -> bool:
+    """Fix 288 — 같은 심볼·방향에 최근 진입이 있었는가 (하네스의 32봉 쿨다운)."""
+    if not hours or hours <= 0:
+        return False
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import select
+
+    from app.models.strategy_instance import StrategyInstance
+    from app.models.strategy_template import StrategyTemplate
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=float(hours))
+    try:
+        row = db.execute(
+            select(StrategyInstance.created_at)
+            .join(StrategyTemplate,
+                  StrategyTemplate.id == StrategyInstance.strategy_template_id)
+            .where(StrategyTemplate.name.ilike(f"{TEMPLATE_PREFIX}%"))
+            .where(StrategyInstance.symbol == symbol)
+            .where(StrategyInstance.side == side)
+            .order_by(StrategyInstance.id.desc()).limit(1)
+        ).scalar_one_or_none()
+    except Exception as e:
+        # 🚨 조회 실패 = 쿨다운 중으로 간주 (fail-closed). 자본이 나가는 판정이다.
+        logger.warning("[bb_mid] Fix288 조회 실패 = 쿨다운으로 간주: %s", e)
+        return True
+    if row is None:
+        return False
+    if row.tzinfo is None:
+        row = row.replace(tzinfo=timezone.utc)
+    return row > cutoff
 
 
 def run_bb_mid_line_once() -> dict:
@@ -126,6 +231,10 @@ def run_bb_mid_line_once() -> dict:
         capital = float(_setting(db, CAPITAL_KEY, CAPITAL_DEFAULT))
         sl_price = float(_setting(db, SL_PRICE_PCT_KEY, SL_PRICE_PCT_DEFAULT))
         cap_n = int(_setting(db, MAX_CONCURRENT_KEY, MAX_CONCURRENT_DEFAULT))
+        max_hold = float(_setting(db, MAX_HOLD_HOURS_KEY, MAX_HOLD_HOURS_DEFAULT))
+        cool_h = float(_setting(db, COOLDOWN_HOURS_KEY, COOLDOWN_HOURS_DEFAULT))
+        # Fix 287: 보유 시간 초과분을 **먼저** 정리한다 (슬롯을 비우고 시작)
+        out["closed_expired"] = _close_expired(db, max_hold) if mode == "on" else 0
 
         # 패턴별 스위치 — 실측 통과분만 기본 ON (bb_mid_line.PATTERN_DEFAULT_ON)
         on_map = {p: bool(_setting(db, f"bb_mid_line_{p}_enabled",
@@ -184,7 +293,9 @@ def run_bb_mid_line_once() -> dict:
                 ref: dict[str, Any] = {}
                 for tf in ("1h", "4h"):
                     try:
-                        ok, d = check_hist_rising(bc, sym, side, tf)
+                        # Fix 291: 15m 트리거와 같이 **완료봉**으로 본다
+                        ok, d = check_hist_rising(bc, sym, side, tf,
+                                                  use_completed=True)
                         ref[tf] = {"my_side_rising": ok, **(d or {})}
                     except Exception as e:
                         ref[tf] = {"error": str(e)[:120]}
@@ -232,6 +343,13 @@ def run_bb_mid_line_once() -> dict:
 
                 if mode != "on":
                     _blk("shadow")
+                    continue
+
+                # Fix 288: 같은 심볼 재진입 쿨다운 (하네스가 32봉 = 8시간을 뒀다)
+                if _in_cooldown(db, sym, side, cool_h):
+                    _blk("cooldown")
+                    logger.info("[bb_mid] ⏳ %s %s — 최근 %g시간 내 진입 있음 (쿨다운)",
+                                sym, side, cool_h)
                     continue
 
                 # ── 실제 진입 ────────────────────────────────────────────

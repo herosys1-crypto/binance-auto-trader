@@ -221,3 +221,60 @@ def test_필수_4H게이트는_fail_closed():
     )
     assert "if ok4 is False:" not in src
     ast.parse(src)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fix 287~291 — 감사 확정 발견 처리
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_보유시간_상한과_쿨다운이_하네스와_같다():
+    """백테스트 하네스: HOLD=192봉(48시간) / COOL=32봉(8시간).
+    실서비스가 다르면 측정한 표본과 다른 매매가 된다."""
+    from app.workers import bb_mid_line_worker as W
+    assert W.MAX_HOLD_HOURS_DEFAULT == 48.0     # 192봉 x 15분
+    assert W.COOLDOWN_HOURS_DEFAULT == 8.0      # 32봉 x 15분
+
+
+def test_쿨다운_조회실패는_쿨다운으로_간주():
+    """자본이 나가는 판정 = fail-closed."""
+    from app.workers.bb_mid_line_worker import _in_cooldown
+
+    class _Boom:
+        def execute(self, *_a, **_k):
+            raise RuntimeError("db down")
+
+    assert _in_cooldown(_Boom(), "XUSDT", "SHORT", 8.0) is True
+    # 0 시간이면 검사 자체를 안 한다
+    assert _in_cooldown(_Boom(), "XUSDT", "SHORT", 0) is False
+
+
+def test_보유시간_0이면_아무것도_닫지_않는다():
+    from app.workers.bb_mid_line_worker import _close_expired
+    assert _close_expired(None, 0) == 0
+    assert _close_expired(None, -1) == 0
+
+
+def test_템플릿_이름에_마이크로초가_들어간다():
+    """이름이 UNIQUE 인데 초 단위면 같은 초 두 번 호출에 IntegrityError."""
+    src = ENTRY.read_text(encoding="utf-8")
+    assert "%Y%m%d_%H%M%S_%f" in src, "초 단위 이름은 같은 초 충돌을 못 막는다"
+    assert "db.rollback()" in src.split("db.add(tpl)")[1][:400], (
+        "flush 실패 시 롤백이 없으면 세션이 오염돼 그 사이클 남은 진입이 전멸한다"
+    )
+
+
+def test_잔액부족이_이_경로에서도_가드를_켠다():
+    """PreflightCheckFailed 는 ValueError 가 아니라 위쪽 핸들러를 안 탄다."""
+    src = ENTRY.read_text(encoding="utf-8")
+    tail = src.split("실 진입 실패 (좀비 정리)")[1][:900]
+    assert "is_insufficient_balance_error" in tail
+    assert "mark_insufficient_balance" in tail
+
+
+def test_4H게이트_완료봉_옵션은_기본_꺼짐():
+    """기존 호출자(Fix 270/273)의 동작을 재측정 없이 바꾸지 않는다."""
+    import inspect
+    from app.services.trend_4h_gate import check_hist_rising
+    assert inspect.signature(check_hist_rising).parameters["use_completed"].default is False
+    src = (ROOT / "app" / "workers" / "bb_mid_line_worker.py").read_text(encoding="utf-8")
+    assert "use_completed=True" in src, "중단선은 15m 트리거와 같이 완료봉을 써야 한다"

@@ -169,7 +169,8 @@ def check_trend_4h(bc, symbol: str, side: str) -> tuple[bool, str, dict[str, Any
 PYRAMID_TFS: tuple[str, ...] = ("4h", "15m")
 
 
-def check_hist_rising(bc, symbol: str, side: str, tf: str) -> tuple[bool | None, dict[str, Any]]:
+def check_hist_rising(bc, symbol: str, side: str, tf: str,
+                      *, use_completed: bool = False) -> tuple[bool | None, dict[str, Any]]:
     """해당 봉의 MACD hist 가 **내 편 방향으로 상승 중**인가.
 
     Returns:
@@ -181,7 +182,13 @@ def check_hist_rising(bc, symbol: str, side: str, tf: str) -> tuple[bool | None,
         if not kl or len(kl) < 40:
             d["reason"] = "봉 부족"
             return None, d
-        h = _macd_hist([float(k[4]) for k in kl])
+        # 🚨 Fix 291 (감사 발견): use_completed=True 면 **진행 중 봉을 잘라낸다**.
+        #   15분 트리거는 완료봉만 쓰는데(Fix 216) 게이트만 진행 중 봉을 보면,
+        #   봉 중간에 판정이 뒤집혀 측정과 다른 표본에서 주문이 나간다.
+        #   ⚠️ 기본값은 False = **기존 호출자(Fix 270/273) 동작 무변경**.
+        #      그쪽도 같은 어긋남이 있지만, 켜진 전략의 동작을 재측정 없이 바꾸지 않는다.
+        _kl = kl[:-1] if (use_completed and len(kl) > 40) else kl
+        h = _macd_hist([float(k[4]) for k in _kl])
         if h is None or len(h) < 2:
             d["reason"] = "MACD 계산 불가"
             return None, d
