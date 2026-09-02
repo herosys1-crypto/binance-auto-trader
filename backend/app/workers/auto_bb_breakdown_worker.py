@@ -1741,6 +1741,61 @@ def _create_auto_bb_strategy(
     _stage3_cap = capitals[2] if _is_obv_hold else None
     _stage2_trig = Decimal(str(_obv_trig2)) if _is_obv_hold else None
     _stage3_trig = Decimal(str(_obv_trig3)) if _is_obv_hold else None
+    # ═══════════════════════════════════════════════════════════════════
+    # 🎯 Fix 299 (2026-09-02 사장님): **변동성 연동 TP1**
+    #
+    #   "급등락하는 심볼투자는 tp1 +15%, 매우 안정적은 상위심볼은 +5%나 +3% 등등
+    #    낮은 익절을 만들어 **경우의 수를 가져가야해**"
+    #   "볼밴 처음에는 tp1 +5%에서 시작을 제안했었어. 시스템이 제대로 운영이 되지않아
+    #    로직을 변경하고 tp1 +15% 유지한거야"  ← 15% 는 임시값이었다
+    #
+    #   실측 30일: 설계 R=3.00 인데 **실효 R=1.01**. 607건 중 ROI +15% 도달이
+    #   **3건(0.5%)** 뿐이라 나머지는 ±4% 에서 끝난다. 닿지 않는 TP1 은 소용없다.
+    #
+    #   구간별 기대값 (도달률 x TP + 미도달 x 손절):
+    #     |24h| <5%   TP3 -0.30 / TP15 **-4.30**
+    #     5~10%       TP3 +0.27 / TP15 -2.43
+    #     10~15%      TP3 +0.53 / TP15 -0.94
+    #     **15~30%**  TP3 -0.06 / TP15 **+0.51**  ← TP15 가 최선인 유일한 구간
+    #
+    #   ⚠️ 기본 OFF (헌법 161). `adaptive_tp_enabled=1` 로만 켜진다.
+    #   ⚠️ 24h 를 못 받으면 **급등락 쪽(높은 TP)** 으로 간다 — 낮은 TP 로 잘못 내리면
+    #      큰 파도를 조기 익절해 버리고 그건 되돌릴 수 없다.
+    # ═══════════════════════════════════════════════════════════════════
+    try:
+        from app.services.adaptive_tp import (
+            adaptive_tp_enabled as _atp_on, pick_tp1 as _atp_pick,
+            tp_ladder_from_tp1 as _atp_ladder,
+        )
+        if _atp_on(db):
+            _chg = None
+            try:
+                from app.core.crypto import decrypt_text as _dt299
+                from app.integrations.binance.client import BinanceClient as _BC299
+                from app.models.exchange_account import ExchangeAccount as _EA299
+                _acc299 = db.get(_EA299, 1)
+                if _acc299 is not None:
+                    _t299 = _BC299(
+                        api_key=_dt299(_acc299.api_key_enc),
+                        api_secret=_dt299(_acc299.api_secret_enc),
+                        is_testnet=_acc299.is_testnet,
+                    ).get_24hr_ticker(symbol=symbol)
+                    if isinstance(_t299, list):
+                        _t299 = _t299[0] if _t299 else None
+                    if _t299:
+                        _chg = float(_t299.get("priceChangePercent") or 0)
+            except Exception as _e299t:
+                logger.debug("[Fix299] %s 티커 실패 (급등락 기준 적용): %s", symbol, _e299t)
+            _tp1, _why299, _d299 = _atp_pick(db, _chg)
+            _lad = _atp_ladder(_tp1, 4)
+            for _i, _v in enumerate(_lad, start=1):
+                cfg[f"tp{_i}_percent"] = _v
+            cfg["_adaptive_tp1"] = _tp1          # 아래 인스턴스 override 에서 쓴다
+            logger.info("[Fix299/적응TP] %s %s — %s | 사다리 %s",
+                        symbol, side, _why299, _lad)
+    except Exception as _e299:
+        logger.warning("[Fix299] 적응 TP 오류 (기존 TP 유지): %s", _e299)
+
     tpl = StrategyTemplate(
         name=f"AUTO_BB_{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S')}{_tpl_name_suffix}",
         strategy_type=f"auto_bb_break{strategy_type_suffix}",  # 🎯 v203: 재진입 정보!
@@ -1836,6 +1891,21 @@ def _create_auto_bb_strategy(
     # 이전 (v225): SL -80% = 청산 직전까지 방치 → 단일 사고 -400 USDT+ 위험!
     # 신 (Fix 52 P1): SL -5% = 손실 최소화 + 재도전 가능! (SHORT도 강제 ON!)
     # ⚠️ OBV_HOLD 예외 = 오래 버티기 = 아래 _apply_obv_hold_settings에서 별도 처리!
+    # 🚨 Fix 299 (Fix 205 함정 재적용): 적응 TP1 을 **인스턴스에도** 박는다.
+    #   strategy_service 가 생성 시 tp1_pct_override = TP1_PCT_DEFAULT(15) 를
+    #   모든 전략에 넣는다. 템플릿만 바꾸면 그 override 가 이겨서 무효가 된다.
+    #   (2026-08-29 볼밴에서 실제로 났던 사고 — Fix 205)
+    try:
+        _atp1 = cfg.get("_adaptive_tp1")
+        if _atp1:
+            strategy.tp1_pct_override = Decimal(str(_atp1))
+            db.commit()
+            logger.info("[Fix299/적응TP] #%s tp1_pct_override = %s%% (템플릿+인스턴스 둘 다)",
+                        strategy.id, _atp1)
+    except Exception as _e299o:
+        logger.warning("[Fix299] tp1 override 실패 (기본 15%% 유지): %s", _e299o)
+        db.rollback()
+
     if not _is_obv_hold:
         try:
             strategy.force_sl_enabled_override = True
