@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 #   손절이 -5% ROI(레버리지 반영) 이므로 익절 트리거도 「같은 자」로 재야 대칭이다.
 #   옛 값 2.0 은 raw 가격 변동률이라 2x 레버리지에서 ROI 4% 를 뜻했다 = 기준 불일치.
 MIN_UNREALIZED_ROI_PCT = 5.0       # ROI 기준 (= 가격변동 × 레버리지)
+SETTING_TRIGGER_ROI = "sajangnim_pyramid_trigger_roi"   # Fix 300: 설정으로 덮는다
 MIN_UNREALIZED_PNL_PCT = 2.0       # (레거시 상수 = 다른 곳 참조 방지 위해 유지)
 MIN_SUSTAIN_PCT = 0.5              # v220: 1.0 → 0.5 (더 빨리 발동!)
 PEAK_HOLD_TOLERANCE_PCT = 2.5      # v220: 1.5 → 2.5 (변동성 관대!)
@@ -275,6 +276,54 @@ def _indicator_gate_enabled(db) -> bool:
         return True                          # fail-safe = 조건을 거는 쪽
 
 
+
+def _trigger_roi(db) -> float:
+    """🎯 Fix 300 (2026-09-03 사장님 지시) — 추가 진입 트리거 ROI 를 설정으로 뺀다.
+
+    사장님: "추가 트리거가 ROI +5% 인데 안정 종목 TP1 이 3% 면 추가 전에 익절됩니다.
+             이것도 그러면 **+2%부터 진행**하면 될것 같아"
+
+    ## 실측 (상승50 ∪ 하락50, 15m 1000봉, Fix 299 적응TP 적용, 전체 흐름 시뮬)
+
+        트리거      총 손익      전반      후반    과적합   추가횟수  1차승률
+        +2.0%     +556.27  +171.86  +309.60     OK      168     54%
+        +2.5%     +610.28  +167.58  +345.74     OK      142      -
+        +3.0%     +578.31  +187.49  +409.81     OK      101      -
+        +5.0%     +656.95  +113.47  +512.66     OK       63     61%
+
+    두 가지가 동시에 사실이다:
+
+    1. **사장님이 지적한 「추가 전에 익절」은 일어나지 않는다.** TP1 은 물량의 25%만
+       닫으므로 나머지 75%가 그대로 ROI 5% 까지 간다. 실측 63회 붙었다.
+    2. **그래도 낮추면 추가가 2.7배(63→168회) 붙는다.** 사장님 사상
+       「잘되면 추가 2번 진입해서 수익을 올린다」에 더 부합한다.
+
+    다만 총 손익은 -100.68 낮고 1차 승률이 61%→54% 로 떨어진다. 덜 확실한 자리에
+    물량을 키우면 되돌림에서 **커진 물량**이 손절을 맞기 때문이다.
+    2% 도 과적합 검사(표본 절반 양쪽 양수)는 통과하므로 위험한 값은 아니다.
+
+    그래서 **코드 기본값은 측정 최선인 5.0 을 유지**하고, 사장님 지시값 2.0 은
+    설정 행으로 넣는다. 되돌리기 = 설정 행 삭제 한 줄.
+    """
+    from app.models.system_setting import SystemSetting
+    try:
+        row = db.get(SystemSetting, SETTING_TRIGGER_ROI)
+        if row is None or row.value is None or not str(row.value).strip():
+            return MIN_UNREALIZED_ROI_PCT
+        v = float(str(row.value).strip())
+        if v < 0.5 or v > 50.0:
+            logger.warning(
+                "[Fix300] %s=%s 범위밖(0.5~50) → 기본 %.1f",
+                SETTING_TRIGGER_ROI, v, MIN_UNREALIZED_ROI_PCT,
+            )
+            return MIN_UNREALIZED_ROI_PCT
+        return v
+    except Exception as e:
+        logger.warning("[Fix300] %s 조회 실패 → 기본 %.1f: %s",
+                       SETTING_TRIGGER_ROI, MIN_UNREALIZED_ROI_PCT, e)
+        return MIN_UNREALIZED_ROI_PCT
+
+
 def run_success_pyramiding() -> dict:
     """매 30초 = 익절중 심볼 = 강한 지속 신호 시 = 원 자본으로 추가 진입!"""
     db: Session = SessionLocal()
@@ -315,6 +364,9 @@ def run_success_pyramiding() -> dict:
                     return {"note": "pyramid_enabled=0 (사장님 명시 OFF)", "entered": 0}
             except (TypeError, ValueError):
                 pass    # 손상값이면 켜진 것으로 본다 (사장님이 원하는 기본 동작)
+
+        # 🎯 Fix 300: 추가 트리거 ROI (런당 1회 조회 — 후보마다 DB 를 때리지 않는다)
+        _trig = _trigger_roi(db)
 
         from app.workers.auto_bb_breakdown_worker import (
             _count_used_slots, _create_auto_bb_strategy,
@@ -493,7 +545,7 @@ def run_success_pyramiding() -> dict:
                 _lev = 1.0
             roi_pct = price_pct * _lev
 
-            if roi_pct < MIN_UNREALIZED_ROI_PCT:
+            if roi_pct < _trig:
                 skipped += 1
                 _bump("roi_below_trigger")
                 continue
@@ -567,7 +619,7 @@ def run_success_pyramiding() -> dict:
                             logger.info(
                                 "[Fix155/헌법68] %s SHORT 24h=%+.1f%% 이지만 "
                                 "수익 중(ROI>=%.1f%%) 포지션 추가 = 반대매매 아님 → 허용",
-                                si.symbol, ch, MIN_UNREALIZED_ROI_PCT,
+                                si.symbol, ch, _trig,
                             )
                             _bump("chg24_extreme_allowed")
                         if si.side == "LONG" and ch < -15.0:
@@ -814,7 +866,7 @@ def run_success_pyramiding() -> dict:
         logger.info(
             "[SUCCESS_PYRAMID] 완료: entered=%d skipped=%d | 사유: %s "
             "(트리거 ROI>=%.1f%% 추가자본=사다리2칸 최대%d회)",
-            entered, skipped, _reason_str, MIN_UNREALIZED_ROI_PCT, MAX_PYRAMID_COUNT,
+            entered, skipped, _reason_str, _trig, MAX_PYRAMID_COUNT,
         )
         return {"entered": entered, "skipped": skipped, "results": results}
     except Exception as e:
