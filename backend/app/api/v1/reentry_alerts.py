@@ -212,3 +212,107 @@ def update_reentry_settings(
     db.commit()
 
     return get_reentry_settings(db, user_id)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 🌟 Fix 301 (2026-09-03 사장님): 재진입 「대기 모니터링」을 화면에 남긴다.
+#
+#   사장님: "대기 모니터링도 전략 인스턴스에 남겨두고 종료 숨김 처럼
+#            선택적으로 볼수 있게 하는것도 좋은것 같아"
+#
+#   🚨 사장님 1안(「99% 청산하고 남겨두기」)은 쓸 수 없다 — 두 가지 이유가
+#      각각 단독으로 치명적이다:
+#
+#      (1) **재진입이 완전히 막힌다.** `realtime_reentry_worker` 는 후보를
+#          `status ∈ TERMINAL_STATUSES`(청산 완료)에서 고르고, 그 뒤
+#          `if symbol in active_syms: continue` 로 활성 심볼을 건너뛴다.
+#          1% 를 남기면 상태가 STAGE*_OPEN 으로 살아 있어 **두 관문에 다 걸린다.**
+#      (2) **dust orphan.** 거래소 MIN_NOTIONAL 은 5.00 USDT 인데
+#          1차 진입 10 USDT × 레버 2 = 명목 20, 그 1% 는 **0.20 USDT** 다.
+#          reduceOnly 주문이 거부되어 영원히 청산할 수 없다.
+#          (이 저장소는 dust orphan 하나로 계정 전체가 막힌 전력이 있다.)
+#
+#   그래서 포지션은 지금처럼 100% 청산하고, **감시 중인 심볼과 각각이 왜
+#   아직 진입하지 않았는지**를 워커가 매 주기 Redis 에 남겨 여기서 보여준다.
+#   재진입 판정은 손대지 않는다 — 보이기만 한다.
+# ═══════════════════════════════════════════════════════════════════════
+
+# 사유 코드 → 사장님이 읽는 말
+_REASON_KO: dict[str, str] = {
+    "already_active": "이미 포지션 보유 중",
+    "rebound_too_small": "아직 반등이 부족",
+    "stop_wait_too_short": "손절 직후 대기 시간 중",
+    "no_stop_price": "기준가 결손 (조사 필요)",
+    "max_reentry_count": "재진입 횟수 소진",
+    "ladder_exhausted_reset_to_stage1": "사다리 소진 → 1단계로",
+    "learning_gate": "학습 게이트가 보류",
+    "concurrent_limit_full": "동시 보유 상한 가득",
+    "slot_exhausted_midloop": "재진입 슬롯 소진",
+    "24h_change_limit": "24h 변동 제한",
+    "stage3_wait_too_short": "3단계 대기 시간 중",
+    "indicator_fetch_error": "지표 조회 실패",
+    "no_exchange_account": "거래소 계정 없음",
+}
+
+
+def _reason_ko(code: str | None) -> str:
+    if not code:
+        return "조건 확인 중"
+    if code.startswith("indicator_gate_need"):
+        return f"지표 반전 부족 ({code.replace('indicator_gate_need', '')}개 필요)"
+    if code.startswith("capital_none"):
+        return "자본 계산 실패 (조사 필요)"
+    return _REASON_KO.get(code, code)
+
+
+@router.get("/watchlist")
+def get_reentry_watchlist(user_id: int = Depends(get_current_user_id)) -> dict:
+    """지금 재진입 감시 중인 심볼과 각각의 대기 사유.
+
+    화면은 이걸 「종료 숨김」과 **독립된 목록**으로 띄운다 — 청산된 전략은
+    숨겨도, 재진입 감시는 계속 보여야 하기 때문이다.
+
+    비어 있음(`items: []`)에는 두 가지 뜻이 있어 구분해 돌려준다:
+      · `stale=false` → 워커가 돌았고 감시 대상이 실제로 없다
+      · `stale=true`  → 워커 기록이 없다/만료됐다 (= 워커가 안 돌고 있을 수 있다)
+    """
+    empty = {"items": [], "count": 0, "waiting": 0, "entered": 0,
+             "updated_at": None, "stale": True, "note": None}
+    try:
+        from app.core.redis_client import get_redis_client
+        from app.workers.realtime_reentry_worker import WATCHLIST_REDIS_KEY
+        r = get_redis_client()
+        if not r:
+            return empty
+        raw = r.get(WATCHLIST_REDIS_KEY)
+        if not raw:
+            return empty
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        data = json.loads(raw)
+    except Exception as e:                       # 화면이 죽으면 안 된다
+        logger.warning("[Fix301] watchlist 조회 실패: %s", e)
+        return empty
+
+    items = []
+    for it in (data.get("items") or []):
+        if not isinstance(it, dict):
+            continue
+        code = it.get("reason")
+        items.append({
+            **it,
+            "reason_code": code,
+            "reason_ko": "진입함" if it.get("entered") else _reason_ko(code),
+        })
+    # 대기 중을 위로, 그 안에서는 반등이 많이 온 순 (= 곧 들어갈 것부터)
+    items.sort(key=lambda x: (x.get("entered") or False,
+                              -(x.get("rebound_pct") or -999)))
+    return {
+        "items": items,
+        "count": len(items),
+        "waiting": sum(1 for x in items if not x.get("entered")),
+        "entered": sum(1 for x in items if x.get("entered")),
+        "updated_at": data.get("updated_at"),
+        "note": data.get("note"),
+        "stale": False,
+    }

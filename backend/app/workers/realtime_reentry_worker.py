@@ -55,6 +55,10 @@ logger = logging.getLogger(__name__)
 # 🎯 Fix 102 완화 + 정밀 (2026-08-26!):
 # 사장님 verbatim: "손절후 2단계 진입이 없는것 같이 이것도 보조지표를 최대한 활용해"
 # → Fix 99 = 너무 엄격 = 진입 X! → 완화 + 다이버전스/BB 위치 정밀 활용!
+# 🌟 Fix 301: 재진입 대기 목록 (화면용). API 가 이 키를 읽는다.
+WATCHLIST_REDIS_KEY = "reentry:watchlist"
+WATCHLIST_TTL_SEC = 300        # 주기 30초의 여유 배수 — 죽으면 조용히 비워진다
+
 REBOUND_PCT_MIN_SAFETY = 1.0    # 🎯 Fix 102 C: 1.5 → 1.0 (완화! 진입 가능성 확보!)
 MAX_HOURLY_REENTRIES = 5        # 1h 최대 5건 (남발 방지!)
 STAGE3_MIN_WAIT_HOURS = 4.0     # 3단계 = 충분히 대기!
@@ -806,9 +810,51 @@ def run_realtime_reentry() -> dict:
     entry_error_kinds: dict[str, int] = {}
     entry_errors: list[str] = []
 
+    # ═══════════════════════════════════════════════════════════════════
+    # 🌟 Fix 301 (2026-09-03 사장님): **재진입 대기 목록을 화면에 남긴다.**
+    #
+    #   사장님: "재진입 모니터링을 첫진입과 두번째 진입에서 실패하면 지금은 모두
+    #            청산인데 99% 청산하고 다음 포지션을 진입하는 로직은 어떤가?
+    #            ... 대기 모니터링도 전략 인스턴스에 남겨두고 종료 숨김 처럼
+    #            선택적으로 볼수 있게 하는것도 좋은것 같아"
+    #
+    #   🚨 **99% 잔량 방식은 재진입을 완전히 막는다.** 이 워커는 후보를
+    #      `status ∈ TERMINAL_STATUSES` (= 청산 완료) 에서 고르고,
+    #      그 다음 `if symbol in active_syms: continue` 로 **활성 심볼을 건너뛴다**.
+    #      1% 를 남기면 상태가 STAGE*_OPEN 으로 살아 있어 두 관문에 다 걸린다.
+    #      → 그 심볼은 재진입 후보에서 **영구 제외**된다. 의도와 정반대다.
+    #
+    #   추가로 거래소 제약도 있다 — MIN_NOTIONAL 5.00 USDT.
+    #      1차 진입 10 USDT × 레버 2 = 명목 20, 그 1% 는 **0.20 USDT**.
+    #      reduceOnly 주문이 거부되어 **영원히 못 파는 dust** 가 된다
+    #      (이 저장소는 dust orphan 하나로 계정 전체가 막힌 적이 있다).
+    #
+    #   그래서 사장님이 2안으로 제시하신 「대기 모니터링을 남기고 선택적으로
+    #   보기」를 택한다. 포지션은 지금처럼 100% 청산하고, **감시 중인 심볼과
+    #   각각이 왜 아직 진입 안 했는지**를 심볼별로 남겨 화면에 띄운다.
+    #
+    #   지금까지 사유는 `skip_reasons` 집계 카운트뿐이라 「어느 심볼이 왜」를
+    #   알 수 없었다 — 사장님이 나에게 물어야만 알 수 있었다 (Fix 200 과 같은 성격).
+    # ═══════════════════════════════════════════════════════════════════
+    _watch: list[dict] = []              # 심볼별 판정 기록 (화면용)
+    # ⚠️ 홀더를 **리스트 1칸**으로 둔다. 클로저가 dict 객체 하나를 잡아 두면
+    #    루프마다 그 객체를 재사용하게 되고, `_watch` 에 담긴 것들이 전부
+    #    같은 dict 를 가리켜 마지막 심볼의 값으로 덮인다.
+    _cur_ref: list[dict | None] = [None]
+
+    def _note(**kv) -> None:
+        """현재 심볼 카드에 판정 재료를 붙인다 (루프 밖 호출은 무시)."""
+        _c = _cur_ref[0]
+        if _c is not None:
+            _c.update(kv)
+
     def _bump(reason: str) -> None:
         """🎯 Fix 103 A: skip 사유 집계 = 완료 로그 1줄로 원인 판정!"""
         skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+        # Fix 301: 집계와 **함께** 심볼별로도 남긴다 (마지막 사유 = 막힌 이유)
+        _c = _cur_ref[0]
+        if _c is not None:
+            _c["reason"] = reason
 
     def _finish(note: str, level: str = "warning", **extra) -> dict:
         """🚨 Fix 103 A+B: 모든 종료 경로 = 반드시 여기로! (silent return 0건!)"""
@@ -832,6 +878,30 @@ def run_realtime_reentry() -> dict:
             "results": results,
         }
         payload.update(extra)
+
+        # ═══════════════════════════════════════════════════════════════
+        # 🌟 Fix 301: 재진입 대기 목록을 Redis 에 남긴다 (화면이 읽는다).
+        #   ⚠️ 기록 실패가 재진입을 막으면 안 된다 — 전부 fail-open.
+        #   TTL 은 주기(30초)의 여유 배수. 워커가 죽으면 화면도 조용히 비워져
+        #   「낡은 목록을 최신인 척」 보여주지 않는다.
+        # ═══════════════════════════════════════════════════════════════
+        payload["watchlist"] = _watch
+        try:
+            import json as _json
+            from app.core.redis_client import get_redis_client as _grc
+            _grc().setex(
+                WATCHLIST_REDIS_KEY, WATCHLIST_TTL_SEC,
+                _json.dumps({
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "note": note,
+                    "candidates": candidates,
+                    "entered": entered_fail + entered_success,
+                    "items": _watch,
+                }, default=str),
+            )
+        except Exception as _we:
+            logger.debug("[Fix301] watchlist 기록 실패 (계속): %s", _we)
+
         _log = getattr(logger, level, logger.warning)
         _log(
             "[RT_REENTRY] 완료: scanned=%d candidates=%d reentered=%d "
@@ -1028,6 +1098,16 @@ def run_realtime_reentry() -> dict:
 
         for (symbol, side), si in latest_by_sym.items():
             scanned += 1
+            # Fix 301: 이 심볼의 판정 카드를 만들고 `_watch` 에 **그 객체를** 넣는다.
+            #          사본을 넣으면 이후 `_bump`/`_note` 갱신이 반영되지 않는다.
+            _card = {
+                "symbol": symbol, "side": side,
+                "strategy_id": si.id,
+                "stopped_at": si.stopped_at.isoformat() if si.stopped_at else None,
+                "reason": None, "entered": False,
+            }
+            _watch.append(_card)
+            _cur_ref[0] = _card
             if remaining <= 0:
                 # 🎯 Fix 103 A: 루프 중단도 무로그 금지!
                 logger.warning(
@@ -1260,6 +1340,11 @@ def run_realtime_reentry() -> dict:
                 _rebound_pct = (mp - _stop_price) / _stop_price * 100
             else:
                 _rebound_pct = (_stop_price - mp) / _stop_price * 100
+
+            # Fix 301: 「얼마나 더 반등해야 들어가는가」를 화면에 보여준다
+            _note(stop_price=float(_stop_price), mark=float(mp),
+                  rebound_pct=round(float(_rebound_pct), 3),
+                  rebound_need_pct=float(REBOUND_PCT_MIN_SAFETY))
 
             # (a) 최소 안전선 = 역방향 폭주 방지 (0.5% 만!)
             if _rebound_pct < REBOUND_PCT_MIN_SAFETY:
@@ -1671,6 +1756,8 @@ def run_realtime_reentry() -> dict:
                 else:
                     _increment_reentry_count(symbol, side)
                     entered_fail += 1
+                _note(entered=True, reason=None,
+                      new_strategy_id=new_strategy.id)      # Fix 301
 
                 db.commit()
                 remaining -= 1
