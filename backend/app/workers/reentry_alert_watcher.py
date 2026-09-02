@@ -242,6 +242,43 @@ def run_reentry_alert_watcher(db: Session, decrypt_text) -> dict:
                     "detail": detail,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
+                # ═══════════════════════════════════════════════════════
+                # 📊 Fix 309 (2026-09-03 사장님 「끄고 하루 지켜보자」):
+                #   알람을 `market_observations` 에도 남긴다.
+                #
+                #   Redis 알람은 TTL 24h 라 만료되면 **사후 검증이 불가능**하다.
+                #   이 테이블은 `market_observation_worker` 가 1h/4h/24h 뒤 가격을
+                #   자동으로 채워 준다(실측 최근 7일 2,600건 전부 채워짐).
+                #   → 「그 알람대로 진입했으면 어땠는가」를 나중에 숫자로 볼 수 있다.
+                #
+                #   🚨 기록 실패가 알람을 막으면 안 된다 — 전부 fail-open.
+                # ═══════════════════════════════════════════════════════
+                try:
+                    from app.models.market_observation import MarketObservation
+                    _px = None
+                    for _k in ("mark_price", "price", "last_price", "current_price"):
+                        if isinstance(detail, dict) and detail.get(_k):
+                            _px = Decimal(str(detail[_k]))
+                            break
+                    db.add(MarketObservation(
+                        symbol=strategy.symbol,
+                        observed_at=datetime.now(timezone.utc),
+                        price_at_obs=_px,
+                        side_would_have=strategy.side,
+                        market_context={
+                            "source": "obv_reentry_alert",     # 이 값으로 골라 본다
+                            "prev_strategy_id": strategy.id,
+                            "detail": detail if isinstance(detail, dict) else {},
+                        },
+                    ))
+                    db.commit()
+                except Exception as _obs_e:
+                    logger.debug("[Fix309] 관찰 기록 실패 (계속): %s", _obs_e)
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+
                 if _redis:
                     _alert_key = "reentry_alert:" + hashlib.md5(
                         f"{strategy.exchange_account_id}:{strategy.symbol}".encode()
