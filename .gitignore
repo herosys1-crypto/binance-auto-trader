@@ -104,3 +104,7 @@ option_c_diff.txt
 sync-from-office.ps1
 �̾-�����ϱ�.md
 .claude/worktrees/
+
+# 배치 실행기 상태/산출물 (Fix 292)
+tools/batch/.state/
+docs/batch-out/
