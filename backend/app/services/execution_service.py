@@ -279,33 +279,7 @@ class ExecutionService:
         #       확정하지 못하면 단계 진입 자체를 하지 않는다. 실제 자금이므로
         #       "반쯤 실행된 상태"가 가장 위험하다.
         # ═══════════════════════════════════════════════════════════════════
-        from app.services.stage_trim import compute_trim, trim_enabled
-        if trim_enabled(self.db) and stage_no > 1:
-            _cur_qty = self._fetch_current_position_qty(strategy)
-            if _cur_qty and _cur_qty > 0:
-                _mark = self._fetch_current_mark_price(strategy.symbol)
-                _close_qty, _keep_qty, _why = compute_trim(
-                    self.db, strategy.symbol, _cur_qty, _mark,
-                )
-                if _close_qty > 0:
-                    logger.warning(
-                        "[Fix304] %s #%s 단계%s 진입 전 정리: %s",
-                        strategy.symbol, strategy.id, stage_no, _why,
-                    )
-                    # 부분 청산이면 status 가 유지되고 미체결도 살아 있다
-                    # (execution_service 2026-06-08 fix). 전략이 죽지 않는다.
-                    self.emergency_close_position(strategy.id, quantity=_close_qty)
-                    self.db.refresh(strategy)
-                else:
-                    # 청산할 수 없다 = 평단 오염을 막을 방법이 없다 → 진입 중단
-                    logger.warning(
-                        "[Fix304] %s #%s 단계%s 진입 **중단** — 정리 불가: %s",
-                        strategy.symbol, strategy.id, stage_no, _why,
-                    )
-                    raise ValueError(
-                        f"[Fix304] {strategy.symbol} 단계 {stage_no} 진입 전 "
-                        f"「10 USDT 남기고 청산」을 실행할 수 없어 중단합니다: {_why}"
-                    )
+        self._trim_before_stage(strategy, stage_no)   # ✂️ Fix 304
 
         order = self._place_stage_entry_order(strategy, stage_plan, force_market=force_market)
         strategy.current_stage = stage_no
@@ -317,7 +291,10 @@ class ExecutionService:
         self.db.refresh(order)
         return order
 
-    def emergency_close_position(self, strategy_id: int, *, quantity: Decimal) -> Order:
+    def emergency_close_position(
+        self, strategy_id: int, *, quantity: Decimal,
+        for_stage_transition: bool = False,
+    ) -> Order:
         # 2026-05-08 (사용자 #120 DYDXUSDT orphan 사례): emergency_close_position 이
         # 같은 strategy 에 대해 동시 다발 호출되면 (manual stop API + tp_sl_orchestrator
         # + admin cleanup 등) 같은 양 (예: 245 DYDX) 이 여러 번 청산되어 거래소-DB
@@ -327,7 +304,10 @@ class ExecutionService:
         lock_key = f"lock:strategy:{strategy_id}:emergency_close"
         try:
             with redis_lock(redis_client, lock_key, ttl_seconds=5, wait_timeout_seconds=0):
-                return self._emergency_close_position_locked(strategy_id, quantity=quantity)
+                return self._emergency_close_position_locked(
+                    strategy_id, quantity=quantity,
+                    for_stage_transition=for_stage_transition,
+                )
         except RedisLockError:
             logger.warning(
                 "emergency_close_position skipped — duplicate call within 5s window: strategy_id=%s qty=%s",
@@ -337,7 +317,10 @@ class ExecutionService:
                 f"strategy_id={strategy_id} 의 청산이 이미 진행 중 — 중복 호출 차단"
             )
 
-    def _emergency_close_position_locked(self, strategy_id: int, *, quantity: Decimal) -> Order:
+    def _emergency_close_position_locked(
+        self, strategy_id: int, *, quantity: Decimal,
+        for_stage_transition: bool = False,
+    ) -> Order:
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
             raise ValueError("Strategy not found")
@@ -391,7 +374,11 @@ class ExecutionService:
         #   옛 silent bug: MARKET close만 발송 + 미체결 LIMIT 방치 =
         #   긴급 종료 후 = LIMIT 도달 시 = 좀비 신 포지션 생성!
         #   부분 청산 (TP) = 정상 유지 필요 = 취소 X.
-        if is_full_close:
+        # 🚨 Fix 305: **단계 전환 중**의 전량 폴백에서는 취소하지 않는다.
+        #   여기서 cancel_all_orders 를 하면 아직 안 걸린 2·3단계 LIMIT 이
+        #   지워져 사다리가 통째로 사라진다. 곧바로 다음 단계를 발주하므로
+        #   좀비 위험(v127 이 막으려던 것)도 없다.
+        if is_full_close and not for_stage_transition:
             try:
                 self.client.cancel_all_orders(symbol=strategy.symbol)
                 logger.info(
@@ -423,8 +410,19 @@ class ExecutionService:
         from app.core.strategy_status import TOTAL_TP_LEVELS as _TPMAX   # Fix 186
         _TP_PARTIAL_SET = {f"TP{n}_DONE_PARTIAL" for n in range(1, _TPMAX + 1)}
         if strategy.status not in ({"COMPLETED", "REENTRY_READY", "STOPPED"} | _TP_PARTIAL_SET):
-            if is_full_close:
+            if is_full_close and not for_stage_transition:
                 strategy.status = "STOPPING"  # 풀 청산 = STOPPING 정상
+            elif is_full_close:
+                # 🚨 Fix 305: 단계 전환 중이면 STOPPING 을 찍지 않는다.
+                #   reconcile 의 `_detect_stopping_stuck` 은 포지션 수량을 보지 않고
+                #   status/updated_at 만으로 5분 뒤 MANUAL_CLEANUP_REQUIRED 를 찍는다.
+                #   또 이 사이 EXIT 체결이 도착하면 stream_service 가 STOPPING →
+                #   STOPPED(터미널)로 확정해 전략이 죽는다. 호출자가 곧바로
+                #   STAGE{n}_OPEN_PENDING 으로 덮으므로 여기서는 손대지 않는다.
+                logger.info(
+                    "[Fix305] %s #%s 단계 전환 중 전량 정리 — STOPPING 마킹 생략",
+                    strategy.symbol, strategy.id,
+                )
             # 부분 청산 = 옛 status (예: STAGE4_OPEN) 유지 = 사장님 자율 운영 보장
         self.db.commit()
         # A03 fix (audit 2026-05-02): 거래소 호출 실패 시 명시적 로깅 + RiskEvent 기록.
@@ -666,8 +664,19 @@ class ExecutionService:
             return
 
         # ===== 자동 재시도 1회 =====
-        # 잔량 (post_position) 기반으로 재청산 — 부분 체결 케이스 정확히 처리.
-        retry_qty = post_position
+        # 🚨 Fix 305 (2026-09-03): 재시도가 **요청분을 넘지 않게** 캡한다.
+        #
+        #   옛 코드 `retry_qty = post_position` 은 「거래소에 남은 전부」를 던졌다.
+        #   부분 청산에서는 이것이 치명적이다 — Fix 304 가 「10 USDT 만 남기고」
+        #   95% 를 닫았는데 1차 검증이 미달로 보면, 재시도가 **남기려던 10 USDT
+        #   까지 전부** 시장가로 던진다. 포지션이 0 이 되면 stream_service 가
+        #   전량 청산으로 보고 REENTRY_READY 로 종료시킨다.
+        #   = 사양이 조용히 「100% 청산 후 종료」로 바뀐다.
+        #
+        #   올바른 재시도량 = 「요청했는데 아직 안 닫힌 만큼」이다.
+        _reduced = (initial_position or Decimal("0")) - post_position
+        _shortfall = (requested_close_qty or Decimal("0")) - _reduced
+        retry_qty = min(post_position, _shortfall if _shortfall > 0 else Decimal("0"))
         if retry_qty <= 0:
             # 사실 닫혔는데 race 로 0 반환된 케이스 — 성공으로 간주.
             return
@@ -1243,6 +1252,11 @@ class ExecutionService:
                 f"계산된 수량이 0 — capital={capital} USDT, current_price={current_price}, leverage={leverage}x. "
                 "더 큰 자본 입력 필요."
             )
+        # ✂️ Fix 305: 수동 「▶ 다음 단계」도 자동과 **같은 정리**를 거친다.
+        #   여기를 빠뜨리면 사장님이 손으로 누른 단계만 물타기가 된다
+        #   (「게이트는 있는데 한 경로가 안 부른다」 — 이 저장소의 반복 사고).
+        self._trim_before_stage(strategy, stage_no)
+
         # Phase 3 (2026-05-21 사장님 요구): 사전 마진 검증 — -2027 거래소 거절 사전 차단.
         self._preflight_entry_market_check(
             strategy, qty=qty, current_price=current_price,
@@ -1693,6 +1707,51 @@ class ExecutionService:
             strategy.id, strategy.symbol, side, quantity, limit_price, mark, lower, upper,
         )
         return self.client.place_order(payload)
+
+    def _trim_before_stage(self, strategy, stage_no: int) -> None:
+        """✂️ Fix 304 — 다음 단계 진입 **전에** 「10 USDT 만 남기고」 정리한다.
+
+        🚨 Fix 305: 자동(`trigger_next_stage`) 과 수동(`enter_stage_at_market`)
+           **양쪽**이 이 메서드를 부른다. 한쪽만 걸면 그 경로로 물타기가
+           그대로 일어난다 — 이 저장소가 반복해서 당한 함정이다.
+        """
+        from app.services.stage_trim import compute_trim, trim_enabled
+        if trim_enabled(self.db) and stage_no > 1:
+            _cur_qty = self._fetch_current_position_qty(strategy)
+            if _cur_qty and _cur_qty > 0:
+                # 🚨 Fix 305: `_fetch_current_mark_price` 는 실패 시 **예외를 던진다.**
+                #   감싸지 않으면 시세 조회 실패가 곧바로 단계 진입 실패 알림이 된다
+                #   (15초 주기 워커라 하루 5,760건).
+                try:
+                    _mark = self._fetch_current_mark_price(strategy.symbol)
+                except Exception as _me:
+                    _mark = None
+                    logger.warning("[Fix304] %s 현재가 조회 실패: %s", strategy.symbol, _me)
+                _close_qty, _keep_qty, _why = compute_trim(
+                    self.db, strategy.symbol, _cur_qty, _mark,
+                )
+                if _close_qty > 0:
+                    logger.warning(
+                        "[Fix304] %s #%s 단계%s 진입 전 정리: %s",
+                        strategy.symbol, strategy.id, stage_no, _why,
+                    )
+                    # 부분 청산이면 status 가 유지되고 미체결도 살아 있다
+                    # (execution_service 2026-06-08 fix). 전략이 죽지 않는다.
+                    self.emergency_close_position(
+                        strategy.id, quantity=_close_qty,
+                        for_stage_transition=True,      # Fix 305
+                    )
+                    self.db.refresh(strategy)
+                else:
+                    # 청산할 수 없다 = 평단 오염을 막을 방법이 없다 → 진입 중단
+                    logger.warning(
+                        "[Fix304] %s #%s 단계%s 진입 **중단** — 정리 불가: %s",
+                        strategy.symbol, strategy.id, stage_no, _why,
+                    )
+                    raise ValueError(
+                        f"[Fix304] {strategy.symbol} 단계 {stage_no} 진입 전 "
+                        f"「10 USDT 남기고 청산」을 실행할 수 없어 중단합니다: {_why}"
+                    )
 
     def _assert_symbol_allowed(self, strategy) -> None:
         """🚫 Fix 303 (2026-09-03 사장님 「이것들은 포지션에서 제외해줘」).

@@ -1430,13 +1430,40 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     continue  # 일반 「시스템 오류」 spam 알림 안 보냄
                 _stat["err"] += 1
                 logger.exception(f"[stage-trigger] failed for strategy #{strategy.id}: {e}")
+                # ═══════════════════════════════════════════════════════
+                # 🚨 Fix 305 (2026-09-03): **알림 쿨다운.**
+                #
+                #   이 워커는 15초 주기다(`scheduler_runner` IntervalTrigger).
+                #   같은 전략이 같은 이유로 계속 실패하면 하루 5,760건이 나간다.
+                #   Fix 304(단계 전 정리)는 fail-CLOSED 라 정리 불가 시 매번
+                #   여기로 오므로, 쿨다운이 없으면 알림이 폭주한다.
+                #
+                #   마진부족(-2019) 경로에는 이미 쿨다운이 있는데(위 분기)
+                #   일반 오류 경로에는 없었다.
+                # ═══════════════════════════════════════════════════════
+                _alert_ok = True
                 try:
-                    NotificationService(db).send_system_alert(
-                        title="[시스템 오류] Stage 자동 진입 실패",
-                        body=f"strategy_id={strategy.id} stage={next_stage_no if next_stage_no is not None else '?'} error={e}",
-                    )
+                    from app.core.redis_client import get_redis_client as _grc
+                    _r = _grc()
+                    if _r is not None:
+                        _k = f"stage_trigger_alert:{strategy.id}:{next_stage_no}"
+                        # 30분에 1건만. set(nx=True) 가 False 면 이미 보냈다.
+                        _alert_ok = bool(_r.set(_k, "1", nx=True, ex=1800))
                 except Exception:
-                    pass
+                    _alert_ok = True      # 판정 실패 시엔 보낸다 (놓치지 않는다)
+                if _alert_ok:
+                    try:
+                        NotificationService(db).send_system_alert(
+                            title="[시스템 오류] Stage 자동 진입 실패",
+                            body=(
+                                f"strategy_id={strategy.id} "
+                                f"stage={next_stage_no if next_stage_no is not None else '?'} "
+                                f"error={e} "
+                                f"(같은 전략·단계는 30분에 1건만 알립니다)"
+                            ),
+                        )
+                    except Exception:
+                        pass
         # 🎯 Fix 121: 완료 로그 (헌법 80 = 무로그 종료 금지)
         # 📐 Fix 260: 정점-주춤 카운터를 **매 사이클** 남긴다.
         #   🚨 Fix 255/258 의 교훈 — 적중했을 때만 로그를 남기면

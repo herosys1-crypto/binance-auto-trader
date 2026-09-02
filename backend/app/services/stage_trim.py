@@ -156,7 +156,14 @@ def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
         keep_qty = min_qty
 
     # 잔량이 보유량 이상이면 남길 것이 없다 → 전량 청산
+    #
+    # 🚨 Fix 305: 전량 청산도 **발주 가능해야** 한다. 보유 명목이 MIN_NOTIONAL
+    #    미만이면 그 주문 자체가 거부되므로 시도하지 않는다 (단위 테스트가 잡음).
     if keep_qty >= qty:
+        if qty * px < min_notional:
+            return zero, qty, (
+                f"보유 명목 {qty * px:.2f} < MIN_NOTIONAL {min_notional} → 청산 불가 (미실행)"
+            )
         return qty, zero, (
             f"잔량 목표({target:.2f} USDT = {keep_qty}) >= 보유 {qty} → 전량 청산"
         )
@@ -166,9 +173,22 @@ def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
         return zero, qty, "청산 수량이 stepSize 미만 → 미실행"
 
     # 🚨 청산 주문 자체도 MIN_NOTIONAL 을 넘어야 발주된다.
+    #
+    #   Fix 305 (2026-09-03): 여기서 그냥 미실행으로 돌려주면 **영구 정지**가 된다.
+    #   보유 명목이 「목표 잔량 ~ 목표 잔량 + MIN_NOTIONAL」 구간(대략 11~16 USDT)
+    #   이면 매 사이클 이 분기에 걸리고, 호출자는 fail-CLOSED 라 단계 진입을
+    #   중단한다. 사다리가 그 심볼에서 영원히 멈춘다.
+    #
+    #   이 구간은 애초에 「10 을 남길 만큼 크지 않은 포지션」이다. 전량 청산으로
+    #   떨어뜨리는 것이 맞다 — 잔량 0 이면 dust 문제도 없다.
     if close_qty * px < min_notional:
+        if qty * px >= min_notional:
+            return qty, zero, (
+                f"청산분 명목 {close_qty * px:.2f} < MIN_NOTIONAL {min_notional} "
+                f"→ 잔량을 남길 수 없는 크기 = 전량 청산"
+            )
         return zero, qty, (
-            f"청산분 명목 {close_qty * px:.2f} < MIN_NOTIONAL {min_notional} → 미실행"
+            f"보유 명목 {qty * px:.2f} < MIN_NOTIONAL {min_notional} → 청산 불가 (미실행)"
         )
 
     return close_qty, keep_qty, (

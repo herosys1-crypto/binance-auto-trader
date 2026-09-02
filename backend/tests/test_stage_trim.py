@@ -114,12 +114,13 @@ def test_잔량은_stepSize_배수다():
         assert close % step == 0, close
 
 
-def test_청산분이_최소주문금액_미만이면_실행하지_않는다():
-    """🚨 발주해도 거부된다. 시도하면 로그만 더럽히고 상태가 어긋난다."""
+def test_청산분이_최소주문금액_미만이면_전량으로_떨어진다():
+    """🚨 Fix 305: 여기서 미실행으로 두면 그 심볼의 단계가 **영구히 멈춘다**
+    (호출자가 fail-CLOSED). 잔량을 남길 수 없는 크기이므로 전량 청산이 맞다."""
     db = _DB(sym=_Sym(D("1"), D("1"), D("5")))
-    # 보유 명목 10.5, 잔량 목표 10 → 청산분 명목 0.5 < 5
+    # 보유 명목 10.5, 잔량 목표 10 → 청산분 명목 0.5 < 5 → 전량으로
     close, keep, why = T.compute_trim(db, "X", D("21"), D("0.5"))
-    assert close == 0, why
+    assert close == D("21") and keep == 0, why
 
 
 # ── 🚨 불확실하면 아무것도 하지 않는다 ───────────────────────────────
@@ -185,9 +186,16 @@ def _fn_src(name):
 def test_다음단계_주문보다_먼저_실행된다():
     """🚨 순서가 뒤바뀌면 평단이 오염된 뒤에 청산하게 된다 = 의미 없음."""
     src = _fn_src("trigger_next_stage")
-    i_trim = src.index("if trim_enabled(self.db)")
+    i_trim = src.index("self._trim_before_stage(strategy, stage_no)")
     i_order = src.index("order = self._place_stage_entry_order(strategy, stage_plan")
     assert i_trim < i_order
+
+
+def test_수동경로도_주문보다_먼저_정리한다():
+    src = _fn_src("enter_stage_at_market")
+    assert src.index("self._trim_before_stage(strategy, stage_no)") < src.index(
+        "order = self._place_market_entry("
+    )
 
 
 def test_1단계_진입은_정리하지_않는다():
@@ -229,17 +237,16 @@ def test_1단계에는_적용하지_않는다():
 
 def test_정리_불가면_단계진입을_중단한다():
     """🚨 fail-open 하면 물타기가 그대로 일어난다 — 고치려던 것이 그대로 남는다."""
-    blk = ESRC[ESRC.index("if trim_enabled(self.db)"):]
-    blk = blk[:blk.index("order = self._place_stage_entry_order")]
-    assert "raise ValueError" in blk
-    assert "진입 **중단**" in blk
+    src = _fn_src("_trim_before_stage")
+    assert "raise ValueError" in src
+    assert "진입 **중단**" in src
 
 
 def test_부분청산_경로를_쓴다():
     """전량 청산 함수를 쓰면 전략이 죽어 「인스턴스에 남겨둬야겠어」가 깨진다."""
-    blk = ESRC[ESRC.index("if trim_enabled(self.db)"):]
-    blk = blk[:blk.index("order = self._place_stage_entry_order")]
-    assert "self.emergency_close_position(strategy.id, quantity=_close_qty)" in blk
+    src = _fn_src("_trim_before_stage")
+    assert "self.emergency_close_position(" in src
+    assert "quantity=_close_qty" in src
 
 
 def test_실측_근거가_모듈에_남아_있다():
@@ -247,3 +254,87 @@ def test_실측_근거가_모듈에_남아_있다():
     assert "-88.17%" in doc, "물타기로 생긴 실제 손실률"
     assert "dust" in doc and "MIN_NOTIONAL" in doc
     assert "reconcile_worker.py:330" in doc, "잔량이 자동 정리되지 않는다는 근거"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fix 305 — 전수 감사가 찾아낸 차단 요인 5건 (전부 실제로 확인된 것)
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_BLOCKER4_사각지대에서_영구정지하지_않는다():
+    """🚨 보유 명목이 「목표 잔량 ~ 목표+MIN_NOTIONAL」이면 청산분이
+    MIN_NOTIONAL 미만이라 미실행 → 호출자가 fail-CLOSED 라 단계가 영원히 멈춘다.
+    이 구간은 전량 청산으로 떨어져야 한다."""
+    db = _DB(sym=_Sym(D("1"), D("1"), D("5")))
+    for qty, px in ((D("24"), D("0.5")), (D("28"), D("0.5")), (D("13"), D("1"))):
+        close, keep, why = T.compute_trim(db, "X", qty, px)
+        assert close > 0, f"영구 정지: qty={qty} px={px} — {why}"
+        if keep > 0:
+            assert keep * px >= D("5"), why          # dust 안 만든다
+
+
+def test_BLOCKER4_정말_못_파는_크기면_미실행():
+    """보유 자체가 MIN_NOTIONAL 미만이면 전량 청산도 발주가 거부된다."""
+    db = _DB(sym=_Sym(D("1"), D("1"), D("5")))
+    close, _k, why = T.compute_trim(db, "X", D("8"), D("0.5"))   # 명목 4 < 5
+    assert close == 0, why
+    assert "청산 불가" in why
+
+
+def test_BLOCKER2_재시도가_요청분을_넘지_않는다():
+    """🚨 옛 코드 `retry_qty = post_position` 은 **남은 전부**를 던졌다.
+    Fix 304 가 남기려던 10 USDT 까지 사라져 전략이 종료된다."""
+    # 🚨 주석에 옛 코드를 인용해 두었으므로 **대입문**만 본다 (과잉 매칭 방지).
+    import re
+    assert not re.search(r"^\s*retry_qty = post_position\s*$", ESRC, re.M)
+    assert "_shortfall = (requested_close_qty or Decimal(\"0\")) - _reduced" in ESRC
+    assert "retry_qty = min(post_position," in ESRC
+
+
+def test_BLOCKER1_단계전환중_전량정리는_주문을_안_지운다():
+    """🚨 cancel_all_orders 가 아직 안 걸린 2·3단계 LIMIT 을 지워
+    사다리가 통째로 사라진다."""
+    assert "if is_full_close and not for_stage_transition:" in ESRC
+    assert "for_stage_transition: bool = False," in ESRC
+
+
+def test_BLOCKER1_단계전환중_STOPPING을_안_찍는다():
+    """🚨 reconcile 이 포지션 수량을 안 보고 5분 뒤 MANUAL_CLEANUP_REQUIRED 를
+    찍는다. EXIT 체결이 겹치면 STOPPED 로 확정돼 전략이 죽는다."""
+    assert "단계 전환 중 전량 정리 — STOPPING 마킹 생략" in ESRC
+
+
+def test_BLOCKER1_정리_호출이_전환플래그를_넘긴다():
+    src = _fn_src("_trim_before_stage")
+    assert "for_stage_transition=True" in src
+
+
+def test_BLOCKER3_현재가_조회_실패가_예외로_새지_않는다():
+    """🚨 `_fetch_current_mark_price` 는 실패 시 ValueError 를 던진다.
+    감싸지 않으면 시세 오류가 곧 단계 진입 실패 알림이 된다 (15초 주기)."""
+    src = _fn_src("_trim_before_stage")
+    i_try = src.index("try:\n                    _mark = self._fetch_current_mark_price")
+    i_call = src.index("_mark = self._fetch_current_mark_price")
+    assert i_try <= i_call
+    assert "except Exception as _me:" in src
+
+
+def test_BLOCKER5_수동_다음단계도_정리를_거친다():
+    """🚨 수동 「▶ 다음 단계」는 `enter_stage_at_market` 을 쓴다.
+    여기를 빠뜨리면 손으로 누른 단계만 물타기가 된다."""
+    assert "_trim_before_stage" in _fn_src("enter_stage_at_market")
+
+
+def test_자동과_수동이_같은_코드를_쓴다():
+    """두 경로가 각자 구현하면 한쪽만 고쳐지는 사고가 난다."""
+    assert ESRC.count("def _trim_before_stage") == 1
+    assert ESRC.count("self._trim_before_stage(strategy, stage_no)") == 2
+
+
+def test_알림_쿨다운이_있다():
+    """🚨 15초 주기 워커 + fail-CLOSED = 쿨다운 없으면 하루 5,760건."""
+    from app.workers import stage_trigger_worker as W
+    src = Path(W.__file__).read_text(encoding="utf-8")
+    blk = src[src.index("[시스템 오류] Stage 자동 진입 실패") - 2000:]
+    blk = blk[:blk.index("[시스템 오류] Stage 자동 진입 실패") + 1200]
+    assert "stage_trigger_alert:" in blk
+    assert "nx=True" in blk and "ex=1800" in blk
