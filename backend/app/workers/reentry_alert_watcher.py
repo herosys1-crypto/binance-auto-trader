@@ -177,10 +177,27 @@ def run_reentry_alert_watcher(db: Session, decrypt_text) -> dict:
     events = db.execute(
         select(RiskEvent)
         .where(RiskEvent.created_at >= cutoff_24h)
+        # ═══════════════════════════════════════════════════════════════
+        # 🚨 Fix 308 (2026-09-03): **생산자와 소비자의 이름이 하나도 안 겹쳤다.**
+        #
+        #   여기서 찾던 세 이름은 이 저장소 어디에서도 **기록되지 않는다**:
+        #       FORCE_SL_TRIGGERED / SL_TRIGGERED / STRATEGY_STOPPED_BY_SL  → 30일 0건
+        #   실제로 기록되는 이름은 하나뿐이다:
+        #       risk_service.py:428  event_type="FORCE_STOP_LOSS_TRIGGERED"  → 30일 369건
+        #
+        #   결과: 손절이 **369번** 났는데 이 워커는 매 사이클 `checked=0` 을 찍었다.
+        #   → 알람 큐(reentry_alerts:v1) 0건
+        #   → 그 큐를 읽는 OBV 자동 진입(auto_bb_breakdown_worker) 후보 0건
+        #   → **OBV 자동은 30일간 자동 진입이 한 건도 없었다.**
+        #      (OBV_REVERSE 80건은 전부 `_quick_` = 사장님 수동)
+        #
+        #   `auto_obv_enabled=1` 로 켜져 있었는데도 안 돈 진짜 이유가 이것이다.
+        #
+        #   옛 이름 3개는 지운다 — 한 번도 기록된 적이 없어 남겨둘 근거가 없고,
+        #   남기면 「무언가 더 잡히겠지」라는 착시를 준다.
+        # ═══════════════════════════════════════════════════════════════
         .where(RiskEvent.event_type.in_([
-            "FORCE_SL_TRIGGERED",
-            "SL_TRIGGERED",
-            "STRATEGY_STOPPED_BY_SL",
+            "FORCE_STOP_LOSS_TRIGGERED",
         ]))
     ).scalars().all()
 
