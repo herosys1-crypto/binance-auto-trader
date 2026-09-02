@@ -770,11 +770,41 @@ def get_binance_positions(
             iso_margin = Decimal(str(p.get("isolatedMargin", "0") or "0"))
         except Exception:
             iso_margin = Decimal("0")
+        # ═══════════════════════════════════════════════════════════════
+        # 🚨 Fix 302 (2026-09-03 사장님 「손실율 표기가 잘못된것 같고」)
+        #
+        #   Binance positionRisk 의 두 필드는 이름이 비슷한데 뜻이 완전히 다르다:
+        #     · isolatedWallet = 실제로 넣은 증거금        (손익 무관 = 고정)
+        #     · isolatedMargin = isolatedWallet + 미실현손익 (손실 나면 줄어든다)
+        #
+        #   여기서 `isolatedMargin` 을 분모로 쓰면 **손실이 커질수록 분모가 같이
+        #   작아져** 손실률이 가속 왜곡된다. 손실이 증거금에 근접하면 -100% 를
+        #   넘어 발산한다.
+        #
+        #   실측 (#2032 AKEUSDT SHORT, 2026-09-03):
+        #     isolatedWallet   300.52   ← 사장님이 실제로 넣은 증거금
+        #     isolatedMargin   150.72   ( = 300.52 - 149.80 )
+        #     미실현           -149.80
+        #     올바른 ROI       -149.80 / 300.52 = **-49.85%**
+        #     옛 표기          -149.80 / 150.72 = **-99.39%**  (거의 2배)
+        #   사장님 화면에는 -96.74% 로 떴다.
+        #
+        #   🚨 이 저장소는 v102 에서 **정확히 같은 함정**을 한 번 고쳤다
+        #      (같은 파일 위쪽 `_pr_iso_wallet` 블록). 사장님 원문:
+        #      "실투자금이 손실관련이 없어야 하는데 손실에 따라 변동".
+        #      그때 계정 요약 경로만 고치고 **이 포지션 목록 경로는 남아 있었다.**
+        # ═══════════════════════════════════════════════════════════════
+        try:
+            iso_wallet = Decimal(str(p.get("isolatedWallet", "0") or "0"))
+        except Exception:
+            iso_wallet = Decimal("0")
+        # 원 자본 우선. 없을 때만 옛 값으로 떨어진다 (구 API/필드 결손 대비).
+        iso_basis = iso_wallet if iso_wallet > 0 else iso_margin
 
-        # ROI % — Binance UI 와 일치
-        if margin_mode == "ISOLATED" and iso_margin > 0:
-            roi = upnl / iso_margin * 100
-            margin_display = iso_margin
+        # ROI % = 미실현손익 / **실제로 넣은 증거금** (Binance 앱의 ROI 와 같은 정의)
+        if margin_mode == "ISOLATED" and iso_basis > 0:
+            roi = upnl / iso_basis * 100
+            margin_display = iso_basis
         else:
             notional = abs(amt) * entry
             cross_margin = notional / leverage if leverage > 0 and notional > 0 else Decimal("0")
