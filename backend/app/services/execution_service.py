@@ -194,6 +194,39 @@ class ExecutionService:
         stage_plan = next((p for p in strategy.stage_plans if p.stage_no == 1), None)
         if not stage_plan:
             raise ValueError("Stage 1 plan not found")
+
+        # ═══════════════════════════════════════════════════════════════
+        # 📊 Fix 310 (2026-09-03 사장님): "당분간 **당일 10% 이상 상승과 하락한
+        #    심볼만** 모니터링하고 포지션에 진입하도록해줘"
+        #
+        #   🚨 **신규 진입(1단계)에만** 건다. `trigger_next_stage` 에는 걸지 않는다 —
+        #      1단계 때 12% 였다가 2단계 트리거에서 8% 로 떨어지면 사다리가 그
+        #      자리에서 영원히 멈춘다. 이미 자금이 들어간 전략을 변동률로 끊으면 안 된다.
+        #   ⚠️ 수동(`_quick_`)은 제외한다 — 사장님이 손으로 넣으신 것은 사장님 판단이다.
+        # ═══════════════════════════════════════════════════════════════
+        try:
+            from app.services.chg24_entry_gate import passes as _chg24_passes
+            _tpl_name = None
+            try:
+                from app.models.strategy_template import StrategyTemplate as _STpl
+                _t = (self.db.get(_STpl, strategy.strategy_template_id)
+                      if strategy.strategy_template_id else None)
+                _tpl_name = _t.name if _t else None
+            except Exception:
+                _tpl_name = None
+            _ok24, _why24 = _chg24_passes(
+                self.db, self.client, strategy.symbol, template_name=_tpl_name,
+            )
+        except Exception as _ge:      # 게이트 자체가 깨져도 매매를 막지 않는다
+            logger.warning("[Fix310] 게이트 오류 → 통과: %s", _ge)
+            _ok24, _why24 = True, "게이트 오류 (fail-open)"
+        if not _ok24:
+            logger.info(
+                "[Fix310] %s #%s 1단계 진입 차단 — %s",
+                strategy.symbol, strategy.id, _why24,
+            )
+            raise ValueError(f"[Fix310] {strategy.symbol} 진입 차단: {_why24}")
+
         self.ensure_isolated_margin(strategy)  # 2026-05-06 (사용자 결정): 모든 거래 ISOLATED
         self.apply_leverage(strategy)
         order = self._place_stage_entry_order(strategy, stage_plan)
