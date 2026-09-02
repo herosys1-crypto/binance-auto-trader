@@ -262,6 +262,32 @@ class StreamService:
                     #        → 다음 단계 있음 = LIQUIDATED_WAITING_RETRY (대기!)
                     #        → 없음 = REENTRY_READY (기존!)
                     #     아니면 = REENTRY_READY (기존!)
+                    # ═══════════════════════════════════════════════════════
+                    # 🚨 Fix 295 (2026-09-02): **청산가를 항상 남긴다.**
+                    #
+                    #   `last_liquidation_price` 는 재진입 워커가 「반등 시작점」을
+                    #   재는 기준가다. 그런데 지금까지 이 값을 쓰는 곳이
+                    #   아래 v131 분기 **한 곳뿐**이었다 —
+                    #   `retry_after_liquidation_enabled=True` **이면서 다음 단계가
+                    #   있을 때만**. 일반 손절(STOPPED/REENTRY_READY)은 안 채웠다.
+                    #
+                    #   결과: 재진입 후보 **19건 중 19건이 결손**이었고, 워커가
+                    #   평단(avg_entry)으로 대체해 반등률을 쟀다. 그러면 LONG 은
+                    #   「평단보다 위로 올라가야」 재진입한다 = **싸게 사는 게 아니라
+                    #   비싸게 산다**. 사장님 「짧은 손절 후 적당한 시점에 재진입」의
+                    #   정반대다. 실제로 로그가 -5.61% / -6.90% 처럼 찍히며
+                    #   16건 전부 `rebound_too_small` 로 막혀 있었다.
+                    #
+                    #   ⚠️ 여기서 남기는 값은 **실제 청산 체결가**다. 이름이
+                    #      liquidation 이지만 강제청산가가 아니라 「직전 청산가」다
+                    #      (stage_trigger_worker:486 주석도 그렇게 읽는다).
+                    # ═══════════════════════════════════════════════════════
+                    try:
+                        if order.avg_price and float(order.avg_price) > 0:
+                            strategy.last_liquidation_price = Decimal(str(order.avg_price))
+                    except Exception as _lqe:      # 기록 실패가 청산을 막으면 안 된다
+                        logger.debug("[Fix295] 청산가 기록 실패 (계속): %s", _lqe)
+
                     if strategy.status == "COMPLETED":
                         pass
                     elif strategy.status == "STOPPING":

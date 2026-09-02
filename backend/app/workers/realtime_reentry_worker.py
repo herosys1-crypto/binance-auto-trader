@@ -958,12 +958,38 @@ def run_realtime_reentry() -> dict:
                   StrategyInstance.strategy_template_id == StrategyTemplate.id)
             .where(StrategyInstance.stopped_at >= cutoff_24h)
             .where(StrategyInstance.status.in_(list(TERMINAL_STATUSES)))
+            # ═══════════════════════════════════════════════════════════
+            # 🚨 Fix 297 (2026-09-02 사장님 「손실일때 청산하고 모니터링 대기하고
+            #   진입이 없었어」): 화이트리스트가 **주력 전략을 통째로 빼고 있었다.**
+            #
+            #   최근 7일 strategy_type 별 (재진입 후보에 드는가):
+            #     auto_bb_break_*   254건  ✅
+            #     pump_split         68건  🚨 빠져 있었다  ← 사장님 주력(볼밴 분할)
+            #     DYNAMIC_LONG/SHORT 42건  (수동 `_quick_`)
+            #     bb_mid_line         7건  (오늘 신설)
+            #
+            #   오늘 손절된 25건 중 **13건이 후보에서 제외**됐다.
+            #
+            #   → `pump_split` 을 **추가**한다. 다단계 물타기 전략이라
+            #     「짧은 손절 후 적당한 시점에 재진입」 사상과 맞고, 재진입 워커에는
+            #     이미 반등 1% + 대기 3분 + 볼륨 1.3x + 지표 반전 게이트가 걸려 있다.
+            #
+            #   ⚠️ **일부러 넣지 않는 것들** (넣으면 안 되는 이유가 있다):
+            #     · DYNAMIC_* (수동) — 오늘 수동이 -124.72 를 잃었다. 자동 재진입을
+            #       붙이면 그 손실을 **자동화**한다. 사상 ⑦(욕심 제어) 정면 위반.
+            #       수동 진입은 사장님 판단이고, 그 뒤처리도 사장님 판단이어야 한다.
+            #     · bb_mid_line / surge_peak_ladder — **1회 진입 전략**이고 자기
+            #       쿨다운(8시간)·자기 재도전 사다리를 이미 갖고 있다
+            #       (services/single_entry_guard.py 참조). 남의 재진입을 얹으면
+            #       그 설계가 깨진다 — Fix 213/214/282/283 과 같은 성격이다.
+            # ═══════════════════════════════════════════════════════════
             .where(
                 or_(
                     StrategyTemplate.strategy_type.like('auto_bb_break%'),
                     StrategyTemplate.strategy_type.like('sajangnim_top%'),
                     StrategyTemplate.strategy_type.like('realtime_reentry%'),
                     StrategyTemplate.strategy_type.like('chart_pattern%'),
+                    StrategyTemplate.strategy_type.like('pump_split%'),   # Fix 297
                 )
             )
         ).scalars().all()
@@ -1125,13 +1151,49 @@ def run_realtime_reentry() -> dict:
             #    (exit_fill 이 의미상 손절가에 더 가깝지만, 기존 동작 보존을 위해 3순위!)
             # ※ 근본 원인 = stream_service ACCOUNT_UPDATE 의 ep="0.0" truthy 함정이
             #   avg_entry_price 를 0 으로 파괴 → Fix 105 C 에서 별도 fix!
+            # ═══════════════════════════════════════════════════════════
+            # 🚨 Fix 296 (2026-09-02): 위 주석이 적어 둔 것을 **코드가 안 하고 있었다.**
+            #
+            #   주석: "(SL -5% 로 청산됐으면 손절가 ≈ 평단 × 0.95, SHORT 는 × 1.05)"
+            #   코드: `_stop_price = avg_entry_price` — 환산을 **안 한다**.
+            #
+            #   그래서 LONG 이 평단 -5% 에서 손절됐어도 기준가가 「평단」이 되고,
+            #   재진입에 필요한 +1% 반등이 **평단보다 위**를 뜻하게 된다
+            #   = 손절당한 가격보다 6% 비싸게 사야 재진입 = 사장님 사상의 정반대.
+            #   실측: 재진입 후보 19건 전부 이 경로였고 16건이 rebound_too_small.
+            #
+            #   → ① 실 청산 체결가(exit_fill)를 **2순위로 올린다** — 그게 손절가 자체다.
+            #     ② 평단으로 내려가면 **손절 ROI 로 역산**한다 (주석대로).
+            #   ⚠️ Fix 295 로 앞으로는 1순위(liq)가 항상 채워지므로, 이 경로는
+            #      **과거 데이터 구제용**이다.
+            # ═══════════════════════════════════════════════════════════
             _stop_price = float(si.last_liquidation_price or 0)
             _px_src = "liq"
             if _stop_price <= 0:
-                _stop_price = float(si.avg_entry_price or 0)
-                _px_src = "avg_entry"
+                # 2순위 = 실 청산 체결가 (배치 1회 조회 = lazy)
+                if order_px_map is None:
+                    order_px_map = _build_order_price_map(db, [c.id for c in closed])
+                _exit_px = float((order_px_map.get(si.id) or {}).get("exit") or 0)
+                if _exit_px > 0:
+                    _stop_price = _exit_px
+                    _px_src = "exit_fill"
             if _stop_price <= 0:
-                # 3/4순위 = orders 실 체결가 (배치 1회 조회 = lazy!)
+                # 3순위 = 평단에서 **손절 ROI 를 역산**해 손절가를 추정한다
+                _avg = float(si.avg_entry_price or 0)
+                if _avg > 0:
+                    try:
+                        _lev = float(si.leverage or 1) or 1.0
+                        _sl_roi = float(si.force_sl_roi_override or 0)
+                        # ROI% = 가격변동% x 레버리지  →  가격변동% = ROI% / 레버
+                        _pp = abs(_sl_roi) / _lev if _sl_roi else 5.0
+                        _pp = min(max(_pp, 0.5), 50.0)      # 방어: 0.5~50%
+                    except Exception:
+                        _pp = 5.0
+                    _stop_price = _avg * ((1 - _pp / 100) if side == "LONG"
+                                          else (1 + _pp / 100))
+                    _px_src = f"avg_entry-{_pp:.1f}%"
+            if _stop_price <= 0:
+                # 4순위 = orders 진입 체결가 / 시작가
                 if order_px_map is None:
                     order_px_map = _build_order_price_map(
                         db, [c.id for c in closed],
