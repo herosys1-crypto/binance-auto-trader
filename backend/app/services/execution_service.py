@@ -260,6 +260,53 @@ class ExecutionService:
         stage_plan = next((p for p in strategy.stage_plans if p.stage_no == stage_no), None)
         if not stage_plan:
             raise ValueError(f"Stage {stage_no} plan not found")
+
+        # ═══════════════════════════════════════════════════════════════════
+        # ✂️ Fix 304 (2026-09-03 사장님): 다음 단계 진입 **전에** 기존 포지션을
+        #    「10 USDT 만 남기고」 청산한다.
+        #
+        #    사장님: "모든 단계에서 청산은 10usdt 만 남기고 모두 청산하고
+        #             다음 단계 진입하게 해줘 ... 전략 인스턴스에 남겨둬야 겠어"
+        #
+        #    이걸 켜면 단계 전환이 **물타기 → 손절 후 재진입** 으로 바뀐다.
+        #    지금은 기존 포지션을 그대로 두고 얹어서 평단이 계속 오염된다
+        #    (실측 #2032: 0.01550 → 0.02531, 5단계 손실률 -88.17%).
+        #
+        #    기본 OFF. 사장님이 `stage_trim_before_next_enabled=1` 로 켠다.
+        #
+        #    🚨 청산 실패가 다음 단계 진입을 막지 않게 한다면 **물타기가 그대로
+        #       일어난다**. 그래서 여기서는 fail-CLOSED 로 둔다 — 남길 수량을
+        #       확정하지 못하면 단계 진입 자체를 하지 않는다. 실제 자금이므로
+        #       "반쯤 실행된 상태"가 가장 위험하다.
+        # ═══════════════════════════════════════════════════════════════════
+        from app.services.stage_trim import compute_trim, trim_enabled
+        if trim_enabled(self.db) and stage_no > 1:
+            _cur_qty = self._fetch_current_position_qty(strategy)
+            if _cur_qty and _cur_qty > 0:
+                _mark = self._fetch_current_mark_price(strategy.symbol)
+                _close_qty, _keep_qty, _why = compute_trim(
+                    self.db, strategy.symbol, _cur_qty, _mark,
+                )
+                if _close_qty > 0:
+                    logger.warning(
+                        "[Fix304] %s #%s 단계%s 진입 전 정리: %s",
+                        strategy.symbol, strategy.id, stage_no, _why,
+                    )
+                    # 부분 청산이면 status 가 유지되고 미체결도 살아 있다
+                    # (execution_service 2026-06-08 fix). 전략이 죽지 않는다.
+                    self.emergency_close_position(strategy.id, quantity=_close_qty)
+                    self.db.refresh(strategy)
+                else:
+                    # 청산할 수 없다 = 평단 오염을 막을 방법이 없다 → 진입 중단
+                    logger.warning(
+                        "[Fix304] %s #%s 단계%s 진입 **중단** — 정리 불가: %s",
+                        strategy.symbol, strategy.id, stage_no, _why,
+                    )
+                    raise ValueError(
+                        f"[Fix304] {strategy.symbol} 단계 {stage_no} 진입 전 "
+                        f"「10 USDT 남기고 청산」을 실행할 수 없어 중단합니다: {_why}"
+                    )
+
         order = self._place_stage_entry_order(strategy, stage_plan, force_market=force_market)
         strategy.current_stage = stage_no
         # 2026-05-04 fix: 옵션 C 1~10단계 동적 — 이전엔 2/3/4 만 dict 있어 5+ stage 진입 시
