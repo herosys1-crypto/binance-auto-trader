@@ -352,8 +352,34 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 # 신 v131 (사장님 정확 사고!):
                 #   retry ON = STAGES_WITH_NEXT (STAGE1_OPEN 등) 상태 = 옛 로직 skip!
                 #   = 오직 LIQUIDATED_WAITING_RETRY 상태 = 신 로직으로 진입!
+                # ═══════════════════════════════════════════════════════
+                # 🚨 Fix 306 (2026-09-03): retry 모드와 **단계 정리 모드는 배타적**이다.
+                #
+                #   사장님 질문: "단계별 청산되면 왜 전략 인스턴스에 남아서
+                #                다음 단계 진입을 하지 않지?"
+                #
+                #   답이 바로 이 분기다. retry 모드를 켜면 `STAGE1_OPEN` 같은
+                #   **정상 상태를 전부 건너뛴다.** 오직 `LIQUIDATED_WAITING_RETRY`
+                #   에서만 진입하는데, 그 상태로 가려면 stream_service 에서
+                #   「전량 청산 + 다음 stage plan 존재」가 동시에 맞아야 한다.
+                #   실측 현재 그 상태 **0건** = 사다리가 한 번도 안 돌았다.
+                #
+                #   Fix 304(10 USDT 남기고 청산)는 정반대 방식이다 — 부분 청산이라
+                #   status 가 `STAGE_N_OPEN` 으로 **유지**되고, 바로 이 워커가
+                #   계속 감시해서 다음 단계로 간다.
+                #
+                #   그래서 둘을 같이 켜면 Fix 304 가 잔량을 남겨도 여기서 건너뛰어
+                #   **사다리가 영원히 멈춘다.** 정리 모드가 켜져 있으면 이 분기를
+                #   적용하지 않는다 (정리 모드가 이긴다).
+                # ═══════════════════════════════════════════════════════
                 if getattr(strategy, "retry_after_liquidation_enabled", False):
-                    if strategy.status != "LIQUIDATED_WAITING_RETRY":
+                    _trim_on = False
+                    try:
+                        from app.services.stage_trim import trim_enabled as _trim_enabled
+                        _trim_on = _trim_enabled(db)
+                    except Exception:
+                        _trim_on = False
+                    if not _trim_on and strategy.status != "LIQUIDATED_WAITING_RETRY":
                         # 옛 stage_trigger 로직 skip! (사장님 사고 = 청산 후만!)
                         continue
                 # 2026-06-01 Critical fix: STAGE_OPEN_PENDING 도 검사 대상 (Sub-account user-stream

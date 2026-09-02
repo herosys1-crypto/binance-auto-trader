@@ -56,11 +56,13 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "SETTING_ENABLED", "SETTING_KEEP_NOTIONAL",
     "KEEP_NOTIONAL_DEFAULT", "MIN_NOTIONAL_SAFETY",
-    "trim_enabled", "keep_notional", "compute_trim",
+    "SETTING_MAX_CUM_LOSS",
+    "trim_enabled", "keep_notional", "compute_trim", "cumulative_loss_exceeded",
 ]
 
 SETTING_ENABLED = "stage_trim_before_next_enabled"   # 기본 OFF (헌법 161)
 SETTING_KEEP_NOTIONAL = "stage_keep_notional_usdt"   # 사장님 「10 usdt」
+SETTING_MAX_CUM_LOSS = "stage_max_cumulative_loss_usdt"   # Fix 306: 누적 손실 상한
 
 KEEP_NOTIONAL_DEFAULT = Decimal("10")
 # 잔량이 가격 변동으로 MIN_NOTIONAL 아래로 떨어지면 나중에 못 판다.
@@ -195,3 +197,52 @@ def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
         f"{close_qty} 청산 / {keep_qty} 잔여 (명목 {keep_qty * px:.2f} USDT, "
         f"목표 {target:.2f}, MIN_NOTIONAL {min_notional})"
     )
+
+
+def cumulative_loss_exceeded(db, strategy) -> tuple[bool, str]:
+    """🚨 Fix 306 — 누적 실현 손실이 상한을 넘었는가.
+
+    사장님 2026-09-03: **"손실 그래도 계산되어야 하는거 아닌가?"**
+
+    ## 왜 필요한가
+
+    Fix 304 는 단계마다 청산하고 다음 단계로 넘어간다. 그때 평단이 리셋되므로
+    강제 손절 판정(`risk_service`)의 `pnl_ratio = raw_pnl_pct x leverage` 도
+    **0 부터 다시 시작**한다. 즉 단계를 거듭할수록 누적 손실은 커지는데
+    **손절 판정에는 한 번도 잡히지 않는다.**
+
+    사장님 3단 사다리는 「3번 지면 -60(SHORT)/-120(LONG) 에서 멈춘다」가 전제다.
+    그 멈춤을 보장하려면 **누적 실현 손실**을 봐야 한다.
+
+    ## 실측 (2026-09-03)
+
+    `cumulative_realized_loss` 는 `stream_service.py:399` 에서 EXIT 체결마다
+    누적되는데, **읽는 곳이 0곳**이었다. 주석은 "UI 표시용" 이라고 적혀 있지만
+    화면도 읽지 않았다 — 쓰기만 하는 죽은 필드였다.
+
+    ## 기본은 무제한
+
+    상한값은 전략마다·사장님 사다리마다 다르므로 임의로 정하지 않는다.
+    설정 `stage_max_cumulative_loss_usdt` 를 넣어야 작동한다 (기본 없음 = 무제한).
+    """
+    try:
+        cum = abs(Decimal(str(getattr(strategy, "cumulative_realized_loss", 0) or 0)))
+    except Exception:
+        return False, ""
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_MAX_CUM_LOSS)
+        if row is None or row.value is None or not str(row.value).strip():
+            return False, ""            # 미설정 = 무제한 (기본 동작 불변)
+        limit = Decimal(str(row.value).strip())
+    except Exception as e:
+        logger.warning("[Fix306] %s 조회 실패 → 무제한: %s", SETTING_MAX_CUM_LOSS, e)
+        return False, ""
+    if limit <= 0:
+        return False, ""
+    if cum >= limit:
+        return True, (
+            f"누적 실현 손실 {cum:.2f} USDT >= 상한 {limit:.2f} USDT "
+            f"→ 다음 단계 진입 중단"
+        )
+    return False, f"누적 손실 {cum:.2f} / {limit:.2f} USDT"

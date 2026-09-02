@@ -1715,8 +1715,24 @@ class ExecutionService:
            **양쪽**이 이 메서드를 부른다. 한쪽만 걸면 그 경로로 물타기가
            그대로 일어난다 — 이 저장소가 반복해서 당한 함정이다.
         """
-        from app.services.stage_trim import compute_trim, trim_enabled
+        from app.services.stage_trim import (
+            compute_trim, cumulative_loss_exceeded, trim_enabled,
+        )
         if trim_enabled(self.db) and stage_no > 1:
+            # 🚨 Fix 306 (사장님 「손실 그래도 계산되어야 하는거 아닌가?」)
+            #   단계마다 청산하면 평단이 리셋돼 강제 손절 ROI 도 0 부터 다시
+            #   시작한다 = 누적 손실이 아무리 커도 손절에 안 잡힌다.
+            #   사장님 사다리의 「3번 지면 멈춘다」를 **금액으로도** 보장한다.
+            #   (설정 미입력이면 무제한 = 기본 동작 불변)
+            _over, _cum_why = cumulative_loss_exceeded(self.db, strategy)
+            if _over:
+                logger.warning(
+                    "[Fix306] %s #%s 단계%s 진입 중단 — %s",
+                    strategy.symbol, strategy.id, stage_no, _cum_why,
+                )
+                raise ValueError(
+                    f"[Fix306] {strategy.symbol} 단계 {stage_no} 진입 중단: {_cum_why}"
+                )
             _cur_qty = self._fetch_current_position_qty(strategy)
             if _cur_qty and _cur_qty > 0:
                 # 🚨 Fix 305: `_fetch_current_mark_price` 는 실패 시 **예외를 던진다.**

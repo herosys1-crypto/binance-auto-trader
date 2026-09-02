@@ -169,7 +169,8 @@ def test_잔량_금액을_설정으로_바꿀_수_있다():
 
 def test_단계_전환부에_연결돼_있다():
     """상수만 만들고 안 부르면 소용없다 — 이 저장소의 반복 사고."""
-    assert "from app.services.stage_trim import compute_trim, trim_enabled" in ESRC
+    assert "from app.services.stage_trim import (" in ESRC
+    assert "compute_trim, cumulative_loss_exceeded, trim_enabled," in ESRC
     assert "if trim_enabled(self.db) and stage_no > 1:" in ESRC
 
 
@@ -338,3 +339,70 @@ def test_알림_쿨다운이_있다():
     blk = blk[:blk.index("[시스템 오류] Stage 자동 진입 실패") + 1200]
     assert "stage_trigger_alert:" in blk
     assert "nx=True" in blk and "ex=1800" in blk
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fix 306 — 사장님 "손실 그래도 계산되어야 하는거 아닌가?"
+# ═══════════════════════════════════════════════════════════════════════
+
+class _Strat:
+    def __init__(self, cum):
+        self.cumulative_realized_loss = cum
+
+
+def test_상한_미설정이면_무제한():
+    """기본 동작을 바꾸지 않는다 — 상한은 사장님이 넣어야 작동."""
+    over, _w = T.cumulative_loss_exceeded(_DB(), _Strat(D("9999")))
+    assert over is False
+
+
+def test_누적손실이_상한을_넘으면_중단():
+    db = _DB({T.SETTING_MAX_CUM_LOSS: "60"})
+    assert T.cumulative_loss_exceeded(db, _Strat(D("60")))[0] is True
+    assert T.cumulative_loss_exceeded(db, _Strat(D("120")))[0] is True
+    assert T.cumulative_loss_exceeded(db, _Strat(D("59.99")))[0] is False
+
+
+def test_부호와_무관하게_절대값으로_본다():
+    db = _DB({T.SETTING_MAX_CUM_LOSS: "60"})
+    assert T.cumulative_loss_exceeded(db, _Strat(D("-70")))[0] is True
+
+
+def test_손상값이나_DB장애면_무제한():
+    """🚨 여기서 fail-closed 하면 모든 사다리가 멈춘다."""
+    for bad in ("", "abc", "0", "-1"):
+        assert T.cumulative_loss_exceeded(_DB({T.SETTING_MAX_CUM_LOSS: bad}),
+                                          _Strat(D("999")))[0] is False, bad
+    assert T.cumulative_loss_exceeded(_DB(boom=True), _Strat(D("999")))[0] is False
+
+
+def test_필드가_없어도_안_터진다():
+    assert T.cumulative_loss_exceeded(_DB(), object())[0] is False
+
+
+def test_단계진입_게이트에_연결돼_있다():
+    src = _fn_src("_trim_before_stage")
+    assert "cumulative_loss_exceeded(self.db, strategy)" in src
+    assert "raise ValueError" in src
+
+
+def test_누적손실_확인이_청산보다_먼저다():
+    """🚨 순서가 뒤바뀌면 「상한을 넘었는데 청산은 이미 나간」 상태가 된다."""
+    src = _fn_src("_trim_before_stage")
+    assert src.index("cumulative_loss_exceeded") < src.index("emergency_close_position")
+
+
+def test_화면이_실현손익을_합산한다():
+    """🚨 미실현만 보면 단계 청산으로 확정된 손실이 화면에서 사라진다."""
+    js = (Path(E.__file__).resolve().parents[1] / "static" / "js"
+          / "strategies-list.js").read_text(encoding="utf-8")
+    assert "totalRealized += Number(s.realized_pnl || 0);" in js
+    assert "const totalNetPnl = totalRealized + totalUnrealized;" in js
+    assert "(totalNetPnl / totalMarginUsed * 100)" in js
+
+
+def test_retry모드와_정리모드_충돌_가드():
+    """🚨 둘 다 켜면 STAGE_N_OPEN 이 건너뛰어져 사다리가 영원히 멈춘다."""
+    from app.workers import stage_trigger_worker as W
+    src = Path(W.__file__).read_text(encoding="utf-8")
+    assert "if not _trim_on and strategy.status != \"LIQUIDATED_WAITING_RETRY\":" in src

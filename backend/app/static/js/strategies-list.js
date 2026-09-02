@@ -244,16 +244,31 @@ async function refreshStrategies() {
     }
     const active = data.filter(s => !TERMINAL_STATUSES.includes((s.status || '').toUpperCase()) && !s.is_archived);
     let totalUnrealized = 0;
+    let totalRealized = 0;    // 🚨 Fix 306
     let totalMarginUsed = 0;  // 마진 합 = sum(capital / leverage) — 사용자 실제 사용 자본
     active.forEach(s => {
       const pnl = Number(s.unrealized_pnl || 0);
       const cap = Number(s.total_capital || 0);
       const lev = Number(s.leverage || 1) || 1;
       totalUnrealized += pnl;
+      totalRealized += Number(s.realized_pnl || 0);
       if (cap > 0 && lev > 0) totalMarginUsed += cap / lev;
     });
+    // ═══════════════════════════════════════════════════════════════════
+    // 🚨 Fix 306 (2026-09-03 사장님 「손실 그래도 계산되어야 하는거 아닌가?」)
+    //
+    //   여기는 **미실현만** 합산하고 있었다. Fix 304(단계마다 10 USDT 남기고
+    //   청산)를 켜면 단계가 넘어갈 때마다 손실이 **실현**되는데, 새 단계의
+    //   미실현은 0 에서 다시 시작한다.
+    //   → 이미 잃은 돈이 화면에서 사라져 「손실이 없다」로 보인다.
+    //
+    //   실현 + 미실현을 합쳐야 그 전략에서 실제로 얼마를 잃었는지가 보인다.
+    //   `realized_pnl` 은 API 응답에 이미 있었는데(strategy 스키마) 화면이
+    //   한 번도 읽지 않았다.
+    // ═══════════════════════════════════════════════════════════════════
+    const totalNetPnl = totalRealized + totalUnrealized;
     // 전체 ROI % = 총 USD 손익 / 총 마진 x 100 (사용자 실제 자본 대비 수익률)
-    const overallRoiPct = totalMarginUsed > 0 ? (totalUnrealized / totalMarginUsed * 100) : 0;
+    const overallRoiPct = totalMarginUsed > 0 ? (totalNetPnl / totalMarginUsed * 100) : 0;
 
     setMetric('active', active.length + '건',
       active.length === 0 ? '진행 중인 전략 없음' : `전체 ${data.length}건 중`,
@@ -270,18 +285,24 @@ async function refreshStrategies() {
     const _activeCountEl = document.getElementById('strategies-active-count');
     if (_activeCountEl) _activeCountEl.textContent = `(${active.length}건)`;
 
-    const pnlSig = totalUnrealized > 0 ? 'green' : totalUnrealized < 0 ? 'red' : 'gray';
+    // Fix 306: 표시 기준을 「실현 + 미실현」으로 바꾼다.
+    //   미실현만 보면, 단계 청산으로 확정된 손실이 화면에서 사라진다.
+    const pnlSig = totalNetPnl > 0 ? 'green' : totalNetPnl < 0 ? 'red' : 'gray';
     const pnlEl = document.getElementById('metric-pnl');
     const roiSign = overallRoiPct > 0 ? '+' : '';
-    pnlEl.innerHTML = `${fmtPnL(totalUnrealized)} USDT <span class="text-xs font-normal">(${roiSign}${overallRoiPct.toFixed(2)}%)</span>`;
-    pnlEl.className = 'card-metric-value card-metric-value-xl ' + (totalUnrealized > 0 ? 'pos' : totalUnrealized < 0 ? 'neg' : '');
+    // 실현분이 있으면 내역을 함께 보여준다 (얼마가 이미 확정됐는지)
+    const _realizedNote = Math.abs(totalRealized) >= 0.01
+      ? ` <span class="text-xs font-normal text-slate-400">실현 ${fmtPnL(totalRealized)} + 미실현 ${fmtPnL(totalUnrealized)}</span>`
+      : '';
+    pnlEl.innerHTML = `${fmtPnL(totalNetPnl)} USDT <span class="text-xs font-normal">(${roiSign}${overallRoiPct.toFixed(2)}%)</span>${_realizedNote}`;
+    pnlEl.className = 'card-metric-value card-metric-value-xl ' + (totalNetPnl > 0 ? 'pos' : totalNetPnl < 0 ? 'neg' : '');
     setSignal('card-pnl', pnlSig);
 
     // 🌟 2026-06-09 v3: PNL 카드 = 의미 색상 border 동적 적용 (pos/neg/neutral)
     const pnlCard = document.getElementById('card-pnl');
     if (pnlCard) {
       pnlCard.classList.remove('card-pnl-pos','card-pnl-neg','card-pnl-neutral');
-      pnlCard.classList.add(totalUnrealized > 0 ? 'card-pnl-pos' : totalUnrealized < 0 ? 'card-pnl-neg' : 'card-pnl-neutral');
+      pnlCard.classList.add(totalNetPnl > 0 ? 'card-pnl-pos' : totalNetPnl < 0 ? 'card-pnl-neg' : 'card-pnl-neutral');
     }
 
     const tbody = document.getElementById('strategies-tbody');
