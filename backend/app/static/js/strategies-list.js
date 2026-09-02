@@ -234,6 +234,9 @@ async function refreshStrategies() {
     } catch (_e) {
       window.__BLOCK_REASONS = window.__BLOCK_REASONS || {};
     }
+
+    // 🌟 Fix 301: 재진입 대기 목록 — 이것도 **별도 호출**이라 실패해도 목록은 뜬다
+    refreshReentryWatchlist();
     // 인덱스 갱신 (activity 필터용)
     window._strategiesById = {};
     for (const s of data) {
@@ -1259,3 +1262,126 @@ async function openStageDetailModal(strategyId, symbol, side) {
   }, 5000);  // 5초!
 })();
 
+
+
+// ═══════════════════════════════════════════════════════════════════════
+// 🌟 Fix 301 (2026-09-03 사장님): 재진입 「대기 모니터링」을 화면에 남긴다.
+//
+//   사장님: "대기 모니터링도 전략 인스턴스에 남겨두고 종료 숨김 처럼
+//            선택적으로 볼수 있게 하는것도 좋은것 같아"
+//
+//   청산된 전략은 「종료 숨김」으로 감춰도, **재진입 감시는 계속 보여야 한다.**
+//   그래서 목록과 완전히 분리된 접이식 패널로 둔다 (기본 접힘 = 「선택적으로」).
+//
+//   🚨 목록과 **별도 호출**이라 이게 실패해도 전략 목록은 그대로 뜬다.
+//      (Fix 201 과 같은 방식 — 부가 정보가 본 화면을 죽이면 안 된다.)
+// ═══════════════════════════════════════════════════════════════════════
+
+const _RWL_OPEN_KEY = 'reentryWatchlistOpen';
+
+function toggleReentryWatchlist() {
+  const open = !(localStorage.getItem(_RWL_OPEN_KEY) === '1');
+  localStorage.setItem(_RWL_OPEN_KEY, open ? '1' : '0');
+  _renderReentryWatchlist(window.__REENTRY_WATCHLIST);
+}
+
+function _rwlIsOpen() {
+  return localStorage.getItem(_RWL_OPEN_KEY) === '1';
+}
+
+async function refreshReentryWatchlist() {
+  try {
+    const d = await api('/reentry-alerts/watchlist');
+    window.__REENTRY_WATCHLIST = d;
+    _renderReentryWatchlist(d);
+  } catch (_e) {
+    // 조회 실패는 조용히 — 전략 목록을 가리면 안 된다
+    _renderReentryWatchlist(null);
+  }
+}
+
+function _rwlEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function _renderReentryWatchlist(d) {
+  const box = document.getElementById('reentry-watchlist');
+  if (!box) return;
+
+  // 워커 기록이 없다 = 「감시 대상 없음」이 아니라 「워커가 안 돌고 있을 수 있다」.
+  // 이 둘을 같은 화면으로 보여주면 고장을 정상으로 착각한다.
+  if (!d || d.stale) {
+    box.innerHTML = '<div class="text-xs text-slate-500 px-2 py-1">'
+      + '⏳ 재진입 대기 — <span class="text-amber-400">기록 없음</span>'
+      + ' <span class="text-slate-600">(워커 미가동 또는 기록 만료)</span></div>';
+    return;
+  }
+
+  const items = d.items || [];
+  const waiting = d.waiting || 0;
+  const open = _rwlIsOpen();
+
+  // 사유별 요약 (접힌 상태에서도 한 줄로 상황을 안다)
+  const byReason = {};
+  items.forEach((it) => {
+    if (it.entered) return;
+    const k = it.reason_ko || '조건 확인 중';
+    byReason[k] = (byReason[k] || 0) + 1;
+  });
+  const summary = Object.entries(byReason)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `${_rwlEsc(k)} ${v}`)
+    .join(' · ') || '없음';
+
+  let html = ''
+    + '<div class="flex items-center gap-2 px-2 py-1 cursor-pointer select-none"'
+    + '     onclick="toggleReentryWatchlist()">'
+    + `  <span class="text-xs text-slate-300">${open ? '▾' : '▸'} ⏳ 재진입 대기</span>`
+    + `  <span class="text-xs font-semibold text-cyan-400">${waiting}건</span>`
+    + `  <span class="text-xs text-slate-500 truncate">${summary}</span>`
+    + '</div>';
+
+  if (open) {
+    if (!items.length) {
+      html += '<div class="text-xs text-slate-500 px-3 pb-2">'
+        + '24시간 내 청산된 자동 진입 종목이 없습니다.</div>';
+    } else {
+      html += '<div class="overflow-x-auto px-2 pb-2"><table class="min-w-max text-xs">'
+        + '<thead><tr class="text-slate-500">'
+        + '<th class="text-left pr-3 font-normal">심볼</th>'
+        + '<th class="text-left pr-3 font-normal">방향</th>'
+        + '<th class="text-right pr-3 font-normal">반등</th>'
+        + '<th class="text-right pr-3 font-normal">필요</th>'
+        + '<th class="text-left pr-3 font-normal">지금 왜 대기중인가</th>'
+        + '</tr></thead><tbody>';
+      items.forEach((it) => {
+        const rb = (it.rebound_pct == null) ? null : Number(it.rebound_pct);
+        const need = (it.rebound_need_pct == null) ? null : Number(it.rebound_need_pct);
+        // 반등이 필요치에 닿았는지 = 「곧 들어갈 것」을 눈에 띄게
+        const close = (rb != null && need != null && rb >= need);
+        const rbCls = rb == null ? 'text-slate-600'
+          : (close ? 'text-emerald-400' : (rb < 0 ? 'text-rose-400' : 'text-slate-300'));
+        html += '<tr class="border-t border-slate-800">'
+          + `<td class="pr-3 py-0.5 text-slate-200">${_rwlEsc(it.symbol)}</td>`
+          + `<td class="pr-3 py-0.5 ${it.side === 'LONG' ? 'text-emerald-400' : 'text-rose-400'}">`
+          + `${_rwlEsc(it.side)}</td>`
+          + `<td class="pr-3 py-0.5 text-right ${rbCls}">`
+          + `${rb == null ? '-' : rb.toFixed(2) + '%'}</td>`
+          + `<td class="pr-3 py-0.5 text-right text-slate-500">`
+          + `${need == null ? '-' : need.toFixed(1) + '%'}</td>`
+          + `<td class="pr-3 py-0.5 ${it.entered ? 'text-emerald-400' : 'text-slate-400'}">`
+          + `${_rwlEsc(it.reason_ko)}</td>`
+          + '</tr>';
+      });
+      html += '</tbody></table>';
+      if (d.updated_at) {
+        html += `<div class="text-[10px] text-slate-600 pt-1">갱신 ${_rwlEsc(
+          new Date(d.updated_at).toLocaleTimeString('ko-KR'))}</div>`;
+      }
+      html += '</div>';
+    }
+  }
+  box.innerHTML = html;
+}

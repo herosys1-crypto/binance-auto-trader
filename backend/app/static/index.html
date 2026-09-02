@@ -1711,6 +1711,10 @@
           </label>
         </div>
       </div>
+      <!-- 🌟 Fix 301 (2026-09-03 사장님): 재진입 「대기 모니터링」.
+           「종료 숨김」과 **독립**이다 — 청산된 전략을 감춰도 재진입 감시는 보여야 한다.
+           기본 접힘 = 사장님 「선택적으로 볼수 있게」. -->
+      <div id="reentry-watchlist" class="border-t border-slate-800 bg-slate-900/40"></div>
       <!-- 2026-06-08 사장님 fix v2: 가로 스크롤바
            PC (= 큰 화면, > 768px) = overflow-x: hidden (= 깔끔, 옛 PR #144)
            모바일 (= 작은 화면, ≤ 768px) = overflow-x: auto (= 사장님 모바일 시각) -->
@@ -2919,7 +2923,7 @@ function openBBMiddleRanking(direction) {
 <script src="/static/js/dashboard-refresh.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/templates-panel.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/indicators.js?v=20260722v119-grid-align"></script>
-<script src="/static/js/strategies-list.js?v=20260825-fix96-stage-2lines"></script>
+<script src="/static/js/strategies-list.js?v=20260903-fix301-reentry-watchlist"></script>
 <script src="/static/js/external-positions.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/multi-symbol.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/template-save.js?v=20260722v119-grid-align"></script>

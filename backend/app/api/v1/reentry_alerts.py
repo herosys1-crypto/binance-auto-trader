@@ -252,6 +252,9 @@ _REASON_KO: dict[str, str] = {
     "stage3_wait_too_short": "3단계 대기 시간 중",
     "indicator_fetch_error": "지표 조회 실패",
     "no_exchange_account": "거래소 계정 없음",
+    # 실측(2026-09-03 TRIAUSDT): 조용한 실패가 아니라 **진입 관문의 정당한 차단**이다.
+    # `_create_auto_bb_strategy` 안에서 4H MACD 방향 게이트(Fix 270) 등이 막는다.
+    "create_strategy_failed": "진입 관문에서 차단 (4H 방향 등)",
 }
 
 
