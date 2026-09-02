@@ -7,6 +7,8 @@
     python -m tools.batch.run status                 # 진행 중 배치 상태
     python -m tools.batch.run collect <batch_id>     # 결과 회수 + **실제 청구 비용** 보고
 
+    python -m tools.batch.run all docstring_audit    # ⭐ 위 네 단계를 한 번에
+
 ## 왜 `warm` 이 따로 있나
 
 배치는 요청이 **병렬로** 처리돼서 「첫 요청이 캐시를 쓰고 나머지가 읽는다」가
@@ -57,10 +59,27 @@ def _client():
         import anthropic
     except ImportError:
         sys.exit("anthropic SDK 가 없다:  pip install anthropic")
-    if not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
-        print("⚠️  ANTHROPIC_API_KEY 가 없다. `ant auth login` 프로필이 있으면 그것을 쓴다.",
-              file=sys.stderr)
-    return anthropic.Anthropic()
+    # 🚨 `Anthropic()` 생성자는 키가 없어도 **성공**한다. 실패는 첫 요청에서 나고
+    #    트레이스백이 20줄 쏟아진다. 그래서 여기서 미리 판정한다.
+    #    ⚠️ env 가 비어 있어도 `ant auth login` 프로필로 될 수 있으므로,
+    #       프로필 디렉터리가 있으면 막지 않고 SDK 에 맡긴다.
+    c = anthropic.Anthropic()
+    has_env = bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN"))
+    has_client = bool(getattr(c, "api_key", None) or getattr(c, "auth_token", None))
+    has_profile = (Path.home() / ".config" / "anthropic").is_dir()
+    if not (has_env or has_client or has_profile):
+        print()
+        print("❌ Anthropic 자격증명이 없다. 배치를 낼 수 없다.")
+        print()
+        print("   1) console.anthropic.com  →  API Keys  →  Create Key")
+        print("   2) 이 창에서만 :  $env:ANTHROPIC_API_KEY = \"sk-ant-...\"")
+        print("      계속 쓰려면 :  setx ANTHROPIC_API_KEY \"sk-ant-...\"  (새 창부터 적용)")
+        print()
+        print("   ⚠️ Claude Code 구독과 **별개 계정·별개 청구**다.")
+        print("   ℹ️ `plan` 은 자격증명 없이도 돈다 — 비용 추정은 무료다.")
+        print()
+        sys.exit(1)
+    return c
 
 
 def _context_text(docs: tuple[str, ...]) -> str:
@@ -326,6 +345,50 @@ def cmd_collect(batch_id: str) -> None:
     print("\n  🚨 생성물은 **초안**이다. 사람이 검토하기 전에 코드에 반영하지 마라.")
 
 
+def cmd_all(job_key: str, limit: int | None, yes: bool) -> None:
+    """warm → submit → 완료 대기 → collect 를 한 번에.
+
+    캐시 예열을 **반드시 먼저** 한다 — 안 하면 배치 병렬성 때문에 전부 write(2배)로
+    처리돼 캐싱을 안 한 것보다 비싸질 수 있다.
+    대기 중 Ctrl+C 해도 배치는 서버에서 계속 돈다. 나중에 `collect <id>` 로 회수하면 된다.
+    """
+    job = JOBS[job_key]
+    if any("cache_control" in b for b in _shared_system(job)):
+        print("① 캐시 예열…")
+        cmd_warm(job_key)
+        print()
+    else:
+        print("① 캐시 예열 생략 (이 작업은 접두부가 짧아 캐싱을 안 건다)")
+        print()
+
+    print("② 제출…")
+    cmd_submit(job_key, limit, yes)
+    latest = max(STATE_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime)
+    bid = latest.stem
+
+    print()
+    print("③ 완료 대기 (60초마다 확인 · Ctrl+C 해도 배치는 계속 돈다)")
+    c = _client()
+    t0 = time.time()
+    while True:
+        try:
+            b = c.messages.batches.retrieve(bid)
+        except Exception as e:
+            print(f"   조회 실패, 60초 후 재시도: {str(e)[:70]}")
+            time.sleep(60)
+            continue
+        rc = b.request_counts
+        print(f"   [{(time.time() - t0) / 60:5.1f}분] {b.processing_status}  "
+              f"처리중 {rc.processing} / 성공 {rc.succeeded} / 실패 {rc.errored}")
+        if b.processing_status == "ended":
+            break
+        time.sleep(60)
+
+    print()
+    print("④ 회수…")
+    cmd_collect(bid)
+
+
 # ══════════════════════════════════════════════════════════════════════
 def main() -> None:
     a = sys.argv[1:]
@@ -357,6 +420,8 @@ def main() -> None:
         cmd_status(pos[0] if pos else None)
     elif cmd == "collect":
         cmd_collect(pos[0])
+    elif cmd == "all":
+        cmd_all(pos[0], limit, yes)
     else:
         sys.exit(f"모르는 명령: {cmd}  (--help)")
 
