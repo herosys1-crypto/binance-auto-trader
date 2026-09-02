@@ -1023,6 +1023,7 @@ class ExecutionService:
         return response
 
     def _place_stage_entry_order(self, strategy, stage_plan, *, force_market: bool = False) -> Order:
+        self._assert_symbol_allowed(strategy)   # 🚫 Fix 303
         # 🌟 2026-08-08 v130 사장님: 시작가 없으면 (start_price=None) = MARKET 진입!
         #   trigger_price=None → MARKET (현재가 즉시 진입!)
         #   trigger_price=값 → LIMIT (기존 로직!)
@@ -1646,12 +1647,40 @@ class ExecutionService:
         )
         return self.client.place_order(payload)
 
+    def _assert_symbol_allowed(self, strategy) -> None:
+        """🚫 Fix 303 (2026-09-03 사장님 「이것들은 포지션에서 제외해줘」).
+
+        BTCUSDT/ETHUSDT 계열은 거래소 MIN_NOTIONAL 이 20~50 이라 사장님 사양
+        (「모든 단계에서 10 USDT 만 남기고 청산하고 다음 단계 진입」)의 잔량을
+        남길 수 없다. 남기면 reduceOnly 가 거부되어 **팔 수 없는 dust** 가 된다.
+        (이 저장소는 dust orphan 하나로 계정 전체가 막힌 전력이 있다.)
+
+        🚨 **진입 주문을 만드는 함수 전부**가 이걸 부른다:
+             `_place_stage_entry_order` / `_place_market_entry` / `_place_limit_entry`
+           후보 생산자(워커)마다 거는 방식은 이 저장소에서 반복해서 실패했다 —
+           「게이트는 있는데 한 경로가 그 함수를 안 부른다」. 주문 직전에 두면
+           어떤 워커가 만들어도, 시장가든 지정가든 새어나갈 수 없다.
+           `tests/test_symbol_exclusion.py` 가 세 곳 모두를 정적으로 고정한다.
+
+        ⚠️ **신규 진입만** 막는다. 이미 열린 포지션은 건드리지 않는다 —
+           자금 조작은 사장님 판단이다. (지시 시점 해당 종목 보유 0건 확인)
+        """
+        from app.services.symbol_exclusion import SETTING_KEY, is_excluded
+        if is_excluded(self.db, strategy.symbol):
+            raise ValueError(
+                f"[Fix303] {strategy.symbol} 는 자동매매 제외 심볼입니다 "
+                f"(MIN_NOTIONAL 이 커서 「10 USDT 잔량」 규칙을 만족할 수 없음). "
+                f"해제하려면 SystemSetting '{SETTING_KEY}' 를 조정하십시오."
+            )
+
     def _place_market_entry(self, strategy, *, stage_no: int | None, qty: Decimal, current_price: Decimal, suffix: str) -> Order:
         """공통 MARKET 진입 주문 (stage 또는 ad-hoc).
 
         2026-05-21 Phase 2B (사장님 요구): 진입 직후 1초 검증 — qty 가 의도대로 증가했나.
         자동 재시도는 안 함 (중복 진입 risk) — 알림만으로 사장님 인지.
         """
+        self._assert_symbol_allowed(strategy)   # 🚫 Fix 303
+
         # 검증 기준 — 발송 전 거래소 실 포지션 (DB current_position_qty 가 stale 일 수 있음).
         initial_qty = self._fetch_current_position_qty(strategy)
 
@@ -1875,6 +1904,7 @@ class ExecutionService:
 
     def _place_limit_entry(self, strategy, *, stage_no: int | None, qty: Decimal, limit_price: Decimal, suffix: str) -> Order:
         """공통 LIMIT 진입 주문 (ad-hoc 지정가 진입용)."""
+        self._assert_symbol_allowed(strategy)   # 🚫 Fix 303
         side = "BUY" if strategy.side == "LONG" else "SELL"
         position_side = strategy.side
         client_order_id = self._new_client_order_id(strategy.symbol, suffix)
