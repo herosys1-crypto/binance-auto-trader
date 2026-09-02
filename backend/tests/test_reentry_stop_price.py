@@ -127,3 +127,44 @@ def test_single_entry_guard와_목록이_어긋나지_않는다():
 def test_워커_구문이_온전하다():
     ast.parse(WORKER.read_text(encoding="utf-8"))
     ast.parse(STREAM.read_text(encoding="utf-8"))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fix 298 — 자체 물타기 전략에 마틴게일 배수를 얹지 않는다
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_재진입_자본이_사장님_사다리를_그대로_쓴다():
+    """🚨 compute_reentry_capital 은 base_capital 을 **무시**한다 —
+    사다리(10/300/600)를 그대로 돌려준다. 이걸 모르고 pump_split 을
+    재진입 대상에 넣으면 100 → 300(×3) → 600(×6) 이 된다.
+    """
+    from app.services.sajangnim_capital import compute_reentry_capital
+    from decimal import Decimal
+    # base 를 100 으로 줘도 사다리 값이 나온다 (= base 무시)
+    got = compute_reentry_capital(2, [Decimal("100")])
+    assert got is not None
+    assert got != Decimal("100"), (
+        "이 함수가 base 를 존중하면 Fix 298 의 전제가 달라진다 — 재확인 필요"
+    )
+
+
+def test_자체물타기_전략은_배수를_안_받는다():
+    """볼밴 분할은 이미 1→2→3차(100→200→500) 물타기를 한다.
+    거기에 마틴게일을 또 얹으면 **이중 마틴게일** = 사상 ⑦ 위반.
+    """
+    src = WORKER.read_text(encoding="utf-8")
+    assert "_own_ladder" in src, "자체 물타기 전략 판정이 있어야 한다"
+    assert 'startswith("pump_split")' in src
+    # 배수 분기보다 **먼저** 걸러야 한다
+    i_own = src.find("if _own_ladder:")
+    i_mart = src.find("compute_reentry_capital, MAX_REENTRY_STAGE")
+    assert 0 < i_own < i_mart, "자체 물타기 판정이 마틴게일 계산보다 앞이어야 한다"
+
+
+def test_자체물타기_판정_실패는_배수_없음으로():
+    """자본이 커지는 판정이므로 fail-closed — 모르면 배수를 안 준다."""
+    src = WORKER.read_text(encoding="utf-8")
+    blk = src[src.find("Fix 298"):src.find("elif _use_success_reentry")]
+    assert "_own_ladder = True" in blk.split("except")[-1], (
+        "판정 실패 시 _own_ladder=True (배수 없음) 여야 한다"
+    )

@@ -1468,7 +1468,45 @@ def run_realtime_reentry() -> dict:
                     )
                     continue
                 _is_last_chance = False  # Fix 53 라스트 챈스 여부!
-                if _use_success_reentry:
+                # ═══════════════════════════════════════════════════════
+                # 🚨 Fix 298 (2026-09-02): **자체 물타기 전략에 마틴게일 배수를
+                #   얹지 않는다** — Fix 297 이 만든 위험을 막는다.
+                #
+                #   compute_reentry_capital 은 `_base_capital` 을 **무시하고**
+                #   사장님 사다리(10/300/600)를 그대로 쓴다. 그래서 Fix 297 로
+                #   pump_split 을 재진입 대상에 넣은 순간:
+                #
+                #       볼밴 분할 100 손절 → 재진입 **300**(×3.00) → 또 손절 시 **600**(×6.00)
+                #
+                #   그런데 볼밴 분할은 **이미 자체 물타기**(1→2→3차 = 100→200→500)를 한다.
+                #   그 위에 마틴게일 배수를 또 얹으면 **이중 마틴게일**이고,
+                #   사장님이 설정한 자본(pump_split_capitals)을 시스템이 무시하는 것이다.
+                #   사상 ⑦(「욕심을 제어 못했다 · 큰손실 후 무리한 투자」) 정면 위반.
+                #
+                #   → 자체 물타기 전략은 **원 자본 그대로** 재진입한다 (배수 없음).
+                #     사장님 사다리 마틴게일은 auto_bb 계열 전용으로 둔다.
+                # ═══════════════════════════════════════════════════════
+                _own_ladder = False
+                try:
+                    _st_type = ""
+                    _tpl_of = getattr(si, "strategy_template", None)
+                    if _tpl_of is not None:
+                        _st_type = str(getattr(_tpl_of, "strategy_type", "") or "")
+                    _own_ladder = _st_type.startswith("pump_split")
+                except Exception as _oe:
+                    # 판정 실패 = **배수 없음**으로 (fail-closed: 자본이 커지는 판정)
+                    logger.warning("[RT_REENTRY] Fix298 판정 실패 = 배수 없음: %s", _oe)
+                    _own_ladder = True
+
+                if _own_ladder:
+                    _entry_capital = float(_base_capital)
+                    _mult_label = " (자체 물타기 = 배수 없음)"
+                    logger.info(
+                        "[RT_REENTRY] Fix298 %s %s: 자체 물타기 전략 → 원 자본 %.0f 그대로 "
+                        "(사장님 사다리 마틴게일 미적용)",
+                        symbol, side, float(_base_capital),
+                    )
+                elif _use_success_reentry:
                     # 사장님: 익절 후 재진입 = 초기 시작금액!
                     _entry_capital = float(_base_capital)
                     _mult_label = ""
