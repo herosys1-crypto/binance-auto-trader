@@ -162,6 +162,58 @@ class RiskService:
             logger.exception("[Fix235] 다음 단계 ROI 산출 실패 — 게이트는 옛 동작 유지")
             return None
 
+    def _stage_gate_exempt(self, strategy) -> tuple[bool, str]:
+        """단계 게이트(「단계가 남으면 손절 보류」)를 **면제**받는가.
+
+        🚨 Fix 321 (2026-09-03): 이 판정이 **세 곳에 흩어져** 있었고 면제는
+           force SL 한 곳에만 있었다. 그래서 Fix 315 가 신규 전략을 3단계로
+           바꾸자 일반 SL 이 그대로 잠겼다. 한 곳으로 모아 **세 게이트가 같은
+           판정을 쓰게** 한다 — 한쪽만 고치는 사고를 구조적으로 막는다.
+
+        면제 대상(전부 「단계마다 손절해야 하는」 설계):
+          · 청산 후 재진입 (v131)
+          · 분할매수 split_entry (Fix 178) — 1·2·3차 어느 시점이든 -5%
+          · 단계 사다리 stage_ladder (Fix 315)
+          · 단계 정리 Fix 304 ON (Fix 317) — 「단계마다 청산하고 다음 단계」
+
+        면제가 아니면 옛 물타기 동작(v130) 그대로 — 남의 전략을 바꾸지 않는다.
+
+        ## 🚨 왜 이 면제가 필요한가 (Fix 317 실측, 2026-09-03)
+
+        사장님: "일단 급한건 기본 방식이야 이건 확실하게 해줘야해
+                 그래야 지금까지 잃은걸 다시 벌수 있어"
+
+        단계 계획이 있는 전략 **1,221건 중 371건(30%)** 이 이 게이트에 걸려
+        **손절이 마지막 단계까지 보류**되고 있었다:
+
+            #2046 AKEUSDT     수동 3단계 / force_sl **-3%** / stage 1 → 보류
+            #2047 MUBARAKUSDT 수동 3단계 / force_sl **-5%** / stage 1 → 보류
+
+        즉 사장님이 -3% 로 설정해도 3단계를 다 채우기 전엔 손절이 안 열린다.
+        그 사이 손실은 무한정 커진다 (#2032 가 -96.74% 표시까지 간 구조).
+
+        게이트의 전제는 「단계가 남으면 추가 진입해서 평단 평균화」= **물타기**인데,
+        사장님 사양은 **단계마다 손절**이라 정면 충돌한다.
+        """
+        if bool(getattr(strategy, "retry_after_liquidation_enabled", False)):
+            return True, "청산 후 재진입"
+        _mode = str(getattr(strategy, "capital_management_mode", "") or "").lower()
+        if _mode == "split_entry":
+            return True, "분할매수(split_entry)"
+        try:
+            from app.services.sajangnim_capital import is_stage_ladder
+            if is_stage_ladder(strategy):
+                return True, "단계 사다리(stage_ladder)"
+        except Exception as e:      # 판정 실패 = 옛 동작 (fail-safe)
+            logger.warning("[Fix321] 사다리 판정 실패 → 옛 동작: %s", e)
+        try:
+            from app.services.stage_trim import trim_enabled
+            if trim_enabled(self.db, strategy):
+                return True, "단계 정리(Fix304)"
+        except Exception as e:
+            logger.warning("[Fix321] trim 판정 실패 → 옛 동작: %s", e)
+        return False, ""
+
     def evaluate_stop_loss(self, strategy_id: int) -> bool:
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
@@ -169,7 +221,9 @@ class RiskService:
         # 사용자 기획: SL 은 모든 단계가 진입된 후에만 발동.
         # 진입할 단계가 남아있으면 추가 진입(평단가 평균화) 기회를 먼저 줌.
         total_stages = self._get_total_stages(strategy)
-        if (strategy.current_stage or 0) < total_stages:
+        # 🚨 Fix 321: 단계마다 손절해야 하는 설계는 이 게이트를 면제받는다.
+        _exempt, _why_ex = self._stage_gate_exempt(strategy)
+        if not _exempt and (strategy.current_stage or 0) < total_stages:
             return False
 
         # 🌟🌟🌟 2026-06-11 사장님 critical 영구 fix v4 (BEATUSDT #110 청산 사건!):
@@ -248,7 +302,8 @@ class RiskService:
             from app.api.v1.strategies.helpers import _count_active_stages
             _total_stages = _count_active_stages(tpl)
             _current_stage = strategy.current_stage or 0
-            if _current_stage < _total_stages:
+            _ex2, _why2 = self._stage_gate_exempt(strategy)   # Fix 321
+            if not _ex2 and _current_stage < _total_stages:
                 logger.info(
                     "[SL v130] 사장님 사상: SL 발동 조건 도달 (ROI %.2f%%) but "
                     "다음 단계 남음 (%s/%s) = 발동 X! 손실 회복 기회 유지!",
@@ -352,64 +407,13 @@ class RiskService:
         #   끈 전략(기존 방식/물타기)은 v130 동작 그대로 — 남의 전략을 바꾸지 않는다.
         # ══════════════════════════════════════════════════════════════════
         if is_force:
-            _retry_flow = bool(getattr(strategy, "retry_after_liquidation_enabled", False))
-            # 🎯 Fix 178 (2026-08-27 사장님): 급등락 분할 매수 전략도 단계 게이트 제외.
-            #   사장님 verbatim: "1-3번 매수 했는데 -5% 청산"
-            #   = 1·2·3차 **어느 시점이든** 평단 -5% 면 전량 청산이다.
-            #   v130 게이트(단계 남으면 손절 보류)를 두면 3차까지 다 채워야 손절이 열려
-            #   #1488 과 똑같은 교착이 재현된다.
-            #   capital_management_mode 는 지금 저장만 되고 로직에 안 쓰이므로
-            #   마이그레이션 없이 모드 마커로 재사용한다 (헌법 127).
-            _split_mode = (
-                str(getattr(strategy, "capital_management_mode", "") or "").lower()
-                == "split_entry"
-            )
-            # 🌟 Fix 315 (2026-09-03 사장님 정책 확정): 단계 사다리도 같은 자격.
-            #   사장님 "부분 손절하고 다음 트리거 단가에 포지션 진입하고
-            #           또 손실이면 부분청산하고 다음단계 트리거 단가에 포지션 진입"
-            #   = 1·2·3단계 **어느 시점이든** 평단 -5%/-10% 면 청산이다.
-            #   v130 게이트(단계 남으면 손절 보류)를 두면 3단계까지 다 채워야
-            #   손절이 열려 #1488 과 같은 교착이 재현된다 (Fix 178 과 같은 이유).
-            from app.services.sajangnim_capital import is_stage_ladder as _is_ladder
-            _ladder_mode = _is_ladder(strategy)
-            # ═══════════════════════════════════════════════════════════
-            # 🚨🚨 Fix 317 (2026-09-03) — **사장님이 잃은 돈의 구조적 원인**
-            #
-            #   사장님: "일단 급한건 기본 방식이야 이건 확실하게 해줘야해
-            #            그래야 지금까지 잃은걸 다시 벌수 있어"
-            #
-            #   실측(2026-09-03): 단계 계획이 있는 전략 **1,221건 중 371건(30%)**
-            #   이 이 게이트에 걸려 **손절이 마지막 단계까지 보류**되고 있었다.
-            #   사장님이 손으로 만드신 3단계 전략들이 정확히 여기 해당한다:
-            #     #2046 AKEUSDT force_sl -3% / 3단계 계획 / current_stage 1 → 보류
-            #     #2047 MUBARAKUSDT -5% / 3단계 → 보류
-            #   즉 **-3% 로 설정해도 3단계를 다 채우기 전엔 손절이 안 열린다.**
-            #   그 사이 손실은 무한정 커진다.
-            #
-            #   v130 게이트의 전제는 「진입할 단계가 남았으면 추가 진입(평단
-            #   평균화) 기회를 먼저 준다」= **물타기**다. 그런데 사장님 사양은
-            #     "부분 손절하고 다음 트리거 단가에 포지션 진입하고
-            #      또 손실이면 부분청산하고 다음단계 트리거 단가에 포지션 진입"
-            #   = **단계마다 손절**이다. 두 설계가 정면으로 충돌한다.
-            #
-            #   → **단계 정리(Fix 304)가 켜진 전략은 게이트를 건너뛴다.**
-            #     trim ON = 「단계마다 청산하고 다음 단계」 방식이므로 손절도
-            #     단계마다 열려야 한다. trim OFF 면 옛 물타기 동작 그대로 둔다
-            #     (남의 전략을 바꾸지 않는다 — 이 파일 위쪽 원칙).
-            # ═══════════════════════════════════════════════════════════
-            _trim_mode = False
-            try:
-                from app.services.stage_trim import trim_enabled as _trim_en
-                _trim_mode = _trim_en(self.db, strategy)
-            except Exception as _te:
-                logger.warning("[Fix317] trim 판정 실패 → 옛 동작 유지: %s", _te)
-            if _retry_flow or _split_mode or _ladder_mode or _trim_mode:
+            # 🚨 Fix 321: 면제 판정을 공용 메서드로 모았다 (세 게이트 동일 규칙).
+            _exempt_fsl, _why_fsl = self._stage_gate_exempt(strategy)
+            if _exempt_fsl:
                 logger.info(
                     "[force_sl Fix177/178] #%s %s = 단계 게이트 건너뜀 (-%s%% 청산)",
                     strategy.id,
-                    ("분할매수(split_entry)" if _split_mode else
-                     "단계 사다리(stage_ladder)" if _ladder_mode else
-                     "단계 정리(Fix304)" if _trim_mode else "청산 후 재진입"),
+                    _why_fsl,
                     threshold,
                 )
             else:

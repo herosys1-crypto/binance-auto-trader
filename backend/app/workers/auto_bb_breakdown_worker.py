@@ -1909,6 +1909,7 @@ def _create_auto_bb_strategy(
     #   `if not new_strategy` 경로를 갖고 있으므로 정상 skip 으로 흐른다.
     #   워커는 사이클 앞에서 그 플래그를 보고 조기 종료해 API 낭비를 멈춘다.
     # ══════════════════════════════════════════════════════════════════
+    from app.services.sajangnim_capital import STAGE_LADDER_MODE as _LADDER_MODE
     try:
         strategy = svc.create_strategy_instance(
             user_id=1,
@@ -1922,6 +1923,13 @@ def _create_auto_bb_strategy(
             retry_trigger_pct=(
                 Decimal(str(cfg.get("retry_trigger_pct", 10)))
                 if cfg.get("retry_trigger_pct") else None
+            ),
+            # 🚨 Fix 321: 사다리 전략은 **마커를 저장해야** 손절 단계 게이트가 면제된다.
+            #   이걸 빠뜨려서 Fix 315 가 신규 전략을 3단계로 바꾸자
+            #   force SL(-5%)이 3단계까지 잠겼다 — Fix 317 이 고친 그 교착이
+            #   신규 전략 전건에 다시 심어졌다. (검증이 배포 후 잡았고 피해는 0)
+            capital_management_mode=(
+                _LADDER_MODE if stages_config.get("stages_count", 1) > 1 else "fixed"
             ),
         )
     except ValueError as _bal_e:

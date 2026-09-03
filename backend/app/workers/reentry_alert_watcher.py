@@ -254,6 +254,20 @@ def run_reentry_alert_watcher(db: Session, decrypt_text) -> dict:
                 #   🚨 기록 실패가 알람을 막으면 안 된다 — 전부 fail-open.
                 # ═══════════════════════════════════════════════════════
                 try:
+                    # 🚨 Fix 321: 이 워커는 2분 주기이고 알람 조건이 24h 창이라
+                    #   같은 심볼이 하루 최대 720행을 쌓는다 = 학습 표본 오염.
+                    #   Redis 로 6시간에 1건만 기록한다 (알람 dedup 과 같은 창).
+                    _obs_ok = True
+                    try:
+                        if _redis is not None:
+                            _obs_key = "obs_dedup:" + hashlib.md5(
+                                f"{strategy.exchange_account_id}:{strategy.symbol}:{strategy.side}".encode()
+                            ).hexdigest()[:16]
+                            _obs_ok = bool(_redis.set(_obs_key, "1", nx=True, ex=6 * 3600))
+                    except Exception:
+                        _obs_ok = True      # 판정 실패 시엔 기록한다 (놓치지 않는다)
+                    if not _obs_ok:
+                        raise StopIteration     # 아래 except 로 조용히 빠진다
                     from app.models.market_observation import MarketObservation
                     _px = None
                     for _k in ("mark_price", "price", "last_price", "current_price"):
@@ -272,6 +286,8 @@ def run_reentry_alert_watcher(db: Session, decrypt_text) -> dict:
                         },
                     ))
                     db.commit()
+                except StopIteration:
+                    pass        # Fix 321: 6시간 내 중복 — 기록 생략
                 except Exception as _obs_e:
                     logger.debug("[Fix309] 관찰 기록 실패 (계속): %s", _obs_e)
                     try:

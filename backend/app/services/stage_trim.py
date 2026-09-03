@@ -221,6 +221,11 @@ def _filters(db, symbol: str):
         mn = Decimal(str(row.min_notional or 0))
         if step <= 0:
             return None
+        # 🚨 Fix 321: MIN_NOTIONAL 이 NULL 이면 0 이 되어 **모든 검사를 통과**한다.
+        #   심볼 동기화 누락·신규 상장에서 dust 를 만들 수 있다 → 판정 불가로 본다.
+        if mn <= 0:
+            logger.warning("[Fix321] %s min_notional 결손 → 정리 판정 불가", symbol)
+            return None
         return step, mq, mn
     except Exception as e:
         logger.warning("[Fix304] %s 거래소 필터 조회 실패: %s", symbol, e)
@@ -245,8 +250,15 @@ def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
         px = Decimal(str(mark_price or 0))
     except Exception:
         return zero, zero, "수량/가격 파싱 실패", ACTION_BLOCK
-    if qty <= 0 or px <= 0:
-        return zero, zero, "포지션 없음 또는 가격 없음", ACTION_SKIP
+    # 🚨 Fix 321: 「포지션 없음」과 「시세 결손」은 다르다.
+    #   포지션이 없으면 정리할 것이 없다 → SKIP(그냥 진입).
+    #   시세를 모르면 **정리 여부를 판정할 수 없다** → BLOCK.
+    #   전자를 후자로 묶어 두면 시세가 한 번 흔들릴 때 그 단계가 물타기가 된다
+    #   (이 함수의 선언은 fail-CLOSED 인데 코드가 반대였다).
+    if qty <= 0:
+        return zero, zero, "포지션 없음 → 정리 불필요", ACTION_SKIP
+    if px <= 0:
+        return zero, zero, "현재가 없음 → 정리 여부 판정 불가", ACTION_BLOCK
 
     f = _filters(db, symbol)
     if f is None:
