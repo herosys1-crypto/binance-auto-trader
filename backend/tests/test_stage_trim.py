@@ -406,3 +406,95 @@ def test_retry모드와_정리모드_충돌_가드():
     from app.workers import stage_trigger_worker as W
     src = Path(W.__file__).read_text(encoding="utf-8")
     assert "if not _trim_on and strategy.status != \"LIQUIDATED_WAITING_RETRY\":" in src
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fix 311 — 사장님 "첫진입이 10이라 손절없이 그냥"
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_1단계_10USDT는_정리하지_않는다():
+    """🚨 1단계 10 x 레버2 = 명목 20. 10 을 남기면 **절반만 청산**된다.
+    사장님 사다리에서 1단계는 「자리 탐색」이라 그대로 둔다."""
+    db = _DB(sym=ALT)
+    close, keep, why = T.compute_trim(db, "X", D("400"), D("0.05"))   # 명목 20
+    assert close == 0, why
+    assert "손절없이 그냥" in why
+
+
+def test_2단계급_큰_포지션은_정상_정리된다():
+    """명목 600 (2단계 300 x 레버2) → 10 남기고 590 청산."""
+    db = _DB(sym=ALT)
+    close, keep, why = T.compute_trim(db, "X", D("12000"), D("0.05"))  # 명목 600
+    assert close > 0, why
+    assert keep * D("0.05") >= D("10"), why
+
+
+def test_경계_비율을_설정으로_바꿀_수_있다():
+    assert T.min_trim_ratio(_DB()) == D("2")
+    assert T.min_trim_ratio(_DB({T.SETTING_MIN_TRIM_RATIO: "5"})) == D("5")
+    # 0 = 비율 검사 끔
+    db = _DB({T.SETTING_MIN_TRIM_RATIO: "0"}, sym=ALT)
+    assert T.compute_trim(db, "X", D("400"), D("0.05"))[0] > 0
+
+
+def test_손상값이면_기본_2배():
+    for bad in ("", "abc", "-1", "9999"):
+        assert T.min_trim_ratio(_DB({T.SETTING_MIN_TRIM_RATIO: bad})) == D("2"), bad
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fix 312 — 「모니터링 후 좋은 포지션에 진입」 (v219 사다리 전용)
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_세_방식_중_v219_사다리에만_적용된다():
+    """🚨 기본방식은 「정해진 트리거에 즉시」, OBV 자동은 이미 4중 게이트가 있다.
+    거기에 얹으면 사장님 설계가 깨지고 Fix 232 가 없앤 중복 게이트가 부활한다."""
+    from app.services import stage_entry_timing as W
+    db = _DB({W.SETTING_ENABLED: "1"})
+    # v219 사다리 → 적용 대상
+    ok, why = W.should_enter_now(db, None, "X", "SHORT", "auto_bb_break_SAJANGNIM_TOP")
+    assert "대기 대상 아님" not in why
+    # 기본방식/볼밴/수동 → 미적용
+    for st in ("bb_mid_line", "pump_split", "DYNAMIC_SHORT", None, ""):
+        ok2, why2 = W.should_enter_now(db, None, "X", "SHORT", st)
+        assert ok2 is True and "대기 대상 아님" in why2, st
+
+
+def test_LONG은_기본적으로_대기하지_않는다():
+    """실측: SHORT +15.3%p / LONG -1.4%p."""
+    from app.services import stage_entry_timing as W
+    db = _DB({W.SETTING_ENABLED: "1"})
+    ok, why = W.should_enter_now(db, None, "X", "LONG", "auto_bb_break_SAJANGNIM_BOTTOM")
+    assert ok is True and "대기 대상 아님" in why
+
+
+def test_기본은_꺼져있다():
+    from app.services import stage_entry_timing as W
+    assert W.wait_enabled(_DB()) is False
+    assert W.should_enter_now(_DB(), None, "X", "SHORT", "auto_bb_break_SAJANGNIM_TOP")[0] is True
+
+
+def test_캔들_조회_실패는_진입을_허용한다():
+    """🚨 fail-closed 하면 조회가 한 번 실패할 때마다 단계가 멈춘다."""
+    from app.services import stage_entry_timing as W
+
+    class _Boom:
+        def get_klines(self, **_k):
+            raise RuntimeError("api down")
+
+    db = _DB({W.SETTING_ENABLED: "1"})
+    ok, why = W.should_enter_now(db, _Boom(), "X", "SHORT", "auto_bb_break_SAJANGNIM_TOP")
+    assert ok is True and "fail-open" in why
+
+
+def test_대기가_정리보다_먼저다():
+    """🚨 순서가 뒤바뀌면 「좋은 자리가 아닌데 청산은 이미 나간」 상태가 된다."""
+    src = _fn_src("_trim_before_stage")
+    assert src.index("stage_entry_timing") < src.index("stage_trim import")
+
+
+def test_실측_근거가_모듈에_남아_있다():
+    from app.services import stage_entry_timing as W
+    doc = W.__doc__ or ""
+    assert "+15.3%p" in doc and "47.6%" in doc
+    assert "기본방식" in doc and "OBV 자동" in doc, "세 방식 구분이 적혀 있어야 한다"

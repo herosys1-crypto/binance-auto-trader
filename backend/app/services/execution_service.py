@@ -1748,6 +1748,46 @@ class ExecutionService:
            **양쪽**이 이 메서드를 부른다. 한쪽만 걸면 그 경로로 물타기가
            그대로 일어난다 — 이 저장소가 반복해서 당한 함정이다.
         """
+        # ═══════════════════════════════════════════════════════════════
+        # ⏳ Fix 312 (2026-09-03 사장님): v219 사다리는 **모니터링 후 좋은
+        #    포지션에** 다음 단계로 들어간다.
+        #
+        #    사장님: "부분손절후 10 남기고 다음단계 모니터링 해서
+        #             **좋은 포지션에 진입**하는 로직"
+        #
+        #    🚨 세 방식이 각각 다르다 — 이 대기는 **v219 사다리에만** 붙는다:
+        #       · 기본방식  = 정해진 트리거 단가에 **즉시** (사장님 명시)
+        #       · OBV 자동  = stage_entry_signal 이 이미 4중 게이트로 판정
+        #       · v219 사다리(auto_bb_break_SAJANGNIM_*) = **여기**
+        #    대상은 `stage_wait_for_turn_types` 로 가른다 (기본 SAJANGNIM 접두사).
+        #
+        #    실측: 트리거 도달 후 꺾임을 최대 8~16봉 기다리면
+        #          SHORT 32.3% → **47.6% (+15.3%p)**, 과적합 검사 통과.
+        #          LONG 은 효과 없음(-1.4%p) → 기본 SHORT 만.
+        # ═══════════════════════════════════════════════════════════════
+        try:
+            from app.services.stage_entry_timing import should_enter_now as _wait_ok
+            _stype = None
+            try:
+                from app.models.strategy_template import StrategyTemplate as _STpl2
+                _t2 = (self.db.get(_STpl2, strategy.strategy_template_id)
+                       if strategy.strategy_template_id else None)
+                _stype = _t2.strategy_type if _t2 else None
+            except Exception:
+                _stype = None
+            _good, _good_why = _wait_ok(
+                self.db, self.client, strategy.symbol, strategy.side, _stype,
+            )
+        except Exception as _we:
+            logger.warning("[Fix312] 대기 판정 오류 → 진입 허용: %s", _we)
+            _good, _good_why = True, "판정 오류 (fail-open)"
+        if not _good:
+            logger.info(
+                "[Fix312] %s #%s 단계%s — %s",
+                strategy.symbol, strategy.id, stage_no, _good_why,
+            )
+            raise ValueError(f"[Fix312] {strategy.symbol} 단계 {stage_no}: {_good_why}")
+
         from app.services.stage_trim import (
             compute_trim, cumulative_loss_exceeded, trim_enabled,
         )

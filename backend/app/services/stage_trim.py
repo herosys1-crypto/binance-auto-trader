@@ -56,18 +56,27 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "SETTING_ENABLED", "SETTING_KEEP_NOTIONAL",
     "KEEP_NOTIONAL_DEFAULT", "MIN_NOTIONAL_SAFETY",
-    "SETTING_MAX_CUM_LOSS",
+    "SETTING_MAX_CUM_LOSS", "SETTING_MIN_TRIM_RATIO", "MIN_TRIM_RATIO_DEFAULT",
     "trim_enabled", "keep_notional", "compute_trim", "cumulative_loss_exceeded",
 ]
 
 SETTING_ENABLED = "stage_trim_before_next_enabled"   # 기본 OFF (헌법 161)
 SETTING_KEEP_NOTIONAL = "stage_keep_notional_usdt"   # 사장님 「10 usdt」
 SETTING_MAX_CUM_LOSS = "stage_max_cumulative_loss_usdt"   # Fix 306: 누적 손실 상한
+SETTING_MIN_TRIM_RATIO = "stage_min_trim_ratio"           # Fix 311: 청산분/잔량 최소 배수
 
 KEEP_NOTIONAL_DEFAULT = Decimal("10")
 # 잔량이 가격 변동으로 MIN_NOTIONAL 아래로 떨어지면 나중에 못 판다.
 # 목표 잔량은 그 심볼 최소치의 1.1배 이상으로 잡는다.
 MIN_NOTIONAL_SAFETY = Decimal("1.1")
+
+# 🚨 Fix 311 (2026-09-03 사장님): 「첫진입이 10이라 **손절없이 그냥**」
+#   1단계 10 USDT x 레버 2 = 명목 20. 여기서 10 을 남기면 **절반만 청산**된다.
+#   사장님 사다리(10/300/600)에서 1단계는 「자리 탐색」이라 손절할 것이 없다.
+#   청산분이 잔량의 이 배수 미만이면 **아무것도 하지 않는다.**
+#     명목  20 / 잔량 10 → 청산 10 = 1.0배 → 스킵 (사장님 뜻)
+#     명목 600 / 잔량 10 → 청산 590 = 59배 → 실행
+MIN_TRIM_RATIO_DEFAULT = Decimal("2")
 
 
 def trim_enabled(db) -> bool:
@@ -100,6 +109,30 @@ def keep_notional(db) -> Decimal:
         logger.warning("[Fix304] %s 조회 실패 → 기본 %s: %s",
                        SETTING_KEEP_NOTIONAL, KEEP_NOTIONAL_DEFAULT, e)
         return KEEP_NOTIONAL_DEFAULT
+
+
+def min_trim_ratio(db) -> Decimal:
+    """청산분이 잔량의 몇 배 이상이어야 실행하는가 (Fix 311).
+
+    사장님: "여기는 **첫진입이 10이라 손절없이 그냥** 좋은 포지션에
+             2단계 300으로 진입후 손실이면 부분손절후 10 남기고..."
+
+    1단계 10 USDT 는 명목 20 이라 10 을 남기면 절반만 청산된다 — 손절이라 부를
+    수 없고, 사장님 사다리에서 1단계는 「자리 탐색」이라 그대로 두는 것이 맞다.
+    """
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_MIN_TRIM_RATIO)
+        if row is None or row.value is None or not str(row.value).strip():
+            return MIN_TRIM_RATIO_DEFAULT
+        v = Decimal(str(row.value).strip())
+        if v < 0 or v > 1000:
+            return MIN_TRIM_RATIO_DEFAULT
+        return v
+    except Exception as e:
+        logger.warning("[Fix311] %s 조회 실패 → 기본 %s: %s",
+                       SETTING_MIN_TRIM_RATIO, MIN_TRIM_RATIO_DEFAULT, e)
+        return MIN_TRIM_RATIO_DEFAULT
 
 
 def _filters(db, symbol: str):
@@ -191,6 +224,15 @@ def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
             )
         return zero, qty, (
             f"보유 명목 {qty * px:.2f} < MIN_NOTIONAL {min_notional} → 청산 불가 (미실행)"
+        )
+
+    # 🚨 Fix 311: 청산분이 잔량에 비해 너무 작으면 **손절이 아니다** → 미실행.
+    #    사장님 사다리 1단계(10 USDT, 명목 20)가 정확히 이 경우다.
+    _ratio = min_trim_ratio(db)
+    if _ratio > 0 and close_qty < keep_qty * _ratio:
+        return zero, qty, (
+            f"청산분 {close_qty} < 잔량 {keep_qty} x {_ratio} "
+            f"→ 1단계급 소액이라 정리하지 않는다 (사장님 「손절없이 그냥」)"
         )
 
     return close_qty, keep_qty, (
