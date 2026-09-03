@@ -382,8 +382,8 @@ MIN_LIQUIDATION_DISTANCE_PCT=5
 **🚨 Neon DB credentials 긴급 회전 (보안 사고 즉시 대응)**:
 - 사고: 진단 중 `docker compose exec api env | grep DATABASE_URL` 로 Neon connection string 평문 노출 (대화 + 학습 risk)
 - 즉시 Neon Console (https://console.neon.tech/) → Reset password (2번 reset — 사장님 메모장 password 미스매치로 한 번 추가):
-  - 옛 password 1: `npg_5zVX9lPSQZon` (대화 노출)
-  - 옛 password 2: `npg_eY7bBnyWK2HD` (사장님 read -s 입력 시 화면 실수로 노출)
+  - 옛 password 1: `<제거됨: 폐기된 옛 비밀번호 — 저장소가 public 이라 2026-09-03 마스킹>` (대화 노출)
+  - 옛 password 2: `<제거됨: 폐기된 옛 비밀번호 — 저장소가 public 이라 2026-09-03 마스킹>` (사장님 read -s 입력 시 화면 실수로 노출)
   - 새 password (현재 작동): 마스킹 (사장님 메모장 → .env)
 - Connection pooling 토글 OFF + `channel_binding=require` 제거 = 옛 시스템과 100% 호환 형식 유지
 - 변환: `postgresql://...&channel_binding=require` → `postgresql+psycopg2://...?sslmode=require` (prefix + 끝 정리)
