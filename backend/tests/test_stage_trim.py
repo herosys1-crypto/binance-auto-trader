@@ -74,12 +74,16 @@ def test_1단계_100이든_1000이든_같은_10을_남긴다():
     assert keeps[0] >= D("10")
 
 
-def test_잔량이_보유량보다_크면_전량청산():
-    """포지션이 10 USDT 도 안 되면 남길 것이 없다."""
+def test_잔량목표가_보유량_이상이면_정리하지_않는다():
+    """🚨 Fix 324: 전량이 아니라 **SKIP** 이다.
+
+    사장님 사다리 1단계가 이 경우다 — 자본 10 이고 목표 잔량도 증거금 10.
+    사장님 "첫진입이 10이라 손절없이 그냥 2단계 300으로 진입", 그리고 주신
+    수치도 2단계 총 증거금이 310(=10+300) 이라 1단계가 살아 있다.
+    손절 경로는 SKIP 을 받으면 스스로 전량으로 떨어지므로 양쪽 다 옳다."""
     db = _DB(sym=ALT)
-    close, keep, why, _act = T.compute_trim(db, "X", D("100"), D("0.05"))   # 명목 5
-    assert keep == 0 and close == D("100"), why
-    assert "전량" in why
+    close, keep, why, act = T.compute_trim(db, "X", D("100"), D("0.05"))   # 명목 5
+    assert close == 0 and act == T.ACTION_SKIP, why
 
 
 # ── 🚨 dust 방지 ─────────────────────────────────────────────────────
@@ -114,13 +118,15 @@ def test_잔량은_stepSize_배수다():
         assert close % step == 0, close
 
 
-def test_청산분이_최소주문금액_미만이면_전량으로_떨어진다():
-    """🚨 Fix 305: 여기서 미실행으로 두면 그 심볼의 단계가 **영구히 멈춘다**
-    (호출자가 fail-CLOSED). 잔량을 남길 수 없는 크기이므로 전량 청산이 맞다."""
+def test_청산분이_최소주문금액_미만이면_정리하지_않는다():
+    """🚨 Fix 324: SKIP 이다 (전량 폴백 철회).
+
+    Fix 305 는 「영구 정지」를 막으려 전량으로 떨어뜨렸는데, Fix 316 이
+    SKIP/BLOCK 을 도입하면서 그 이유가 사라졌다 — SKIP 이면 진입이 그대로
+    진행되므로 정지하지 않는다. 전량으로 두면 사장님 1단계가 통째로 잘린다."""
     db = _DB(sym=_Sym(D("1"), D("1"), D("5")))
-    # 보유 명목 10.5, 잔량 목표 10 → 청산분 명목 0.5 < 5 → 전량으로
-    close, keep, why, _act = T.compute_trim(db, "X", D("21"), D("0.5"))
-    assert close == D("21") and keep == 0, why
+    close, keep, why, act = T.compute_trim(db, "X", D("21"), D("0.5"))
+    assert close == 0 and act == T.ACTION_SKIP, why
 
 
 # ── 🚨 불확실하면 아무것도 하지 않는다 ───────────────────────────────
@@ -262,14 +268,15 @@ def test_실측_근거가_모듈에_남아_있다():
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_BLOCKER4_사각지대에서_영구정지하지_않는다():
-    """🚨 보유 명목이 「목표 잔량 ~ 목표+MIN_NOTIONAL」이면 청산분이
-    MIN_NOTIONAL 미만이라 미실행 → 호출자가 fail-CLOSED 라 단계가 영원히 멈춘다.
-    이 구간은 전량 청산으로 떨어져야 한다."""
+    """🚨 이 구간이 **BLOCK 이면** 호출자(fail-CLOSED)가 단계를 영원히 멈춘다.
+
+    Fix 324 이후 SKIP 으로 떨어지므로 진입은 그대로 진행된다 = 정지하지 않는다.
+    핵심은 「BLOCK 이 아닐 것」이지 「청산할 것」이 아니다."""
     db = _DB(sym=_Sym(D("1"), D("1"), D("5")))
     for qty, px in ((D("24"), D("0.5")), (D("28"), D("0.5")), (D("13"), D("1"))):
-        close, keep, why, _act = T.compute_trim(db, "X", qty, px)
-        assert close > 0, f"영구 정지: qty={qty} px={px} — {why}"
-        if keep > 0:
+        close, keep, why, act = T.compute_trim(db, "X", qty, px)
+        assert act != T.ACTION_BLOCK, f"영구 정지: qty={qty} px={px} — {why}"
+        if close > 0 and keep > 0:
             assert keep * px >= D("5"), why          # dust 안 만든다
 
 
@@ -613,10 +620,11 @@ def test_정상_정리는_TRIM():
     assert close > 0 and act == T.ACTION_TRIM
 
 
-def test_전량_폴백도_TRIM():
+def test_남길_만큼_크지_않으면_SKIP():
+    """Fix 324: 전량 폴백을 철회했다 — 1단계를 자르지 않기 위해서."""
     db = _DB(sym=ALT)
-    close, keep, _w, act = T.compute_trim(db, "X", D("21"), D("0.5"))
-    assert close == D("21") and keep == 0 and act == T.ACTION_TRIM
+    close, _k, _w, act = T.compute_trim(db, "X", D("21"), D("0.5"))
+    assert close == 0 and act == T.ACTION_SKIP
 
 
 def test_호출부가_세_행동을_모두_구분한다():

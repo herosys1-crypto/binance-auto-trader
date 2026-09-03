@@ -1831,6 +1831,7 @@ class ExecutionService:
                     logger.warning("[Fix304] %s 현재가 조회 실패: %s", strategy.symbol, _me)
                 _close_qty, _keep_qty, _why, _act = compute_trim(
                     self.db, strategy.symbol, _cur_qty, _mark,
+                    leverage=strategy.leverage,      # Fix 324: 「10 usdt」는 증거금
                 )
                 if _act == ACTION_SKIP:
                     # 🌟 Fix 316: 「정리 불필요」는 **중단이 아니다.**

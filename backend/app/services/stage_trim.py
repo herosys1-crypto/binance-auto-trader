@@ -63,7 +63,7 @@ __all__ = [
 ]
 
 SETTING_ENABLED = "stage_trim_before_next_enabled"   # 기본 OFF (헌법 161)
-SETTING_KEEP_NOTIONAL = "stage_keep_notional_usdt"   # 사장님 「10 usdt」
+SETTING_KEEP_NOTIONAL = "stage_keep_notional_usdt"   # 사장님 「10 usdt」= **증거금**
 SETTING_MAX_CUM_LOSS = "stage_max_cumulative_loss_usdt"   # Fix 306: 누적 손실 상한
 SETTING_MIN_TRIM_RATIO = "stage_min_trim_ratio"           # Fix 311: 청산분/잔량 최소 배수
 SETTING_EXCLUDE_MODES = "stage_trim_exclude_modes"        # Fix 313: 추가 제외 (콤마)
@@ -232,7 +232,7 @@ def _filters(db, symbol: str):
         return None
 
 
-def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
+def compute_trim(db, symbol: str, position_qty, mark_price, leverage=1) -> tuple:
     """「10 USDT 만 남기고」 청산할 수량을 계산한다.
 
     Returns:
@@ -265,12 +265,37 @@ def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
         return zero, zero, f"{symbol} 거래소 필터 없음 (판정 불가)", ACTION_BLOCK
     step, min_qty, min_notional = f
 
-    # 목표 잔량 = max(사장님 설정, 그 심볼 최소치 x 여유)
-    target = keep_notional(db)
+    # ═══════════════════════════════════════════════════════════════════
+    # 🚨 Fix 324 (2026-09-03) — 사장님 「10 usdt」는 **증거금**이다.
+    #
+    #   사장님이 직접 계산해 주신 수치로 확정됐다 (SHORT 레버 2):
+    #
+    #     1단계 0.2000 진입 → 10 USDT 남기고 청산
+    #     0.2090 에서 잔량 평가손실 **-0.9 USDT = -9.00%**
+    #       → 잔량 명목이 20 이어야 나오는 값. 즉 **증거금 10**이다.
+    #         (명목 10 이면 -18% 가 나온다)
+    #     2단계 300 진입 → 총 증거금 **310**, 손실률 **-0.29%**, 평단 **0.2087**
+    #     3단계 600 진입 → 총 증거금 **610**, 손실률 **-0.10%**, 평단 **0.2149**
+    #
+    #   재현 결과가 사장님 수치와 **소수점까지 일치**한다.
+    #   내 옛 구현은 명목 10(증거금 5)이라 사장님 의도의 절반이었다.
+    #
+    #   레버리지를 못 받으면 1 로 두어 옛 동작(명목 기준)을 유지한다 — 조용히
+    #   두 배로 남기는 것보다 낫다.
+    # ═══════════════════════════════════════════════════════════════════
+    try:
+        _lev = Decimal(str(leverage or 1))
+        if _lev <= 0:
+            _lev = Decimal("1")
+    except Exception:
+        _lev = Decimal("1")
+
+    # 목표 잔량(명목) = 사장님 증거금 설정 x 레버리지
+    target = keep_notional(db) * _lev
+    # 거래소 최소치는 명목 기준이므로 그대로 비교한다
     floor_notional = min_notional * MIN_NOTIONAL_SAFETY
     if floor_notional > target:
         target = floor_notional
-
     # 잔량 수량 = 올림 (내림하면 목표 아래로 떨어져 못 팔 위험)
     keep_qty = (target / px / step).to_integral_value(rounding=ROUND_CEILING) * step
     if keep_qty < min_qty:
@@ -286,9 +311,18 @@ def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
             return zero, qty, (
                 f"보유 명목 {qty * px:.2f} < MIN_NOTIONAL {min_notional} → 정리 불필요"
             ), ACTION_SKIP
-        return qty, zero, (
-            f"잔량 목표({target:.2f} USDT = {keep_qty}) >= 보유 {qty} → 전량 청산"
-        ), ACTION_TRIM
+        # 🚨 Fix 324: **정리하지 않는다** (전량이 아니다).
+        #   사장님 사다리 1단계가 이 경우다 — 자본 10 USDT 이고 목표 잔량도
+        #   증거금 10 이라 남길 것과 가진 것이 같다.
+        #   사장님: "첫진입이 10이라 **손절없이 그냥** 2단계 300으로 진입"
+        #   사장님이 주신 수치도 2단계 총 증거금이 **310**(=10+300) 이므로
+        #   1단계 10 이 그대로 살아 있다.
+        #   ⚠️ 손절 경로는 SKIP 을 받으면 스스로 전량으로 떨어진다(손절은 반드시
+        #      나가야 한다). 단계 진입 경로만 「그냥 진입」이 된다.
+        return zero, qty, (
+            f"잔량 목표({target:.2f} USDT) >= 보유 명목({qty * px:.2f}) "
+            f"→ 남길 것이 없다 = 정리 불필요"
+        ), ACTION_SKIP
 
     close_qty = ((qty - keep_qty) / step).to_integral_value(rounding=ROUND_FLOOR) * step
     if close_qty <= 0:
@@ -303,14 +337,15 @@ def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
     #
     #   이 구간은 애초에 「10 을 남길 만큼 크지 않은 포지션」이다. 전량 청산으로
     #   떨어뜨리는 것이 맞다 — 잔량 0 이면 dust 문제도 없다.
+    # 🚨 Fix 324: **SKIP 이다** (전량 폴백 철회).
+    #   Fix 305 는 「영구 정지」를 막으려고 전량으로 떨어뜨렸는데, Fix 316 이
+    #   SKIP/BLOCK 을 도입하면서 그 이유가 사라졌다 — SKIP 이면 진입은 그대로
+    #   진행되므로 정지하지 않는다.
+    #   그리고 전량으로 두면 사장님 1단계(명목 20, 청산분 0.5)가 **통째로 잘린다.**
     if close_qty * px < min_notional:
-        if qty * px >= min_notional:
-            return qty, zero, (
-                f"청산분 명목 {close_qty * px:.2f} < MIN_NOTIONAL {min_notional} "
-                f"→ 잔량을 남길 수 없는 크기 = 전량 청산"
-            ), ACTION_TRIM
         return zero, qty, (
-            f"보유 명목 {qty * px:.2f} < MIN_NOTIONAL {min_notional} → 정리 불필요"
+            f"청산분 명목 {close_qty * px:.2f} < MIN_NOTIONAL {min_notional} "
+            f"→ 남길 만큼 크지 않다 = 정리 불필요"
         ), ACTION_SKIP
 
     # 🚨 Fix 311: 청산분이 잔량에 비해 너무 작으면 **손절이 아니다** → 미실행.

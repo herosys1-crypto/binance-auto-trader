@@ -577,6 +577,7 @@ class TPSLOrchestratorService:
                     _mark = self.execution_service._fetch_current_mark_price(strategy.symbol)
                     _c, _k, _why, _act = compute_trim(
                         self.db, strategy.symbol, current_qty, _mark,
+                        leverage=strategy.leverage,      # Fix 324
                     )
                     if _act == ACTION_TRIM and _c > 0 and _k > 0:
                         _close_qty, _keep_qty = _c, _k
@@ -684,6 +685,7 @@ class TPSLOrchestratorService:
                     _mark = self.execution_service._fetch_current_mark_price(strategy.symbol)
                     _c, _k, _why, _act = compute_trim(
                         self.db, strategy.symbol, current_qty, _mark,
+                        leverage=strategy.leverage,      # Fix 324
                     )
                     if _act == ACTION_TRIM and _c > 0:
                         _close_qty, _keep_qty = _c, _k
