@@ -86,6 +86,9 @@ def list_strategies(
     # TP 발동 카운트 + TRAILING 여부 batch fetch (UI 정확 표시용)
     strategy_ids = {r.id for r in rows}
     tp_counts = _fetch_tp_counts_batch(db, strategy_ids)
+    # 🧾 Fix 341: 사다리 계획 합계 batch (표기 분리용)
+    from app.api.v1.strategies.helpers import _fetch_ladder_batch, apply_capital_split
+    ladders = _fetch_ladder_batch(db, strategy_ids)
     out = []
     for r in rows:
         tpl = templates.get(r.strategy_template_id)
@@ -93,6 +96,7 @@ def list_strategies(
         cnt = tp_counts.get(r.id, {})
         resp.tp_triggered_count = cnt.get("tp_count", 0)
         resp.last_close_reason = _resolve_close_reason(r, cnt, resp.total_active_tps)
+        apply_capital_split(resp, r, ladders.get(r.id), db)
         out.append(resp)
     # 2026-05-20: 라이브 markPrice 로 unrealized_pnl 재계산 (Redis mget 1회).
     # 캐시 miss 인 심볼은 stored 값 유지 — backward-compat.
@@ -206,6 +210,9 @@ def get_strategy(
     counts = _fetch_tp_counts_batch(db, {strategy.id}).get(strategy.id, {})
     resp.tp_triggered_count = counts.get("tp_count", 0)
     resp.last_close_reason = _resolve_close_reason(strategy, counts, resp.total_active_tps)
+    # 🧾 Fix 341: 사다리 / 피라미딩 / 실제 증거금 분리 표기
+    from app.api.v1.strategies.helpers import _fetch_ladder_batch, apply_capital_split
+    apply_capital_split(resp, strategy, _fetch_ladder_batch(db, {strategy.id}).get(strategy.id), db)
     # 2026-05-20: 라이브 markPrice 로 unrealized_pnl 재계산.
     apply_live_unrealized_pnl(resp)
     return resp

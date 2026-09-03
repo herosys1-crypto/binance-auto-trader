@@ -116,6 +116,16 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # default 4 로 두면 backward-compat (이전 frontend 도 동작)
     total_active_stages: int = 4
     total_active_tps: int = 4
+    # ─── 🧾 Fix 341 (2026-09-04): 「사다리」와 「피라미딩」을 화면에서 가른다 ───
+    # 사장님: "이런 표기가 이상하잖아 완전 엉망이 되었네" (#2116: 진입 1/3 인데 702/1500)
+    #   「1/3」은 사다리 단계, 「702」는 피라미딩 포함 총 증거금 — 서로 다른 축인데
+    #   나란히 있어 "1단계 100인데 왜 702?" 로 읽힌다. 게다가 피라미딩이 total_capital
+    #   만 올려(1200→1500) 사다리 합(900)과 어긋난다.
+    #   → 세 값을 따로 준다. 계산 불가면 **None** (0 으로 채우면 그게 거짓 표시다).
+    ladder_capital: Decimal | None = None          # 단계 계획 합계 (사다리로 계획된 자본)
+    ladder_stage_count: int | None = None          # 단계 계획 개수
+    pyramid_capital: Decimal | None = None         # total_capital − ladder_capital (추가진입으로 더해진 자본)
+    invested_capital_computed: Decimal | None = None   # 체결 기준 실제 증거금 (Fix 333-b: 수량×평단÷레버)
     # 🌟 2026-08-06 v130 신 필드: template의 trigger_mode (구/OBV 구분!)
     # 'PRICE_DOWN_PCT' (기존) or 'OBV_REVERSE' (신)
     trigger_mode: str = "PRICE_DOWN_PCT"

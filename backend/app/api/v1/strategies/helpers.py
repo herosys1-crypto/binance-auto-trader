@@ -41,6 +41,48 @@ def _count_active_tps(tpl) -> int:
     return 20
 
 
+def _fetch_ladder_batch(db, strategy_ids: set[int]) -> dict[int, dict]:
+    """🧾 Fix 341: 전략별 「사다리 계획 자본 합계 + 단계 수」 batch fetch (N+1 방지).
+
+    Returns: {strategy_id: {"ladder_capital": Decimal, "stage_count": int}}
+    계획이 없는 전략은 키 자체가 없다 → 호출자는 None 으로 둔다 (0 으로 채우지 마라).
+    """
+    if not strategy_ids:
+        return {}
+    from sqlalchemy import func, select as sa_select
+    from app.models.strategy_stage_plan import StrategyStagePlan as SP
+    rows = db.execute(
+        sa_select(SP.strategy_instance_id,
+                  func.coalesce(func.sum(SP.planned_capital), 0),
+                  func.count(SP.id))
+        .where(SP.strategy_instance_id.in_(list(strategy_ids)))
+        .group_by(SP.strategy_instance_id)
+    ).all()
+    return {sid: {"ladder_capital": Decimal(str(total or 0)), "stage_count": int(cnt or 0)}
+            for sid, total, cnt in rows}
+
+
+def apply_capital_split(resp: StrategyDetailResponse, strategy, ladder: dict | None, db) -> StrategyDetailResponse:
+    """🧾 Fix 341: 사다리 / 피라미딩 / 실제 증거금을 응답에 채운다.
+
+    - ladder_capital / ladder_stage_count : 단계 계획에서 (없으면 None)
+    - pyramid_capital                     : total_capital − ladder_capital (둘 다 있을 때만, 0 미만이면 0)
+    - invested_capital_computed           : Fix 333-b 식 (수량 × 평단 ÷ 레버). 계산 불가면 None.
+    """
+    if ladder:
+        resp.ladder_capital = ladder.get("ladder_capital")
+        resp.ladder_stage_count = ladder.get("stage_count")
+        if resp.total_capital is not None and resp.ladder_capital is not None:
+            diff = Decimal(str(resp.total_capital)) - Decimal(str(resp.ladder_capital))
+            resp.pyramid_capital = diff if diff > 0 else Decimal("0")
+    try:
+        from app.services.capital_accounting import compute_invested_capital
+        resp.invested_capital_computed = compute_invested_capital(db, strategy)
+    except Exception:      # 표시용 — 실패해도 응답을 막지 않는다 (None 유지)
+        pass
+    return resp
+
+
 def _enrich_response(resp: StrategyDetailResponse, tpl) -> StrategyDetailResponse:
     """응답에 template 기반 카운트 채우기.
 
