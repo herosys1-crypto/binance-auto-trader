@@ -217,3 +217,52 @@ def test_실측_근거가_주석에_남아_있다():
     src = Path(G.__file__).read_text(encoding="utf-8")
     for token in ("1,546", "3.3%", "15분이 기준", "SAJANGNIM_TOP"):
         assert token in src, token
+
+
+# ═════════════════════════════════════════════════════════════════════
+# 🚨 Fix 331 — 합의 게이트도 같은 구조적 충돌을 갖는다
+#
+# 합의 판정 = EMA/VCP(돌파형) + SAR/구름대(추세추종).
+# **둘 다 추세추종**이라 정점에서 SHORT 를 승인할 수 없다 → AVOID.
+#
+# 실측 (게이트 도입 2026-08-31 전후):
+#   v219 정점SHORT  이전 280건 승률 29.6% 건당 +1.65 → 이후 35건 2.9% +0.62
+#   v219 저점LONG   이전 126건 -4.99      → 이후 30건 **-14.01**
+#   24시간에 SHORT 801건 차단.
+# ═════════════════════════════════════════════════════════════════════
+
+def test_Fix331_합의게이트도_반전전략은_막지_않는다():
+    from app.services import confluence_gate as C
+
+    assert C.reversal_exempt_enabled(_DB({})) is True
+    assert C.reversal_exempt_enabled(_DB({C.SETTING_REVERSAL_EXEMPT: "0"})) is False
+
+
+def test_Fix331_워커가_전략_종류를_넘긴다():
+    """🚨 안 넘기면 이 기능이 죽은 채로 산다."""
+    from app.workers import auto_bb_breakdown_worker as W
+    src = Path(W.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_create_auto_bb_strategy")
+    seg = ast.get_source_segment(src, fn) or ""
+    # 합의 게이트 호출에 db / strategy_kind 가 실려 있어야 한다
+    assert "_cg(" in seg
+    assert seg.count("strategy_kind=strategy_type_suffix") >= 2, \
+        "4H 게이트와 합의 게이트 **둘 다** 전략 종류를 넘겨야 한다"
+
+
+def test_Fix331_반전_판정을_한_곳에서만_정의한다():
+    """🚨 판정이 흩어지면 한쪽만 고치는 사고가 난다 (Fix 318→319 의 교훈).
+    합의 게이트는 4H 게이트의 is_reversal_strategy 를 **재사용**해야 한다."""
+    from app.services import confluence_gate as C
+    src = Path(C.__file__).read_text(encoding="utf-8")
+    assert "from app.services.trend_4h_gate import is_reversal_strategy" in src
+    assert "def is_reversal_strategy" not in src, "반전 판정이 두 번 정의됐다"
+
+
+def test_Fix331_실측_근거가_주석에_남아_있다():
+    from app.services import confluence_gate as C
+    src = Path(C.__file__).read_text(encoding="utf-8")
+    for token in ("+1.65", "-14.01", "801건", "둘 다 추세추종"):
+        assert token in src, token

@@ -1644,7 +1644,12 @@ def _create_auto_bb_strategy(
                         "[Fix251] %s 되돌림 판정 실패 = 통과: %s", symbol, _re251,
                     )
 
-            _allow, _why, _det = _cg(_cg_client, symbol, side)
+            # 🚨 Fix 331: 반전 계열이면 합의 판정도 **참고**로만 쓴다
+            #   (EMA/VCP·SAR 둘 다 추세추종이라 정점 SHORT 를 승인할 수 없다)
+            _allow, _why, _det = _cg(
+                _cg_client, symbol, side,
+                db=db, strategy_kind=strategy_type_suffix,
+            )
             if not _allow:
                 if _cg_on(db):
                     logger.warning(

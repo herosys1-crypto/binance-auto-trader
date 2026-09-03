@@ -44,9 +44,31 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["check_confluence_gate", "confluence_gate_enabled", "SETTING_KEY"]
+__all__ = [
+    "check_confluence_gate", "confluence_gate_enabled", "SETTING_KEY",
+    "SETTING_REVERSAL_EXEMPT", "reversal_exempt_enabled",
+]
 
 SETTING_KEY = "confluence_gate_enabled"
+SETTING_REVERSAL_EXEMPT = "confluence_reversal_exempt"   # Fix 331 — 기본 ON
+
+
+def reversal_exempt_enabled(db) -> bool:
+    """반전 전략에서 합의 판정을 참고로만 쓸 것인가 (기본 ON).
+
+    사장님 정정: "15분이 기준이고 4시간을 참고" — 추세추종 지표 두 개의 합의로
+    반전 진입을 막으면 사장님 사상 ①(급등 정점 SHORT)이 실행되지 않는다.
+    """
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_REVERSAL_EXEMPT)
+        if row is None or row.value is None or not str(row.value).strip():
+            return True
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:
+        logger.warning("[Fix331] %s 조회 실패 → 기본 ON: %s", SETTING_REVERSAL_EXEMPT, e)
+        return True
+
 
 
 def confluence_gate_enabled(db) -> bool:
@@ -59,7 +81,9 @@ def confluence_gate_enabled(db) -> bool:
         return False
 
 
-def check_confluence_gate(bc, symbol: str, side: str) -> tuple[bool, str, dict[str, Any]]:
+def check_confluence_gate(bc, symbol: str, side: str, *,
+                         db=None, strategy_kind: object = None,
+                         ) -> tuple[bool, str, dict[str, Any]]:
     """진입해도 되는가.
 
     Returns:
@@ -102,11 +126,53 @@ def check_confluence_gate(bc, symbol: str, side: str) -> tuple[bool, str, dict[s
         level = str(conf.get("level") or "?")
         score = conf.get("score")
         detail = {"blocked": blocked, "level": level, "score": score}
-        if blocked:
+
+        # ═══════════════════════════════════════════════════════════════
+        # 🚨 Fix 331 (2026-09-03) — 반전 전략에는 「참고」로만 쓴다
+        #
+        # 합의 판정은 **EMA/VCP(돌파형)** 와 **SAR/구름대(추세추종)** 두 개를 합친다.
+        # 🚨 **둘 다 추세추종 계열**이다. 정점에서는 가격이 아직 상승 추세이므로
+        #    SHORT 에 대해 둘 다 D등급이 나오는 것이 **당연**하다 → AVOID.
+        #    즉 정점 반전 전략은 **구조적으로 이 게이트를 통과할 수 없다.**
+        #    (Fix 270 4H 게이트와 정확히 같은 충돌이다 — Fix 330 참조)
+        #
+        # 실측 — 게이트 도입(2026-08-31) 전후:
+        #     v219 정점SHORT  이전 280건 승률 29.6% 건당 **+1.65**
+        #                     이후  35건 승률  2.9% 건당   +0.62
+        #     v219 저점LONG   이전 126건 건당 -4.99
+        #                     이후  30건 건당 **-14.01**
+        #   → 켠 뒤 **두 전략 모두 나빠졌다.** 24시간에 SHORT 801건을 막고 있었다.
+        #
+        # ⚠️ 표본이 작고(35/30건) 그 사이 다른 Fix 가 많이 들어가 교란이 있다.
+        #    그래서 「게이트가 나쁘다」고 단정하지 않고 **반전 전략에만** 내린다.
+        #    AVOID 227건 = 손실의 87% 라는 원 근거는 **전략 제안(추천 761건)**
+        #    표본에서 나온 것이고, v219 정점 진입과는 다른 모집단이다.
+        #
+        # 🚨 되돌리기: `confluence_reversal_exempt = 0`
+        # ═══════════════════════════════════════════════════════════════
+        _exempt = False
+        if blocked and db is not None and strategy_kind is not None:
+            try:
+                from app.services.trend_4h_gate import is_reversal_strategy
+                _exempt = is_reversal_strategy(strategy_kind) and reversal_exempt_enabled(db)
+            except Exception as _ee:      # 판정 실패가 매매를 막으면 안 된다
+                logger.debug("[Fix331] 반전 판정 실패 (무시): %s", _ee)
+                _exempt = False
+        detail["reversal_exempt"] = _exempt
+
+        if blocked and not _exempt:
             return (
                 False,
                 f"합의 판정 {level} (score={score}) "
                 f"[Fix247 실측: 이 구간이 손실의 87%, CONFLICT 적중률 16.4%]",
+                detail,
+            )
+        if blocked and _exempt:
+            # 참고만 — 「합의는 반대였다」를 기록으로 남긴다 (나중에 재려고)
+            detail["ref_note"] = f"합의 {level} (score={score})"
+            return (
+                True,
+                f"합의 참고: {level} (score={score}) — 반전 전략이라 막지 않음 (Fix 331)",
                 detail,
             )
         return True, f"합의 {level} (score={score})", detail
