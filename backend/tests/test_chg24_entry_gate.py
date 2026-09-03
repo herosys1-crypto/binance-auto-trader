@@ -26,17 +26,25 @@ class _DB:
 
 
 class _BC:
-    def __init__(self, chg=None, boom=False, as_list=False):
+    """순위 방식은 전체 티커 목록을 받는다 (symbol 인자 없이 호출)."""
+
+    def __init__(self, chg=None, boom=False, as_list=False, others=None, sym="X"):
         self.chg, self.boom, self.as_list = chg, boom, as_list
+        self.others = others or []
+        self.sym = sym          # 순위 방식은 symbol 인자 없이 전체를 받는다
 
     def get_24hr_ticker(self, symbol=None):
         if self.boom:
             raise RuntimeError("api down")
-        t = {"symbol": symbol, "priceChangePercent": str(self.chg)}
-        return [t] if self.as_list else t
+        me = {"symbol": symbol or self.sym, "priceChangePercent": str(self.chg),
+              "quoteVolume": "999999999"}
+        if symbol is not None:
+            return [me] if self.as_list else me
+        return [me] + list(self.others)
 
 
 ON = {G.SETTING_ENABLED: "1"}
+ABS = {G.SETTING_ENABLED: "1", G.SETTING_MODE: "abs"}
 
 
 # ── 사장님 지시 그대로 ────────────────────────────────────────────────
@@ -44,20 +52,20 @@ ON = {G.SETTING_ENABLED: "1"}
 def test_상승도_하락도_10퍼센트_이상이면_통과():
     """「상승과 하락」 = 절대값 기준. 급등도 급락도 대상이다."""
     for chg in (10.0, 12.5, 40.0, -10.0, -12.5, -40.0):
-        ok, why = G.passes(_DB(ON), _BC(chg), "X")
+        ok, why = G.passes(_DB(ABS), _BC(chg), "X")
         assert ok, f"{chg}% 가 막혔다 — {why}"
 
 
 def test_10퍼센트_미만은_막힌다():
     for chg in (9.99, 5.0, 0.0, -5.0, -9.99):
-        ok, why = G.passes(_DB(ON), _BC(chg), "X")
+        ok, why = G.passes(_DB(ABS), _BC(chg), "X")
         assert not ok, f"{chg}% 가 통과했다"
         assert "미충족" in why
 
 
 def test_경계값_10은_포함():
-    assert G.passes(_DB(ON), _BC(10.0), "X")[0] is True
-    assert G.passes(_DB(ON), _BC(-10.0), "X")[0] is True
+    assert G.passes(_DB(ABS), _BC(10.0), "X")[0] is True
+    assert G.passes(_DB(ABS), _BC(-10.0), "X")[0] is True
 
 
 # ── 「당분간」 = 끄고 켜고 값 바꾸기 ──────────────────────────────────
@@ -69,7 +77,7 @@ def test_기본은_꺼져있다():
 
 
 def test_임계값을_바꿀_수_있다():
-    db = _DB({G.SETTING_ENABLED: "1", G.SETTING_MIN_ABS: "15"})
+    db = _DB({G.SETTING_ENABLED: "1", G.SETTING_MODE: "abs", G.SETTING_MIN_ABS: "15"})
     assert G.passes(db, _BC(12.0), "X")[0] is False
     assert G.passes(db, _BC(16.0), "X")[0] is True
 
@@ -84,13 +92,13 @@ def test_손상값이면_기본_10():
 
 def test_수동진입은_게이트를_적용하지_않는다():
     """사장님이 손으로 넣으신 것을 자동 규칙으로 막으면 안 된다."""
-    ok, why = G.passes(_DB(ON), _BC(1.0), "X", template_name="_quick_20260903_1")
+    ok, why = G.passes(_DB(ABS), _BC(1.0), "X", template_name="_quick_20260903_1")
     assert ok and "수동" in why
 
 
 def test_자동_템플릿은_적용된다():
     for name in ("auto_bb_break_SAJANGNIM_TOP", "BB_MIDLINE_x", None):
-        ok, _w = G.passes(_DB(ON), _BC(1.0), "X", template_name=name)
+        ok, _w = G.passes(_DB(ABS), _BC(1.0), "X", template_name=name)
         assert not ok, name
 
 
@@ -98,7 +106,7 @@ def test_자동_템플릿은_적용된다():
 
 def test_조회_실패는_통과시킨다():
     """🚨 fail-closed 하면 API 가 한 번 흔들릴 때마다 모든 신규 진입이 멈춘다."""
-    ok, why = G.passes(_DB(ON), _BC(boom=True), "X")
+    ok, why = G.passes(_DB(ABS), _BC(boom=True), "X")
     assert ok and "fail-open" in why
 
 
@@ -107,7 +115,7 @@ def test_DB_장애도_통과():
 
 
 def test_리스트_응답도_처리한다():
-    assert G.passes(_DB(ON), _BC(20.0, as_list=True), "X")[0] is True
+    assert G.passes(_DB(ABS), _BC(20.0, as_list=True), "X")[0] is True
 
 
 # ── 🚨 어디에 걸렸는가 (이게 핵심) ────────────────────────────────────
@@ -143,3 +151,73 @@ def test_근거가_모듈에_남아_있다():
     doc = G.__doc__ or ""
     assert "start_stage1" in doc and "trigger_next_stage" in doc
     assert "_quick_" in doc
+
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fix 325 — 사장님 「상승 50 / 하락 50 = 100개」
+# ═══════════════════════════════════════════════════════════════════════
+
+def _tick(sym, chg):
+    return {"symbol": sym, "priceChangePercent": str(chg), "quoteVolume": "999999999"}
+
+
+def test_기본은_순위_방식이다():
+    assert G.gate_mode(_DB()) == "rank"
+    assert G.top_n(_DB()) == 50
+
+
+def _pool(n_up, n_dn):
+    """상승 n_up + 하락 n_dn 짜리 시장.
+
+    🚨 `top_movers` 는 심볼이 적으면 상승/하락 목록이 **겹친다**(docstring 경고).
+    그래서 대상이 한쪽에만 들도록 반대편을 충분히 두껍게 깐다.
+    """
+    return ([_tick("U%dUSDT" % i, 80 - i * 0.5) for i in range(1, n_up + 1)]
+            + [_tick("D%dUSDT" % i, -80 + i * 0.5) for i in range(1, n_dn + 1)])
+
+
+def test_상승_50위_안이면_통과():
+    """+3% 라도 상승 50위 안(21위)이면 대상이다 — 절대값 10% 방식이면 막혔다."""
+    ok, why = G.passes(_DB(ON), _BC(3.0, others=_pool(20, 60), sym="XUSDT"), "XUSDT")
+    assert ok and "상승" in why, why
+
+
+def test_하락_50위_안이면_통과():
+    ok, why = G.passes(_DB(ON), _BC(-3.0, others=_pool(60, 20), sym="XUSDT"), "XUSDT")
+    assert ok and "하락" in why, why
+
+
+def test_순위_밖이면_막힌다():
+    """상승 50 + 하락 50 어디에도 안 들면 대상이 아니다."""
+    ok, why = G.passes(_DB(ON), _BC(0.0, others=_pool(60, 60), sym="XUSDT"), "XUSDT")
+    assert not ok and "위 밖" in why, why
+
+
+def test_순위_개수를_설정으로_바꾼다():
+    """50위 안이던 것이 top_n=10 이면 밖이 된다 — 설정이 실제로 먹는다."""
+    n50 = _DB({G.SETTING_ENABLED: "1"})
+    n10 = _DB({G.SETTING_ENABLED: "1", G.SETTING_TOP_N: "10"})
+    assert G.top_n(n10) == 10
+
+    pool = _pool(20, 60)        # 대상 +3% = 상승 21위
+    assert G.passes(n50, _BC(3.0, others=pool, sym="XUSDT"), "XUSDT")[0]
+    assert not G.passes(n10, _BC(3.0, others=pool, sym="XUSDT"), "XUSDT")[0]
+
+
+def test_손상된_순위값은_기본_50():
+    for bad in ("", "abc", "0", "-1", "9999"):
+        assert G.top_n(_DB({G.SETTING_TOP_N: bad})) == 50, bad
+
+
+def test_abs_모드로_되돌릴_수_있다():
+    db = _DB({G.SETTING_ENABLED: "1", G.SETTING_MODE: "abs"})
+    assert G.gate_mode(db) == "abs"
+    assert G.passes(db, _BC(12.0), "X")[0] is True
+    assert G.passes(db, _BC(3.0), "X")[0] is False
+
+
+def test_시세_조회_실패는_통과():
+    """🚨 fail-closed 하면 API 가 흔들릴 때마다 모든 신규 진입이 멈춘다."""
+    ok, why = G.passes(_DB(ON), _BC(boom=True), "X")
+    assert ok and "fail-open" in why
