@@ -550,20 +550,79 @@ class TPSLOrchestratorService:
         = 사장님 손절 의사 = 그 전략 종료. 자동 재진입 시 사장님 의도 위반.
         """
         current_qty = abs(Decimal(str(strategy.current_position_qty)))
-        # 1) 미진입/미체결 LIMIT 주문 취소 (청산 후 자동 진입 worker 가 다시 포지션 만드는 것 차단).
-        try:
-            self.execution_service.client.cancel_all_orders(symbol=strategy.symbol)
-        except Exception as _e:
-            logger.warning("[force-sl] cancel_all_orders 실패 strategy=%s: %s", strategy.id, _e)
-        # 2) 전량 시장가 청산.
+
+        # ═══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 319 (2026-09-03) — **여기가 사장님이 쓰는 손절이다.**
+        #
+        #   사장님 손절 설정(`force_sl_roi_override` = -5% / -10%)은
+        #   `evaluate_force_stop_loss` → **이 함수**로 온다.
+        #   Fix 318 은 `_execute_stop_loss`(-80~90% 일반 SL)에 붙어서
+        #   **실제로는 아무 효과가 없었다.** #2046 AKEUSDT 가 전량 청산된 것도
+        #   이 함수를 탔기 때문이다. 사전 검증을 하지 않아 함수를 잘못 골랐다.
+        #
+        #   사장님: "전략인스턴스에 선택한 옵션으로 **부분 손절**하고 다음 트리거
+        #            단가에 포지션 진입" / "왜 이것도 10usdt 남기고 부분손절을
+        #            해야 하는데 왜 이런거야"
+        #
+        #   → 손절 수량을 `compute_trim` 이 정한다.
+        #     TRIM  : 10 USDT 만 남기고 청산 (사장님 사양) → **전략을 살려 둔다**
+        #     그 외  : 전량 청산 (손절을 건너뛰면 손실이 무한정 커진다)
+        # ═══════════════════════════════════════════════════════════════════
+        _close_qty = current_qty
+        _keep_qty = Decimal("0")
         if current_qty > 0:
             try:
-                self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
+                from app.services.stage_trim import ACTION_TRIM, compute_trim, trim_enabled
+                if trim_enabled(self.db, strategy):
+                    _mark = self.execution_service._fetch_current_mark_price(strategy.symbol)
+                    _c, _k, _why, _act = compute_trim(
+                        self.db, strategy.symbol, current_qty, _mark,
+                    )
+                    if _act == ACTION_TRIM and _c > 0 and _k > 0:
+                        _close_qty, _keep_qty = _c, _k
+                        logger.warning(
+                            "[Fix319] %s #%s **부분 손절**: %s 청산 / %s 잔여 — %s",
+                            strategy.symbol, strategy.id, _c, _k, _why,
+                        )
+                    else:
+                        logger.info("[Fix319] %s #%s 전량 손절 (%s): %s",
+                                    strategy.symbol, strategy.id, _act, _why)
+            except Exception as _fe:
+                logger.warning("[Fix319] %s 부분 손절 판정 실패 → 전량: %s",
+                               strategy.symbol, _fe)
+
+        # 1) 미체결 LIMIT 취소 — 🚨 **부분 손절이면 취소하지 않는다.**
+        #    다음 단계 트리거 LIMIT 이 지워지면 사장님 사다리가 사라진다.
+        if _keep_qty <= 0:
+            try:
+                self.execution_service.client.cancel_all_orders(symbol=strategy.symbol)
+            except Exception as _e:
+                logger.warning("[force-sl] cancel_all_orders 실패 strategy=%s: %s", strategy.id, _e)
+
+        # 2) 시장가 청산 (전량 또는 잔량 남기고).
+        if current_qty > 0:
+            try:
+                self.execution_service.emergency_close_position(
+                    strategy.id, quantity=_close_qty,
+                    for_stage_transition=bool(_keep_qty > 0),
+                )
             except EmergencyCloseInProgress:
                 return  # 다른 caller 가 청산 중 — 다음 cycle 재시도
             except ValueError:
                 # 거래소 포지션 0 — emergency_close 가 이미 미체결 취소 + STOPPED 마킹함.
                 pass
+
+        # 🚨 부분 손절이면 전략을 **종료하지 않는다.**
+        #    STOPPING 을 찍으면 stream_service 가 STOPPED(터미널)로 확정해
+        #    잔량도 「남겨두기」도 다음 단계 진입도 전부 깨진다.
+        if _keep_qty > 0:
+            logger.info(
+                "[Fix319] %s #%s 잔량 %s 유지 — 전략 종료하지 않음 (다음 단계 트리거 대기)",
+                strategy.symbol, strategy.id, _keep_qty,
+            )
+            self.db.commit()
+            return
+
         # 3) 종료 마킹 (STOPPING → reconcile 가 flat 확인 시 STOPPED). 재진입 X.
         strategy.status = "STOPPING"
         self.db.commit()

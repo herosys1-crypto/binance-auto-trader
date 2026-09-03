@@ -70,3 +70,53 @@ def test_전량_손절도_여전히_가능하다():
 def test_실측_근거가_주석에_남아_있다():
     src = _fn("_execute_stop_loss")
     assert "#2046" in src and "부분 손절" in src
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fix 319 — 🚨 사장님이 실제로 쓰는 손절은 `_execute_force_stop_loss` 다
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_force_SL_이_사장님_손절_경로다():
+    """🚨 `force_sl_roi_override`(-5%/-10%) 는 evaluate_force_stop_loss →
+    _execute_force_stop_loss 로 온다. Fix 318 이 붙은 _execute_stop_loss 는
+    -80~90% 일반 SL 이라 **사장님 설정과 무관**했다."""
+    run = _fn("run_once") if "def run_once" in SRC else SRC
+    assert "evaluate_force_stop_loss" in SRC
+    i_force = SRC.index("self._execute_force_stop_loss(strategy)")
+    i_norm = SRC.index("self._execute_stop_loss(strategy)")
+    assert i_force < i_norm, "force SL 이 먼저 판정된다"
+
+
+def test_force_SL도_부분_손절을_한다():
+    src = _fn("_execute_force_stop_loss")
+    assert "compute_trim" in src, "여기 없으면 사장님 설정 손절이 전량으로 나간다"
+    assert "trim_enabled(self.db, strategy)" in src
+
+
+def test_force_SL_부분일_때_주문을_취소하지_않는다():
+    """🚨 다음 단계 트리거 LIMIT 이 지워지면 사다리가 사라진다."""
+    src = _fn("_execute_force_stop_loss")
+    i_guard = src.index("if _keep_qty <= 0:")
+    i_cancel = src.index("cancel_all_orders")
+    assert i_guard < i_cancel
+
+
+def test_force_SL_부분일_때_전략을_종료하지_않는다():
+    src = _fn("_execute_force_stop_loss")
+    i_keep = src.index("if _keep_qty > 0:")
+    i_stop = src.index('strategy.status = "STOPPING"')
+    assert i_keep < i_stop
+    assert "return" in src[i_keep:i_stop]
+
+
+def test_잔량이_0이면_부분으로_치지_않는다():
+    """🚨 keep=0 인 전량 폴백을 「부분」으로 오인하면 STOPPING 을 안 찍어
+    좀비가 된다."""
+    src = _fn("_execute_force_stop_loss")
+    assert "_act == ACTION_TRIM and _c > 0 and _k > 0" in src
+
+
+def test_두_손절_경로가_같은_규칙을_쓴다():
+    """일반 SL(Fix 318)과 force SL(Fix 319) 둘 다 compute_trim 을 쓴다."""
+    for name in ("_execute_stop_loss", "_execute_force_stop_loss"):
+        assert "compute_trim" in _fn(name), name
