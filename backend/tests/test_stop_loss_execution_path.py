@@ -121,9 +121,20 @@ class _DB:
             return type("R", (), {"value": self._s[key]})()
         return None
 
+    #: Fix 332 — 다음 단계 계획이 있는가 (테스트가 갈아끼운다)
+    next_stage = 2
+
     def execute(self, _stmt):
+        outer = self
+
         class _R:
             def scalar_one_or_none(self_inner):
+                # 🩸 Fix 332: StrategyStagePlan 조회면 다음 단계를 흉내낸다.
+                txt = str(_stmt).lower()
+                if "strategy_stage_plan" in txt:
+                    if outer.next_stage is None:
+                        return None
+                    return type("P", (), {"stage_no": outer.next_stage})()
                 return _Sym()
         return _R()
 
@@ -373,3 +384,87 @@ def test_Fix326_두_손절_경로가_같은_판정을_쓴다():
         seg = ast.get_source_segment(src, fn) or ""
         assert "ACTION_SKIP" in seg, f"{name} 이 SKIP 을 보지 않는다"
         assert "elif _act == ACTION_SKIP:" in seg, f"{name} 의 SKIP 분기가 없다"
+
+
+# ═════════════════════════════════════════════════════════════════════
+# 🩸 Fix 332 — Fix 326 이 만든 「손절 영구 면제」를 막는다
+#
+# 감사(2026-09-03)가 잡아낸 1순위 위험:
+#   stage_min_trim_ratio = 2 라 보유 명목이 60 USDT 미만이면
+#   -5% / -10% / -50% / -400% ROI 어디서든 compute_trim 이 SKIP 을 낸다.
+#   Fix 326 은 SKIP 이면 손절하지 않고 return → **손절이 아예 안 나간다.**
+#   실제로 #1988 TQQQUSDT(자본 10, 명목 20, 단계 1개)가 36시간째 그 상태였다.
+#
+# → 다음 단계가 **있으면** 잔량 유지(사장님 루프 계속),
+#   **없으면** 전량 청산(루프 종료). 이것이 유일한 안전한 경계다.
+# ═════════════════════════════════════════════════════════════════════
+
+def test_Fix332_다음단계가_없으면_잔량이라도_전량_손절():
+    """🩸 이것이 없으면 소액 포지션의 손절이 영영 안 나간다."""
+    st = _Strategy(qty=-184, avg="0.05")
+    svc, calls = _make(st, mark="0.1072", settings=TRIM_ON)   # 명목 19.72 → SKIP
+    svc.db.next_stage = None                                   # 다음 단계 없음
+
+    svc._execute_force_stop_loss(st)
+
+    assert len(calls.closes) == 1, f"손절이 안 나갔다: {calls.closes}"
+    assert calls.closes[0][0] == D("184"), "전량이어야 한다"
+
+
+def test_Fix332_다음단계가_있으면_잔량_유지():
+    """사장님 사양은 그대로 지킨다 — 2단계가 기다리면 잔량을 남긴다."""
+    st = _Strategy(qty=-184, avg="0.05")
+    svc, calls = _make(st, mark="0.1072", settings=TRIM_ON)
+    svc.db.next_stage = 2                                      # 2단계 대기
+
+    svc._execute_force_stop_loss(st)
+
+    assert calls.closes == [], f"잔량을 청산했다: {calls.closes}"
+    assert st.status != "STOPPING"
+
+
+def test_Fix332_1단계_소액도_다음단계_없으면_닫는다():
+    """1단계 10 USDT x 레버2 = 명목 20. 사다리가 1개뿐이면 방치하면 안 된다."""
+    st = _Strategy(qty=-400, avg="0.05")
+    svc, calls = _make(st, mark="0.05", settings=TRIM_ON)
+    svc.db.next_stage = None
+
+    svc._execute_force_stop_loss(st)
+
+    assert len(calls.closes) == 1 and calls.closes[0][0] == D("400")
+
+
+def test_Fix332_조회_실패하면_닫는다_failSAFE():
+    """🚨 판정 불가일 때 방치보다 닫는 쪽이 안전하다.
+    (단계 진입 게이트의 fail 방향과 **반대**다 — 거기선 안 사면 그만이다.)"""
+    st = _Strategy(qty=-184, avg="0.05")
+    svc, calls = _make(st, mark="0.1072", settings=TRIM_ON)
+
+    def _boom(_stmt):
+        raise RuntimeError("DB 끊김")
+    svc.db.execute = _boom
+
+    svc._execute_force_stop_loss(st)
+    assert len(calls.closes) == 1, "조회 실패인데 손절이 안 나갔다"
+
+
+def test_Fix332_일반_SL도_같은_규칙():
+    st = _Strategy(qty=-184, avg="0.05")
+    svc, calls = _make(st, mark="0.1072", settings=TRIM_ON)
+    svc.db.next_stage = None
+
+    svc._execute_stop_loss(st)
+    assert len(calls.closes) == 1, "일반 SL 이 잔량을 방치했다"
+
+
+def test_Fix332_두_손절_경로가_같은_판정을_쓴다():
+    import ast
+    from pathlib import Path
+    src = Path(O.__file__).read_text(encoding="utf-8")
+    assert src.count("def _has_next_stage") == 1, "판정이 두 번 정의됐다"
+    tree = ast.parse(src)
+    for name in ("_execute_force_stop_loss", "_execute_stop_loss"):
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == name)
+        seg = ast.get_source_segment(src, fn) or ""
+        assert "self._has_next_stage(strategy)" in seg, f"{name} 이 다음단계를 안 본다"

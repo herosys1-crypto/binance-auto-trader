@@ -542,6 +542,50 @@ class TPSLOrchestratorService:
             closed_qty=close_qty, remaining_qty=remaining_qty,
         )
 
+
+    def _has_next_stage(self, strategy) -> tuple[bool, str]:
+        """다음 단계 계획이 남아 있는가.
+
+        🩸 Fix 332 — Fix 326 이 만든 위험을 막는다.
+
+        Fix 326 은 `ACTION_SKIP`(=이미 잔량 수준) 이면 손절하지 않고 잔량을
+        유지한다. 사장님 사양「10 USDT 남기고 **다음 단계 진입**」의 앞부분이다.
+
+        🚨 그런데 **다음 단계가 없으면** 그 잔량은 영원히 안 닫힌다.
+           `stage_min_trim_ratio = 2` 때문에 보유 명목이 60 USDT 미만이면
+           -5% 든 -400% 든 **전 구간 SKIP** 이다(감사에서 전 손실구간 재현 확인).
+           즉 손절 주문이 **아예 나가지 않고** 증거금 전액을 거래소 강제청산까지
+           끌고 간다. 실제로 #1988 TQQQUSDT(자본 10, 명목 20, 단계 1개)가
+           36시간째 그 상태였다.
+
+        → **다음 단계가 있으면 잔량 유지(사장님 루프 계속), 없으면 전량 청산(루프 종료).**
+          이것이 사장님 사양을 지키면서 손절 공백을 없애는 유일한 경계다.
+
+        ⚠️ fail-SAFE: 조회에 실패하면 **「다음 단계 없음」**으로 본다.
+           판정 불가일 때 잔량을 방치하는 것보다 닫는 쪽이 안전하다
+           (단계 진입 게이트의 fail 방향과 반대다 — 거기선 안 사면 그만이지만
+            여기선 안 닫으면 손실이 커진다).
+        """
+        try:
+            from sqlalchemy import select
+            from app.models.strategy_stage_plan import StrategyStagePlan
+            cur = int(getattr(strategy, "current_stage", 1) or 1)
+            row = self.db.execute(
+                select(StrategyStagePlan)
+                .where(StrategyStagePlan.strategy_instance_id == strategy.id)
+                .where(StrategyStagePlan.stage_no > cur)
+                .limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                return False, f"다음 단계 계획 없음 (현재 {cur}단계가 마지막)"
+            return True, f"{row.stage_no}단계 대기 중"
+        except Exception as e:
+            logger.warning(
+                "[Fix332] #%s 다음 단계 조회 실패 → 「없음」으로 본다 (fail-SAFE): %s",
+                getattr(strategy, "id", "?"), e,
+            )
+            return False, f"조회 실패 (fail-SAFE): {e}"
+
     def _execute_force_stop_loss(self, strategy) -> None:
         """손실 한도 강제 청산 실행 (FORCE_SL_LOSS_LIMIT_SPEC 2026-06-24).
 
@@ -615,12 +659,20 @@ class TPSLOrchestratorService:
                     elif _act == ACTION_SKIP:
                         # 🚨 Fix 326: 이미 「10 USDT 잔량」 상태다.
                         #   여기서 전량 청산하면 사장님 사양이 사라진다.
-                        #   손절하지 않고 그대로 두고 다음 단계 트리거를 기다린다.
-                        logger.info(
-                            "[Fix326] %s #%s 잔량 유지 — 손절하지 않음 (%s): %s",
-                            strategy.symbol, strategy.id, _act, _why,
+                        # 🩸 Fix 332: 단, **다음 단계가 있을 때만** 유지한다.
+                        #   없으면 그 잔량은 영원히 안 닫혀 손절이 사라진다.
+                        _nx, _nxwhy = self._has_next_stage(strategy)
+                        if _nx:
+                            logger.info(
+                                "[Fix326] %s #%s 잔량 유지 — 손절하지 않음 (%s): %s | %s",
+                                strategy.symbol, strategy.id, _act, _why, _nxwhy,
+                            )
+                            return
+                        logger.warning(
+                            "[Fix332] %s #%s **전량 손절** — 잔량이지만 %s "
+                            "(유지하면 손절이 영영 안 나간다): %s",
+                            strategy.symbol, strategy.id, _nxwhy, _why,
                         )
-                        return
                     else:
                         logger.info("[Fix319] %s #%s 전량 손절 (%s): %s",
                                     strategy.symbol, strategy.id, _act, _why)
@@ -738,11 +790,18 @@ class TPSLOrchestratorService:
                         )
                     elif _act == ACTION_SKIP:
                         # 🚨 Fix 326: 이미 잔량 수준 → 손절하지 않고 그대로 둔다.
-                        logger.info(
-                            "[Fix326] %s #%s 잔량 유지 — 손절하지 않음 (%s): %s",
-                            strategy.symbol, strategy.id, _act, _why,
+                        # 🩸 Fix 332: 단, 다음 단계가 있을 때만 (없으면 영구 방치가 된다).
+                        _nx2, _nxwhy2 = self._has_next_stage(strategy)
+                        if _nx2:
+                            logger.info(
+                                "[Fix326] %s #%s 잔량 유지 — 손절하지 않음 (%s): %s | %s",
+                                strategy.symbol, strategy.id, _act, _why, _nxwhy2,
+                            )
+                            return
+                        logger.warning(
+                            "[Fix332] %s #%s **전량 손절** — 잔량이지만 %s: %s",
+                            strategy.symbol, strategy.id, _nxwhy2, _why,
                         )
-                        return
                     else:
                         logger.info(
                             "[Fix318] %s #%s 전량 손절 (%s): %s",
