@@ -663,10 +663,22 @@ async function refreshStrategies() {
       //   옛 4줄 (qty + margin + notional + 버튼) → 신 2줄 (qty · margin/plan% + 버튼)
       //   notional 별줄 = 완전 삭제 → planTooltip hover 로 확인 (정보 손실 X)
       //   margin 폰트 14→12, qty 10→9, 세로 30px+ 절감/행
+      // 🧾 Fix 341 (2026-09-04): 「사다리」와 「피라미딩」을 가른다.
+      //   #2116: 「진입 1/3」 옆에 「702/1500」 — 1/3 은 사다리 단계, 702 는 피라미딩 포함 총 증거금.
+      //   서로 다른 축이 나란히 있어 "1단계 100인데 왜 702?" 로 읽혔다 (사장님: "표기가 완전 엉망").
+      //   백엔드(helpers.apply_capital_split)가 ladder_capital / pyramid_capital 을 따로 준다.
+      //   🚨 계산 불가 = null → 이 줄 자체를 안 그린다 (0 으로 채우면 그게 거짓 표시다).
+      const _ladderCap = (s.ladder_capital === null || s.ladder_capital === undefined) ? null : Number(s.ladder_capital);
+      const _pyrCap = (s.pyramid_capital === null || s.pyramid_capital === undefined) ? 0 : Number(s.pyramid_capital);
+      const _ladderN = s.ladder_stage_count || s.total_active_stages || '?';
+      const ladderTag = (hasPosition && _ladderCap !== null && Number.isFinite(_ladderCap))
+        ? `<div class="text-slate-400" style="font-size:var(--font-sm);white-space:nowrap" title="사다리 계획 ${_ladderCap.toFixed(0)} USDT (${_ladderN}단계)${_pyrCap > 0 ? `\n피라미딩(수익중 추가) +${_pyrCap.toFixed(0)} USDT → 계획 자본 ${plannedMargin.toFixed(0)}` : ''}\n실제 증거금 ${positionMargin.toFixed(0)} = 체결 수량 × 평단 ÷ ${sLev}x">사다리 ${s.current_stage}/${_ladderN} 계획 ${_ladderCap.toFixed(0)}${_pyrCap > 0 ? ` · 피라미딩 +${_pyrCap.toFixed(0)}` : ''}</div>`
+        : '';
       const qtyStack = hasPosition
         ? `<div class="leading-none" style="white-space:nowrap">
             <span class="${qtyColor}" style="font-size:var(--font-sm)" title="${qtyTooltip}\n\n📊 notional = 마진 × ${sLev}x = ${positionNotionalDisp.toFixed(0)}/${plannedNotionalDisp.toFixed(0)} USDT">${qtySideIcon} ${fmtQty(sQtyAbs)}</span>
             <span class="text-slate-100 font-bold" title="${planTooltip}" style="font-size:var(--font-xl)"> ${positionMargin.toFixed(0)}/${plannedMargin.toFixed(0)} <span class="${entryColor}">${entryPct.toFixed(0)}%</span></span>
+            ${ladderTag}
             <div style="margin-top:1px;line-height:1">${addMarginBtnInQty}${addPositionBtn}${manualTpBtn}</div>
           </div>`
         : `<div class="leading-none" style="white-space:nowrap">
