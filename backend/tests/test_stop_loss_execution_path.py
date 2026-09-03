@@ -193,14 +193,23 @@ def test_force_SL_부분이면_미체결_주문을_취소하지_않는다():
 # 전량이어야 하는 경우
 # ─────────────────────────────────────────────────────────────────────
 
-def test_1단계_소액은_전량_손절된다():
-    """1단계 10 USDT x 레버2 = 명목 20 → 10 을 남기면 절반뿐이라 의미가 없다.
-    손절은 반드시 나가야 하므로 전량이 맞다."""
-    st = _Strategy(qty=-400, avg="0.05")     # 명목 20
+def test_1단계_소액은_손절하지_않는다():
+    """🚨 Fix 326 — 기대를 **뒤집었다**.
+
+    이 테스트는 원래 "전량 손절되어야 한다"였다. 사장님 사양과 반대였다:
+
+        사장님: "첫진입이 10이라 **손절없이 그냥** 좋은 포지션에
+                 2단계 300으로 진입후 손실이면 부분손절후 10 남기고"
+
+    1단계 10 USDT x 레버2 = 명목 20 = 목표 잔량과 같다. 남길 것이 없으니
+    청산할 것도 없다. 전량 청산하면 사장님이 「손절없이 그냥」 넘어가라고
+    하신 단계에서 포지션이 사라진다.
+    """
+    st = _Strategy(qty=-400, avg="0.05")     # 명목 20 = 1단계 10 x 레버2
     svc, calls = _make(st, mark="0.05", settings=TRIM_ON)
     svc._execute_force_stop_loss(st)
-    assert calls.closes[0][0] == D("400"), "전량이어야 한다"
-    assert st.status == "STOPPING"
+    assert calls.closes == [], f"손절이 나갔다: {calls.closes}"
+    assert st.status != "STOPPING", "전략을 죽이면 다음 단계가 없다"
 
 
 def test_trim이_꺼져있으면_전량_손절():
@@ -279,3 +288,88 @@ def test_모든_손절_경로가_실제로_부분_주문을_낸다(fn_name):
     getattr(svc, fn_name)(st)
     assert calls.closes, f"{fn_name}: 주문이 안 나갔다"
     assert calls.closes[0][0] < D("12000"), f"{fn_name}: 전량이 나갔다"
+
+
+# ═════════════════════════════════════════════════════════════════════
+# 🚨 Fix 326 — 남긴 10 USDT 를 다음 사이클이 죽이던 사고
+#
+# 사장님: "10usdt는 남기는 부분 손절을 하라고 했잖아 **언제까지 이렇게 하나**"
+#
+# 실서버 로그 (2026-09-03):
+#   07:55:00  MARSCOIN #2091 부분 손절 → 184 잔여 (명목 20.04)   ✅
+#   08:00:22  MARSCOIN #2091 「남길 것이 없다」 → 전량 청산       ❌ 5분 뒤
+#   08:01:52  HEMI #2095 부분 손절 → 1173 잔여 (명목 20.01)      ✅
+#   08:02:09  HEMI #2095 「남길 만큼 크지 않다」 → 전량 청산      ❌ 17초 뒤
+#
+# 한 번의 부분 손절이 성공해도 **다음 사이클이 잔량을 지우면**
+# 사양은 구현되지 않은 것과 같다.
+# ═════════════════════════════════════════════════════════════════════
+
+def test_Fix326_남긴_잔량을_다음_사이클이_죽이지_않는다():
+    """MARSCOIN #2091 재현 — 잔량 184 (명목 19.73) 가 또 손절 대상이 됐을 때."""
+    st = _Strategy(qty=-184, avg="0.05")
+    svc, calls = _make(st, mark="0.1072", settings=TRIM_ON)   # 명목 19.72
+
+    svc._execute_force_stop_loss(st)
+
+    assert calls.closes == [], f"잔량을 청산했다: {calls.closes}"
+    assert calls.cancels == [], "미체결 취소가 나가면 다음 단계 LIMIT 이 사라진다"
+    assert st.status != "STOPPING", "전략이 죽으면 다음 단계 진입이 없다"
+
+
+def test_Fix326_청산분이_너무_작아도_잔량을_죽이지_않는다():
+    """HEMI #2095 재현 — 보유 명목 20.29, 목표 20 → 청산분 0.29 < MIN_NOTIONAL."""
+    st = _Strategy(qty=-1173, avg="0.0166")
+    svc, calls = _make(st, mark="0.0173", settings=TRIM_ON)   # 명목 20.29
+
+    svc._execute_force_stop_loss(st)
+
+    assert calls.closes == [], f"잔량을 청산했다: {calls.closes}"
+    assert st.status != "STOPPING"
+
+
+def test_Fix326_큰_포지션은_여전히_부분_손절된다():
+    """잔량 보호가 「손절을 아예 안 한다」가 되면 안 된다."""
+    st = _Strategy(qty=-12000, avg="0.05")   # 명목 600
+    svc, calls = _make(st, mark="0.05", settings=TRIM_ON)
+
+    svc._execute_force_stop_loss(st)
+
+    assert len(calls.closes) == 1, "큰 포지션은 반드시 부분 손절이 나가야 한다"
+    qty, for_stage = calls.closes[0]
+    assert D("0") < qty < D("12000")
+    assert for_stage is True
+
+
+def test_Fix326_trim이_꺼지면_옛_동작_전량():
+    """스위치를 끄면 남의 전략 동작을 바꾸지 않는다."""
+    st = _Strategy(qty=-184, avg="0.05")
+    svc, calls = _make(st, mark="0.1072", settings={})
+
+    svc._execute_force_stop_loss(st)
+
+    assert len(calls.closes) == 1 and calls.closes[0][0] == D("184"),         f"trim OFF 인데 전량이 안 나갔다: {calls.closes}"
+
+
+def test_Fix326_일반_SL도_같은_규칙():
+    """-80~90% 일반 SL 경로도 잔량을 죽이면 안 된다 (두 경로가 갈리면 또 사고)."""
+    st = _Strategy(qty=-184, avg="0.05")
+    svc, calls = _make(st, mark="0.1072", settings=TRIM_ON)
+
+    svc._execute_stop_loss(st)
+
+    assert calls.closes == [], f"일반 SL 이 잔량을 청산했다: {calls.closes}"
+
+
+def test_Fix326_두_손절_경로가_같은_판정을_쓴다():
+    """🚨 한쪽만 고치는 사고가 반복됐다 (Fix 318 → 319). 둘 다 SKIP 을 본다."""
+    import ast
+    from pathlib import Path
+    src = Path(O.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    for name in ("_execute_force_stop_loss", "_execute_stop_loss"):
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == name)
+        seg = ast.get_source_segment(src, fn) or ""
+        assert "ACTION_SKIP" in seg, f"{name} 이 SKIP 을 보지 않는다"
+        assert "elif _act == ACTION_SKIP:" in seg, f"{name} 의 SKIP 분기가 없다"

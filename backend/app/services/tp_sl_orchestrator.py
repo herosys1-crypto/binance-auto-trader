@@ -566,13 +566,40 @@ class TPSLOrchestratorService:
         #
         #   → 손절 수량을 `compute_trim` 이 정한다.
         #     TRIM  : 10 USDT 만 남기고 청산 (사장님 사양) → **전략을 살려 둔다**
-        #     그 외  : 전량 청산 (손절을 건너뛰면 손실이 무한정 커진다)
+        #     SKIP  : **이미 잔량만 남았다 → 손절하지 않고 그대로 둔다** (Fix 326)
+        #     BLOCK : 판정 불가 → 전량 청산 (안전측)
+        #
+        # ═══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 326 (2026-09-03) — 남긴 10 USDT 를 다음 사이클이 죽이고 있었다.
+        #
+        #   사장님: "10usdt는 남기는 부분 손절을 하라고 했잖아 **언제까지 이렇게 하나**"
+        #
+        #   실서버 로그가 정확히 보여줬다:
+        #     07:55:00  MARSCOIN #2091 부분 손절 → 184 잔여 (명목 20.04)   ✅
+        #     08:00:22  MARSCOIN #2091 「남길 것이 없다」 → **전량 청산**   ❌ 5분 뒤
+        #     08:01:52  HEMI #2095 부분 손절 → 1173 잔여 (명목 20.01)      ✅
+        #     08:02:09  HEMI #2095 「남길 만큼 크지 않다」 → **전량 청산**  ❌ 17초 뒤
+        #
+        #   남긴 잔량은 여전히 손절 ROI 아래라 **다음 사이클에 또 손절 대상**이 된다.
+        #   그때 compute_trim 은 SKIP(=이미 잔량 수준)을 돌려주는데, 내가 그것을
+        #   「전량 청산」으로 처리해 사장님 사양을 스스로 지웠다.
+        #
+        #   내가 근거로 적었던 "손절을 건너뛰면 손실이 무한정 커진다"는 **틀렸다.**
+        #   잔량 증거금이 10 USDT 면 최대 손실도 10 USDT 다. 무한정 커지지 않는다.
+        #   반대로 전량 청산하면 「다음 단계 트리거 대기」가 통째로 사라진다
+        #   (화면에 「(미진입) 자본 1600 USDT」로 나온 것이 그 결과다).
+        #
+        #   🔁 교훈: **부분 청산을 만들면 「남긴 것」이 다음 사이클에 어떻게
+        #      취급되는지 반드시 따라가라.** 한 번의 부분 손절은 성공해도
+        #      다음 사이클이 그것을 지우면 사양은 구현되지 않은 것과 같다.
         # ═══════════════════════════════════════════════════════════════════
         _close_qty = current_qty
         _keep_qty = Decimal("0")
         if current_qty > 0:
             try:
-                from app.services.stage_trim import ACTION_TRIM, compute_trim, trim_enabled
+                from app.services.stage_trim import (
+                    ACTION_SKIP, ACTION_TRIM, compute_trim, trim_enabled,
+                )
                 if trim_enabled(self.db, strategy):
                     _mark = self.execution_service._fetch_current_mark_price(strategy.symbol)
                     _c, _k, _why, _act = compute_trim(
@@ -585,6 +612,15 @@ class TPSLOrchestratorService:
                             "[Fix319] %s #%s **부분 손절**: %s 청산 / %s 잔여 — %s",
                             strategy.symbol, strategy.id, _c, _k, _why,
                         )
+                    elif _act == ACTION_SKIP:
+                        # 🚨 Fix 326: 이미 「10 USDT 잔량」 상태다.
+                        #   여기서 전량 청산하면 사장님 사양이 사라진다.
+                        #   손절하지 않고 그대로 두고 다음 단계 트리거를 기다린다.
+                        logger.info(
+                            "[Fix326] %s #%s 잔량 유지 — 손절하지 않음 (%s): %s",
+                            strategy.symbol, strategy.id, _act, _why,
+                        )
+                        return
                     else:
                         logger.info("[Fix319] %s #%s 전량 손절 (%s): %s",
                                     strategy.symbol, strategy.id, _act, _why)
@@ -668,19 +704,26 @@ class TPSLOrchestratorService:
         #
         #   → 손절 수량 자체를 `compute_trim` 으로 정한다.
         #     TRIM  : 10 USDT 만 남기고 청산 (사장님 사양)
-        #     SKIP  : 정리 불필요(1단계급 소액) → **전량 청산**
-        #             (여기서 손절을 건너뛰면 손실이 무한정 커진다 —
-        #              단계 진입 때와 달리 손절은 반드시 나가야 한다)
-        #     BLOCK : 판정 불가 → **전량 청산** (같은 이유, 안전측)
+        #     SKIP  : **이미 잔량만 남았다 → 손절하지 않고 그대로 둔다** (Fix 326)
+        #     BLOCK : 판정 불가 → **전량 청산** (안전측)
         #
-        #   🚨 단계 진입(Fix 316)과 fail 방향이 **반대**다. 거기서는 판정 불가면
-        #      진입을 막지만(안 사면 그만), 손절은 막으면 손실이 커진다.
+        #   🚨 Fix 326 정정: 원래 여기 "SKIP → 전량 청산 (손절을 건너뛰면 손실이
+        #      무한정 커진다)" 이라고 적혀 있었다. **틀렸다.** 잔량 증거금이
+        #      10 USDT 면 최대 손실도 10 USDT 다. 전량 청산하면 사장님 사양
+        #      (10 남기고 다음 단계 대기)이 다음 사이클에 지워진다.
+        #      force SL 쪽 Fix 326 주석에 실서버 로그 근거가 있다.
+        #
+        #   🚨 단계 진입(Fix 316)과 BLOCK 의 fail 방향은 여전히 **반대**다.
+        #      거기서는 판정 불가면 진입을 막지만(안 사면 그만), 손절은
+        #      판정 불가일 때 막으면 손실이 커진다.
         # ═══════════════════════════════════════════════════════════════════
         _close_qty = current_qty
         _keep_qty = Decimal("0")
         if current_qty > 0:
             try:
-                from app.services.stage_trim import ACTION_TRIM, compute_trim, trim_enabled
+                from app.services.stage_trim import (
+                    ACTION_SKIP, ACTION_TRIM, compute_trim, trim_enabled,
+                )
                 if trim_enabled(self.db, strategy):
                     _mark = self.execution_service._fetch_current_mark_price(strategy.symbol)
                     _c, _k, _why, _act = compute_trim(
@@ -693,6 +736,13 @@ class TPSLOrchestratorService:
                             "[Fix318] %s #%s 부분 손절: %s 청산 / %s 잔여 — %s",
                             strategy.symbol, strategy.id, _c, _k, _why,
                         )
+                    elif _act == ACTION_SKIP:
+                        # 🚨 Fix 326: 이미 잔량 수준 → 손절하지 않고 그대로 둔다.
+                        logger.info(
+                            "[Fix326] %s #%s 잔량 유지 — 손절하지 않음 (%s): %s",
+                            strategy.symbol, strategy.id, _act, _why,
+                        )
+                        return
                     else:
                         logger.info(
                             "[Fix318] %s #%s 전량 손절 (%s): %s",
