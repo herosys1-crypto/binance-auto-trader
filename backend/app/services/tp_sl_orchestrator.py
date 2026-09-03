@@ -652,6 +652,15 @@ class TPSLOrchestratorService:
                     )
                     if _act == ACTION_TRIM and _c > 0 and _k > 0:
                         _close_qty, _keep_qty = _c, _k
+                        # 🔁 Fix 338: 부분 손절 = 새 사이클 시작 → 피라미딩 카운터 리셋.
+                        #   #2116: 손절 전 2회 소진 → 수동 재진입 뒤 추가 0회(max_pyramid_count).
+                        try:
+                            from app.workers.success_pyramiding_worker import reset_pyramid_count
+                            if reset_pyramid_count(strategy.id):
+                                logger.info("[Fix338] #%s 피라미딩 카운터 리셋 (부분손절 = 새 사이클)",
+                                            strategy.id)
+                        except Exception as _e338:
+                            logger.debug("[Fix338] 카운터 리셋 실패 (무시): %s", _e338)
                         logger.warning(
                             "[Fix319] %s #%s **부분 손절**: %s 청산 / %s 잔여 — %s",
                             strategy.symbol, strategy.id, _c, _k, _why,
@@ -784,6 +793,14 @@ class TPSLOrchestratorService:
                     )
                     if _act == ACTION_TRIM and _c > 0:
                         _close_qty, _keep_qty = _c, _k
+                        # 🔁 Fix 338: 부분 손절 = 새 사이클 시작 → 피라미딩 카운터 리셋 (force SL 과 동일)
+                        try:
+                            from app.workers.success_pyramiding_worker import reset_pyramid_count
+                            if reset_pyramid_count(strategy.id):
+                                logger.info("[Fix338] #%s 피라미딩 카운터 리셋 (부분손절 = 새 사이클)",
+                                            strategy.id)
+                        except Exception as _e338:
+                            logger.debug("[Fix338] 카운터 리셋 실패 (무시): %s", _e338)
                         logger.warning(
                             "[Fix318] %s #%s 부분 손절: %s 청산 / %s 잔여 — %s",
                             strategy.symbol, strategy.id, _c, _k, _why,

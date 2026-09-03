@@ -468,3 +468,77 @@ def test_Fix332_두_손절_경로가_같은_판정을_쓴다():
                   if isinstance(n, ast.FunctionDef) and n.name == name)
         seg = ast.get_source_segment(src, fn) or ""
         assert "self._has_next_stage(strategy)" in seg, f"{name} 이 다음단계를 안 본다"
+
+
+# ═════════════════════════════════════════════════════════════════════
+# 🔁 Fix 338 — 부분 손절은 새 사이클 → 피라미딩 카운터를 리셋한다
+#
+# #2116 BULLAUSDT (2026-09-03): 손절 전 추가 2회 소진 → -3% 부분손절(10 잔량)
+# → 사장님 수동 +300 → TP1 청산까지 갔는데 피라미딩 워커는
+# `skipped … max_pyramid_count` 로 새 사이클에 추가 0회.
+# ═════════════════════════════════════════════════════════════════════
+
+def _capture_reset(monkeypatch):
+    import app.workers.success_pyramiding_worker as SPW
+    seen = []
+    monkeypatch.setattr(SPW, "reset_pyramid_count", lambda sid: (seen.append(sid) or True))
+    return seen
+
+
+def test_Fix338_force_SL_부분손절이면_카운터를_리셋한다(monkeypatch):
+    seen = _capture_reset(monkeypatch)
+    st = _Strategy(qty=-12000, avg="0.05")          # 명목 600 → TRIM
+    svc, calls = _make(st, mark="0.05", settings=TRIM_ON)
+    svc._execute_force_stop_loss(st)
+    assert len(calls.closes) == 1 and calls.closes[0][0] < D("12000"), "부분 손절이 아니다"
+    assert seen == [st.id], f"카운터 리셋이 안 불렸다: {seen}"
+
+
+def test_Fix338_일반_SL_부분손절도_리셋한다(monkeypatch):
+    seen = _capture_reset(monkeypatch)
+    st = _Strategy(qty=-12000, avg="0.05")
+    svc, _calls = _make(st, mark="0.05", settings=TRIM_ON)
+    svc._execute_stop_loss(st)
+    assert seen == [st.id]
+
+
+def test_Fix338_잔량_유지_SKIP_이면_리셋하지_않는다(monkeypatch):
+    """이미 잔량 상태에서 또 손절 사이클이 돌 때마다 리셋하면 안 된다."""
+    seen = _capture_reset(monkeypatch)
+    st = _Strategy(qty=-184, avg="0.05")
+    svc, _calls = _make(st, mark="0.1072", settings=TRIM_ON)
+    svc.db.next_stage = 2
+    svc._execute_force_stop_loss(st)
+    assert seen == []
+
+
+def test_Fix338_전량_청산이면_리셋하지_않는다(monkeypatch):
+    """전략이 끝나면 키는 TTL 로 사라진다 — 리셋은 이어가는 경우에만."""
+    seen = _capture_reset(monkeypatch)
+    st = _Strategy(qty=-12000, avg="0.05")
+    svc, calls = _make(st, mark="0.05", settings={})   # trim OFF → 전량
+    svc._execute_force_stop_loss(st)
+    assert calls.closes[0][0] == D("12000") and seen == []
+
+
+def test_Fix338_리셋_실패가_손절을_막지_않는다(monkeypatch):
+    import app.workers.success_pyramiding_worker as SPW
+    def _boom(sid):
+        raise RuntimeError("redis down")
+    monkeypatch.setattr(SPW, "reset_pyramid_count", _boom)
+    st = _Strategy(qty=-12000, avg="0.05")
+    svc, calls = _make(st, mark="0.05", settings=TRIM_ON)
+    svc._execute_force_stop_loss(st)                   # 예외가 새어나오면 안 된다
+    assert len(calls.closes) == 1
+
+
+def test_Fix338_두_손절_경로가_모두_리셋을_부른다():
+    import ast
+    from pathlib import Path
+    src = Path(O.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    for name in ("_execute_force_stop_loss", "_execute_stop_loss"):
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == name)
+        seg = ast.get_source_segment(src, fn) or ""
+        assert "reset_pyramid_count(strategy.id)" in seg, f"{name} 이 카운터를 리셋하지 않는다"

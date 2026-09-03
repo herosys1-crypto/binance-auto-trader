@@ -162,6 +162,34 @@ def _get_pyramid_count(strategy_id: int) -> int:
     return int(v) if v else 0
 
 
+def reset_pyramid_count(strategy_id: int) -> bool:
+    """🔁 Fix 338 (2026-09-03): 부분 손절 뒤에는 카운터를 **새 사이클**로 되돌린다.
+
+    사장님 루프: 1단계 → 수익 중 추가(최대 2회) → 실패하면 **10 USDT 남기고 부분손절**
+    → 모니터링 → 다시 진입 → 수익 중 추가 …
+
+    #2116 BULLAUSDT 실측 (2026-09-03 KST):
+        22:05 추가#1 300 (ROI+3.5%)  ┐ 「최대 2회」 소진
+        22:12 추가#2 300 (ROI+4.2%)  ┘
+        22:20 강제손절 -3% → 46,492 매도, 10 USDT 잔량   ← 그 두 번은 손절로 사라짐
+        22:58 사장님 수동 +300
+        23:14 TP1 25% 청산 (ROI +17.7%)
+        → 이후 피라미딩 워커: skipped … **max_pyramid_count**  = 새 사이클에 추가 0회
+
+    손절 전 소진한 2회가 잔량 10 위에 새로 쌓인 포지션까지 묶고 있었다.
+    「이 포지션에 최대 2회」(Fix 196)에서 「포지션」은 부분손절로 **다시 시작**된다.
+
+    ⚠️ 전량 청산(전략 종료)에서는 호출하지 않는다 — 키는 TTL 로 사라진다.
+       리셋은 **잔량을 남기고 이어가는 경우**에만 의미가 있다.
+    """
+    try:
+        n = _redis().delete(f"pyramid_count:sid:{strategy_id}")
+        return bool(n)
+    except Exception as e:      # 카운터 리셋 실패가 손절을 막으면 안 된다
+        logger.warning("[Fix338] #%s 피라미딩 카운터 리셋 실패 (무시): %s", strategy_id, e)
+        return False
+
+
 def _increment_pyramid_count(strategy_id: int) -> int:
     try:
         new_count = _get_pyramid_count(strategy_id) + 1
