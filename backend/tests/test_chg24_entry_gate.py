@@ -221,3 +221,98 @@ def test_시세_조회_실패는_통과():
     """🚨 fail-closed 하면 API 가 흔들릴 때마다 모든 신규 진입이 멈춘다."""
     ok, why = G.passes(_DB(ON), _BC(boom=True), "X")
     assert ok and "fail-open" in why
+
+
+# ═════════════════════════════════════════════════════════════════════
+# 🌟 Fix 328 — "가능하면 10% 상승하락에 포지션 진입할수 있게해줘"
+#
+# 「가능하면」 = 슬롯이 여유로우면 100개 전부, **빠듯하면 |24h| >= 10% 만**.
+#
+# 실측 근거 (자동 508건, 진입일 기준):
+#   24h >= +10% SHORT  106건 +5.44/건 PF 1.70 (전반 +6.49 / 후반 +2.91 둘 다 양수)
+#   -10 ~ +10% SHORT   214건 +0.04/건
+#   🚨 +5% 로 낮추면 효과가 완전히 사라진다 (컷 안 +1.53 vs 밖 +1.78)
+# ═════════════════════════════════════════════════════════════════════
+
+def _slot(monkeypatch, used, cap):
+    """position_limit.check_position_slot 을 가짜로 꽂는다."""
+    import sys, types
+    mod = types.ModuleType("app.services.position_limit")
+    mod.check_position_slot = lambda db, tag="": (True, "", used, cap)
+    monkeypatch.setitem(sys.modules, "app.services.position_limit", mod)
+
+
+def test_Fix328_기본값은_10퍼센트():
+    assert G.PRIORITY_ABS_DEFAULT == 10.0
+    assert G.priority_abs_pct(_DB(ON)) == 10.0
+
+
+def test_Fix328_슬롯_빠듯하면_10퍼센트만_받는다(monkeypatch):
+    """🚨 이것이 「가능하면」의 핵심이다."""
+    _slot(monkeypatch, 18, 20)          # 90% — 빠듯
+    pool = _pool(20, 60)
+
+    # +3% = 상승 21위 → 순위 안이지만 10% 미만 → 막힌다
+    ok, why = G.passes(_DB(ON), _BC(3.0, others=pool, sym="XUSDT"), "XUSDT")
+    assert not ok and "빠듯" in why, why
+
+    # +12% 는 10% 이상 → 통과
+    ok2, why2 = G.passes(_DB(ON), _BC(12.0, others=pool, sym="XUSDT"), "XUSDT")
+    assert ok2 and "우선" in why2, why2
+
+
+def test_Fix328_슬롯_여유로우면_순위_안은_전부_통과(monkeypatch):
+    """슬롯이 비었는데 10% 미만이라고 막으면 기회를 그냥 버린다."""
+    _slot(monkeypatch, 3, 20)           # 15% — 여유
+    ok, why = G.passes(_DB(ON), _BC(3.0, others=_pool(20, 60), sym="XUSDT"), "XUSDT")
+    assert ok and "여유" in why, why
+
+
+def test_Fix328_하락도_같은_규칙(monkeypatch):
+    """급락 -12% 도 |24h| >= 10% 이므로 우선이다 (사장님 「상승하락」)."""
+    _slot(monkeypatch, 19, 20)
+    ok, why = G.passes(_DB(ON), _BC(-12.0, others=_pool(60, 20), sym="XUSDT"), "XUSDT")
+    assert ok and "우선" in why, why
+
+
+def test_Fix328_순위_밖이면_10퍼센트여도_대상_아니다(monkeypatch):
+    """모니터링 대상은 어디까지나 상승50+하락50 이다 — 범위를 넓히지 않는다."""
+    _slot(monkeypatch, 1, 20)
+    # 상승 60개를 깔면 +12% 는 61위 → 순위 밖
+    ok, why = G.passes(_DB(ON), _BC(12.0, others=_pool(60, 60), sym="XUSDT"), "XUSDT")
+    assert not ok and "위 밖" in why, why
+
+
+def test_Fix328_슬롯_조회_실패하면_막지_않는다(monkeypatch):
+    """🚨 fail-open — 슬롯 판정이 깨졌다고 진입이 멈추면 안 된다."""
+    import sys, types
+    mod = types.ModuleType("app.services.position_limit")
+    def _boom(db, tag=""):
+        raise RuntimeError("DB 끊김")
+    mod.check_position_slot = _boom
+    monkeypatch.setitem(sys.modules, "app.services.position_limit", mod)
+
+    ok, why = G.passes(_DB(ON), _BC(3.0, others=_pool(20, 60), sym="XUSDT"), "XUSDT")
+    assert ok, why
+
+
+def test_Fix328_임계값을_설정으로_바꾼다(monkeypatch):
+    _slot(monkeypatch, 19, 20)
+    db = _DB({G.SETTING_ENABLED: "1", G.SETTING_PRIORITY_ABS: "5"})
+    assert G.priority_abs_pct(db) == 5.0
+    ok, why = G.passes(db, _BC(7.0, others=_pool(20, 60), sym="XUSDT"), "XUSDT")
+    assert ok and "우선" in why, why
+
+
+def test_Fix328_손상된_설정값은_기본값():
+    for bad in ("abc", "-1", "200", ""):
+        db = _DB({G.SETTING_ENABLED: "1", G.SETTING_PRIORITY_ABS: bad})
+        assert G.priority_abs_pct(db) == G.PRIORITY_ABS_DEFAULT, bad
+
+
+def test_Fix328_실측_근거가_주석에_남아_있다():
+    """🚨 +5% 로 내리면 효과가 사라진다 — 다음에 무심코 낮추지 않도록."""
+    from pathlib import Path
+    src = Path(G.__file__).read_text(encoding="utf-8")
+    for token in ("+5.44", "PF 1.70", "106건", "+5% 로 낮추면"):
+        assert token in src, token
