@@ -1718,13 +1718,67 @@ def _create_auto_bb_strategy(
         #   3단계 600 재진입 → -5% 청산
         #     → Fix 135: 카운터 리셋 = 1단계(10) 모니터링 대기로 복귀
         # ═══════════════════════════════════════════════════════════════════
-        capitals = [stage1_only]
-        total_capital = stage1_only
-        stages_config = {
-            "capitals": capitals,
-            "trigger_percents": [None],
-            "stages_count": 1,
-        }
+        # ═══════════════════════════════════════════════════════════════
+        # 🌟 Fix 315 (2026-09-03 사장님 정책 확정): 사다리를 **단계**로 돌린다.
+        #
+        #   사장님: "부분 손절하고 **다음 트리거 단가에 포지션 진입**하고
+        #            또 손실이면 부분청산하고 다음단계 트리거 단가에 포지션 진입"
+        #           "첫진입이 10이라 손절없이 그냥 **좋은 포지션에 2단계 300으로 진입**"
+        #
+        #   위 Fix 137 은 사장님 "복잡하면 청산하고 다음단계 모니터링 대기해도
+        #   됩니다" 를 받아 **재진입 방식(B)** 을 택했다. 그 결과 30일간
+        #   **재진입 2차가 1건**뿐이었고, SAJANGNIM_TOP/BOTTOM **475건이 전부
+        #   1단계 단발**로 끝났다 = 사다리가 사실상 돌지 않았다.
+        #   사장님이 오늘 **단계 방식(A)** 으로 확정하셔서 여기로 되돌린다.
+        #
+        #   🚨 **간격은 손절폭보다 작아야 한다.**
+        #      SHORT 손절 ROI -5% / 레버2 → 가격 2.5% 불리하면 손절
+        #      LONG  손절 ROI -10%/ 레버2 → 가격 5.0%
+        #      간격이 그보다 크면 손절이 항상 먼저 와서 2단계에 **영원히 도달 못 한다.**
+        #      실측(850사이클): 간격 2.5% → SHORT 2·3단계 **0건**,
+        #                       간격 5.0% → 둘 다 **0건** (= 지금 상태와 동일 +44)
+        #                       간격 1.5% → +2,636 (SHORT 69·40 / LONG 149·151)
+        #
+        #   손절 단계 게이트는 `capital_management_mode = "stage_ladder"` 마커로
+        #   건너뛴다 (Fix 315, risk_service). 그래야 1단계에서도 -5% 가 발동한다.
+        # ═══════════════════════════════════════════════════════════════
+        _ladder_on = False
+        _gap = None
+        try:
+            from app.services.sajangnim_capital import (
+                get_capital_ladder as _get_ladder,
+                ladder_stages_enabled as _ladder_en,
+                stage_gap_pct as _gap_pct,
+            )
+            _ladder_on = _ladder_en(db)
+            if _ladder_on:
+                _lad = [float(x) for x in _get_ladder(db)]
+                _gap = float(_gap_pct(db))
+        except Exception as _le:
+            logger.warning("[Fix315] 사다리 설정 조회 실패 → 1단계 유지: %s", _le)
+            _ladder_on = False
+
+        if _ladder_on and _gap and len(_lad) >= 2:
+            # 1단계는 기존 로직이 정한 값(사다리 1칸)을 그대로 쓴다
+            capitals = [stage1_only] + _lad[1:3]
+            total_capital = sum(capitals)
+            stages_config = {
+                "capitals": capitals,
+                "trigger_percents": [None] + [_gap] * (len(capitals) - 1),
+                "stages_count": len(capitals),
+            }
+            logger.info(
+                "[Fix315] %s %s 단계 사다리 %s (간격 %.2f%%) — 총 %.0f USDT",
+                symbol, side, capitals, _gap, total_capital,
+            )
+        else:
+            capitals = [stage1_only]
+            total_capital = stage1_only
+            stages_config = {
+                "capitals": capitals,
+                "trigger_percents": [None],
+                "stages_count": 1,
+            }
 
     # 신 template = 1단계만!
     now = datetime.now(timezone.utc)
@@ -1737,10 +1791,17 @@ def _create_auto_bb_strategy(
         _tpl_name_suffix = ""
     # 🎯 OBV_HOLD = 3단계! 나머지 = 1단계!
     _stage1_cap = capitals[0]
-    _stage2_cap = capitals[1] if _is_obv_hold else None
-    _stage3_cap = capitals[2] if _is_obv_hold else None
-    _stage2_trig = Decimal(str(_obv_trig2)) if _is_obv_hold else None
-    _stage3_trig = Decimal(str(_obv_trig3)) if _is_obv_hold else None
+    # 🌟 Fix 315: OBV_HOLD 뿐 아니라 **단계 사다리**도 2·3단계를 싣는다.
+    _multi = _is_obv_hold or (stages_config.get("stages_count", 1) > 1)
+    _stage2_cap = capitals[1] if (_multi and len(capitals) > 1) else None
+    _stage3_cap = capitals[2] if (_multi and len(capitals) > 2) else None
+    _trigs = stages_config.get("trigger_percents") or []
+    if _is_obv_hold:
+        _stage2_trig = Decimal(str(_obv_trig2))
+        _stage3_trig = Decimal(str(_obv_trig3))
+    else:
+        _stage2_trig = Decimal(str(_trigs[1])) if len(_trigs) > 1 and _trigs[1] else None
+        _stage3_trig = Decimal(str(_trigs[2])) if len(_trigs) > 2 and _trigs[2] else None
     # ═══════════════════════════════════════════════════════════════════
     # 🎯 Fix 299 (2026-09-02 사장님): **변동성 연동 TP1**
     #
