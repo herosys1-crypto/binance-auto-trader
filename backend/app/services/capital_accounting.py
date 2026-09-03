@@ -115,14 +115,42 @@ def compute_invested_capital(db, strategy) -> Decimal | None:
         lev = Decimal(str(getattr(strategy, "leverage", None) or 1))
         if lev <= 0:
             lev = Decimal("1")
+
+        # ═══════════════════════════════════════════════════════════════
+        # 🚨 Fix 333-b (같은 날 정정): 「Σ진입명목 − Σ청산명목」은 **틀린 식**이었다.
+        #
+        #   #2116 BULLAUSDT 로 반증됐다:
+        #     진입 명목 1,401.50 − 청산 명목 1,327.96 = 73.54 ÷ 레버2 = **36.77**
+        #     실제 잔량 689주 × 평단 0.02970 ÷ 레버2           = **10.23**
+        #
+        #   청산가(0.02856)가 평단(0.02970)보다 낮아서 차액에 **실현손실 −53 이
+        #   섞여 들어갔다.** 그 식은 「증거금」이 아니라 「증거금 + 실현손익」이었다.
+        #   #2090 에서 맞아 보였던 건 청산가 ≈ 평단이라 우연히 비슷했던 것이다.
+        #
+        #   → 지금 묶인 증거금 = **현재 수량 × 평단 ÷ 레버리지**. 이것이 거래소가
+        #     initial margin 으로 잡는 값이고 손익과 섞이지 않는다.
+        #   주문 기반 집계는 수량·평단이 결손일 때의 **폴백**으로만 쓴다.
+        # ═══════════════════════════════════════════════════════════════
+        qty = getattr(strategy, "current_position_qty", None)
+        avg = getattr(strategy, "avg_entry_price", None)
+        if qty is not None and avg is not None:
+            q = abs(Decimal(str(qty)))
+            a = abs(Decimal(str(avg)))
+            if q == 0:
+                return ZERO          # 포지션 없음 = 묶인 증거금 없음
+            if a > 0:
+                return (q * a / lev).quantize(Decimal("0.00000001"))
+
+        # ── 폴백: 수량·평단 결손 시 체결 주문으로 근사 (손익이 섞일 수 있다) ──
         entry = _filled_notional(db, strategy.id, "ENTRY")
         if entry <= 0:
-            # 체결된 진입이 하나도 없다 = 아직 안 들어갔다. 0 이 맞다.
             return ZERO
         exit_ = _filled_notional(db, strategy.id, "EXIT")
         net = entry - exit_
         if net < 0:
-            net = ZERO          # 청산이 진입보다 큰 기록 오류 — 음수 증거금은 없다
+            net = ZERO
+        logger.debug("[Fix333] #%s 수량·평단 결손 → 주문 기반 근사 사용",
+                     getattr(strategy, "id", "?"))
         return (net / lev).quantize(Decimal("0.00000001"))
     except Exception as e:
         logger.warning("[Fix333] #%s 투입자본 계산 실패 (기존 값 유지): %s",

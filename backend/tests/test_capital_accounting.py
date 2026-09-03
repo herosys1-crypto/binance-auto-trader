@@ -26,10 +26,13 @@ D = Decimal
 # ─────────────────────────────────────────────────────────────────────
 
 class _Strategy:
-    def __init__(self, sid=1, leverage=2, invested=0):
+    def __init__(self, sid=1, leverage=2, invested=0, qty=None, avg=None):
         self.id = sid
         self.leverage = leverage
         self.invested_capital = D(str(invested))
+        # Fix 333-b: 수량·평단이 있으면 그것이 우선. None 이면 주문 기반 폴백.
+        self.current_position_qty = D(str(qty)) if qty is not None else None
+        self.avg_entry_price = D(str(avg)) if avg is not None else None
 
 
 class _DB:
@@ -204,4 +207,66 @@ def test_실측_근거가_주석에_남아_있다():
     from pathlib import Path
     src = Path(C.__file__).read_text(encoding="utf-8")
     for token in ("1,124", "2090", "+17.34%", "+0.98%", "대입된 적이 없다"):
+        assert token in src, token
+
+
+# ═════════════════════════════════════════════════════════════════════
+# 🚨 Fix 333-b — 「Σ진입 − Σ청산」은 틀린 식이었다 (#2116 이 반증)
+#
+#   진입 명목 1,401.50 − 청산 명목 1,327.96 = 73.54 ÷ 2 = 36.77   ← 틀림
+#   실제 잔량 689주 × 평단 0.02970 ÷ 2                 = 10.23   ← 맞음
+#
+#   청산가 < 평단이라 차액에 실현손실 -53 이 섞였다. 증거금은 손익과 섞이면 안 된다.
+# ═════════════════════════════════════════════════════════════════════
+
+def test_Fix333b_실서버_2116_을_재현한다():
+    """손절로 46,492주를 0.02856 에 판 뒤 689주 남은 상태."""
+    db = _DB(
+        entries=[
+            (D("6890"), D("6890"), D("0.02902600"), None),
+            (D("20313"), D("20313"), D("0.02956200"), None),
+            (D("19978"), D("19978"), D("0.03008410"), None),
+        ],
+        exits=[(D("46492"), D("46492"), D("0.02856300"), None)],
+    )
+    st = _Strategy(leverage=2, qty="689", avg="0.02970482")
+    got = C.compute_invested_capital(db, st)
+    assert got is not None
+    assert abs(got - D("10.23")) < D("0.05"), f"잔량 증거금이 아니다: {got}"
+    assert got < D("20"), f"옛 식(36.77)이 다시 쓰였다: {got}"
+
+
+def test_Fix333b_2090_도_수량x평단이_거래소와_더_가깝다():
+    """거래소 isolatedWallet 1,124.42 — 수량x평단 = 1,124.95 (오차 0.05%)."""
+    st = _Strategy(leverage=2, qty="5523", avg="0.40736743")
+    got = C.compute_invested_capital(_DB([], []), st)
+    real = D("1124.42428696")
+    assert abs(got - real) / real < D("0.001"), f"{got} vs {real}"
+
+
+def test_Fix333b_수량이_0이면_0():
+    st = _Strategy(leverage=2, qty="0", avg="0.5")
+    assert C.compute_invested_capital(_DB([(D("1"), D("1"), D("1"), None)], []), st) == D("0")
+
+
+def test_Fix333b_평단_결손이면_주문_기반_폴백():
+    """수량은 있는데 평단이 없으면 옛 근사식으로 떨어진다 (None 보다 낫다)."""
+    db = _DB([(D("100"), D("100"), D("10"), None)], [])
+    st = _Strategy(leverage=2, qty="100", avg=None)
+    assert C.compute_invested_capital(db, st) == D("500")
+
+
+def test_Fix333b_손익이_증거금에_섞이지_않는다():
+    """같은 잔량이면 청산가가 얼마였든 증거금은 같아야 한다."""
+    e = [(D("1000"), D("1000"), D("1.0"), None)]
+    st = _Strategy(leverage=1, qty="500", avg="1.0")
+    a = C.compute_invested_capital(_DB(e, [(D("500"), D("500"), D("0.8"), None)]), st)  # 손실 청산
+    b = C.compute_invested_capital(_DB(e, [(D("500"), D("500"), D("1.2"), None)]), st)  # 이익 청산
+    assert a == b == D("500"), f"청산가에 따라 증거금이 달라졌다: {a} vs {b}"
+
+
+def test_Fix333b_반증_근거가_주석에_남아_있다():
+    from pathlib import Path
+    src = Path(C.__file__).read_text(encoding="utf-8")
+    for token in ("2116", "36.77", "10.23", "실현손실"):
         assert token in src, token
