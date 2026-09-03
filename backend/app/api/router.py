@@ -21,6 +21,7 @@ from app.api.v1.pattern_learning import router as pattern_learning_router  # �
 from app.api.v1.multi_timeframe_scan import router as multi_timeframe_scan_router  # 🎯 v189 MTA!
 from app.api.v1.realtime_monitor import router as realtime_monitor_router  # 🎯 v200 실시간 모니터링!
 from app.api.v1.orchestra_status import router as orchestra_status_router  # 🎼 v206 P3 오케스트라!
+from app.api.v1.terminal import router as terminal_router  # 🖥 선물거래 터미널 (터미널 화면 전용 집계)
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth_router)
@@ -45,3 +46,4 @@ api_router.include_router(pattern_learning_router)  # 🎓 v187 성공/실패 �
 api_router.include_router(multi_timeframe_scan_router)  # 🎯 v189 Multi-Timeframe!
 api_router.include_router(realtime_monitor_router)  # 🎯 v200 실시간 모니터링!
 api_router.include_router(orchestra_status_router)  # 🎼 v206 P3 오케스트라 상태!
+api_router.include_router(terminal_router)  # 🖥 선물거래 터미널 (/static/perp-terminal.html)

@@ -10,6 +10,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db
@@ -298,7 +299,7 @@ def cleanup_quick_templates(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> MessageResponse:
-    """이름이 '_quick_' 로 시작하는 템플릿 일괄 정리.
+    """이름이 '_quick_' 또는 'TERMINAL_' 로 시작하는 일회용 템플릿 일괄 정리.
 
     - cascade=False, force=False : 미사용(인스턴스 없는)은 삭제, 사용 중은 비활성화만.
     - cascade=True,  force=False : 참조 strategy 가 모두 terminal 이면 strategy 까지 함께 삭제. active 가 있으면 비활성화만.
@@ -326,9 +327,21 @@ def cleanup_quick_templates(
 
     # Bug #14 fix (2026-04-29): PostgreSQL LIKE 의 underscore (_) 는 와일드카드라서
     # 단순히 \\_ 만으로는 매칭 안 됨 (ESCAPE 절 필요). startswith() 가 자동으로 처리해줌.
+    # 🚨 2026-09-03: `TERMINAL_` 접두어도 함께 정리한다.
+    #    선물거래 터미널(/static/perp-terminal.html)은 확인 모달을 통과할 때마다
+    #    일회용 템플릿 `TERMINAL_<시각>` 을 1건 만든다. 그런데 이 정리 경로는
+    #    `_quick_` 만 훑고 있어서 **TERMINAL_ 템플릿을 지울 방법이 아예 없었다**
+    #    = 주문 1건당 1행씩 영구 누적 → /strategies 목록 조회가 계속 무거워진다.
+    #    아래 로직(참조 전략이 있으면 삭제 대신 비활성화, 활성 전략은 절대 건드리지
+    #    않음)은 그대로 적용되므로 진행 중인 실자금 전략은 영향을 받지 않는다.
     candidates = (
         db.query(StrategyTemplate)
-        .filter(StrategyTemplate.name.startswith("_quick_"))
+        .filter(
+            or_(
+                StrategyTemplate.name.startswith("_quick_"),
+                StrategyTemplate.name.startswith("TERMINAL_"),
+            )
+        )
         .all()
     )
     # 2026-05-04 fix: 공통 TERMINAL_STATUSES 사용 (이전엔 항목 누락 + STOPPING 위험 포함).

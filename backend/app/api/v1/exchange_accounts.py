@@ -23,6 +23,57 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/exchange-accounts", tags=["exchange-accounts"])
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 🚨 2026-09-03 (IP밴·부하 적대적 검증): 이 파일의 생짜 `requests.get` 3곳은
+#    Fix 116 회로 차단기를 안 탄다
+#
+# 서명 호출 3곳이 `BinanceClient._request` 를 거치지 않고 HMAC 을 손으로 만들어
+# `requests.get` 을 직접 부른다 (positionRisk 2곳 + openOrders 1곳).
+# 그래서 다음이 **전부 우회**된다:
+#   · Fix 116 IP ban 전역 회로 차단기   · Fix 124 weight 거버너   · Fix 118 계측
+#
+# 2026-08-26 사고의 핵심은 「**ban 중에 보낸 요청이 ban 을 연장한다**」였다.
+# 신설 선물거래 터미널(/static/perp-terminal.html)처럼 상시 열어 두는 화면이
+# 이 경로들을 초 단위로 폴링하면, ban 이 걸린 뒤에도 계속 두드려 ban 이 계속
+# 밀린다 — 그 사이 **주문·손절 호출까지 같이 막힌다.**
+#
+# 전체를 BinanceClient 로 옮기지 않은 이유: v98~v102 가 이 raw 경로에서
+# isolatedWallet 필드 문제를 잡아낸 곳이라 응답 형태가 그 코드와 얽혀 있다.
+# 옮기면 조용히 깨질 위험이 크다(기존 파일 최소 수정 원칙).
+# → **ban 판정만** 공유한다. 「ban 중에는 아무도 두드리지 않는다」는 예외가 없어야 한다.
+#
+# 🚨 호출 위치가 중요하다: **캐시 조회 뒤, 네트워크 직전**에 둔다.
+#    캐시가 살아 있으면 ban 중에도 화면은 마지막 값을 계속 보여 준다.
+# ═══════════════════════════════════════════════════════════════════════════
+def _guard_ip_ban(where: str) -> None:
+    """IP ban 중이면 네트워크로 나가기 전에 끊는다 (ban 연장 되먹임 차단)."""
+    try:
+        from app.integrations.binance.client import get_ip_ban_remaining_sec
+        left = get_ip_ban_remaining_sec()
+    except Exception:      # 진단 함수 때문에 화면이 죽으면 안 된다
+        return
+    if left > 0:
+        logger.warning("[Fix116] %s: IP ban 중 — 요청 억제 (%ds 남음)", where, left)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Binance IP 차단(418) 중입니다 — {left}초 후 자동 복구됩니다. "
+                   f"지금 요청을 보내면 차단이 연장됩니다 (Fix 116).",
+            headers={"Retry-After": str(max(1, left))},
+        )
+
+
+def _note_ip_ban(resp) -> None:
+    """418/429 응답을 전역 ban 플래그에 반영 — 이 경로가 ban 을 처음 맞아도
+    모든 컨테이너가 즉시 멈추도록 (`BinanceClient._request` 와 같은 동작)."""
+    try:
+        if getattr(resp, "status_code", 0) in (418, 429):
+            from app.integrations.binance.client import _mark_ip_ban_from_response
+            _mark_ip_ban_from_response(resp)
+    except Exception:
+        pass
+
+
+
 class ExchangeAccountCreate(BaseModel):
     exchange_name: Literal["binance"] = Field(default="binance")
     market_type: Literal["usds_m_futures"] = Field(default="usds_m_futures")
@@ -104,9 +155,12 @@ def create_exchange_account(
         api_secret_enc = encrypt_text(payload.api_secret)
         passphrase_enc = encrypt_text(payload.passphrase) if payload.passphrase else None
     except Exception as e:
+        # 🚨 보안: 암호화 예외 문자열에 **평문 키가 섞여 나올 수 있다**(인코딩/타입 오류는
+        #   입력값을 메시지에 담는 경우가 있다). 사유는 서버 로그에만 남긴다.
+        logger.error("거래소 키 암호화 실패: user_id=%s", user_id, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to encrypt credentials: {e}",
+            detail="자격증명 암호화에 실패했습니다 (서버 로그 확인)",
         ) from e
 
     account = ExchangeAccount(
@@ -235,9 +289,12 @@ def update_credentials(
         db.refresh(account)
     except Exception as e:
         db.rollback()
+        # 🚨 보안: SQLAlchemy 오류 문자열에는 실행된 SQL 과 **바인딩 파라미터**가 붙는다
+        #   (= `api_key_enc` / `api_secret_enc` 암호문이 그대로). 응답에 넣지 않는다.
+        logger.error("거래소 키 회전 저장 실패: account_id=%s", exchange_account_id, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"키 저장 실패 (암호화 또는 DB): {e}",
+            detail="키 저장에 실패했습니다 (암호화 또는 DB — 서버 로그 확인)",
         ) from e
 
     # 4) Audit 알림 — 키 회전은 보안 사건이라 텔레그램 + DB 기록
@@ -363,8 +420,17 @@ def get_balance(
             )
             info = client.get_account()
         except Exception as e:
-            logger.error("get_balance Binance call failed: account_id=%s error=%s", exchange_account_id, e)
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Binance API 호출 실패: {e}") from e
+            # 🚨 보안 (2026-09-03 적대적 검증): 예외 문자열을 응답 detail 에 넣지 않는다.
+            #   client._request 는 `requests.RequestException` 을 `network error: {e}` 로 감싸는데,
+            #   ConnectionError/Timeout 메시지에는 요청 URL 전체(= 서명 호출이므로
+            #   `signature=<hmac>` 포함)가 들어 있다. 그게 브라우저 body 로 나간다.
+            logger.error(
+                "get_balance Binance call failed: account_id=%s", exchange_account_id, exc_info=True,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Binance 잔액 조회에 실패했습니다 (서버 로그 확인)",
+            ) from e
         # 캐시 저장 (Decimal → str)
         if _redis is not None:
             try:
@@ -450,11 +516,13 @@ def get_balance(
             _ts_v99 = int(_time_v99.time() * 1000)
             _qs = f"timestamp={_ts_v99}&recvWindow=5000"
             _sig = _hmac.new(_sk.encode(), _qs.encode(), _hashlib.sha256).hexdigest()
+            _guard_ip_ban("balance/positionRisk")   # 🚨 네트워크 직전 (캐시 미스일 때만 여기 온다)
             _resp = _requests.get(
                 f"{_base}/fapi/v2/positionRisk?{_qs}&signature={_sig}",
                 headers={"X-MBX-APIKEY": _ak},
                 timeout=10,
             )
+            _note_ip_ban(_resp)                     # 🚨 418/429 를 전역 차단기에 알린다
             _resp.raise_for_status()
             _pr_data = _resp.json()
             if _redis is not None:
@@ -732,22 +800,38 @@ def get_binance_positions(
         ak = decrypt_text(account.api_key_enc)
         sk = decrypt_text(account.api_secret_enc)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"키 복호화 실패: {e}") from e
+        # 🚨 보안: 복호화 예외 문자열에는 키 조각·경로가 섞일 수 있다. 응답에 넣지 않는다.
+        logger.error("binance-positions 키 복호화 실패: account_id=%s", account_id, exc_info=True)
+        raise HTTPException(status_code=500, detail="거래소 자격증명을 사용할 수 없습니다") from e
 
     base = "https://testnet.binancefuture.com" if account.is_testnet else "https://fapi.binance.com"
     ts = int(time.time() * 1000)
     qs = f"timestamp={ts}&recvWindow=5000"
     sig = hmac.new(sk.encode(), qs.encode(), hashlib.sha256).hexdigest()
+    _guard_ip_ban("binance-positions")          # 🚨 네트워크 직전 (캐시 미스일 때만 여기 온다)
     try:
         r = requests.get(
             f"{base}/fapi/v2/positionRisk?{qs}&signature={sig}",
             headers={"X-MBX-APIKEY": ak},
             timeout=10,
         )
+        _note_ip_ban(r)                         # 🚨 418/429 를 전역 차단기에 알린다
         r.raise_for_status()
         raw = r.json()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Binance positionRisk 호출 실패: {e}") from e
+        # 🚨 보안 (2026-09-03 적대적 검증): 예외 문자열을 응답 detail 에 넣지 않는다.
+        #   서명 URL 을 f-string 으로 만들었기 때문에(`...&signature={sig}`) requests 의
+        #   HTTPError / ConnectionError 메시지에는 **HMAC 서명 전체가 그대로** 들어 있다
+        #   ("... for url: https://fapi.binance.com/fapi/v2/positionRisk?...&signature=<hmac>").
+        #   그 detail 은 브라우저 응답 body 로 나가고, 신설 /static/perp-terminal.html 은
+        #   이 엔드포인트를 3초마다 폴링하며 detail 을 화면에 그대로 찍는다.
+        #   → 사유는 서버 로그에만 남기고 응답은 고정 문구로 한다.
+        logger.error(
+            "binance-positions positionRisk 호출 실패: account_id=%s", account_id, exc_info=True,
+        )
+        raise HTTPException(
+            status_code=502, detail="Binance positionRisk 호출에 실패했습니다 (서버 로그 확인)",
+        ) from e
 
     positions: dict = {}
     for p in raw:
@@ -880,6 +964,10 @@ def get_binance_open_orders_summary(
         pass
 
     # Binance /fapi/v1/openOrders (계정 전체!)
+    # 🚨 ban 가드는 try 밖에 둔다 — 아래 `except Exception` 이 넓어서 안에 두면
+    #    503 이 삼켜져 `{"error": ...}` 200 으로 나간다. 호출을 막는 효과는 같지만
+    #    「왜 안 나오는지」가 화면에서 사라진다.
+    _guard_ip_ban("binance-open-orders-summary")   # weight 40 짜리 전체 조회
     try:
         ak = decrypt_text(account.api_key_enc)
         sk = decrypt_text(account.api_secret_enc)
@@ -892,6 +980,7 @@ def get_binance_open_orders_summary(
             headers={"X-MBX-APIKEY": ak},
             timeout=10,
         )
+        _note_ip_ban(r)                         # 🚨 418/429 를 전역 차단기에 알린다
         r.raise_for_status()
         raw_orders = r.json() or []
     except Exception as e:

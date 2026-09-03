@@ -1,0 +1,2972 @@
+<!DOCTYPE html>
+<html lang="ko" translate="no">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<!-- 🚨 크롬 자동번역이 「실현손익」 같은 라벨을 오역한 전례가 있어 번역을 막는다 (index.html:8-9 와 동일). -->
+<meta name="google" content="notranslate" />
+<title>선물거래 터미널 — 메리디안</title>
+
+<!--
+  시안 지정 한글 본문 폰트 = IBM Plex Sans KR (Google Fonts).
+  🚨 display=swap 이므로 CDN 이 막혀도 폰트만 fallback(--sans 의 Pretendard →
+     Malgun Gothic)으로 떨어질 뿐 텍스트가 사라지거나 렌더가 지연되지 않는다.
+     숫자는 이 폰트를 쓰지 않는다(--mono 고정폭) = 자릿수 정렬은 폰트 로드와 무관.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap" />
+
+<!--
+  ════════════════════════════════════════════════════════════════════════════
+  선물거래 터미널 (perp-terminal.html)  — 2026-09-03 신설
+  ════════════════════════════════════════════════════════════════════════════
+
+  왜 단일 HTML 인가:
+    app/static/ 은 main.py:164 의 _NoCacheStaticFiles 로 이미 마운트돼 있다.
+    파일만 놓으면 /static/perp-terminal.html 로 바로 뜬다 = main.py 무수정.
+
+  왜 `?v=` 캐시버스터가 하나도 없는가 (Fix 190):
+    자동 해시 재작성은 index.html 에만 걸려 있다(main.py:112-115 가 파일명 하드코딩).
+    손으로 적은 `?v=` 는 영원히 안 바뀌는 「거짓 버전 문자열」이 된다.
+    _NoCacheStaticFiles 가 모든 /static 응답에 no-cache, must-revalidate 를 붙이므로
+    브라우저가 매 로드마다 ETag 재검증한다 = 낡은 파일이 로드될 수 없다.
+
+  왜 Tailwind 를 안 쓰는가:
+    팝업/보조 페이지(realtime-monitor / bb-* / pump-ranking)는 전부 순수 CSS 다.
+    Tailwind play CDN 은 런타임에 preflight 리셋을 <head> 에 주입해서
+    이 페이지의 촘촘한 호가 그리드를 뭉갤 수 있다. 색·크기는 :root 변수로만 정의한다
+    (docs/UI_DESIGN_GUIDELINES.md 원칙 1 = 인라인 하드코딩 금지).
+
+  데이터 소스 규칙 (2026-08-26 IP ban 418 무한연장 사고의 교훈):
+    · 공개 시세(가격·호가·체결·캔들·펀딩비)  → 브라우저가 바이낸스 WS 에 직접 연결.
+      서버 IP 부담 0. 초기 스냅샷만 /api/v1/market/* 로 각 1회.
+    · 계정 데이터(잔고·포지션·주문)          → 서버 API 폴링만. API 키가 필요하므로
+      브라우저에 키를 절대 내리지 않는다.
+
+  주문 규칙 (실측: 수동 진입이 전체 손실의 94.3%):
+    raw place_order 를 절대 부르지 않는다. 기존 전략 생성 3-콜 체인을 탄다
+    (템플릿 → 전략 → start). 그래야 Kill-Switch / 레버리지 상한 / 화이트리스트 /
+    동시 상한 / Fix 303 제외심볼 / Fix 310·325 24h 순위게이트 / Fix 327 지지선 /
+    부분손절(잔량 유지) / force SL 이 전부 그대로 걸린다.
+-->
+
+<style>
+:root {
+  /* ── 색 (시안에서 뽑은 값) ───────────────────────────────────────── */
+  --bg:            #0b0e11;
+  --panel:         #12161c;
+  --panel-2:       #161b22;
+  --border:        #1e2329;
+  --divider:       #252a31;
+  --text:          #eaecef;
+  --text-2:        #848e9c;
+  --text-3:        #5e6673;
+  --up:            #0ecb81;
+  --down:          #f6465d;
+  --warn:          #f0b90b;
+  --accent:        #7c5cff;
+  --up-bar:        rgba(14, 203, 129, 0.14);
+  --down-bar:      rgba(246, 70, 93, 0.14);
+  --up-soft:       rgba(14, 203, 129, 0.12);
+  --down-soft:     rgba(246, 70, 93, 0.12);
+  --hover:         rgba(255, 255, 255, 0.04);
+
+  /* ── 타이포 ─────────────────────────────────────────────────────── */
+  --mono: ui-monospace, "SF Mono", "Roboto Mono", "DejaVu Sans Mono", Consolas, monospace;
+  --sans: "IBM Plex Sans KR", "Pretendard", -apple-system, BlinkMacSystemFont,
+          "Segoe UI", "Malgun Gothic", sans-serif;
+  --fs-xs:  11px;   /* 하한 11px — 10px 이하 금지 (WCAG) */
+  --fs-sm:  12px;
+  --fs-md:  13px;
+  --fs-lg:  15px;
+  --fs-xl:  20px;
+  --fs-2xl: 26px;
+
+  /* ── 치수 ───────────────────────────────────────────────────────── */
+  --nav-h:    48px;
+  --sym-h:    56px;
+  --book-w:   242px;
+  --order-w:  274px;
+  --touch:    32px;
+  --radius:   4px;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg); color: var(--text);
+  font-family: var(--sans); font-size: var(--fs-md);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;              /* 🚨 가로 스크롤 절대 금지 */
+}
+/* 🚨 본체 높이를 「100vh − 상수」로 빼면 안 된다.
+   나비·심볼헤더·관문줄은 내용에 따라 늘어난다(한글 줄바꿈, 관문 칩 wrap).
+   실측: 100vh − 48 − 56 − 30 = 766 인데 실제 헤더 합은 147 → 13px 초과로
+   1440×900 에서 세로 스크롤바가 생기고, 관문 칩이 2줄이 되면 더 벌어졌다.
+   flex 로 「남은 높이 전부」를 주면 상수가 사라져 어떤 헤더 높이에도 정확하다. */
+body { min-height: 100vh; display: flex; flex-direction: column; }
+button, input, select { font-family: inherit; color: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .45; }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.up   { color: var(--up); }
+.down { color: var(--down); }
+.warn { color: var(--warn); }
+.muted{ color: var(--text-2); }
+.hidden { display: none !important; }
+.nowrap { white-space: nowrap; }
+
+/* ══ 인증 만료 배너 ══════════════════════════════════════════════ */
+#auth-banner {
+  position: fixed; inset: 0 0 auto 0; z-index: 90;
+  background: #2a1215; border-bottom: 1px solid var(--down);
+  padding: 10px 14px; display: flex; align-items: center; gap: 12px;
+  font-size: var(--fs-sm); flex-wrap: wrap;
+}
+#auth-banner b { color: var(--down); }
+#auth-banner button {
+  background: var(--accent); border: 0; color: #fff;
+  padding: 6px 12px; border-radius: var(--radius); font-size: var(--fs-xs);
+  min-height: var(--touch);
+}
+
+/* ══ 상단 내비 ══════════════════════════════════════════════════ */
+.nav {
+  height: var(--nav-h); display: flex; align-items: center; gap: 18px;
+  padding: 0 14px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: var(--fs-lg); }
+.brand-mark {
+  width: 22px; height: 22px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--accent), #a78bfa);
+}
+.nav-menu { display: flex; gap: 16px; font-size: var(--fs-md); }
+.nav-menu span { color: var(--text-3); }
+.nav-menu span.on { color: var(--text); font-weight: 600; }
+.nav-menu span[data-off] { cursor: not-allowed; }
+.nav-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+.nav-equity { text-align: right; line-height: 1.25; }
+.nav-equity .lbl { font-size: var(--fs-xs); color: var(--text-2); }
+.nav-equity .val { font-size: var(--fs-md); font-weight: 600; }
+.nav-btn {
+  background: var(--warn); color: #12161c; border: 0; font-weight: 700;
+  padding: 6px 14px; border-radius: var(--radius); font-size: var(--fs-sm);
+  min-height: var(--touch);
+}
+.avatar {
+  width: 28px; height: 28px; border-radius: 50%; background: var(--panel-2);
+  border: 1px solid var(--divider); display: grid; place-items: center;
+  font-size: var(--fs-xs); color: var(--text-2);
+}
+.acct-select {
+  background: var(--panel-2); border: 1px solid var(--divider); color: var(--text);
+  border-radius: var(--radius); font-size: var(--fs-xs); padding: 5px 6px;
+  min-height: var(--touch);
+}
+
+/* ══ 심볼 헤더 ═══════════════════════════════════════════════════ */
+.symhead {
+  min-height: var(--sym-h); display: flex; align-items: center; gap: 22px;
+  padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--border);
+  overflow-x: auto; overflow-y: hidden;
+}
+.symhead::-webkit-scrollbar { height: 4px; }
+.sym-id { line-height: 1.3; }
+.sym-id .name { font-size: var(--fs-lg); font-weight: 700; display: flex; align-items: center; gap: 7px; }
+.badge-perp {
+  background: rgba(240,185,11,.14); color: var(--warn); font-size: var(--fs-xs);
+  padding: 2px 6px; border-radius: 3px; font-weight: 600;
+}
+.sym-id .sub { font-size: var(--fs-xs); color: var(--text-2); margin-top: 3px; }
+.sym-price { line-height: 1.2; }
+.sym-price .big { font-size: var(--fs-2xl); font-weight: 600; }
+.sym-price .usd { font-size: var(--fs-xs); color: var(--text-2); margin-top: 2px; }
+.stats { display: flex; gap: 22px; }
+.stat { line-height: 1.35; }
+.stat .lbl { font-size: var(--fs-xs); color: var(--text-2); }
+.stat .val { font-size: var(--fs-sm); }
+.sym-search { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.sym-search input {
+  width: 118px; background: var(--panel-2); border: 1px solid var(--divider);
+  color: var(--text); padding: 6px 8px; border-radius: var(--radius);
+  font-size: var(--fs-xs); font-family: var(--mono); text-transform: uppercase;
+  min-height: var(--touch);
+}
+.conn { display: flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--text-2); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
+.dot.ok  { background: var(--up); }
+.dot.wait{ background: var(--warn); }
+.dot.err { background: var(--down); }
+
+/* ══ 자동매매 관문 한 줄 ═════════════════════════════════════════ */
+.gatebar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 14px; background: var(--panel-2);
+  border-bottom: 1px solid var(--border); font-size: var(--fs-xs);
+}
+.gatebar .gb-title { color: var(--text-2); font-weight: 600; }
+.chip {
+  padding: 3px 8px; border-radius: 3px; border: 1px solid var(--divider);
+  background: var(--panel); color: var(--text-2); white-space: nowrap;
+}
+.chip.ok      { border-color: rgba(14,203,129,.4);  color: var(--up);   background: var(--up-soft); }
+.chip.bad     { border-color: rgba(246,70,93,.45);  color: var(--down); background: var(--down-soft); }
+.chip.unknown { border-color: rgba(240,185,11,.45); color: var(--warn); background: rgba(240,185,11,.10); }
+
+/* ══ 본체 그리드 ═════════════════════════════════════════════════ */
+.main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--book-w) var(--order-w);
+  grid-template-rows: minmax(300px, 1fr) minmax(190px, 300px);
+  grid-template-areas:
+    "chart  book   order"
+    "bottom bottom order";
+  gap: 1px; background: var(--border);
+  flex: 1 1 auto;          /* 헤더 3줄이 쓰고 남은 높이 전부 (상수 계산 금지) */
+  min-height: 560px;
+}
+/* 헤더 3줄은 절대 눌리지 않는다 — flex 기본 shrink 가 1 이라 명시가 필요하다. */
+.nav, .symhead, .gatebar { flex: none; }
+.pane { background: var(--panel); min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+#pane-chart  { grid-area: chart; }
+#pane-book   { grid-area: book; }
+#pane-order  { grid-area: order; overflow-y: auto; }
+#pane-bottom { grid-area: bottom; }
+
+/* ══ 차트 ═══════════════════════════════════════════════════════ */
+.chart-bar {
+  display: flex; align-items: center; gap: 10px; padding: 6px 10px;
+  border-bottom: 1px solid var(--border); flex-wrap: wrap;
+}
+.tf { display: flex; gap: 2px; }
+.tf button {
+  background: transparent; border: 0; color: var(--text-2);
+  padding: 5px 9px; border-radius: 3px; font-size: var(--fs-xs); min-height: var(--touch);
+}
+.tf button:hover { background: var(--hover); }
+.tf button.on { background: var(--panel-2); color: var(--text); font-weight: 600; }
+.chart-tools { font-size: var(--fs-xs); color: var(--text-3); display: flex; gap: 10px; }
+.ohlc { margin-left: auto; display: flex; gap: 10px; font-size: var(--fs-xs); font-family: var(--mono); }
+.ohlc .k { color: var(--text-2); margin-right: 3px; }
+#chart-host { flex: 1; position: relative; min-height: 200px; }
+#chart-msg {
+  position: absolute; inset: 0; display: none; place-items: center;
+  text-align: center; padding: 16px; color: var(--text-2); font-size: var(--fs-sm);
+}
+
+/* ══ 호가 / 체결 ════════════════════════════════════════════════ */
+.book-head {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.book-head .tabs { display: flex; gap: 4px; }
+.book-head .tabs button {
+  background: transparent; border: 0; color: var(--text-2);
+  font-size: var(--fs-sm); padding: 4px 6px; min-height: var(--touch);
+}
+.book-head .tabs button.on { color: var(--text); font-weight: 600; }
+.book-head .tick { margin-left: auto; font-size: var(--fs-xs); color: var(--text-3); font-family: var(--mono); }
+.ob-cols, .tr-cols {
+  /* padding 4px → 3px: 1920×1080 전체화면에서 호가가 「12+12행」으로 딱 1px 모자랐다.
+     2px 를 돌려주면 시안대로 13+13 이 전부 들어온다. */
+  display: grid; padding: 3px 10px; font-size: var(--fs-xs); color: var(--text-2);
+  border-bottom: 1px solid var(--border);
+}
+.ob-cols { grid-template-columns: 1fr 1fr 1fr; }
+.tr-cols { grid-template-columns: 1fr 1fr 1fr; }
+.ob-cols span:nth-child(n+2), .tr-cols span:nth-child(n+2) { text-align: right; }
+#ob-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+.ob-cols, .ob-mid { flex: none; }
+/*
+  🚨 실측 사고: 13+13 행(585px)이 pane(420px)보다 커서 overflow:hidden 이
+     「매수 13행 중 8행」을 통째로 삼켰다(1440×900). 중간가도 아래로 밀려 있었다.
+     매도/매수를 같은 flex 로 나눠 갖게 하면 중간가가 정확히 가운데 오고,
+     공간이 모자랄 때 잘리는 것은 「중간가에서 먼」 호가뿐이다.
+     · 매도(위)  = justify-content:flex-end → 최우선 매도호가가 항상 중간가 바로 위
+     · 매수(아래) = 기본 flex-start        → 최우선 매수호가가 항상 중간가 바로 아래
+     세로가 넉넉하면(뷰포트 ≥ 약 970px) 시안대로 13+13 이 전부 보인다.
+*/
+.ob-side { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; overflow: hidden; }
+#ob-asks { justify-content: flex-end; }
+.ob-row { flex: none; }
+.ob-row {
+  position: relative; display: grid; grid-template-columns: 1fr 1fr 1fr;
+  padding: 1px 10px; font-size: var(--fs-xs); font-family: var(--mono);
+  line-height: 1.65; cursor: pointer;
+}
+.ob-row:hover { background: var(--hover); }
+.ob-row .bar { position: absolute; top: 0; bottom: 0; right: 0; width: 0; pointer-events: none; }
+.ob-row.ask .bar { background: var(--down-bar); }
+.ob-row.bid .bar { background: var(--up-bar); }
+.ob-row span { position: relative; }
+.ob-row .px  { text-align: left; }
+.ob-row .qty { text-align: right; color: var(--text); }
+.ob-row .cum { text-align: right; color: var(--text-2); }
+.ob-row.ask .px { color: var(--down); }
+.ob-row.bid .px { color: var(--up); }
+.ob-mid {
+  padding: 6px 10px; border-top: 1px solid var(--divider); border-bottom: 1px solid var(--divider);
+  display: flex; align-items: baseline; gap: 8px; font-family: var(--mono);
+}
+.ob-mid .last { font-size: var(--fs-xl); font-weight: 600; }
+.ob-mid .mark { font-size: var(--fs-xs); color: var(--text-2); }
+#tr-wrap { flex: 1; overflow: hidden; }
+.tr-row {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; padding: 1px 10px;
+  font-size: var(--fs-xs); font-family: var(--mono); line-height: 1.7;
+}
+.tr-row .t { color: var(--text-2); }
+.tr-row .q { text-align: right; color: var(--text); }
+.tr-row .p { text-align: right; }
+
+/* ══ 주문 패널 ══════════════════════════════════════════════════ */
+.op { padding: 10px; display: flex; flex-direction: column; gap: 9px; }
+.op-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.op-pill {
+  background: var(--panel-2); border: 1px solid var(--divider); color: var(--text);
+  padding: 7px; border-radius: var(--radius); font-size: var(--fs-xs); min-height: var(--touch);
+}
+.side-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.side-toggle button {
+  padding: 9px; border-radius: var(--radius); font-size: var(--fs-md); font-weight: 700;
+  border: 1px solid var(--divider); background: transparent; color: var(--text-2);
+  min-height: var(--touch);
+}
+.side-toggle button.on-long  { background: var(--up);   border-color: var(--up);   color: #08130d; }
+.side-toggle button.on-short { background: var(--down); border-color: var(--down); color: #1a0508; }
+.otype { display: flex; gap: 12px; border-bottom: 1px solid var(--border); }
+.otype button {
+  background: transparent; border: 0; border-bottom: 2px solid transparent;
+  color: var(--text-2); font-size: var(--fs-sm); padding: 6px 1px; min-height: var(--touch);
+}
+.otype button.on { color: var(--text); border-bottom-color: var(--warn); font-weight: 600; }
+.kv { display: flex; justify-content: space-between; align-items: baseline; font-size: var(--fs-xs); }
+.kv .k { color: var(--text-2); }
+.kv .v { font-family: var(--mono); }
+.field {
+  display: flex; align-items: center; gap: 6px; background: var(--panel-2);
+  border: 1px solid var(--divider); border-radius: var(--radius); padding: 0 9px;
+}
+.field:focus-within { border-color: var(--text-3); }
+.field .fl { font-size: var(--fs-xs); color: var(--text-2); width: 30px; flex: none; }
+.field input {
+  flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
+  text-align: right; font-family: var(--mono); font-size: var(--fs-md);
+  padding: 8px 0; min-height: var(--touch);
+}
+.field .fu { font-size: var(--fs-xs); color: var(--text-2); width: 42px; text-align: right; flex: none; }
+.ratios { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.ratios button {
+  background: var(--panel-2); border: 1px solid var(--divider); color: var(--text-2);
+  border-radius: var(--radius); font-size: var(--fs-xs); padding: 6px 0; min-height: var(--touch);
+}
+.ratios button:hover { color: var(--text); }
+.cta {
+  width: 100%; border: 0; border-radius: var(--radius); padding: 12px;
+  font-size: var(--fs-md); font-weight: 700; min-height: 42px;
+  background: var(--up); color: #08130d;
+}
+.cta.short { background: var(--down); color: #1a0508; }
+.cta:disabled { background: var(--panel-2); color: var(--text-3); border: 1px solid var(--divider); }
+.cta-note { font-size: var(--fs-xs); color: var(--warn); line-height: 1.45; }
+.margin-bar { height: 4px; border-radius: 2px; background: var(--panel-2); overflow: hidden; }
+.margin-bar > i { display: block; height: 100%; width: 0; background: var(--accent); }
+.op-divider { height: 1px; background: var(--border); margin: 2px 0; }
+.op-hint { font-size: var(--fs-xs); color: var(--text-3); line-height: 1.5; }
+
+/* ══ 하단 탭 + 테이블 ═══════════════════════════════════════════ */
+.bt-head {
+  display: flex; align-items: center; gap: 4px; padding: 5px 10px;
+  border-bottom: 1px solid var(--border); flex-wrap: wrap;
+}
+.bt-head button {
+  background: transparent; border: 0; color: var(--text-2);
+  font-size: var(--fs-sm); padding: 5px 8px; border-radius: 3px; min-height: var(--touch);
+}
+.bt-head button.on { color: var(--text); font-weight: 600; background: var(--panel-2); }
+.bt-head .only {
+  margin-left: auto; display: flex; align-items: center; gap: 6px;
+  font-size: var(--fs-xs); color: var(--text-2); cursor: pointer;
+}
+#bt-body { flex: 1; overflow: auto; }
+table.tbl { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
+table.tbl th {
+  position: sticky; top: 0; z-index: 1; background: var(--panel);
+  text-align: left; font-weight: 500; color: var(--text-2);
+  padding: 7px 10px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+table.tbl td {
+  padding: 7px 10px; border-bottom: 1px solid var(--divider);
+  font-family: var(--mono); white-space: nowrap;
+}
+table.tbl td.ko { font-family: var(--sans); }
+table.tbl tr:hover td { background: var(--hover); }
+table.tbl th.r, table.tbl td.r { text-align: right; }
+.tag {
+  display: inline-block; font-family: var(--sans); font-size: var(--fs-xs);
+  padding: 1px 5px; border-radius: 3px; border: 1px solid var(--divider);
+  color: var(--text-2); margin-left: 4px; vertical-align: middle;
+}
+.tag.auto   { color: var(--up);     border-color: rgba(14,203,129,.4);  background: var(--up-soft); }
+.tag.manual { color: var(--warn);   border-color: rgba(240,185,11,.45); background: rgba(240,185,11,.10); }
+.tag.out    { color: var(--down);   border-color: rgba(246,70,93,.4);   background: var(--down-soft); }
+.tag.stage  { color: var(--accent); border-color: rgba(124,92,255,.45); background: rgba(124,92,255,.12); }
+.tag.trim   { color: var(--warn);   border-color: rgba(240,185,11,.45); background: rgba(240,185,11,.10); }
+.btn-x {
+  background: var(--panel-2); border: 1px solid var(--divider); color: var(--text);
+  border-radius: 3px; font-size: var(--fs-xs); padding: 4px 8px; min-height: 26px;
+  font-family: var(--sans);
+}
+.btn-x:hover:not(:disabled) { border-color: var(--down); color: var(--down); }
+.empty { padding: 20px; text-align: center; color: var(--text-3); font-size: var(--fs-sm); }
+
+/* ══ 확인 모달 ══════════════════════════════════════════════════ */
+.mask {
+  position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.66);
+  display: grid; place-items: center; padding: 14px;
+}
+.modal {
+  width: 100%; max-width: 420px; max-height: 90vh; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--divider); border-radius: 8px;
+}
+.modal h3 { margin: 0; padding: 13px 16px; border-bottom: 1px solid var(--border); font-size: var(--fs-lg); }
+.modal .body { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.modal .kv { font-size: var(--fs-sm); }
+.modal .foot { padding: 12px 16px; border-top: 1px solid var(--border); display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.modal .foot button { padding: 11px; border-radius: var(--radius); font-size: var(--fs-md); font-weight: 700; border: 0; min-height: 42px; }
+.modal .foot .cancel { background: var(--panel-2); border: 1px solid var(--divider); color: var(--text); }
+.gate-box {
+  border: 1px solid var(--divider); border-radius: var(--radius);
+  padding: 9px; display: flex; flex-direction: column; gap: 6px; background: var(--panel-2);
+}
+.gate-box .t { font-size: var(--fs-xs); color: var(--text-2); font-weight: 600; }
+.err-box {
+  border: 1px solid rgba(246,70,93,.5); background: rgba(246,70,93,.08);
+  color: #ffb3bd; border-radius: var(--radius); padding: 9px;
+  font-size: var(--fs-xs); line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+}
+.ok-box {
+  border: 1px solid rgba(14,203,129,.5); background: var(--up-soft); color: var(--up);
+  border-radius: var(--radius); padding: 9px; font-size: var(--fs-xs); line-height: 1.6;
+  white-space: pre-wrap; word-break: break-all;
+}
+
+/* ══ 토스트 ═════════════════════════════════════════════════════ */
+#toast {
+  position: fixed; right: 14px; bottom: 14px; z-index: 110; max-width: 380px;
+  background: var(--panel-2); border: 1px solid var(--divider); color: var(--text);
+  padding: 11px 14px; border-radius: var(--radius); font-size: var(--fs-sm);
+  white-space: pre-line; box-shadow: 0 6px 22px rgba(0,0,0,.5); cursor: pointer;
+}
+#toast.err { border-color: var(--down); color: #ffb3bd; }
+#toast.ok  { border-color: var(--up); }
+
+/* ══ 반응형 ═════════════════════════════════════════════════════ */
+@media (max-width: 1279px) {
+  .main {
+    grid-template-columns: minmax(0, 1fr) var(--book-w);
+    grid-template-rows: minmax(280px, 1fr) auto minmax(180px, 260px);
+    grid-template-areas:
+      "chart  book"
+      "order  order"
+      "bottom bottom";
+    height: auto;
+  }
+  #pane-order { max-height: none; }
+  /* 이 폭에서는 주문 패널이 전폭 띠로 내려가 세로를 크게 먹는다.
+     그러면 1fr 인 차트/호가 행이 최소치(280px)까지 굶어 호가가 4+4행만 남았다(1100px 실측).
+     이 레이아웃은 어차피 페이지가 세로로 스크롤되므로, 호가에는 시안대로
+     13+13 이 들어가는 높이를 보장한다. */
+  #pane-book { min-height: 636px; }
+  /*
+    🚨 여기 있던 `.op > .span2` 는 HTML 어디에도 없는 죽은 클래스였다.
+       그래서 1024~1279px 에서 주문 패널이 뒤죽박죽이 됐다 (1100px 실측):
+         · 「지정가/시장가/스탑」 탭이 안내문 옆에 붙고
+         · 「가격」과 「수량」 입력이 서로 다른 열·다른 줄로 흩어지고
+         · 초록 CTA 가 반쪽 폭이 되고 구분선이 반쪽 선이 되고
+         · 「증거금 비율」 라벨(우열)과 보라 진행바(좌열)가 완전히 분리됐다.
+       기본을 전폭으로 두고 「가격 | 수량」 한 쌍만 나란히 놓는다.
+       (클래스 추가 없이 기존 마크업만으로 되도록 자식 선택자로 처리) */
+  .op { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); align-items: start; }
+  .op > * { grid-column: 1 / -1; }
+  .op > .field { grid-column: span 1; }
+}
+@media (max-width: 860px) {
+  .main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 320px auto auto auto;
+    grid-template-areas: "chart" "book" "order" "bottom";
+    height: auto; min-height: 0;
+  }
+  .op { grid-template-columns: minmax(0, 1fr); }
+  .nav-menu { display: none; }
+  .stats { gap: 14px; }
+  .symhead { gap: 14px; }
+  /* 세로 스택이라 이미 페이지가 스크롤된다 → 높이를 아끼는 이득이 없다.
+     시안대로 매도 13 + 매수 13 이 전부 보이는 높이를 준다
+     (헤드 45 + 컬럼 24 + 13행×20×2 + 중간가 37 ≒ 630). */
+  #pane-book { min-height: 636px; }
+}
+</style>
+</head>
+<body>
+
+<!-- ══ 인증 만료 배너 (토큰 수명 60분 — 오래 열어두면 반드시 발생) ══ -->
+<div id="auth-banner" class="hidden">
+  <b>🔐 인증 만료</b>
+  <span>대시보드(<span class="mono">/admin-ui</span>)에서 재로그인한 뒤 아래 버튼을 누르세요.</span>
+  <button type="button" id="auth-retry">🔄 재시도</button>
+</div>
+
+<!-- ══ 상단 내비 ══════════════════════════════════════════════════ -->
+<div class="nav">
+  <div class="brand"><span class="brand-mark"></span><span>메리디안</span></div>
+  <div class="nav-menu">
+    <span class="on">선물</span>
+    <!-- 이 시스템은 USD-M 선물 전용이다. 나머지는 대응 데이터가 없어 비활성. -->
+    <span data-off title="이 시스템은 USD-M 선물만 운영합니다">현물</span>
+    <span data-off title="이 시스템은 USD-M 선물만 운영합니다">스테이킹</span>
+    <span data-off title="이 시스템은 USD-M 선물만 운영합니다">마켓</span>
+    <span data-off title="이 시스템은 USD-M 선물만 운영합니다">자산</span>
+  </div>
+  <div class="nav-right">
+    <select id="acct-select" class="acct-select hidden" title="거래 계정"></select>
+    <div class="nav-equity">
+      <div class="lbl">순자산</div>
+      <div class="val mono" id="nav-equity" title="total_margin_balance = 지갑 + 미실현손익">--</div>
+    </div>
+    <!-- 입금 = 자금 이동. 이 도구는 자금을 옮기지 않는다 (금지 항목) → 항상 비활성. -->
+    <button class="nav-btn" type="button" disabled title="이 터미널은 자금 이동을 하지 않습니다 — 입금은 Binance 앱에서">입금</button>
+    <div class="avatar">👤</div>
+  </div>
+</div>
+
+<!-- ══ 심볼 헤더 ═══════════════════════════════════════════════════ -->
+<div class="symhead">
+  <div class="sym-id">
+    <div class="name"><span id="sym-name">--</span><span class="badge-perp">무기한</span></div>
+    <div class="sub" id="sym-sub">무기한 · -- · USDT 결제</div>
+  </div>
+  <div class="sym-price">
+    <div class="big mono up" id="px-last">--</div>
+    <div class="usd mono" id="px-usd">≈ $--</div>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="lbl">24시간 변동</div><div class="val mono" id="st-chg">--</div></div>
+    <div class="stat"><div class="lbl">24시간 고가</div><div class="val mono" id="st-high">--</div></div>
+    <div class="stat"><div class="lbl">24시간 저가</div><div class="val mono" id="st-low">--</div></div>
+    <div class="stat"><div class="lbl" id="st-vol-lbl">24시간 거래량</div><div class="val mono" id="st-vol">--</div></div>
+    <div class="stat"><div class="lbl">미결제약정</div><div class="val mono" id="st-oi">--</div></div>
+    <div class="stat">
+      <div class="lbl">펀딩비 / 정산까지</div>
+      <div class="val mono"><span id="st-funding">--</span> · <span id="st-countdown" class="warn">--:--:--</span></div>
+    </div>
+  </div>
+  <div class="sym-search">
+    <div class="conn"><span class="dot" id="conn-dot"></span><span id="conn-txt">연결 중</span></div>
+    <input id="sym-input" placeholder="심볼" maxlength="24" autocomplete="off" spellcheck="false" />
+  </div>
+</div>
+
+<!-- ══ 자동매매 관문 한 줄 (index.html 에 per-symbol 뷰가 없어 중복 아님) ══ -->
+<div class="gatebar">
+  <span class="gb-title">🤖 자동매매 관문</span>
+  <span class="chip unknown" id="gate-excl">제외 심볼: 확인 중</span>
+  <span class="chip unknown" id="gate-chg24">24h 순위 게이트: 확인 중</span>
+  <span class="chip unknown" id="gate-support">지지선 게이트: 확인 중</span>
+  <span class="chip unknown" id="gate-trim">부분손절: 확인 중</span>
+  <span class="chip unknown" id="gate-reentry">재진입 대기: 확인 중</span>
+</div>
+
+<!-- ══ 본체 ═══════════════════════════════════════════════════════ -->
+<div class="main">
+
+  <!-- 차트 -->
+  <div class="pane" id="pane-chart">
+    <div class="chart-bar">
+      <div class="tf" id="tf-tabs"></div>
+      <div class="chart-tools"><span>호가</span><span>차트</span><span>지표</span></div>
+      <div class="ohlc">
+        <span><span class="k">시</span><span id="oh-o">--</span></span>
+        <span><span class="k">고</span><span id="oh-h" class="up">--</span></span>
+        <span><span class="k">저</span><span id="oh-l" class="down">--</span></span>
+        <span><span class="k">종</span><span id="oh-c">--</span></span>
+      </div>
+    </div>
+    <div id="chart-host"><div id="chart-msg"></div></div>
+  </div>
+
+  <!-- 호가 / 체결 -->
+  <div class="pane" id="pane-book">
+    <div class="book-head">
+      <div class="tabs">
+        <button type="button" id="bk-tab-book" class="on">호가</button>
+        <button type="button" id="bk-tab-trade">체결</button>
+      </div>
+      <!-- 호가 스트림이 안 오는 상태를 「조용히」 두지 않는다. 자세한 근거는 obWatchdog(). -->
+      <div class="tick warn hidden" id="ob-stale" title="">호가 지연</div>
+      <div class="tick" id="bk-tick">--</div>
+    </div>
+
+    <div id="ob-wrap">
+      <div class="ob-cols"><span>가격</span><span id="ob-qty-lbl">수량</span><span>누적</span></div>
+      <div class="ob-side" id="ob-asks"></div>
+      <div class="ob-mid">
+        <span class="last up" id="ob-last">--</span>
+        <span class="mark">표시가 <span id="ob-mark">--</span></span>
+      </div>
+      <div class="ob-side" id="ob-bids"></div>
+    </div>
+
+    <div id="tr-wrap" class="hidden">
+      <div class="tr-cols"><span>시각</span><span>가격</span><span id="tr-qty-lbl">수량</span></div>
+      <div id="tr-rows"></div>
+    </div>
+  </div>
+
+  <!-- 주문 패널 -->
+  <div class="pane" id="pane-order">
+    <div class="op">
+      <div class="op-row2">
+        <!-- 마진 모드는 거래소 실 포지션 값에서 읽는다. 하드코딩하면 거짓말이 된다. -->
+        <button class="op-pill" type="button" id="op-margin-mode" disabled title="읽기 전용 — 마진 모드 변경은 이 터미널의 범위 밖입니다">마진 --</button>
+        <button class="op-pill" type="button" id="op-lev-btn" title="레버리지 변경">20x</button>
+      </div>
+
+      <div class="side-toggle">
+        <button type="button" id="btn-long"  class="on-long">매수 / 롱</button>
+        <button type="button" id="btn-short">매도 / 숏</button>
+      </div>
+
+      <div class="otype">
+        <button type="button" class="on" id="ot-limit">지정가</button>
+        <!-- 전략 생성 경로는 1단계 LIMIT(start_price) 진입만 지원한다.
+             StrategyCreateRequest / StrategyTemplateCreate 에 시장가·스탑 파라미터가 없다. -->
+        <button type="button" disabled title="전략 생성 경로가 지정가(1단계 LIMIT) 진입만 지원합니다">시장가</button>
+        <button type="button" disabled title="전략 생성 경로가 지정가(1단계 LIMIT) 진입만 지원합니다">스탑 지정가</button>
+      </div>
+      <div class="op-hint">시장가 · 스탑 지정가는 전략 생성 경로가 지원하지 않아 비활성입니다.</div>
+
+      <div class="kv"><span class="k">사용 가능</span><span class="v" id="op-avail">--</span></div>
+
+      <div class="field">
+        <span class="fl">가격</span>
+        <input id="in-price" inputmode="decimal" autocomplete="off" placeholder="0" />
+        <span class="fu">USDT</span>
+      </div>
+      <div class="field">
+        <span class="fl">수량</span>
+        <input id="in-qty" inputmode="decimal" autocomplete="off" placeholder="0" />
+        <span class="fu" id="in-qty-unit">--</span>
+      </div>
+
+      <div class="ratios">
+        <button type="button" data-r="25">25%</button>
+        <button type="button" data-r="50">50%</button>
+        <button type="button" data-r="75">75%</button>
+        <button type="button" data-r="100">최대</button>
+      </div>
+
+      <div class="op-divider"></div>
+      <div class="kv"><span class="k">주문 금액</span><span class="v" id="op-notional">-- USDT</span></div>
+      <div class="kv"><span class="k">개시 증거금</span><span class="v" id="op-margin">-- USDT</span></div>
+      <div class="kv">
+        <span class="k">예상 청산가 <span class="muted" title="MMR 티어 테이블이 저장소에 없어 정확 계산 불가 — 어림값입니다. 진입 후 정확한 값은 포지션 테이블의 청산가에 표시됩니다.">ⓘ 근사</span></span>
+        <span class="v warn" id="op-liq">--</span>
+      </div>
+
+      <button class="cta" type="button" id="cta">-- 매수 / 롱</button>
+      <div class="cta-note" id="cta-note"></div>
+
+      <div class="op-divider"></div>
+      <div class="kv"><span class="k">증거금 비율</span><span class="v" id="op-mr">--</span></div>
+      <div class="margin-bar"><i id="op-mr-bar"></i></div>
+      <div class="kv"><span class="k">유지 증거금</span><span class="v" id="op-maint">--</span></div>
+    </div>
+  </div>
+
+  <!-- 하단 탭 + 테이블 -->
+  <div class="pane" id="pane-bottom">
+    <div class="bt-head">
+      <button type="button" class="on" data-tab="pos">포지션 (0)</button>
+      <button type="button" data-tab="open">미체결 (0)</button>
+      <button type="button" data-tab="orders">주문 내역</button>
+      <button type="button" data-tab="trades">체결 내역</button>
+      <!-- 기본 「해제」 — 기본 숨김이 「기능이 없다」는 착각을 만든 전례(볼밴 3차 0건 오진). -->
+      <label class="only"><input type="checkbox" id="only-sym" /> 현재 종목만 보기</label>
+    </div>
+    <div id="bt-body"><div class="empty">불러오는 중…</div></div>
+  </div>
+</div>
+
+<div id="modal-host"></div>
+<div id="toast" class="hidden"></div>
+
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+'use strict';
+/* ════════════════════════════════════════════════════════════════════════
+   0. 공통 유틸
+   ════════════════════════════════════════════════════════════════════════ */
+
+// js/helpers.js:290 의 구현을 그대로 복사. 팝업 페이지는 helpers.js 를 로드하지 않고
+// 이 앱에는 CSP 헤더가 없으므로 escape 가 유일한 XSS 방어선이다.
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
+
+/** 소수 자릿수 고정 + 천단위 구분. 값이 없으면 절대 0 으로 떨어뜨리지 않고 '--'. */
+function fmt(v, dp) {
+  const n = num(v);
+  if (n === null) return '--';
+  const d = (dp == null) ? 2 : dp;
+  return n.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+}
+function fmtSigned(v, dp) {
+  const n = num(v);
+  if (n === null) return '--';
+  return (n > 0 ? '+' : '') + fmt(n, dp);
+}
+function fmtCompact(v) {
+  const n = num(v);
+  if (n === null) return '--';
+  const a = Math.abs(n);
+  if (a >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (a >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (a >= 1e3) return (n / 1e3).toFixed(2) + 'K';
+  return n.toFixed(2);
+}
+/** tick_size 문자열("0.00001")에서 표시 소수 자릿수를 뽑는다. */
+function dpFromStep(step, fallback) {
+  const s = String(step == null ? '' : step);
+  if (!s || !s.includes('.')) {
+    const n = num(s);
+    if (n !== null && n >= 1) return 0;
+    return fallback == null ? 4 : fallback;
+  }
+  const frac = s.split('.')[1].replace(/0+$/, '');
+  return frac.length || 0;
+}
+function pxDp() { return S.meta.priceDp != null ? S.meta.priceDp : 5; }
+function qtyDp() { return S.meta.qtyDp != null ? S.meta.qtyDp : 3; }
+function fmtPx(v) { return fmt(v, pxDp()); }
+function fmtQty(v) { return fmt(v, qtyDp()); }
+
+/**
+ * 선택 심볼이 「아닌」 종목의 가격 포맷.
+ * 🚨 tick_size 는 선택 심볼 것만 갖고 있다. 그걸 다른 종목에 쓰면 자릿수가 잘린다
+ *    (0.00000123 짜리 코인이 「0.0000」 으로 보이는 사고). 크기별로 유효자릿수를 잡는다.
+ */
+function fmtPxAuto(v, symbol) {
+  if (symbol && String(symbol).toUpperCase() === S.symbol) return fmtPx(v);
+  const n = num(v);
+  if (n === null) return '--';
+  const a = Math.abs(n);
+  let dp = 4;
+  if (a === 0)        dp = 2;
+  else if (a >= 1000) dp = 2;
+  else if (a >= 1)    dp = 4;
+  else if (a >= 0.01) dp = 5;
+  else if (a >= 0.0001) dp = 7;
+  else                dp = 9;
+  return fmt(n, dp);
+}
+/** 수량도 같은 이유로 종목별 step_size 를 알 수 없다 — 크기에 맞춰 자릿수를 정한다. */
+function fmtQtyAuto(v, symbol) {
+  if (symbol && String(symbol).toUpperCase() === S.symbol) return fmtQty(v);
+  const n = num(v);
+  if (n === null) return '--';
+  const a = Math.abs(n);
+  return fmt(n, a >= 1000 ? 0 : (a >= 1 ? 2 : 4));
+}
+
+/** 손익 색. 0 은 녹색이 아니라 중립 — 「본전」을 이익으로 보이게 하면 안 된다. */
+function pnlCls(v) {
+  const n = num(v);
+  if (n === null || n === 0) return '';
+  return n < 0 ? 'down' : 'up';
+}
+
+function hhmmss(ms) {
+  const d = new Date(ms);
+  const p = (x) => String(x).padStart(2, '0');
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+}
+function ymdhm(v) {
+  if (!v) return '--';
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return '--';
+  const p = (x) => String(x).padStart(2, '0');
+  return p(d.getMonth() + 1) + '/' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function setTxt(id, text, cls) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (el.textContent !== text) el.textContent = text;
+  if (cls !== undefined) el.className = cls;
+}
+function toast(msg, kind) {
+  const el = document.getElementById('toast');
+  el.textContent = String(msg || '');
+  el.className = kind === 'err' ? 'err' : (kind === 'ok' ? 'ok' : '');
+  el.classList.remove('hidden');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.add('hidden'), Math.max(3500, Math.min(14000, String(msg).length * 80)));
+  el.onclick = () => el.classList.add('hidden');
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   1. 인증 + API
+   ════════════════════════════════════════════════════════════════════════ */
+
+const API_BASE = window.location.origin + '/api/v1';
+
+/**
+ * 토큰은 「매 호출마다」 다시 읽는다.
+ * v180/v183 이 잡은 팝업 401 의 진짜 원인이 「팝업이 옛 토큰을 붙잡고 있어서」였다.
+ * 부모 창이 있으면 부모 것을 우선(대시보드가 방금 재로그인했을 수 있다),
+ * 없으면 자기 localStorage → sessionStorage. 부모가 없어도 반드시 동작해야 한다.
+ */
+function getToken() {
+  try {
+    if (window.opener && !window.opener.closed) {
+      const t = window.opener.localStorage.getItem('access_token');
+      if (t) return t;
+    }
+  } catch (_e) { /* cross-origin — 무시 */ }
+  try { return localStorage.getItem('access_token') || sessionStorage.getItem('access_token') || ''; }
+  catch (_e) { return ''; }
+}
+
+// 401 은 3연속이어야 「진짜 만료」로 본다 (api.js:40,68-80 과 같은 규칙).
+// 서버 재시작·네트워크 hiccup 으로 오는 1~2회는 무시.
+let _c401 = 0;
+function showAuthBanner(show) {
+  document.getElementById('auth-banner').classList.toggle('hidden', !show);
+}
+
+/**
+ * api.js 를 외부 스크립트 태그로 재사용하지 않는 이유:
+ *   api.js:33-34 의 logout() 이 'login-screen'/'dashboard-screen' DOM 을 직접 만진다.
+ *   이 페이지엔 그 DOM 이 없어 401 3회째에 TypeError 로 죽는다.
+ */
+async function api(path, opts) {
+  opts = opts || {};
+  const headers = Object.assign({}, opts.headers || {});
+  const t = getToken();
+  if (t) headers['Authorization'] = 'Bearer ' + t;
+
+  let body = opts.body;
+  const isForm = (typeof FormData !== 'undefined' && body instanceof FormData)
+    || (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams)
+    || (typeof Blob !== 'undefined' && body instanceof Blob);
+  if (body && !isForm) {
+    if (typeof body === 'object') body = JSON.stringify(body);
+    const hasCT = Object.keys(headers).some((k) => k.toLowerCase() === 'content-type');
+    if (!hasCT) headers['Content-Type'] = 'application/json';   // Fix 107: 문자열 body 에도 반드시
+  }
+
+  const res = await fetch(API_BASE + path, Object.assign({}, opts, { headers: headers, body: body }));
+  if (res.status === 401) {
+    _c401 += 1;
+    if (_c401 >= 3) showAuthBanner(true);
+    const e = new Error('인증 오류 (' + _c401 + '/3)');
+    e.status = 401;
+    throw e;
+  }
+  _c401 = 0;
+  showAuthBanner(false);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    const e = new Error(res.status + ': ' + text);
+    e.status = res.status;
+    e.raw = text;
+    throw e;
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+/** FastAPI 의 한글 detail 을 그대로 꺼낸다. 가공하지 않는다 — 사유가 곧 정답이다. */
+function detailOf(err) {
+  const raw = err && err.raw;
+  if (raw) {
+    try {
+      const j = JSON.parse(raw);
+      if (j && j.detail !== undefined && j.detail !== null) {
+        if (Array.isArray(j.detail)) {
+          return j.detail.map((d) => {
+            const loc = (d.loc || []).filter((x) => x !== 'body' && typeof x === 'string').join('.') || '(root)';
+            return '• ' + loc + ': ' + (d.msg || '');
+          }).join('\n');
+        }
+        return String(j.detail);
+      }
+    } catch (_e) { /* JSON 아님 */ }
+    // 🚨 JSON 이 아닌 응답(프록시·게이트웨이의 HTML 오류 페이지)을 **그대로 찍지 않는다**.
+    //    2026-09-03 적대적 검증에서 실제로 재현: 502/404 HTML 본문 900자가 토스트와
+    //    미체결 패널에 통째로 쏟아져 「<!DOCTYPE html> <head> <style>…」 이 화면을 덮었다.
+    //    (escapeHtml 을 타므로 XSS 는 아니지만, 진짜 사유가 그 안에 파묻혀 안 보인다.)
+    //    태그를 걷어내고 공백을 합쳐 사람이 읽는 한 줄로 만든다.
+    const looksHtml = /^\s*<(!doctype|html|head|body)\b/i.test(raw);
+    const text = (looksHtml ? raw.replace(/<script[\s\S]*?<\/script>/gi, ' ')
+                                 .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+                                 .replace(/<[^>]*>/g, ' ')
+                            : raw)
+      .replace(/\s+/g, ' ').trim();
+    if (!text) return '서버가 빈 응답을 보냈습니다 (상태 ' + ((err && err.status) || '?') + ')';
+    return text.slice(0, looksHtml ? 200 : 900);
+  }
+  return String((err && err.message) || err || '알 수 없는 오류');
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   2. 전역 상태
+   ════════════════════════════════════════════════════════════════════════ */
+
+const TF = [
+  { iv: '1m',  ko: '1분' }, { iv: '5m',  ko: '5분' },  { iv: '15m', ko: '15분' },
+  { iv: '1h',  ko: '1시간' }, { iv: '4h',  ko: '4시간' }, { iv: '1d',  ko: '1일' },
+  { iv: '1w',  ko: '1주' },
+];
+const OB_ROWS = 13;      // 시안 = 매도 13행 / 매수 13행
+const TR_ROWS = 22;
+
+// app/core/strategy_status.py 의 ACTIVE_LIKE 복사본.
+// /strategies 가 종료 전략까지 전부 내려주므로 프론트에서 반드시 걸러야 한다.
+const ACTIVE_LIKE = (function () {
+  const s = new Set(['TRAILING_ARMED', 'CRISIS_TP1_DONE', 'STOPPING',
+                     'MANUAL_CLEANUP_REQUIRED', 'LIQUIDATED_WAITING_RETRY']);
+  for (let n = 1; n <= 10; n++) { s.add('STAGE' + n + '_OPEN'); s.add('STAGE' + n + '_OPEN_PENDING'); }
+  for (let n = 1; n <= 20; n++) { s.add('TP' + n + '_DONE_PARTIAL'); }
+  return s;
+})();
+
+const S = {
+  symbol: 'SOLUSDT',
+  base: 'SOL',
+  interval: '15m',
+  side: 'LONG',
+  leverage: 20,
+  accountId: null,
+  accounts: [],
+  caps: null,             // /terminal/capabilities — null = 아직 모름 = 주문 금지
+  capsReason: '',
+  meta: { tick: null, step: null, minQty: null, minNotional: null, priceDp: null, qtyDp: null },
+  live: { last: null, mark: null, funding: null, nextFunding: null,
+          chgPct: null, high: null, low: null, vol: null, quoteVol: null },
+  book: { bids: [], asks: [] },
+  bookAt: 0,              // 마지막 **WS** 호가 수신 시각. REST 스냅샷은 여기를 갱신하지 않는다
+                          // (그래야 「WS 가 죽었다」를 스냅샷이 가려 주지 못한다 — obWatchdog)
+  priceAt: 0,             // 마지막 **WS 가격계열**(kline/aggTrade/markPrice/ticker) 수신 시각.
+                          // bookAt 과 따로 세는 이유는 priceWatchdog() 주석 참조.
+  streamSince: 0,         // 마지막으로 WS 연결을 시작한 시각 — 「아직 한 건도 안 왔을 때」의 기준
+  trades: [],
+  marks: {},              // 심볼별 WS 마크가 (선택 심볼만 채워진다)
+  balance: null,
+  strategies: [],
+  exPositions: {},
+  extPositions: [],
+  openOrders: null,       // null = 아직/불가, [] = 진짜 0건
+  openOrdersErr: '',
+  orders: [],
+  userTrades: null,
+  userTradesErr: '',
+  gate: null,             // /terminal/symbol-status
+  gateErr: '',
+  bottomTab: 'pos',
+  bookTab: 'book',
+  onlySymbol: false,
+  qtyTouched: false,
+  priceTouched: false,
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   3. 렌더 스케줄러 — 100ms 호가를 그대로 그리면 배터리·CPU 를 태운다
+   ════════════════════════════════════════════════════════════════════════ */
+
+const dirty = { book: false, head: false, trades: false };
+let _rafPending = false;
+function markDirty(k) {
+  dirty[k] = true;
+  if (_rafPending) return;
+  _rafPending = true;
+  requestAnimationFrame(flushRender);
+}
+function flushRender() {
+  _rafPending = false;
+  // 🚨 탭이 안 보이면 아예 그리지 않는다. dirty 플래그는 남으므로 복귀 시 최신값으로 한 번에 그려진다.
+  if (document.hidden) return;
+  if (dirty.head)   { dirty.head = false;   renderHead(); }
+  if (dirty.book)   { dirty.book = false;   renderBook(); }
+  if (dirty.trades) { dirty.trades = false; renderTrades(); }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   4. 바이낸스 WS — 브라우저 직결 (서버 IP 부담 0)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * 결합 엔드포인트는 `/market/stream` 을 쓴다.
+ * 옛 `/stream?streams=` 는 Binance 2026-04-23 변경으로 차단됐고, 이 저장소도
+ * 그때 워커를 전부 옮겼다 (mark_price_stream_consumer.py:185-191, 커밋 a87a72f).
+ * 구독은 쿼리스트링이 아니라 SUBSCRIBE 메시지로 한다.
+ * 실패가 누적되면 심볼당 개별 스트림으로 폴백한다.
+ *
+ * 🚨 폴백 경로도 `/market/` 접두어가 **반드시** 붙어야 한다 (2026-09-03 적대적
+ *    검증에서 실측). 옛 `/ws/<stream>` 은 접속 자체는 성립하지만 **한 건의
+ *    메시지도 오지 않는다** — 즉 "연결됨"으로 보이면서 화면이 영원히 비는,
+ *    이 저장소가 가장 싫어하는 「조용한 실패」다. 실측:
+ *      wss://fstream.binance.com/market/ws/solusdt@aggTrade → 0.2초 만에 수신 ✅
+ *      wss://fstream.binance.com/ws/solusdt@aggTrade        → 15초 대기 0건 ❌
+ *      wss://fstream.binance.com/stream?streams=...         → 15초 대기 0건 ❌
+ *    (`symbol-trading-modal.js:148` 이 아직 옛 `/ws/` 를 쓰고 있는데, 그건
+ *     「작동 중인 참조 구현」이 아니라 **같은 이유로 이미 죽어 있는 코드**다.
+ *     그 파일을 참조해 폴백을 만들면 고장을 그대로 복제한다.)
+ */
+const WS_COMBINED = 'wss://fstream.binance.com/market/stream';
+const WS_RAW = 'wss://fstream.binance.com/market/ws/';
+
+const Stream = {
+  ws: null,
+  raws: [],
+  attempt: 0,
+  timer: null,
+  useRaw: false,
+  reqId: 1,
+  loggedOnce: {},
+
+  streamsFor: function () {
+    const s = S.symbol.toLowerCase();
+    return [
+      s + '@kline_' + S.interval,
+      s + '@depth20@100ms',
+      s + '@aggTrade',
+      s + '@markPrice@1s',
+      s + '@ticker',
+    ];
+  },
+
+  setStatus: function (kind, text) {
+    const dot = document.getElementById('conn-dot');
+    dot.className = 'dot ' + kind;
+    setTxt('conn-txt', text);
+  },
+
+  /** 지수 백오프 — base 1s, cap 30s, jitter (app/utils/backoff.py 곡선을 JS 로). */
+  delay: function () {
+    const base = Math.min(30000, 1000 * Math.pow(2, this.attempt));
+    return Math.round(base * (0.8 + Math.random() * 0.4));
+  },
+
+  /* 🚨 세대(gen) 번호.
+   * 소켓 콜백은 「이미 버려진 연결」에서도 늦게 도착한다. 심볼을 빠르게 여러 번
+   * 바꾸면 옛 소켓의 onclose 가 새 연결을 또 끊거나 백오프를 부풀린다.
+   * close()/scheduleReconnect() 에서 gen 을 올려 옛 세대의 콜백을 전부 무효화한다.
+   * (onclose=null 만으로는 부족하다 — connectRaw 는 소켓이 5개라 서로를 끊는다.) */
+  gen: 0,
+
+  close: function () {
+    this.gen += 1;
+    clearTimeout(this.timer); this.timer = null;
+    if (this.ws) { try { this.ws.onclose = null; this.ws.close(); } catch (_e) {} this.ws = null; }
+    this.raws.forEach((w) => { try { w.onclose = null; w.onmessage = null; w.close(); } catch (_e) {} });
+    this.raws = [];
+  },
+
+  connect: function () {
+    this.close();
+    // 🚨 감시견의 기준 시각. 아직 한 건도 못 받았을 때 「연결한 지 얼마나 됐나」로 재야
+    //    ①부팅 직후 0.1초에 「지연」이 번쩍이지 않고 ②그렇다고 영영 침묵해도
+    //    놓치지 않는다. (0 으로 두면 age=Infinity 라 부팅하자마자 경고가 뜬다.)
+    S.streamSince = Date.now();
+    this.setStatus('wait', '연결 중');
+    if (this.useRaw) return this.connectRaw();
+    let ws;
+    try { ws = new WebSocket(WS_COMBINED); }
+    catch (_e) { return this.scheduleReconnect(); }
+    this.ws = ws;
+    ws.onopen = () => {
+      this.attempt = 0;
+      this.setStatus('ok', '실시간');
+      // 🚨 재연결 때마다 구독을 처음부터 다시 보낸다 (서버는 이전 구독을 기억하지 않는다).
+      try {
+        ws.send(JSON.stringify({ method: 'SUBSCRIBE', params: this.streamsFor(), id: this.reqId++ }));
+      } catch (_e) {}
+    };
+    ws.onmessage = (ev) => this.onMessage(ev.data);
+    ws.onerror = () => { /* onclose 가 이어서 온다 */ };
+    ws.onclose = () => {
+      this.ws = null;
+      // 결합 연결이 3번 연속 실패하면 개별 raw 스트림으로 폴백한다.
+      if (this.attempt >= 3 && !this.useRaw) {
+        this.useRaw = true;
+        console.warn('[terminal] 결합 스트림 3회 실패 → 개별 /market/ws 폴백');
+      }
+      this.scheduleReconnect();
+    };
+  },
+
+  connectRaw: function () {
+    const names = this.streamsFor();
+    const gen = this.gen;
+    names.forEach((name) => {
+      let w;
+      try { w = new WebSocket(WS_RAW + name); } catch (_e) { return; }
+      w.onopen = () => {
+        if (gen !== this.gen) { try { w.close(); } catch (_e) {} return; }   // 버려진 세대
+        this.attempt = 0;
+        this.setStatus('ok', '실시간(개별)');
+      };
+      // raw 스트림은 결합 래퍼가 없으므로 stream 이름을 우리가 붙여 준다.
+      w.onmessage = (ev) => {
+        if (gen !== this.gen) return;
+        try { this.route(name, JSON.parse(ev.data)); } catch (_e) {}
+      };
+      // 🚨 하나라도 죽으면 **전체를 다시 붙인다.**
+      //    옛 코드는 열린 소켓 수를 세어 「전부 죽었을 때만」 재연결했다.
+      //    그러면 depth 하나만 끊겼을 때 나머지 4개가 살아 있어 화면은
+      //    「실시간(개별)」 초록불인데 **호가만 영원히 멈춘다** — 거래 화면에서
+      //    가장 위험한 실패 방식이다(멈춘 값을 현재값으로 착각).
+      //    gen 가드가 있어 5개가 동시에 죽어도 재연결은 1회만 예약된다.
+      w.onclose = () => {
+        if (gen !== this.gen) return;
+        this.scheduleReconnect();
+      };
+      this.raws.push(w);
+    });
+    if (!this.raws.length) this.scheduleReconnect();
+  },
+
+  scheduleReconnect: function () {
+    this.gen += 1;                 // 이 시점 이후 도착하는 옛 소켓 콜백은 전부 무시
+    clearTimeout(this.timer);
+    const d = this.delay();
+    this.attempt += 1;
+    this.setStatus('wait', '재연결 ' + Math.round(d / 1000) + '초');
+    this.timer = setTimeout(() => this.connect(), d);
+  },
+
+  onMessage: function (raw) {
+    let msg;
+    try { msg = JSON.parse(raw); } catch (_e) { return; }
+    // {"result":null,"id":1} 같은 SUBSCRIBE 응답은 stream/data 키가 없다 → 무시.
+    if (!msg || typeof msg !== 'object') return;
+    if (!('stream' in msg) || !('data' in msg)) return;
+    this.route(String(msg.stream), msg.data);
+  },
+
+  route: function (stream, d) {
+    if (!d) return;
+    // 심볼 전환 직후 옛 심볼 메시지가 남아 올 수 있다 — 심볼이 다르면 버린다.
+    const sym = d.s || (d.k && d.k.s);
+    if (sym && String(sym).toUpperCase() !== S.symbol) return;
+
+    // 🚨 첫 메시지 원문을 종류별로 1회만 콘솔에 남긴다.
+    //    kline/aggTrade/ticker 페이로드는 이 저장소에 소비 코드가 없어 필드명을 코드로 대조하지 못했다.
+    //    필드가 바뀌면 화면이 '--' 로 떨어지고, 여기 로그로 즉시 확인할 수 있다.
+    const kind = stream.split('@')[1] || stream;
+    if (!this.loggedOnce[kind]) {
+      this.loggedOnce[kind] = true;
+      try { console.log('[terminal WS 첫 메시지] ' + kind + ' =', JSON.stringify(d).slice(0, 500)); } catch (_e) {}
+    }
+
+    // 🚨 가격계열 수신 시각을 **분배 지점 한 곳에서** 찍는다 (priceWatchdog 가 본다).
+    //    각 on*() 안에서 찍으면 새 핸들러를 추가하는 사람이 빠뜨리기 쉽다 —
+    //    이 저장소가 반복해서 당한 실패 방식이라 「한 곳」으로 모은다.
+    if (stream.indexOf('@depth') < 0) S.priceAt = Date.now();
+
+    if (stream.indexOf('@depth') > 0)      return onDepth(d);
+    if (stream.indexOf('@kline') > 0)      return onKline(d);
+    if (stream.indexOf('@aggTrade') > 0)   return onAggTrade(d);
+    if (stream.indexOf('@markPrice') > 0)  return onMarkPrice(d);
+    if (stream.indexOf('@ticker') > 0)     return onTicker(d);
+  },
+};
+
+/* ── WS 핸들러 (전부 방어적으로 — undefined 면 화면에 '--', 절대 0 아님) ── */
+
+function onDepth(d) {
+  const bids = d.b || d.bids;
+  const asks = d.a || d.asks;
+  if (!Array.isArray(bids) || !Array.isArray(asks)) return;
+  // depth20 은 「부분 뎁스 스냅샷」이라 로컬 오더북 재구성이 필요 없다 — 통째로 교체.
+  S.book.bids = bids;
+  S.book.asks = asks;
+  S.bookAt = Date.now();          // 호가 감시견이 본다 (obWatchdog)
+  markDirty('book');
+}
+
+/**
+ * 호가 감시견 — 「멈춘 호가판」을 조용히 두지 않는다.
+ *
+ * 🚨 2026-09-03 적대적 검증 실측: 같은 연결에서 kline / aggTrade / markPrice /
+ *    ticker 는 정상 수신되는데 **`@depth20@100ms` 만 한 건도 오지 않는** 경우가
+ *    있다(결합 `/market/stream` 과 개별 `/market/ws/` 양쪽 동일, SUBSCRIBE 는
+ *    `{"result":null}` 로 정상 응답). 망·지역에 따라 오더북 스트림만 막히는
+ *    것으로 보인다.
+ *
+ *    이때 화면은 **가장 나쁜 형태로 고장난다**: 연결 점은 녹색(다른 스트림이
+ *    살아 있으니까), 호가판에는 진입 시 REST 스냅샷 1회분이 그대로 남아 있어
+ *    「정상」처럼 보인다. 그 죽은 숫자를 클릭하면 그대로 지정가 입력칸에 들어간다.
+ *    = 실자금 주문의 근거가 낡은 값이 된다.
+ *
+ * 대응 두 가지 (둘 다 해야 의미가 있다):
+ *   ① 화면에 「호가 지연」을 띄운다 — 「모름」을 「정상」으로 보이게 하지 않는다.
+ *   ② 그동안만 REST 스냅샷으로 대신 채운다. 평상시(WS 정상)에는 **한 번도 안 돈다**.
+ *      15초 × weight 2 = 8 weight/분, 그것도 고장난 동안에만.
+ */
+const OB_STALE_MS = 6000;      // depth 는 100ms 주기다. 6초 침묵은 명백한 고장.
+const OB_RESYNC_MS = 15000;
+let _obResyncAt = 0;
+function obWatchdog() {
+  if (document.hidden) return;
+  const el = document.getElementById('ob-stale');
+  // 한 건도 못 받았으면 「연결 시작 시각」부터 잰다 (Stream.connect 주석 참조).
+  const ref = S.bookAt || S.streamSince;
+  const age = ref ? (Date.now() - ref) : Infinity;
+  const stale = age > OB_STALE_MS;
+  if (el) {
+    el.classList.toggle('hidden', !stale);
+    el.title = stale
+      ? ('호가 스트림이 ' + (S.bookAt ? (Math.round(age / 1000) + '초째 멈춰 있습니다')
+                                     : ('연결 후 ' + Math.round(age / 1000) + '초 동안 한 건도 오지 않았습니다'))
+         + ' — 아래 숫자는 실시간이 아닙니다. 15초마다 스냅샷으로만 갱신합니다.')
+      : '';
+  }
+  if (!stale) return;
+  const now = Date.now();
+  if (now - _obResyncAt < OB_RESYNC_MS) return;
+  _obResyncAt = now;
+  loadDepthSnapshot();
+}
+
+/**
+ * 가격 감시견 — 「멈춘 현재가」를 녹색 불 뒤에 숨기지 않는다.
+ *
+ * 🚨 2026-09-03 최종통합 실측 (같은 PC·같은 순간, 노드 WebSocket 으로 직접 계측):
+ *
+ *    URL                              10초간 수신
+ *    ─────────────────────────────────────────────────────────────────
+ *    /market/stream + SUBSCRIBE       markPrice 10, kline 13, aggTrade 16,
+ *                                     ticker 5, **depth20 0**
+ *    /stream + SUBSCRIBE              **depth20 93, 나머지 전부 0**
+ *    /market/ws/btcusdt@aggTrade      aggTrade 93
+ *    /ws/btcusdt@aggTrade             **0**
+ *
+ *    같은 순간 REST `/fapi/v1/aggTrades` 는 0.6초 전 체결을 돌려준다 = 시장은 살아 있다.
+ *    즉 **어느 스트림이 도착하는지가 연결마다 다르다.** 앞선 검증에서 「depth 만 죽는다」로
+ *    본 것은 이 현상의 한쪽 면이었고, 나는 정반대 면(가격계열만 죽고 depth 만 산다)을
+ *    재현했다. 따라서 depth 만 감시하는 것으로는 부족하다.
+ *
+ *    가격계열이 죽으면 화면은 **호가가 죽을 때보다 더 나쁘게** 고장난다:
+ *    연결 점은 녹색(depth 가 살아 있으니까), 헤더 현재가·마크가·차트 마지막 봉이
+ *    **마지막으로 받은 값에 그대로 얼어붙는다.** 그 값이 예상 청산가·주문 금액 계산과
+ *    확인 모달에 그대로 들어간다 = 실자금 주문의 근거가 낡은 값이 된다.
+ *
+ * 대응은 obWatchdog 와 같은 두 가지다:
+ *   ① 연결 표시를 「가격 지연 N초」로 바꾼다 — 「모름」을 「정상」으로 보이게 하지 않는다.
+ *   ② 그동안만 REST ticker24h 스냅샷으로 현재가를 대신 채운다(15초 = weight 1/회).
+ *      평상시(WS 정상)에는 **한 번도 안 돈다.**
+ */
+const PX_STALE_MS = 12000;     // ticker/markPrice 는 1초 주기. 12초 침묵은 명백한 고장.
+const PX_RESYNC_MS = 15000;
+let _pxResyncAt = 0;
+let _pxWarned = false;
+function priceWatchdog() {
+  if (document.hidden) return;
+  // 연결 자체가 끊긴 상태면 Stream.setStatus 가 이미 「재연결 N초」를 쓰고 있다 —
+  // 그 위에 덧쓰면 진짜 원인(끊김)을 가린다.
+  if (!Stream.ws && !Stream.raws.length) return;
+
+  const ref = S.priceAt || S.streamSince;
+  const age = ref ? (Date.now() - ref) : Infinity;
+  if (age <= PX_STALE_MS) {
+    // 🚨 회복되면 **반드시 되돌린다.** setStatus 는 open/close 때만 불리므로
+    //    여기서 되돌리지 않으면 스트림이 살아나도 「가격 지연」이 영구히 남는다
+    //    (= 이번엔 반대로 정상을 고장으로 표시하게 된다).
+    if (_pxWarned) {
+      _pxWarned = false;
+      Stream.setStatus('ok', Stream.useRaw ? '실시간(개별)' : '실시간');
+    }
+    return;
+  }
+  _pxWarned = true;
+
+  const dot = document.getElementById('conn-dot');
+  if (dot) dot.className = 'dot warn';
+  setTxt('conn-txt', '가격 지연' + (age === Infinity ? '' : ' ' + Math.round(age / 1000) + '초'));
+
+  const now = Date.now();
+  if (now - _pxResyncAt < PX_RESYNC_MS) return;
+  _pxResyncAt = now;
+  loadTicker24h();             // 현재가·24h 통계만 되살린다 (마크가는 계정 폴링이 채운다)
+}
+
+function onKline(d) {
+  const k = d.k;
+  if (!k) return;
+  const t = num(k.t);
+  const c = num(k.c);
+  if (t === null || c === null) return;
+  const bar = { time: Math.floor(t / 1000), open: num(k.o), high: num(k.h), low: num(k.l), close: c };
+  Chart.updateBar(bar, num(k.v));
+  S.live.last = c;
+  markDirty('head');
+}
+
+function onAggTrade(d) {
+  const p = num(d.p);
+  const q = num(d.q);
+  if (p === null) return;
+  S.live.last = p;
+  // m = 매수자가 메이커 → true 면 매도 주도(적색).
+  S.trades.unshift({ t: num(d.T) || Date.now(), p: p, q: q, sell: d.m === true });
+  if (S.trades.length > TR_ROWS) S.trades.length = TR_ROWS;
+  markDirty('head');
+  markDirty('trades');
+}
+
+function onMarkPrice(d) {
+  const p = num(d.p);
+  if (p !== null) { S.live.mark = p; S.marks[S.symbol] = p; }
+  const r = num(d.r);
+  if (r !== null) S.live.funding = r;
+  const T = num(d.T);
+  if (T !== null) S.live.nextFunding = T;
+  markDirty('head');
+}
+
+function onTicker(d) {
+  const set = (key, v) => { const n = num(v); if (n !== null) S.live[key] = n; };
+  set('chgPct', d.P);
+  set('high', d.h);
+  set('low', d.l);
+  set('vol', d.v);
+  set('quoteVol', d.q);
+  set('last', d.c);
+  markDirty('head');
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   5. 심볼 헤더 렌더
+   ════════════════════════════════════════════════════════════════════════ */
+
+function renderHead() {
+  const L = S.live;
+  setTxt('px-last', L.last === null ? '--' : fmtPx(L.last),
+         'big mono ' + ((L.chgPct !== null && L.chgPct < 0) ? 'down' : 'up'));
+  setTxt('px-usd', L.last === null ? '≈ $--' : '≈ $' + fmtPx(L.last));
+
+  if (L.chgPct === null) setTxt('st-chg', '--', 'val mono');
+  else setTxt('st-chg', fmtSigned(L.chgPct, 2) + '%', 'val mono ' + (L.chgPct >= 0 ? 'up' : 'down'));
+
+  setTxt('st-high', L.high === null ? '--' : fmtPx(L.high));
+  setTxt('st-low',  L.low  === null ? '--' : fmtPx(L.low));
+  setTxt('st-vol',  L.vol  === null ? '--' : fmtCompact(L.vol));
+
+  if (L.funding === null) setTxt('st-funding', '--', '');
+  else {
+    const pct = L.funding * 100;
+    setTxt('st-funding', fmtSigned(pct, 4) + '%', pct >= 0 ? 'up' : 'down');
+  }
+  setTxt('ob-last', L.last === null ? '--' : fmtPx(L.last),
+         'last ' + ((L.chgPct !== null && L.chgPct < 0) ? 'down' : 'up'));
+  setTxt('ob-mark', L.mark === null ? '--' : fmtPx(L.mark));
+}
+
+// 정산 카운트다운은 서버 호출 0 — markPrice 의 T 로 로컬 타이머만 돈다.
+setInterval(function () {
+  if (document.hidden) return;
+  const T = S.live.nextFunding;
+  if (!T) { setTxt('st-countdown', '--:--:--', 'warn'); return; }
+  let left = Math.floor((T - Date.now()) / 1000);
+  if (left < 0) left = 0;
+  const h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), s = left % 60;
+  const p = (x) => String(x).padStart(2, '0');
+  setTxt('st-countdown', p(h) + ':' + p(m) + ':' + p(s), 'warn');
+}, 1000);
+
+/* ════════════════════════════════════════════════════════════════════════
+   6. 호가 / 체결 — DOM 은 한 번만 만들고 textContent 만 갱신 (깜빡임 방지)
+   ════════════════════════════════════════════════════════════════════════ */
+
+const obDom = { asks: [], bids: [] };
+
+function buildBook() {
+  const mk = (side) => {
+    const row = document.createElement('div');
+    row.className = 'ob-row ' + side;
+    const bar = document.createElement('div'); bar.className = 'bar';
+    const px = document.createElement('span'); px.className = 'px';
+    const qty = document.createElement('span'); qty.className = 'qty';
+    const cum = document.createElement('span'); cum.className = 'cum';
+    row.appendChild(bar); row.appendChild(px); row.appendChild(qty); row.appendChild(cum);
+    // 호가를 클릭하면 지정가 입력에 그 가격이 들어간다 (거래 터미널 관행).
+    row.addEventListener('click', function () {
+      const v = px.textContent;
+      if (v && v !== '--') {
+        document.getElementById('in-price').value = v.replace(/,/g, '');
+        S.priceTouched = true;
+        recalcOrder();
+      }
+    });
+    return { row: row, bar: bar, px: px, qty: qty, cum: cum };
+  };
+  const asks = document.getElementById('ob-asks');
+  const bids = document.getElementById('ob-bids');
+  asks.textContent = ''; bids.textContent = '';
+  obDom.asks = []; obDom.bids = [];
+  for (let i = 0; i < OB_ROWS; i++) { const c = mk('ask'); asks.appendChild(c.row); obDom.asks.push(c); }
+  for (let i = 0; i < OB_ROWS; i++) { const c = mk('bid'); bids.appendChild(c.row); obDom.bids.push(c); }
+}
+
+function buildTrades() {
+  const host = document.getElementById('tr-rows');
+  host.textContent = '';
+  trDom.length = 0;
+  for (let i = 0; i < TR_ROWS; i++) {
+    const row = document.createElement('div'); row.className = 'tr-row';
+    const t = document.createElement('span'); t.className = 't';
+    const p = document.createElement('span'); p.className = 'p';
+    const q = document.createElement('span'); q.className = 'q';
+    row.appendChild(t); row.appendChild(p); row.appendChild(q);
+    host.appendChild(row);
+    trDom.push({ t: t, p: p, q: q });
+  }
+}
+const trDom = [];
+
+function renderBook() {
+  const asks = (S.book.asks || []).slice(0, OB_ROWS);   // 오름차순 (최우선 매도가 [0])
+  const bids = (S.book.bids || []).slice(0, OB_ROWS);
+
+  // 누적은 「최우선 호가에서 멀어지는 방향」으로 쌓는다.
+  let cum = 0; const askCum = asks.map((a) => (cum += (num(a[1]) || 0)));
+  cum = 0;     const bidCum = bids.map((b) => (cum += (num(b[1]) || 0)));
+  const maxCum = Math.max(askCum[askCum.length - 1] || 0, bidCum[bidCum.length - 1] || 0, 1);
+
+  // 매도는 위→아래로 가격이 「낮아지는」 순서 = 최우선 매도호가가 맨 아래(중간가 바로 위).
+  for (let i = 0; i < OB_ROWS; i++) {
+    const c = obDom.asks[i];
+    const idx = OB_ROWS - 1 - i;                 // 화면 위쪽이 먼 호가
+    const row = asks[idx];
+    if (!row) { c.px.textContent = '--'; c.qty.textContent = ''; c.cum.textContent = ''; c.bar.style.width = '0'; continue; }
+    c.px.textContent = fmtPx(row[0]);
+    c.qty.textContent = fmtQty(row[1]);
+    c.cum.textContent = fmtQty(askCum[idx]);
+    c.bar.style.width = Math.min(100, (askCum[idx] / maxCum) * 100).toFixed(1) + '%';
+  }
+  for (let i = 0; i < OB_ROWS; i++) {
+    const c = obDom.bids[i];
+    const row = bids[i];
+    if (!row) { c.px.textContent = '--'; c.qty.textContent = ''; c.cum.textContent = ''; c.bar.style.width = '0'; continue; }
+    c.px.textContent = fmtPx(row[0]);
+    c.qty.textContent = fmtQty(row[1]);
+    c.cum.textContent = fmtQty(bidCum[i]);
+    c.bar.style.width = Math.min(100, (bidCum[i] / maxCum) * 100).toFixed(1) + '%';
+  }
+}
+
+function renderTrades() {
+  for (let i = 0; i < TR_ROWS; i++) {
+    const c = trDom[i];
+    const t = S.trades[i];
+    if (!t) { c.t.textContent = ''; c.p.textContent = ''; c.q.textContent = ''; c.p.className = 'p'; continue; }
+    c.t.textContent = hhmmss(t.t);
+    c.p.textContent = fmtPx(t.p);
+    c.p.className = 'p ' + (t.sell ? 'down' : 'up');
+    c.q.textContent = fmtQty(t.q);
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   7. 차트 — lightweight-charts 4.1.3
+   ════════════════════════════════════════════════════════════════════════ */
+
+const Chart = {
+  chart: null, candle: null, vol: null, ready: false, lastBar: null,
+
+  msg: function (text) {
+    const el = document.getElementById('chart-msg');
+    el.textContent = text || '';
+    el.style.display = text ? 'grid' : 'none';
+  },
+
+  init: function () {
+    const host = document.getElementById('chart-host');
+    // CDN 이 막혀도 페이지 전체가 죽으면 안 된다 (chart-detail.js:165-169 와 같은 가드).
+    if (typeof LightweightCharts === 'undefined') {
+      this.msg('차트 라이브러리를 불러오지 못했습니다 (인터넷 연결 확인).\n호가·체결·주문은 정상 동작합니다.');
+      return false;
+    }
+    this.chart = LightweightCharts.createChart(host, {
+      width: host.clientWidth, height: host.clientHeight || 320,
+      layout: { background: { type: 'solid', color: '#12161c' }, textColor: '#848e9c',
+                fontFamily: 'IBM Plex Sans KR, Pretendard, sans-serif', fontSize: 11 },
+      grid: { vertLines: { color: 'rgba(148,163,184,0.06)' }, horzLines: { color: 'rgba(148,163,184,0.06)' } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      timeScale: { borderColor: '#252a31', timeVisible: true, secondsVisible: false,
+                   rightOffset: 12, fixLeftEdge: false, fixRightEdge: false },
+      // 시안은 가격축이 오른쪽이다 (chart-detail.js 는 좌측 — 그건 다른 화면의 UX #27).
+      rightPriceScale: { visible: true, borderColor: '#252a31', scaleMargins: { top: 0.08, bottom: 0.26 } },
+      leftPriceScale: { visible: false },
+      handleScale: { axisPressedMouseMove: true },
+    });
+    this.candle = this.chart.addCandlestickSeries({
+      upColor: '#0ecb81', downColor: '#f6465d',
+      borderUpColor: '#0ecb81', borderDownColor: '#f6465d',
+      wickUpColor: '#0ecb81', wickDownColor: '#f6465d',
+      priceLineVisible: true, lastValueVisible: true,   // 시안 = 우측 축 현재가 녹색 배지
+      priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
+    });
+    this.vol = this.chart.addHistogramSeries({
+      priceScaleId: 'vol', priceFormat: { type: 'volume' },
+      priceLineVisible: false, lastValueVisible: false,
+    });
+    try { this.chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } }); } catch (_e) {}
+
+    this.chart.subscribeCrosshairMove((p) => {
+      if (!p || !p.seriesData) return;
+      const b = p.seriesData.get(this.candle);
+      // 커서가 차트 밖으로 나가면 마지막 봉으로 되돌린다 (옛 값이 남아 오해를 사면 안 된다).
+      this.setOhlc(b || this.lastBar);
+    });
+    this.ready = true;
+    this.msg('');
+    return true;
+  },
+
+  setOhlc: function (b) {
+    if (!b) return;
+    setTxt('oh-o', fmtPx(b.open));
+    setTxt('oh-h', fmtPx(b.high), 'up');
+    setTxt('oh-l', fmtPx(b.low), 'down');
+    setTxt('oh-c', fmtPx(b.close));
+  },
+
+  setData: function (klines) {
+    if (!this.ready) return;
+    const bars = [], vols = [];
+    (klines || []).forEach((c) => {
+      const t = Math.floor(num(c[0]) / 1000);
+      const o = num(c[1]), h = num(c[2]), l = num(c[3]), cl = num(c[4]), v = num(c[5]);
+      if (t === null || cl === null) return;
+      bars.push({ time: t, open: o, high: h, low: l, close: cl });
+      vols.push({ time: t, value: v || 0, color: (cl >= o) ? 'rgba(14,203,129,0.45)' : 'rgba(246,70,93,0.45)' });
+    });
+    if (!bars.length) { this.msg('차트 데이터를 가져올 수 없습니다'); return; }
+    this.msg('');
+    this.candle.setData(bars);
+    this.vol.setData(vols);
+    this.lastBar = bars[bars.length - 1];
+    this.setOhlc(this.lastBar);
+    try { this.chart.timeScale().fitContent(); } catch (_e) {}
+  },
+
+  /** k.x === false 인 동안은 update 로 마지막 봉을 갱신, true 면 그대로 확정된다. */
+  updateBar: function (bar, volume) {
+    if (!this.ready || !bar || bar.close === null) return;
+    try {
+      this.candle.update(bar);
+      this.vol.update({ time: bar.time, value: volume || 0,
+        color: (bar.close >= bar.open) ? 'rgba(14,203,129,0.45)' : 'rgba(246,70,93,0.45)' });
+      this.lastBar = bar;
+      this.setOhlc(bar);
+    } catch (_e) { /* 옛 봉이 늦게 오면 update 가 던진다 — 무시 */ }
+  },
+
+  /**
+   * 가격축 자릿수를 심볼의 tick_size 에 맞춘다.
+   * 기본 precision 8 로 두면 0.04 짜리 코인의 축이 「0.04281000」 으로 나와 읽기 어렵다.
+   * tick 을 모르면 8 자리 그대로 둔다 (자릿수를 잘라 오해를 만드는 것보다 낫다).
+   */
+  applyPrecision: function () {
+    if (!this.ready || !this.candle) return;
+    const dp = S.meta.tick != null ? dpFromStep(S.meta.tick, 8) : 8;
+    try {
+      this.candle.applyOptions({
+        priceFormat: { type: 'price', precision: dp, minMove: Math.pow(10, -dp) },
+      });
+    } catch (_e) {}
+  },
+
+  resize: function () {
+    if (!this.ready) return;
+    const host = document.getElementById('chart-host');
+    try { this.chart.applyOptions({ width: host.clientWidth, height: host.clientHeight || 320 }); } catch (_e) {}
+  },
+};
+
+/* ════════════════════════════════════════════════════════════════════════
+   8. 초기 스냅샷 (서버 프록시 — 심볼/인터벌 전환 시에만 각 1회)
+   ════════════════════════════════════════════════════════════════════════ */
+
+async function loadKlines() {
+  try {
+    const r = await fetch(API_BASE + '/market/klines?symbol=' + encodeURIComponent(S.symbol)
+      + '&interval=' + encodeURIComponent(S.interval) + '&limit=300');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    Chart.setData(await r.json());
+  } catch (e) {
+    Chart.msg('캔들을 불러오지 못했습니다 — ' + (e.message || e));
+  }
+}
+
+async function loadDepthSnapshot() {
+  try {
+    const r = await fetch(API_BASE + '/market/depth?symbol=' + encodeURIComponent(S.symbol) + '&limit=20');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (Array.isArray(d.bids) && Array.isArray(d.asks)) {
+      S.book.bids = d.bids; S.book.asks = d.asks; markDirty('book');
+    }
+  } catch (_e) { /* WS 가 곧 채운다 */ }
+}
+
+async function loadTicker24h() {
+  try {
+    const r = await fetch(API_BASE + '/market/ticker24h?symbol=' + encodeURIComponent(S.symbol));
+    if (!r.ok) return;
+    const d = await r.json();
+    const set = (k, v) => { const n = num(v); if (n !== null) S.live[k] = n; };
+    set('last', d.lastPrice); set('chgPct', d.priceChangePercent);
+    set('high', d.highPrice); set('low', d.lowPrice);
+    set('vol', d.volume); set('quoteVol', d.quoteVolume);
+    markDirty('head');
+  } catch (_e) {}
+}
+
+/**
+ * 심볼 메타(틱/스텝/최소수량/최소명목).
+ * 신규 /terminal/symbol-meta 가 있으면 그걸 쓰고, 없으면 기존 /symbols/{symbol} 로 폴백한다.
+ * 백엔드 신규 엔드포인트가 아직 없어도 페이지가 죽지 않아야 한다.
+ */
+async function loadSymbolMeta() {
+  let d = null;
+  try { d = await api('/terminal/symbol-meta?symbol=' + encodeURIComponent(S.symbol)); }
+  catch (_e) {
+    try { d = await api('/symbols/' + encodeURIComponent(S.symbol)); } catch (_e2) { d = null; }
+  }
+  if (!d) {
+    S.meta = { tick: null, step: null, minQty: null, minNotional: null, priceDp: null, qtyDp: null };
+    setTxt('bk-tick', '--');
+    return;
+  }
+  const tick = d.tick_size != null ? d.tick_size : (d.tickSize != null ? d.tickSize : null);
+  const step = d.step_size != null ? d.step_size : (d.stepSize != null ? d.stepSize : null);
+  S.meta = {
+    tick: tick, step: step,
+    minQty: num(d.min_qty), minNotional: num(d.min_notional),
+    priceDp: tick != null ? dpFromStep(tick, 5) : (d.price_precision != null ? Number(d.price_precision) : null),
+    qtyDp: step != null ? dpFromStep(step, 3) : null,
+  };
+  setTxt('bk-tick', tick != null ? String(tick) : '--');
+  Chart.applyPrecision();
+  markDirty('book'); markDirty('head');
+}
+
+/**
+ * 미결제약정.
+ *
+ * 🚨 `/market/open-interest` 는 **존재하지 않는 경로**였다 (전수 grep 확인:
+ *    market.py 의 라우트는 ticker / ticker24h / klines / depth 넷뿐).
+ *    30초마다 404 를 받아 영원히 '--' 를 찍고 있었다.
+ *
+ * 대신 `/terminal/symbol-meta` 를 쓴다 — 미결제약정을 주는 유일한 실 경로이고,
+ * 이미 심볼 메타(틱·스텝)를 받으러 부르는 곳이라 **새 업스트림 종류가 늘지 않는다.**
+ *   · 서버가 3개 업스트림(ticker24h + openInterest + premiumIndex)을 1회로 합쳐 준다
+ *   · 심볼별 Redis 캐시 20초 + 분당 업스트림 예산 40회 (terminal.py)
+ *   · 30초 폴링이면 최악 2회/분 × weight 3 = 6 weight/분
+ *
+ * 단위: 서버가 `open_interest`(코인 수량)와 `open_interest_usdt`(× markPrice) 를
+ * **둘 다** 준다. 라벨에 단위를 반드시 찍어 「9.14M」이 무엇의 9.14M 인지
+ * 화면에서 헷갈리지 않게 한다.
+ */
+async function loadOpenInterest() {
+  try {
+    const d = await api('/terminal/symbol-meta?symbol=' + encodeURIComponent(S.symbol));
+    const usdt = num(d && d.open_interest_usdt);
+    const el = document.getElementById('st-oi');
+    if (usdt !== null) {
+      setTxt('st-oi', fmtCompact(usdt) + ' USDT');
+      if (el) el.title = '미결제약정 = 계약 수량 × 마크가 (USDT 환산)';
+      return;
+    }
+    const coin = num(d && d.open_interest);
+    setTxt('st-oi', coin === null ? '--' : fmtCompact(coin) + ' ' + S.base);
+    if (el) {
+      const rl = d && Array.isArray(d.partial) && d.partial.indexOf('upstream_rate_limited') >= 0;
+      el.title = coin === null
+        ? (rl ? '조회 빈도 제한으로 이번엔 건너뛰었습니다 (다음 갱신 때 표시됩니다)'
+              : '미결제약정을 받지 못했습니다 — 「모름」이지 0 이 아닙니다')
+        : ('미결제약정 = 계약 수량 (' + S.base + ')');
+    }
+  } catch (_e) {
+    setTxt('st-oi', '--');
+    const el = document.getElementById('st-oi');
+    if (el) el.title = '미결제약정을 조회하지 못했습니다 — 「모름」이지 0 이 아닙니다';
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   9. 자동매매 관문 (③) — /terminal/symbol-status
+   ════════════════════════════════════════════════════════════════════════ */
+
+function chip(id, cls, text, title) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'chip ' + cls;
+  el.textContent = text;
+  el.title = title || '';
+}
+
+async function loadGate() {
+  let g = null;
+  try {
+    g = await api('/terminal/symbol-status?symbol=' + encodeURIComponent(S.symbol));
+    S.gate = g; S.gateErr = '';
+  } catch (e) {
+    S.gate = null;
+    S.gateErr = (e && e.status === 404)
+      ? '엔드포인트 준비 중 (/api/v1/terminal/symbol-status)'
+      : detailOf(e);
+  }
+  renderGate();
+}
+
+function renderGate() {
+  const g = S.gate;
+  if (!g) {
+    // 🚨 「모름」과 「꺼짐」을 다르게 표시한다 (fail-OFF 사고의 교훈).
+    const t = '판정 불가 — ' + (S.gateErr || '원인 미상');
+    chip('gate-excl',    'unknown', '제외 심볼: 모름', t);
+    chip('gate-chg24',   'unknown', '24h 순위 게이트: 모름', t);
+    chip('gate-support', 'unknown', '지지선 게이트: 모름', t);
+    chip('gate-trim',    'unknown', '부분손절: 모름', t);
+    chip('gate-reentry', 'unknown', '재진입 대기: 모름', t);
+    return;
+  }
+
+  if (g.excluded === true) {
+    chip('gate-excl', 'bad', '⛔ 자동매매 제외 심볼', g.excluded_reason || '');
+  } else if (g.excluded === false) {
+    chip('gate-excl', 'ok', '✅ 제외 아님', '');
+  } else {
+    chip('gate-excl', 'unknown', '제외 심볼: 모름', '');
+  }
+
+  const c = g.chg24_gate || {};
+  if (c.enabled === false) {
+    chip('gate-chg24', 'ok', '24h 순위 게이트: 꺼짐', '게이트가 비활성이라 순위와 무관하게 통과합니다');
+  } else if (c.passes === true) {
+    chip('gate-chg24', 'ok', '✅ 24h 순위 통과' + (c.top_n ? ' (상위 ' + c.top_n + ')' : ''), c.reason || '');
+  } else if (c.passes === false) {
+    chip('gate-chg24', 'bad', '⛔ 24h 순위 밖 — 진입 거부', c.reason || '');
+  } else {
+    chip('gate-chg24', 'unknown', '24h 순위 게이트: 모름', c.reason || '판정 실패');
+  }
+
+  if (g.support_gate_enabled === true)       chip('gate-support', 'ok', '지지선 게이트: 켬', '판정은 진입 시점에 이뤄집니다');
+  else if (g.support_gate_enabled === false) chip('gate-support', '',   '지지선 게이트: 꺼짐', '');
+  else                                       chip('gate-support', 'unknown', '지지선 게이트: 모름', '');
+
+  const tr = g.trim || {};
+  if (tr.enabled === true) {
+    chip('gate-trim', 'ok', '✂️ 부분손절 켬 (잔량 ' + fmt(tr.keep_notional_usdt, 2) + ' USDT)',
+         '손절 시 이 명목만큼 잔량을 남기고 다음 단계를 기다립니다');
+  } else if (tr.enabled === false) {
+    chip('gate-trim', '', '부분손절: 꺼짐 (전량 손절)', '');
+  } else {
+    chip('gate-trim', 'unknown', '부분손절: 모름', '');
+  }
+
+  const re = g.reentry || {};
+  if (re.waiting === true)       chip('gate-reentry', 'unknown', '🔁 재진입 대기 중', re.reason_ko || '');
+  else if (re.waiting === false) chip('gate-reentry', '', '재진입 대기 없음', re.reason_ko || '');
+  else                           chip('gate-reentry', 'unknown', '재진입 대기: 모름', '');
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   10. 계정 데이터 폴링 (서버 API 만)
+   ════════════════════════════════════════════════════════════════════════ */
+
+async function loadAccounts() {
+  const list = await api('/exchange-accounts');
+  S.accounts = Array.isArray(list) ? list : [];
+  const active = S.accounts.filter((a) => a.is_active);
+  const pick = active.length ? active : S.accounts;
+  if (!pick.length) throw new Error('거래소 계정이 없습니다');
+  S.accountId = pick[0].id;
+
+  // 🚨 계정이 둘 이상이면 반드시 고를 수 있어야 한다 — 엉뚱한 계정에 주문이 나가면 안 된다.
+  const sel = document.getElementById('acct-select');
+  if (pick.length > 1) {
+    sel.textContent = '';
+    pick.forEach((a) => {
+      const o = document.createElement('option');
+      o.value = String(a.id);
+      o.textContent = '#' + a.id + ' ' + (a.exchange_name || '') + (a.is_testnet ? ' (테스트넷)' : '');
+      sel.appendChild(o);
+    });
+    sel.value = String(S.accountId);
+    sel.classList.remove('hidden');
+    sel.onchange = () => { S.accountId = Number(sel.value); refreshAccountData(); };
+  }
+}
+
+async function loadCapabilities() {
+  try {
+    const c = await api('/terminal/capabilities');
+    S.caps = c || {};
+    S.capsReason = c && c.reason ? String(c.reason) : '';
+  } catch (e) {
+    // 🚨 확인이 안 되면 주문을 막는다 (fail-closed). raw place_order 우회는 절대 하지 않는다.
+    S.caps = null;
+    S.capsReason = (e && e.status === 404)
+      ? '주문 경로 확인 API(/api/v1/terminal/capabilities)가 아직 없습니다 — 안전을 위해 주문을 막습니다.'
+      : ('주문 가능 여부를 확인하지 못했습니다 — ' + detailOf(e));
+  }
+  updateCta();
+}
+
+function canPlaceOrder() {
+  return !!(S.caps && S.caps.can_place_order === true && S.accountId);
+}
+
+/**
+ * 계정 요약.
+ *
+ * 🚨 왜 `/exchange-accounts/{id}/balance` 가 아니라 `/terminal/account` 인가
+ *    (2026-09-03 IP밴·부하 검증에서 바꿈)
+ *
+ *   `/exchange-accounts/{id}/balance` 는 내부에서 `/fapi/v2/positionRisk` 를
+ *   **생짜 `requests.get`** 으로 부른다 (exchange_accounts.py:445~460, HMAC 을
+ *   손으로 만든다). 그 경로는 `BinanceClient._request` 를 안 타므로
+ *     · Fix 116 IP ban 전역 회로 차단기
+ *     · Fix 124 weight 거버너 / Fix 118 호출량 계측
+ *   을 **전부 우회**한다. 캐시가 5초라 이 화면이 3초로 폴링하면
+ *   **분당 12회**가 그 우회 경로로 나간다 — 그리고 IP ban 이 걸린 뒤에도
+ *   계속 나간다. 그게 정확히 2026-08-26 「ban 무한 연장」의 형태다.
+ *
+ *   `/terminal/account` 는 `BinanceClient.get_account()` 하나만 쓰고
+ *   (`binance:account_info:{id}` 15초 캐시를 balance 와 **공유**한다)
+ *   positionRisk 는 아예 부르지 않는다. 즉 업스트림이 12회/분 → 0회/분이다
+ *   (대시보드가 이미 채워 둔 캐시를 그대로 읽는다).
+ *
+ *   대신 `our_available_balance` 가 거래소 실 증거금 보정이 빠진 **보수적
+ *   근사**가 된다(적게 나온다 = 안전 측). 정밀한 값이 필요하면 대시보드의
+ *   잔액 카드가 단일 진실이다 — 같은 계산을 두 곳에 두지 않는다.
+ *
+ *   구버전 서버(터미널 라우터 미배포) 대비로 404 일 때만 옛 경로로 폴백한다.
+ */
+let _balanceFallback = false;   // 한 번 404 를 보면 그 뒤로는 바로 옛 경로로
+async function loadBalance() {
+  if (!S.accountId) return;
+  try {
+    if (!_balanceFallback) {
+      S.balance = await api('/terminal/account?account_id=' + S.accountId);
+    } else {
+      S.balance = await api('/exchange-accounts/' + S.accountId + '/balance');
+    }
+    renderBalance();
+  } catch (e) {
+    // 🚨 404 라고 무조건 폴백하면 안 된다. `/terminal/account` 는 「활성 계정 없음」에도
+    //    404 를 낸다 — 그때 옛 경로로 영구 전환하면 회로 차단기를 우회하는
+    //    positionRisk 폴링이 되살아난다(이 함수를 바꾼 이유가 사라진다).
+    //    라우트 자체가 없을 때만(FastAPI 기본 문구 "Not Found") 폴백한다.
+    const routeMissing = e && e.status === 404 && /"detail"\s*:\s*"Not Found"/.test(String(e.raw || ''));
+    if (routeMissing && !_balanceFallback) {
+      _balanceFallback = true;
+      console.warn('[terminal] /terminal/account 라우트 없음 → /exchange-accounts/{id}/balance 폴백');
+      return loadBalance();
+    }
+    if (e.status !== 401) console.warn('[terminal] balance 실패', e);
+  }
+}
+
+function renderBalance() {
+  const b = S.balance;
+  if (!b) return;
+  setTxt('nav-equity', fmt(b.total_margin_balance, 2) + ' USDT');
+  const avail = (b.our_available_balance != null) ? b.our_available_balance : b.available_balance;
+  setTxt('op-avail', fmt(avail, 2) + ' USDT');
+  const mr = num(b.margin_ratio_pct);
+  setTxt('op-mr', mr === null ? '--' : fmt(mr, 2) + '%');
+  const bar = document.getElementById('op-mr-bar');
+  if (bar) bar.style.width = (mr === null ? 0 : Math.min(100, Math.max(0, mr))).toFixed(1) + '%';
+  setTxt('op-maint', fmt(b.total_maint_margin, 2) + ' USDT');
+}
+
+/**
+ * 거래소 실 포지션 스냅샷 (서버 Redis 캐시 30초).
+ *
+ * 🚨 `/strategies` 를 여기서 **떼어냈다** (2026-09-03 부하 검증).
+ *    `/strategies?include_archived=false` 는 보관 안 된 전략을 **전부** 돌려주고,
+ *    행마다 템플릿 조인 + TP 발동 카운트 배치 + Redis mget 을 한다
+ *    (strategies/crud.py:60~100). 이 화면이 5초로 폴링하면 분당 12회다.
+ *    DB 가 외부 Neon 이라 왕복 지연이 그대로 동기 워커 스레드를 붙잡는다.
+ *
+ *    포지션 수량·손익은 **초 단위로 변하지만**, 전략 메타(배지·단계·상태)는
+ *    분 단위로 변한다. 그래서 갱신 주기를 나눈다: 포지션 5초 / 전략 10초.
+ */
+async function loadPositions() {
+  if (!S.accountId) return;
+  const d = await api('/exchange-accounts/' + S.accountId + '/binance-positions').catch(() => null);
+  if (d && d.positions) S.exPositions = d.positions;
+  renderMarginMode();
+  if (S.bottomTab === 'pos') renderBottom();
+  updateTabCounts();
+}
+
+/** 전략 목록 — 배지·단계·청산버튼용. 무거운 쿼리라 포지션과 주기를 분리했다. */
+async function loadStrategies() {
+  const list = await api('/strategies?include_archived=false').catch(() => null);
+  if (!Array.isArray(list)) return;
+  S.strategies = list;
+  if (S.bottomTab === 'pos') renderBottom();
+  updateTabCounts();
+}
+
+async function loadExternal() {
+  try {
+    const r = await api('/positions/external');
+    S.extPositions = Array.isArray(r) ? r : (r && r.items) || [];
+  } catch (_e) { /* 선택 정보 — 실패해도 화면은 유지 */ }
+}
+
+/**
+ * 미체결 주문 행 목록.
+ *
+ * 🚨 `/exchange-accounts/{id}/binance-open-orders` 는 **존재하지 않는 경로**였다
+ *    (2026-09-03 적대적 검증, 라우터 전수 열거로 확인). exchange_accounts.py 에
+ *    있는 것은 `binance-open-orders-**summary**` 하나뿐이고 그건 개수·명목 합계만
+ *    준다 — 행 목록이 아니라 이 테이블을 채울 수 없다. 즉 미체결 탭은 5초마다
+ *    404 를 받아 **영원히 「엔드포인트가 아직 없습니다」**만 띄우고 있었다.
+ *
+ * 실제로 있는 경로는 `/terminal/open-orders` 다. 여기가 더 나은 이유:
+ *   · `client_order_id` 로 우리 Order 를 조인해 `our_order_id` / `our_strategy_id`
+ *     를 붙여 준다 → 취소 버튼이 기존 DELETE 경로를 부를 수 있다.
+ *     (거래소 raw 목록만으로는 그 두 값을 알 방법이 프런트에 없다.)
+ *   · symbol 유무에 따라 서버 캐시 TTL 이 5초/30초로 비대칭이라
+ *     「현재 종목만 보기」를 꺼도 weight 40 짜리 전체 조회가 분당 2회로 묶인다.
+ *
+ * 필드명이 거래소 raw 와 다르다(order_type / order_status / time_ms).
+ * 렌더가 양쪽 이름을 다 읽지만, 여기서도 굳이 맞춰 두지 않는다 — 서버 응답을
+ * 프런트에서 재조립하면 다음 사람이 「어느 쪽이 진짜인가」를 또 헤맨다.
+ */
+async function loadOpenOrders() {
+  if (!S.accountId) return;
+  // symbol 을 넘기면 업스트림 weight 가 40 → 1 로 떨어진다. 「현재 종목만」이면 반드시 전달.
+  const q = '?account_id=' + encodeURIComponent(S.accountId)
+    + (S.onlySymbol ? ('&symbol=' + encodeURIComponent(S.symbol)) : '');
+  try {
+    const d = await api('/terminal/open-orders' + q);
+    S.openOrders = (d && d.orders) || [];
+    S.openOrdersErr = '';
+  } catch (e) {
+    S.openOrders = null;
+    S.openOrdersErr = (e && e.status === 404)
+      ? '미체결 목록 엔드포인트(/api/v1/terminal/open-orders)가 아직 없습니다'
+      : detailOf(e);
+  }
+  updateTabCounts();
+  if (S.bottomTab === 'open') renderBottom();
+}
+
+async function loadOrders() {
+  try {
+    const d = await api('/orders?limit=200');
+    S.orders = Array.isArray(d) ? d : ((d && d.items) || []);
+  } catch (_e) { S.orders = []; }
+  if (S.bottomTab === 'orders') renderBottom();
+}
+
+async function loadUserTrades() {
+  if (!S.accountId) return;
+  // userTrades 는 symbol 이 필수다 → 「현재 종목만 보기」가 꺼져 있으면 DB 기반으로 대체한다.
+  if (!S.onlySymbol) {
+    S.userTrades = null;
+    S.userTradesErr = '거래소 체결 내역은 종목별로만 조회됩니다 — 「현재 종목만 보기」를 켜면 ' + S.symbol + ' 체결을 불러옵니다. 아래는 우리 DB 의 체결(FILLED) 주문입니다.';
+    try {
+      const d = await api('/orders?limit=200&status_filter=FILLED');
+      S.orders = Array.isArray(d) ? d : ((d && d.items) || []);
+    } catch (_e) {}
+    if (S.bottomTab === 'trades') renderBottom();
+    return;
+  }
+  try {
+    const d = await api('/exchange-accounts/' + S.accountId + '/binance-user-trades?symbol='
+      + encodeURIComponent(S.symbol) + '&limit=50');
+    S.userTrades = (d && d.trades) || [];
+    S.userTradesErr = '';
+  } catch (e) {
+    S.userTrades = null;
+    S.userTradesErr = (e && e.status === 404)
+      ? '거래소 체결 내역 엔드포인트(/binance-user-trades)가 아직 없습니다 — 아래는 우리 DB 의 체결(FILLED) 주문입니다.'
+      : (detailOf(e) + ' — 아래는 우리 DB 의 체결(FILLED) 주문입니다.');
+    // 🚨 실패했을 때도 **빈 화면을 주지 않는다** (2026-09-03 적대적 검증).
+    //    `/binance-user-trades` 는 라우터 전수 열거 결과 **존재하지 않는 경로**이고
+    //    (exchange_accounts.py 에 그런 route 가 없다), 새로 만들지도 않았다.
+    //    그래서 「현재 종목만 보기」를 켜면 이 탭은 **영구히 오류 문구 한 줄**만
+    //    띄운다 — 「기록 없음」과 「고장」이 화면에서 같아 보이는, 이 저장소가
+    //    반복해서 당한 실패 방식이다. 종목 미지정 경로와 **같은** DB 폴백을 태운다
+    //    (renderUserTrades 가 S.userTrades === null 이면 DB 주문을 붙여 준다).
+    try {
+      const d2 = await api('/orders?limit=200&status_filter=FILLED');
+      S.orders = Array.isArray(d2) ? d2 : ((d2 && d2.items) || []);
+    } catch (_e2) { /* DB 폴백까지 실패하면 사유 문구만 남는다 */ }
+  }
+  if (S.bottomTab === 'trades') renderBottom();
+}
+
+function renderMarginMode() {
+  const p = S.exPositions[S.symbol];
+  const mode = p && p.margin_mode ? String(p.margin_mode) : null;
+  const ko = mode === 'ISOLATED' ? '격리 마진' : (mode === 'CROSS' ? '교차 마진' : null);
+  setTxt('op-margin-mode', ko || '마진 --');
+  const el = document.getElementById('op-margin-mode');
+  if (el) el.title = ko
+    ? ('거래소 실 포지션의 마진 모드입니다 (읽기 전용). 이 시스템은 격리(ISOLATED) 를 전제로 운영됩니다.')
+    : ('이 종목에 포지션이 없어 마진 모드를 알 수 없습니다. 이 시스템은 격리(ISOLATED) 를 전제로 운영됩니다.');
+  const lev = p && p.leverage ? Number(p.leverage) : null;
+  setTxt('sym-sub', '무기한 · ' + (ko || '마진 모드 미확인') + ' · USDT 결제'
+    + (lev ? ' · 현재 ' + lev + 'x' : ''));
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   11. 전략 배지 (①) — 접두사 매칭
+   ════════════════════════════════════════════════════════════════════════
+   🚨 이 배지는 「어느 워커가 잡았나」만 말한다.
+      「게이트가 적용되는가」의 근거로 쓰면 안 된다 — 그 판정은 백엔드가
+      템플릿 「이름」으로 하고(chg24_entry_gate.py:120), /strategies 응답에는
+      이름이 없다. 게이트 판정은 위 gatebar 의 chg24_gate.passes 로만 한다.
+*/
+function strategyBadge(type) {
+  const t = String(type || '');
+  if (!t) return { cls: 'manual', text: '👤 수동' };
+  if (t.indexOf('DYNAMIC_') === 0 || t === 'manual' || t === 'terminal_manual') {
+    return { cls: 'manual', text: '👤 수동' };
+  }
+  if (t.indexOf('auto_bb_break') === 0) {
+    const suf = t.slice('auto_bb_break'.length);
+    let ko = 'BB이탈';
+    if (suf.indexOf('_SAJANGNIM_TOP') === 0)     ko = '정점SHORT';
+    else if (suf.indexOf('_SAJANGNIM_BOTTOM') === 0) ko = '저점LONG';
+    else if (suf.indexOf('_UNIFIED_15M') === 0)      ko = '통합15m';
+    else if (suf.indexOf('_PENDING_HC_FAST') === 0)  ko = 'HC속공';
+    else if (suf.indexOf('_OBV_HOLD') === 0)         ko = 'OBV보류';
+    const m = suf.match(/_reentry(\d+)/);
+    if (m) ko += '·재진입' + m[1];
+    if (suf.indexOf('_success') >= 0) ko += '·피라미딩';
+    return { cls: 'auto', text: '🤖 자동(' + ko + ')' };
+  }
+  if (t.indexOf('pump_split') === 0)        return { cls: 'auto', text: '🤖 볼밴분할' };
+  if (t.indexOf('bb_mid_line') === 0)       return { cls: 'auto', text: '🤖 중단선' };
+  if (t.indexOf('surge_peak_ladder') === 0) return { cls: 'auto', text: '🤖 급등사다리' };
+  if (t.indexOf('realtime_reentry') === 0)  return { cls: 'auto', text: '🤖 재진입' };
+  if (t.indexOf('chart_pattern') === 0)     return { cls: 'auto', text: '🤖 차트패턴' };
+  if (t.indexOf('sajangnim_top') === 0)     return { cls: 'auto', text: '🤖 정점SHORT' };
+  // 알 수 없는 값은 원문 그대로 — 조용히 「수동」으로 오분류하지 않는다.
+  return { cls: '', text: '❓ ' + t };
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   12. 하단 테이블
+   ════════════════════════════════════════════════════════════════════════ */
+
+/** 거래소 실 포지션 + 전략 + 도구 밖 포지션을 한 테이블로 합친다. */
+function buildPositionRows() {
+  const rows = [];
+  const active = S.strategies.filter((s) => ACTIVE_LIKE.has(String(s.status)));
+
+  Object.keys(S.exPositions || {}).forEach((k) => {
+    const p = S.exPositions[k];
+    if (!p) return;
+    const sym = String(p.symbol || k).toUpperCase();
+    const side = String(p.side || '').toUpperCase();
+    // 포지션↔전략 매칭 = (계정, 심볼, 방향). positions.py:88-92 의 tracked_set 규칙과 동일.
+    const st = active.find((s) => String(s.symbol).toUpperCase() === sym
+      && String(s.side).toUpperCase() === side
+      && (s.exchange_account_id == null || Number(s.exchange_account_id) === Number(S.accountId)));
+    const ext = S.extPositions.find((e) => String(e.symbol).toUpperCase() === sym
+      && String(e.side).toUpperCase() === side);
+    rows.push({
+      symbol: sym, side: side,
+      qty: num(p.size), entry: num(p.entry_price),
+      mark: num(p.mark_price), liq: num(p.liquidation_price),
+      leverage: num(p.leverage), upnl: num(p.unrealized_pnl), roi: num(p.roi_pct),
+      strategy: st || null, outside: !st && !!ext,
+      unknown: !st && !ext,
+    });
+  });
+
+  // 거래소 스냅샷에 아직 안 잡힌 전략(체결 직후)도 보여 준다 — 조용히 사라지면 안 된다.
+  active.forEach((s) => {
+    const sym = String(s.symbol).toUpperCase();
+    const side = String(s.side).toUpperCase();
+    if (rows.some((r) => r.symbol === sym && r.side === side)) return;
+    const q = num(s.current_position_qty);
+    if (!q) return;
+    rows.push({
+      symbol: sym, side: side, qty: q, entry: num(s.avg_entry_price),
+      mark: null, liq: num(s.liquidation_price), leverage: num(s.leverage),
+      upnl: num(s.unrealized_pnl), roi: null, strategy: s, outside: false, unknown: false,
+    });
+  });
+
+  return rows;
+}
+
+function renderPositions(host) {
+  let rows = buildPositionRows();
+  if (S.onlySymbol) rows = rows.filter((r) => r.symbol === S.symbol);
+  if (!rows.length) { host.innerHTML = '<div class="empty">보유 포지션이 없습니다.</div>'; return; }
+
+  const keep = (S.gate && S.gate.trim && S.gate.trim.enabled === true)
+    ? num(S.gate.trim.keep_notional_usdt) : null;
+
+  const body = rows.map((r) => {
+    // 표시가는 WS 마크가로 덮어쓴다 (서버 응답은 Redis 30초 캐시라 stale).
+    const mark = (S.marks[r.symbol] != null) ? S.marks[r.symbol] : r.mark;
+    const dir = r.side === 'SHORT' ? -1 : 1;
+    const upnl = (mark !== null && r.entry !== null && r.qty !== null)
+      ? (mark - r.entry) * Math.abs(r.qty) * dir : r.upnl;
+
+    const st = r.strategy;
+    const badge = st ? strategyBadge(st.strategy_type)
+                     : (r.outside ? { cls: 'out', text: '🚪 도구 밖' }
+                                  : { cls: 'out', text: '🚪 도구 밖(미확인)' });
+
+    let stageTag = '';
+    if (st && st.current_stage != null) {
+      const tot = st.total_active_stages != null ? st.total_active_stages : '?';
+      stageTag = '<span class="tag stage">' + escapeHtml(st.current_stage + '/' + tot) + '</span>';
+    }
+    // ✂️ 잔량 유지 배지 = 「추정」이다. Fix 318 은 잔량을 남겨도 status 를 바꾸지 않아
+    // 이 상태를 직접 알려주는 필드가 없다. keep_notional 은 서버가 준 값만 쓴다(하드코딩 금지).
+    let trimTag = '';
+    if (st && keep !== null && mark !== null && r.qty !== null && r.leverage) {
+      const notional = Math.abs(r.qty) * mark;
+      if (notional < keep * r.leverage * 1.5) {
+        trimTag = '<span class="tag trim" title="추정입니다 — 잔량(명목 ' + fmt(notional, 2)
+          + ' USDT)이 부분손절 기준(' + fmt(keep, 2) + ' × ' + r.leverage
+          + ' × 1.5)보다 작습니다. 1단계 소액 진입을 잔량으로 오인할 수 있습니다.">✂️ 잔량 유지(추정)</span>';
+      }
+    }
+
+    const canClose = !!st;
+    const closeBtn = canClose
+      ? '<button class="btn-x" type="button" data-close="' + escapeHtml(String(st.id)) + '">시장가</button>'
+      : '<button class="btn-x" type="button" disabled title="이 도구가 추적하지 않는 포지션입니다 — 가시성 전용. 청산은 Binance 앱에서 직접 하세요.">시장가</button>';
+
+    return '<tr>'
+      + '<td class="ko"><span class="mono">' + escapeHtml(r.symbol) + '</span> '
+        + '<span class="muted mono">' + (r.leverage ? r.leverage + 'x' : '') + '</span> '
+        + '<span class="tag ' + badge.cls + '">' + escapeHtml(badge.text) + '</span>' + stageTag + trimTag + '</td>'
+      + '<td class="ko ' + (r.side === 'SHORT' ? 'down' : 'up') + '">' + (r.side === 'SHORT' ? '숏' : '롱') + '</td>'
+      + '<td class="r">' + (r.qty === null ? '--' : fmtQtyAuto(Math.abs(r.qty), r.symbol)) + '</td>'
+      + '<td class="r">' + fmtPxAuto(r.entry, r.symbol) + '</td>'
+      + '<td class="r">' + fmtPxAuto(mark, r.symbol) + '</td>'
+      + '<td class="r warn">' + (r.liq ? fmtPxAuto(r.liq, r.symbol) : '--') + '</td>'
+      + '<td class="r ' + pnlCls(upnl) + '">' + fmtSigned(upnl, 2)
+        + (r.roi !== null ? ' <span class="muted">(' + fmtSigned(r.roi, 2) + '%)</span>' : '') + '</td>'
+      + '<td class="r">' + closeBtn + '</td>'
+      + '</tr>';
+  }).join('');
+
+  host.innerHTML = '<table class="tbl"><thead><tr>'
+    + '<th>종목</th><th>방향</th><th class="r">수량</th><th class="r">진입가</th>'
+    + '<th class="r">표시가</th><th class="r">청산가</th><th class="r">미실현 손익</th><th class="r">청산</th>'
+    + '</tr></thead><tbody>' + body + '</tbody></table>';
+
+  host.querySelectorAll('button[data-close]').forEach((b) => {
+    b.addEventListener('click', () => closePosition(Number(b.getAttribute('data-close'))));
+  });
+}
+
+function renderOpenOrders(host) {
+  if (S.openOrders === null) {
+    host.innerHTML = '<div class="empty">미체결 목록을 불러오지 못했습니다.<br>'
+      + escapeHtml(S.openOrdersErr || '') + '</div>';
+    return;
+  }
+  let list = S.openOrders;
+  if (S.onlySymbol) list = list.filter((o) => String(o.symbol).toUpperCase() === S.symbol);
+  if (!list.length) { host.innerHTML = '<div class="empty">미체결 주문이 없습니다.</div>'; return; }
+
+  const body = list.map((o) => {
+    const canCancel = o.our_order_id != null && o.our_strategy_id != null;
+    const btn = canCancel
+      ? '<button class="btn-x" type="button" data-cancel="' + escapeHtml(String(o.our_strategy_id))
+        + '" data-oid="' + escapeHtml(String(o.our_order_id)) + '">취소</button>'
+      : '<button class="btn-x" type="button" disabled title="우리 DB 에 없는 주문입니다 (도구 밖 수동 주문) — Binance 앱에서 직접 취소하세요.">취소</button>';
+    const buy = String(o.side).toUpperCase() === 'BUY';
+    // 🚨 /terminal/open-orders 는 거래소 raw 와 필드명이 다르다
+    //    (type→order_type / status→order_status / time→time_ms).
+    //    양쪽을 다 읽는다 — 한쪽만 읽으면 유형·상태·시각 칸이 통째로 빈다.
+    const oType   = o.order_type   != null ? o.order_type   : o.type;
+    const oStatus = o.order_status != null ? o.order_status : o.status;
+    const oTime   = o.time_ms      != null ? o.time_ms      : o.time;
+    return '<tr>'
+      + '<td>' + escapeHtml(o.symbol || '') + '</td>'
+      + '<td class="ko ' + (buy ? 'up' : 'down') + '">' + (buy ? '매수' : '매도') + '</td>'
+      + '<td class="ko">' + escapeHtml(oType || '') + (o.reduce_only ? ' <span class="tag">청산</span>' : '') + '</td>'
+      + '<td class="r">' + fmtPxAuto(o.price, o.symbol) + '</td>'
+      + '<td class="r">' + fmtQtyAuto(o.orig_qty, o.symbol) + '</td>'
+      + '<td class="r">' + fmtQtyAuto(o.executed_qty, o.symbol) + '</td>'
+      + '<td class="ko">' + escapeHtml(oStatus || '') + '</td>'
+      + '<td>' + ymdhm(oTime) + '</td>'
+      + '<td class="r">' + btn + '</td>'
+      + '</tr>';
+  }).join('');
+
+  host.innerHTML = '<table class="tbl"><thead><tr>'
+    + '<th>종목</th><th>방향</th><th>유형</th><th class="r">가격</th><th class="r">수량</th>'
+    + '<th class="r">체결</th><th>상태</th><th>시각</th><th class="r">취소</th>'
+    + '</tr></thead><tbody>' + body + '</tbody></table>';
+
+  host.querySelectorAll('button[data-cancel]').forEach((b) => {
+    b.addEventListener('click', () => cancelOrder(
+      Number(b.getAttribute('data-cancel')), Number(b.getAttribute('data-oid'))));
+  });
+}
+
+function renderOrders(host) {
+  let list = S.orders || [];
+  if (S.onlySymbol) list = list.filter((o) => String(o.symbol).toUpperCase() === S.symbol);
+  if (!list.length) { host.innerHTML = '<div class="empty">주문 내역이 없습니다.</div>'; return; }
+  const body = list.slice(0, 200).map((o) => {
+    const buy = String(o.side).toUpperCase() === 'BUY';
+    const pnl = num(o.realized_pnl);
+    return '<tr>'
+      + '<td>' + ymdhm(o.created_at) + '</td>'
+      + '<td>' + escapeHtml(o.symbol || '') + '</td>'
+      + '<td class="ko ' + (buy ? 'up' : 'down') + '">' + (buy ? '매수' : '매도') + '</td>'
+      // 🚨 stage_no 도 escapeHtml 을 태운다. 지금은 정수 컬럼이지만 「서버가 주는 값이라
+      //    안전하다」는 가정은 이 저장소에서 이미 여러 번 깨졌다 — innerHTML 로 들어가는
+      //    값은 출처와 무관하게 전부 escape 한다(예외를 두면 다음 사람이 그 예외를 넓힌다).
+      + '<td class="ko">' + escapeHtml(o.purpose || o.order_type || '')
+        + (o.stage_no ? ' ' + escapeHtml(String(o.stage_no)) + '단계' : '') + '</td>'
+      + '<td class="r">' + fmtPxAuto(o.avg_price != null ? o.avg_price : o.price, o.symbol) + '</td>'
+      + '<td class="r">' + fmtQtyAuto(o.executed_qty != null ? o.executed_qty : o.orig_qty, o.symbol) + '</td>'
+      + '<td class="ko">' + escapeHtml(o.status || '') + '</td>'
+      + '<td class="r ' + (pnl === null ? '' : pnlCls(pnl)) + '">'
+        + (pnl === null ? '--' : fmtSigned(pnl, 2)) + '</td>'
+      + '</tr>';
+  }).join('');
+  host.innerHTML = '<table class="tbl"><thead><tr>'
+    + '<th>시각</th><th>종목</th><th>방향</th><th>목적</th><th class="r">가격</th>'
+    + '<th class="r">수량</th><th>상태</th><th class="r">실현손익</th>'
+    + '</tr></thead><tbody>' + body + '</tbody></table>';
+}
+
+function renderUserTrades(host) {
+  if (S.userTrades === null) {
+    // 🚨 「현재 종목만 보기」 여부와 **무관하게** DB 폴백을 붙인다.
+    //    옛 코드는 onlySymbol 이 켜져 있으면 오류 문구 한 줄만 남기고 끝냈는데,
+    //    거래소 체결 경로가 실제로 없어서(라우터 전수 확인) 그 분기가 곧 「항상」이었다.
+    //    renderOrders 가 S.onlySymbol 로 알아서 종목 필터를 건다.
+    const note = '<div class="empty">' + escapeHtml(S.userTradesErr || '체결 내역을 불러오지 못했습니다.') + '</div>';
+    host.innerHTML = note;
+    renderOrdersInto(host);
+    return;
+  }
+  if (!S.userTrades.length) { host.innerHTML = '<div class="empty">체결 내역이 없습니다.</div>'; return; }
+  const body = S.userTrades.map((t) => {
+    const buy = String(t.side).toUpperCase() === 'BUY';
+    const pnl = num(t.realized_pnl);
+    return '<tr>'
+      + '<td>' + ymdhm(t.time) + '</td>'
+      + '<td>' + escapeHtml(t.symbol || S.symbol) + '</td>'
+      + '<td class="ko ' + (buy ? 'up' : 'down') + '">' + (buy ? '매수' : '매도') + '</td>'
+      + '<td class="r">' + fmtPxAuto(t.price, t.symbol || S.symbol) + '</td>'
+      + '<td class="r">' + fmtQtyAuto(t.qty, t.symbol || S.symbol) + '</td>'
+      + '<td class="r">' + fmt(t.quote_qty, 2) + '</td>'
+      + '<td class="r ' + (pnl === null ? '' : pnlCls(pnl)) + '">'
+        + (pnl === null ? '--' : fmtSigned(pnl, 4)) + '</td>'
+      + '<td class="r muted">' + fmt(t.commission, 4) + ' ' + escapeHtml(t.commission_asset || '') + '</td>'
+      + '</tr>';
+  }).join('');
+  host.innerHTML = '<table class="tbl"><thead><tr>'
+    + '<th>시각</th><th>종목</th><th>방향</th><th class="r">가격</th><th class="r">수량</th>'
+    + '<th class="r">금액</th><th class="r">실현손익</th><th class="r">수수료</th>'
+    + '</tr></thead><tbody>' + body + '</tbody></table>';
+}
+
+/** 전체 종목 체결 내역은 거래소 API 로 불가 → 우리 DB 주문(FILLED)을 대신 붙인다. */
+function renderOrdersInto(host) {
+  const box = document.createElement('div');
+  renderOrders(box);
+  host.appendChild(box);
+}
+
+function renderBottom() {
+  const host = document.getElementById('bt-body');
+  if (S.bottomTab === 'pos')    return renderPositions(host);
+  if (S.bottomTab === 'open')   return renderOpenOrders(host);
+  if (S.bottomTab === 'orders') return renderOrders(host);
+  if (S.bottomTab === 'trades') return renderUserTrades(host);
+}
+
+function updateTabCounts() {
+  let rows = buildPositionRows();
+  if (S.onlySymbol) rows = rows.filter((r) => r.symbol === S.symbol);
+  const btns = document.querySelectorAll('.bt-head button[data-tab]');
+  btns.forEach((b) => {
+    const tab = b.getAttribute('data-tab');
+    if (tab === 'pos') b.textContent = '포지션 (' + rows.length + ')';
+    if (tab === 'open') {
+      let n = S.openOrders === null ? '?' : S.openOrders.length;
+      if (S.openOrders && S.onlySymbol) {
+        n = S.openOrders.filter((o) => String(o.symbol).toUpperCase() === S.symbol).length;
+      }
+      b.textContent = '미체결 (' + n + ')';
+    }
+  });
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   13. 청산 / 취소
+   ════════════════════════════════════════════════════════════════════════ */
+
+async function closePosition(strategyId) {
+  if (!strategyId) return;
+  if (!window.confirm('전략 #' + strategyId + ' 를 시장가로 청산합니다. 진행할까요?')) return;
+  try {
+    await api('/strategies/' + strategyId + '/stop', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': newKey() },
+      body: { mode: 'close_position_market', reason: '터미널 수동 청산' },
+    });
+    toast('청산 요청을 보냈습니다 (전략 #' + strategyId + ').', 'ok');
+    refreshAccountData();
+  } catch (e) { toast(detailOf(e), 'err'); }
+}
+
+async function cancelOrder(strategyId, orderId) {
+  if (!strategyId || !orderId) return;
+  if (!window.confirm('주문 #' + orderId + ' 를 취소합니다. 진행할까요?')) return;
+  try {
+    await api('/strategies/' + strategyId + '/open-orders/' + orderId, {
+      method: 'DELETE', headers: { 'Idempotency-Key': newKey() },
+    });
+    toast('주문 취소 요청을 보냈습니다.', 'ok');
+    loadOpenOrders();
+  } catch (e) { toast(detailOf(e), 'err'); }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   14. 주문 패널 계산
+   ════════════════════════════════════════════════════════════════════════
+   이 저장소의 단일 진실 (헌법 v107):
+     capital = 증거금(margin),  qty = capital × leverage / price
+   역산:      capital = qty × price / leverage
+*/
+
+function inputPrice() {
+  const v = num(document.getElementById('in-price').value.replace(/,/g, ''));
+  if (v !== null && v > 0) return v;
+  return S.live.last;
+}
+function inputQty() {
+  const v = num(document.getElementById('in-qty').value.replace(/,/g, ''));
+  return (v !== null && v > 0) ? v : null;
+}
+
+/**
+ * 예상 청산가 — 어림값이다.
+ * 유지증거금률(MMR) 티어 테이블이 저장소에 없어 정확 계산이 불가능하다.
+ * 진입 후 정확한 값은 포지션 테이블의 「청산가」(거래소 liquidationPrice) 에 나온다.
+ */
+const APPROX_MMR = 0.004;
+function approxLiq(entry, lev, side) {
+  if (!entry || !lev) return null;
+  const f = 1 / lev - APPROX_MMR;
+  return side === 'SHORT' ? entry * (1 + f) : entry * (1 - f);
+}
+
+function recalcOrder() {
+  const px = inputPrice();
+  const qty = inputQty();
+  const lev = S.leverage;
+  const notional = (px && qty) ? px * qty : null;
+  const margin = notional ? notional / lev : null;
+  setTxt('op-notional', notional === null ? '-- USDT' : fmt(notional, 2) + ' USDT');
+  setTxt('op-margin',   margin === null ? '-- USDT' : fmt(margin, 2) + ' USDT');
+  const liq = approxLiq(px, lev, S.side);
+  setTxt('op-liq', liq === null ? '--' : fmtPx(liq));
+  updateCta();
+}
+
+function applyRatio(ratio) {
+  const b = S.balance;
+  const px = inputPrice();
+  if (!b || !px) { toast('잔고 또는 가격을 아직 못 읽었습니다.', 'err'); return; }
+  const availRaw = (b.our_available_balance != null) ? b.our_available_balance : b.available_balance;
+  const avail = num(availRaw) || 0;
+  const capital = avail * (ratio / 100);
+  const qty = capital * S.leverage / px;
+  document.getElementById('in-qty').value = qty > 0 ? qty.toFixed(qtyDp()) : '';
+  S.qtyTouched = true;
+  recalcOrder();
+}
+
+/**
+ * 주문을 막아야 하는 이유 목록.
+ * 🚨 CTA 비활성화와 확인 모달이 「같은」 판정을 쓰게 하려고 함수 하나로 뺐다.
+ *    버튼만 막고 모달 진입로가 느슨하면, 다른 경로로 모달이 열려 게이트를 우회한다.
+ */
+function blockReasons() {
+  const reasons = [];
+  if (!canPlaceOrder()) {
+    reasons.push(S.capsReason || (S.caps && S.caps.reason) || '주문 경로가 확인되지 않았습니다.');
+  }
+  if (S.gate && S.gate.excluded === true) {
+    reasons.push('⛔ ' + S.symbol + ' 는 자동매매 제외 심볼입니다 — 전략 경로로는 주문이 거부됩니다.'
+      + (S.gate.excluded_reason ? ' (' + S.gate.excluded_reason + ')' : ''));
+  }
+  const px = inputPrice(), qty = inputQty();
+  if (!px) reasons.push('가격을 입력하세요.');
+  if (!qty) reasons.push('수량을 입력하세요.');
+  if (px && qty && S.meta.minNotional && px * qty < S.meta.minNotional) {
+    reasons.push('주문 금액이 최소 명목(' + fmt(S.meta.minNotional, 2) + ' USDT)보다 작습니다.');
+  }
+  if (px && qty && S.meta.minQty && qty < S.meta.minQty) {
+    reasons.push('수량이 최소 수량(' + fmt(S.meta.minQty, qtyDp()) + ')보다 작습니다.');
+  }
+  return reasons;
+}
+
+function updateCta() {
+  const btn = document.getElementById('cta');
+  const note = document.getElementById('cta-note');
+  btn.className = 'cta' + (S.side === 'SHORT' ? ' short' : '');
+  btn.textContent = S.base + (S.side === 'SHORT' ? ' 매도 / 숏' : ' 매수 / 롱');
+  const reasons = blockReasons();
+  btn.disabled = reasons.length > 0;
+  note.textContent = reasons.join('\n');
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   15. 주문 확인 모달 → 전략 3-콜 체인
+   ════════════════════════════════════════════════════════════════════════ */
+
+function newKey() {
+  try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (_e) {}
+  return 'tk-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+}
+
+function tsCompact() {
+  const d = new Date(); const p = (x) => String(x).padStart(2, '0');
+  return String(d.getFullYear()) + p(d.getMonth() + 1) + p(d.getDate())
+       + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+
+let _modalKey = null;   // 모달을 연 시점에 1회 생성해 고정. 닫았다 열면 새로 만든다.
+
+function openConfirm() {
+  // CTA 와 「같은」 판정을 쓴다 — 버튼이 막히는 이유는 모달도 막는 이유여야 한다.
+  const blocked = blockReasons();
+  if (blocked.length) { toast(blocked[0], 'err'); updateCta(); return; }
+  const px = inputPrice(), qty = inputQty();
+  if (!px || !qty) return;
+  const notional = px * qty;
+  const margin = notional / S.leverage;
+  const liq = approxLiq(px, S.leverage, S.side);
+  _modalKey = newKey();
+
+  // 관문 미리보기 — 눌러도 400 으로 떨어지는 걸 미리 막는다.
+  let gateHtml = '';
+  const g = S.gate;
+  if (!g) {
+    gateHtml = '<div class="chip unknown">관문 상태 모름 — ' + escapeHtml(S.gateErr || '') + '</div>';
+  } else {
+    if (g.excluded === true) {
+      gateHtml += '<div class="chip bad">⛔ 제외 심볼 — 진입이 거부됩니다</div>';
+    }
+    const c = g.chg24_gate || {};
+    if (c.enabled !== false) {
+      if (c.passes === false) {
+        gateHtml += '<div class="chip bad">⛔ 24h 상승/하락 각 '
+          + escapeHtml(String(c.top_n != null ? c.top_n : 'N')) + '위 밖 — 진입이 거부됩니다</div>';
+      } else if (c.passes === true) {
+        gateHtml += '<div class="chip ok">✅ 24h 순위 게이트 통과</div>';
+      } else {
+        gateHtml += '<div class="chip unknown">24h 순위 게이트 판정 실패 — '
+          + escapeHtml(String(c.reason || '사유 없음')) + '</div>';
+      }
+    }
+    if (g.support_gate_enabled === true) {
+      gateHtml += '<div class="chip">지지선 게이트 켜짐 — 진입 시점에 판정됩니다</div>';
+    }
+  }
+
+  const sideKo = S.side === 'SHORT' ? '매도 / 숏' : '매수 / 롱';
+  const host = document.getElementById('modal-host');
+  host.innerHTML =
+    '<div class="mask" id="cm-mask"><div class="modal" role="dialog" aria-modal="true">'
+    + '<h3>주문 확인 — ' + escapeHtml(S.symbol) + ' ' + escapeHtml(sideKo) + '</h3>'
+    + '<div class="body">'
+      + kvRow('종목', escapeHtml(S.symbol))
+      + kvRow('방향', '<span class="' + (S.side === 'SHORT' ? 'down' : 'up') + '">' + escapeHtml(sideKo) + '</span>')
+      + kvRow('주문유형', '지정가 (전략 1단계 LIMIT)')
+      // 🚨 확인 모달은 「실제로 전송될 값」을 그대로 보여준다.
+      //    표시 자릿수(tick 기준)로 반올림해서 보여 주면, 사장님이 본 숫자와
+      //    서버로 가는 숫자가 달라진다 — 확인 절차의 의미가 사라진다.
+      + kvRow('가격', escapeHtml(String(px)) + ' USDT')
+      + kvRow('수량', escapeHtml(String(qty)) + ' ' + escapeHtml(S.base))
+      + kvRow('주문 금액', fmt(notional, 2) + ' USDT')
+      + kvRow('개시 증거금', fmt(margin, 2) + ' USDT')
+      + kvRow('레버리지', S.leverage + 'x')
+      + kvRow('예상 청산가 <span class="muted">(근사)</span>', '<span class="warn">' + (liq === null ? '--' : fmtPx(liq)) + '</span>')
+      + '<div class="gate-box"><div class="t">🤖 자동매매 관문 미리보기</div>' + (gateHtml || '<div class="chip ok">차단 요소 없음</div>') + '</div>'
+      + '<div class="op-hint">이 주문은 raw 주문이 아니라 <b>기존 전략 생성 경로</b>로 나갑니다 — '
+        + '손절 · TP 사다리 · 부분손절 잔량 유지 · Kill-Switch · 레버리지 상한 · 화이트리스트 · '
+        + '동시 보유 상한 · 제외 심볼 · <b>24h 상승/하락 순위 게이트</b>가 그대로 적용됩니다.</div>'
+      + '<div id="cm-out"></div>'
+    + '</div>'
+    + '<div class="foot">'
+      + '<button type="button" class="cancel" id="cm-cancel">취소</button>'
+      + '<button type="button" class="cta' + (S.side === 'SHORT' ? ' short' : '') + '" id="cm-ok">확인 — 주문</button>'
+    + '</div></div></div>';
+
+  document.getElementById('cm-cancel').addEventListener('click', closeConfirm);
+  document.getElementById('cm-mask').addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'cm-mask') closeConfirm();
+  });
+  document.getElementById('cm-ok').addEventListener('click', () => submitOrder(px, qty, margin));
+}
+
+function kvRow(k, v) { return '<div class="kv"><span class="k">' + k + '</span><span class="v">' + v + '</span></div>'; }
+function closeConfirm() { document.getElementById('modal-host').innerHTML = ''; _modalKey = null; }
+
+/**
+ * 3-콜 체인: 템플릿 → 전략 → start.
+ *
+ * 🚨 템플릿 이름을 `_quick_` 로 시작시키지 않는다.
+ *    `_quick_` 이면 chg24_entry_gate._is_manual(chg24_entry_gate.py:120) 이 24h 순위 게이트를
+ *    통과시켜 버린다 = 실측 손실의 94.3% 를 낸 수동 경로가 게이트 없이 열린다.
+ *    이 터미널의 취지는 정확히 그 반대다.
+ */
+async function submitOrder(px, qty, margin) {
+  const out = document.getElementById('cm-out');
+  const ok = document.getElementById('cm-ok');
+  const key = _modalKey || newKey();
+
+  // 🚨 발송 직전 재검사 (2026-09-03 적대적 검증에서 추가).
+  //   openConfirm 이 통과시킨 뒤에도 모달은 계속 떠 있고 관문 폴링은 10초마다 돈다 —
+  //   그 사이에 「제외 심볼」로 바뀌거나 토큰이 만료돼 capabilities 가 무효가 될 수 있다.
+  //   또 submitOrder 는 모달 버튼에만 묶여 있지만, 「진입로가 하나뿐」이라는 가정에
+  //   기대는 대신 **전송하는 함수 자신이** 마지막으로 한 번 더 본다.
+  //   입력칸 기반 사유(가격/수량/최소명목)는 여기서 다시 보지 않는다 — 확인 모달은
+  //   「그때 본 숫자」를 그대로 보내야 하고, 그 숫자는 인자로 이미 고정돼 있다.
+  const hardBlock = [];
+  if (!canPlaceOrder()) {
+    hardBlock.push(S.capsReason || (S.caps && S.caps.reason) || '주문 경로가 확인되지 않았습니다.');
+  }
+  if (S.gate && S.gate.excluded === true) {
+    hardBlock.push('⛔ ' + S.symbol + ' 는 자동매매 제외 심볼입니다 — 전략 경로로는 주문이 거부됩니다.');
+  }
+  if (!(num(px) > 0) || !(num(qty) > 0) || !(num(margin) > 0)) {
+    hardBlock.push('가격·수량·증거금이 올바르지 않습니다 (모달을 닫고 다시 입력하세요).');
+  }
+  if (hardBlock.length) {
+    out.innerHTML = '<div class="err-box">' + escapeHtml(hardBlock.join('\n')) + '</div>';
+    ok.disabled = true;
+    updateCta();
+    return;
+  }
+
+  ok.disabled = true;
+  out.innerHTML = '<div class="ok-box">주문 경로 진행 중… (1/3 템플릿 생성)</div>';
+
+  const stepFail = (label, e) => {
+    out.innerHTML = '<div class="err-box">' + escapeHtml(label) + ' 실패\n\n' + escapeHtml(detailOf(e)) + '</div>';
+    ok.disabled = false;
+  };
+
+  let tpl;
+  try {
+    tpl = await api('/admin/strategy-templates', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': key + '-tpl' },
+      body: {
+        // 🚨 초 단위 시각만 쓰면 같은 초에 두 번 확인했을 때 이름이 충돌한다.
+        //    뒤에 모달 키 4자를 붙여 확인 1회당 반드시 유일하게 만든다.
+        name: 'TERMINAL_' + tsCompact() + '_' + String(key).slice(-4),
+        strategy_type: 'terminal_manual',
+        side: S.side,
+        leverage: S.leverage,
+        capitals: [margin.toFixed(2)],
+        trigger_percents: [null],
+        additional_margins: [null],
+        tp1_percent: 3, tp2_percent: 5, tp3_percent: 10,
+        tp1_qty_ratio: 25, tp2_qty_ratio: 25, tp3_qty_ratio: 50,
+        stop_loss_percent_of_capital: 90,
+        reentry_policy: 'manual_ready',
+        trigger_mode: 'PRICE_DOWN_PCT',
+      },
+    });
+  } catch (e) { return stepFail('① 템플릿 생성', e); }
+
+  out.innerHTML = '<div class="ok-box">템플릿 #' + escapeHtml(String(tpl.id))
+    + ' 생성됨. (2/3 전략 생성 — 안전 게이트 검사 중)</div>';
+
+  let created;
+  try {
+    created = await api('/strategies', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': key + '-str' },
+      body: {
+        exchange_account_id: S.accountId,
+        strategy_template_id: tpl.id,
+        symbol: S.symbol,
+        side: S.side,
+        start_price: String(px),
+        leverage_override: S.leverage,
+        retry_after_liquidation_enabled: false,
+        retry_trigger_pct: 10,
+        capital_management_mode: 'fixed',
+        retry_stage_trigger_pcts: {},
+      },
+    });
+  } catch (e) {
+    // 🚨 ① 만 성공하고 ② 가 막히면 TERMINAL_ 템플릿이 **고아로 남는다.**
+    //    게이트 차단(제외 심볼·순위·지지선)은 「정상적으로 자주 일어나는 일」이라
+    //    그때마다 쓰레기 1행이 쌓인다. 참조 전략이 아직 없으므로 지우는 것이 안전하다.
+    //    실패해도 무시한다 — 사장님께 보여야 할 것은 ② 의 차단 사유이지
+    //    뒷정리 실패가 아니다 (정리 못 한 것은 cleanup-quick 이 나중에 걷어간다).
+    try { await api('/admin/strategy-templates/' + tpl.id, { method: 'DELETE' }); } catch (_e) {}
+    return stepFail('② 전략 생성 (안전 게이트)', e);
+  }
+
+  out.innerHTML = '<div class="ok-box">전략 #' + escapeHtml(String(created.id))
+    + ' 생성됨. (3/3 1단계 주문 발송)</div>';
+
+  try {
+    await api('/strategies/' + created.id + '/start', {
+      method: 'POST', headers: { 'Idempotency-Key': key + '-start' },
+    });
+  } catch (e) {
+    // 진입 게이트 차단 사유(예 [Fix310] …)를 가공하지 않고 그대로 보여 준다.
+    out.innerHTML = '<div class="err-box">③ 1단계 주문 발송 실패 (전략 #'
+      + escapeHtml(String(created.id)) + ')\n\n' + escapeHtml(detailOf(e)) + '</div>';
+    ok.disabled = false;
+    refreshAccountData();
+    return;
+  }
+
+  out.innerHTML = '<div class="ok-box">🚀 전략 #' + escapeHtml(String(created.id))
+    + ' 시작 — 1단계 주문이 발송되었습니다.</div>';
+  toast('전략 #' + created.id + ' 시작 — 1단계 주문 발송됨.', 'ok');
+  setTimeout(closeConfirm, 1400);
+  refreshAccountData();
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   16. 심볼 / 인터벌 전환
+   ════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * 🚨 심볼 형식 (백엔드 `terminal._SYMBOL_RE` 와 같은 규칙 — 두 곳이 갈라지면 안 된다).
+ *    ?symbol= 과 localStorage 값은 우리가 쓴 것이 아닐 수 있으므로 여기서 한 번 거른다.
+ *    걸러야 하는 이유는 XSS 가 아니라(모든 출력은 escape/textContent 를 탄다)
+ *    ①쓰레기 문자열이 WS 구독·서버 API·Redis 캐시 키로 흘러가는 것을 막고
+ *    ②서버가 400/404 로 되돌려 준 뒤에야 알게 되는 상황을 없애기 위해서다.
+ */
+const SYMBOL_RE = /^[A-Z0-9]{2,20}$/;
+
+function setSymbol(sym) {
+  const s = String(sym || '').trim().toUpperCase();
+  if (!s || s === S.symbol) return;
+  if (!SYMBOL_RE.test(s)) {
+    toast('심볼 형식이 올바르지 않습니다 (영문 대문자·숫자 2~20자, 예: BTCUSDT)', 'err');
+    document.getElementById('sym-input').value = S.symbol;
+    return;
+  }
+  S.symbol = s;
+  S.base = s.replace(/USDT$|USDC$|BUSD$|USD$/, '') || s;
+  S.live = { last: null, mark: null, funding: null, nextFunding: null,
+             chgPct: null, high: null, low: null, vol: null, quoteVol: null };
+  S.book = { bids: [], asks: [] };
+  S.bookAt = 0;            // 심볼이 바뀌면 옛 심볼 호가의 신선도를 물려받으면 안 된다
+  S.priceAt = 0;           // 가격계열도 같다 — 옛 심볼의 「신선함」을 새 심볼이 물려받으면
+                           // 새 심볼 스트림이 죽어도 감시견이 한동안 침묵한다
+  S.trades = [];
+  S.priceTouched = false; S.qtyTouched = false;
+  document.getElementById('in-price').value = '';
+  document.getElementById('in-qty').value = '';
+  try { localStorage.setItem('perp_terminal_symbol', s); } catch (_e) {}
+
+  setTxt('sym-name', s.replace(/USDT$/, ' / USDT'));
+  setTxt('st-vol-lbl', '24시간 거래량 (' + S.base + ')');
+  setTxt('ob-qty-lbl', '수량 (' + S.base + ')');
+  setTxt('tr-qty-lbl', '수량 (' + S.base + ')');
+  setTxt('in-qty-unit', S.base);
+  document.getElementById('sym-input').value = s;
+  markDirty('head'); markDirty('book'); markDirty('trades');
+  updateCta();
+
+  Stream.attempt = 0;
+  Stream.connect();
+  // 🚨 미결제약정은 심볼 메타와 **같은 엔드포인트**(/terminal/symbol-meta)를 쓴다.
+  //    동시에 쏘면 둘 다 Redis 캐시를 못 맞아 업스트림이 2배(3→6 weight)가 되므로
+  //    메타를 먼저 받아 캐시를 채운 뒤에 부른다 (두 번째는 캐시 히트 = 업스트림 0).
+  loadSymbolMeta().then(() => { recalcOrder(); loadOpenInterest(); });
+  loadKlines(); loadDepthSnapshot(); loadTicker24h(); loadGate();
+  if (S.bottomTab === 'trades') loadUserTrades();
+  if (S.onlySymbol) loadOpenOrders();
+}
+
+function setInterval_(iv) {
+  if (iv === S.interval) return;
+  S.interval = iv;
+  document.querySelectorAll('#tf-tabs button').forEach((b) => {
+    b.classList.toggle('on', b.getAttribute('data-iv') === iv);
+  });
+  Stream.attempt = 0;
+  Stream.connect();      // kline 스트림이 바뀌므로 재구독
+  loadKlines();
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   17. 폴링 (계정 데이터만 — 공개 시세는 서버 호출 0)
+   ════════════════════════════════════════════════════════════════════════ */
+
+function every(ms, fn) {
+  // 🚨 탭이 안 보이면 건너뛴다 (auth-bootstrap.js:52 패턴).
+  setInterval(() => { if (!document.hidden) { try { fn(); } catch (_e) {} } }, ms);
+}
+
+function refreshAccountData() {
+  loadBalance(); loadPositions(); loadStrategies(); loadOpenOrders();
+}
+
+/* ── 폴링 주기 산정 근거 (2026-09-03 IP밴·부하 검증에서 확정) ─────────────
+ *
+ * 원칙: **폴링을 서버 캐시 TTL 보다 빠르게 돌려도 얻는 것이 없다.**
+ *   업스트림 호출 수는 캐시 TTL 이 정하고, 그보다 빠른 폴링은 서버 CPU 와
+ *   외부 Neon DB 조회만 늘린다. 탭을 여러 개 열면 그대로 배수가 된다.
+ *
+ * 탭 1개당 분당 업스트림(바이낸스) 호출 — 이 주기 기준:
+ *   /terminal/account       5초 폴링 → account_info 캐시 15초 → 최대 4회 × w5  =  20
+ *   /binance-positions      5초 폴링 → 캐시 30초                → 최대 2회 × w5  =  10
+ *   /terminal/symbol-status 15초 폴링 → 전 심볼 티커 Fix117 캐시 30초(워커와 공유)
+ *                                     → 대개 0회, 최악 2회 × w40             =  80
+ *   /terminal/symbol-meta   30초 폴링 → 심볼별 캐시 20초 → 2회 × w3           =   6
+ *   /positions/external     60초 폴링 → 캐시 없음 → 1회 × w5                  =   5
+ *   /terminal/open-orders   「현재 종목만」 켬  5초 → TTL  5초 → 12회 × w1     =  12
+ *                           「현재 종목만」 끔 15초 → TTL 30초 →  2회 × w40    =  80
+ *                                            합계 ≈ 121 (켬) ~ 191 (끔) weight/분
+ *   Binance USD-M 한도는 2,400 weight/분 → 탭 1개 ≈ 5~8%. 탭 5개여도 25~40%.
+ *
+ *   비교 — 옛 조합(3초/3초/5초/10초/30초)의 문제:
+ *     · balance 가 부르던 positionRisk 가 분당 12회 × w5 = 60 weight,
+ *       그것도 **회로 차단기 밖에서**(생짜 requests) 나가고 있었다 → 지금은 0.
+ *     · /strategies 전체 목록을 3초마다(20회/분) → 10초(6회/분)로. 외부 Neon 왕복이라
+ *       가장 비싼 조회였다.
+ *
+ * 🚨 미체결(open-orders)은 「현재 종목만 보기」를 끄면 symbol 없는 조회가 되어
+ *    weight 가 1 → **40** 으로 뛴다. 그래서 ①서버가 TTL 을 5초/30초로 비대칭
+ *    적용하고 (terminal.py `_cache_set(..., ttl=(5 if sym else 30))`)
+ *    ②여기서 폴링 주기도 5초/15초로 나눈다. 둘 중 하나만으로는 부족하다 —
+ *    TTL 만 늘리면 서버 왕복이 그대로 남고, 주기만 늘리면 탭이 여러 개일 때
+ *    업스트림이 다시 곱해진다.
+ */
+function startPolling() {
+  every(5000,  loadBalance);        // 서버 캐시 15초 — 3초로 당겨도 값이 더 새로워지지 않는다
+  every(5000,  loadPositions);      // /binance-positions 캐시 30초 (거래소 스냅샷)
+  every(10000, loadStrategies);     // 전체 목록 조인 = 이 화면에서 가장 무거운 쿼리 → 절반 주기로
+  // 🚨 미체결은 「현재 종목만 보기」 상태에 따라 업스트림 weight 가 1 ↔ 40 으로 40배 다르다.
+  //    · 켬(symbol 지정, weight 1)  → 5초.  12회/분 ×  1 =  12 weight/분
+  //    · 끔(전체 조회, weight 40)   → 15초. 서버 TTL 이 30초라 그보다 빨리 물어봐야
+  //      캐시 히트만 늘고 업스트림은 어차피 분당 2회(=80 weight)로 묶인다.
+  //      즉 5초로 두면 서버 왕복만 3배 쓰고 얻는 것이 없다.
+  every(5000,  () => { if (S.onlySymbol) loadOpenOrders(); });
+  every(15000, () => { if (!S.onlySymbol) loadOpenOrders(); });
+  every(60000, loadExternal);       // 캐시가 없는 유일한 경로 — 가장 길게 (표시 전용 정보)
+  every(10000, () => { if (S.bottomTab === 'orders') loadOrders(); });
+  every(10000, () => { if (S.bottomTab === 'trades') loadUserTrades(); });
+  every(15000, loadGate);           // 게이트 설정은 사람이 바꾸는 값 — 초 단위로 볼 이유가 없다
+  every(30000, loadOpenInterest);
+  every(3000,  obWatchdog);         // 멈춘 호가판을 「정상」으로 보이게 두지 않는다 (평상시 아무 일도 안 한다)
+  every(3000,  priceWatchdog);      // 멈춘 **현재가**도 마찬가지 — 실측 근거는 priceWatchdog() 주석
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   18. 이벤트 배선 + 부트스트랩
+   ════════════════════════════════════════════════════════════════════════ */
+
+function wire() {
+  // 시간프레임 탭
+  const tf = document.getElementById('tf-tabs');
+  TF.forEach((t) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = t.ko; b.setAttribute('data-iv', t.iv);
+    if (t.iv === S.interval) b.className = 'on';
+    b.addEventListener('click', () => setInterval_(t.iv));
+    tf.appendChild(b);
+  });
+
+  // 호가 / 체결 탭
+  const showBook = (isBook) => {
+    S.bookTab = isBook ? 'book' : 'trade';
+    document.getElementById('ob-wrap').classList.toggle('hidden', !isBook);
+    document.getElementById('tr-wrap').classList.toggle('hidden', isBook);
+    document.getElementById('bk-tab-book').classList.toggle('on', isBook);
+    document.getElementById('bk-tab-trade').classList.toggle('on', !isBook);
+    markDirty(isBook ? 'book' : 'trades');
+  };
+  document.getElementById('bk-tab-book').addEventListener('click', () => showBook(true));
+  document.getElementById('bk-tab-trade').addEventListener('click', () => showBook(false));
+
+  // 방향 토글
+  const setSide = (side) => {
+    S.side = side;
+    document.getElementById('btn-long').className = side === 'LONG' ? 'on-long' : '';
+    document.getElementById('btn-short').className = side === 'SHORT' ? 'on-short' : '';
+    recalcOrder();
+  };
+  document.getElementById('btn-long').addEventListener('click', () => setSide('LONG'));
+  document.getElementById('btn-short').addEventListener('click', () => setSide('SHORT'));
+
+  // 레버리지
+  document.getElementById('op-lev-btn').addEventListener('click', () => {
+    const v = window.prompt('레버리지 (1~125)', String(S.leverage));
+    if (v === null) return;
+    const n = Math.round(Number(v));
+    if (!Number.isFinite(n) || n < 1 || n > 125) { toast('레버리지는 1~125 사이여야 합니다.', 'err'); return; }
+    S.leverage = n;
+    setTxt('op-lev-btn', n + 'x');
+    recalcOrder();
+  });
+
+  // 입력 / 비율
+  document.getElementById('in-price').addEventListener('input', () => { S.priceTouched = true; recalcOrder(); });
+  document.getElementById('in-qty').addEventListener('input', () => { S.qtyTouched = true; recalcOrder(); });
+  document.querySelectorAll('.ratios button').forEach((b) => {
+    b.addEventListener('click', () => applyRatio(Number(b.getAttribute('data-r'))));
+  });
+  document.getElementById('cta').addEventListener('click', openConfirm);
+
+  // 심볼 입력
+  const si = document.getElementById('sym-input');
+  si.addEventListener('keydown', (e) => { if (e.key === 'Enter') setSymbol(si.value); });
+  si.addEventListener('blur', () => { if (si.value) setSymbol(si.value); });
+
+  // 하단 탭
+  document.querySelectorAll('.bt-head button[data-tab]').forEach((b) => {
+    b.addEventListener('click', () => {
+      S.bottomTab = b.getAttribute('data-tab');
+      document.querySelectorAll('.bt-head button[data-tab]').forEach((x) => x.classList.remove('on'));
+      b.classList.add('on');
+      document.getElementById('bt-body').innerHTML = '<div class="empty">불러오는 중…</div>';
+      if (S.bottomTab === 'orders') loadOrders();
+      else if (S.bottomTab === 'trades') loadUserTrades();
+      else renderBottom();
+    });
+  });
+  document.getElementById('only-sym').addEventListener('change', (e) => {
+    S.onlySymbol = !!e.target.checked;
+    loadOpenOrders();
+    if (S.bottomTab === 'trades') loadUserTrades();
+    renderBottom(); updateTabCounts();
+  });
+
+  document.getElementById('auth-retry').addEventListener('click', () => {
+    _c401 = 0; showAuthBanner(false); bootstrap();
+  });
+
+  // 리사이즈 — 중복 등록 방지 플래그 (chart-detail.js:424-431 관행)
+  if (!wire._resizeBound) {
+    wire._resizeBound = true;
+    let rt = null;
+    window.addEventListener('resize', () => {
+      clearTimeout(rt);
+      rt = setTimeout(() => Chart.resize(), 120);
+    });
+  }
+
+  // 탭 복귀 — 백오프 리셋 + 스냅샷 재동기화 (WS 는 유지되지만 오더북·캔들이 벌어져 있을 수 있다)
+  /* 탭 복귀 — 백오프 리셋 + 스냅샷 재동기화.
+   *
+   * 🚨 **스로틀이 반드시 있어야 한다.** 여기서 부르는 세 개
+   *    (/market/klines · /market/depth · /market/ticker24h)는
+   *    ①서버 캐시가 전혀 없고 ②market.py 가 생짜 `requests.get` 이라
+   *    Fix 124 weight 거버너에도 안 잡힌다. 알트탭을 오가면 그대로 배수로
+   *    나간다 — 1분에 20번 오가면 klines(w2)+depth(w2)+ticker(w1) × 20 =
+   *    **100 weight/분**이 회로 차단기 계측 밖에서 발생한다.
+   *    (IP ban 중에는 market.py 의 `_guard_ip_ban()` 이 503 으로 끊는다 —
+   *     그건 최후 방어선이고, 애초에 이 빈도를 만들지 않는 것이 먼저다.)
+   *
+   * 20초는 임의값이 아니다: 이 화면의 공개 시세는 복귀 즉시 WS 가 다시
+   * 채우므로(호가 100ms · 체결 실시간), 스냅샷 재동기화는 「WS 가 아직
+   * 안 붙은 경우」의 보험일 뿐이다.
+   */
+  let _lastResync = 0;
+  const RESYNC_MIN_MS = 20000;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    Stream.attempt = 0;
+    if (!Stream.ws && !Stream.raws.length) Stream.connect();
+    markDirty('head'); markDirty('book'); markDirty('trades');
+
+    const now = Date.now();
+    if (now - _lastResync < RESYNC_MIN_MS) return;   // 잦은 알트탭이 시세 프록시를 때리지 않게
+    _lastResync = now;
+    loadKlines(); loadDepthSnapshot(); loadTicker24h();
+    refreshAccountData();
+  });
+}
+
+async function bootstrap() {
+  try {
+    await loadAccounts();
+  } catch (e) {
+    if (e && e.status === 401) {
+      showAuthBanner(true);
+    } else {
+      toast('계정 정보를 불러오지 못했습니다 — ' + detailOf(e), 'err');
+    }
+  }
+  await loadCapabilities();
+  loadBalance(); loadPositions(); loadStrategies(); loadExternal(); loadOpenOrders();
+}
+
+(function main() {
+  // 심볼 결정: ?symbol= → 마지막 선택 → 기본값.
+  // 기본을 BTCUSDT 로 두지 않는 이유 = Fix 303 자동매매 제외 목록에 있어
+  //   첫 화면부터 「제외 심볼」 경고가 떠서 오해를 산다.
+  let initial = 'SOLUSDT';
+  try {
+    const q = new URLSearchParams(window.location.search).get('symbol');
+    const saved = localStorage.getItem('perp_terminal_symbol');
+    const want = String(q || saved || initial).trim().toUpperCase();
+    // 🚨 ?symbol= 과 localStorage 는 우리가 쓴 값이 아닐 수 있다. 형식이 아니면 기본값으로.
+    //    (여기서 안 거르면 setSymbol 이 거절해 S.symbol 이 빈 문자열로 남아 화면이 통째로 죽는다.)
+    if (SYMBOL_RE.test(want)) initial = want;
+  } catch (_e) {}
+
+  buildBook();
+  buildTrades();
+  wire();
+  Chart.init();
+
+  const s = initial;
+  S.symbol = '';            // setSymbol 이 「같으면 무시」하므로 한 번 비운다
+  setSymbol(s);
+
+  startPolling();
+  bootstrap();
+  setTimeout(() => Chart.resize(), 300);
+})();
+</script>
+</body>
+</html>
