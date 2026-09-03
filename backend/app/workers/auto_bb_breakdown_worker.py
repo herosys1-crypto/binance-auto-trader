@@ -1562,7 +1562,13 @@ def _create_auto_bb_strategy(
             except Exception as _e270c:
                 logger.debug("[Fix270] 클라이언트 생성 실패 (fail-open): %s", _e270c)
             if _t4_client is not None:
-                _t4_ok, _t4_why, _t4_det = _t4(_t4_client, symbol, side)
+                # 🚨 Fix 330: 전략 종류를 넘긴다. 반전 계열(정점/저점)이면
+                #   4H 는 **참고**로만 쓰고 막지 않는다
+                #   (사장님 "15분이 기준이고 4시간을 참고").
+                _t4_ok, _t4_why, _t4_det = _t4(
+                    _t4_client, symbol, side,
+                    db=db, strategy_kind=strategy_type_suffix,
+                )
                 if not _t4_ok:
                     logger.info(
                         "[Fix270/4H] ⛔ %s %s 차단 — %s | %s",

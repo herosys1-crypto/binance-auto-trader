@@ -65,6 +65,75 @@ SETTING_KEY = "trend_4h_gate_enabled"
 TF = "4h"
 LIMIT = 60          # MACD(12,26,9) 안정화에 충분
 
+# ══════════════════════════════════════════════════════════════════════
+# 🚨 Fix 330 (2026-09-03 사장님 정정) — 4H 는 「거부권」이 아니라 「참고」다
+#
+# 사장님 원문:
+#   "**15분이 기준이고 4시간을 참고**하고 4시간 장기 흐름을 판단하는 차트라고
+#    그렇게 이야기를 했으고 차트전문가라면 **4시간 차트의 의미는 중단기 지속적인
+#    흐름을 판단하는 정도** 차트라는걸 알잖아"
+#
+# 이 파일의 원 설계는 4H 를 **통과 조건**으로 썼다. 그 결과 실측:
+#
+#     최근 6시간 [Fix270/4H]   차단 1,546건 / 통과 52건 = **통과율 3.3%**
+#     (문서에는 21% 라고 적혀 있는데 실제로는 그보다 훨씬 빡빡했다)
+#
+# 🚨 **정점/저점 반전 전략과는 구조적으로 충돌한다.**
+#   사장님 사상 ①: "급등 정점에서, 지표 최고점에서 하락·지지 여러번 반복 후 하락 시작"
+#   → 정점 SHORT 는 **정의상 4H 가 아직 안 꺾인 자리**에서 잡는 것이다.
+#     그런데 이 게이트는 "4H hist 가 이미 내 편으로 상승 중 AND 내 편 부호"를 요구한다.
+#     = "이미 하락이 시작된 뒤에만 SHORT 하라" = **정점이 아니라 추세추종**이다.
+#
+#   실제 피해: 사다리(10/300/600)를 켠 2026-09-03 07:22 이후
+#            v219 정점 SHORT 가 **단 한 건도 생성되지 않아** 사다리가 도는지조차
+#            확인할 수 없었다. 사장님 루프(1단계 → 부분손절 → 2단계 → …)의
+#            **출발점 자체가 막혀 있었다.**
+#
+# 그래서 **전략 종류로 나눈다**:
+#   · 반전 전략(정점 SHORT / 저점 LONG) → 4H 는 **참고만**. 막지 않는다.
+#   · 그 외(추세 편승 계열)            → 기존대로 통과 조건 유지.
+#
+# ⚠️ 게이트를 전부 여는 것이 아니다. 아래 실측(게이트 없음 158건 -3,599.87)이
+#   말하는 위험은 그대로 있다. 다만 그 측정은 **다른 게이트가 없던 시절**의 것이고,
+#   지금은 Fix 111(정점 확인 2/2 꺾임) · Fix 303 · Fix 310/325/328 · Fix 327 ·
+#   obv_gate 가 앞단에 겹겹이 있다. 반전 전략에 한해 4H 를 참고로 내린다.
+#
+# 🚨 되돌리기: `trend_4h_reversal_exempt = 0` 이면 예전처럼 반전 전략도 막는다.
+# ══════════════════════════════════════════════════════════════════════
+
+SETTING_REVERSAL_EXEMPT = "trend_4h_reversal_exempt"   # 기본 ON (사장님 정정)
+
+#: 반전(정점/저점) 계열 — 4H 를 참고로만 쓴다
+REVERSAL_MARKERS: tuple[str, ...] = (
+    "SAJANGNIM_TOP",        # v219 급등 정점 SHORT
+    "SAJANGNIM_BOTTOM",     # v219 급락 저점 LONG
+    "TOP_REVERSAL",
+    "BOTTOM_REVERSAL",
+)
+
+
+def reversal_exempt_enabled(db) -> bool:
+    """반전 전략에서 4H 를 참고로만 쓸 것인가 (사장님 정정 = 기본 ON)."""
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_REVERSAL_EXEMPT)
+        if row is None or row.value is None or not str(row.value).strip():
+            return True                     # 기본 ON
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:
+        logger.warning("[Fix330] %s 조회 실패 → 기본 ON: %s", SETTING_REVERSAL_EXEMPT, e)
+        return True
+
+
+def is_reversal_strategy(strategy_type_or_suffix: object) -> bool:
+    """정점/저점 **반전** 전략인가.
+
+    반전 전략은 「4H 가 아직 안 꺾인 자리」를 노리므로 4H 를 통과 조건으로
+    쓰면 안 된다 (사장님 정정: 15분이 기준, 4시간은 참고).
+    """
+    s = str(strategy_type_or_suffix or "").upper()
+    return any(m in s for m in REVERSAL_MARKERS)
+
 
 def trend_4h_gate_enabled(db) -> bool:
     """기본 OFF. 진입을 1/5 로 줄이는 큰 변화라 명시적으로 켠다 (헌법 161)."""
@@ -96,8 +165,14 @@ def _macd_hist(closes: list[float]) -> list[float] | None:
     return [a - b for a, b in zip(macd, sig)]
 
 
-def check_trend_4h(bc, symbol: str, side: str) -> tuple[bool, str, dict[str, Any]]:
+def check_trend_4h(bc, symbol: str, side: str, *,
+                   db=None, strategy_kind: object = None) -> tuple[bool, str, dict[str, Any]]:
     """4H 흐름이 이 방향을 지지하는가.
+
+    Args:
+        strategy_kind: 전략 종류(또는 접미사). **반전 계열이면 막지 않고 참고만 한다**
+            (Fix 330 — 사장님 "15분이 기준이고 4시간을 참고"). `db` 를 함께 넘겨야
+            설정으로 끌 수 있다. 둘 중 하나라도 없으면 기존 동작(통과 조건)이다.
 
     Returns:
         (통과, 사유, 상세)
@@ -124,11 +199,27 @@ def check_trend_4h(bc, symbol: str, side: str) -> tuple[bool, str, dict[str, Any
         d.update(hist_signed=now_v, rising=rising,
                  hist_norm_pct=now_v / closes[-1] * 100 if closes[-1] else None)
 
+        # 🚨 Fix 330: 반전 전략이면 **막지 않고 참고만** 한다.
+        #   정점 SHORT 는 정의상 4H 가 아직 안 꺾인 자리를 잡는다 —
+        #   여기서 막으면 사장님 사상 ①이 통째로 실행되지 않는다.
+        _exempt = False
+        if db is not None and strategy_kind is not None:
+            _exempt = is_reversal_strategy(strategy_kind) and reversal_exempt_enabled(db)
+        d["reversal_exempt"] = _exempt
+
+        _fail = None
         if not rising:
-            return False, "4H MACD hist 가 내 편으로 상승 중이 아님", d
-        if now_v <= 0:
-            return False, "4H MACD hist 가 아직 내 편 부호가 아님", d
-        return True, "4H 흐름 지지 (hist 상승 + 내 편 부호)", d
+            _fail = "4H MACD hist 가 내 편으로 상승 중이 아님"
+        elif now_v <= 0:
+            _fail = "4H MACD hist 가 아직 내 편 부호가 아님"
+
+        if _fail is None:
+            return True, "4H 흐름 지지 (hist 상승 + 내 편 부호)", d
+        if _exempt:
+            # 참고만 — 통과시키되 「4H 는 아직 내 편이 아니다」를 기록으로 남긴다.
+            d["ref_note"] = _fail
+            return True, f"4H 참고: {_fail} (반전 전략이라 막지 않음 — Fix 330)", d
+        return False, _fail, d
     except Exception as e:
         # fail-open — 필터가 매매를 멈추게 하지 않는다
         logger.debug("[Fix270] %s %s 4H 판정 실패 (fail-open): %s", symbol, side, e)
