@@ -376,7 +376,7 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     _trim_on = False
                     try:
                         from app.services.stage_trim import trim_enabled as _trim_enabled
-                        _trim_on = _trim_enabled(db)
+                        _trim_on = _trim_enabled(db, strategy)   # Fix 313
                     except Exception:
                         _trim_on = False
                     if not _trim_on and strategy.status != "LIQUIDATED_WAITING_RETRY":

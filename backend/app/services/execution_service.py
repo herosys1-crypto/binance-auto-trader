@@ -1791,7 +1791,7 @@ class ExecutionService:
         from app.services.stage_trim import (
             compute_trim, cumulative_loss_exceeded, trim_enabled,
         )
-        if trim_enabled(self.db) and stage_no > 1:
+        if trim_enabled(self.db, strategy) and stage_no > 1:   # Fix 313
             # 🚨 Fix 306 (사장님 「손실 그래도 계산되어야 하는거 아닌가?」)
             #   단계마다 청산하면 평단이 리셋돼 강제 손절 ROI 도 0 부터 다시
             #   시작한다 = 누적 손실이 아무리 커도 손절에 안 잡힌다.

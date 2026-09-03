@@ -57,6 +57,7 @@ __all__ = [
     "SETTING_ENABLED", "SETTING_KEEP_NOTIONAL",
     "KEEP_NOTIONAL_DEFAULT", "MIN_NOTIONAL_SAFETY",
     "SETTING_MAX_CUM_LOSS", "SETTING_MIN_TRIM_RATIO", "MIN_TRIM_RATIO_DEFAULT",
+    "SETTING_EXCLUDE_MODES", "ALWAYS_EXCLUDED_MODES",
     "trim_enabled", "keep_notional", "compute_trim", "cumulative_loss_exceeded",
 ]
 
@@ -64,6 +65,13 @@ SETTING_ENABLED = "stage_trim_before_next_enabled"   # 기본 OFF (헌법 161)
 SETTING_KEEP_NOTIONAL = "stage_keep_notional_usdt"   # 사장님 「10 usdt」
 SETTING_MAX_CUM_LOSS = "stage_max_cumulative_loss_usdt"   # Fix 306: 누적 손실 상한
 SETTING_MIN_TRIM_RATIO = "stage_min_trim_ratio"           # Fix 311: 청산분/잔량 최소 배수
+SETTING_EXCLUDE_MODES = "stage_trim_exclude_modes"        # Fix 313: 추가 제외 (콤마)
+
+# 🚨 Fix 313 (2026-09-03): **분할매수 전략은 절대 제외한다.**
+#   볼밴 분할(`pump_split`)은 100 → 200 → 500 으로 **일부러 물타기**하는 설계다.
+#   단계마다 청산하면 그 설계가 정면으로 파괴된다. 설정으로도 켤 수 없게
+#   코드에 박아 둔다 — 전역 스위치 하나로 다른 전략의 설계를 부수면 안 된다.
+ALWAYS_EXCLUDED_MODES: frozenset[str] = frozenset({"split_entry"})
 
 KEEP_NOTIONAL_DEFAULT = Decimal("10")
 # 잔량이 가격 변동으로 MIN_NOTIONAL 아래로 떨어지면 나중에 못 판다.
@@ -79,17 +87,60 @@ MIN_NOTIONAL_SAFETY = Decimal("1.1")
 MIN_TRIM_RATIO_DEFAULT = Decimal("2")
 
 
-def trim_enabled(db) -> bool:
-    """기본 OFF. 매매 흐름을 바꾸는 큰 변경이라 명시적으로 켠다 (헌법 161)."""
+def trim_enabled(db, strategy=None) -> bool:
+    """기본 OFF. 매매 흐름을 바꾸는 큰 변경이라 명시적으로 켠다 (헌법 161).
+
+    🚨 Fix 313 (2026-09-03): **전략별로 판정한다.**
+
+      전수 조사에서 이 함수가 `strategy` 를 안 받아 **전역 스위치 하나**로
+      모든 전략에 적용된다는 것이 드러났다. 사장님이 기본전략용으로 켜는 순간
+      **볼밴 분할(`pump_split`, 100→200→500 물타기)까지 매 단계 청산**되어
+      그 전략의 설계가 정면으로 파괴된다.
+
+      사장님 지시는 "기본전략**도** obv 자동**도** 부분 손절후 좋은 포지션에
+      진입" 이었다. 볼밴 분할은 그 대상이 아니다 — 일부러 물타기하는 전략이다.
+
+      `strategy` 를 넘기지 않으면 (구 호출부) 전역 판정만 한다.
+    """
     try:
         from app.models.system_setting import SystemSetting
         row = db.get(SystemSetting, SETTING_ENABLED)
         if row is None or row.value is None:
             return False
-        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+        if str(row.value).strip().lower() not in ("1", "true", "on", "yes"):
+            return False
     except Exception as e:
         logger.warning("[Fix304] %s 조회 실패 = OFF: %s", SETTING_ENABLED, e)
         return False
+
+    if strategy is None:
+        return True
+
+    # 전략의 자본 운용 모드로 제외 판정
+    try:
+        mode = str(getattr(strategy, "capital_management_mode", "") or "").strip().lower()
+    except Exception:
+        mode = ""
+    if mode in ALWAYS_EXCLUDED_MODES:
+        logger.info(
+            "[Fix313] %s #%s 단계 정리 제외 — capital_management_mode=%s "
+            "(분할매수는 물타기가 설계다)",
+            getattr(strategy, "symbol", "?"), getattr(strategy, "id", "?"), mode,
+        )
+        return False
+    try:
+        from app.models.system_setting import SystemSetting
+        row2 = db.get(SystemSetting, SETTING_EXCLUDE_MODES)
+        extra = str(row2.value).strip() if (row2 and row2.value) else ""
+        if extra:
+            more = {x.strip().lower() for x in extra.split(",") if x.strip()}
+            if mode in more:
+                logger.info("[Fix313] %s 단계 정리 제외 — 설정 제외 목록: %s",
+                            getattr(strategy, "symbol", "?"), mode)
+                return False
+    except Exception:
+        pass
+    return True
 
 
 def keep_notional(db) -> Decimal:

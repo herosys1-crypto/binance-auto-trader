@@ -171,7 +171,7 @@ def test_단계_전환부에_연결돼_있다():
     """상수만 만들고 안 부르면 소용없다 — 이 저장소의 반복 사고."""
     assert "from app.services.stage_trim import (" in ESRC
     assert "compute_trim, cumulative_loss_exceeded, trim_enabled," in ESRC
-    assert "if trim_enabled(self.db) and stage_no > 1:" in ESRC
+    assert "if trim_enabled(self.db, strategy) and stage_no > 1:" in ESRC
 
 
 def _fn_src(name):
@@ -498,3 +498,78 @@ def test_실측_근거가_모듈에_남아_있다():
     doc = W.__doc__ or ""
     assert "+15.3%p" in doc and "47.6%" in doc
     assert "기본방식" in doc and "OBV 자동" in doc, "세 방식 구분이 적혀 있어야 한다"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fix 313 — 전역 스위치 하나가 다른 전략의 설계를 부수면 안 된다
+# ═══════════════════════════════════════════════════════════════════════
+
+class _Strat2:
+    def __init__(self, mode, sid=1, sym="X"):
+        self.capital_management_mode = mode
+        self.id, self.symbol = sid, sym
+
+
+def test_볼밴분할은_절대_정리하지_않는다():
+    """🚨 `pump_split` 은 100→200→500 으로 **일부러 물타기**하는 설계다.
+    단계마다 청산하면 그 전략이 통째로 망가진다. 설정으로도 못 켜게 한다."""
+    db = _DB({T.SETTING_ENABLED: "1"})
+    assert T.trim_enabled(db, _Strat2("split_entry")) is False
+    assert "split_entry" in T.ALWAYS_EXCLUDED_MODES
+
+
+def test_그_외_전략은_정상_적용():
+    db = _DB({T.SETTING_ENABLED: "1"})
+    for mode in ("", None, "preserve", "reset"):
+        assert T.trim_enabled(db, _Strat2(mode)) is True, mode
+
+
+def test_설정으로_더_제외할_수_있다():
+    db = _DB({T.SETTING_ENABLED: "1", T.SETTING_EXCLUDE_MODES: "preserve, reset"})
+    assert T.trim_enabled(db, _Strat2("preserve")) is False
+    assert T.trim_enabled(db, _Strat2("other")) is True
+
+
+def test_스위치가_꺼져있으면_전략과_무관하게_꺼짐():
+    assert T.trim_enabled(_DB(), _Strat2("")) is False
+
+
+def test_전략을_안_넘기면_전역판정만():
+    """구 호출부 호환 — 인자 없이도 동작해야 한다."""
+    assert T.trim_enabled(_DB({T.SETTING_ENABLED: "1"})) is True
+
+
+def test_모든_호출부가_strategy를_넘긴다():
+    """🚨 한 곳이라도 안 넘기면 그 경로에서 볼밴 분할이 청산된다."""
+    import re
+    from pathlib import Path
+    from app.workers import stage_trigger_worker as W
+    for src in (ESRC, Path(W.__file__).read_text(encoding="utf-8")):
+        for m in re.finditer(r"trim_enabled\(([^)]*)\)", src):
+            args = m.group(1)
+            if "db" not in args:
+                continue
+            assert "strategy" in args, f"strategy 를 안 넘긴다: trim_enabled({args})"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fix 314 — 「설정만 수정」이 OBV 전략을 기본전략으로 강등시키던 버그
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_템플릿_복사가_trigger_mode를_보존한다():
+    """🚨 빠뜨리면 server_default='PRICE_DOWN_PCT' 가 들어가
+    OBV 자동 전략이 수정 한 번에 기본전략이 된다."""
+    from pathlib import Path
+    from app.api.v1.strategies import control as C
+    src = Path(C.__file__).read_text(encoding="utf-8")
+    blk = src[src.index("new_tpl = StrategyTemplate("):]
+    blk = blk[:blk.index("\n    )")]
+    assert "trigger_mode=old_tpl.trigger_mode," in blk
+
+
+def test_모델_기본값이_PRICE_DOWN_PCT_임을_확인():
+    """이 기본값 때문에 누락이 조용한 강등이 된다 — 근거 고정."""
+    from pathlib import Path
+    from app.models import strategy_template as M
+    src = Path(M.__file__).read_text(encoding="utf-8")
+    assert 'server_default="PRICE_DOWN_PCT"' in src or "server_default='PRICE_DOWN_PCT'" in src

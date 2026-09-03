@@ -220,6 +220,22 @@ def update_strategy_settings_in_place(
         side=old_tpl.side,
         leverage=old_tpl.leverage,
         total_capital=old_tpl.total_capital,
+        # ═══════════════════════════════════════════════════════════════
+        # 🚨 Fix 314 (2026-09-03): **`trigger_mode` 를 복사하지 않고 있었다.**
+        #
+        #   빠뜨리면 모델의 server_default="PRICE_DOWN_PCT" 가 들어가
+        #   **OBV 자동 전략이 「설정만 수정」 한 번에 기본전략으로 영구 강등**된다.
+        #   그 뒤로는
+        #     · stage_trigger_worker 가 OBV 분기 대신 가격 분기를 타고
+        #     · ladder_restart_worker 대상에서 빠지고
+        #     · strategy_service 의 OBV 전용 자본 검증 완화가 사라지고
+        #     · 화면 배지가 「OBV」에서 「기존」으로 바뀐다
+        #   사장님 입장에서는 "OBV 였는데 왜 가격에 들어갔지" 가 된다.
+        #
+        #   바로 아래 `stage4_trigger_mode` 는 복사하고 있어서 더 눈에 안 띄었다.
+        # ═══════════════════════════════════════════════════════════════
+        trigger_mode=old_tpl.trigger_mode,
+        crisis_max_loss_threshold=old_tpl.crisis_max_loss_threshold,
         stages_config=dict(old_tpl.stages_config) if old_tpl.stages_config else None,
         # legacy 4단계 호환 필드 (있으면 유지)
         stage1_capital=old_tpl.stage1_capital,
