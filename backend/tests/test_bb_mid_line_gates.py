@@ -48,11 +48,30 @@ def _fn_src(mod_path: Path, name: str) -> str:
 # 4H 참고 판정 — check_hist_rising 의 의미가 우리가 쓰는 것과 같은가
 # ═════════════════════════════════════════════════════════════════════
 
-def test_4H_가속상승이면_LONG_편_확대로_잡힌다():
-    """가속 상승 → hist 가 LONG 편으로 커지는 중 → mid_resist SHORT 보류 대상."""
-    accel = [100.0 * (1.004 ** i) for i in range(60)]
-    rising, _d = G.check_hist_rising(_BC(accel), "XUSDT", "LONG", "4h")
-    assert rising is True
+def test_4H_급등_시작이면_LONG_편_확대로_잡힌다():
+    """평탄 후 급등 → hist 가 LONG 편으로 커지는 중 → mid_resist SHORT 보류 대상.
+
+    🚨 실측으로 고친 테스트 (2026-09-03). 처음엔 `1.004**i` 정률 상승을 썼는데
+       **rising=False(delta -0.0016)** 였다 — 정률 상승은 MACD 가 수렴해 「확대 중」이
+       아니다. 실제 4H 모양별 측정:
+           정률가속 1.004^i     False  delta -0.001646
+           강가속 1.02^i        True   delta +0.037979
+           평탄후 급등(14봉)     True   delta +0.000313
+           평탄후 급등(6봉)      True   delta +0.159742   ← PYTHUSDT 형
+           선형상승             False  delta -0.002442
+       이 게이트가 잡으려는 것은 「막 힘이 붙는 상승」이고, 그것이 위 True 들이다.
+    """
+    surge = [100.0] * 54 + [100.0 + (i + 1) * 1.5 for i in range(6)]
+    rising, d = G.check_hist_rising(_BC(surge), "XUSDT", "LONG", "4h")
+    assert rising is True, d
+
+
+def test_4H_정률상승은_확대_아님_이라_막지_않는다():
+    """🚨 반증 기록: 완만한 정률 상승은 hist 가 수렴한다 → SHORT 를 막지 않는다.
+    (이걸 막으면 mid_resist 가 상승장에서 통째로 죽는다 — +785.11 근거 훼손)"""
+    steady = [100.0 * (1.004 ** i) for i in range(60)]
+    rising, _d = G.check_hist_rising(_BC(steady), "XUSDT", "LONG", "4h")
+    assert rising is False
 
 
 def test_4H_하락시작이면_LONG_편_확대_아님():

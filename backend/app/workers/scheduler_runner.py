@@ -71,7 +71,28 @@ def _scheduler_heartbeat_loop(redis_client) -> None:
 def start_scheduler() -> None:
     import threading
 
-    scheduler = BlockingScheduler(timezone="Asia/Seoul")
+    # ═══════════════════════════════════════════════════════════════════
+    # ⏰ Fix 337 (2026-09-03 감사): 6시간 주기 잡이 **구조적으로 굶고 있었다**.
+    #
+    #   job_defaults 가 없어 misfire_grace_time 이 APScheduler 기본 **1초**였다.
+    #   등록~시작 사이 약 2초 지연으로 **부팅 직후 첫 실행이 매번 폐기**된다:
+    #     Run time of job "(trigger: interval[6:00:00]...)" was missed by 0:00:01.95
+    #   72시간 집계: interval[6:00:00] → Running **0** / missed **18**.
+    #   → `chart_patterns` 가 0행 (2026-08-16 에 만든 차트분석 팀이 한 번도 실행 안 됨),
+    #     `binance_changelog_monitor` 도 같이 굶음.
+    #
+    #   300초: 부팅 지연(수 초)과 앞 잡의 점유(guarded_job 타임아웃 ≤ 600)를 넉넉히 덮되,
+    #          한참 지난 실행을 뒤늦게 몰아서 돌리지는 않는 값. coalesce=True 로
+    #          밀린 여러 회를 **1회**로 합친다 (거래소 API 폭주 방지 — 8/26 IP ban 전력).
+    #
+    #   ⚠️ 한계: 재시작이 잦으면(오늘만 여러 번) 6시간 **타이머 자체가 매번 리셋**된다.
+    #      grace 만으로는 「부팅+6시간」 문제를 못 푼다. 근본 해결은 마지막 실행 시각을
+    #      Redis 에 남기고 부팅 시 「6시간 지났으면 즉시 1회」로 바꾸는 것 — 별건.
+    # ═══════════════════════════════════════════════════════════════════
+    scheduler = BlockingScheduler(
+        timezone="Asia/Seoul",
+        job_defaults={"misfire_grace_time": 300, "coalesce": True},
+    )
     redis_client = get_redis_client()
     guard = DistributedSchedulerGuard(redis_client)
     if not guard.try_become_leader():
