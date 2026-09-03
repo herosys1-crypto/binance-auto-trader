@@ -478,6 +478,37 @@ def _do_reconcile(decrypt_func) -> None:
                 strategy.avg_entry_price = exchange_entry_price if exchange_entry_price > 0 else strategy.avg_entry_price
                 strategy.current_position_qty = exchange_position_amt
                 strategy.unrealized_pnl = exchange_unrealized_pnl
+
+                # ═══════════════════════════════════════════════════════════
+                # 💰 Fix 333 (2026-09-03 사장님 발견): 투입 자본을 여기서 맞춘다.
+                #
+                #   사장님: "수도(수동) 포지션 추가를 500 두번을 했는데 왜 이런 나오는거지"
+                #           화면 `100 / 3500  3%` — 실제 증거금은 **1,124 USDT**
+                #
+                #   `invested_capital` 은 **전 코드베이스에서 대입된 적이 없다**
+                #   (선언 + default=0 뿐). 살아있는 전략 13건 전부 0 이었다.
+                #
+                #   🚨 숫자가 틀리면 **사장님 판단이 오염된다.** 실제로 그 일이 났다:
+                #      화면 정점 +17.34% → +8.20% 로 보여 「최고점 -5% 회귀인데 왜
+                #      청산이 안 되나」고 물으셨는데, 실제 ROI 는 +0.98% → +0.51%
+                #      (회귀 -0.47%p) 로 **트레일링이 정상 동작**이었다.
+                #
+                #   왜 여기인가: 진입 경로가 최소 다섯(1단계/단계/수동추가/피라미딩/재진입)
+                #   이라 경로마다 대입하면 **반드시 하나를 빠뜨린다**(이 저장소의 상습
+                #   실패모드). reconcile 은 주기적으로 **모든** 전략을 훑으므로
+                #   어느 경로로 들어왔든 여기서 바로잡힌다.
+                #
+                #   ⚠️ 계산 불가면 기존 값을 유지한다 — 0 으로 덮으면 그게 거짓 표시다.
+                # ═══════════════════════════════════════════════════════════
+                try:
+                    from app.services.capital_accounting import sync_invested_capital
+                    _ic_changed, _ic_why = sync_invested_capital(db, strategy)
+                    if _ic_changed:
+                        logger.info("[Fix333] #%s %s 투입자본 %s",
+                                    strategy.id, strategy.symbol, _ic_why)
+                except Exception as _ice:      # 집계 실패가 reconcile 을 멈추면 안 된다
+                    logger.warning("[Fix333] #%s 투입자본 동기화 실패 (무시): %s",
+                                   strategy.id, _ice)
                 # Fix 198: user-stream 이 체결을 놓쳤을 때의 보완 (이 프로젝트의 상습 실패모드).
                 #   진입 시각이 없으면 여기서라도 남긴다 — 학습 전용이고 덮어쓰지 않는다.
                 #   ※ 실제 체결보다 최대 2분(reconcile 주기) 늦을 수 있다.
