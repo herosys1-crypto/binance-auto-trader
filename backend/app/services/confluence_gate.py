@@ -150,15 +150,23 @@ def check_confluence_gate(bc, symbol: str, side: str, *,
         #
         # 🚨 되돌리기: `confluence_reversal_exempt = 0`
         # ═══════════════════════════════════════════════════════════════
-        _exempt = False
+        _exempt, _exempt_why = False, ""
         if blocked and db is not None and strategy_kind is not None:
             try:
-                from app.services.trend_4h_gate import is_reversal_strategy
-                _exempt = is_reversal_strategy(strategy_kind) and reversal_exempt_enabled(db)
+                from app.services.trend_4h_gate import gate_exempt, is_reversal_strategy
+                if is_reversal_strategy(strategy_kind) and reversal_exempt_enabled(db):
+                    _exempt, _exempt_why = True, "반전 전략 (Fix 331)"
+                else:
+                    # 🔁 Fix 334: 손절 후 재진입도 참고로만 (판정은 trend_4h_gate 한 곳)
+                    _exempt, _exempt_why = gate_exempt(
+                        db, strategy_kind,
+                        reentry_key="confluence_reentry_exempt", reversal=False,
+                    )
             except Exception as _ee:      # 판정 실패가 매매를 막으면 안 된다
-                logger.debug("[Fix331] 반전 판정 실패 (무시): %s", _ee)
-                _exempt = False
+                logger.debug("[Fix331/334] 면제 판정 실패 (무시): %s", _ee)
+                _exempt, _exempt_why = False, ""
         detail["reversal_exempt"] = _exempt
+        detail["exempt_why"] = _exempt_why
 
         if blocked and not _exempt:
             return (
@@ -172,7 +180,7 @@ def check_confluence_gate(bc, symbol: str, side: str, *,
             detail["ref_note"] = f"합의 {level} (score={score})"
             return (
                 True,
-                f"합의 참고: {level} (score={score}) — 반전 전략이라 막지 않음 (Fix 331)",
+                f"합의 참고: {level} (score={score}) — {_exempt_why}, 막지 않음",
                 detail,
             )
         return True, f"합의 {level} (score={score})", detail

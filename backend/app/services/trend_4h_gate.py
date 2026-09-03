@@ -135,6 +135,79 @@ def is_reversal_strategy(strategy_type_or_suffix: object) -> bool:
     return any(m in s for m in REVERSAL_MARKERS)
 
 
+# ══════════════════════════════════════════════════════════════════════
+# 🔁 Fix 334 (2026-09-03) — 손절 후 **재진입**도 신규 진입 게이트를 참고로만
+#
+# 감사 실측: 재진입 워커가 30초마다 살아서 도는데 **24시간 608회 시도, 성공 0건**.
+#
+#     방향   시도   주 차단자                        건수
+#     LONG   304   Fix 274 (24h 급등 15% 미만)      297   ← 통과율 0.19%
+#     SHORT  297   Fix 270 (4H MACD hist)           294
+#
+#     [reentry_alert v130] 🎯 재진입 알람! SUIUSDT LONG obv_reverse=True rsi_reverse=True
+#     [Fix274/LONG급등]    ⛔ SUIUSDT 차단 — 24h +7.6% < 15%
+#     [RT_REENTRY]         🚨 skip: _create_auto_bb_strategy None 반환!
+#
+# 왜 이중 필터인가: 재진입 워커는 **자기 판정(OBV 반전·RSI 반전·10% 이동)을 통과한
+# 심볼만** 여기로 보낸다. 그 위에 신규 진입용 추세 게이트를 또 걸면 「손절 후
+# 좋은 자리에 다시 진입」(사장님 사양)이 구조적으로 불가능해진다.
+# 게다가 `_create_auto_bb_strategy` 안에서 `strategy_type_suffix` 가 쓰이는 곳이
+# 게이트들보다 **뒤**에 있어 면제 자체가 코드상 불가능했다.
+#
+# 🚨 전부 면제하는 것이 아니다 — 아래는 재진입에도 **그대로 건다**:
+#   · Fix 168 동시보유 상한 / 심볼 검증 / Fix 303 제외 심볼 (안전장치)
+#   · Fix 251 되돌림 ≥ 1.0 (원점 회귀 = 6건 -1,845) — 손절 뒤 원점까지 밀린
+#     자리는 재진입에서 **더** 위험하다
+#
+# 🚨 되돌리기: `trend_4h_reentry_exempt = 0` / `confluence_reentry_exempt = 0` /
+#             `long_surge_reentry_exempt = 0`
+# ══════════════════════════════════════════════════════════════════════
+
+SETTING_REENTRY_EXEMPT = "trend_4h_reentry_exempt"    # 기본 ON
+REENTRY_MARKER = "_REENTRY"
+
+
+def is_reentry_strategy(strategy_type_or_suffix: object) -> bool:
+    """손절 후 **재진입**(`_reentry1`, `_reentry2`, …)인가.
+
+    🚨 판정은 **이 함수 하나**에만 둔다. 게이트마다 따로 문자열 비교를 하면
+       한쪽만 고치는 사고가 난다 (Fix 318→319 의 교훈). 테스트가 단일 정의를 강제한다.
+    """
+    return REENTRY_MARKER in str(strategy_type_or_suffix or "").upper()
+
+
+def reentry_exempt_enabled(db, key: str = SETTING_REENTRY_EXEMPT) -> bool:
+    """재진입에서 이 게이트를 참고로만 쓸 것인가 (기본 ON).
+
+    `key` 를 바꿔 다른 게이트(합의·LONG 급등)의 스위치로도 쓴다 — 읽는 방식이 같다.
+    """
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, key)
+        if row is None or row.value is None or not str(row.value).strip():
+            return True
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:
+        logger.warning("[Fix334] %s 조회 실패 → 기본 ON: %s", key, e)
+        return True
+
+
+def gate_exempt(db, strategy_kind: object, *, reentry_key: str = SETTING_REENTRY_EXEMPT,
+                reversal: bool = True) -> tuple[bool, str]:
+    """이 전략 종류가 「신규 진입 추세 게이트」를 **참고로만** 써야 하는가.
+
+    Returns:
+        (면제, 사유). 반전(Fix 330)과 재진입(Fix 334)을 **한 곳에서** 판정한다.
+    """
+    if db is None or strategy_kind is None:
+        return False, ""
+    if reversal and is_reversal_strategy(strategy_kind) and reversal_exempt_enabled(db):
+        return True, "반전 전략 (Fix 330)"
+    if is_reentry_strategy(strategy_kind) and reentry_exempt_enabled(db, reentry_key):
+        return True, "손절 후 재진입 (Fix 334)"
+    return False, ""
+
+
 def trend_4h_gate_enabled(db) -> bool:
     """기본 OFF. 진입을 1/5 로 줄이는 큰 변화라 명시적으로 켠다 (헌법 161)."""
     try:
@@ -202,10 +275,10 @@ def check_trend_4h(bc, symbol: str, side: str, *,
         # 🚨 Fix 330: 반전 전략이면 **막지 않고 참고만** 한다.
         #   정점 SHORT 는 정의상 4H 가 아직 안 꺾인 자리를 잡는다 —
         #   여기서 막으면 사장님 사상 ①이 통째로 실행되지 않는다.
-        _exempt = False
-        if db is not None and strategy_kind is not None:
-            _exempt = is_reversal_strategy(strategy_kind) and reversal_exempt_enabled(db)
+        # Fix 330(반전) + Fix 334(재진입) 을 한 곳에서 판정한다
+        _exempt, _exempt_why = gate_exempt(db, strategy_kind)
         d["reversal_exempt"] = _exempt
+        d["exempt_why"] = _exempt_why
 
         _fail = None
         if not rising:
@@ -218,7 +291,7 @@ def check_trend_4h(bc, symbol: str, side: str, *,
         if _exempt:
             # 참고만 — 통과시키되 「4H 는 아직 내 편이 아니다」를 기록으로 남긴다.
             d["ref_note"] = _fail
-            return True, f"4H 참고: {_fail} (반전 전략이라 막지 않음 — Fix 330)", d
+            return True, f"4H 참고: {_fail} ({_exempt_why} — 막지 않음)", d
         return False, _fail, d
     except Exception as e:
         # fail-open — 필터가 매매를 멈추게 하지 않는다

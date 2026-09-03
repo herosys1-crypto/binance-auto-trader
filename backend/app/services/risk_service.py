@@ -768,10 +768,32 @@ class RiskService:
             | {"TRAILING_ARMED"}
         )
         _any_tp_triggered = (strategy.status or "").upper() in _TP_ANY_TRIGGERED
+        # ═══════════════════════════════════════════════════════════════
+        # 🚨 Fix 335 (2026-09-03): `peak >= TP1값` 조건이 트레일링을 **사실상 죽였다**
+        #
+        #   사장님 verbatim (2026-08-23): "tp1 실행후 -5% 회기하면 청산" — **값 무관**.
+        #   그런데 아래 조건은 「정점이 TP1 설정값(보통 15%) 이상일 때만」이었다.
+        #   실측: **607건 중 ROI +15% 도달이 3건(0.5%)**. 즉 0.5% 에서만 켜지는 기능.
+        #   #2090 MAGMAUSDT: TP1 이 실제로 25% 청산됐는데 정점 ROI 0.98% 라 영영 무장 안 됨.
+        #
+        #   → 기본은 사장님 사양(값 무관). 옛 동작은 설정으로 되돌린다:
+        #     trailing_require_peak_ge_tp1 = 1
+        #   ⚠️ 되돌림 폭(_strategy_retrace)은 건드리지 않는다 — 메모리 실측
+        #     「트레일링 3%p 는 현행이 최고(내 가설 반증)」.
+        # ═══════════════════════════════════════════════════════════════
+        _require_peak_ge_tp1 = False
+        try:
+            from app.models.system_setting import SystemSetting as _SS335
+            _row335 = self.db.get(_SS335, "trailing_require_peak_ge_tp1")
+            if _row335 is not None and _row335.value is not None:
+                _require_peak_ge_tp1 = str(_row335.value).strip().lower() in ("1", "true", "on", "yes")
+        except Exception as _e335:      # 설정 조회 실패가 익절을 막으면 안 된다 → 사장님 사양 유지
+            logger.debug("[Fix335] 설정 조회 실패 → 값 무관(기본): %s", _e335)
+        _peak_ok = (not _require_peak_ge_tp1) or (peak >= Decimal(str(_tp1_override_val)))
         if (
             _tp1_active  # 사장님 옵션 20% 이상!
             and _any_tp_triggered  # 첫 익절 발동 확인!
-            and peak >= Decimal(str(_tp1_override_val))  # peak >= 사장님 옵션 값!
+            and _peak_ok  # Fix 335: 기본 「값 무관」 — 설정으로만 옛 조건(peak >= TP1값) 복귀
             and pnl_ratio <= (peak - _strategy_retrace)
             and pnl_ratio < peak
         ):

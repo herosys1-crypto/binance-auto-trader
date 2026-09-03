@@ -1535,9 +1535,30 @@ def _create_auto_bb_strategy(
             if _ls_client is not None:
                 _ok274, _why274, _det274 = _ls274(_ls_client, symbol, side)
                 if not _ok274:
-                    logger.info("[Fix274/LONG급등] ⛔ %s 차단 — %s", symbol, _why274)
-                    return None
-                logger.info("[Fix274/LONG급등] ✅ %s — %s", symbol, _why274)
+                    # 🔁 Fix 334: 손절 후 **재진입**이면 참고로만 — 막지 않는다.
+                    #   실측: 24h 동안 LONG 재진입 304회 중 **297회가 이 게이트**에서
+                    #   죽었다(통과율 0.19%). 재진입 워커가 이미 OBV·RSI 반전으로
+                    #   재판정한 심볼에 신규 진입 기준(24h >= 15%)을 또 걸면
+                    #   「손절 후 좋은 자리에 다시 진입」(사장님 사양)이 구조적으로 불가능.
+                    #   신규 진입은 **기존대로 막는다** (게이트 근거 20건 +80.07 유지).
+                    #   되돌리기: long_surge_reentry_exempt = 0
+                    try:
+                        from app.services.trend_4h_gate import gate_exempt as _ge334
+                        _ex274, _exwhy274 = _ge334(
+                            db, strategy_type_suffix,
+                            reentry_key="long_surge_reentry_exempt", reversal=False,
+                        )
+                    except Exception as _e334:
+                        logger.debug("[Fix334] 재진입 면제 판정 실패 (무시): %s", _e334)
+                        _ex274, _exwhy274 = False, ""
+                    if _ex274:
+                        logger.info("[Fix274/LONG급등] ✅ %s 참고: %s (%s — 막지 않음)",
+                                    symbol, _why274, _exwhy274)
+                    else:
+                        logger.info("[Fix274/LONG급등] ⛔ %s 차단 — %s", symbol, _why274)
+                        return None
+                else:
+                    logger.info("[Fix274/LONG급등] ✅ %s — %s", symbol, _why274)
     except Exception as _e274:
         logger.warning("[Fix274] LONG 급등 게이트 오류 (fail-open): %s", _e274)
 

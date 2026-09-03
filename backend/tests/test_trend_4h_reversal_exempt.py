@@ -135,7 +135,8 @@ def test_게이트_조건이_실제로_좁다():
 def test_반전이_아니면_기존대로_막힌다():
     """🚨 게이트를 통째로 여는 것이 아니다. 실측(게이트 없음 158건 -3,599.87)이
     말하는 위험은 추세 편승 계열에 그대로 있다."""
-    for kind in ("_OBV_HOLD", "_reentry1", "", "_success"):
+    # Fix 334: "_reentry1" 은 이제 면제 대상이라 이 목록에서 뺐다
+    for kind in ("_OBV_HOLD", "", "_success"):
         ok, why, d = G.check_trend_4h(
             _BC(RISING), "XUSDT", "SHORT", db=_DB({}), strategy_kind=kind,
         )
@@ -257,7 +258,7 @@ def test_Fix331_반전_판정을_한_곳에서만_정의한다():
     합의 게이트는 4H 게이트의 is_reversal_strategy 를 **재사용**해야 한다."""
     from app.services import confluence_gate as C
     src = Path(C.__file__).read_text(encoding="utf-8")
-    assert "from app.services.trend_4h_gate import is_reversal_strategy" in src
+    assert "from app.services.trend_4h_gate import" in src and "is_reversal_strategy" in src
     assert "def is_reversal_strategy" not in src, "반전 판정이 두 번 정의됐다"
 
 

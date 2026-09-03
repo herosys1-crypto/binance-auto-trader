@@ -255,6 +255,14 @@ def run_bb_mid_line_once() -> dict:
         symbols = [str(t.get("symbol") or "")
                    for (t, _sd, _rk) in rank_map(tickers, top_n)]
         symbols = [x for x in symbols if x]
+        # Fix 336: 이미 받아 둔 24h 티커에서 심볼별 변동률을 뽑는다 (추가 API 호출 0)
+        _chg24_map: dict[str, float] = {}
+        for _t in (tickers or []):
+            try:
+                _chg24_map[str(_t.get("symbol") or "")] = float(_t.get("priceChangePercent") or 0)
+            except Exception:
+                continue
+        _resist_4h_ref = bool(_setting(db, "bb_mid_resist_4h_ref_enabled", True))
 
         from app.services.bb_entry_rules import band_series
         from app.services.trend_4h_gate import check_hist_rising
@@ -353,6 +361,54 @@ def run_bb_mid_line_once() -> dict:
                     continue
 
                 # ── 실제 진입 ────────────────────────────────────────────
+                # ═══════════════════════════════════════════════════════════
+                # 🚨 Fix 336-a (2026-09-03): 「중단 저항」SHORT 에 **4H 참고**를 넣는다.
+                #
+                #   실측: 오늘 bb_mid_line 29건 **전부 SHORT, 합계 -29.12**.
+                #   PYTHUSDT — 4H RSI 68/69/64, MACD hist 양수 확대, OBV 상승 = 명확한
+                #   상승인데 15분 중단선 터치 하나만 보고 SHORT 가 나갔다.
+                #   **상승 추세에서 중단선은 저항이 아니라 지지다.**
+                #
+                #   이 파일 헤더가 스스로 적어 놓았다: "4H 확인을 진입 조건으로 거는 것은
+                #   「중단 하락돌파」 하나뿐". mid_resist 는 4H 를 전혀 안 봤다.
+                #
+                #   ⚠️ 패턴을 **끄지 않는다** — +785.11 (전 +294 / 후 +558, 양쪽 절반 양수).
+                #   사장님 정정 「15분이 기준, 4시간은 참고」대로: 4H 가 **명확한 상승**
+                #   (hist 가 LONG 편으로 커지는 중)일 때만 SHORT 를 내지 않는다.
+                #   판정 함수는 trend_4h_gate.check_hist_rising 재사용 (중복 정의 금지).
+                #   되돌리기: bb_mid_resist_4h_ref_enabled = 0
+                # ═══════════════════════════════════════════════════════════
+                if pat == "mid_resist" and side == "SHORT" and _resist_4h_ref:
+                    try:
+                        _up4h, _d4h = check_hist_rising(bc, sym, "LONG", "4h")
+                    except Exception as _e336:
+                        _up4h, _d4h = None, {"reason": str(_e336)[:80]}
+                    if _up4h is True:
+                        _blk("resist_4h_uptrend")
+                        logger.info("[bb_mid/Fix336] ⏸ %s 중단저항 SHORT 보류 — 4H 가 명확한 상승 "
+                                    "(hist LONG 편으로 확대 중) | %s", sym, _d4h)
+                        continue
+                # ═══════════════════════════════════════════════════════════
+                # 🎯 Fix 336-b: 적응 TP (Fix 299) 를 이 워커에도 배선한다.
+                #   감사 실측: adaptive_tp 호출처가 auto_bb_breakdown_worker **단 1개**였다.
+                #   이 워커는 TP_PERCENTS(15%) 고정 → 안정 종목에서 절대 안 닿는다
+                #   (607건 중 ROI +15% 도달 3건 = 0.5%). 사장님 사양: 급등락 15 / 안정 3~5.
+                #   auto_bb 와 같은 pick_tp1 + tp_ladder_from_tp1 을 쓴다.
+                # ═══════════════════════════════════════════════════════════
+                _tp_percents = TP_PERCENTS
+                try:
+                    from app.services.adaptive_tp import (
+                        adaptive_tp_enabled as _atp_on, pick_tp1 as _atp_pick,
+                        tp_ladder_from_tp1 as _atp_ladder,
+                    )
+                    if _atp_on(db):
+                        _tp1, _why299, _d299 = _atp_pick(db, _chg24_map.get(sym))
+                        _tp_percents = _atp_ladder(_tp1, len(TP_PERCENTS) or 4)
+                        logger.info("[Fix299/적응TP] %s %s — %s | 사다리 %s",
+                                    sym, side, _why299, _tp_percents)
+                except Exception as _e299:
+                    logger.warning("[Fix299] 적응 TP 오류 (기존 TP 유지): %s", _e299)
+                    _tp_percents = TP_PERCENTS
                 try:
                     from app.services.surge_ladder_entry import create_surge_position
                     st = create_surge_position(
@@ -364,7 +420,7 @@ def run_bb_mid_line_once() -> dict:
                         #   기본값(15/20/25/30)을 그대로 두면 측정한 규칙과 다른 매매가
                         #   된다 (+15% 를 가야 첫 익절 = 레버 2 에서 가격 7.5%).
                         #   pump_split 과 같은 검증된 모양(5/10/15/20 + 트레일링 -3%)을 쓴다.
-                        tp_percents=TP_PERCENTS, trailing_pct=TRAILING_PCT,
+                        tp_percents=_tp_percents, trailing_pct=TRAILING_PCT,
                     )
                     if st is not None:
                         out["entered"] += 1
