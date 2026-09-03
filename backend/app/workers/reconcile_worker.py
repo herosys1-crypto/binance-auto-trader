@@ -618,6 +618,40 @@ def _do_reconcile(decrypt_func) -> None:
                 tags={"event_type": "ORPHAN_DETECTION_LOOP_FAILED"},
             )
 
+        # ═══════════════════════════════════════════════════════════════════
+        # 🔓 Fix 339 (2026-09-04): 수량 불일치가 해소되면 Kill-Switch 자동 해제.
+        #
+        #   Fix 221 이 같은 일을 하지만 사유가 ORPHAN_EXCHANGE_POSITION 하나뿐이라,
+        #   09-04 05:22 에 **다른 사유**(QTY_MISMATCH_PERSISTENT)로 같은 사고가 났다:
+        #   XMRUSDT 명목 20 USDT 하나가 계정 전체를 **5시간 넘게** 잠갔고 사장님
+        #   수동 「포지션 추가 +500」이 400 으로 튕겼다. 확인해 보니 불일치는 이미
+        #   해소돼 있었다(전 계정 17/17 일치). 원인은 사라졌는데 잠금만 남은 것이다.
+        #   같은 사고 네 번째 — 07-21 ACE / 08-26 CL / 08-29 INJ / 09-04 XMR.
+        #
+        #   여기에 두는 이유: 이 시점이면 이번 사이클의 **전 전략 거래소 대조가 끝나**
+        #   불일치 카운터가 최신이다 (Fix 221 도 같은 자리다).
+        #   ⚠️ 카운터를 못 읽으면(Redis 장애) **풀지 않는다** — 모르는 채로 여는 것이
+        #      가장 위험하다.
+        # ═══════════════════════════════════════════════════════════════════
+        try:
+            from app.services.zombie_guardian import maybe_auto_clear_qty_mismatch_ks
+            _seen_accs: set[int] = set()
+            for _acc_id in [
+                a for a in (
+                    s.exchange_account_id for s, _ in rows
+                ) if a is not None
+            ]:
+                if _acc_id in _seen_accs:
+                    continue
+                _seen_accs.add(_acc_id)
+                maybe_auto_clear_qty_mismatch_ks(db, _acc_id)
+        except Exception as _e339:
+            logger.error("[Fix339] Kill-Switch 자동 해제 검사 실패: %s", _e339)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+
         # ===== Phase 3 안전망 — 거래소 orphan open order 자동 취소 (사장님 자본 자동 회수!) =====
         # 🚨 2026-07-02 사장님 critical fix (v54!):
         # 옛 silent bug: auto_cancel=False = 감지만 + warning!

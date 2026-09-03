@@ -468,15 +468,36 @@ def start_scheduler() -> None:
     #   (같은 함수명 + 같은 import + 같은 lock 이름 + 같은 job id + 같은 trigger).
     #   APScheduler replace_existing=True 로 뒤엣것이 앞엣것을 대체 = 실행은 1회였으나
     #   헌법 6번(단일 진실) + 헌법 63번(같은 이름 함수 재정의 금지) 위배 → 두 번째 블록 완전 제거.
-    def _auto_add_margin():
-        from app.workers.auto_add_margin_worker import run_auto_add_margin
-        run_auto_add_margin()
-    scheduler.add_job(
-        guarded_job("auto_add_margin", 12, _auto_add_margin),
-        trigger=IntervalTrigger(seconds=15),
-        id="auto_add_margin",
-        replace_existing=True, max_instances=1, coalesce=True,
-    )
+    # ═══════════════════════════════════════════════════════════════════
+    # ⛔ Fix 340 (2026-09-04 사장님 지시): 자동 증거금 주입 **폐지**.
+    #
+    #   사장님: "증거금 주입은 필요없는 기능이야. 지금 포지션 진입후 손실이면
+    #            10usdt 남기고 부분손절입니다. 그런데 왜 증거금 주입이 필요한가
+    #            이기능은 삭제해줘"
+    #
+    #   🚨 두 사양이 **정면 충돌**한다:
+    #     · v220(08-22) 자동 증거금: ROI < -30% 이면 300 USDT 를 더 넣어 청산가를 민다
+    #                                = 손실 포지션에 돈을 더 넣고 **버틴다**
+    #     · 현행(Fix 304~326) 부분손절: 손실이면 10 USDT 만 남기고 청산 → 다음 단계
+    #                                = 손실 포지션을 **줄이고** 좋은 자리에 다시 진입
+    #     같은 포지션에 둘 다 걸리면 손절해야 할 것에 300 을 얹고 -80% 까지 끌고 간다.
+    #     v220 은 부분손절 사양이 확정되기 **전**에 만들어진 것이라 지금은 사상 위배다.
+    #
+    #   ⚠️ **수동 증거금 추가는 그대로 남긴다** — 사장님이 직접 넣으시는 것은
+    #      사장님 판단이다 (`POST /strategies/{id}/add-margin` → lifecycle.py:60).
+    #      단계 진입 시 stage_plan.additional_margin_usdt 도 그대로다.
+    #
+    #   되돌리려면 이 블록의 주석을 풀면 된다 (git revert 로도 가능).
+    # ═══════════════════════════════════════════════════════════════════
+    # def _auto_add_margin():
+    #     from app.workers.auto_add_margin_worker import run_auto_add_margin
+    #     run_auto_add_margin()
+    # scheduler.add_job(
+    #     guarded_job("auto_add_margin", 12, _auto_add_margin),
+    #     trigger=IntervalTrigger(seconds=15),
+    #     id="auto_add_margin",
+    #     replace_existing=True, max_instances=1, coalesce=True,
+    # )
     # 🎼 v206 Phase 4 (2026-08-21 사장님!): 오케스트라 자동 진단 + 자동 fix!
     # "우리 에이전트 팀이 많은데 왜 이런 문제가?
     #  오케스트라 지휘자가 각각의 에이전트팀을 컨트롤!"

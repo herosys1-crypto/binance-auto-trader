@@ -161,6 +161,107 @@ def _stuck_clear(strategy_id: int) -> None:
         pass
 
 
+def any_stuck_strategy() -> bool | None:
+    """지금 **연속 불일치 카운터가 남은 전략**이 하나라도 있는가.
+
+    Returns:
+        True/False. Redis 를 못 읽으면 **None** — 호출자는 「모른다」로 다뤄야 한다.
+
+    🚨 None 을 False 로 바꾸지 마라. 「모르는데 없다고 치고」 Kill-Switch 를 푸는 것이
+       가장 위험하다. 자동 해제는 **확실히 0건일 때만** 한다.
+    """
+    r = _redis()
+    if r is None:
+        return None
+    try:
+        pat = STUCK_COUNT_KEY.format(strategy_id="*")
+        for _ in r.scan_iter(match=pat, count=100):
+            return True
+        return False
+    except Exception as e:
+        logger.debug("[Fix339] stuck 카운터 조회 실패: %s", e)
+        return None
+
+
+def maybe_auto_clear_qty_mismatch_ks(db: Session, account_id: int) -> bool:
+    """🔓 Fix 339 (2026-09-04): 수량 불일치가 해소되면 Kill-Switch 를 **자동 해제**.
+
+    ## 왜 필요한가 — 같은 사고의 **네 번째**다
+
+    Fix 221 이 자동 해제를 만들었지만 사유가 `ORPHAN_EXCHANGE_POSITION` 하나뿐이었다.
+    2026-09-04 05:22, 이번엔 **다른 사유**로 같은 일이 났다:
+
+        reason_code : ZOMBIE:QTY_MISMATCH_PERSISTENT
+        사유        : 좀비 strategy #2477 (XMRUSDT SHORT) — 5 cycles 연속 qty 불일치
+        규모        : 명목 약 20 USDT (수량 -0.038, 증거금 9.74)
+        결과        : 계정 전체가 **5시간 넘게** 잠김. 사장님 수동 「포지션 추가 +500」이
+                      400 으로 튕기고, 자동 피라미딩·증거금추가·신규진입이 전부 정지.
+                      #2351 SNOWUSDT 는 ROI +17.3% / 카운터 0-2 로 조건을 다 갖추고도 대기.
+
+    그런데 확인해 보니 불일치는 **이미 해소돼 있었다** (DB -0.038 = 거래소 -0.038,
+    평단 512.57 = 512.57, 전 계정 17/17 일치). 원인은 사라졌는데 잠금만 남은 것이다.
+
+    발동은 자동인데 **해제만 수동**이라 구조적으로 반복된다 —
+    07-21 ACEUSDT / 08-26 CLUSDT / 08-29 INJUSDT / 09-04 XMRUSDT.
+
+    ## 🚨 좁게 연다 (Fix 221 과 같은 원칙)
+
+    아래를 **전부** 만족할 때만 푼다:
+      · Kill-Switch 가 켜져 있고
+      · 사유가 **정확히** `ZOMBIE:QTY_MISMATCH_PERSISTENT` (사장님 수동/손실한도 등은 손대지 않는다)
+      · 연속 불일치 카운터가 남은 전략이 **0건** (Redis 를 못 읽으면 **풀지 않는다**)
+
+    ⚠️ 이 함수는 「거래소 대조」를 다시 하지 않는다. reconcile 이 매 사이클 대조해
+       불일치면 카운터를 올리고 해소되면 지우므로, **카운터가 비어 있다 = 최근 사이클에서
+       불일치가 없었다** 가 곧 대조 결과다. 여기서 또 거래소를 부르면 8/26 IP ban 위험만 는다.
+    """
+    from app.models.account_kill_switch import AccountKillSwitch as _KS
+    from app.services.account_kill_switch_service import AccountKillSwitchService as _KSS
+
+    try:
+        row = db.execute(
+            select(_KS).where(_KS.exchange_account_id == account_id)
+        ).scalar_one_or_none()
+        if row is None or not row.is_enabled:
+            return False
+        if str(row.reason_code or "") != "ZOMBIE:QTY_MISMATCH_PERSISTENT":
+            return False
+
+        stuck = any_stuck_strategy()
+        if stuck is not False:      # True(남음) 또는 None(모름) → 풀지 않는다
+            logger.debug("[Fix339] 자동 해제 보류 acc=%s (stuck=%s)", account_id, stuck)
+            return False
+
+        _KSS(db).clear(account_id)
+        logger.warning(
+            "[Fix339] 🔓 Kill-Switch 자동 해제 — account #%s: 수량 불일치 해소 "
+            "(원 사유: %s / 발동 %s)",
+            account_id, row.reason_message, row.triggered_at,
+        )
+        db.add(RiskEvent(
+            event_type="KILL_SWITCH_AUTO_CLEARED",
+            severity="WARN",
+            title=f"🔓 Kill-Switch 자동 해제 — account #{account_id}",
+            message=(
+                "수량 불일치가 해소되어 자동 해제했습니다 (Fix 339). "
+                f"원 사유: {row.reason_message} / 발동 시각: {row.triggered_at} / "
+                "발동은 자동인데 해제만 수동이라 먼지 하나로 계정 전체가 장시간 "
+                "멈추는 사고가 네 번 반복됐습니다 (07-21 ACE / 08-26 CL / "
+                "08-29 INJ / 09-04 XMR)."
+            ),
+            event_payload={"account_id": account_id, "reason_code": row.reason_code},
+        ))
+        db.commit()
+        return True
+    except Exception as e:
+        logger.error("[Fix339] Kill-Switch 자동 해제 실패 acc=%s: %s", account_id, e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return False
+
+
 # ============================================================================
 # Phase 1 — 자동 회복 (preventive)
 # ============================================================================
