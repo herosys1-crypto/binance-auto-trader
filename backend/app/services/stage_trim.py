@@ -59,6 +59,7 @@ __all__ = [
     "SETTING_MAX_CUM_LOSS", "SETTING_MIN_TRIM_RATIO", "MIN_TRIM_RATIO_DEFAULT",
     "SETTING_EXCLUDE_MODES", "ALWAYS_EXCLUDED_MODES",
     "trim_enabled", "keep_notional", "compute_trim", "cumulative_loss_exceeded",
+    "min_trim_ratio", "ACTION_TRIM", "ACTION_SKIP", "ACTION_BLOCK",
 ]
 
 SETTING_ENABLED = "stage_trim_before_next_enabled"   # 기본 OFF (헌법 161)
@@ -85,6 +86,27 @@ MIN_NOTIONAL_SAFETY = Decimal("1.1")
 #     명목  20 / 잔량 10 → 청산 10 = 1.0배 → 스킵 (사장님 뜻)
 #     명목 600 / 잔량 10 → 청산 590 = 59배 → 실행
 MIN_TRIM_RATIO_DEFAULT = Decimal("2")
+
+# ═══════════════════════════════════════════════════════════════════════
+# 🚨 Fix 316 (2026-09-03): **「정리 불필요」와 「정리 불가」는 다르다.**
+#
+#   Fix 311 은 1단계급 소액에 「정리하지 않는다」로 close_qty=0 을 돌려줬는데,
+#   호출부(Fix 305)는 fail-CLOSED 라 **0 을 전부 「정리 불가 → 진입 중단」**으로
+#   받았다. 그 결과 사장님 사다리 1단계(10 USDT x 레버2 = 명목 20)에서
+#   **2단계 진입이 통째로 막혔다.** 사장님 "첫진입이 10이라 손절없이 그냥
+#   좋은 포지션에 2단계 300으로 진입" 과 정반대다.
+#
+#   두 테스트가 각각 옳아서 57건이 전부 통과하는데도 사양이 안 돌았다
+#   (`assert close == 0` 과 `assert "raise ValueError" in src`).
+#   → 반환에 **행동**을 실어 호출부가 구분하게 한다.
+#
+#     TRIM  : 청산하고 진입   (정상)
+#     SKIP  : 청산 없이 진입   (1단계급 소액 = 사장님 「손절없이 그냥」 / 팔 수 없는 크기)
+#     BLOCK : 진입 중단        (판정 자체가 불가 = 필터·가격 결손)
+# ═══════════════════════════════════════════════════════════════════════
+ACTION_TRIM = "trim"
+ACTION_SKIP = "skip"
+ACTION_BLOCK = "block"
 
 
 def trim_enabled(db, strategy=None) -> bool:
@@ -209,8 +231,9 @@ def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
     """「10 USDT 만 남기고」 청산할 수량을 계산한다.
 
     Returns:
-        (close_qty, keep_qty, why)  — 전부 Decimal / str.
-        close_qty == 0 이면 아무것도 하지 않는다 (판정 불가 등).
+        (close_qty, keep_qty, why, action)
+        action: ACTION_TRIM(청산 후 진입) / ACTION_SKIP(청산 없이 진입) /
+                ACTION_BLOCK(진입 중단 — 판정 자체가 불가)
 
     🚨 **판정이 불확실하면 아무것도 하지 않는다** (close_qty=0).
        여기서 잘못 청산하면 실제 자금이 사라진다. 되돌릴 수 없다.
@@ -221,13 +244,13 @@ def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
         qty = abs(Decimal(str(position_qty or 0)))
         px = Decimal(str(mark_price or 0))
     except Exception:
-        return zero, zero, "수량/가격 파싱 실패"
+        return zero, zero, "수량/가격 파싱 실패", ACTION_BLOCK
     if qty <= 0 or px <= 0:
-        return zero, zero, "포지션 없음 또는 가격 없음"
+        return zero, zero, "포지션 없음 또는 가격 없음", ACTION_SKIP
 
     f = _filters(db, symbol)
     if f is None:
-        return zero, zero, f"{symbol} 거래소 필터 없음 (안전상 미실행)"
+        return zero, zero, f"{symbol} 거래소 필터 없음 (판정 불가)", ACTION_BLOCK
     step, min_qty, min_notional = f
 
     # 목표 잔량 = max(사장님 설정, 그 심볼 최소치 x 여유)
@@ -247,16 +270,17 @@ def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
     #    미만이면 그 주문 자체가 거부되므로 시도하지 않는다 (단위 테스트가 잡음).
     if keep_qty >= qty:
         if qty * px < min_notional:
+            # 팔 수도 없는 크기 = 정리할 것이 없다 → 그냥 진입한다
             return zero, qty, (
-                f"보유 명목 {qty * px:.2f} < MIN_NOTIONAL {min_notional} → 청산 불가 (미실행)"
-            )
+                f"보유 명목 {qty * px:.2f} < MIN_NOTIONAL {min_notional} → 정리 불필요"
+            ), ACTION_SKIP
         return qty, zero, (
             f"잔량 목표({target:.2f} USDT = {keep_qty}) >= 보유 {qty} → 전량 청산"
-        )
+        ), ACTION_TRIM
 
     close_qty = ((qty - keep_qty) / step).to_integral_value(rounding=ROUND_FLOOR) * step
     if close_qty <= 0:
-        return zero, qty, "청산 수량이 stepSize 미만 → 미실행"
+        return zero, qty, "청산 수량이 stepSize 미만 → 정리 불필요", ACTION_SKIP
 
     # 🚨 청산 주문 자체도 MIN_NOTIONAL 을 넘어야 발주된다.
     #
@@ -272,10 +296,10 @@ def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
             return qty, zero, (
                 f"청산분 명목 {close_qty * px:.2f} < MIN_NOTIONAL {min_notional} "
                 f"→ 잔량을 남길 수 없는 크기 = 전량 청산"
-            )
+            ), ACTION_TRIM
         return zero, qty, (
-            f"보유 명목 {qty * px:.2f} < MIN_NOTIONAL {min_notional} → 청산 불가 (미실행)"
-        )
+            f"보유 명목 {qty * px:.2f} < MIN_NOTIONAL {min_notional} → 정리 불필요"
+        ), ACTION_SKIP
 
     # 🚨 Fix 311: 청산분이 잔량에 비해 너무 작으면 **손절이 아니다** → 미실행.
     #    사장님 사다리 1단계(10 USDT, 명목 20)가 정확히 이 경우다.
@@ -284,12 +308,12 @@ def compute_trim(db, symbol: str, position_qty, mark_price) -> tuple:
         return zero, qty, (
             f"청산분 {close_qty} < 잔량 {keep_qty} x {_ratio} "
             f"→ 1단계급 소액이라 정리하지 않는다 (사장님 「손절없이 그냥」)"
-        )
+        ), ACTION_SKIP
 
     return close_qty, keep_qty, (
         f"{close_qty} 청산 / {keep_qty} 잔여 (명목 {keep_qty * px:.2f} USDT, "
         f"목표 {target:.2f}, MIN_NOTIONAL {min_notional})"
-    )
+    ), ACTION_TRIM
 
 
 def cumulative_loss_exceeded(db, strategy) -> tuple[bool, str]:

@@ -56,7 +56,7 @@ ALT = _Sym(D("1"), D("1"), D("5"))
 
 def test_10USDT_만_남기고_나머지를_청산한다():
     db = _DB(sym=ALT)
-    close, keep, why = T.compute_trim(db, "AKEUSDT", D("34417"), D("0.0224"))
+    close, keep, why, _act = T.compute_trim(db, "AKEUSDT", D("34417"), D("0.0224"))
     assert keep * D("0.0224") >= D("10"), why      # 잔량 명목 >= 10
     assert close + keep == D("34417"), why         # 합이 보유량
     assert close > 0
@@ -68,7 +68,7 @@ def test_1단계_100이든_1000이든_같은_10을_남긴다():
     px = D("0.05")
     keeps = []
     for qty in ("2000", "20000", "200000"):          # 명목 100 / 1000 / 10000
-        _c, k, _w = T.compute_trim(db, "X", D(qty), px)
+        _c, k, _w, _act = T.compute_trim(db, "X", D(qty), px)
         keeps.append(k * px)
     assert len(set(keeps)) == 1, f"잔량이 포지션 크기에 따라 달라졌다: {keeps}"
     assert keeps[0] >= D("10")
@@ -77,7 +77,7 @@ def test_1단계_100이든_1000이든_같은_10을_남긴다():
 def test_잔량이_보유량보다_크면_전량청산():
     """포지션이 10 USDT 도 안 되면 남길 것이 없다."""
     db = _DB(sym=ALT)
-    close, keep, why = T.compute_trim(db, "X", D("100"), D("0.05"))   # 명목 5
+    close, keep, why, _act = T.compute_trim(db, "X", D("100"), D("0.05"))   # 명목 5
     assert keep == 0 and close == D("100"), why
     assert "전량" in why
 
@@ -87,7 +87,7 @@ def test_잔량이_보유량보다_크면_전량청산():
 def test_MIN_NOTIONAL_이_10보다_크면_그만큼_남긴다():
     """ETHUSDT(20) / BTCUSDT(50). 10 을 남기면 못 파는 dust 가 된다."""
     db = _DB(sym=_Sym(D("0.001"), D("0.001"), D("20")))
-    _c, keep, why = T.compute_trim(db, "ETHUSDT", D("10"), D("3000"))
+    _c, keep, why, _act = T.compute_trim(db, "ETHUSDT", D("10"), D("3000"))
     assert keep * D("3000") >= D("20") * T.MIN_NOTIONAL_SAFETY, why
 
 
@@ -100,7 +100,7 @@ def test_잔량은_항상_최소치_이상이다():
         (D("0.01"), D("0.01"), D("5"), D("180")),
     ):
         db = _DB(sym=_Sym(step, mq, mn))
-        close, keep, why = T.compute_trim(db, "X", D("100000"), px)
+        close, keep, why, _act = T.compute_trim(db, "X", D("100000"), px)
         if close == 0:
             continue
         assert keep * px >= mn, f"dust 발생: keep={keep} px={px} mn={mn} — {why}"
@@ -109,7 +109,7 @@ def test_잔량은_항상_최소치_이상이다():
 def test_잔량은_stepSize_배수다():
     for step in (D("1"), D("0.1"), D("0.001")):
         db = _DB(sym=_Sym(step, step, D("5")))
-        close, keep, _w = T.compute_trim(db, "X", D("100000"), D("1.7"))
+        close, keep, _w, _act = T.compute_trim(db, "X", D("100000"), D("1.7"))
         assert keep % step == 0, keep
         assert close % step == 0, close
 
@@ -119,7 +119,7 @@ def test_청산분이_최소주문금액_미만이면_전량으로_떨어진다(
     (호출자가 fail-CLOSED). 잔량을 남길 수 없는 크기이므로 전량 청산이 맞다."""
     db = _DB(sym=_Sym(D("1"), D("1"), D("5")))
     # 보유 명목 10.5, 잔량 목표 10 → 청산분 명목 0.5 < 5 → 전량으로
-    close, keep, why = T.compute_trim(db, "X", D("21"), D("0.5"))
+    close, keep, why, _act = T.compute_trim(db, "X", D("21"), D("0.5"))
     assert close == D("21") and keep == 0, why
 
 
@@ -127,7 +127,7 @@ def test_청산분이_최소주문금액_미만이면_전량으로_떨어진다(
 
 def test_거래소_필터가_없으면_미실행():
     """잘못 청산하면 실제 자금이 사라진다. 되돌릴 수 없다."""
-    close, _k, why = T.compute_trim(_DB(sym=None), "X", D("1000"), D("1"))
+    close, _k, why, _act = T.compute_trim(_DB(sym=None), "X", D("1000"), D("1"))
     assert close == 0 and "필터 없음" in why
 
 
@@ -144,7 +144,7 @@ def test_포지션이나_가격이_없으면_미실행():
 
 
 def test_DB가_죽어도_예외를_밖으로_던지지_않는다():
-    close, _k, _w = T.compute_trim(_DB(boom=True), "X", D("1000"), D("1"))
+    close, _k, _w, _act = T.compute_trim(_DB(boom=True), "X", D("1000"), D("1"))
     assert close == 0
 
 
@@ -267,7 +267,7 @@ def test_BLOCKER4_사각지대에서_영구정지하지_않는다():
     이 구간은 전량 청산으로 떨어져야 한다."""
     db = _DB(sym=_Sym(D("1"), D("1"), D("5")))
     for qty, px in ((D("24"), D("0.5")), (D("28"), D("0.5")), (D("13"), D("1"))):
-        close, keep, why = T.compute_trim(db, "X", qty, px)
+        close, keep, why, _act = T.compute_trim(db, "X", qty, px)
         assert close > 0, f"영구 정지: qty={qty} px={px} — {why}"
         if keep > 0:
             assert keep * px >= D("5"), why          # dust 안 만든다
@@ -276,9 +276,9 @@ def test_BLOCKER4_사각지대에서_영구정지하지_않는다():
 def test_BLOCKER4_정말_못_파는_크기면_미실행():
     """보유 자체가 MIN_NOTIONAL 미만이면 전량 청산도 발주가 거부된다."""
     db = _DB(sym=_Sym(D("1"), D("1"), D("5")))
-    close, _k, why = T.compute_trim(db, "X", D("8"), D("0.5"))   # 명목 4 < 5
+    close, _k, why, _act = T.compute_trim(db, "X", D("8"), D("0.5"))   # 명목 4 < 5
     assert close == 0, why
-    assert "청산 불가" in why
+    assert "정리 불필요" in why   # Fix 316: SKIP 으로 바뀜
 
 
 def test_BLOCKER2_재시도가_요청분을_넘지_않는다():
@@ -416,7 +416,7 @@ def test_1단계_10USDT는_정리하지_않는다():
     """🚨 1단계 10 x 레버2 = 명목 20. 10 을 남기면 **절반만 청산**된다.
     사장님 사다리에서 1단계는 「자리 탐색」이라 그대로 둔다."""
     db = _DB(sym=ALT)
-    close, keep, why = T.compute_trim(db, "X", D("400"), D("0.05"))   # 명목 20
+    close, keep, why, _act = T.compute_trim(db, "X", D("400"), D("0.05"))   # 명목 20
     assert close == 0, why
     assert "손절없이 그냥" in why
 
@@ -424,7 +424,7 @@ def test_1단계_10USDT는_정리하지_않는다():
 def test_2단계급_큰_포지션은_정상_정리된다():
     """명목 600 (2단계 300 x 레버2) → 10 남기고 590 청산."""
     db = _DB(sym=ALT)
-    close, keep, why = T.compute_trim(db, "X", D("12000"), D("0.05"))  # 명목 600
+    close, keep, why, _act = T.compute_trim(db, "X", D("12000"), D("0.05"))  # 명목 600
     assert close > 0, why
     assert keep * D("0.05") >= D("10"), why
 
@@ -573,3 +573,62 @@ def test_모델_기본값이_PRICE_DOWN_PCT_임을_확인():
     from app.models import strategy_template as M
     src = Path(M.__file__).read_text(encoding="utf-8")
     assert 'server_default="PRICE_DOWN_PCT"' in src or "server_default='PRICE_DOWN_PCT'" in src
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fix 316 — 「정리 불필요」와 「정리 불가」는 다르다
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_1단계_소액은_SKIP이지_BLOCK이_아니다():
+    """🚨 이것이 Fix 311 이 만든 사고다. 사장님 사다리 1단계
+    (10 USDT x 레버2 = 명목 20)가 「진입 중단」으로 처리돼 2단계가 막혔다."""
+    db = _DB(sym=ALT)
+    close, keep, why, act = T.compute_trim(db, "X", D("400"), D("0.05"))   # 명목 20
+    assert close == 0
+    assert act == T.ACTION_SKIP, f"BLOCK 이면 2단계가 막힌다 — {why}"
+
+
+def test_판정_불가만_BLOCK():
+    """필터·가격이 없으면 정리 여부를 알 수 없다 → 물타기를 막기 위해 중단."""
+    assert T.compute_trim(_DB(sym=None), "X", D("1000"), D("1"))[3] == T.ACTION_BLOCK
+    assert T.compute_trim(_DB(sym=_Sym(D("0"), D("1"), D("5"))), "X", D("1000"), D("1"))[3] \
+        == T.ACTION_BLOCK
+
+
+def test_팔_수_없는_크기는_SKIP():
+    """보유가 MIN_NOTIONAL 미만이면 정리할 것이 없다 → 그냥 진입."""
+    db = _DB(sym=ALT)
+    close, _k, _w, act = T.compute_trim(db, "X", D("8"), D("0.5"))   # 명목 4
+    assert close == 0 and act == T.ACTION_SKIP
+
+
+def test_정상_정리는_TRIM():
+    db = _DB(sym=ALT)
+    close, keep, _w, act = T.compute_trim(db, "X", D("12000"), D("0.05"))
+    assert close > 0 and act == T.ACTION_TRIM
+
+
+def test_전량_폴백도_TRIM():
+    db = _DB(sym=ALT)
+    close, keep, _w, act = T.compute_trim(db, "X", D("21"), D("0.5"))
+    assert close == D("21") and keep == 0 and act == T.ACTION_TRIM
+
+
+def test_호출부가_세_행동을_모두_구분한다():
+    src = _fn_src("_trim_before_stage")
+    assert "if _act == ACTION_SKIP:" in src, "SKIP 을 중단으로 처리하면 1단계가 막힌다"
+    assert "elif _act == ACTION_BLOCK:" in src
+    assert "elif _close_qty > 0:" in src
+    # SKIP 분기에는 raise 가 없어야 한다
+    skip_blk = src[src.index("if _act == ACTION_SKIP:"):src.index("elif _act == ACTION_BLOCK:")]
+    assert "raise" not in skip_blk
+
+
+def test_포지션_조회_실패는_중단한다():
+    """🚨 None 을 falsy 로 흘리면 trim 을 건너뛰고 진입 = 물타기로 조용히 복귀.
+    주석은 fail-CLOSED 라고 선언했는데 코드가 반대였다."""
+    src = _fn_src("_trim_before_stage")
+    assert "if _cur_qty is None:" in src
+    blk = src[src.index("if _cur_qty is None:"):]
+    blk = blk[:blk.index("if _cur_qty > 0:")]
+    assert "raise ValueError" in blk

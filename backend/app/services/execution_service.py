@@ -1789,6 +1789,7 @@ class ExecutionService:
             raise ValueError(f"[Fix312] {strategy.symbol} 단계 {stage_no}: {_good_why}")
 
         from app.services.stage_trim import (
+            ACTION_BLOCK, ACTION_SKIP,
             compute_trim, cumulative_loss_exceeded, trim_enabled,
         )
         if trim_enabled(self.db, strategy) and stage_no > 1:   # Fix 313
@@ -1807,7 +1808,19 @@ class ExecutionService:
                     f"[Fix306] {strategy.symbol} 단계 {stage_no} 진입 중단: {_cum_why}"
                 )
             _cur_qty = self._fetch_current_position_qty(strategy)
-            if _cur_qty and _cur_qty > 0:
+            # 🚨 Fix 316: 조회 실패(None)를 falsy 로 흘려보내면 **trim 을 건너뛰고
+            #    진입 주문이 그대로 나간다** = 물타기로 조용히 되돌아간다.
+            #    바로 위 주석이 "fail-CLOSED 로 둔다" 라고 선언했는데 코드가 반대였다.
+            if _cur_qty is None:
+                logger.warning(
+                    "[Fix316] %s #%s 단계%s 진입 중단 — 포지션 조회 실패 "
+                    "(정리 여부를 판정할 수 없다)",
+                    strategy.symbol, strategy.id, stage_no,
+                )
+                raise ValueError(
+                    f"[Fix316] {strategy.symbol} 단계 {stage_no}: 포지션 조회 실패로 중단"
+                )
+            if _cur_qty > 0:
                 # 🚨 Fix 305: `_fetch_current_mark_price` 는 실패 시 **예외를 던진다.**
                 #   감싸지 않으면 시세 조회 실패가 곧바로 단계 진입 실패 알림이 된다
                 #   (15초 주기 워커라 하루 5,760건).
@@ -1816,10 +1829,28 @@ class ExecutionService:
                 except Exception as _me:
                     _mark = None
                     logger.warning("[Fix304] %s 현재가 조회 실패: %s", strategy.symbol, _me)
-                _close_qty, _keep_qty, _why = compute_trim(
+                _close_qty, _keep_qty, _why, _act = compute_trim(
                     self.db, strategy.symbol, _cur_qty, _mark,
                 )
-                if _close_qty > 0:
+                if _act == ACTION_SKIP:
+                    # 🌟 Fix 316: 「정리 불필요」는 **중단이 아니다.**
+                    #   사장님 사다리 1단계(10 USDT x 레버2 = 명목 20)가 여기다 —
+                    #   "첫진입이 10이라 손절없이 그냥 좋은 포지션에 2단계 300으로 진입".
+                    logger.info(
+                        "[Fix316] %s #%s 단계%s 정리 없이 진입 — %s",
+                        strategy.symbol, strategy.id, stage_no, _why,
+                    )
+                elif _act == ACTION_BLOCK:
+                    # 판정 자체가 불가(필터·가격 결손) → 물타기를 막기 위해 중단
+                    logger.warning(
+                        "[Fix304] %s #%s 단계%s 진입 **중단** — 정리 불가: %s",
+                        strategy.symbol, strategy.id, stage_no, _why,
+                    )
+                    raise ValueError(
+                        f"[Fix304] {strategy.symbol} 단계 {stage_no} 진입 전 "
+                        f"「10 USDT 남기고 청산」을 판정할 수 없어 중단합니다: {_why}"
+                    )
+                elif _close_qty > 0:
                     logger.warning(
                         "[Fix304] %s #%s 단계%s 진입 전 정리: %s",
                         strategy.symbol, strategy.id, stage_no, _why,
@@ -1831,16 +1862,7 @@ class ExecutionService:
                         for_stage_transition=True,      # Fix 305
                     )
                     self.db.refresh(strategy)
-                else:
-                    # 청산할 수 없다 = 평단 오염을 막을 방법이 없다 → 진입 중단
-                    logger.warning(
-                        "[Fix304] %s #%s 단계%s 진입 **중단** — 정리 불가: %s",
-                        strategy.symbol, strategy.id, stage_no, _why,
-                    )
-                    raise ValueError(
-                        f"[Fix304] {strategy.symbol} 단계 {stage_no} 진입 전 "
-                        f"「10 USDT 남기고 청산」을 실행할 수 없어 중단합니다: {_why}"
-                    )
+
 
     def _assert_symbol_allowed(self, strategy) -> None:
         """🚫 Fix 303 (2026-09-03 사장님 「이것들은 포지션에서 제외해줘」).

@@ -308,3 +308,86 @@ def get_martingale_multipliers(db) -> list:
     if base <= 0:
         return [1.0]
     return [float(c / base) for c in ladder[:get_max_stage(db)]]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 🌟 Fix 315 (2026-09-03 사장님 정책 확정): 사다리를 **단계**로 돌린다.
+#
+#   사장님: "부분 손절하고 **다음 트리거 단가에 포지션 진입**하고 또 손실이면
+#            부분청산하고 다음단계 트리거 단가에 포지션 진입"
+#           "첫진입이 10이라 손절없이 그냥 좋은 포지션에 **2단계 300으로 진입**"
+#
+#   Fix 137(2026-08-26)은 사장님 "복잡하면 청산하고 다음단계 모니터링 대기해도
+#   됩니다" 를 받아 **재진입 방식(B)** 을 택하고 템플릿을 1단계로 유지했다.
+#   그 결과 30일간 **재진입 2차가 1건**뿐이었고 사다리가 사실상 돌지 않았다
+#   (SAJANGNIM_TOP/BOTTOM 475건 전부 1단계 단발).
+#   사장님이 오늘 **단계 방식(A)** 으로 정책을 확정하셔서 여기로 되돌린다.
+#
+#   `capital_management_mode` 를 모드 마커로 쓴다 — Fix 178 이 `split_entry`
+#   에 쓴 것과 같은 방식이라 마이그레이션이 필요 없다 (헌법 127).
+# ═══════════════════════════════════════════════════════════════════════
+STAGE_LADDER_MODE = "stage_ladder"
+
+# 단계 간격(%). 🚨 **손절폭보다 작아야 사다리가 산다.**
+#   SHORT 손절 ROI -5%  / 레버2 → 가격 2.5% 불리하면 손절
+#   LONG  손절 ROI -10% / 레버2 → 가격 5.0% 불리하면 손절
+#   간격이 그보다 크면 **손절이 항상 먼저 와서 2단계에 영원히 도달하지 못한다.**
+#
+# 실측 (상승50 ∪ 하락50, 15m 2000봉, 사다리 10/300/600, 적응TP, 850사이클):
+#
+#   간격   총 손익   승률   SHORT(2·3단계)   LONG(2·3단계)
+#   1.0%   +2735   79.9%   +376 / 53·79    +2359 / 152·213
+#   1.5%   +2636   80.5%   +307 / 69·40    +2328 / 149·151
+#   2.0%   +2637   78.1%   +311 / 60·10    +2326 / 153·107
+#   2.5%   +2032           **-3 / 0·0**    +2034 / 159·73     ← SHORT 사다리 사망
+#   5.0%     +44   66.8%   **-3 / 0·0**      **+47 / 0·0**    ← 둘 다 사망
+#   (지금) 1단계 단발  +44  66.8%
+#
+#   전 구간 과적합 검사 통과(표본 반 갈라 양쪽 흑자). **1.5% 채택** —
+#   1.0% 가 근소하게 높지만 수수료·슬리피지 여유가 절반이고, 2.0% 는 SHORT
+#   손절선(2.5%)까지 여유가 0.5%p 뿐이라 갭에 취약하다.
+#   1.5% 는 여유 1.0%p 이면서 SHORT 2·3단계 도달이 가장 많다(69·40).
+SETTING_STAGE_GAP = "sajangnim_stage_gap_pct"
+STAGE_GAP_DEFAULT = Decimal("1.5")
+
+SETTING_LADDER_STAGES = "sajangnim_ladder_stages_enabled"
+
+
+def ladder_stages_enabled(db) -> bool:
+    """사다리를 **단계**로 만들 것인가 (기본 ON — 사장님 확정 정책)."""
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_LADDER_STAGES)
+        if row is None or row.value is None or not str(row.value).strip():
+            return True
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:
+        logger.warning("[Fix315] %s 조회 실패 → ON: %s", SETTING_LADDER_STAGES, e)
+        return True
+
+
+def stage_gap_pct(db) -> Decimal:
+    """단계 간격(%). 🚨 손절폭보다 작아야 한다 (위 실측표 참조)."""
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_STAGE_GAP)
+        if row is None or row.value is None or not str(row.value).strip():
+            return STAGE_GAP_DEFAULT
+        v = Decimal(str(row.value).strip())
+        if v <= 0 or v > Decimal("50"):
+            logger.warning("[Fix315] %s=%s 범위밖 → 기본 %s",
+                           SETTING_STAGE_GAP, v, STAGE_GAP_DEFAULT)
+            return STAGE_GAP_DEFAULT
+        return v
+    except Exception as e:
+        logger.warning("[Fix315] %s 조회 실패 → 기본 %s: %s",
+                       SETTING_STAGE_GAP, STAGE_GAP_DEFAULT, e)
+        return STAGE_GAP_DEFAULT
+
+
+def is_stage_ladder(strategy) -> bool:
+    """이 전략이 사장님 단계 사다리인가 (손절 단계 게이트를 건너뛴다)."""
+    try:
+        return str(getattr(strategy, "capital_management_mode", "") or "").lower()             == STAGE_LADDER_MODE
+    except Exception:
+        return False
