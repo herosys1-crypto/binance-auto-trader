@@ -591,11 +591,77 @@ class TPSLOrchestratorService:
         # SHORT 포지션은 음수 qty 로 저장됨 — abs() 로 양수화 후 청산.
         # 이전엔 `current_qty > 0` 이라 SHORT SL 이 실행되지 않는 버그가 있었음.
         current_qty = abs(Decimal(str(strategy.current_position_qty)))
+
+        # ═══════════════════════════════════════════════════════════════════
+        # 🚨 Fix 318 (2026-09-03 사장님): **손절도 「부분 손절」이다.**
+        #
+        #   사장님 원문:
+        #     "전략인스턴스에 선택한 옵션으로 **부분 손절**하고 다음 트리거 단가에
+        #      포지션 진입하고 또 손실이면 **부분청산**하고 다음단계 트리거 단가에"
+        #     "왜 이것도 10usdt 남기고 부분손절을 해야 하는데 왜 이런거야"
+        #
+        #   Fix 304 는 「단계 진입 **직전** 정리」에만 붙어 있었다. 그래서 손절선에
+        #   먼저 닿으면 여기서 **전량 청산**이 나가고 전략이 종료됐다
+        #   (실제 사고: #2046 AKEUSDT — 사장님이 화면에서 「종료 중」을 보셨다).
+        #   손절이 전량이면 잔량이 안 남아 「전략 인스턴스에 남겨두기」도,
+        #   「다음 단계 트리거 진입」도 성립하지 않는다.
+        #
+        #   → 손절 수량 자체를 `compute_trim` 으로 정한다.
+        #     TRIM  : 10 USDT 만 남기고 청산 (사장님 사양)
+        #     SKIP  : 정리 불필요(1단계급 소액) → **전량 청산**
+        #             (여기서 손절을 건너뛰면 손실이 무한정 커진다 —
+        #              단계 진입 때와 달리 손절은 반드시 나가야 한다)
+        #     BLOCK : 판정 불가 → **전량 청산** (같은 이유, 안전측)
+        #
+        #   🚨 단계 진입(Fix 316)과 fail 방향이 **반대**다. 거기서는 판정 불가면
+        #      진입을 막지만(안 사면 그만), 손절은 막으면 손실이 커진다.
+        # ═══════════════════════════════════════════════════════════════════
+        _close_qty = current_qty
+        _keep_qty = Decimal("0")
         if current_qty > 0:
             try:
-                self.execution_service.emergency_close_position(strategy.id, quantity=current_qty)
+                from app.services.stage_trim import ACTION_TRIM, compute_trim, trim_enabled
+                if trim_enabled(self.db, strategy):
+                    _mark = self.execution_service._fetch_current_mark_price(strategy.symbol)
+                    _c, _k, _why, _act = compute_trim(
+                        self.db, strategy.symbol, current_qty, _mark,
+                    )
+                    if _act == ACTION_TRIM and _c > 0:
+                        _close_qty, _keep_qty = _c, _k
+                        logger.warning(
+                            "[Fix318] %s #%s 부분 손절: %s 청산 / %s 잔여 — %s",
+                            strategy.symbol, strategy.id, _c, _k, _why,
+                        )
+                    else:
+                        logger.info(
+                            "[Fix318] %s #%s 전량 손절 (%s): %s",
+                            strategy.symbol, strategy.id, _act, _why,
+                        )
+            except Exception as _fe:
+                logger.warning(
+                    "[Fix318] %s 부분 손절 판정 실패 → 전량 청산: %s",
+                    strategy.symbol, _fe,
+                )
+
+            try:
+                self.execution_service.emergency_close_position(
+                    strategy.id, quantity=_close_qty,
+                    for_stage_transition=bool(_keep_qty > 0),   # 잔량 유지 = 전략 살림
+                )
             except EmergencyCloseInProgress:
                 return  # #120 fix: 다른 caller 가 청산 중 — 다음 cycle 재시도
+
+        # 🚨 잔량을 남긴 부분 손절이면 전략을 종료시키지 않는다.
+        #    STOPPING 을 찍으면 stream_service 가 STOPPED(터미널)로 확정해
+        #    「전략 인스턴스에 남겨두기」와 다음 단계 진입이 모두 깨진다.
+        if _keep_qty > 0:
+            logger.info(
+                "[Fix318] %s #%s 잔량 %s 유지 — 전략 종료하지 않음 (다음 단계 대기)",
+                strategy.symbol, strategy.id, _keep_qty,
+            )
+            self.db.commit()
+            return
+
         strategy.status = "STOPPING"
         self.db.commit()
 
