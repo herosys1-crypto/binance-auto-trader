@@ -1,0 +1,295 @@
+{
+  "title": "정점 반전(최고점에서 하락) SHORT — 1단계 진입 + 2단계 재진입 판정식",
+  "date": "2026-09-03",
+  "phase": "① 최고점에서 하락 시점 (정점 반전)",
+  "data": {
+    "source": "top100_klines.json (24h 상승50 + 하락50)",
+    "symbols_used": 97,
+    "tf": "15m 500봉 / 1h 500봉 / 4h 500봉",
+    "candidates_primary": 1152,
+    "candidates_secondary": 1209
+  },
+  "label": {
+    "direction": "SHORT",
+    "tp_pct": 3.0,
+    "sl_pct": 3.0,
+    "horizon_bars_15m": 64,
+    "note": "삼중장벽. 같은 봉에서 TP/SL 동시 도달 시 보수적으로 패. 64봉 내 미도달이면 i+64 종가로 청산(부호로 승패). 미결착 제외 없음."
+  },
+  "crossval": {
+    "scheme": "심볼 인덱스 홀수=A / 짝수=B",
+    "baseline_all": 0.531,
+    "baseline_a": 0.541,
+    "baseline_b": 0.522,
+    "extra_axes": [
+      "심볼 3분할(mod 3)",
+      "각 심볼 시계열 전/후반",
+      "후보군 정의 2종(꺾임확인 / 신고가봉)"
+    ],
+    "generalization_corr_A_vs_B": 0.368,
+    "generalization_note": "조합탐색 5,597개에서 A 상위 10%의 B 평균승률은 57.5% (B 기준선 52.2%). 즉 탐색으로 얻는 진짜 이득은 +5pp 수준이며, 아래 규칙의 높은 승률은 사전지정 + 4개 축 재현으로 뒷받침한 것."
+  },
+  "rules": [
+    {
+      "id": "TOPREV_S1_TURN_BASE",
+      "tf": "15m",
+      "stage": 1,
+      "expr": "15m: high[i-3..i] 중 하나가 20봉 신고가 AND close[i]<open[i] AND close[i]<close[i-1] AND high[i]가 신고가 아님",
+      "note": "후보 정의(꺾임 확인). 이것만으로는 승률 54%로 기준선 수준 — 반드시 아래 게이트와 함께 쓸 것.",
+      "threshold": {
+        "f_obv_slope": -0.15,
+        "f_obv_slope_strict": -0.3,
+        "run24_max": 0.03,
+        "touch_min": 2
+      },
+      "n": 762,
+      "win_rate": 0.5433,
+      "effect": null,
+      "group_a": 0.5525,
+      "group_b": 0.5331,
+      "n_group_a": 400,
+      "n_group_b": 362,
+      "n_symbols": 97,
+      "pnl_pct_per_trade": 0.124,
+      "replication_family2": {
+        "n": 782,
+        "win_rate": 0.5422,
+        "group_a": 0.5539,
+        "group_b": 0.5294
+      }
+    },
+    {
+      "id": "TOPREV_S1_4H_DIR",
+      "tf": "4h",
+      "stage": 1,
+      "expr": "4h_macd_hist[j] > 4h_macd_hist[j-1]   (j = 15m 판정시각 기준 마지막 '완전히 닫힌' 4H 봉)",
+      "note": "4H MACD hist 가 아직 상승 중일 때 SHORT 가 더 잘 된다. 현행 trend_4h_gate 와 정반대.",
+      "threshold": {
+        "f_obv_slope": -0.15,
+        "f_obv_slope_strict": -0.3,
+        "run24_max": 0.03,
+        "touch_min": 2
+      },
+      "n": 458,
+      "win_rate": 0.5786,
+      "effect": 0.174,
+      "group_a": 0.5868,
+      "group_b": 0.5694,
+      "n_group_a": 242,
+      "n_group_b": 216,
+      "n_symbols": 94,
+      "pnl_pct_per_trade": 0.306,
+      "replication_family2": {
+        "n": 408,
+        "win_rate": 0.598,
+        "group_a": 0.6215,
+        "group_b": 0.5722
+      }
+    },
+    {
+      "id": "TOPREV_S1_4H_OBV",
+      "tf": "4h",
+      "stage": 1,
+      "expr": "4h_macd_hist[j] > 4h_macd_hist[j-1] AND 4h_obv_slope_norm14[j] <= -0.15",
+      "note": "4H OBV 정규화 기울기(=(obv[j]-obv[j-14])/sum(vol[j-13..j])) 가 음수 = 4H 매집이 이미 빠지는 중.",
+      "threshold": {
+        "f_obv_slope": -0.15,
+        "f_obv_slope_strict": -0.3,
+        "run24_max": 0.03,
+        "touch_min": 2
+      },
+      "n": 209,
+      "win_rate": 0.6699,
+      "effect": 0.366,
+      "group_a": 0.6693,
+      "group_b": 0.6707,
+      "n_group_a": 127,
+      "n_group_b": 82,
+      "n_symbols": 68,
+      "pnl_pct_per_trade": 0.812,
+      "replication_family2": {
+        "n": 195,
+        "win_rate": 0.6667,
+        "group_a": 0.661,
+        "group_b": 0.6753
+      }
+    },
+    {
+      "id": "TOPREV_S1_STRICT_OBV",
+      "tf": "4h",
+      "stage": 1,
+      "expr": "4h_macd_hist[j] > 4h_macd_hist[j-1] AND 4h_obv_slope_norm14[j] <= -0.30",
+      "note": "OBV 기준을 강하게. 표본은 줄지만 승률 73%. 임계값 -0.05~-0.30 구간에서 단조 증가(절벽 없음).",
+      "threshold": {
+        "f_obv_slope": -0.15,
+        "f_obv_slope_strict": -0.3,
+        "run24_max": 0.03,
+        "touch_min": 2
+      },
+      "n": 122,
+      "win_rate": 0.7295,
+      "effect": 0.49,
+      "group_a": 0.7183,
+      "group_b": 0.7451,
+      "n_group_a": 71,
+      "n_group_b": 51,
+      "n_symbols": 52,
+      "pnl_pct_per_trade": 1.187,
+      "replication_family2": {
+        "n": 117,
+        "win_rate": 0.735,
+        "group_a": 0.7463,
+        "group_b": 0.72
+      }
+    },
+    {
+      "id": "TOPREV_S1_STRICT_RUN",
+      "tf": "15m+4h",
+      "stage": 1,
+      "expr": "4h_macd_hist[j] > 4h_macd_hist[j-1] AND 4h_obv_slope_norm14[j] <= -0.15 AND (close[i]-min(low[i-24..i]))/min(low[i-24..i]) <= 0.03",
+      "note": "직전 6시간 상승폭이 3% 이하 = 「이미 크게 오른 것」이 아니라 「조용히 고점을 다지던 것」. 최고 승률.",
+      "threshold": {
+        "f_obv_slope": -0.15,
+        "f_obv_slope_strict": -0.3,
+        "run24_max": 0.03,
+        "touch_min": 2
+      },
+      "n": 114,
+      "win_rate": 0.7456,
+      "effect": 0.445,
+      "group_a": 0.7792,
+      "group_b": 0.6757,
+      "n_group_a": 77,
+      "n_group_b": 37,
+      "n_symbols": 46,
+      "pnl_pct_per_trade": 1.105,
+      "replication_family2": {
+        "n": 135,
+        "win_rate": 0.7259,
+        "group_a": 0.7241,
+        "group_b": 0.7292
+      }
+    },
+    {
+      "id": "TOPREV_S1_TOUCH_1H",
+      "tf": "15m+1h",
+      "stage": 1,
+      "expr": "15m 고점터치 >= 2 AND 1h_macd_hist[k] <= 1h_macd_hist[k-1]",
+      "note": "사장님 「지지 여러번 반복 후 하락 시작」. 고점터치 = 최근 30봉 중 창 최고가의 99% 이상인 스윙고점 수(현재봉 포함).",
+      "threshold": {
+        "f_obv_slope": -0.15,
+        "f_obv_slope_strict": -0.3,
+        "run24_max": 0.03,
+        "touch_min": 2
+      },
+      "n": 88,
+      "win_rate": 0.7045,
+      "effect": 0.282,
+      "group_a": 0.7755,
+      "group_b": 0.6154,
+      "n_group_a": 49,
+      "n_group_b": 39,
+      "n_symbols": 52,
+      "pnl_pct_per_trade": 0.777,
+      "replication_family2": {
+        "n": 166,
+        "win_rate": 0.6807,
+        "group_a": 0.6471,
+        "group_b": 0.716
+      }
+    },
+    {
+      "id": "TOPREV_S2_VETO",
+      "tf": "4h",
+      "stage": 2,
+      "expr": "NOT (4h_macd_hist[j] > 0)   → 2단계 재진입 금지",
+      "note": "★금지 규칙★ 부분손절 후 재진입 시 4H MACD hist 가 이미 0 이하면 승률 37.7%. 두 후보군·두 그룹 모두 일치.",
+      "threshold": {
+        "f_obv_slope": -0.15,
+        "f_obv_slope_strict": -0.3,
+        "run24_max": 0.03,
+        "touch_min": 2
+      },
+      "n": 69,
+      "win_rate": 0.3768,
+      "effect": -0.301,
+      "group_a": 0.4103,
+      "group_b": 0.3333,
+      "n_group_a": 39,
+      "n_group_b": 30,
+      "n_symbols": 36,
+      "pnl_pct_per_trade": -0.661,
+      "replication_family2": {
+        "n": 87,
+        "win_rate": 0.3793,
+        "group_a": 0.3913,
+        "group_b": 0.3659
+      }
+    },
+    {
+      "id": "TOPREV_S2_GATE",
+      "tf": "4h",
+      "stage": 2,
+      "expr": "4h_macd_hist[j] > 0 AND 4h_macd_hist[j] > 4h_macd_hist[j-1]",
+      "note": "2단계 허용 게이트. 1단계에서는 hist 의 '부호'가 무의미(-2.0pp)했는데 2단계에서는 결정적(+15.9pp).",
+      "threshold": {
+        "f_obv_slope": -0.15,
+        "f_obv_slope_strict": -0.3,
+        "run24_max": 0.03,
+        "touch_min": 2
+      },
+      "n": 230,
+      "win_rate": 0.5826,
+      "effect": 0.363,
+      "group_a": 0.5652,
+      "group_b": 0.5942,
+      "n_group_a": 92,
+      "n_group_b": 138,
+      "n_symbols": 65,
+      "pnl_pct_per_trade": 0.482,
+      "replication_family2": {
+        "n": 235,
+        "win_rate": 0.5191,
+        "group_a": 0.5263,
+        "group_b": 0.5143
+      }
+    },
+    {
+      "id": "TOPREV_S2_GATE_TOUCH",
+      "tf": "15m+4h",
+      "stage": 2,
+      "expr": "4h_macd_hist[j] > 0 AND 4h_macd_hist[j] > 4h_macd_hist[j-1] AND 15m 고점터치 >= 2",
+      "note": "2단계 게이트 + 고점 반복. 단 익절 목표는 3% 로 낮출 것(5% 목표로 재면 45%로 떨어짐).",
+      "threshold": {
+        "f_obv_slope": -0.15,
+        "f_obv_slope_strict": -0.3,
+        "run24_max": 0.03,
+        "touch_min": 2
+      },
+      "n": 109,
+      "win_rate": 0.633,
+      "effect": 0.363,
+      "group_a": 0.6078,
+      "group_b": 0.6552,
+      "n_group_a": 51,
+      "n_group_b": 58,
+      "n_symbols": 50,
+      "pnl_pct_per_trade": 0.807,
+      "replication_family2": {
+        "n": 162,
+        "win_rate": 0.5432,
+        "group_a": 0.5352,
+        "group_b": 0.5495
+      }
+    }
+  ],
+  "stage_ladder": {
+    "note": "사장님 사다리 10/300/600, 승 +3%/패 -3% (레버1 기준 USDT 기대값)",
+    "stage1_10usdt": 0.01,
+    "stage2_300_ungated": 0.17,
+    "stage2_300_gated": 1.45,
+    "stage3_600_ungated": -0.24,
+    "stage3_600_gated": 2.24,
+    "warning": "2·3단계를 게이트 없이 열면 자본이 큰 쪽에서 승률이 낮아 기대값이 음수가 된다. 게이트 없는 3단계 600 USDT 는 두 후보군에서 각각 -0.24 / -2.30."
+  }
+}

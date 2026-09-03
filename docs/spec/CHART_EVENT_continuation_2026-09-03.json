@@ -1,0 +1,534 @@
+{
+  "spec": "CHART_EVENT_continuation",
+  "phase": "⑦ 지속 상승 / 지속 하락 — 추가 진입(피라미딩) 조건",
+  "date": "2026-09-03",
+  "sajangnim_quote": "익절중 추가 포지션 ... +2%가 아니야. 수익중에 차트와 보조지표가 지속 상승이나 하락이 데이터를 보이면 포지션 추가하는거야",
+  "doctrine": "15분이 기준, 4시간은 참고(중단기 흐름). 4H 를 거부권으로 쓰지 않는다.",
+  "headline": "「지속」을 말해주는 단일 지표는 없다. 전 지표 효과크기 |d| < 0.13. 현행 「4H·15m 둘 다 MACD hist 상승 중」은 SHORT 에서 5개 게이트 전부 탈락했다.",
+  "data": {
+    "symbols_total": 100,
+    "symbols_used": 93,
+    "tf": [
+      "15m",
+      "4h"
+    ],
+    "bars_15m": 499,
+    "bars_4h": 499,
+    "source": "top100_klines.json (24h 상승50 + 하락50)"
+  },
+  "event_definition": {
+    "premise": "최근 12봉(3시간) 동안 내 방향으로 >= +1.5% 이동 = 이미 수익 중인 포지션",
+    "sampling": "15m 봉 4개마다(1시간) 1회",
+    "n_events": {
+      "LONG": 1504,
+      "SHORT": 1543
+    },
+    "label": "추가분을 독립 미니 트레이드로 라벨링. 목표 2.0*ATR14 / 손절 1.2*ATR14 / 지평선 32봉(8h). 같은 봉에서 둘 다 닿으면 손절 우선(보수적). 미도달은 32봉 종가 정산.",
+    "R_unit": "손절폭(1.2*ATR14) 대비 배수",
+    "base": {
+      "LONG": {
+        "win": 40.0,
+        "R": 0.059
+      },
+      "SHORT": {
+        "win": 41.6,
+        "R": 0.074
+      }
+    },
+    "lookahead_guard": "판정식은 전부 bar i 까지만. 4H 진행 중 봉은 완료봉 EMA 상태 + 현재 15m 종가로 partial hist 를 재구성한다 (완성된 4H 종가를 그대로 쓰면 미래참조 — 실제로 이 버그가 효과크기 0.47 의 가짜 신호를 만들었다)."
+  },
+  "validation_gates": [
+    "지평선 16/32/64봉 전부 base 초과",
+    "홀/짝 심볼 교차검증 — 양쪽 그룹 모두 자기 base 대비 개선",
+    "시간 전반/후반 양쪽 개선",
+    "심볼 단위 부트스트랩 P(ATR라벨) >= 0.90 & P(고정%라벨) >= 0.75",
+    "고정% 라벨과 ATR 라벨 양쪽에서 base 초과",
+    "표본 >= 100"
+  ],
+  "helpers": {
+    "sgn": "LONG 이면 +1, SHORT 이면 -1",
+    "h4_hist_accel(side)": "4H MACD(12,26,9) hist. 진행 중 봉 hist_p 를 완료봉 EMA 상태 + 현재가로 재구성한 뒤, (hist_p - hist[k])*sgn > (hist[k] - hist[k-1])*sgn. k = 마지막 완료 4H 봉. 「상승 중」이 아니라 「증분이 커지는 중」이다.",
+    "pos_in_4h_bar": "(now - 마지막 완료 4H 봉의 close_time) / 4h. 0~1.",
+    "rsi14_15m_dir": "LONG 이면 RSI14, SHORT 이면 100-RSI14",
+    "atr14_15m_pct_rank(100)": "ATR14 의 최근 100봉 내 자기 순위 0~1 (절대값 금지)",
+    "bb_bandwidth_15m_pct_rank(100)": "(upper-lower)/mid 의 최근 100봉 내 자기 순위",
+    "obv_slope_norm(tf,k)": "(obv[i]-obv[i-k]) / sum(volume[i-k+1..i])  — 거래량 정규화 필수",
+    "consec_4h_candles(side)": "현재 완료 4H 봉부터 거슬러 (close-open)*sgn > 0 인 연속 개수",
+    "body_ratio_15m": "|close-open| / (high-low)"
+  },
+  "add_stage_policy": {
+    "question": "1차 추가와 2차 추가의 조건이 달라야 하는가",
+    "answer": "그렇다. 방향에 따라 반대로 갈린다.",
+    "LONG": "2차 추가가 1차보다 낫다 (base R 1차 +0.040 vs 2차 +0.098). 같은 규칙을 두 번 다 써도 되고, 2차에서 더 세게 나온다.",
+    "SHORT": "1차 추가가 2차보다 낫다 (base R 1차 +0.082 vs 2차 +0.049). S_ATR_LO_H4_CONSEC2 는 1차 +0.295 / 2차 +0.076 으로 2차에서 죽는다 = 1차 전용.",
+    "both_stages_ok": [
+      "S_H4_ACCEL_OBV4H",
+      "L_BODY_H4_ACCEL"
+    ]
+  },
+  "rules": [
+    {
+      "id": "S_H4_ACCEL_EMA4H",
+      "tf": "15m",
+      "tf_context": "4h",
+      "tf_primary": "4h",
+      "side": "SHORT",
+      "expr": "h4_hist_accel(side) and pos_in_4h_bar >= 0.25 and (ema20_4h - ema50_4h)*sgn > 0",
+      "threshold": {
+        "pos_in_4h_bar_min": 0.25
+      },
+      "n": 325,
+      "win_rate": 48.3,
+      "base_win_rate": 41.6,
+      "effect": 0.173,
+      "group_a": 49.7,
+      "group_b": 47.0,
+      "mean_R_atr": 0.25,
+      "base_R_atr": 0.074,
+      "mean_R_fixed": 0.149,
+      "base_R_fixed": 0.035,
+      "trigger_rate": 0.21,
+      "bootstrap_p": {
+        "atr": 1.0,
+        "fixed_pct": 0.96
+      },
+      "add1": {
+        "n": 280,
+        "win": 45.7,
+        "R": 0.202,
+        "base_R": 0.082
+      },
+      "add2": {
+        "n": 45,
+        "win": 64.4,
+        "R": 0.547,
+        "base_R": 0.049
+      },
+      "note": "SHORT 최고 규칙. 2차 추가에서 더 강하지만 n=45 라 2차 수치는 참고치."
+    },
+    {
+      "id": "S_H4_ACCEL_OBV4H",
+      "tf": "15m",
+      "tf_context": "4h",
+      "tf_primary": "4h",
+      "side": "SHORT",
+      "expr": "h4_hist_accel(side) and pos_in_4h_bar >= 0.25 and obv_slope_norm(4h,6)*sgn > 0",
+      "threshold": {
+        "pos_in_4h_bar_min": 0.25,
+        "obv_k": 6
+      },
+      "n": 383,
+      "win_rate": 46.2,
+      "base_win_rate": 41.6,
+      "effect": 0.124,
+      "group_a": 47.6,
+      "group_b": 44.8,
+      "mean_R_atr": 0.214,
+      "base_R_atr": 0.074,
+      "mean_R_fixed": 0.166,
+      "base_R_fixed": 0.035,
+      "trigger_rate": 0.25,
+      "bootstrap_p": {
+        "atr": 0.98,
+        "fixed_pct": 0.98
+      },
+      "add1": {
+        "n": 298,
+        "win": 45.6,
+        "R": 0.214,
+        "base_R": 0.082
+      },
+      "add2": {
+        "n": 85,
+        "win": 48.2,
+        "R": 0.215,
+        "base_R": 0.049
+      },
+      "note": "1차·2차가 같은 크기로 통하는 유일한 SHORT 규칙 = 단계 구분 없이 써도 된다."
+    },
+    {
+      "id": "S_H4_ACCEL_RSI_BAND",
+      "tf": "15m",
+      "tf_context": "15m+4h",
+      "tf_primary": "15m",
+      "side": "SHORT",
+      "expr": "h4_hist_accel(side) and pos_in_4h_bar >= 0.25 and 50 <= rsi14_15m_dir < 80",
+      "threshold": {
+        "pos_in_4h_bar_min": 0.25,
+        "rsi_dir_min": 50,
+        "rsi_dir_max": 80
+      },
+      "n": 806,
+      "win_rate": 45.0,
+      "base_win_rate": 41.6,
+      "effect": 0.146,
+      "group_a": 44.0,
+      "group_b": 45.9,
+      "mean_R_atr": 0.157,
+      "base_R_atr": 0.074,
+      "mean_R_fixed": 0.092,
+      "base_R_fixed": 0.035,
+      "trigger_rate": 0.52,
+      "bootstrap_p": {
+        "atr": 0.99,
+        "fixed_pct": 0.94
+      },
+      "add1": {
+        "n": 622,
+        "win": 44.5,
+        "R": 0.166,
+        "base_R": 0.082
+      },
+      "add2": {
+        "n": 184,
+        "win": 46.7,
+        "R": 0.127,
+        "base_R": 0.049
+      },
+      "note": "통과율 52% 로 가장 넓다. rsi14_15m_dir = SHORT 이면 100-RSI14."
+    },
+    {
+      "id": "S_ATR_RANK_LO",
+      "tf": "15m",
+      "tf_context": "15m",
+      "tf_primary": "15m",
+      "side": "SHORT",
+      "expr": "atr14_15m_pct_rank(100) < 0.70",
+      "threshold": {
+        "atr_rank_max": 0.7
+      },
+      "n": 893,
+      "win_rate": 43.1,
+      "base_win_rate": 41.6,
+      "effect": 0.073,
+      "group_a": 44.0,
+      "group_b": 42.3,
+      "mean_R_atr": 0.137,
+      "base_R_atr": 0.074,
+      "mean_R_fixed": 0.098,
+      "base_R_fixed": 0.035,
+      "trigger_rate": 0.58,
+      "bootstrap_p": {
+        "atr": 0.98,
+        "fixed_pct": 0.98
+      },
+      "add1": {
+        "n": 694,
+        "win": 43.7,
+        "R": 0.154,
+        "base_R": 0.082
+      },
+      "add2": {
+        "n": 199,
+        "win": 41.2,
+        "R": 0.076,
+        "base_R": 0.049
+      },
+      "note": "MACD 와 독립. 효과는 작지만 모든 게이트를 최고 점수로 통과. 1차 추가에서 더 강하다."
+    },
+    {
+      "id": "S_ATR_LO_H4_CONSEC2",
+      "tf": "15m",
+      "tf_context": "15m+4h",
+      "tf_primary": "15m",
+      "side": "SHORT",
+      "expr": "atr14_15m_pct_rank(100) < 0.70 and consec_4h_candles(side) >= 2",
+      "threshold": {
+        "atr_rank_max": 0.7,
+        "consec_4h_min": 2
+      },
+      "n": 363,
+      "win_rate": 46.6,
+      "base_win_rate": 41.6,
+      "effect": 0.131,
+      "group_a": 48.3,
+      "group_b": 44.9,
+      "mean_R_atr": 0.234,
+      "base_R_atr": 0.074,
+      "mean_R_fixed": 0.206,
+      "base_R_fixed": 0.035,
+      "trigger_rate": 0.24,
+      "bootstrap_p": {
+        "atr": 0.99,
+        "fixed_pct": 0.99
+      },
+      "add1": {
+        "n": 261,
+        "win": 48.7,
+        "R": 0.295,
+        "base_R": 0.082
+      },
+      "add2": {
+        "n": 102,
+        "win": 41.2,
+        "R": 0.076,
+        "base_R": 0.049
+      },
+      "note": "1차 추가 전용. 2차(runup>=4%)에서는 +0.076 으로 base 와 같아진다."
+    },
+    {
+      "id": "L_BODY_H4_ACCEL",
+      "tf": "15m",
+      "tf_context": "15m+4h",
+      "tf_primary": "15m",
+      "side": "LONG",
+      "expr": "body_ratio_15m >= 0.50 and h4_hist_accel(side) and pos_in_4h_bar >= 0.25",
+      "threshold": {
+        "body_ratio_min": 0.5,
+        "pos_in_4h_bar_min": 0.25
+      },
+      "n": 368,
+      "win_rate": 45.1,
+      "base_win_rate": 40.0,
+      "effect": 0.137,
+      "group_a": 43.7,
+      "group_b": 46.3,
+      "mean_R_atr": 0.203,
+      "base_R_atr": 0.059,
+      "mean_R_fixed": 0.115,
+      "base_R_fixed": 0.029,
+      "trigger_rate": 0.24,
+      "bootstrap_p": {
+        "atr": 1.0,
+        "fixed_pct": 0.94
+      },
+      "add1": {
+        "n": 252,
+        "win": 44.0,
+        "R": 0.177,
+        "base_R": 0.04
+      },
+      "add2": {
+        "n": 116,
+        "win": 47.4,
+        "R": 0.259,
+        "base_R": 0.098
+      },
+      "note": "LONG 에서 가장 넓고 안정적. body_ratio = |close-open|/(high-low)."
+    },
+    {
+      "id": "L_OBV_DIVERGE",
+      "tf": "15m",
+      "tf_context": "15m",
+      "tf_primary": "15m",
+      "side": "LONG",
+      "expr": "close_15m == max(close_15m[-11:]) and obv_15m != max(obv_15m[-11:])",
+      "threshold": {
+        "lookback": 10
+      },
+      "n": 149,
+      "win_rate": 49.0,
+      "base_win_rate": 40.0,
+      "effect": 0.203,
+      "group_a": 44.6,
+      "group_b": 52.4,
+      "mean_R_atr": 0.284,
+      "base_R_atr": 0.059,
+      "mean_R_fixed": 0.143,
+      "base_R_fixed": 0.029,
+      "trigger_rate": 0.1,
+      "bootstrap_p": {
+        "atr": 0.98,
+        "fixed_pct": 0.86
+      },
+      "add1": {
+        "n": 108,
+        "win": 46.3,
+        "R": 0.204,
+        "base_R": 0.04
+      },
+      "add2": {
+        "n": 41,
+        "win": 56.1,
+        "R": 0.496,
+        "base_R": 0.098
+      },
+      "note": "통념 반대. OBV 확인(같이 감)보다 미확인이 낫다 (+0.284 vs +0.059)."
+    },
+    {
+      "id": "L_BW_OBV_DIVERGE",
+      "tf": "15m",
+      "tf_context": "15m",
+      "tf_primary": "15m",
+      "side": "LONG",
+      "expr": "close_15m == max(close_15m[-11:]) and obv_15m != max(obv_15m[-11:]) and bb_bandwidth_15m_pct_rank(100) >= 0.60",
+      "threshold": {
+        "lookback": 10,
+        "bw_rank_min": 0.6
+      },
+      "n": 108,
+      "win_rate": 55.6,
+      "base_win_rate": 40.0,
+      "effect": 0.343,
+      "group_a": 51.1,
+      "group_b": 58.7,
+      "mean_R_atr": 0.458,
+      "base_R_atr": 0.059,
+      "mean_R_fixed": 0.182,
+      "base_R_fixed": 0.029,
+      "trigger_rate": 0.07,
+      "bootstrap_p": {
+        "atr": 1.0,
+        "fixed_pct": 0.87
+      },
+      "add1": {
+        "n": 69,
+        "win": 53.6,
+        "R": 0.394,
+        "base_R": 0.04
+      },
+      "add2": {
+        "n": 39,
+        "win": 59.0,
+        "R": 0.573,
+        "base_R": 0.098
+      },
+      "note": "표본 108건 / 통과율 7% 로 얇다. 효과크기는 전 규칙 중 최대(+0.343)."
+    },
+    {
+      "id": "L_PX_EXT",
+      "tf": "15m",
+      "tf_context": "15m",
+      "tf_primary": "15m",
+      "side": "LONG",
+      "expr": "close_15m == max(close_15m[-11:])",
+      "threshold": {
+        "lookback": 10
+      },
+      "n": 628,
+      "win_rate": 41.9,
+      "base_win_rate": 40.0,
+      "effect": 0.065,
+      "group_a": 42.5,
+      "group_b": 41.3,
+      "mean_R_atr": 0.113,
+      "base_R_atr": 0.059,
+      "mean_R_fixed": 0.067,
+      "base_R_fixed": 0.029,
+      "trigger_rate": 0.42,
+      "bootstrap_p": {
+        "atr": 0.91,
+        "fixed_pct": 0.83
+      },
+      "add1": {
+        "n": 401,
+        "win": 40.1,
+        "R": 0.064,
+        "base_R": 0.04
+      },
+      "add2": {
+        "n": 227,
+        "win": 44.9,
+        "R": 0.198,
+        "base_R": 0.098
+      },
+      "note": "효과 작음(+0.065). 넓은 1차 필터로만. 1차 추가에서는 base 와 거의 같다."
+    }
+  ],
+  "rejected": [
+    {
+      "id": "S_PROD_4H_15M",
+      "side": "SHORT",
+      "expr": "h4_hist_rising(side) and h15_hist_rising(side)   # 현행 Fix 273 채택안",
+      "n": 597,
+      "win_rate": 41.5,
+      "base_win_rate": 41.6,
+      "mean_R_atr": 0.069,
+      "base_R_atr": 0.074,
+      "mean_R_fixed": -0.026,
+      "base_R_fixed": 0.035,
+      "effect": -0.002,
+      "bootstrap_p": {
+        "atr": 0.44,
+        "fixed_pct": 0.05
+      },
+      "gates_failed": [
+        "horizon",
+        "oddeven",
+        "time",
+        "boot",
+        "label"
+      ],
+      "verdict": "5개 게이트 전부 탈락. 프로덕션이 SHORT 에서 건당 -91.32 -> +99.28 로 봤던 그 조건이 여기서는 base 보다 나쁘다. 고정% 라벨 심볼 부트스트랩 p=0.05 = 95% 확률로 base 보다 나쁘다."
+    },
+    {
+      "id": "L_PROD_4H_15M",
+      "side": "LONG",
+      "expr": "h4_hist_rising(side) and h15_hist_rising(side)   # 현행 Fix 273 채택안",
+      "n": 651,
+      "win_rate": 40.7,
+      "base_win_rate": 40.0,
+      "mean_R_atr": 0.076,
+      "base_R_atr": 0.059,
+      "mean_R_fixed": 0.057,
+      "base_R_fixed": 0.029,
+      "effect": 0.024,
+      "bootstrap_p": {
+        "atr": 0.68,
+        "fixed_pct": 0.77
+      },
+      "gates_failed": [
+        "time",
+        "boot"
+      ],
+      "verdict": "홀/짝은 통과하지만 시간 분할과 심볼 부트스트랩에서 탈락. 프로덕션은 LONG 을 '여전히 적자'로 봤는데 여기서는 오히려 LONG 쪽이 살아 있다 = 방향별 결론이 정반대."
+    },
+    {
+      "id": "S_H4_ACCEL",
+      "side": "SHORT",
+      "expr": "h4_hist_accel(side) and pos_in_4h_bar >= 0.25",
+      "n": 879,
+      "win_rate": 43.7,
+      "base_win_rate": 41.6,
+      "mean_R_atr": 0.124,
+      "base_R_atr": 0.074,
+      "effect": 0.098,
+      "bootstrap_p": {
+        "atr": 0.94,
+        "fixed_pct": 0.78
+      },
+      "gates_failed": [
+        "time"
+      ],
+      "verdict": "단독으로는 시간 분할 탈락. 반드시 2차 조건과 함께 쓴다."
+    },
+    {
+      "id": "S_H4_ACCEL_BW",
+      "side": "SHORT",
+      "expr": "h4_hist_accel(side) and pos_in_4h_bar>=0.25 and bb_bandwidth_15m_pct_rank>=0.60",
+      "n": 558,
+      "win_rate": 46.2,
+      "base_win_rate": 41.6,
+      "mean_R_atr": 0.182,
+      "base_R_atr": 0.074,
+      "effect": 0.147,
+      "bootstrap_p": {
+        "atr": 0.98,
+        "fixed_pct": 0.93
+      },
+      "gates_failed": [
+        "time"
+      ],
+      "verdict": "수치는 좋은데 시간 분할에서 뒤집힌다. 같은 계열이면 EMA4H / OBV4H 를 쓴다."
+    },
+    {
+      "id": "L_EMA_H4_ACCEL",
+      "side": "LONG",
+      "expr": "ema20_15m>ema50_15m and h4_hist_accel(side) and pos_in_4h_bar>=0.25",
+      "n": 563,
+      "win_rate": 44.8,
+      "base_win_rate": 40.0,
+      "mean_R_atr": 0.183,
+      "base_R_atr": 0.059,
+      "effect": 0.155,
+      "bootstrap_p": {
+        "atr": 1.0,
+        "fixed_pct": 0.97
+      },
+      "gates_failed": [
+        "time"
+      ],
+      "verdict": "부트스트랩 1.00 인데 전반 -0.004 / 후반 +0.357 로 시간 쏠림. body50 판이 더 안전."
+    }
+  ]
+}

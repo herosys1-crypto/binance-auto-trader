@@ -1,0 +1,274 @@
+{
+  "meta": {
+    "regime": "8_trend_up_down_sideways",
+    "title": "추세 상승/하락/보합 판정 — 4H 는 「참고」다",
+    "date": "2026-09-03",
+    "doctrine": "15분이 기준이고 4시간을 참고한다. 4시간 차트의 의미는 중단기 지속적인 흐름을 판단하는 정도. 4H 를 거부권(veto)으로 쓰지 않는다.",
+    "dataset": {
+      "source": "top100_klines.json (24h 상승 50위 + 하락 50위)",
+      "symbols_total": 100,
+      "symbols_used_4h": 97,
+      "symbols_used_15m_and_4h": 97,
+      "bars": "15m 500봉(5일) / 4h 500봉(83일). 마지막 진행중 봉은 전부 제거",
+      "chg24_range_pct": [-29.9, 68.0]
+    },
+    "methodology": {
+      "lookahead_guard": "판정은 i 시점 완료봉까지만. 진입은 o[i+1](다음 15m 봉 시가). 4H 는 그 15m 시각에 이미 완전히 닫힌 봉만 사용(binary search align).",
+      "label": "TP/SL 선착 배리어. 기본 TP +3% / SL -3% / 최대보유 24h(15m×96). 한 봉에서 양쪽 다 닿으면 보수적으로 패.",
+      "unresolved_handling": "TP/SL 어느 쪽도 못 닿은 건은 승률 계산에서 제외. 엄격 신호 1,180건 중 결착 1,027건(87.0%), 미결착 153건(13.0%)을 별도 집계.",
+      "cross_validation": "97종목을 이름순 정렬 후 짝수 인덱스=그룹A(49종목) / 홀수=그룹B(48종목). 두 그룹 모두 기준 승률을 초과한 규칙만 채택.",
+      "robustness": "TP/SL/보유시간 5~7개 설정 + 신호 정의 2종(엄격/느슨)에서 전부 같은 부호일 것을 요구.",
+      "effect_size": "Cohen's d = (규칙 적용군 평균손익 − 미적용군 평균손익) / 합동표준편차. 손익은 ±TP%."
+    },
+    "headline": "4H 를 「MACD hist 의 1봉 미분」으로 읽는 현행 게이트(Fix 270)는 SHORT 에서 승률을 57.5%→52.1% 로 **낮춘다**. 4H 는 지속 상태(EMA 배열)로 읽어야 하고, 그때 정점 SHORT 승률이 70.1% 로 오른다."
+  },
+
+  "rules": [
+    {
+      "id": "TREND_4H_SHORT_SUSTAINED",
+      "tf": "4h",
+      "side": "SHORT",
+      "role": "context_weight",
+      "expr": "ema20_4h < ema50_4h AND NOT (macd_hist_4h[-1] < macd_hist_4h[-2])",
+      "expr_plain": "4H EMA20 이 EMA50 아래(지속 하락 흐름) 이고, 4H MACD hist 가 아직 아래로 꺾이지 않았다",
+      "threshold": {"ema_fast": 20, "ema_slow": 50, "macd": [12, 26, 9], "hist_direction": "not_falling"},
+      "n": 157,
+      "win_rate": 0.7006,
+      "baseline_win_rate": 0.5749,
+      "effect": 0.375,
+      "group_a": 0.6265,
+      "group_b": 0.7683,
+      "cross_validated": true,
+      "robustness": {
+        "TP3_SL3_24h": {"n": 157, "win_rate": 0.701},
+        "TP2_SL2_24h": {"n": 168, "win_rate": 0.655},
+        "TP5_SL5_24h": {"n": 111, "win_rate": 0.676},
+        "TP3_SL3_12h": {"n": 136, "win_rate": 0.566},
+        "TP3_SL3_48h": {"n": 131, "win_rate": 0.733},
+        "TP5_SL3_24h": {"n": 123, "win_rate": 0.545},
+        "TP3_SL5_24h": {"n": 151, "win_rate": 0.795},
+        "loose_signal": {"n": 532, "win_rate": 0.639, "group_a": 0.626, "group_b": 0.651}
+      },
+      "note": "🚨 hist 조건이 현행 Fix 270 과 **정반대**다. Fix 270 은 hist 가 아래로 꺾였을 것을 요구하는데, 그건 이미 늦은 자리다(49.3%)."
+    },
+    {
+      "id": "TREND_4H_SHORT_STRONG",
+      "tf": "4h",
+      "side": "SHORT",
+      "role": "context_weight",
+      "expr": "ema20_4h < ema50_4h AND close_4h < bb_mid_4h AND NOT (macd_hist_4h[-1] < macd_hist_4h[-2])",
+      "expr_plain": "4H 지속 하락(EMA 배열) + 4H 종가가 볼밴 중단선 아래 + 4H MACD hist 가 아직 안 꺾임",
+      "threshold": {"ema_fast": 20, "ema_slow": 50, "bb": [20, 2.0], "macd": [12, 26, 9], "hist_direction": "not_falling"},
+      "n": 93,
+      "win_rate": 0.7527,
+      "baseline_win_rate": 0.5749,
+      "effect": 0.447,
+      "group_a": 0.6429,
+      "group_b": 0.8431,
+      "cross_validated": true,
+      "robustness": {
+        "TP3_SL3_24h": {"n": 93, "win_rate": 0.753},
+        "TP2_SL2_24h": {"n": 104, "win_rate": 0.692},
+        "TP5_SL5_24h": {"n": 64, "win_rate": 0.703},
+        "TP3_SL3_12h": {"n": 79, "win_rate": 0.595},
+        "TP3_SL3_48h": {"n": 89, "win_rate": 0.775},
+        "loose_signal": {"n": 320, "win_rate": 0.694, "group_a": 0.667, "group_b": 0.717}
+      },
+      "note": "가장 강한 규칙이지만 그룹간 편차가 크다(64.3% vs 84.3%). 가중치 최상위 등급으로만 쓰고 단독 통과조건으로 쓰지 말 것."
+    },
+    {
+      "id": "TREND_4H_LONG_STRONG",
+      "tf": "4h",
+      "side": "LONG",
+      "role": "context_weight",
+      "expr": "ema20_4h > ema50_4h AND macd_hist_4h[-1] > macd_hist_4h[-2]",
+      "expr_plain": "4H EMA20 이 EMA50 위(지속 상승 흐름) 이고 4H MACD hist 가 상승 중",
+      "threshold": {"ema_fast": 20, "ema_slow": 50, "macd": [12, 26, 9], "hist_direction": "rising"},
+      "n": 126,
+      "win_rate": 0.6111,
+      "baseline_win_rate": 0.5399,
+      "effect": 0.188,
+      "group_a": 0.6200,
+      "group_b": 0.6047,
+      "cross_validated": true,
+      "robustness": {
+        "TP3_SL3_24h": {"n": 126, "win_rate": 0.611},
+        "TP2_SL2_24h": {"n": 130, "win_rate": 0.585},
+        "TP5_SL5_24h": {"n": 93, "win_rate": 0.624},
+        "TP3_SL3_12h": {"n": 118, "win_rate": 0.627},
+        "TP3_SL3_48h": {"n": 105, "win_rate": 0.600},
+        "loose_signal": {"n": 411, "win_rate": 0.572, "group_a": 0.617, "group_b": 0.538}
+      },
+      "note": "🚨 **LONG 은 SHORT 와 hist 조건이 반대다.** LONG 은 hist 상승중이 유리(61.1%), SHORT 는 hist 안꺾임이 유리(70.1%). 한 식으로 대칭 처리하면 안 된다. 효과크기는 SHORT 의 절반 이하."
+    }
+  ],
+
+  "continuous_weight": {
+    "note": "🚨 이것이 본 임무의 주 산출물이다. 이진 통과/차단이 아니라 **신뢰도 배수**로 쓴다. 최저 등급도 승률 48.4% 라 진입을 막을 근거가 못 된다 — 자본 배분·확신도에만 반영할 것.",
+    "score_expr": "trend_4h_score = (ema20_4h*sgn > ema50_4h*sgn) + (close_4h*sgn > bb_mid_4h*sgn) + (macd_hist_4h 가 내 편 반대로 꺾이지 않음)   # sgn: LONG=+1, SHORT=-1 로 부호 정렬. 0~3점",
+    "SHORT": {
+      "baseline_win_rate": 0.5749,
+      "levels": [
+        {"score": 0, "n": 62,  "win_rate": 0.4839, "weight": 0.842, "group_a": 0.4390, "group_b": 0.5714, "cross_validated": true},
+        {"score": 1, "n": 148, "win_rate": 0.5270, "weight": 0.917, "group_a": 0.5070, "group_b": 0.5476, "cross_validated": true},
+        {"score": 2, "n": 198, "win_rate": 0.5556, "weight": 0.966, "group_a": 0.5980, "group_b": 0.5098, "cross_validated": false},
+        {"score": 3, "n": 93,  "win_rate": 0.7527, "weight": 1.309, "group_a": 0.6429, "group_b": 0.8431, "cross_validated": true}
+      ],
+      "monotonic": true,
+      "usage": "capital_multiplier 또는 confidence 에 곱한다. veto 금지."
+    },
+    "LONG": {
+      "baseline_win_rate": 0.5399,
+      "levels": [
+        {"score": 0, "n": 95,  "win_rate": 0.4842, "weight": 0.897, "group_a": 0.5280, "group_b": 0.4290, "cross_validated": false},
+        {"score": 1, "n": 177, "win_rate": 0.5480, "weight": 1.015, "group_a": 0.4750, "group_b": 0.6080, "cross_validated": false},
+        {"score": 2, "n": 174, "win_rate": 0.5860, "weight": 1.086, "group_a": 0.6620, "group_b": 0.5260, "cross_validated": false},
+        {"score": 3, "n": 80,  "win_rate": 0.4880, "weight": 0.903, "group_a": 0.5750, "group_b": 0.4000, "cross_validated": false}
+      ],
+      "monotonic": false,
+      "usage": "🚨 **채택 금지.** 단조성이 깨졌고(3점이 0점보다 낮다) 네 등급 전부 교차검증 실패. LONG 은 TREND_4H_LONG_STRONG 이진 규칙만 쓸 것."
+    }
+  },
+
+  "current_gate_verdict": {
+    "target": "backend/app/services/trend_4h_gate.py (Fix 270) check_trend_4h",
+    "condition": "macd_hist_4h*sgn > 0 AND macd_hist_4h 가 내 편으로 상승 중",
+    "verdict": "REFUTED — 두 방향 모두, 두 신호정의 모두, 두 교차검증 그룹 모두에서 기준 승률 이하",
+    "measured": {
+      "SHORT_strict": {"n": 96, "win_rate": 0.5208, "baseline": 0.5749, "effect": -0.135, "group_a": 0.5510, "group_b": 0.4890},
+      "SHORT_loose": {"n": 300, "win_rate": 0.4900, "baseline": 0.5340, "effect": -0.108, "group_a": 0.5140, "group_b": 0.4680},
+      "LONG_strict": {"n": 127, "win_rate": 0.5350, "baseline": 0.5399, "effect": -0.012, "group_a": 0.5230, "group_b": 0.5480},
+      "LONG_loose": {"n": 436, "win_rate": 0.5000, "baseline": 0.5210, "effect": -0.054, "group_a": 0.4960, "group_b": 0.5050}
+    },
+    "pass_rate_unconditional_all_bars": {"total_bars": 42960, "LONG": 0.273, "SHORT": 0.249},
+    "pass_rate_current_snapshot_97_symbols": {"LONG": 0.351, "SHORT": 0.227},
+    "pass_rate_conditional_on_15m_peak_short_signal": 0.198,
+    "why_production_is_3_3_pct": {
+      "explanation": "게이트 자체의 무조건부 통과율은 약 25% 다. 생산의 3.3% 는 게이트가 빡빡해서가 아니라 **후보군이 급등 종목에 몰려 있기 때문**이다. 급등할수록 SHORT 게이트 통과율이 0 으로 수렴한다.",
+      "short_gate_pass_by_chg24_current": [
+        {"bucket": "-15% 이하", "symbols": 5, "pass_rate": 0.600},
+        {"bucket": "-15~-5%", "symbols": 13, "pass_rate": 0.308},
+        {"bucket": "-5~+5%", "symbols": 33, "pass_rate": 0.455},
+        {"bucket": "+5~+15%", "symbols": 35, "pass_rate": 0.000},
+        {"bucket": "+15~+30%", "symbols": 6, "pass_rate": 0.000},
+        {"bucket": "+30% 이상", "symbols": 5, "pass_rate": 0.000}
+      ],
+      "short_gate_pass_by_4h_6bar_surge_at_signal": [
+        {"bucket": "-10% 이하", "n": 26, "pass_rate": 0.538},
+        {"bucket": "-10~-3%", "n": 114, "pass_rate": 0.605},
+        {"bucket": "-3~+3%", "n": 424, "pass_rate": 0.160},
+        {"bucket": "+3~+10%", "n": 126, "pass_rate": 0.016},
+        {"bucket": "+10~+25%", "n": 58, "pass_rate": 0.000},
+        {"bucket": "+25% 이상", "n": 26, "pass_rate": 0.000}
+      ],
+      "conflict": "사장님 「급등 정점 SHORT」의 대상은 정확히 통과율 0% 구간이다. 게이트를 켜면 정점 SHORT 전략이 **정의상 전멸**한다."
+    }
+  },
+
+  "relaxation_options": {
+    "note": "무조건부 통과율 (전 구간 42,960봉)",
+    "options": [
+      {"id": "current", "expr": "부호 AND 방향", "pass_LONG": 0.273, "pass_SHORT": 0.249,
+       "measured_win_rate_SHORT": 0.521, "verdict": "탈락 (기준 이하)"},
+      {"id": "relax_1_direction_only", "expr": "방향만 (내 편으로 상승중)", "pass_LONG": 0.509, "pass_SHORT": 0.491,
+       "measured_win_rate_SHORT": 0.506, "verdict": "**최악** — SHORT 차단군 61.3% vs 통과군 50.6%, 효과크기 -0.218"},
+      {"id": "relax_2_sign_only", "expr": "부호만", "pass_LONG": 0.515, "pass_SHORT": 0.485,
+       "measured_win_rate_SHORT": 0.576, "verdict": "무해무익 (효과크기 0.005)"},
+      {"id": "relax_3_sign_or_direction", "expr": "부호 OR 방향", "pass_LONG": 0.751, "pass_SHORT": 0.727,
+       "measured_win_rate_SHORT": 0.554, "verdict": "탈락 (기준 이하)"},
+      {"id": "PROPOSED_replace", "expr": "MACD hist 대신 EMA 지속상태로 교체 + 연속 가중치", "pass_SHORT": 0.451,
+       "measured_win_rate_SHORT": 0.637, "verdict": "**채택 권장**"}
+    ]
+  },
+
+  "expected_effect_if_replaced": {
+    "basis": "SHORT 엄격신호 결착 501건, TP3/SL3 기대값 = 승률×3 − (1−승률)×3",
+    "rows": [
+      {"option": "게이트 없음", "n": 501, "pass_rate": 1.000, "win_rate": 0.575, "expected_pct": 0.449},
+      {"option": "현행 Fix270", "n": 96, "pass_rate": 0.192, "win_rate": 0.521, "expected_pct": 0.125},
+      {"option": "제안A: 4H EMA 지속상태만", "n": 226, "pass_rate": 0.451, "win_rate": 0.637, "expected_pct": 0.823},
+      {"option": "제안B: EMA + hist 안꺾임", "n": 157, "pass_rate": 0.313, "win_rate": 0.701, "expected_pct": 1.204},
+      {"option": "제안C: 3점 만점만", "n": 93, "pass_rate": 0.186, "win_rate": 0.753, "expected_pct": 1.516},
+      {"option": "제안D: 2점 이상", "n": 291, "pass_rate": 0.581, "win_rate": 0.619, "expected_pct": 0.711}
+    ],
+    "recommendation": "게이트를 **없애고** 연속 가중치로 바꾼다. 굳이 하한을 둔다면 제안D(2점 이상, 통과율 58.1%)가 기회를 가장 덜 버리면서 기준을 넘는다."
+  },
+
+  "refuted": [
+    {
+      "hypothesis": "4H 추세 방향은 이후 4H 움직임을 예측한다",
+      "test": "95종목 11,500표본, 후보 12종, 전방 12/24/48/72/120시간",
+      "result": "효과크기 최대 0.081, 대부분 0.01~0.04. 12개 후보 **전부** 홀/짝 교차검증 실패.",
+      "verdict": "REFUTED — 4H 추세는 방향 예측력이 사실상 없다"
+    },
+    {
+      "hypothesis": "추세 점수가 클수록 이후 수익률이 단조 증가한다",
+      "test": "10분위, H=48시간",
+      "result": "U자형. ema_align 10분위 = 2.26 → 0.67(중앙) → 2.20. 양 극단이 **둘 다** 높다.",
+      "verdict": "REFUTED — 이건 방향이 아니라 변동성 효과다. 4H 극단값을 방향 근거로 쓰면 안 된다."
+    },
+    {
+      "hypothesis": "현행 Fix 270 게이트는 좋은 자리를 고른다",
+      "result": "SHORT 통과군 52.1% vs 차단군 58.8%. 7개 배리어 설정 **전부**에서 통과군이 기준 이하. 두 그룹 모두.",
+      "verdict": "REFUTED"
+    },
+    {
+      "hypothesis": "게이트가 너무 빡빡하니 「방향만」으로 완화하면 나아진다",
+      "result": "완화① 방향만 = 통과군 50.6% vs 차단군 61.3%, 효과크기 **-0.218** (현행 -0.135보다 나쁨)",
+      "verdict": "REFUTED — 완화 방향이 틀렸다. 조건을 느슨하게 하는 게 아니라 **지표를 바꿔야** 한다."
+    },
+    {
+      "hypothesis": "생산 통과율 3.3% 는 게이트 조건이 과도해서다",
+      "result": "게이트 무조건부 통과율은 24.9%(SHORT). 신호 조건부로도 19.8%. 3.3% 는 후보군이 급등 쪽에 몰려서 나온다 — 4H 6봉 +10% 이상 구간에서 통과율 **0.0%**(n=84).",
+      "verdict": "REFUTED (원인 오귀속) — 조건이 아니라 후보군 분포와의 상호작용이 원인"
+    },
+    {
+      "hypothesis": "LONG 과 SHORT 는 4H 조건을 대칭으로 쓰면 된다",
+      "result": "SHORT 는 hist **안 꺾임**이 유리(70.1% vs 49.3%), LONG 은 hist **상승중**이 유리(61.1% vs 53.0%). 부호만 뒤집는 sgn 방식으로는 표현 불가.",
+      "verdict": "REFUTED"
+    },
+    {
+      "hypothesis": "4H EMA 지속상승은 LONG 에 유리하다 (SHORT 의 대칭)",
+      "result": "엄격 n=292 56.5%(기준 54.0%, 그룹B +0.8p로 미미), 느슨 n=1004 52.9%(기준 52.1%, **그룹B 49.6% 로 기준 이하**)",
+      "verdict": "REFUTED — 신호 정의를 바꾸면 교차검증이 깨진다. 채택 안 함."
+    },
+    {
+      "hypothesis": "SHORT 에서 통하는 연속 가중치를 LONG 에도 쓸 수 있다",
+      "result": "LONG 가중치 0/1/2/3점 = 48.4% / 54.8% / 58.6% / **48.8%**. 단조성 붕괴, 네 등급 전부 교차검증 실패.",
+      "verdict": "REFUTED"
+    },
+    {
+      "hypothesis": "ADX·OBV 기울기가 4H 추세 신뢰도를 보강한다",
+      "result": "SHORT 5분위에서 obv 교차=X(A+3.4 B-5.1), adx 교차=X(A+3.5 B-3.9). LONG 은 adx 가 **역방향**으로만 일관(A-10.1 B-9.5).",
+      "verdict": "REFUTED (신뢰도 축으로는 사용 불가)"
+    },
+    {
+      "hypothesis": "MACD hist 는 방향으로 쓰면 살아난다 (기존 사상 ④)",
+      "result": "종목 선정에서는 맞았지만 **정점 SHORT 진입 맥락에서는 방향 조건이 오히려 해롭다**(-20.8%p, EMA 내편일 때). 같은 지표·같은 「방향」 사용법이어도 국면이 다르면 부호가 뒤집힌다.",
+      "verdict": "부분 반증 — 「방향으로 쓰면 항상 낫다」는 일반화는 틀렸다"
+    }
+  ],
+
+  "unresolved": [
+    "LONG 의 연속 가중치. 네 등급 전부 교차검증 실패, 단조성 붕괴. LONG 은 이진 규칙(TREND_4H_LONG_STRONG) 만 채택했다.",
+    "가중치 2점 구간(SHORT n=198)이 교차검증 실패(A 59.8% / B 51.0%). 0·1·3점은 통과. 2점의 배수 0.966 은 잠정값이다.",
+    "TREND_4H_SHORT_STRONG(3점) 의 그룹간 편차가 크다(64.3% vs 84.3%, n=93). 표본 30건은 넘지만 그룹당 약 45건이라 최상위 등급 배수 1.309 는 실거래로 재확인이 필요하다.",
+    "15m 데이터가 500봉(5일)뿐이라 15m 신호 표본이 최근 5일 시장 국면에 갇혀 있다. 4H 는 83일이지만 15m×4H 결합 측정은 5일치다. 국면이 바뀌면 재측정 필요.",
+    "「보합」 판정을 별도 상태로 분리하지 못했다. ADX 구간별 측정에서 ADX<15 구간(n=818)의 효과크기가 교차검증을 통과하지 못해 보합 전용 규칙은 만들지 않았다.",
+    "실제 시스템은 분할 진입·부분 손절(10 USDT 잔량)·사다리 자본(10/300/600)을 쓰는데, 본 측정은 단일 진입 + 대칭 배리어다. 사다리에서의 효과는 별도 측정이 필요하다."
+  ],
+
+  "integration_notes": {
+    "do_not": [
+      "4H 판정을 통과/차단(veto)으로 쓰지 말 것 — 사장님 명시. 최저 등급도 승률 48.4% 라 막을 근거가 없다.",
+      "LONG 과 SHORT 를 sgn 하나로 대칭 처리하지 말 것 — hist 조건이 서로 반대다.",
+      "MACD hist 원시값을 쓰지 말 것 — 가격 단위라 심볼마다 스케일이 다르다. 부호와 방향만.",
+      "trend_4h_gate.py 의 check_pyramid_trend(Fix 273) 는 본 측정 범위 밖이다. 피라미딩은 별도 국면이므로 이 결과를 그대로 옮기지 말 것 (「같은 지표라도 용도가 다르면 결과가 다르다」)."
+    ],
+    "do": [
+      "check_trend_4h 의 반환을 (bool, str, dict) 에서 신뢰도 점수(0~3)와 배수를 포함하도록 확장하고, 호출자는 배수를 confidence/자본에 곱한다.",
+      "굳이 하한을 둔다면 SHORT 2점 이상(통과율 58.1%, 승률 61.9%). 기본은 하한 없음.",
+      "설정 키 trend_4h_gate_enabled 는 기본 OFF 를 유지하고, 새 키(예: trend_4h_weight_enabled)로 가중치 모드를 분리한다."
+    ]
+  }
+}
