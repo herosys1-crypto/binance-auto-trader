@@ -1,0 +1,224 @@
+{
+  "spec": "SUPPORT_BOUNCE_VS_BREAKDOWN",
+  "version": "1.0",
+  "date": "2026-09-03",
+  "question": "급락 후 지지선 접촉 시점에서 BOUNCE(반등) 와 BREAKDOWN(추가하락) 을 사전에 가르는 판정식",
+  "data_basis": {
+    "symbols": 30,
+    "symbols_up_24h": 15,
+    "symbols_down_24h": 15,
+    "timeframes": ["15m", "1h", "4h"],
+    "bars_per_tf": 300,
+    "events_swing_low": 264,
+    "events_resolved_3pct": 220,
+    "window_hours_15m": 75,
+    "caveat": "표본 264건 / 30심볼 / 15분봉 75시간. 통계적으로 방향은 신뢰할 만하나 절대 승률은 ±5%p 오차를 가정할 것. 하위 분할(n<30) 수치는 참고용."
+  },
+
+  "support_definition": {
+    "chosen": "swing_low",
+    "reason": "9개 정의를 전부 재서 중첩검증(A그룹에서 상위지표 선택 → B그룹에서 재측정) OOS 평균 |d| 가 0.517 로 1위. 표본도 264건으로 최다급.",
+    "algorithm": {
+      "name": "pivot_low",
+      "description": "좌우 3봉보다 낮은 저점(피벗 저점) 중 가장 최근 것. 현재 봉과 직전 3봉은 제외(아직 피벗 확정 불가). 최근 96봉 이내에서만 탐색.",
+      "pseudocode": [
+        "for j in range(i-4, max(2, i-96), -1):",
+        "    if j-3 < 0 or j+3 > i-1: continue",
+        "    if low[j] == min(low[j-3 : j+4]): S = low[j]; break"
+      ],
+      "lookback_bars": 96,
+      "pivot_half_width": 3,
+      "exclude_recent_bars": 4
+    },
+    "ranking_measured": [
+      {"def": "swing_low",  "n": 264, "oos_mean_abs_d": 0.517, "stable_indicators": 23},
+      {"def": "bb_mid",     "n": 266, "oos_mean_abs_d": 0.375, "stable_indicators": 13},
+      {"def": "rollmin48",  "n": 144, "oos_mean_abs_d": 0.293, "stable_indicators": 19},
+      {"def": "rollmin20",  "n": 224, "oos_mean_abs_d": 0.190, "stable_indicators": 22},
+      {"def": "ema50",      "n": 175, "oos_mean_abs_d": 0.178, "stable_indicators": 18},
+      {"def": "rollmin96",  "n": 108, "oos_mean_abs_d": 0.129, "stable_indicators": 21},
+      {"def": "bb_lower",   "n": 252, "oos_mean_abs_d": -0.125, "stable_indicators": 6},
+      {"def": "fib618",     "n": 69,  "oos_mean_abs_d": -0.656, "stable_indicators": 17},
+      {"def": "fib50",      "n": 94,  "oos_mean_abs_d": -0.724, "stable_indicators": 12}
+    ],
+    "rejected": {
+      "bb_lower": "볼린저 하단은 접촉이 잦지만(252건) 지표 부호가 두 그룹에서 계속 뒤집힘(OOS -0.125). 「지지선」으로 쓰지 말 것.",
+      "fib618_fib50": "표본 69/94건이고 OOS 가 음수(-0.66/-0.72) = 그룹 간 완전 반전. 되돌림 레벨은 이 데이터에서 지지선으로 기능하지 않음.",
+      "rollmin20_48_96": "단순 N봉 저점은 접촉 자체가 「이미 신저점」이라 BOUNCE 비율이 43~49% 로 낮음. 판별력도 낮음."
+    }
+  },
+
+  "touch_detection": {
+    "timeframe": "15m",
+    "condition_all_of": [
+      "low[i] <= S * (1 + tol)",
+      "close[i-1] > S * (1 + tol)",
+      "(close[i] / max(high[i-24 .. i]) - 1) * 100 <= -1.0"
+    ],
+    "tol_formula": "max(0.002, 0.25 * ATR14[i] / close[i])",
+    "tol_note": "ATR% 중앙값 1.43% 기준 tol 중앙값 ≈ 0.36%",
+    "cooldown_bars": 6,
+    "evaluate_at": "15분봉 종가 확정 시점"
+  },
+
+  "score_rules": {
+    "type": "integer_count",
+    "max_score": 7,
+    "note": "7개 규칙 각 1점. 가중치를 붙여도 결과가 개선되지 않아 등가중을 채택(단순 = 과적합 방어).",
+    "rules": [
+      {"id": "h1_macdh_pos",     "tf": "1h",  "expr": "macd_hist(12,26,9) > 0",
+       "win_yes": 65.5, "win_no": 43.9, "delta_pp": 21.6, "win_yes_A": 73.8, "win_yes_B": 55.8,
+       "d_tercile": 0.572, "d_trade": 0.446, "d_A": 0.688, "d_B": 0.211},
+      {"id": "h1_above_ema20",   "tf": "1h",  "expr": "close > EMA20",
+       "win_yes": 65.4, "win_no": 45.7, "delta_pp": 19.7, "win_yes_A": 69.7, "win_yes_B": 57.9,
+       "d_tercile": 0.373, "d_trade": 0.405, "d_A": 0.514, "d_B": 0.223},
+      {"id": "m15_macdh_not_rising3", "tf": "15m", "expr": "NOT (macd_hist[i] > macd_hist[i-3])",
+       "win_yes": 61.5, "win_no": 42.9, "delta_pp": 18.7, "win_yes_A": 67.6, "win_yes_B": 55.6,
+       "d_tercile": -0.380, "d_trade": -0.364, "d_A": -0.437, "d_B": -0.285,
+       "warning": "부호가 직관과 반대다. 15분 MACD hist 가 3봉 상승 중이면 그 접촉은 더 잘 깨진다. 아래꼬리/RSI 반등과 달리 이 지표는 진입가 통제 후에도 살아남았다(층별 d -0.40/-0.49, 지지선 지정가 가정에서도 -0.298)."},
+      {"id": "m15_rsi24_ge_45",  "tf": "15m", "expr": "RSI(24) >= 45",
+       "win_yes": 62.7, "win_no": 46.1, "delta_pp": 16.6, "win_yes_A": 66.7, "win_yes_B": 56.5,
+       "d_tercile": 0.246, "d_trade": 0.356, "d_A": 0.412, "d_B": 0.224},
+      {"id": "h1_rsi12_ge_50",   "tf": "1h",  "expr": "RSI(12) >= 50",
+       "win_yes": 64.7, "win_no": 46.6, "delta_pp": 18.1, "win_yes_A": 68.8, "win_yes_B": 57.9,
+       "d_tercile": 0.394, "d_trade": 0.345, "d_A": 0.445, "d_B": 0.185},
+      {"id": "m15_drop96_ge_m15","tf": "15m", "expr": "(close / max(high[i-96..i]) - 1) * 100 >= -15.0",
+       "win_yes": 61.6, "win_no": 41.9, "delta_pp": 19.8, "win_yes_A": 67.1, "win_yes_B": 56.2,
+       "d_tercile": 0.565, "d_trade": 0.328, "d_A": 0.188, "d_B": 0.337,
+       "meaning": "24시간 고점에서 15% 넘게 빠진 자리는 지지선이 잘 깨진다. BOUNCE 평균 -11.2% vs BREAKDOWN 평균 -19.1%."},
+      {"id": "m15_above_ema50",  "tf": "15m", "expr": "close > EMA50",
+       "win_yes": 67.7, "win_no": 50.0, "delta_pp": 17.7, "win_yes_A": 70.3, "win_yes_B": 64.0,
+       "d_tercile": 0.182, "d_trade": 0.325, "d_A": 0.302, "d_B": 0.294}
+    ]
+  },
+
+  "decision": {
+    "LONG_STRONG": {
+      "condition": "score >= 7",
+      "n": 47, "win_rate": 76.9, "win_A": 78.3, "win_B": 75.0,
+      "mean_fwd_8h": 4.10, "tp3_hit_rate": 72.3, "sl3_touch_rate": 29.8
+    },
+    "LONG": {
+      "condition": "score >= 6",
+      "n": 80, "win_rate": 70.6, "win_A": 75.0, "win_B": 64.3,
+      "mean_fwd_8h": 2.53, "tp3_hit_rate": 70.0, "tp5_hit_rate": 53.8, "sl3_touch_rate": 36.2
+    },
+    "NEUTRAL": {
+      "condition": "2 <= score <= 5",
+      "action": "진입 금지. 관망."
+    },
+    "BREAKDOWN_SHORT": {
+      "condition": "score <= 1",
+      "n": 67, "short_win_rate": 63.9, "short_win_A": 72.2, "short_win_B": 60.5,
+      "mean_fwd_8h": -3.16, "down3_hit_rate": 74.6, "adverse_up3_rate": 49.3,
+      "note": "지지선이 깨지고 더 내려간다는 판정. 기존 LONG 이 있으면 손절/축소, SHORT 는 추가 가능."
+    },
+    "BREAKDOWN_SHORT_STRONG": {
+      "condition": "score == 0",
+      "n": 22, "short_win_rate": 71.4, "short_win_A": 80.0, "short_win_B": 63.6,
+      "mean_fwd_8h": -3.10
+    },
+    "baseline_all_touches": {"n": 264, "win_rate": 55.0, "win_A": 60.6, "win_B": 50.0}
+  },
+
+  "tp_sl": {
+    "horizon_bars_15m": 32,
+    "horizon_hours": 8,
+    "LONG_score_ge_6": {
+      "sl_price_pct": -3.0,
+      "tp1_price_pct": 3.0,
+      "tp2_price_pct": 5.0,
+      "evidence": "TP+3% 도달 70.0% / TP+5% 도달 53.8% / SL-3% 터치 36.2%. 최대상승 중앙값 +5.13%, 최대하락 중앙값 -1.72%.",
+      "note": "가격 기준 %. 레버리지를 곱하면 ROI 가 된다. 시스템의 적응TP(변동성 연동)와 병행할 것."
+    },
+    "SHORT_score_le_1": {
+      "sl_price_pct": 3.0,
+      "tp1_price_pct": -3.0,
+      "tp2_price_pct": -5.0,
+      "evidence": "하락 -3% 도달 74.6% / -5% 도달 52.2% / 역행 +3% 도달 49.3%."
+    }
+  },
+
+  "reentry_policy": {
+    "headline": "「손절했으니 다음 접촉에서 다시 들어가면 확률이 오른다」는 실측으로 성립하지 않는다.",
+    "measured_causal": {
+      "note": "직전 접촉의 승패가 이번 접촉 시점 이전에 이미 확정된 건만 사용(미래참조 제거).",
+      "prev_touch_stopped_out": {"n": 55, "win_rate": 49.1, "win_A": 52.6, "win_B": 47.1},
+      "prev_touch_bounced":     {"n": 72, "win_rate": 57.4, "win_A": 56.2, "win_B": 58.3},
+      "baseline":               {"n": 264, "win_rate": 55.0}
+    },
+    "measured_naive_CONTAMINATED": {
+      "warning": "직전 접촉의 결착 시점을 확인하지 않으면 234건 중 102건(43.6%)이 미래참조. 그 오염된 계산은 직전손절 36.8% / 직전반등 69.7% 라는 훨씬 극단적인 값을 낸다. 절대 이 숫자로 코딩하지 말 것.",
+      "prev_stopped_out": 36.8,
+      "prev_bounced": 69.7
+    },
+    "rule": [
+      "재진입 여부를 「몇 번째 접촉인가」나 「직전에 손절했는가」로 결정하지 말 것 — 접촉 횟수의 효과크기는 d(A)=-0.304 / d(B)=+0.095 로 그룹 간 부호가 뒤집힌다.",
+      "재진입도 첫 진입과 똑같이 score 로 판정한다. score >= 6 이면 진입, score <= 1 이면 진입 금지(오히려 SHORT).",
+      "직전 손절 후 재진입은 무조건 하면 49.1%(기준선 55.0% 미만) = 손해. score 게이트를 통과할 때만 한다.",
+      "직전 손절 + 1H MACDh>0 + 4H close>EMA20 조합은 n=9 로 표본이 너무 작다(66.7%). 이 조합을 별도 특례로 코딩하지 말 것."
+    ],
+    "reentry_capital": "재진입 자본은 마틴게일(×배수)로 키우지 말 것. 확률이 오른다는 근거가 없으므로 원 자본 이하로 유지."
+  },
+
+  "multi_timeframe": {
+    "finding": "이 판정에서는 1H 가 4H 보다 강하다. 「4H=방향 / 15m=타이밍」 원칙은 유지되지만, 8시간 지평의 지지 판정에서는 1H 가 실질 방향축이다.",
+    "measured_win_rates": [
+      {"cond": "무조건(기준선)",           "n": 264, "win": 55.0, "A": 60.6, "B": 50.0, "verdict": "-"},
+      {"cond": "1H MACDh > 0",           "n": 135, "win": 65.5, "A": 73.8, "B": 55.8, "verdict": "채택"},
+      {"cond": "1H close > EMA20",       "n": 121, "win": 65.4, "A": 69.7, "B": 57.9, "verdict": "채택"},
+      {"cond": "1H MACDh>0 & 4H>EMA20",  "n": 82,  "win": 72.9, "A": 76.7, "B": 66.7, "verdict": "최강 조합(참고)"},
+      {"cond": "4H MACDh 상승중",         "n": 137, "win": 60.0, "A": 68.8, "B": 47.8, "verdict": "기각 - B그룹이 기준선 미만"},
+      {"cond": "4H close > EMA20",       "n": 142, "win": 57.5, "A": 61.1, "B": 52.1, "verdict": "약함 - 점수에서 제외"},
+      {"cond": "4H MACDh > 0",           "n": 153, "win": 54.3, "A": 54.5, "B": 54.0, "verdict": "무효 - 기준선과 동일"},
+      {"cond": "4H EMA20 > EMA50",       "n": 154, "win": 55.1, "A": 63.9, "B": 43.6, "verdict": "기각 - 그룹 간 20%p 격차"}
+    ]
+  },
+
+  "rejected_hypotheses": [
+    {"name": "4H MACD hist 상승중", "d_A": 0.439, "d_B": -0.071,
+     "verdict": "이 문제에서는 기각. 메모리의 「4H MACD hist 상승중 효과크기 2.08」은 종목 선정 문제였고, 지지 판정에서는 그룹 B에서 부호가 뒤집힌다. 같은 지표라도 용도가 다르면 결과가 다르다."},
+    {"name": "아래꼬리(lower wick) 가 길면 반등", "d_tercile": -0.450, "d_trade": -0.175,
+     "verdict": "부호가 반대다. 그리고 진입가를 통제하면(dist_to_sup 층별 d -0.03/-0.11/-0.22, 지지선 지정가 가정 -0.125) 대부분 사라진다 = 「이미 반등해서 비싸게 사는」 아티팩트. 지표로 쓰지 말 것."},
+    {"name": "RSI 상향 전환(turnup) 이면 반등", "d_tercile": -0.303, "d_trade": -0.240,
+     "verdict": "부호 반대이고, 지지선 지정가 가정으로 재면 d=+0.080 으로 뒤집힌다 = 순수 진입가 아티팩트. 채택하지 않음."},
+    {"name": "거래량 급증이 반등 신호", "d_A": -0.197, "d_B": 0.226,
+     "verdict": "그룹 간 부호 반전. 무효."},
+    {"name": "볼밴 %B 가 낮으면(밴드 하단) 반등", "d_tercile": -0.370, "d_trade": 0.052,
+     "verdict": "두 라벨에서 부호가 다름. 무효."},
+    {"name": "OBV 기울기(10봉)", "d_tercile": 0.080, "d_trade": 0.140,
+     "verdict": "효과 미미. 20봉 기울기는 d=+0.244 로 약하게 양수지만 Δ가 +7.6%p 뿐이라 최종 7규칙에서 제외."},
+    {"name": "접촉 횟수가 많을수록 반등", "d_A": -0.304, "d_B": 0.095,
+     "verdict": "그룹 간 부호 반전. 접촉 횟수 자체는 정보가 없다."}
+  ],
+
+  "regime_check": {
+    "note": "24h 등락 방향별로 규칙이 살아 있는지 확인 — 둘 다에서 작동",
+    "up_symbols":   {"n": 113, "baseline": 67.4, "score_ge_6": 74.4, "score_le_1": 45.5},
+    "down_symbols": {"n": 151, "baseline": 47.0, "score_ge_6": 65.5, "score_le_1": 34.0}
+  },
+
+  "cross_validation": {
+    "split": "chg24 순 정렬 후 교대 배정 (두 그룹의 국면 구성 동일)",
+    "group_A": ["4USDT","AKEUSDT","ARBUSDT","ARUSDT","BULLAUSDT","CAPUSDT","EDGEUSDT","EGLDUSDT","FLOCKUSDT","MAGMAUSDT","MUBARAKUSDT","ROBOUSDT","STARUSDT","TUTUSDT","UNIUSDT"],
+    "group_B": ["ACEUSDT","BRUSDT","BTRUSDT","CRDOUSDT","CYSUSDT","DOSUSDT","FFUSDT","HEMIUSDT","HPEUSDT","HUSDT","MARSCOINUSDT","SKYAIUSDT","SNOWUSDT","UAIUSDT","USELESSUSDT"],
+    "nested_A_to_B": {"baseline": 50.0, "bounce_bucket": 68.2, "breakdown_bucket": 42.5},
+    "nested_B_to_A": {"baseline": 60.6, "bounce_bucket": 69.8, "breakdown_bucket": 33.3},
+    "generalization_to_other_support_defs": [
+      {"def": "rollmin20", "n": 224, "baseline": 50.8, "score_ge_6": 65.8, "score_le_1": 33.9},
+      {"def": "rollmin48", "n": 144, "baseline": 47.1, "score_le_1": 36.8},
+      {"def": "rollmin96", "n": 108, "baseline": 50.0, "score_le_1": 39.6},
+      {"def": "bb_lower",  "n": 252, "baseline": 55.8, "score_ge_6": 66.7, "score_le_1": 48.2},
+      {"def": "bb_mid",    "n": 266, "baseline": 61.8, "score_ge_6": 67.2, "score_le_1": 44.0},
+      {"def": "ema50",     "n": 175, "baseline": 60.6, "score_ge_6": 68.8}
+    ]
+  },
+
+  "implementation_notes": [
+    "판정 시점은 15분봉 「종가 확정」. 진행 중인 봉으로 판정하면 macdh_rising3 가 계속 흔들린다.",
+    "1H/4H 상태는 「확정된 마지막 봉」만 사용(다음 봉 시작시각 <= 현재 15m 봉 시작시각).",
+    "OBV 기울기는 반드시 거래량 합으로 정규화할 것: (obv[i]-obv[i-k]) / sum(volume[i-k+1..i]) → [-1,1]. 원시값을 쓰면 스케일이 폭주한다(과거 obv_slope_pct 최대 2,249,160 사고).",
+    "score 를 계산할 때 1H 데이터가 없으면(신규 상장 등) 판정을 내리지 말고 진입 보류. 1H 규칙 2개가 점수의 핵심이다.",
+    "이 판정식은 「어디서 사는가」만 답한다. 「얼마를 사는가」는 기존 자본 사다리를, 「언제 파는가」는 적응TP 를 따른다."
+  ]
+}

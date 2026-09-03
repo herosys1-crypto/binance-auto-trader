@@ -227,6 +227,46 @@ class ExecutionService:
             )
             raise ValueError(f"[Fix310] {strategy.symbol} 진입 차단: {_why24}")
 
+        # ═══════════════════════════════════════════════════════════════
+        # 📐 Fix 327 (2026-09-03 사장님) — 지지선 7점 판정
+        #
+        #   사장님: "차트와 보조지표 급등과 급락 그리고 보합 그리고 다시
+        #            **지지반등과 지지선 추가 하락**시 보조지표의 움직임과
+        #            수치를 전문가가 분석해서 **수치화**"
+        #
+        #   차트분석 에이전트팀 실측 (30심볼 x 15m/1h/4h x 300봉, 접촉 264건):
+        #     score >= 6  LONG   승률 70.6% (A 75.0 / B 64.3)   기준선 55.0%
+        #     score <= 1  SHORT  승률 63.9% (A 72.2 / B 60.5)
+        #     2~5 구간은 관망 = 진입 금지
+        #
+        #   🚨 **반등을 보고 들어가면 진다.** 아래꼬리·RSI 상향전환·거래량 급증은
+        #      전부 부호가 반대이거나 "이미 반등해서 비싸게 사는" 아티팩트였다.
+        #      15m MACD hist 「상승 중」은 **역방향 지표**로 채택했다(d=-0.380).
+        #      → 사장님 사상("조정 구간에 미리미리 분할, 바닥 확인 X")과 같다.
+        #
+        #   ⚠️ 지지선 **접촉 시점**이 아니면 막지 않는다 — 판정식이 접촉 264건으로
+        #      만들어졌으므로 다른 자리에 적용하면 표본 밖이다.
+        #   ⚠️ 기본 OFF (`support_score_gate_enabled`). fail-open.
+        #   🚨 여기(1단계)에만 건다. `trigger_next_stage` 에 걸면 사다리가 멈춘다.
+        # ═══════════════════════════════════════════════════════════════
+        try:
+            from app.services.support_score import evaluate as _sup_eval
+            _oks, _whys, _ds = _sup_eval(
+                self.db, self.client, strategy.symbol, strategy.side,
+            )
+        except Exception as _se:      # 게이트가 깨져도 매매를 막지 않는다
+            logger.warning("[Fix327] 게이트 오류 → 통과: %s", _se)
+            _oks, _whys = True, "게이트 오류 (fail-open)"
+        if not _oks:
+            logger.info(
+                "[Fix327] %s #%s %s 1단계 진입 차단 — %s",
+                strategy.symbol, strategy.id, strategy.side, _whys,
+            )
+            raise ValueError(f"[Fix327] {strategy.symbol} 진입 차단: {_whys}")
+        if _whys:
+            logger.info("[Fix327] %s #%s %s — %s",
+                        strategy.symbol, strategy.id, strategy.side, _whys)
+
         self.ensure_isolated_margin(strategy)  # 2026-05-06 (사용자 결정): 모든 거래 ISOLATED
         self.apply_leverage(strategy)
         order = self._place_stage_entry_order(strategy, stage_plan)
