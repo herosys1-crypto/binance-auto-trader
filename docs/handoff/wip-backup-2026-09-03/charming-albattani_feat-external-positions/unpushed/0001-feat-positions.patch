@@ -1,0 +1,604 @@
+From f346fee0ff3f4fa56ad68879d5bc4b429ee53d75 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?=EC=9D=B4=EA=B7=9C=EC=88=98?= <herosys1@gmail.com>
+Date: Thu, 21 May 2026 13:40:54 +0900
+Subject: [PATCH] =?UTF-8?q?feat(positions):=20=EC=99=B8=EB=B6=80=20?=
+ =?UTF-8?q?=ED=8F=AC=EC=A7=80=EC=85=98=20=EA=B0=80=EC=8B=9C=EC=84=B1=20?=
+ =?UTF-8?q?=E2=80=94=20=EB=8F=84=EA=B5=AC=20=EB=B0=96=20=EC=88=98=EB=8F=99?=
+ =?UTF-8?q?=20=EC=A7=84=EC=9E=85=20=ED=91=9C=EC=8B=9C=20(=EC=82=AC?=
+ =?UTF-8?q?=EC=9E=A5=EB=8B=98=20=EC=9A=94=EA=B5=AC)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+배경 (#77 PHB +157 / #78 RONIN +26 후속):
+  사장님이 거래소 UI 에서 직접 진입한 포지션이 대시보드에 안 보여서 운영 인지 못 함.
+  도구 밖 포지션도 손익/청산 위험 추적 필요 → 별도 「📊 외부 포지션」 섹션 추가.
+
+변경:
+  - schema: ExternalPositionResponse (계정/심볼/방향/수량/평단/마크/PnL/레버리지/마진타입)
+  - GET /api/v1/positions/external:
+    - 본인 active 계정의 거래소 포지션 bulk fetch (계정당 1회)
+    - ACTIVE_LIKE strategy 가 symbol+side 매칭하는 포지션은 결과에서 제외
+    - 거래소 호출 실패 계정은 silent skip (다른 계정 정상 반환 우선)
+    - positionAmt=0 (flat) 응답 제외
+    - is_archived=True strategy 는 「추적 중」 아님 — 외부로 분류
+  - frontend external-positions.js:
+    - 「🔄 새로고침」 버튼 (수동 트리거 — rate limit 부담 고려)
+    - 0건이면 「외부 포지션 없음 — 모두 도구 추적 중」 표시
+    - 합계 PnL + 「자동 청산/관리 X」 명시
+  - index.html: strategies 카드 하단에 「📊 외부 포지션」 섹션 + script tag 등록
+
+운영 효과:
+  - 사장님이 거래소 직접 진입한 PHB/RONIN 같은 포지션을 대시보드에서 즉시 확인 가능
+  - 자동 관리 X (단순 가시성) — 사장님이 거래소에서 직접 처리
+  - 새로고침 수동 — rate limit 부담 없음
+
+테스트 (7건 신규, 765 total):
+  - test_tracked_positions_excluded (도구 추적 중인 건 제외)
+  - test_flat_positions_excluded (positionAmt=0 제외)
+  - test_other_user_accounts_excluded (multi-user 안전성)
+  - test_failing_account_silent_skip (한 계정 실패해도 다른 계정 OK)
+  - test_archived_strategy_not_treated_as_tracked
+  - test_no_accounts_returns_empty (거래소 호출 0)
+  - test_response_fields_populated (모든 필드 정확 매핑)
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+---
+ backend/app/api/v1/positions.py               | 110 +++++++-
+ backend/app/schemas/position.py               |  19 ++
+ backend/app/static/index.html                 |  28 ++
+ backend/app/static/js/external-positions.js   |  76 ++++++
+ .../integration/test_external_positions.py    | 256 ++++++++++++++++++
+ 5 files changed, 488 insertions(+), 1 deletion(-)
+ create mode 100644 backend/app/static/js/external-positions.js
+ create mode 100644 backend/tests/integration/test_external_positions.py
+
+diff --git a/backend/app/api/v1/positions.py b/backend/app/api/v1/positions.py
+index 1617d81..7e983f6 100644
+--- a/backend/app/api/v1/positions.py
++++ b/backend/app/api/v1/positions.py
+@@ -1,11 +1,21 @@
++import logging
++from decimal import Decimal, InvalidOperation
++
+ from fastapi import APIRouter, Depends, HTTPException, status
++from sqlalchemy import select
+ from sqlalchemy.orm import Session
+ 
+ from app.api.deps import get_current_user_id, get_db
++from app.core.crypto import decrypt_text
++from app.core.strategy_status import ACTIVE_LIKE
++from app.integrations.binance.client import BinanceClient
++from app.models.exchange_account import ExchangeAccount
++from app.models.strategy_instance import StrategyInstance
+ from app.repositories.position_repository import PositionRepository
+ from app.repositories.strategy_repository import StrategyRepository
+-from app.schemas.position import PositionResponse
++from app.schemas.position import ExternalPositionResponse, PositionResponse
+ 
++logger = logging.getLogger(__name__)
+ router = APIRouter(prefix="/positions", tags=["positions"])
+ 
+ 
+@@ -22,3 +32,101 @@ def get_latest_position(
+     if not position:
+         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position snapshot not found")
+     return PositionResponse.model_validate(position)
++
++
++@router.get("/external", response_model=list[ExternalPositionResponse])
++def list_external_positions(
++    db: Session = Depends(get_db),
++    user_id: int = Depends(get_current_user_id),
++) -> list[ExternalPositionResponse]:
++    """거래소에 있지만 도구가 추적 안 하는 포지션 (도구 밖 수동 진입 등) 목록.
++
++    2026-05-21 사장님 요구 (PHB +157 / RONIN +26 사례 후속):
++      도구 밖 수동 진입한 포지션이 대시보드에 표시되지 않아 사장님이 운영 시 인지 못 함.
++      이제 active strategy 가 추적 안 하는 모든 거래소 포지션을 별도 목록으로 반환.
++
++    제외:
++      - 도구가 추적 중인 포지션 (ACTIVE_LIKE strategy 와 symbol+side 매칭)
++      - positionAmt = 0 (flat)
++
++    가시성 only — 자동 청산/관리 대상 아님. 사장님이 직접 처리.
++    rate limit 부담 방지: 본인 active 계정 each 에 1회 bulk 호출.
++    거래소 호출 실패한 계정은 응답에 포함 안 됨 (silent skip — 다른 계정 정상 반환 우선).
++    """
++    accounts = db.execute(
++        select(ExchangeAccount)
++        .where(ExchangeAccount.user_id == user_id)
++        .where(ExchangeAccount.is_active.is_(True))
++    ).scalars().all()
++
++    if not accounts:
++        return []
++
++    result: list[ExternalPositionResponse] = []
++    for acc in accounts:
++        try:
++            client = BinanceClient(
++                api_key=decrypt_text(acc.api_key_enc),
++                api_secret=decrypt_text(acc.api_secret_enc),
++                is_testnet=acc.is_testnet,
++            )
++            risk = client.get_position_risk()  # bulk — 모든 심볼
++            if isinstance(risk, dict):
++                risk = [risk]
++        except Exception as e:
++            logger.warning(
++                "list_external_positions: account=%s 거래소 호출 실패 (skip): %s",
++                acc.id, e,
++            )
++            continue
++
++        # 본 계정의 active strategies 한 번 조회 → 매칭 차감
++        tracked = db.execute(
++            select(StrategyInstance.symbol, StrategyInstance.side)
++            .where(StrategyInstance.exchange_account_id == acc.id)
++            .where(StrategyInstance.status.in_(ACTIVE_LIKE))
++            .where(StrategyInstance.is_archived.is_(False))
++        ).all()
++        tracked_set: set[tuple[str, str]] = {(s, sd) for (s, sd) in tracked}
++
++        account_label = (
++            f"{'testnet' if acc.is_testnet else 'mainnet'} #{acc.id}"
++        )
++        for p in risk:
++            symbol = p.get("symbol")
++            position_side = p.get("positionSide")
++            if not symbol or not position_side:
++                continue
++            try:
++                amt = Decimal(str(p.get("positionAmt", "0")))
++            except (InvalidOperation, TypeError):
++                continue
++            if amt == 0:
++                continue
++            if (symbol, position_side) in tracked_set:
++                continue  # 도구가 추적 중 — 외부 X
++
++            def _safe_decimal(v) -> Decimal | None:
++                if v is None or v == "":
++                    return None
++                try:
++                    d = Decimal(str(v))
++                    return d if d != 0 else None
++                except (InvalidOperation, TypeError):
++                    return None
++
++            result.append(ExternalPositionResponse(
++                account_id=acc.id,
++                account_label=account_label,
++                symbol=symbol,
++                side=position_side,
++                position_amt=amt,
++                entry_price=_safe_decimal(p.get("entryPrice")),
++                mark_price=_safe_decimal(p.get("markPrice")),
++                unrealized_pnl=_safe_decimal(p.get("unRealizedProfit")),
++                leverage=int(p["leverage"]) if p.get("leverage") else None,
++                liquidation_price=_safe_decimal(p.get("liquidationPrice")),
++                margin_type=p.get("marginType"),
++            ))
++
++    return result
+diff --git a/backend/app/schemas/position.py b/backend/app/schemas/position.py
+index 0f87753..6ab2079 100644
+--- a/backend/app/schemas/position.py
++++ b/backend/app/schemas/position.py
+@@ -15,3 +15,22 @@ class PositionResponse(BaseModel):
+     unrealized_pnl: Decimal | None = None
+     leverage: int | None = None
+     snapshot_time: datetime
++
++
++class ExternalPositionResponse(BaseModel):
++    """거래소에 있지만 도구가 추적 안 하는 외부 포지션 (수동 진입 등).
++
++    2026-05-21 사장님 요구: PHB/RONIN 사례처럼 도구 밖에서 사장님이 직접 진입한 포지션도
++    대시보드에 표시. 도구의 자동 청산/관리 대상은 아님 — 단순 가시성용.
++    """
++    account_id: int
++    account_label: str         # 사용자 식별용 (testnet/mainnet 등)
++    symbol: str
++    side: str                  # LONG / SHORT (positionSide 그대로)
++    position_amt: Decimal      # signed (음수=SHORT)
++    entry_price: Decimal | None = None
++    mark_price: Decimal | None = None
++    unrealized_pnl: Decimal | None = None
++    leverage: int | None = None
++    liquidation_price: Decimal | None = None
++    margin_type: str | None = None  # cross / isolated
+diff --git a/backend/app/static/index.html b/backend/app/static/index.html
+index f6b9f01..2f6c14c 100644
+--- a/backend/app/static/index.html
++++ b/backend/app/static/index.html
+@@ -349,6 +349,33 @@
+     </div>
+   </div>
+ 
++  <!-- 📊 외부 포지션 (도구 밖 수동 진입) — 2026-05-21 사장님 요구 -->
++  <div class="card rounded-xl p-4 mb-3">
++    <div class="flex justify-between items-center mb-2 flex-wrap gap-2">
++      <h3 class="text-sm sm:text-base font-bold">📊 외부 포지션
++        <span class="text-xs font-normal text-slate-400" title="도구가 추적하지 않는 거래소 포지션 — 사장님이 거래소에서 직접 진입한 경우. 자동 청산/관리 X.">(도구 밖 수동 진입 — 자동 관리 X)</span>
++      </h3>
++      <button onclick="refreshExternalPositions()" class="btn-ghost btn text-xs" style="padding:3px 8px;font-size:11px" title="거래소에서 최신 외부 포지션 조회 (rate limit 부담 고려해 수동만)">🔄 새로고침</button>
++    </div>
++    <div id="external-positions-status" class="text-xs text-slate-500 mb-2">새로고침을 눌러 거래소 외부 포지션을 조회하세요.</div>
++    <div class="table-wrap">
++      <table class="w-full text-sm">
++        <thead>
++          <tr class="text-left text-slate-400 border-b border-slate-700">
++            <th>계정</th>
++            <th>심볼</th>
++            <th>방향</th>
++            <th class="num">수량</th>
++            <th class="num">평단/마크</th>
++            <th class="num">미실현 PnL</th>
++            <th class="num">레버리지/마진</th>
++          </tr>
++        </thead>
++        <tbody id="external-positions-tbody"></tbody>
++      </table>
++    </div>
++  </div>
++
+   </main><!-- /page-dashboard -->
+ 
+   <!-- ============ Page: Market Ranking (별도 페이지, 2026-05-06 사용자 요청) ============ -->
+@@ -1070,6 +1097,7 @@
+ <script src="/static/js/templates-panel.js"></script>
+ <script src="/static/js/indicators.js"></script>
+ <script src="/static/js/strategies-list.js"></script>
++<script src="/static/js/external-positions.js"></script>
+ <script src="/static/js/multi-symbol.js"></script>
+ <script src="/static/js/template-save.js"></script>
+ <script src="/static/js/cm-submit.js"></script>
+diff --git a/backend/app/static/js/external-positions.js b/backend/app/static/js/external-positions.js
+new file mode 100644
+index 0000000..c4517d1
+--- /dev/null
++++ b/backend/app/static/js/external-positions.js
+@@ -0,0 +1,76 @@
++/**
++ * 외부 포지션 카드 — 도구가 추적 안 하는 거래소 포지션 표시 (2026-05-21 사장님 요구).
++ *
++ * 배경 (#77 PHB +157 / RONIN +26 사례 후속):
++ *   사장님이 거래소 UI 에서 직접 진입한 포지션 (도구 밖) 이 대시보드에 안 보여서
++ *   운영 시 인지 못 함. 이제 「📊 외부 포지션」 카드로 별도 표시.
++ *
++ * 동작:
++ *   - 「🔄 새로고침」 클릭 시 GET /positions/external 호출 (rate limit 부담 고려)
++ *   - 결과 0건이면 「외부 포지션 없음 — 모두 도구 추적 중」 표시
++ *   - 자동 관리 X — 단순 가시성. 사장님이 거래소에서 직접 처리.
++ *
++ * 외부 의존:
++ *   - api, toast (api.js)
++ *   - fmtNum, fmtQty, fmtPnL (helpers.js)
++ *   - DOM: #external-positions-tbody, #external-positions-status
++ */
++
++async function refreshExternalPositions() {
++  const tbody = document.getElementById('external-positions-tbody');
++  const statusEl = document.getElementById('external-positions-status');
++  if (!tbody || !statusEl) return;
++
++  statusEl.textContent = '⏳ 거래소 조회 중...';
++  tbody.innerHTML = '';
++
++  try {
++    const data = await api('/positions/external');
++    if (!Array.isArray(data) || data.length === 0) {
++      statusEl.innerHTML = '<span class="text-emerald-400">✓ 외부 포지션 없음 — 모든 거래소 포지션이 도구 추적 중.</span>';
++      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-slate-500 py-3 text-xs">외부 포지션 없음</td></tr>';
++      return;
++    }
++
++    // 총 미실현 PnL 합계
++    let totalPnL = 0;
++    data.forEach(p => { totalPnL += Number(p.unrealized_pnl || 0); });
++    const pnlClass = totalPnL > 0 ? 'pos' : totalPnL < 0 ? 'neg' : '';
++    statusEl.innerHTML = (
++      `<span class="text-amber-400">⚠️ 외부 포지션 ${data.length}건 — </span>` +
++      `<span class="${pnlClass} font-semibold">합계 PnL ${fmtPnL(totalPnL)} USDT</span>` +
++      `<span class="text-slate-500 text-xs"> · 도구 밖에서 사장님이 직접 진입 (자동 청산/관리 X)</span>`
++    );
++
++    tbody.innerHTML = data.map(p => {
++      const qtyNum = Number(p.position_amt || 0);
++      const qtyClass = qtyNum < 0 ? 'neg' : 'pos';
++      const pnlNum = Number(p.unrealized_pnl || 0);
++      const pnlClass2 = pnlNum > 0 ? 'pos' : pnlNum < 0 ? 'neg' : '';
++      const sideBadge = p.side === 'LONG'
++        ? '<span class="badge badge-green">🟢 LONG</span>'
++        : '<span class="badge badge-red">🔴 SHORT</span>';
++      const priceStack = `<div class="text-xs leading-tight">
++        <span class="text-slate-300" title="평단가">${p.entry_price ? fmtNum(p.entry_price) : '-'}</span><br>
++        <span class="text-cyan-300" title="마크가">${p.mark_price ? fmtNum(p.mark_price) : '-'}</span>
++      </div>`;
++      const marginInfo = `<div class="text-xs leading-tight">
++        <span class="text-slate-300">${p.leverage ? p.leverage + 'x' : '-'}</span><br>
++        <span class="text-slate-500" style="font-size:10px">${p.margin_type || '-'}</span>
++      </div>`;
++      return `<tr>
++        <td class="text-xs"><span class="text-slate-400">${escapeHtml(p.account_label || '')}</span></td>
++        <td class="font-mono text-blue-300 text-xs">${escapeHtml(p.symbol)}</td>
++        <td>${sideBadge}</td>
++        <td class="num"><span class="${qtyClass} font-semibold text-xs">${fmtQty(qtyNum)}</span></td>
++        <td class="num">${priceStack}</td>
++        <td class="num"><span class="${pnlClass2} font-semibold text-xs">${fmtPnL(pnlNum)}</span></td>
++        <td class="num">${marginInfo}</td>
++      </tr>`;
++    }).join('');
++  } catch (err) {
++    statusEl.innerHTML = `<span class="text-red-400">❌ 조회 실패: ${escapeHtml(err.message || String(err))}</span>`;
++    tbody.innerHTML = '';
++    toast('외부 포지션 조회 실패: ' + (err.message || err), 'error');
++  }
++}
+diff --git a/backend/tests/integration/test_external_positions.py b/backend/tests/integration/test_external_positions.py
+new file mode 100644
+index 0000000..0929eb7
+--- /dev/null
++++ b/backend/tests/integration/test_external_positions.py
+@@ -0,0 +1,256 @@
++"""GET /api/v1/positions/external — 외부 포지션 가시성 (사장님 요구 2026-05-21).
++
++배경 (#77 PHB +157 / RONIN +26 후속):
++  사장님이 거래소에서 직접 진입한 포지션이 대시보드에 안 보여서 운영 인지 못 함.
++  이제 active strategy 가 추적 안 하는 거래소 포지션을 별도 목록으로 반환.
++
++테스트 시나리오:
++  1. 추적 중인 포지션은 결과에서 제외 (도구 안)
++  2. 추적 안 되는 포지션은 결과에 포함 (도구 밖)
++  3. positionAmt=0 (flat) 인 거래소 응답은 제외
++  4. 다른 사용자 계정은 제외 (multi-user 안전성)
++  5. 거래소 호출 실패한 계정은 silent skip (다른 계정 정상 반환)
++  6. is_archived = True strategy 는 「추적 중」 으로 안 봄 → 같은 symbol+side 외부 포지션 표시
++"""
++from __future__ import annotations
++
++from decimal import Decimal
++from unittest.mock import MagicMock
++
++import pytest
++from fastapi import HTTPException
++
++from app.api.v1.positions import list_external_positions
++from app.core.crypto import encrypt_text
++
++
++@pytest.fixture(autouse=True)
++def _stub_decrypt(monkeypatch):
++    """decrypt_text 가 enc:xxx 같은 fake 값도 그대로 반환하도록 stub."""
++    monkeypatch.setattr(
++        "app.api.v1.positions.decrypt_text", lambda enc: enc,
++    )
++
++
++def _stub_binance_client(monkeypatch, *, position_risk_by_account: dict[int, list[dict]],
++                         failing_accounts: set[int] | None = None):
++    """BinanceClient 를 fake 로 교체 — account 별 응답 시뮬."""
++    failing = failing_accounts or set()
++
++    class _FakeClient:
++        def __init__(self, *, api_key, api_secret, is_testnet):
++            # api_key 가 enc:apikey:{acc_id} 패턴이라 가정 — 그것으로 account 식별
++            # 테스트에서는 monkey patch 로 _account_id_for 직접 set
++            self.api_key = api_key
++            self.is_testnet = is_testnet
++
++        def get_position_risk(self, symbol=None):
++            acc_id = _FakeClient._lookup_acc_id(self.api_key)
++            if acc_id in failing:
++                raise Exception(f"network error account={acc_id}")
++            return list(position_risk_by_account.get(acc_id, []))
++
++        @staticmethod
++        def _lookup_acc_id(api_key: str) -> int:
++            # `enc:apikey:{acc_id}` 형식에서 acc_id 추출 (테스트용)
++            try:
++                return int(api_key.rsplit(":", 1)[-1])
++            except ValueError:
++                return 0
++
++    monkeypatch.setattr("app.api.v1.positions.BinanceClient", _FakeClient)
++    return _FakeClient
++
++
++def _mk_position(symbol: str, side: str, amt: str, *, entry="0", mark="0",
++                 pnl="0", lev="10", margin="cross", liq="0") -> dict:
++    return {
++        "symbol": symbol, "positionSide": side, "positionAmt": amt,
++        "entryPrice": entry, "markPrice": mark, "unRealizedProfit": pnl,
++        "leverage": lev, "marginType": margin, "liquidationPrice": liq,
++    }
++
++
++class TestListExternalPositions:
++    def test_tracked_positions_excluded(
++        self, db_session, make_strategy, make_user, make_exchange_account, monkeypatch,
++    ):
++        """ACTIVE strategy 가 추적 중인 symbol+side 는 외부 목록에서 제외."""
++        u = make_user()
++        ea = make_exchange_account(
++            user=u, api_key_enc=f"enc:apikey:{u.id * 10 + 1}",
++            api_secret_enc="enc:secret",
++        )
++        # acc.id 가 위 api_key 의 마지막 숫자와 일치하도록 stub
++        # — 테스트 fixture 의 acc.id 는 실제 DB 의 값이므로 그것을 사용
++        # → BinanceClient stub 이 api_key 에서 acc_id 추출
++        # 실제 acc.id 로 다시 stub 갱신:
++        ea.api_key_enc = f"enc:apikey:{ea.id}"
++        db_session.commit()
++
++        # 도구가 추적 중: BTCUSDT LONG
++        make_strategy(
++            symbol_str="BTCUSDT", side="LONG", status="STAGE1_OPEN",
++            current_position_qty=Decimal("0.5"),
++            user=u, exchange_account=ea,
++        )
++
++        # 거래소 응답: BTCUSDT LONG (추적) + ETHUSDT SHORT (외부)
++        _stub_binance_client(monkeypatch, position_risk_by_account={
++            ea.id: [
++                _mk_position("BTCUSDT", "LONG", "0.5", entry="50000", mark="51000", pnl="500"),
++                _mk_position("ETHUSDT", "SHORT", "-1.0", entry="3000", mark="2900", pnl="100"),
++            ],
++        })
++
++        result = list_external_positions(db=db_session, user_id=u.id)
++
++        # ETHUSDT SHORT 만 외부로 분류
++        assert len(result) == 1
++        assert result[0].symbol == "ETHUSDT"
++        assert result[0].side == "SHORT"
++        assert result[0].position_amt == Decimal("-1.0")
++        assert result[0].unrealized_pnl == Decimal("100")
++
++    def test_flat_positions_excluded(
++        self, db_session, make_user, make_exchange_account, monkeypatch,
++    ):
++        """positionAmt=0 (flat) 인 응답은 외부 포지션 아님 — 제외."""
++        u = make_user()
++        ea = make_exchange_account(user=u)
++        ea.api_key_enc = f"enc:apikey:{ea.id}"
++        db_session.commit()
++
++        _stub_binance_client(monkeypatch, position_risk_by_account={
++            ea.id: [
++                _mk_position("BTCUSDT", "LONG", "0"),
++                _mk_position("ETHUSDT", "SHORT", "0"),
++                _mk_position("PHBUSDT", "LONG", "1000", mark="0.06"),  # 진짜 외부
++            ],
++        })
++
++        result = list_external_positions(db=db_session, user_id=u.id)
++        assert len(result) == 1
++        assert result[0].symbol == "PHBUSDT"
++
++    def test_other_user_accounts_excluded(
++        self, db_session, make_user, make_exchange_account, monkeypatch,
++    ):
++        """다른 사용자 계정의 포지션은 결과에서 제외 (multi-user 안전성)."""
++        u1 = make_user()
++        u2 = make_user()
++        ea1 = make_exchange_account(user=u1)
++        ea2 = make_exchange_account(user=u2)
++        ea1.api_key_enc = f"enc:apikey:{ea1.id}"
++        ea2.api_key_enc = f"enc:apikey:{ea2.id}"
++        db_session.commit()
++
++        _stub_binance_client(monkeypatch, position_risk_by_account={
++            ea1.id: [_mk_position("BTCUSDT", "LONG", "0.1")],
++            ea2.id: [_mk_position("ETHUSDT", "SHORT", "-1.0")],
++        })
++
++        # u1 으로 호출 — ea1 의 포지션만 보여야
++        result = list_external_positions(db=db_session, user_id=u1.id)
++        assert len(result) == 1
++        assert result[0].symbol == "BTCUSDT"
++        assert result[0].account_id == ea1.id
++
++    def test_failing_account_silent_skip(
++        self, db_session, make_user, make_exchange_account, monkeypatch,
++    ):
++        """거래소 호출 실패한 계정은 silent skip — 다른 계정 정상 반환."""
++        u = make_user()
++        ea1 = make_exchange_account(user=u)
++        ea2 = make_exchange_account(user=u)
++        ea1.api_key_enc = f"enc:apikey:{ea1.id}"
++        ea2.api_key_enc = f"enc:apikey:{ea2.id}"
++        db_session.commit()
++
++        _stub_binance_client(
++            monkeypatch,
++            position_risk_by_account={
++                ea1.id: [_mk_position("BTCUSDT", "LONG", "0.5")],
++                ea2.id: [_mk_position("ETHUSDT", "SHORT", "-1.0")],
++            },
++            failing_accounts={ea1.id},
++        )
++
++        # 예외 발생 안 함 (ea1 silent skip) + ea2 만 반환
++        result = list_external_positions(db=db_session, user_id=u.id)
++        assert len(result) == 1
++        assert result[0].symbol == "ETHUSDT"
++
++    def test_archived_strategy_not_treated_as_tracked(
++        self, db_session, make_strategy, make_user, make_exchange_account, monkeypatch,
++    ):
++        """is_archived=True strategy 는 추적 중 아님 — 같은 symbol+side 외부 포지션 표시."""
++        u = make_user()
++        ea = make_exchange_account(user=u)
++        ea.api_key_enc = f"enc:apikey:{ea.id}"
++        db_session.commit()
++
++        # archived strategy — 도구가 더 이상 추적 안 함
++        make_strategy(
++            symbol_str="OLDUSDT", side="LONG", status="STAGE1_OPEN",
++            current_position_qty=Decimal("100"),
++            user=u, exchange_account=ea,
++            is_archived=True,
++        )
++
++        _stub_binance_client(monkeypatch, position_risk_by_account={
++            ea.id: [_mk_position("OLDUSDT", "LONG", "100", mark="1.0")],
++        })
++
++        result = list_external_positions(db=db_session, user_id=u.id)
++        assert len(result) == 1
++        assert result[0].symbol == "OLDUSDT"
++
++    def test_no_accounts_returns_empty(
++        self, db_session, make_user, monkeypatch,
++    ):
++        """사용자가 active 계정 없으면 빈 리스트 (거래소 호출 X)."""
++        u = make_user()
++        # exchange account 안 만듦
++
++        called = {"n": 0}
++        class _ShouldNotCall:
++            def __init__(self, *a, **kw): called["n"] += 1
++            def get_position_risk(self, symbol=None): called["n"] += 1; return []
++        monkeypatch.setattr("app.api.v1.positions.BinanceClient", _ShouldNotCall)
++
++        result = list_external_positions(db=db_session, user_id=u.id)
++        assert result == []
++        assert called["n"] == 0  # 거래소 호출 안 함
++
++    def test_response_fields_populated(
++        self, db_session, make_user, make_exchange_account, monkeypatch,
++    ):
++        """ExternalPositionResponse 모든 필드가 정확히 채워지는지."""
++        u = make_user()
++        ea = make_exchange_account(user=u, is_testnet=False)
++        ea.api_key_enc = f"enc:apikey:{ea.id}"
++        db_session.commit()
++
++        _stub_binance_client(monkeypatch, position_risk_by_account={
++            ea.id: [_mk_position(
++                "PHBUSDT", "LONG", "1000",
++                entry="0.06", mark="0.072", pnl="12",
++                lev="10", margin="isolated", liq="0.05",
++            )],
++        })
++
++        result = list_external_positions(db=db_session, user_id=u.id)
++        assert len(result) == 1
++        p = result[0]
++        assert p.account_id == ea.id
++        assert "mainnet" in p.account_label
++        assert p.symbol == "PHBUSDT"
++        assert p.side == "LONG"
++        assert p.position_amt == Decimal("1000")
++        assert p.entry_price == Decimal("0.06")
++        assert p.mark_price == Decimal("0.072")
++        assert p.unrealized_pnl == Decimal("12")
++        assert p.leverage == 10
++        assert p.margin_type == "isolated"
++        assert p.liquidation_price == Decimal("0.05")
+-- 
+2.53.0.windows.2
+

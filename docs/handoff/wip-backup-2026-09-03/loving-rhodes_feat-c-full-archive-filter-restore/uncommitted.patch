@@ -1,0 +1,46 @@
+diff --git a/backend/app/api/v1/strategies.py b/backend/app/api/v1/strategies.py
+index 23d48ac..05e2170 100644
+--- a/backend/app/api/v1/strategies.py
++++ b/backend/app/api/v1/strategies.py
+@@ -41,13 +41,14 @@ def _count_active_stages(tpl) -> int:
+ 
+ 
+ def _count_active_tps(tpl) -> int:
+-    """Template 의 활성 TP 수 — tp1~10_percent 중 NOT NULL 카운트.
++    """Template 의 활성 TP 수 — tp1~20_percent 중 NOT NULL 카운트.
+ 
+     2026-05-06: 1~10 동적 (사용자 요청 10단계 익절 확장). fallback 4 (backward-compat).
++    2026-07-22 v120 CRITICAL: TP20 확장 (range 1→21)! 사장님 진짜 root cause fix!
+     """
+     if not tpl:
+         return 4
+-    n = sum(1 for i in range(1, 11) if getattr(tpl, f"tp{i}_percent", None) is not None)
++    n = sum(1 for i in range(1, 21) if getattr(tpl, f"tp{i}_percent", None) is not None)
+     return n if n > 0 else 4
+ 
+ 
+diff --git a/backend/app/workers/scheduler_runner.py b/backend/app/workers/scheduler_runner.py
+index 716dd22..6d1071a 100644
+--- a/backend/app/workers/scheduler_runner.py
++++ b/backend/app/workers/scheduler_runner.py
+@@ -9,7 +9,9 @@ import app.core.logging  # noqa: F401
+ from app.core.crypto import decrypt_text
+ from app.core.redis_client import get_redis_client
+ from app.observability.metrics import scheduler_leader_status
++from app.workers.auto_long_at_bottom_worker import run_auto_long_at_bottom
+ from app.workers.auto_reentry_worker import run_auto_reentry_once
++from app.workers.long_bottom_detector_worker import run_long_bottom_detector
+ from app.workers.daily_loss_aggregator import run_daily_loss_check_once
+ from app.workers.distributed_scheduler_guard import DistributedSchedulerGuard
+ from app.workers.keepalive_worker import run_keepalive_once
+@@ -95,6 +97,10 @@ def start_scheduler() -> None:
+     # Daily loss limit 체크 — 매 1분 (settings.daily_loss_limit_usdt 미설정 시 no-op).
+     # audit 2026-05-04: AccountDailyLossLimiter 가 호출되는 곳 0건이라 안전장치 무력 상태였음.
+     scheduler.add_job(guarded_job("daily_loss_check", 50, run_daily_loss_check_once), trigger=IntervalTrigger(minutes=1), id="daily_loss_check", replace_existing=True, max_instances=1, coalesce=True)
++    # v219 LONG 바닥 감지 — 매 5분 (pump_top_detector 대칭). 후보 심볼 스캔.
++    scheduler.add_job(guarded_job("long_bottom_detector_v219", 240, lambda: run_long_bottom_detector(decrypt_text)), trigger=IntervalTrigger(minutes=5), id="long_bottom_detector_v219", replace_existing=True, max_instances=1, coalesce=True)
++    # v219 바닥 자동 LONG 진입 — 매 30초 (auto_short_at_top 대칭). 후보 대상 실 진입.
++    scheduler.add_job(guarded_job("auto_long_at_bottom_v219", 25, lambda: run_auto_long_at_bottom(decrypt_text)), trigger=IntervalTrigger(seconds=30), id="auto_long_at_bottom_v219", replace_existing=True, max_instances=1, coalesce=True)
+     scheduler.start()
+ 
+ if __name__ == "__main__":

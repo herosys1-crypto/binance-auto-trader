@@ -1,0 +1,2 @@
+backend/app/workers/auto_long_at_bottom_worker.py
+backend/app/workers/long_bottom_detector_worker.py
