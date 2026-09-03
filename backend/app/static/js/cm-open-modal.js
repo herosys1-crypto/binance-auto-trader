@@ -110,16 +110,19 @@ async function openCreateChartObvModal() {
     };
     for (let i = 2; i <= 10; i++) _disableTrg(document.getElementById('cm-trg-' + i));
     _disableTrg(document.getElementById('cm-last-stage-trigger-pct'));
-    // 🚨 Fix 177 (2026-08-27): 「청산 후 재진입」을 켠다.
-    //   사장님 모델(-5% 청산 → 다음 단계 모니터링)은 이 토글이 켜져야 성립한다.
-    //   꺼져 있으면 (기본값 False) 청산돼도 LIQUIDATED_WAITING_RETRY 로 가지 않고,
-    //   force SL 도 v130 단계 게이트에 막혀 애초에 청산이 안 된다.
-    //   = 사장님이 매번 기억해서 켜야 하는 구조 자체가 함정이므로 모드 기본값으로 둔다.
-    const _retryEl = document.getElementById('cm-retry-after-liq-enabled');
-    if (_retryEl && !_retryEl.checked) {
-      _retryEl.checked = true;
-      try { _retryEl.dispatchEvent(new Event('change', { bubbles: true })); } catch (_e) {}
-    }
+    // 🚨 Fix 323 (2026-09-03): 「청산 후 재진입」 **자동 체크를 제거**한다.
+    //
+    //   Fix 177 은 이 토글을 켜서 v130 단계 게이트(「단계가 남으면 손절 보류」)를
+    //   우회했다. 그런데 그 대가로 `stage_trigger_worker` 가 retry 상태를 보고
+    //   **정상 단계 진입을 통째로 건너뛴다**(그 파일의 retry 분기).
+    //   = OBV 전략이 1단계만 나가고 2단계에 영원히 도달하지 못했다.
+    //
+    //   Fix 322 로 **손절 ROI 가 명시된 전략은 단계 게이트를 면제**받으므로
+    //   이 우회가 더는 필요 없다. 그리고 사장님 오늘 사양은
+    //   "부분 손절하고 **다음 트리거 단가에 포지션 진입**" 이라
+    //   「전량 청산 후 대기」 모델과 다르다.
+    //
+    //   사장님이 이 토글을 직접 켜시면 그대로 동작한다 — 기본값만 손대지 않는다.
     // 자본 칸 옆에 한 줄 안내 (그리드 위)
     try {
       const grid = document.getElementById('cm-capitals-grid');

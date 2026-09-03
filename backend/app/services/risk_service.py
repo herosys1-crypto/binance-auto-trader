@@ -212,6 +212,32 @@ class RiskService:
                 return True, "단계 정리(Fix304)"
         except Exception as e:
             logger.warning("[Fix321] trim 판정 실패 → 옛 동작: %s", e)
+
+        # ═══════════════════════════════════════════════════════════════
+        # 🚨 Fix 322 (2026-09-03) — **사장님이 손절 %를 정했으면 그 %에서 손절한다.**
+        #
+        #   사장님: "철저하게 기본 방식과 OBV 자동은 문제없게 해줘야해"
+        #
+        #   Fix 321 까지의 면제 4종은 전부 **모드 마커**에 의존했다. 그런데
+        #   사장님이 화면에서 만드는 **기본 방식**은 `capital_management_mode`
+        #   가 항상 `"fixed"` 이고(`cm-submit.js`), 재진입 체크도 안 하므로
+        #   **`stage_trim_before_next_enabled` 하나에만 매달려 있었다.**
+        #   → 사장님이 그 스위치를 끄는 순간 **손절이 다시 마지막 단계까지 잠긴다.**
+        #   (실측 371건/1,221건이 그 상태였다)
+        #
+        #   손절 발동 여부가 「단계 정리를 켰는가」에 좌우되는 것은 뒤집힌 구조다.
+        #   **사장님이 그 전략에 손절 ROI 를 명시했다면 그것이 곧 의사표시**이므로
+        #   단계 게이트를 면제한다. v130 의 「물타기 기회」는 손절을 명시하지 않은
+        #   전략에만 남는다.
+        # ═══════════════════════════════════════════════════════════════
+        try:
+            _fs_on = getattr(strategy, "force_sl_enabled_override", None)
+            _fs_roi = getattr(strategy, "force_sl_roi_override", None)
+            if _fs_on is True or (_fs_roi is not None and Decimal(str(_fs_roi)) > 0):
+                return True, f"손절 명시(ROI -{_fs_roi}%)"
+        except Exception as e:
+            logger.warning("[Fix322] 손절 설정 판정 실패 → 옛 동작: %s", e)
+
         return False, ""
 
     def evaluate_stop_loss(self, strategy_id: int) -> bool:

@@ -379,7 +379,20 @@ def run_stage_trigger_once(decrypt_text) -> None:
                         _trim_on = _trim_enabled(db, strategy)   # Fix 313
                     except Exception:
                         _trim_on = False
-                    if not _trim_on and strategy.status != "LIQUIDATED_WAITING_RETRY":
+                    # 🚨 Fix 323: 손절 ROI 가 명시된 전략은 **정상 단계 진입을 막지 않는다.**
+                    #   Fix 177 이 게이트 우회용으로 retry 를 켜 두면서, 그 부작용으로
+                    #   여기서 정상 진입이 통째로 건너뛰어져 OBV 전략이 1단계에서
+                    #   멈췄다. Fix 322 로 손절 게이트가 손절 설정만으로 열리므로
+                    #   retry 를 「청산 후에만 진입」의 근거로 쓸 이유가 사라졌다.
+                    _sl_explicit = False
+                    try:
+                        _fso = getattr(strategy, "force_sl_enabled_override", None)
+                        _fsr = getattr(strategy, "force_sl_roi_override", None)
+                        _sl_explicit = bool(_fso is True or (_fsr is not None and float(_fsr) > 0))
+                    except Exception:
+                        _sl_explicit = False
+                    if (not _trim_on and not _sl_explicit
+                            and strategy.status != "LIQUIDATED_WAITING_RETRY"):
                         # 옛 stage_trigger 로직 skip! (사장님 사고 = 청산 후만!)
                         continue
                 # 2026-06-01 Critical fix: STAGE_OPEN_PENDING 도 검사 대상 (Sub-account user-stream

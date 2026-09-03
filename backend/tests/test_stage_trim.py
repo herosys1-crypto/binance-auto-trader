@@ -402,10 +402,15 @@ def test_화면이_실현손익을_합산한다():
 
 
 def test_retry모드와_정리모드_충돌_가드():
-    """🚨 둘 다 켜면 STAGE_N_OPEN 이 건너뛰어져 사다리가 영원히 멈춘다."""
+    """🚨 둘 다 켜면 STAGE_N_OPEN 이 건너뛰어져 사다리가 영원히 멈춘다.
+
+    Fix 323 이 조건을 넓혔다 — trim 이 꺼져 있어도 **손절이 명시된 전략**이면
+    정상 단계 진입을 막지 않는다 (OBV 모달이 retry 를 켜 두던 문제).
+    """
     from app.workers import stage_trigger_worker as W
     src = Path(W.__file__).read_text(encoding="utf-8")
-    assert "if not _trim_on and strategy.status != \"LIQUIDATED_WAITING_RETRY\":" in src
+    assert "if (not _trim_on and not _sl_explicit" in src
+    assert '_sl_explicit' in src
 
 
 # ═══════════════════════════════════════════════════════════════════════

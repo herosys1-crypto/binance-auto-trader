@@ -152,3 +152,68 @@ def test_마커_상수가_읽기와_쓰기_양쪽에_있다():
     wsrc = Path(W.__file__).read_text(encoding="utf-8")
     assert "STAGE_LADDER_MODE as _LADDER_MODE" in wsrc
     assert "_LADDER_MODE if stages_config" in wsrc
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fix 322/323 — 기본 방식과 OBV 자동을 「철저하게」
+# ═══════════════════════════════════════════════════════════════════════
+
+class _S2:
+    def __init__(self, **kw):
+        self.retry_after_liquidation_enabled = kw.get("retry", False)
+        self.capital_management_mode = kw.get("mode", "fixed")
+        self.force_sl_enabled_override = kw.get("fs_on")
+        self.force_sl_roi_override = kw.get("fs_roi")
+        self.id, self.symbol = 1, "X"
+
+
+def test_기본방식_손절이_명시되면_trim과_무관하게_면제():
+    """🚨 사장님이 화면에서 만드는 기본 전략은 mode='fixed' + retry 미체크라
+    `stage_trim_before_next_enabled` **하나에만** 매달려 있었다.
+    그 스위치를 끄는 순간 손절이 다시 마지막 단계까지 잠긴다."""
+    from decimal import Decimal
+    svc = _svc(_DB())          # trim OFF
+    ok, why = svc._stage_gate_exempt(_S2(fs_roi=Decimal("3")))
+    assert ok is True and "손절 명시" in why
+
+
+def test_손절_미설정이면_옛_동작():
+    """v130 「물타기 기회」는 손절을 명시하지 않은 전략에만 남는다."""
+    assert _svc(_DB())._stage_gate_exempt(_S2())[0] is False
+
+
+def test_손절_0이나_음수는_면제_아님():
+    from decimal import Decimal
+    svc = _svc(_DB())
+    assert svc._stage_gate_exempt(_S2(fs_roi=Decimal("0")))[0] is False
+
+
+def test_enabled_플래그만_있어도_면제():
+    assert _svc(_DB())._stage_gate_exempt(_S2(fs_on=True))[0] is True
+
+
+def test_판정_실패해도_다른_면제는_살아있다():
+    """손절 필드가 없는 객체여도 예외로 죽으면 안 된다."""
+    class _Bare:
+        capital_management_mode = "stage_ladder"
+        retry_after_liquidation_enabled = False
+    assert _svc(_DB())._stage_gate_exempt(_Bare())[0] is True
+
+
+def test_OBV모달이_재진입을_자동으로_켜지_않는다():
+    """🚨 자동 체크가 `stage_trigger_worker` 의 retry 분기를 타게 해
+    OBV 전략이 1단계에서 멈췄다."""
+    from pathlib import Path
+    from app.services import risk_service as _R
+    js = (Path(_R.__file__).resolve().parents[1] / "static" / "js"
+          / "cm-open-modal.js").read_text(encoding="utf-8")
+    assert "_retryEl.checked = true" not in js, "재진입을 자동으로 켜면 2단계가 막힌다"
+    assert "Fix 323" in js, "왜 제거했는지 근거가 남아 있어야 한다"
+
+
+def test_워커가_손절_명시_전략의_단계진입을_막지_않는다():
+    from pathlib import Path
+    from app.workers import stage_trigger_worker as W
+    src = Path(W.__file__).read_text(encoding="utf-8")
+    assert "_sl_explicit" in src
+    assert "if (not _trim_on and not _sl_explicit" in src
