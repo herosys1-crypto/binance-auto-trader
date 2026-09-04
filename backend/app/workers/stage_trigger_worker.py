@@ -897,12 +897,37 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     str(getattr(strategy, "capital_management_mode", "") or "").lower()
                     == "split_entry"
                 )
+                # ═══════════════════════════════════════════════════════
+                # 📐 Fix 342 (2026-09-04 사장님 결정 ①): v219 사다리(stage_ladder)도
+                #    2·3단계를 **정점-주춤(Fix 260) 하나로** 판정한다.
+                #
+                # 사장님 verbatim (2026-09-04):
+                #   "2단계는 차트와 보조지표가 최고점에서 조정이 시작되는 시점에 진입하고
+                #    … 다시 모니터링 대기해서 차트가 최고점을 찍고 하락과 상승을 반복하고
+                #    다시 하락시작하는 시점에 3단계 진입하는 로직"
+                #   "내가 언제 이렇게 로직을 만들었나?" (= +1.5% 가격 도달 진입은 Claude 가 만든 것)
+                #
+                # 9/1 Fix 260 원문("최고점으로 가다가 주춤할때 2단계 … 다시 최고점으로 가면
+                # 대기해서 꺾이면 3단계")과 같은 규칙인데 볼밴 분할(split_entry)에만 붙어 있었고,
+                # 사다리는 Fix 232 「가격만」 분기로 +1.5% 에 닿으면 들어갔다.
+                # 사다리 간격(+1.5%, Claude 값)은 여기서 「새 극값이 최소 그만큼은 가야 한다」
+                # (peak_stall ① 신고점 도달) 는 뜻으로만 남는다. LONG 도 같은 판정
+                # (사장님 "최저점도 같은 전략이고").
+                # 되돌리기: SystemSetting ladder_peak_stall_enabled = 0 → 옛 경로(가격 + Fix 312).
+                # ═══════════════════════════════════════════════════════
+                _is_ladder = (
+                    str(getattr(strategy, "capital_management_mode", "") or "").lower()
+                    == "stage_ladder"
+                )
                 _ps_on = False
                 _ps_force_market = False
-                if _is_split and next_stage_no >= 2:
+                if (_is_split or _is_ladder) and next_stage_no >= 2:
                     try:
                         from app.services.system_settings_service import SystemSettingsService as _SS260
-                        _ps_on = _SS260(db).get_bool("split_peak_stall_enabled", False)
+                        if _is_split:
+                            _ps_on = _SS260(db).get_bool("split_peak_stall_enabled", False)
+                        else:
+                            _ps_on = _SS260(db).get_bool("ladder_peak_stall_enabled", True)
                     except Exception as _e260:
                         logger.warning("[Fix260] 설정 조회 실패 (기존 경로 유지): %s", _e260)
                         _ps_on = False
@@ -982,7 +1007,7 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     # 🚨 Fix 260: 여기는 원래 **로그도 Redis 기록도 없었다.**
                     #   그래서 「가격 미도달」이 화면·사이클요약 어디에도 안 남았고
                     #   「왜 안 들어가는지 알 수 없는」 상태의 한 축이었다 (헌법 93).
-                    if _is_split and next_stage_no >= 2 and not _ps_on:
+                    if (_is_split or _is_ladder) and next_stage_no >= 2 and not _ps_on:
                         try:
                             _record_block_reason(
                                 _redis, strategy.id,
@@ -1126,7 +1151,8 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 # 아래 블록은 알 수 없는 trigger_mode 에 대한 안전망으로 남겨둔다.
                 # ══════════════════════════════════════════════════════════
                 _is_price_mode = _tpl_trigger_mode in ("PRICE_DOWN_PCT", "PRICE_UP_PCT")
-                if _is_price_mode and next_stage_no >= 2:
+                # Fix 342: 정점-주춤이 판정한 사다리·볼밴은 「가격만 본다」 로그를 찍지 않는다
+                if _is_price_mode and next_stage_no >= 2 and not _ps_on:
                     logger.info(
                         "[Fix232/price] #%s %s %s 단계%s = 가격 도달로 진입 "
                         "(지표 게이트 제외 — 기본방식은 가격만 본다)",
@@ -1311,6 +1337,7 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     get_wallet_limit_pct,
                 )
                 try:
+                    _bal_info = None  # Fix 344: 이전 전략의 잔고 응답을 재사용하지 않는다
                     _bal_info = exec_service.client.get_account()
                     _wallet_total = Decimal(str(_bal_info.get('totalWalletBalance', '0')))
                     _real_margin = Decimal(str(_bal_info.get('totalPositionInitialMargin', '0')))
@@ -1384,6 +1411,34 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     #   v127 default deny → 사장님 진입 안 되는 사고!
                     #   preflight (Binance availableBalance) = 백업 = 안전!
                     logger.warning("[stage-trigger v130] wallet 검증 실패 (preflight 백업으로 계속): %s", _e)
+
+                # ═══════════════════════════════════════════════════════
+                # 🧾 Fix 344 (2026-09-04 사장님 결정 ③-a): 사다리(stage_ladder)의 미진입 단계는
+                #    130% 「예약」에서 뺐다 (capital_calculator.ladder_reserves_untriggered).
+                #    그 대신 **발주 직전 가용 잔고**로 -2019(Margin is insufficient) 를 막는다.
+                #    필요 증거금 = planned_capital (사장님 헌법 capital = margin) × 1.02
+                #    (수수료 여유 2% 는 Claude 값). 잔고 조회가 안 되면 기존 preflight 에 맡긴다(fail-open).
+                # ═══════════════════════════════════════════════════════
+                if _is_ladder:
+                    _avail = None
+                    try:
+                        _avail = Decimal(str(_bal_info.get("availableBalance", "0")))
+                    except Exception:
+                        _avail = None
+                    if _avail is not None:
+                        _need = Decimal(str(getattr(next_plan, "planned_capital", 0) or 0)) * Decimal("1.02")
+                        if _need > 0 and _avail < _need:
+                            _record_block_reason(
+                                _redis, strategy.id,
+                                f"Fix344 가용 잔고 부족 (avail={_avail:.2f} < 필요={_need:.2f})",
+                                next_stage_no,
+                            )
+                            logger.warning(
+                                "[Fix344] #%s %s %s 단계%s 보류 — 가용 잔고 %.2f < 필요 %.2f (planned=%s×1.02)",
+                                strategy.id, strategy.symbol, strategy.side, next_stage_no,
+                                _avail, _need, getattr(next_plan, "planned_capital", None),
+                            )
+                            continue
 
                 # Fix 129: trigger 는 가격 트리거 경로에서만 정의된다 → 모드를 함께 표기
                 _fire_mode = (

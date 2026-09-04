@@ -1805,6 +1805,18 @@ class ExecutionService:
         #          SHORT 32.3% → **47.6% (+15.3%p)**, 과적합 검사 통과.
         #          LONG 은 효과 없음(-1.4%p) → 기본 SHORT 만.
         # ═══════════════════════════════════════════════════════════════
+        # 📐 Fix 342 (2026-09-04 사장님 ①): 사다리는 stage_trigger_worker 의 정점-주춤이
+        #    이미 「최고점 찍고 꺾임」을 판정했다. 여기서 Fix 312 꺾임 대기를 또 걸면
+        #    같은 사상을 두 구현이 이중으로 막는다(정점-주춤 OK → Fix 312 대기 → 미진입).
+        #    ladder_peak_stall_enabled 가 켜진 동안은 대기를 생략한다.
+        _ladder_ps = False
+        try:
+            if (str(getattr(strategy, "capital_management_mode", "") or "").lower()
+                    == "stage_ladder"):
+                from app.services.system_settings_service import SystemSettingsService as _SS342
+                _ladder_ps = _SS342(self.db).get_bool("ladder_peak_stall_enabled", True)
+        except Exception:
+            _ladder_ps = False
         try:
             from app.services.stage_entry_timing import should_enter_now as _wait_ok
             _stype = None
@@ -1815,9 +1827,12 @@ class ExecutionService:
                 _stype = _t2.strategy_type if _t2 else None
             except Exception:
                 _stype = None
-            _good, _good_why = _wait_ok(
-                self.db, self.client, strategy.symbol, strategy.side, _stype,
-            )
+            if _ladder_ps:
+                _good, _good_why = True, "정점-주춤(Fix 342)이 이미 판정 — Fix 312 대기 생략"
+            else:
+                _good, _good_why = _wait_ok(
+                    self.db, self.client, strategy.symbol, strategy.side, _stype,
+                )
         except Exception as _we:
             logger.warning("[Fix312] 대기 판정 오류 → 진입 허용: %s", _we)
             _good, _good_why = True, "판정 오류 (fail-open)"

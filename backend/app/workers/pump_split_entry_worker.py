@@ -993,18 +993,11 @@ def run_pump_split_entry_once() -> dict:
                 #   감사 실측: 호출처가 auto_bb_breakdown_worker 단 1개였고 이 워커는
                 #   TP_PERCENTS[0](15%) 고정이었다. 안정 종목에서 15% 는 실측 도달률 0.5%.
                 #   chg(24h) 는 이 루프가 이미 갖고 있다 — 추가 API 호출 없음.
+                # ⛔ Fix 343 (2026-09-04 사장님 결정 ②): Fix 336-c 적응 TP 배선을 **뗀다**.
+                #   사장님: "빠른 익절은 볼밴 분할전략에서 만든건데" + 8/29 확정 TP1 **5%**(Fix 205).
+                #   볼밴 후보는 전부 |24h| ≥ 15% 라 적응 TP 가 켜지면 **항상 15%** 가 되어
+                #   사장님 5% 가 사라졌다 (감사 2026-09-04 2-B). TP1 = TP_PERCENTS[0] 고정.
                 _tp1_pick = Decimal(str(TP_PERCENTS[0]))
-                try:
-                    from app.services.adaptive_tp import (
-                        adaptive_tp_enabled as _atp_on, pick_tp1 as _atp_pick,
-                    )
-                    if _atp_on(db):
-                        _t1, _why299, _d299 = _atp_pick(db, chg)
-                        _tp1_pick = Decimal(str(_t1))
-                        logger.info("[Fix299/적응TP] #%s %s %s — %s → TP1 %s%%",
-                                    strategy.id, sym, side, _why299, _t1)
-                except Exception as _e299:
-                    logger.warning("[Fix299] 적응 TP 오류 (기본 TP1 유지): %s", _e299)
                 strategy.tp1_pct_override = _tp1_pick
                 db.commit()
 

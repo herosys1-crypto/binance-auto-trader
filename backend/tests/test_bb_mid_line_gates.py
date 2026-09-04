@@ -138,18 +138,20 @@ def test_bb_mid_line_적응TP는_추가_API_호출_없이_티커를_재사용한
     assert "_atp_pick(db, _chg24_map.get(sym))" in src
 
 
-def test_pump_split_이_적응TP를_실제로_부른다():
+def test_pump_split_은_적응TP를_부르지_않는다_Fix343():
+    """⛔ Fix 343 (2026-09-04 사장님 ②): 볼밴 분할은 8/29 확정 TP1 5% (Fix 205).
+    사장님: "빠른 익절은 볼밴 분할전략에서 만든건데" — 볼밴 후보는 전부 |24h|≥15% 라
+    Fix 336-c 적응 TP 는 항상 15% 가 되어 5% 를 없앴다. 배선을 뗐다."""
     src = _pump_split_src()
-    assert "from app.services.adaptive_tp import" in src
-    assert "_atp_pick(db, chg)" in src, "루프가 이미 가진 chg 를 써야 한다"
+    assert "_atp_pick" not in src, "Fix 336-c 배선이 되살아났다"
     assert "strategy.tp1_pct_override = _tp1_pick" in src
-    assert "strategy.tp1_pct_override = Decimal(str(TP_PERCENTS[0]))" not in src
+    assert "_tp1_pick = Decimal(str(TP_PERCENTS[0]))" in src, "TP1 은 TP_PERCENTS[0](5%) 고정"
+    assert "Fix 343" in src
 
 
 def test_적응TP_실패시_기존_TP를_유지한다():
-    """fail-open: 적응 TP 오류가 진입 자체를 막으면 안 된다."""
-    for src in (_bb_mid_src(), _pump_split_src()):
-        assert "[Fix299] 적응 TP 오류" in src
+    """fail-open: 적응 TP 오류가 진입 자체를 막으면 안 된다 (bb_mid_line 만 — 볼밴 분할은 Fix 343 으로 배선 제거)."""
+    assert "[Fix299] 적응 TP 오류" in _bb_mid_src()
 
 
 def test_4H_판정을_중복_정의하지_않는다():

@@ -163,4 +163,4 @@ def test_적응TP가_꺼져있으면_아무것도_안_바꾼다():
     src = (Path(__file__).resolve().parents[1] / "app" / "workers"
            / "auto_bb_breakdown_worker.py").read_text(encoding="utf-8")
     blk = src[src.find("Fix 299 (2026-09-02 사장님)"):src.find("tpl = StrategyTemplate(")]
-    assert "if _atp_on(db):" in blk, "게이트 안에서만 cfg 를 건드려야 한다"
+    assert "if _atp_on(db) and not _is_ladder_tpl:" in blk, "게이트 안에서만 cfg 를 건드려야 한다 (Fix 343: 사다리 제외)"

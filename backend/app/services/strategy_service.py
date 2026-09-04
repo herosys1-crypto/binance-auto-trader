@@ -386,7 +386,17 @@ class StrategyService:
                 .where(_SSP.strategy_instance_id.in_(_strategy_ids))
                 .where(_SSP.is_enabled.is_(True))
             ).scalars().all()
+            # 🧾 Fix 344 (2026-09-04 사장님 ③-a): 사다리(stage_ladder)의 미진입 단계는
+            #   예약에서 뺀다 — capital_calculator.ladder_reserves_untriggered 와 같은 규칙
+            #   (생성 시 검사와 워커 검사가 서로 다른 답을 내면 안 된다).
+            from app.services.capital_calculator import ladder_reserves_untriggered as _lru
+            _si_by_id = {_si.id: _si for _si, _ in _active_rows}
             for _p in _all_plans:
+                _owner = _si_by_id.get(_p.strategy_instance_id)
+                if (_owner is not None
+                        and not bool(getattr(_p, "is_triggered", False))
+                        and not _lru(self.db, _owner)):
+                    continue
                 prev = _plans_sum_by_strategy.get(_p.strategy_instance_id, D("0"))
                 _plans_sum_by_strategy[_p.strategy_instance_id] = (
                     prev + D(str(_p.planned_capital or 0))

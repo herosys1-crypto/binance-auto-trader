@@ -1860,7 +1860,14 @@ def _create_auto_bb_strategy(
             adaptive_tp_enabled as _atp_on, pick_tp1 as _atp_pick,
             tp_ladder_from_tp1 as _atp_ladder,
         )
-        if _atp_on(db):
+        # 🎯 Fix 343 (2026-09-04 사장님 결정 ②): 적응 TP(급등락 15% / 안정 3%)는 **볼밴 맥락**의
+        #   지시였다. 사장님: "빠른 익절은 볼밴 분할전략에서 만든건데 … 정말 너 맘대로구나".
+        #   3단 사다리 스펙(9/2, 사장님 검산)은 TP1 **15%**. 사다리(stages_count > 1 =
+        #   stage_ladder 마커와 같은 조건)에는 적용하지 않는다 → 인스턴스 기본 tp1_pct_override 15.
+        _is_ladder_tpl = int(stages_config.get("stages_count", 1) or 1) > 1
+        if _atp_on(db) and _is_ladder_tpl:
+            logger.info("[Fix343] %s %s 사다리 → 적응 TP 제외, TP1 15%% (3단 사다리 스펙)", symbol, side)
+        if _atp_on(db) and not _is_ladder_tpl:
             _chg = None
             try:
                 from app.core.crypto import decrypt_text as _dt299

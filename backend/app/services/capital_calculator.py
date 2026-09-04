@@ -67,6 +67,33 @@ def calc_actual_margin_for_strategy(strategy: StrategyInstance) -> Decimal:
     return Decimal("0")
 
 
+def ladder_reserves_untriggered(db: Session, strategy: StrategyInstance) -> bool:
+    """이 전략의 **미진입 단계**를 「예약」으로 셀 것인가.
+
+    🧾 Fix 344 (2026-09-04 사장님 결정 ③-a): v219 사다리(stage_ladder)는 **아니오**.
+      사다리 1건마다 300+600=900 이 예약으로 잡혀, 열린 사다리가 7개를 넘으면 지갑×1.3 을
+      넘어 **모든 전략의 2단계가 차단**됐다 (24h 106회 / 11전략 — #2264 실측:
+      「실=959 + 예약=11,527 = 207% > 허용 7,235」).
+      사장님 사다리 사상(10 → 300 → 600 을 여러 심볼에)과 130% 가드(2026-05-19, -2019 방지)의
+      충돌을 사장님이 (a) 「미진입 단계는 예약에서 뺀다」로 결정. 대신 발주 직전
+      **가용 잔고 검사**(stage_trigger_worker Fix 344)가 -2019 를 막는다.
+      되돌리기: SystemSetting ladder_reserve_untriggered_enabled = 1 (재시작 불필요).
+    다른 방식(수동 기본·볼밴 분할·OBV)은 그대로 예약한다.
+    """
+    mode = str(getattr(strategy, "capital_management_mode", "") or "").lower()
+    if mode != "stage_ladder":
+        return True
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, "ladder_reserve_untriggered_enabled")
+        if row is None or row.value is None or not str(row.value).strip():
+            return False
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:
+        logger.warning("[Fix344] 설정 조회 실패 → 사다리 미진입 단계는 예약 제외: %s", e)
+        return False
+
+
 def calc_untriggered_margin_for_strategy(db: Session, strategy: StrategyInstance) -> Decimal:
     """strategy 의 미진입 단계 자본 합.
 
@@ -77,6 +104,9 @@ def calc_untriggered_margin_for_strategy(db: Session, strategy: StrategyInstance
       → 나눗셈 X! capital 그대로!
       → exchange_accounts.py:_reserved_one v101 fix와 통일!
     """
+    # 🧾 Fix 344: 사다리(stage_ladder)의 미진입 단계는 예약이 아니다 (위 docstring)
+    if not ladder_reserves_untriggered(db, strategy):
+        return Decimal("0")
     try:
         untriggered_plans = db.execute(
             select(StrategyStagePlan)
