@@ -324,6 +324,19 @@
 
 되돌리기(재시작 불필요): `ladder_peak_stall_enabled=0` / `ladder_reserve_untriggered_enabled=1`. 적응 TP 분리는 코드라 커밋 되돌림.
 
+**추가 결정 (같은 날 오후)**
+
+> 사장님: "차트는 고점인데 다른 보조지표는 상승초입니다. 이건 롱으로 들어가야 승률이 높을 지점인것 같아 분석해서 수정해줘 보조지표를 적용할수 있게 개선해줘" (MINIMAXUSDT #2755)
+> 사장님: "이건 왜 포지션 추가 진입이 없는거죠 문제가 있는것 같아" (LPTUSDT #2690, ROI +11.77%)
+
+| # | 결정 | 구현 | 커밋 |
+|---|---|---|---|
+| ⑪ | 피라미딩 지표 게이트 = **15분 기준, 4H 참고** (4H 거부권 제거, 완성봉) | **Fix 345** `trend_4h_gate.check_pyramid_trend(db=)` + `pyramid_4h_veto_enabled`(기본 0) | `c7417a8` |
+| ⑫ | 「가격 고점 + 15m hist 3봉 가속 + OBV 신고점」 = 상승 초입 → **SHORT 보류 + LONG 알람** | **Fix 346** `services/momentum_phase.py` + auto_short_at_top 배선 + auto_long_at_bottom `SURGE_START` 패턴 | `c7417a8` |
+
+실측(momentum_phase.py 머리말): 이 자리 LONG +1.64 / SHORT −0.88 (n=592), 대조군 LONG +1.32 / SHORT −0.76 (n=632), 4조각 교차검증 통과. 숫자(3봉·40봉)는 Claude 값 = 설정키 `surge_start_*`.
+되돌리기: `surge_start_short_veto_enabled=0` / `surge_start_long_handoff_enabled=0` / `pyramid_4h_veto_enabled=1`.
+
 ## 5. 사장님 확인 필요 (O/X)
 
 | # | 질문 | 제 해석 |
