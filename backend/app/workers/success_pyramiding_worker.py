@@ -787,7 +787,8 @@ def run_success_pyramiding() -> dict:
                             api_secret=_dt(_acc.api_secret_enc),
                             is_testnet=False,
                         )
-                        _ok273, _why273, _det273 = _pt273(_bc273, si.symbol, si.side)
+                        # Fix 345: db 를 넘겨 「15m 기준 · 4H 참고」 설정을 읽는다
+                        _ok273, _why273, _det273 = _pt273(_bc273, si.symbol, si.side, db=db)
                         if not _ok273:
                             skipped += 1
                             _bump("indicator_not_rising")

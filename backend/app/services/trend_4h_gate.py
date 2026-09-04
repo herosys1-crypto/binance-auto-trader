@@ -365,8 +365,37 @@ def check_hist_rising(bc, symbol: str, side: str, tf: str,
         return None, d
 
 
-def check_pyramid_trend(bc, symbol: str, side: str) -> tuple[bool, str, dict[str, Any]]:
-    """「계속 상승하는 차트와 **보조지표**」 — 4H·15m 둘 다 hist 가 내 편으로 상승 중인가.
+SETTING_PYRAMID_4H_VETO = "pyramid_4h_veto_enabled"   # Fix 345: 기본 OFF = 4H 는 참고만
+
+
+def _pyramid_4h_veto_enabled(db) -> bool:
+    """4H 를 피라미딩 **거부권**으로 쓸 것인가. 기본 **아니오** (사장님 「15분이 기준, 4시간은 참고」)."""
+    if db is None:
+        return False
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_PYRAMID_4H_VETO)
+        if row is None or row.value is None or not str(row.value).strip():
+            return False
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:
+        logger.warning("[Fix345] %s 조회 실패 → 참고만: %s", SETTING_PYRAMID_4H_VETO, e)
+        return False
+
+
+def check_pyramid_trend(bc, symbol: str, side: str, *, db=None) -> tuple[bool, str, dict[str, Any]]:
+    """「계속 상승하는 차트와 **보조지표**」 — **15m hist 가 내 편으로 상승 중**인가 (4H 는 참고).
+
+    🎯 Fix 345 (2026-09-04 사장님): "이건 왜 포지션 추가 진입이 없는거죠 문제가 있는것 같아"
+       #2690 LPTUSDT SHORT 가 ROI +11.77% 로 트리거를 통과하고도 매 30초
+       「4h MACD hist 가 내 편으로 상승 중이 아님」(진행중 4H 봉, delta −0.002) 으로 차단됐다.
+       옛 판정은 4H·15m **둘 다** AND 였고 4H 를 먼저 봐서 15m 은 평가조차 안 됐다.
+       사장님 사상: "**15분이 기준이고 4시간을 참고**하고 … 4시간 차트의 의미는 중단기
+       지속적인 흐름을 판단하는 정도 차트" / 추가 조건: "수익중에 차트와 보조지표가
+       지속 상승이나 하락이 데이터를 보이면 포지션 추가".
+       → 15m = 판정(완성봉), 4H = 참고(완성봉, 로그·detail 에만). 되돌리기: SystemSetting
+         pyramid_4h_veto_enabled = 1 이면 옛 AND 로 복귀.
+       진행중 봉을 쓰지 않는다 — 4H 진행중 봉은 첫 25% 구간에서 부호가 뒤집힌다(2026-09-03 실측).
 
     ⚠️ **fail-open** — 판정 불가(데이터 없음)면 통과시킨다.
        이건 좋은 자리를 고르는 필터이지 안전장치가 아니다.
@@ -374,11 +403,20 @@ def check_pyramid_trend(bc, symbol: str, side: str) -> tuple[bool, str, dict[str
         피라미딩이 통째로 멈춘다 — Fix 252 의 교훈. 대신 사유를 반드시 로그에 남긴다.)
     """
     det: dict[str, Any] = {}
-    for tf in PYRAMID_TFS:
-        rising, d = check_hist_rising(bc, symbol, side, tf)
-        det[tf] = d
-        if rising is None:
-            return True, f"{tf} 판정 불가 (fail-open): {d.get('reason')}", det
-        if not rising:
-            return False, f"{tf} MACD hist 가 내 편으로 상승 중이 아님", det
-    return True, "4H·15m 둘 다 상승 중", det
+    veto_4h = _pyramid_4h_veto_enabled(db)
+    det["4h_role"] = "veto" if veto_4h else "reference"
+    # ① 15m = 기준 (완성봉)
+    rising15, d15 = check_hist_rising(bc, symbol, side, "15m", use_completed=True)
+    det["15m"] = d15
+    if rising15 is None:
+        return True, f"15m 판정 불가 (fail-open): {d15.get('reason')}", det
+    if not rising15:
+        return False, "15m MACD hist 가 내 편으로 상승 중이 아님", det
+    # ② 4H = 참고 (완성봉). 기본은 막지 않고 detail 에만 남긴다.
+    rising4, d4 = check_hist_rising(bc, symbol, side, "4h", use_completed=True)
+    det["4h"] = d4
+    if rising4 is None:
+        return True, f"15m 상승 중 · 4H 판정 불가 (참고): {d4.get('reason')}", det
+    if not rising4 and veto_4h:
+        return False, "4h MACD hist 가 내 편으로 상승 중이 아님 (pyramid_4h_veto_enabled=1)", det
+    return True, ("15m 상승 중 · 4H 도 상승 중" if rising4 else "15m 상승 중 · 4H 는 아님 (참고만)"), det

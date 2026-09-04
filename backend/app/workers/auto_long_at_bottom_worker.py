@@ -1115,7 +1115,9 @@ def _create_long_strategy(
         #   → SURGE_PULLBACK 경로는 이 게이트를 건너뛴다.
         #     대신 그 경로 자체가 되돌림 <= 0.35 + 강세 4개 조건 + 원점 아래 하드 차단을
         #     이미 통과한 것이라 **보호가 없어지는 것이 아니라 다른 보호로 바뀌는 것**이다.
-        _skip_pk = (pattern == "SURGE_PULLBACK")
+        # Fix 346: SURGE_START(가격 고점 + 지표 상승 초입, auto_short_at_top 이 넘김)도
+        #   강세 종목이라 저점 반등 게이트를 만족할 수 없다 → SURGE_PULLBACK 과 같이 건너뛴다.
+        _skip_pk = (pattern in ("SURGE_PULLBACK", "SURGE_START"))
         if _skip_pk:
             logger.info(
                 "[Fix249] %s LONG = 급등중 조정 경로 → Fix111b 저점 게이트 제외 "
@@ -1498,8 +1500,11 @@ def run_auto_long_at_bottom_once() -> dict:
                     )
 
                 # 실 진입! (_create_long_strategy 재사용 = 헌법 6!)
+                # Fix 346: 정점 SHORT 워커가 넘긴 SURGE_START 알람은 패턴을 그대로 전달한다
+                #   (저점 게이트 생략). 다른 알람(A/B 등)은 옛 그대로 None.
+                _alert_pattern = "SURGE_START" if alert.get("pattern") == "SURGE_START" else None
                 new_strategy = _create_long_strategy(
-                    db, symbol, capital, bc, pattern=None,   # 알람 경로
+                    db, symbol, capital, bc, pattern=_alert_pattern,   # 알람 경로
                 )
                 if not new_strategy:
                     skipped += 1

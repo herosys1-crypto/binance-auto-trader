@@ -268,6 +268,52 @@ def run_auto_short_at_top() -> dict:
                     continue
                 logger.info("[auto_short_top+Fix111] %s %s | %s", symbol, _pk_why, _pk_det)
 
+                # ═══════════════════════════════════════════════════════
+                # 📈 Fix 346 (2026-09-04 사장님, MINIMAXUSDT #2755): 「가격은 고점인데
+                #    보조지표는 상승 초입」이면 SHORT 를 넣지 않고 LONG 알람으로 넘긴다.
+                #    사장님: "차트는 고점인데 다른 보조지표는 상승초입니다. 이건 롱으로
+                #             들어가야 승률이 높을 지점 … 보조지표를 적용할수 있게 개선해줘"
+                #    위 confirm_peak 는 RSI/CCI 「한 봉 하락」을 꺾임으로 세지만, 15m MACD hist
+                #    가 3봉 연속 커지고 OBV 가 신고점이면 정점이 아니라 초입이다.
+                #    실측(96종목 10일 n=592): SHORT −0.88 / LONG +1.64, 대조군(거래대금 100)
+                #    SHORT −0.76 / LONG +1.32 (momentum_phase.py 머리말).
+                #    되돌리기: surge_start_short_veto_enabled=0 / surge_start_long_handoff_enabled=0
+                # ═══════════════════════════════════════════════════════
+                try:
+                    from app.services.momentum_phase import (
+                        is_surge_start as _is_ss, short_veto_enabled as _ss_veto,
+                        long_handoff_enabled as _ss_handoff, PATTERN as _SS_PATTERN,
+                    )
+                    if _ss_veto(db):
+                        _ss_ok, _ss_why, _ss_det = _is_ss(bc, symbol, db=db)
+                        if _ss_ok:
+                            logger.warning(
+                                "[Fix346] ⛔ %s SHORT 보류 — %s | %s", symbol, _ss_why, _ss_det.get("checks"),
+                            )
+                            if _ss_handoff(db) and r is not None:
+                                try:
+                                    _ss_key = f"sajangnim:bottom_long:{symbol}"
+                                    _ss_payload = {
+                                        "symbol": symbol,
+                                        "side": "LONG",
+                                        "pattern": _SS_PATTERN,
+                                        "confidence": 0.85,
+                                        "chg_24h": alert.get("change_24h", alert.get("chg_24h")),
+                                        "change_24h": alert.get("change_24h", alert.get("chg_24h")),
+                                        "detected_at": datetime.now(timezone.utc).isoformat(),
+                                        "source": "fix346_surge_start",
+                                        "surge_start": _ss_det.get("checks"),
+                                    }
+                                    r.setex(_ss_key, 1800, json.dumps(_ss_payload, default=str))
+                                    logger.info("[Fix346] ↪ %s LONG 알람 발행 (%s)", symbol, _ss_key)
+                                except Exception as _ss_e:
+                                    logger.warning("[Fix346] %s LONG 알람 발행 실패: %s", symbol, _ss_e)
+                            skipped += 1
+                            continue
+                        logger.info("[Fix346] %s SHORT 유지 — %s", symbol, _ss_why)
+                except Exception as _ss_exc:
+                    logger.warning("[Fix346] %s 국면 판정 오류 (SHORT 유지): %s", symbol, _ss_exc)
+
                 # 7. 자동 진입!
                 cfg = {"capitals": [capital_float], "leverage": DEFAULT_LEVERAGE}
                 new_strategy = _create_auto_bb_strategy(
