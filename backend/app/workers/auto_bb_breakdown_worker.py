@@ -1551,6 +1551,21 @@ def _create_auto_bb_strategy(
                     except Exception as _e334:
                         logger.debug("[Fix334] 재진입 면제 판정 실패 (무시): %s", _e334)
                         _ex274, _exwhy274 = False, ""
+                    # 📈 Fix 347 (2026-09-04 사장님): "15% 심볼 롱 차단 이건 또 뭐지 차단 자체가없어
+                    #    올라가면 롱으로 진입을 해야지" — 급등 계열 진입(상승 초입 SURGE_START,
+                    #    급등중 조정 SURGE_PULLBACK)은 이미 「올라가는 심볼」이라 24h 15% 를 채우기
+                    #    전에도 롱이다. 이 게이트(저점 롱 거르기용)에서 뺀다.
+                    #    되돌리기: long_surge_gate_surge_exempt = 0
+                    if not _ex274:
+                        try:
+                            from app.services.long_surge_gate import (
+                                surge_pattern_exempt_enabled as _spx347, SURGE_PATTERNS as _SP347,
+                            )
+                            _pat347 = str((cfg or {}).get("entry_pattern") or "").upper()
+                            if _pat347 in _SP347 and _spx347(db):
+                                _ex274, _exwhy274 = True, f"급등 계열 진입({_pat347}) — Fix 347 면제"
+                        except Exception as _e347:
+                            logger.debug("[Fix347] 급등 패턴 면제 판정 실패 (무시): %s", _e347)
                     if _ex274:
                         logger.info("[Fix274/LONG급등] ✅ %s 참고: %s (%s — 막지 않음)",
                                     symbol, _why274, _exwhy274)

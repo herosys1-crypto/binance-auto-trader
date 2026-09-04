@@ -59,7 +59,15 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["check_long_surge", "long_surge_gate_enabled", "SETTING_KEY", "MIN_CHG_24H"]
+__all__ = ["check_long_surge", "long_surge_gate_enabled", "SETTING_KEY", "MIN_CHG_24H",
+           "SETTING_SURGE_EXEMPT", "SURGE_PATTERNS", "surge_pattern_exempt_enabled"]
+
+# 📈 Fix 347 (2026-09-04 사장님): "15% 심볼 롱 차단 이건 또 뭐지 차단 자체가없어 올라가면 롱으로 진입을 해야지"
+#   이 게이트는 「급등 중이 아닌 종목의 저점 롱」을 거르는 용도다. 이미 올라가고 있는 자리에서
+#   들어가는 급등 계열 패턴(상승 초입 SURGE_START / 급등중 조정 SURGE_PULLBACK)은 24h 가 아직
+#   15% 가 안 됐어도(MINIMAXUSDT +8%) 롱이다 → 면제. 기본 ON.
+SETTING_SURGE_EXEMPT = "long_surge_gate_surge_exempt"
+SURGE_PATTERNS: tuple[str, ...] = ("SURGE_START", "SURGE_PULLBACK")
 
 SETTING_KEY = "long_surge_gate_enabled"
 
@@ -78,6 +86,21 @@ def long_surge_gate_enabled(db) -> bool:
     except Exception as e:
         logger.warning("[Fix274] %s 조회 실패 = OFF: %s", SETTING_KEY, e)
         return False
+
+
+def surge_pattern_exempt_enabled(db) -> bool:
+    """급등 계열 패턴(SURGE_PATTERNS)을 이 게이트에서 면제할 것인가. 기본 **예** (Fix 347)."""
+    if db is None:
+        return True
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_SURGE_EXEMPT)
+        if row is None or row.value is None or not str(row.value).strip():
+            return True
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:
+        logger.warning("[Fix347] %s 조회 실패 = 면제 유지: %s", SETTING_SURGE_EXEMPT, e)
+        return True
 
 
 def check_long_surge(bc, symbol: str, side: str) -> tuple[bool, str, dict[str, Any]]:

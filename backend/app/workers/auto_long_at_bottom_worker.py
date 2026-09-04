@@ -1137,6 +1137,9 @@ def _create_long_strategy(
         cfg = {
             "capitals": [capital],
             "leverage": DEFAULT_LEVERAGE,
+            # Fix 347: 진입 패턴을 공용 관문에 알린다 — 급등 계열(SURGE_START/SURGE_PULLBACK)은
+            #   Fix 274 「24h 15% 미만 롱 차단」에서 제외 (사장님: "올라가면 롱으로 진입을 해야지")
+            "entry_pattern": pattern,
         }
         return _create_auto_bb_strategy(
             db, symbol, "LONG", cfg,
