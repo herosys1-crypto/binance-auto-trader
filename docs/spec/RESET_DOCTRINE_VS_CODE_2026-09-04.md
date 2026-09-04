@@ -337,6 +337,10 @@
 실측(momentum_phase.py 머리말): 이 자리 LONG +1.64 / SHORT −0.88 (n=592), 대조군 LONG +1.32 / SHORT −0.76 (n=632), 4조각 교차검증 통과. 숫자(3봉·40봉)는 Claude 값 = 설정키 `surge_start_*`.
 되돌리기: `surge_start_short_veto_enabled=0` / `surge_start_long_handoff_enabled=0` / `pyramid_4h_veto_enabled=1`.
 
+| ⑬ | 「15% 심볼 롱 차단 이건 또 뭐지 차단 자체가없어 올라가면 롱으로 진입을 해야지」 → 급등 계열 롱(SURGE_START/SURGE_PULLBACK)은 Fix 274(24h<15% 롱 차단)에서 면제 | **Fix 347** `long_surge_gate.surge_pattern_exempt_enabled`(기본 ON) + `cfg["entry_pattern"]` | `b5a61d5` |
+
+⚠️ 정정: 앞선 보고에서 Fix 274 를 「15% 이상 오른 심볼 롱 차단」이라고 거꾸로 적었다. 실제는 **24h < 15% 면 롱 차단**(저점 롱 거르기). 실측(24h 구간별): 상승 초입 롱은 24h<15% 에서 +1.66(n=505), ≥15% 에서 +0.97(n=69) = 우위가 15% 미만 구간에 있다.
+
 ## 5. 사장님 확인 필요 (O/X)
 
 | # | 질문 | 제 해석 |
