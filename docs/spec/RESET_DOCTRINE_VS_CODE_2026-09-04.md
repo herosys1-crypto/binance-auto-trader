@@ -310,6 +310,20 @@
 
 ---
 
+## 5-0. 사장님 결정 기록 (2026-09-04 09:5x KST)
+
+> 사장님: **"실자금으로 운영하고 123으로 진행해줘"**
+
+| # | 결정 | 구현 | 커밋 |
+|---|---|---|---|
+| ① | 사다리 2·3단계 = 정점-주춤 하나로 (LONG 포함), +1.5% 는 「새 극값 최소 폭」 뜻만 | **Fix 342** `stage_trigger_worker` `_is_ladder` + `ladder_peak_stall_enabled`(기본 ON) / `execution_service` Fix 312 대기 생략 | `1673481` |
+| ② | 사다리 TP1 15% / 볼밴 분할 TP1 5% (적응 TP 는 두 경로에서 뗌) | **Fix 343** `auto_bb_breakdown_worker` `_is_ladder_tpl` / `pump_split_entry_worker` Fix 336-c 제거 | `1673481` |
+| ③ | (a) 사다리 미진입 단계는 예약에서 제외 + 발주 직전 가용 잔고 검사 | **Fix 344** `capital_calculator.ladder_reserves_untriggered`(설정 `ladder_reserve_untriggered_enabled` 기본 0) + `strategy_service` 동일 규칙 + `availableBalance ≥ planned×1.02` | `1673481` |
+| ⑧ | 볼밴 중단선 **실자금 운영 유지** (변경 없음) | — | — |
+| ⑤ | 열린 사다리 7건의 TP1 3% → 15% DB 수정 | **미결** (사장님 결정 대기, 신규 사다리부터 15%) | — |
+
+되돌리기(재시작 불필요): `ladder_peak_stall_enabled=0` / `ladder_reserve_untriggered_enabled=1`. 적응 TP 분리는 코드라 커밋 되돌림.
+
 ## 5. 사장님 확인 필요 (O/X)
 
 | # | 질문 | 제 해석 |
