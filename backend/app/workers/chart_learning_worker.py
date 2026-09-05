@@ -293,9 +293,9 @@ def run_chart_learning_outcome_once(decrypt_text, *, limit: int | None = None) -
         pruned = _prune(db)
         res = {"candidates": len(rows), "done": done, "expired": expired, "waiting": waiting,
                "pruned": pruned, "seconds": round(time.time() - t0, 1)}
-        if rows or pruned:
-            logger.info("[%s] 라벨링: 후보 %d · 완료 %d · 만료 %d · 대기 %d · 정리 %d · %.0fs",
-                        FIX, len(rows), done, expired, waiting, pruned, res["seconds"])
+        # 🚨 할 일이 0건이어도 한 줄 남긴다 — 「기록 없음」과 「대기 0건」을 같은 침묵으로 두면 고장을 정상으로 착각한다(9/3 교훈).
+        logger.info("[%s] 라벨링: 후보 %d · 완료 %d · 만료 %d · 대기 %d · 정리 %d · %.0fs",
+                    FIX, len(rows), done, expired, waiting, pruned, res["seconds"])
         return res
     finally:
         db.close()
