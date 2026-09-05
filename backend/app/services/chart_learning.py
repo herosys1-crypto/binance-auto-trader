@@ -51,7 +51,7 @@ SETTING_ENABLED = "chart_learning_enabled"               # 기본 ON
 SETTING_SNAPSHOT_HOURS = "chart_learning_snapshot_hours"  # 기본 "0" (UTC 시각, 쉼표 구분). 스케줄은 0·12시에 깨어나 이 값을 본다
 SETTING_TOP_N = "chart_learning_top_n"                   # 기본 50 (사장님 「50위」)
 SETTING_KEEP_DAYS = "chart_learning_keep_days"           # 원시 봉 보존 일수, 기본 45 (라벨은 영구)
-SETTING_OUTCOME_BATCH = "chart_learning_outcome_batch"   # 시간당 라벨링 상한, 기본 400
+SETTING_OUTCOME_BATCH = "chart_learning_outcome_batch"   # 시간당 라벨링 상한, 기본 200 (스케줄러 프로세스의 거버너 예산을 실매매 워커와 나눠 쓴다)
 
 # ── 측정 잣대 ────────────────────────────────────────────────────────────
 LEV = 2.0
@@ -111,7 +111,7 @@ def keep_days(db: Any) -> int:
 
 
 def outcome_batch(db: Any) -> int:
-    return _int(db, SETTING_OUTCOME_BATCH, 400, 10, 20000)
+    return _int(db, SETTING_OUTCOME_BATCH, 200, 10, 20000)
 
 
 def snapshot_hours(db: Any) -> set[int]:

@@ -132,7 +132,7 @@ def test_build_report_과_markdown():
 
 def test_설정_기본값():
     assert CL.enabled(None) is True and CL.top_n(None) == 50 and CL.keep_days(None) == 45
-    assert CL.outcome_batch(None) == 400 and CL.snapshot_hours(None) == {0}
+    assert CL.outcome_batch(None) == 200 and CL.snapshot_hours(None) == {0}
     assert (CL.LEV, CL.SL_PRICE, CL.TP_PRICE, CL.HORIZON, CL.WINDOW) == (2.0, 0.025, 0.075, 48, 96)
 
 

@@ -41,8 +41,10 @@ from app.services.multiday_movers import returns_from_daily
 logger = logging.getLogger(__name__)
 
 FIX = "Fix353"
-SLEEP = 0.12               # 심볼당 호출 간격 (Claude 가 정함) — 3호출 × 8/s ≈ 분당 500 weight (한도 2400)
+SLEEP = 0.30               # 심볼당 호출 간격 (Claude 가 정함) — 심볼-일당 weight 3 → 분당 ≈ 400 (Fix124 거버너 1,500/분의 1/4)
 MAX_CONSEC_FAIL = 3        # 연속 실패 → 중단 (418/429 스파이럴 방지)
+GOVERNOR_WAIT = (15, 30, 45)   # 🚨 실측 06:35: 백필이 거버너(1,500/분)를 넘겨 「429 weight budget exceeded」로 3연속 실패 → 중단.
+                               #   거버너 거절은 바이낸스 ban 이 아니라 **우리 쪽 예산 초과**이므로 기다렸다가 같은 심볼을 다시 시도한다.
 MIN_PRE_BARS = 120         # chart_events 조정 판정 최소 15m 봉
 
 
@@ -76,13 +78,33 @@ def _open(decrypt_text):
 # 조회 부품
 # ══════════════════════════════════════════════════════════════════════
 
+def _is_governor(e: BaseException) -> bool:
+    """Fix124 로컬 weight 거버너의 거절인가 (바이낸스 실제 429/418 과 구분: 메시지에 'weight budget' 이 있다)."""
+    return "weight budget" in str(e)
+
+
+def _klines(bc, **kw) -> list:
+    """get_klines + 거버너 대기. 거버너가 거절하면 15/30/45초 쉬고 다시(예산은 분 단위로 회복)."""
+    for i, wait in enumerate((0,) + GOVERNOR_WAIT):
+        if wait:
+            logger.info("[%s] 거버너 예산 초과 → %ds 대기 후 재시도 (%s)", FIX, wait, kw.get("symbol"))
+            time.sleep(wait)
+        try:
+            return bc.get_klines(**kw)
+        except Exception as e:  # noqa: BLE001
+            if _is_governor(e) and i < len(GOVERNOR_WAIT):
+                continue
+            raise
+    return []
+
+
 def _fetch_pre(bc, symbol: str, *, end_ms: int | None = None) -> tuple[list[list[float]], list[list[float]]]:
     """스냅샷 전 15m ≤200 + 4h ≤61 완성봉. `end_ms` 를 주면 그 시각 이전(백필)."""
     now = end_ms if end_ms is not None else _now_ms()
     kw: dict[str, Any] = {"end_time": end_ms - 1} if end_ms is not None else {}
-    k15 = CL.compact(bc.get_klines(symbol=symbol, interval="15m", limit=CL.PRE_15M + 2, **kw),
+    k15 = CL.compact(_klines(bc, symbol=symbol, interval="15m", limit=CL.PRE_15M + 2, **kw),
                      now_ms=now, interval_ms=CL.MS_15M)[-CL.PRE_15M:]
-    k4 = CL.compact(bc.get_klines(symbol=symbol, interval="4h", limit=CL.PRE_4H + 2, **kw),
+    k4 = CL.compact(_klines(bc, symbol=symbol, interval="4h", limit=CL.PRE_4H + 2, **kw),
                     now_ms=now, interval_ms=CL.MS_4H)[-CL.PRE_4H:]
     return k15, k4
 
@@ -94,7 +116,7 @@ def _daily_returns(bc, symbols: list[str], *, now_ms: int) -> dict[str, tuple[fl
     fails = 0
     for sym in symbols:
         try:
-            kl = CL.compact(bc.get_klines(symbol=sym, interval="1d", limit=8), now_ms=now_ms, interval_ms=CL.MS_DAY)
+            kl = CL.compact(_klines(bc, symbol=sym, interval="1d", limit=8), now_ms=now_ms, interval_ms=CL.MS_DAY)
             fails = 0
         except Exception as e:  # noqa: BLE001
             fails += 1
@@ -240,7 +262,7 @@ def run_chart_learning_outcome_once(decrypt_text, *, limit: int | None = None) -
                 continue
             start = (int(row.snapshot_at.timestamp() * 1000) // CL.MS_15M) * CL.MS_15M
             try:
-                raw = bc.get_klines(symbol=row.symbol, interval="15m", limit=CL.FWD_BARS + 4, start_time=start)
+                raw = _klines(bc, symbol=row.symbol, interval="15m", limit=CL.FWD_BARS + 4, start_time=start)
                 fails = 0
             except Exception as e:  # noqa: BLE001
                 fails += 1
@@ -299,7 +321,7 @@ def backfill(decrypt_text, days: int, *, label: bool = True) -> dict[str, Any]:
         fails = 0
         for sym in syms:
             try:
-                raw = bc.get_klines(symbol=sym, interval="1d", limit=days + 8)
+                raw = _klines(bc, symbol=sym, interval="1d", limit=days + 8)
                 fails = 0
             except Exception as e:  # noqa: BLE001
                 fails += 1
