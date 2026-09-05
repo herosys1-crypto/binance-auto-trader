@@ -16,6 +16,7 @@ from app.api.v1.analysis import router as analysis_router  # 🌟 v133c 심볼/�
 from app.api.v1.live_pump_dump import router as live_pump_dump_router  # 🌟 v133d 급등락 실시간 진입!
 from app.api.v1.trade_learning import router as trade_learning_router  # 🎓 v134 학습 + TP/SL 조정 제안!
 from app.api.v1.chart_patterns import router as chart_patterns_router  # 📊 v152 차트 패턴 학습!
+from app.api.v1.chart_learning import router as chart_learning_router  # 📚 Fix 353 차트 학습 일지
 from app.api.v1.bb_middle_scan import router as bb_middle_scan_router  # ⚖ v159 BB middle ±5%!
 from app.api.v1.pattern_learning import router as pattern_learning_router  # 🎓 v187 패턴 학습!
 from app.api.v1.multi_timeframe_scan import router as multi_timeframe_scan_router  # 🎯 v189 MTA!
@@ -41,6 +42,7 @@ api_router.include_router(analysis_router)  # 🌟 v133c 심볼/전략 상세 �
 api_router.include_router(live_pump_dump_router)  # 🌟 v133d 급등락 실시간 진입!
 api_router.include_router(trade_learning_router)  # 🎓 v134 학습 + TP/SL 조정 제안!
 api_router.include_router(chart_patterns_router)  # 📊 v152 차트 패턴 학습!
+api_router.include_router(chart_learning_router)  # 📚 Fix 353 차트 학습 일지 (읽기 전용)
 api_router.include_router(bb_middle_scan_router)  # ⚖ v159 BB middle ±5%!
 api_router.include_router(pattern_learning_router)  # 🎓 v187 성공/실패 패턴 학습!
 api_router.include_router(multi_timeframe_scan_router)  # 🎯 v189 Multi-Timeframe!

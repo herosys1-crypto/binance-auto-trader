@@ -564,6 +564,28 @@ def start_scheduler() -> None:
         id="chart_pattern_scan",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 📚 Fix 353 (2026-09-05 사장님): 「상승 50위·하락 50위 차트를 매일 나눠서 학습」
+    #   스냅샷 = UTC 00:05·12:05 에 깨어나 설정(chart_learning_snapshot_hours, 기본 "0") 시각만 저장.
+    #   라벨링 = 매시간 :20, 스냅샷 36h 지난 행에 결과 봉 144개를 붙인다. 둘 다 chart_learning_enabled 로 끈다.
+    def _chart_learning_snapshot():
+        from app.workers.chart_learning_worker import run_chart_learning_snapshot_once
+        run_chart_learning_snapshot_once(decrypt_text)
+    scheduler.add_job(
+        guarded_job("chart_learning_snapshot", 1500, _chart_learning_snapshot),
+        trigger=CronTrigger(hour="0,12", minute=5),
+        id="chart_learning_snapshot",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
+
+    def _chart_learning_outcome():
+        from app.workers.chart_learning_worker import run_chart_learning_outcome_once
+        run_chart_learning_outcome_once(decrypt_text)
+    scheduler.add_job(
+        guarded_job("chart_learning_outcome", 3000, _chart_learning_outcome),
+        trigger=CronTrigger(minute=20),
+        id="chart_learning_outcome",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.
