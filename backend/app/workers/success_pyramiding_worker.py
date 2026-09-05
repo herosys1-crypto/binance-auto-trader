@@ -305,6 +305,51 @@ def _indicator_gate_enabled(db) -> bool:
 
 
 
+SETTING_MIN_MOVE_PCT = "pyramid_min_move_pct"     # Fix 348: 추가 전 유리 가격 이동 최소 % (기본 3.0)
+SETTING_SIDES = "pyramid_sides"                   # Fix 348: 추가 허용 방향 (기본 "SHORT")
+MIN_MOVE_PCT_DEFAULT = 3.0
+SIDES_DEFAULT = "SHORT"
+
+
+def _min_move_pct(db) -> float:
+    """🎯 Fix 348 (2026-09-04 사장님 "정지가 아니라 개선안을 찾아줘") — 추가 전 최소 유리 이동(가격 %).
+
+    ## 실측 (7일 자동 전략 194건, 진입→청산 구간 15m 캔들로 추가 300 을 규칙별 재시뮬)
+        규칙                         정점 SHORT 추가분     저점 LONG 추가분
+        현행(ROI≥2% 즉시)            n=46  −118.4 (41%)   n=49  −205.0 (29%)
+        이동≥3% + hist 3봉 가속       n=17   +10.4 (35%)   n=26  −190.7 (15%)
+        이동≥5%                      n= 6   +15.4 (33%)   n=14  −153.8 ( 7%)
+        추가 없음(탐색 10 만)          +1.2                 −6.7
+      → 정점 SHORT 는 「유리 이동 ≥3% + 15m hist 3봉 가속」에서만 양수. 저점 LONG 은 어떤 조건에서도 음수
+        (진입 자리 자체가 틀린 것) → 기본 허용 방향 SHORT 만 (pyramid_sides).
+      ⚠️ 표본이 작다(6~17건). 배포 후 30건마다 재측정.
+    """
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_MIN_MOVE_PCT)
+        if row is None or row.value is None or str(row.value).strip() == "":
+            return MIN_MOVE_PCT_DEFAULT
+        v = float(str(row.value).strip())
+        return v if 0.0 <= v <= 50.0 else MIN_MOVE_PCT_DEFAULT
+    except Exception as e:
+        logger.warning("[Fix348] %s 조회 실패 = 기본 %.1f: %s", SETTING_MIN_MOVE_PCT, MIN_MOVE_PCT_DEFAULT, e)
+        return MIN_MOVE_PCT_DEFAULT
+
+
+def _allowed_sides(db) -> set[str]:
+    """Fix 348: 추가 허용 방향. 기본 {"SHORT"}. "LONG,SHORT" 로 둘 다. 빈 값/오류 = 기본."""
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_SIDES)
+        raw = SIDES_DEFAULT if (row is None or row.value is None or not str(row.value).strip()) else str(row.value)
+        s = {x.strip().upper() for x in raw.replace("/", ",").split(",") if x.strip()}
+        s = {x for x in s if x in ("LONG", "SHORT")}
+        return s or {SIDES_DEFAULT}
+    except Exception as e:
+        logger.warning("[Fix348] %s 조회 실패 = 기본 %s: %s", SETTING_SIDES, SIDES_DEFAULT, e)
+        return {SIDES_DEFAULT}
+
+
 def _trigger_roi(db) -> float:
     """🎯 Fix 300 (2026-09-03 사장님 지시) — 추가 진입 트리거 ROI 를 설정으로 뺀다.
 
@@ -576,6 +621,17 @@ def run_success_pyramiding() -> dict:
             if roi_pct < _trig:
                 skipped += 1
                 _bump("roi_below_trigger")
+                continue
+            # 🎯 Fix 348: 추가 허용 방향 + 최소 유리 이동(가격 %) — 실측 근거는 _min_move_pct docstring.
+            #   10 USDT 탐색 진입에 ROI 2%(가격 1%)만 움직여도 300 을 얹던 것이 7일 −1,729 의 원인.
+            if str(si.side).upper() not in _allowed_sides(db):
+                skipped += 1
+                _bump("side_not_allowed")
+                continue
+            _min_move = _min_move_pct(db)
+            if price_pct < _min_move:
+                skipped += 1
+                _bump("move_below_min")
                 continue
 
             # peak 갱신 + 지속 판정

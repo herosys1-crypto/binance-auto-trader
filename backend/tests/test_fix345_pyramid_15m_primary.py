@@ -21,7 +21,7 @@ class _DB:
 
 
 def _patch(monkeypatch, m15, m4, calls):
-    def fake(bc, symbol, side, tf, *, use_completed=False):
+    def fake(bc, symbol, side, tf, *, use_completed=False, min_bars=1):
         calls.append((tf, use_completed))
         v = m15 if tf == "15m" else m4
         return v, {"tf": tf, "delta": 0.0 if v is None else (1.0 if v else -1.0)}

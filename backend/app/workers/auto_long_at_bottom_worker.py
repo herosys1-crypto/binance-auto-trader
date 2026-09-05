@@ -201,6 +201,29 @@ BTC_DIRECTION_THRESHOLD_LONG = 3.0
 # 스캔 상한!
 MAX_SYMBOLS = 40              # 심볼당 4 kline call = API 부담 대응!
 MIN_CONFIDENCE = 0.85         # 🌟 Fix 90 (2026-08-25 사장님!): 0.90 → 0.85
+
+# 📉 Fix 349 (2026-09-05 사장님 "정지가 아니라 개선안을 찾아줘") — 「저점 잡기」 롱 알람은 기본 OFF.
+#   실측 7일: macd_reversal LONG 50건 승률 8% −537 / 저점 패턴 B 24건 **0%** −413.
+#   100종목 10일 검증(완성봉, 미래참조 없음): 저점 규칙 롱은 어떤 변형도 무작위 롱(+0.68~+0.81)보다 못함
+#   (+0.01~+0.37) — 반면 상승 초입 롱(SURGE_START)은 +1.3~+1.6.
+#   실패 차트 포렌식 73건: 진입 시 45% 가 「지표 아직 불리 가속」, 진짜 저점은 평균 5시간 뒤 더 낮은 곳.
+#   사장님 사상 ②⑤: "롱은 급등중인 심볼을 찾아 지속상승에 투자" / "원점을 간 심볼은 다시 상승하는 심볼을 찾기는 힘들어".
+#   → 알람 경로 롱은 SURGE_START(급등 계열)만 받는다. 저점 알람을 다시 받으려면
+#     SystemSetting bottom_long_dip_alerts_enabled = 1 (재시작 불필요).
+SETTING_DIP_ALERTS = "bottom_long_dip_alerts_enabled"
+MOMENTUM_ALERT_PATTERNS = ("SURGE_START", "SURGE_PULLBACK")
+
+
+def _dip_alerts_enabled(db) -> bool:
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_DIP_ALERTS)
+        if row is None or row.value is None or not str(row.value).strip():
+            return False
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:
+        logger.warning("[Fix349] %s 조회 실패 = OFF 유지: %s", SETTING_DIP_ALERTS, e)
+        return False
                               # long_bottom_detector와 통일! (기존 = 알람 대부분 drop = 낭비!)
                               # Fix 87 헌법 78 (급락만) + BTC 필터 + Pattern A skip = 이미 안전!
 MIN_PASSED = 5                # Fix 61 P1: 4/7 → 5/7 (71% = 더 엄격!)
@@ -1434,6 +1457,16 @@ def run_auto_long_at_bottom_once() -> dict:
                     skipped += 1
                     logger.info(
                         "[Fix75/alert-skip] %s: 이미 활성 심볼", symbol,
+                    )
+                    continue
+                # 📉 Fix 349: 저점 잡기 알람(패턴 A/B, macd_reversal LONG)은 기본 OFF — 급등 계열만 통과
+                if (str(alert.get("pattern") or "").upper() not in MOMENTUM_ALERT_PATTERNS
+                        and not _dip_alerts_enabled(db)):
+                    skipped += 1
+                    _bump("alert_dip_disabled")
+                    logger.info(
+                        "[Fix349] %s 저점 알람 skip (pattern=%s source=%s) — 급등 계열만 받는다",
+                        symbol, alert.get("pattern"), alert.get("source"),
                     )
                     continue
 

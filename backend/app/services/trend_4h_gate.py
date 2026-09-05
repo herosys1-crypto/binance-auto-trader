@@ -334,13 +334,17 @@ PYRAMID_TFS: tuple[str, ...] = ("4h", "15m")
 
 
 def check_hist_rising(bc, symbol: str, side: str, tf: str,
-                      *, use_completed: bool = False) -> tuple[bool | None, dict[str, Any]]:
+                      *, use_completed: bool = False, min_bars: int = 1) -> tuple[bool | None, dict[str, Any]]:
     """해당 봉의 MACD hist 가 **내 편 방향으로 상승 중**인가.
+
+    min_bars (Fix 348): 연속 몇 봉의 증가를 요구하나. 1 = 옛 동작(한 봉 미분).
+      3 = 「가속」(2026-09-03 차트 학습: 이긴 건 「상승중」이 아니라 「가속」).
+      피라미딩 실측(7일 194건 재시뮬): 이동≥3% + 3봉 가속에서만 정점 SHORT 추가가 양수.
 
     Returns:
         (rising, detail). 판정 불가면 rising=None (호출자가 막지 않는다).
     """
-    d: dict[str, Any] = {"tf": tf}
+    d: dict[str, Any] = {"tf": tf, "min_bars": min_bars}
     try:
         kl = bc.get_klines(symbol=symbol, interval=tf, limit=LIMIT)
         if not kl or len(kl) < 40:
@@ -357,15 +361,21 @@ def check_hist_rising(bc, symbol: str, side: str, tf: str,
             d["reason"] = "MACD 계산 불가"
             return None, d
         sgn = 1.0 if str(side).upper() == "LONG" else -1.0
-        delta = (h[-1] - h[-2]) * sgn
-        d.update(delta=delta, hist_signed=h[-1] * sgn)
-        return delta > 0, d
+        n = max(1, int(min_bars or 1))
+        if len(h) < n + 1:
+            d["reason"] = f"봉 부족 (가속 {n}봉)"
+            return None, d
+        deltas = [(h[-k] - h[-k - 1]) * sgn for k in range(1, n + 1)]   # 최근 n 개 미분 (내 편 부호)
+        delta = deltas[0]
+        d.update(delta=delta, hist_signed=h[-1] * sgn, deltas=[round(x, 8) for x in deltas])
+        return all(x > 0 for x in deltas), d
     except Exception as e:
         d["reason"] = f"조회 실패: {e}"
         return None, d
 
 
 SETTING_PYRAMID_4H_VETO = "pyramid_4h_veto_enabled"   # Fix 345: 기본 OFF = 4H 는 참고만
+SETTING_PYRAMID_ACCEL_BARS = "pyramid_hist_accel_bars"  # Fix 348: 15m hist 연속 가속 봉수 (기본 3)
 
 
 def _pyramid_4h_veto_enabled(db) -> bool:
@@ -405,8 +415,19 @@ def check_pyramid_trend(bc, symbol: str, side: str, *, db=None) -> tuple[bool, s
     det: dict[str, Any] = {}
     veto_4h = _pyramid_4h_veto_enabled(db)
     det["4h_role"] = "veto" if veto_4h else "reference"
-    # ① 15m = 기준 (완성봉)
-    rising15, d15 = check_hist_rising(bc, symbol, side, "15m", use_completed=True)
+    # ① 15m = 기준 (완성봉). Fix 348: 연속 N봉 가속 (설정 pyramid_hist_accel_bars, 기본 3)
+    accel_bars = 3
+    try:
+        if db is not None:
+            from app.models.system_setting import SystemSetting
+            row = db.get(SystemSetting, SETTING_PYRAMID_ACCEL_BARS)
+            if row is not None and row.value is not None and str(row.value).strip():
+                v = int(float(str(row.value).strip()))
+                accel_bars = v if 1 <= v <= 10 else 3
+    except Exception as e:
+        logger.warning("[Fix348] %s 조회 실패 → 3: %s", SETTING_PYRAMID_ACCEL_BARS, e)
+    det["accel_bars"] = accel_bars
+    rising15, d15 = check_hist_rising(bc, symbol, side, "15m", use_completed=True, min_bars=accel_bars)
     det["15m"] = d15
     if rising15 is None:
         return True, f"15m 판정 불가 (fail-open): {d15.get('reason')}", det

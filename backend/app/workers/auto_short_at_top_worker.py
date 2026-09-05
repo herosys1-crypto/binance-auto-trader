@@ -313,6 +313,28 @@ def run_auto_short_at_top() -> dict:
                         logger.info("[Fix346] %s SHORT 유지 — %s", symbol, _ss_why)
                 except Exception as _ss_exc:
                     logger.warning("[Fix346] %s 국면 판정 오류 (SHORT 유지): %s", symbol, _ss_exc)
+                # ═══════════════════════════════════════════════════════
+                # ⏰ Fix 350 (2026-09-05 사장님 "실패한 차트를 가져와서 왜 진입에 실패했는지"):
+                #    1h MACD hist 가 **이미 2봉 이상 하락 중**이면 = 정점을 이미 지난 늦은 진입.
+                #    실거래 7일 정점 SHORT 130건: 1h 이미 하락 후 진입 66건 승률 **9%** vs 1h 상승 중 49건 29%.
+                #    포렌식 108건: 「너무 늦음(극값 8~39봉 전)」 13건은 전부 손실.
+                #    사장님 사상 ①: "최고점에서 하락과 지지를 여러번 반복하고 하락을 **시작할**" — 시작이지 진행이 아니다.
+                #    되돌리기: top_short_skip_if_1h_down = 0
+                # ═══════════════════════════════════════════════════════
+                try:
+                    from app.services.system_settings_service import SystemSettingsService as _SS350
+                    if _SS350(db).get_bool("top_short_skip_if_1h_down", True):
+                        from app.services.trend_4h_gate import check_hist_rising as _hr350
+                        _down1h, _d350 = _hr350(bc, symbol, "SHORT", "1h", use_completed=True, min_bars=2)
+                        if _down1h is True:
+                            logger.warning(
+                                "[Fix350] ⛔ %s SHORT 보류 — 1h hist 이미 2봉 하락 중 (정점 지남 = 늦은 진입) | %s",
+                                symbol, _d350.get("deltas"),
+                            )
+                            skipped += 1
+                            continue
+                except Exception as _e350:
+                    logger.warning("[Fix350] %s 1h 판정 오류 (SHORT 유지): %s", symbol, _e350)
 
                 # 7. 자동 진입!
                 cfg = {"capitals": [capital_float], "leverage": DEFAULT_LEVERAGE}
