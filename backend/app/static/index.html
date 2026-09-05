@@ -444,6 +444,17 @@
       padding-left: 5px !important;
       padding-right: 5px !important;
     }
+    /* 🌟 2026-09-05 사장님 「줄바꿈을 해서 가로 사이즈를 줄여줘 — 전략 인스턴스가 화면을 벗어나지 않게」
+       원인: <table class="min-w-max"> = min-width:max-content → 심볼 열의 배지(단계·➕기존·⏸ 대기 사유)가
+             한 줄로 늘어나 표가 컨테이너보다 넓어지고, overflow-x:hidden 이라 오른쪽(PnL·액션)이 잘렸다.
+       고침: PC 에서는 표를 컨테이너 폭(100%)에 맞추고 심볼 열을 260px 로 묶어 배지가 **줄바꿈**되게 한다.
+             숫자 스택(진입가·수량·PnL)은 inline nowrap 그대로. 그래도 못 담으면 잘리지 않고 스크롤(안전망). */
+    .strategies-table-wrap { overflow-x: auto !important; }
+    .strategies-table-wrap table { width: 100% !important; min-width: 0 !important; table-layout: auto; }
+    .strategies-table-wrap tbody tr td:nth-child(2) { max-width: 240px; white-space: normal; overflow-wrap: anywhere; }
+    .strategies-table-wrap tbody tr td:nth-child(2) > div { white-space: normal; line-height: 1.25 !important; }
+    /* ⏸ 대기 사유 배지는 「상태」 열(4번째) 아래 줄에 — 열 폭을 묶어 긴 사유가 줄바꿈되게 */
+    .strategies-table-wrap tbody tr td:nth-child(4) { max-width: 190px; white-space: normal; overflow-wrap: anywhere; }
     /* 테이블 좌우 자체 padding 줄임 */
     #section-strategies .strategies-table-wrap {
       padding-left: 0 !important;

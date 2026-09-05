@@ -672,7 +672,7 @@ async function refreshStrategies() {
       const _pyrCap = (s.pyramid_capital === null || s.pyramid_capital === undefined) ? 0 : Number(s.pyramid_capital);
       const _ladderN = s.ladder_stage_count || s.total_active_stages || '?';
       const ladderTag = (hasPosition && _ladderCap !== null && Number.isFinite(_ladderCap))
-        ? `<div class="text-slate-400" style="font-size:var(--font-sm);white-space:nowrap" title="사다리 계획 ${_ladderCap.toFixed(0)} USDT (${_ladderN}단계)${_pyrCap > 0 ? `\n피라미딩(수익중 추가) +${_pyrCap.toFixed(0)} USDT → 계획 자본 ${plannedMargin.toFixed(0)}` : ''}\n실제 증거금 ${positionMargin.toFixed(0)} = 체결 수량 × 평단 ÷ ${sLev}x">사다리 ${s.current_stage}/${_ladderN} 계획 ${_ladderCap.toFixed(0)}${_pyrCap > 0 ? ` · 피라미딩 +${_pyrCap.toFixed(0)}` : ''}</div>`
+        ? `<div class="text-slate-400" style="font-size:var(--font-sm);white-space:normal" title="사다리 계획 ${_ladderCap.toFixed(0)} USDT (${_ladderN}단계)${_pyrCap > 0 ? `\n피라미딩(수익중 추가) +${_pyrCap.toFixed(0)} USDT → 계획 자본 ${plannedMargin.toFixed(0)}` : ''}\n실제 증거금 ${positionMargin.toFixed(0)} = 체결 수량 × 평단 ÷ ${sLev}x">사다리 ${s.current_stage}/${_ladderN} 계획 ${_ladderCap.toFixed(0)}${_pyrCap > 0 ? ` · 피라미딩 +${_pyrCap.toFixed(0)}` : ''}</div>`
         : '';
       const qtyStack = hasPosition
         ? `<div class="leading-none" style="white-space:nowrap">
@@ -743,7 +743,7 @@ async function refreshStrategies() {
         ? `<div class="leading-none" style="white-space:nowrap">
             <span class="${pnlNum>0?'pos':pnlNum<0?'neg':''} font-semibold" style="font-size:var(--font-xl)" title="미실현 손익 (USDT)">${fmtPnL(pnlNum)}</span>
             <span class="text-slate-300 font-semibold" style="font-size:var(--font-lg)" title="${posTooltip}">(${posSign}${positionRoi.toFixed(2)}%)</span>${binHealthChip}
-            <div style="line-height:1.1">
+            <div style="line-height:1.1;white-space:normal">
               <span class="text-slate-300" style="font-size:var(--font-sm); opacity:0.85" title="${stratTooltip}">전략 ${stratSign}${strategyRoi.toFixed(2)}%</span>${slInline}${trailingRetraceSelect}
             </div>
           </div>`
@@ -908,12 +908,12 @@ async function refreshStrategies() {
             }${s.retry_after_liquidation_enabled
               ? `<span style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#a855f7);color:#fff;padding:2px 6px;border-radius:4px;font-size:var(--font-badge);font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(245,158,11,0.6)" title="🔄 청산 후 자동 재진입 활성! (트리거 ${s.retry_trigger_pct || 10}%) — 손절 후 = 다음 단계 자동 대기 + 트리거 도달 시 자동 진입!">🔄 재진입 ${s.retry_trigger_pct || 10}%</span>`
               : ''
-            }${scheduledBadge(s)}${blockBadge(s)}<br>
+            }${scheduledBadge(s)}<br><!-- 2026-09-05 사장님 「줄바꿈해서 가로 줄여줘」: ⏸ 대기 사유 배지는 상태 열로 (아래 stateCell) -->
             <span class="text-slate-500" style="font-size:var(--font-badge)" title="전략 생성 일시">${createdShort}</span>
           </div>
         </td>
         <td>${sideBadge(s.side, s.leverage)}${s.strategy_type === 'auto_bb_break' ? (s.side === 'LONG' ? '<br><span style="display:inline-block;background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:bold;margin-top:1px" title="🤖 v174 BB 자동 진입 LONG!">🤖</span>' : '<br><span style="display:inline-block;background:linear-gradient(135deg,#dc2626,#f97316);color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:bold;margin-top:1px" title="🤖 v174 BB 자동 진입 SHORT!">🤖</span>') : ''}</td><!-- 🌟 2026-08-25 UI 컴팩트: OBV/재진입 배지 = 심볼 col 과 중복 → 방향 col 에서 제거 (사장님 「가로 너무 길어」!). 자동LONG/SHORT = side 반복 = 아이콘만 -->
-        <td>${stateCell}</td>
+        <td>${stateCell}${blockBadge(s)}</td><!-- 2026-09-05: ⏸ 대기 사유 = 「상태」 — 심볼 열이 한 줄로 늘어나 표가 화면을 넘던 원인 -->
         <td>${stage}</td>
         <td class="num">${entry}</td>
         <td class="num">${qty}</td>

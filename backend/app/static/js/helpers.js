@@ -308,10 +308,13 @@ function blockBadge(s) {
   if (info.label) {
     const full = escapeHtml(info.reason || '');
     const when = info.blocked_at ? String(info.blocked_at).slice(11, 19) : '';
+    // 2026-09-05 사장님 「줄바꿈해서 가로 줄여줘」: 대기 사유 배지는 한 줄에 이어 붙이지 않고
+    // **다음 줄에 블록으로**, 긴 사유는 열 폭 안에서 줄바꿈 (white-space:normal). 표가 화면을 안 넘는다.
     out += '<span onclick="event.stopPropagation(); openBlockDetail(' + s.id + ')"'
-      + ' style="display:inline-block;background:linear-gradient(135deg,#b45309,#78350f);'
+      + ' style="display:block;width:fit-content;max-width:100%;white-space:normal;line-height:1.2;'
+      + 'background:linear-gradient(135deg,#b45309,#78350f);'
       + 'color:#fde68a;padding:2px 6px;border-radius:4px;font-size:var(--font-badge);'
-      + 'font-weight:bold;margin-left:4px;cursor:pointer;border:1px solid #f59e0b"'
+      + 'font-weight:bold;margin:2px 0 0 0;cursor:pointer;border:1px solid #f59e0b"'
       + ' title="다음 단계가 막혀 있습니다 (' + when + ' UTC) — ' + full
       + ' / 눌러서 근거 지표 보기 + 지정가 우선 켜기">&#9208; ' + escapeHtml(info.label) + '</span>';
   }
