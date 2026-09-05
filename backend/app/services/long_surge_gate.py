@@ -67,7 +67,7 @@ __all__ = ["check_long_surge", "long_surge_gate_enabled", "SETTING_KEY", "MIN_CH
 #   들어가는 급등 계열 패턴(상승 초입 SURGE_START / 급등중 조정 SURGE_PULLBACK)은 24h 가 아직
 #   15% 가 안 됐어도(MINIMAXUSDT +8%) 롱이다 → 면제. 기본 ON.
 SETTING_SURGE_EXEMPT = "long_surge_gate_surge_exempt"
-SURGE_PATTERNS: tuple[str, ...] = ("SURGE_START", "SURGE_PULLBACK")
+SURGE_PATTERNS: tuple[str, ...] = ("SURGE_START", "SURGE_PULLBACK", "MULTIDAY_PULLBACK")   # Fix 352: 다일 조정 반등(당일은 −%) 도 면제
 
 SETTING_KEY = "long_surge_gate_enabled"
 

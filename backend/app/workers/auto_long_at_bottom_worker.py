@@ -211,7 +211,7 @@ MIN_CONFIDENCE = 0.85         # 🌟 Fix 90 (2026-08-25 사장님!): 0.90 → 0.
 #   → 알람 경로 롱은 SURGE_START(급등 계열)만 받는다. 저점 알람을 다시 받으려면
 #     SystemSetting bottom_long_dip_alerts_enabled = 1 (재시작 불필요).
 SETTING_DIP_ALERTS = "bottom_long_dip_alerts_enabled"
-MOMENTUM_ALERT_PATTERNS = ("SURGE_START", "SURGE_PULLBACK")
+MOMENTUM_ALERT_PATTERNS = ("SURGE_START", "SURGE_PULLBACK", "MULTIDAY_PULLBACK")   # Fix 352: 다일 조정 반등 추가
 
 
 def _dip_alerts_enabled(db) -> bool:
@@ -1140,7 +1140,7 @@ def _create_long_strategy(
         #     이미 통과한 것이라 **보호가 없어지는 것이 아니라 다른 보호로 바뀌는 것**이다.
         # Fix 346: SURGE_START(가격 고점 + 지표 상승 초입, auto_short_at_top 이 넘김)도
         #   강세 종목이라 저점 반등 게이트를 만족할 수 없다 → SURGE_PULLBACK 과 같이 건너뛴다.
-        _skip_pk = (pattern in ("SURGE_PULLBACK", "SURGE_START"))
+        _skip_pk = (pattern in ("SURGE_PULLBACK", "SURGE_START", "MULTIDAY_PULLBACK"))
         if _skip_pk:
             logger.info(
                 "[Fix249] %s LONG = 급등중 조정 경로 → Fix111b 저점 게이트 제외 "
@@ -1538,7 +1538,7 @@ def run_auto_long_at_bottom_once() -> dict:
                 # 실 진입! (_create_long_strategy 재사용 = 헌법 6!)
                 # Fix 346: 정점 SHORT 워커가 넘긴 SURGE_START 알람은 패턴을 그대로 전달한다
                 #   (저점 게이트 생략). 다른 알람(A/B 등)은 옛 그대로 None.
-                _alert_pattern = "SURGE_START" if alert.get("pattern") == "SURGE_START" else None
+                _alert_pattern = (str(alert.get("pattern")) if str(alert.get("pattern") or "").upper() in MOMENTUM_ALERT_PATTERNS else None)   # Fix 352: 급등 계열 패턴은 그대로 전달
                 new_strategy = _create_long_strategy(
                     db, symbol, capital, bc, pattern=_alert_pattern,   # 알람 경로
                 )

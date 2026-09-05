@@ -30,7 +30,7 @@ def test_설정으로_켤_수_있다():
 
 
 def test_급등_계열만_통과_목록():
-    assert set(W.MOMENTUM_ALERT_PATTERNS) == {"SURGE_START", "SURGE_PULLBACK"}
+    assert set(W.MOMENTUM_ALERT_PATTERNS) == {"SURGE_START", "SURGE_PULLBACK", "MULTIDAY_PULLBACK"}
 
 
 def test_알람_소비_경로에_게이트가_활성심볼_검사_다음에_있다():

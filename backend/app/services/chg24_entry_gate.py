@@ -234,6 +234,17 @@ def passes(db, bc, symbol: str, *, template_name: object = None) -> tuple[bool, 
         if rank_hit:
             break
 
+    # 📅 Fix 351 (2026-09-05 사장님): 당일 순위 밖이어도 **3일·5일 상승/하락 N위 안**이면 감시 대상이다.
+    #   "1일에서 5일 순위를 기준으로 당일 급등락을 같이 공유해서 활용해줘"
+    #   되돌리기: entry_rank_multiday_enabled = 0
+    if rank_hit is None:
+        try:
+            from app.services.multiday_movers import multiday_hit as _mh351
+            _hit351 = _mh351(symbol, bc, rows, db=db)
+            if _hit351:
+                rank_hit = _hit351
+        except Exception as _e351:
+            logger.debug("[Fix351] 다일 순위 판정 실패 (무시): %s", _e351)
     if rank_hit is None:
         return False, (
             f"24h {chg:+.2f}% — 상승/하락 각 {n}위 밖 "

@@ -395,6 +395,62 @@ class LongBottomDetector:
             return False
 
 
+def _multiday_pullback_scan(bc, db, ranked) -> int:
+    """📅 Fix 352 (2026-09-05 사장님): 3·5일 상승 N위(UP3D/UP5D) 심볼이 당일 −X% 이상 조정 중이고,
+    15m 완성봉 기준 직전 봉 RSI14 < 35 뒤 첫 상승 마감이면 LONG 알람(pattern=MULTIDAY_PULLBACK).
+
+    사장님: "1일에서 5일 사이 이렇게 조정받는 심볼을 찾아서 숏과 롱으로 수익을 만들어야 하는게 우리 시스템"
+    실측(263 심볼-일, 12일): 이 규칙 LONG +0.63 (n=173, 승률 43%) vs 기준선 −0.73; 숏 규칙은 전부 음수.
+    자본은 v219 사다리 1단계 10 USDT. 되돌리기: multiday_pullback_long_enabled = 0.
+    """
+    from app.services.multiday_movers import (
+        PATTERN_PULLBACK, is_pullback_rebound, pullback_enabled, pullback_params,
+    )
+    if not pullback_enabled(db):
+        return 0
+    min_drop, rsi_max = pullback_params(db)
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[Fix352] redis 없음: %s", e)
+        return 0
+    n_alert = 0
+    for t, tag, rank in ranked:
+        if tag not in ("UP3D", "UP5D"):
+            continue
+        symbol = str(t.get("symbol") or "")
+        try:
+            chg24 = float(t.get("priceChangePercent") or 0)
+        except (TypeError, ValueError):
+            continue
+        if chg24 > -min_drop:
+            continue
+        alert_key = f"sajangnim:bottom_long:{symbol}"
+        try:
+            if r.exists(alert_key):
+                continue                                  # 이미 알람 있음 (30분 TTL)
+            kl = bc.get_klines(symbol=symbol, interval="15m", limit=60)
+            if not kl or len(kl) < 30:
+                continue
+            closes = [float(k[4]) for k in kl[:-1]]        # 진행중 봉 제거
+            ok, det = is_pullback_rebound(closes, rsi_max=rsi_max)
+            if not ok:
+                continue
+            alert_data = {
+                "symbol": symbol, "side": "LONG", "pattern": PATTERN_PULLBACK, "confidence": 0.85,
+                "chg_24h": chg24, "change_24h": chg24, "multiday_tag": tag, "multiday_rank": rank,
+                "rsi_prev": det.get("rsi_prev"), "detected_at": datetime.now(timezone.utc).isoformat(),
+                "source": "fix352_multiday_pullback", "spec_version": SPEC_VERSION,
+            }
+            r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data, default=str))
+            n_alert += 1
+            logger.info("[Fix352] 📅 %s %s %d위 · 24h %+.1f%% · RSI14 %s→상승마감 → LONG 알람", symbol, tag, rank, chg24, det.get("rsi_prev"))
+        except Exception as e:  # noqa: BLE001
+            logger.debug("[Fix352] %s 스캔 실패 (무시): %s", symbol, e)
+    return n_alert
+
+
 def _classify_pattern(chg24: float) -> str | None:
     """🌟 Fix 87 (2026-08-25 사장님 = 헌법 78!):
     "전략에 들어가는건 당일 급등락한 심볼만 거래하는거야"
@@ -561,8 +617,17 @@ def run_long_bottom_detector() -> dict:
         #   패턴을 골랐다 = 거래대금 작은 급등락 종목은 감시망 밖이었다.
         #   pump_top_detector 와 **같은 함수**를 쓴다 (헌법 101 — 한쪽만 고치면 어긋난다).
         # ═══════════════════════════════════════════════════════════════════
-        from app.services.market_movers import MIN_QUOTE_VOLUME, rank_map
-        _ranked = rank_map(tickers, MAX_SYMBOLS)
+        from app.services.market_movers import MIN_QUOTE_VOLUME, rank_map  # noqa: F401 (로그·호환)
+        # 📅 Fix 351 (2026-09-05 사장님): 감시 대상 = 당일 ∪ 3일·5일 상승/하락 N위 (pump_top 과 같은 함수 — 헌법 101)
+        from app.services.multiday_movers import rank_map_multiday
+        _ranked = rank_map_multiday(tickers, MAX_SYMBOLS, bc=bc, db=db)
+        # 📅 Fix 352: 「며칠 상승 뒤 조정 → RSI 과매도 뒤 첫 상승 마감」 롱 알람 (사장님 예시 HEMI·TAKE·CLO·ZEST 자리)
+        try:
+            _mp_n = _multiday_pullback_scan(bc, db, _ranked)
+            if _mp_n:
+                logger.info("[Fix352] 다일 조정 반등 롱 알람 %d건 발행", _mp_n)
+        except Exception as _e352:
+            logger.warning("[Fix352] 다일 조정 스캔 오류 (무시): %s", _e352)
 
         # 🌟 Fix 50 v2 (2026-08-24 사장님 verbatim!):
         # "1-2일 10% 전후 상승" (패턴 A: +5%~+15%) OR

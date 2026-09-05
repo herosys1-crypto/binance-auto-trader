@@ -109,8 +109,8 @@ def test_정점_SHORT_워커가_정점확인_뒤_생성_전에_판정한다():
 
 def test_LONG_워커가_SURGE_START_패턴을_받아_저점게이트를_건너뛴다():
     s = _src("workers/auto_long_at_bottom_worker.py")
-    assert '_skip_pk = (pattern in ("SURGE_PULLBACK", "SURGE_START"))' in s
-    assert 'alert.get("pattern") == "SURGE_START"' in s
+    assert '_skip_pk = (pattern in ("SURGE_PULLBACK", "SURGE_START", "MULTIDAY_PULLBACK"))' in s
+    assert 'in MOMENTUM_ALERT_PATTERNS else None' in s
     assert "pattern=_alert_pattern" in s
 
 

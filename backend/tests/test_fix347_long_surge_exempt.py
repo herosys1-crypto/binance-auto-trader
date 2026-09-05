@@ -37,7 +37,7 @@ def test_설정으로_끌_수_있다():
 
 
 def test_면제_패턴은_두_가지():
-    assert set(L.SURGE_PATTERNS) == {"SURGE_START", "SURGE_PULLBACK"}
+    assert set(L.SURGE_PATTERNS) == {"SURGE_START", "SURGE_PULLBACK", "MULTIDAY_PULLBACK"}
 
 
 def test_LONG_생성기가_패턴을_cfg_로_넘긴다():

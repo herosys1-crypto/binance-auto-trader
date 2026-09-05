@@ -400,8 +400,12 @@ def run_pump_top_detector() -> dict:
         #   같은 함수를 long_bottom_detector 도 쓴다 — 한쪽만 고쳐 어긋나면
         #   「상승은 넓어졌는데 하락은 그대로」가 된다 (헌법 101).
         # ═══════════════════════════════════════════════════════════════════
-        from app.services.market_movers import MIN_QUOTE_VOLUME, rank_map
-        _ranked = rank_map(tickers, MAX_SYMBOLS)
+        from app.services.market_movers import MIN_QUOTE_VOLUME, rank_map  # noqa: F401 (로그·호환)
+        # 📅 Fix 351 (2026-09-05 사장님): 감시 대상 = 당일 상승/하락 N위 ∪ **3일·5일** 상승/하락 N위.
+        #   "1일에서 5일 순위를 기준으로 당일 급등락을 같이 공유해서 활용해줘"
+        #   태그 UP3D/UP5D/DOWN3D/DOWN5D 로 순위가 붙는다. 되돌리기: multiday_universe_enabled = 0
+        from app.services.multiday_movers import rank_map_multiday
+        _ranked = rank_map_multiday(tickers, MAX_SYMBOLS, bc=bc, db=db)
         # 🌟 v222/v223: SHORT (chg≥+5) + LONG (chg≤-5) = 대칭!
         candidates = [
             t for (t, _d, _r) in _ranked
