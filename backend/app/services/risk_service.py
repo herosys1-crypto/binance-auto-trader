@@ -90,6 +90,33 @@ def resolve_force_sl(
     return enabled, threshold
 
 
+FORCE_SL_EVENT_DEDUP_MINUTES = 60      # Fix 357: 같은 전략의 FORCE_STOP_LOSS_TRIGGERED 는 60분에 1건 (Claude 가 정함)
+
+
+def force_sl_event_recently_recorded(db, strategy_id: int, minutes: int = FORCE_SL_EVENT_DEDUP_MINUTES) -> bool:
+    """이 전략의 FORCE_STOP_LOSS_TRIGGERED 가 최근 `minutes` 분 안에 이미 기록됐는가 (Fix 357 중복 억제).
+    조회 실패는 False(= 기록한다) — 기록이 빠지는 쪽보다 한 줄 더 남는 쪽이 안전하다."""
+    try:
+        from datetime import timedelta
+        from sqlalchemy import select
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+        last = db.execute(
+            select(RiskEvent.created_at)
+            .where(RiskEvent.strategy_instance_id == strategy_id,
+                   RiskEvent.event_type == "FORCE_STOP_LOSS_TRIGGERED")
+            .order_by(RiskEvent.created_at.desc())
+            .limit(1)
+        ).scalar()
+        if last is None:
+            return False
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        return last >= cutoff
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[Fix357] 중복 조회 실패 (기록함): %s", e)
+        return False
+
+
 class RiskService:
     def __init__(self, db) -> None:
         self.db = db
@@ -494,16 +521,22 @@ class RiskService:
             #   음수라 max_loss_pct 만 갱신된다 — 트레일링의 입력인 max_profit_pct 는
             #   건드리지 않는다. 「진입 직후 즉시 손절」 표본의 극값 결손을 메운다.
             self._update_pnl_extremes(strategy, roi)
+            # 🧾 Fix 357 (2026-09-07): 이 이벤트는 「도달 **판정**」이지 실행이 아니다. 실행(전량/부분/잔량 유지)은
+            #   tp_sl_orchestrator 가 단계 규칙(Fix 319/326/332)으로 정한다. 옛 문구 「전량 강제 청산 + 전략 종료」는
+            #   1단계 10 USDT 잔량이 유지(skip)될 때 거짓이었고, 15초마다 다시 써서 「손절 지연 51건 −994」로 오독됐다
+            #   (실측: 지연으로 커진 손실 0, 손실은 2·3단계·피라미딩 진입 자리). → 문구를 사실대로, 같은 전략 60분 안 중복 억제.
+            if force_sl_event_recently_recorded(self.db, strategy.id):
+                return is_force
             self.db.add(RiskEvent(
                 strategy_instance_id=strategy.id,
                 event_type="FORCE_STOP_LOSS_TRIGGERED",
                 severity="CRITICAL",
-                title=f"🛑 손실 한도 강제 청산 — #{strategy.id} {strategy.symbol} {side}",
+                title=f"🛑 손실 한도 도달 — #{strategy.id} {strategy.symbol} {side} (실행은 단계 규칙이 결정)",
                 message=(
                     f"평단 {avg_entry} → 현재가 {mark_price} = 가격 변동 {price_change_pct:.2f}% "
-                    f"× lev {leverage}x = ROI {roi:.2f}% (= 사장님 한도 -{threshold}% 도달) "
-                    f"→ 전량 강제 청산 + 전략 종료 (재진입 X). "
-                    f"(= FORCE_SL 2026-06-24, 아무 단계에서나 발동)"
+                    f"× lev {leverage}x = ROI {roi:.2f}% (= 사장님 한도 -{threshold}% 도달). "
+                    f"실행은 tp_sl 이 정한다: 전량 / 부분(10 USDT 잔량 유지, Fix 319) / 잔량 유지·다음 단계 대기(Fix 326). "
+                    f"잔량 유지로 건너뛴 사이클은 FORCE_SL_RESIDUE_KEPT 로 따로 남는다. (FORCE_SL 2026-06-24, 아무 단계에서나 판정)"
                 ),
                 event_payload={
                     "avg_entry_price": str(avg_entry),

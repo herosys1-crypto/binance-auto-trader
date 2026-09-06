@@ -543,6 +543,40 @@ class TPSLOrchestratorService:
         )
 
 
+    def _record_residue_kept(self, strategy, why: str, next_why: str) -> None:
+        """Fix 357: FORCE_SL_RESIDUE_KEPT 이벤트 — 같은 전략 60분에 1건, 실패해도 매매에 영향 없음."""
+        try:
+            from datetime import datetime, timedelta, timezone
+            from sqlalchemy import select
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=60)
+            last = self.db.execute(
+                select(RiskEvent.created_at)
+                .where(RiskEvent.strategy_instance_id == strategy.id,
+                       RiskEvent.event_type == "FORCE_SL_RESIDUE_KEPT")
+                .order_by(RiskEvent.created_at.desc()).limit(1)
+            ).scalar()
+            if last is not None:
+                if last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                if last >= cutoff:
+                    return
+            self.db.add(RiskEvent(
+                strategy_instance_id=strategy.id,
+                event_type="FORCE_SL_RESIDUE_KEPT",
+                severity="INFO",
+                title=f"⏸ 손절 판정 도달 — 잔량 유지 (다음 단계 대기) #{strategy.id} {strategy.symbol}",
+                message=f"{why} | {next_why} (Fix 326 사장님 로직: 1단계 10 USDT 는 손절하지 않고 2단계를 기다린다)",
+                event_payload={"why": str(why)[:300], "next_stage": str(next_why)[:300],
+                               "current_stage": strategy.current_stage},
+            ))
+            self.db.commit()
+        except Exception as _e357:  # noqa: BLE001
+            logger.debug("[Fix357] 잔량 유지 이벤트 기록 실패 (무시): %s", _e357)
+            try:
+                self.db.rollback()
+            except Exception:
+                pass
+
     def _has_next_stage(self, strategy) -> tuple[bool, str]:
         """다음 단계 계획이 남아 있는가.
 
@@ -676,6 +710,10 @@ class TPSLOrchestratorService:
                                 "[Fix326] %s #%s 잔량 유지 — 손절하지 않음 (%s): %s | %s",
                                 strategy.symbol, strategy.id, _act, _why, _nxwhy,
                             )
+                            # 🧾 Fix 357: 「손절 판정은 떴는데 잔량 유지로 건너뜀」을 사실대로 남긴다 (시간당 1건).
+                            #   옛날엔 이 경로가 아무 기록 없이 return 해서 FORCE_STOP_LOSS_TRIGGERED 만 남고
+                            #   실행이 없는 것처럼 보였다(「손절 지연」 오독의 원인).
+                            self._record_residue_kept(strategy, _why, _nxwhy)
                             return
                         logger.warning(
                             "[Fix332] %s #%s **전량 손절** — 잔량이지만 %s "
