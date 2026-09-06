@@ -8,6 +8,7 @@
   outcome  : 매시간, 스냅샷 36h 지난 행에 15m 144봉을 받아 라벨링(`chart_learning.label_row`).
   backfill : 지난 N일을 일봉으로 재구성(그날 00:00 기준 순위 = 미래참조 없음). 1회성 CLI.
   report   : 자리별 기준선 + 규칙별 결과 + 교차검증 → markdown/JSON.
+  trades   : 실매매(strategy_instances/orders/risk_events) × 학습 라벨 조인 집계 (Fix 355).
 
 ⚠️ API weight: 2026-08-26 IP ban 전력. 심볼당 SLEEP, 연속 실패 3회면 중단(ban 스파이럴 방지).
 
@@ -16,6 +17,7 @@ CLI (컨테이너 안):
   python -m app.workers.chart_learning_worker outcome --limit 5000
   python -m app.workers.chart_learning_worker backfill --days 20
   python -m app.workers.chart_learning_worker report --days 60 [--json]
+  python -m app.workers.chart_learning_worker trades --days 14 [--json]
   python -m app.workers.chart_learning_worker status
 """
 from __future__ import annotations
@@ -35,6 +37,7 @@ from app.core.database import SessionLocal
 from app.models.chart_learning_day import ChartLearningDay
 from app.models.exchange_account import ExchangeAccount
 from app.services import chart_learning as CL
+from app.services import chart_learning_trades as CLT
 from app.services.market_movers import MIN_QUOTE_VOLUME, change_pct, quote_volume
 from app.services.multiday_movers import returns_from_daily
 
@@ -397,6 +400,43 @@ def backfill(decrypt_text, days: int, *, label: bool = True) -> dict[str, Any]:
 
 
 # ══════════════════════════════════════════════════════════════════════
+# 3b) 재라벨링 — 규칙 레지스트리가 바뀌면 저장된 봉으로 outcome 만 다시 계산 (Fix 356)
+# ══════════════════════════════════════════════════════════════════════
+
+def relabel(days: int = 60, *, limit: int | None = None, only_old_version: bool = True) -> dict[str, Any]:
+    """DONE 행의 klines(15m·4h·15m_fwd) 로 label_row 를 다시 돌려 outcome 을 갱신한다. API 호출 없음."""
+    cutoff = datetime.now(timezone.utc).date() - timedelta(days=days)
+    t0 = time.time()
+    done = skipped = 0
+    with SessionLocal() as db:
+        q = (select(ChartLearningDay)
+             .where(ChartLearningDay.snap_date >= cutoff, ChartLearningDay.outcome_status == "DONE",
+                    ChartLearningDay.klines.isnot(None))
+             .order_by(ChartLearningDay.snap_date, ChartLearningDay.id))
+        if limit:
+            q = q.limit(limit)
+        for row in db.execute(q).scalars().yield_per(50):
+            kl = row.klines or {}
+            if only_old_version and int((row.outcome or {}).get("version") or 0) >= CL.LABEL_VERSION:
+                skipped += 1
+                continue
+            pre15, pre4, fwd = kl.get("15m") or [], kl.get("4h") or [], kl.get("15m_fwd") or []
+            if len(pre15) < MIN_PRE_BARS or len(fwd) < CL.WINDOW:
+                skipped += 1
+                continue
+            row.outcome = CL.label_row(pre15, pre4, fwd)
+            row.labeled_at = datetime.now(timezone.utc)
+            done += 1
+            if done % 25 == 0:
+                db.commit()
+                logger.info("[%s] 재라벨 %d (%.0fs)", FIX, done, time.time() - t0)
+        db.commit()
+    res = {"relabeled": done, "skipped": skipped, "seconds": round(time.time() - t0, 1), "version": CL.LABEL_VERSION}
+    logger.info("[%s] 재라벨 완료: %s", FIX, res)
+    return res
+
+
+# ══════════════════════════════════════════════════════════════════════
 # 4) 보고서 / 상태
 # ══════════════════════════════════════════════════════════════════════
 
@@ -448,6 +488,13 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--json", action="store_true")
     sub.add_parser("status")
     sub.add_parser("prune")
+    rl = sub.add_parser("relabel")
+    rl.add_argument("--days", type=int, default=60)
+    rl.add_argument("--limit", type=int, default=None)
+    rl.add_argument("--all", action="store_true", help="라벨 버전이 최신이어도 다시 계산")
+    tr = sub.add_parser("trades")
+    tr.add_argument("--days", type=int, default=14)
+    tr.add_argument("--json", action="store_true")
     a = p.parse_args(argv)
     try:
         os.nice(10)     # 실매매 워커보다 낮은 우선순위
@@ -467,6 +514,12 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "status":
         with SessionLocal() as db:
             print(json.dumps(status(db), ensure_ascii=False, indent=1))
+    elif a.cmd == "relabel":
+        print(json.dumps(relabel(a.days, limit=a.limit, only_old_version=not a.all), ensure_ascii=False))
+    elif a.cmd == "trades":
+        with SessionLocal() as db:
+            summary = CLT.summarize(CLT.build_trade_dataset(db, a.days))
+        print(json.dumps(summary, ensure_ascii=False) if a.json else CLT.render_markdown(summary))
     elif a.cmd == "prune":
         with SessionLocal() as db:
             print(json.dumps({"pruned": _prune(db)}))
