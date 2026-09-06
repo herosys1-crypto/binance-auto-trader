@@ -229,6 +229,56 @@ class ChartAnalyzer:
     # ==========================================================================
 
     @staticmethod
+    def _analyze_klines(kl: list) -> dict:
+        """봉 리스트 → 지표 dict (analyze_timeframe 의 계산 본문. Fix 356 에서 캐시 경로와 분리)."""
+        from app.services.bb_4h_band_analyzer import BB4HBandAnalyzer
+        closes = [float(k[4]) for k in kl]
+        obv = [float(x) for x in ChartAnalyzer.compute_obv(kl)]
+        rsi_now = BB4HBandAnalyzer._calc_rsi(closes)
+        rsi_prev = BB4HBandAnalyzer._calc_rsi(closes[:-1])
+        cci = ChartAnalyzer.compute_cci(kl)
+        mid, up, lo = BB4HBandAnalyzer.bollinger(closes)
+
+        # MACD 히스토그램!
+        macd_hist = []
+        try:
+            if len(closes) >= 35:
+                ema12 = BB4HBandAnalyzer._calc_ema(closes, 12)
+                ema26 = BB4HBandAnalyzer._calc_ema(closes, 26)
+                macd_line = [a - b for a, b in zip(ema12[26 - 12:], ema26)]
+                if len(macd_line) >= 10:
+                    sig = BB4HBandAnalyzer._calc_ema(macd_line, 9)
+                    if sig:
+                        macd_hist = [m - s for m, s in zip(macd_line[-len(sig):], sig)]
+        except Exception:
+            pass
+
+        # 🎯 Fix 131 (2026-08-26): bb_mid / volumes 반환 추가.
+        #   BB 중단(mid)은 49행에서 이미 계산해놓고 「버리고」 있었다.
+        #   사장님 LONG 시나리오 (3) "급등후 조정 볼밴 중단 지지" 는 bb_mid 없이는
+        #   판정 자체가 불가능하다 = 그 사상이 구현될 수 없었던 이유.
+        #   volumes 도 볼륨 확인(사장님 사상 공통 조건)에 필요하다.
+        #   (기존 키는 그대로 두므로 하위 호환 100%)
+        try:
+            volumes = [float(k[5]) for k in kl]
+        except Exception:
+            volumes = []
+        return {
+            "closes": closes,
+            "volumes": volumes,
+            "obv": obv,
+            "rsi_now": rsi_now,
+            "rsi_prev": rsi_prev,
+            "macd_hist": macd_hist,
+            "cci_now": cci[-1] if cci else None,
+            "cci_prev": cci[-2] if len(cci) >= 2 else None,
+            "bb_up_last": up[-1] if up else None,
+            "bb_mid_last": mid[-1] if mid else None,
+            "bb_lo_last": lo[-1] if lo else None,
+            "kl_count": len(kl),
+        }
+
+    @staticmethod
     def analyze_timeframe(bc, symbol: str, interval: str, limit: int = 80) -> dict:
         """단일 시간대 지표 5개 딕셔너리 반환 (v222!).
 
@@ -237,6 +287,15 @@ class ChartAnalyzer:
             실패 시 {} 반환 (헌법 v127: 캐시 우선 = 인접 실행 재사용!)
         """
         try:
+            # 📚 Fix 356 (2026-09-07): 학습 일지의 재생 클라이언트(chart_learning._BarsClient)는 심볼을
+            #   `_learn_…` 로 넘긴다. 이 경우 Redis 캐시를 **읽지도 쓰지도 않는다** — 캐시를 타면 직전 봉의
+            #   판정이 다음 봉에 재사용되고(같은 키), 실심볼이면 실시간 봉이 과거 판정에 섞인다.
+            _no_cache = str(symbol).startswith("_learn_")
+            if _no_cache:
+                kl = bc.get_klines(symbol=symbol, interval=interval, limit=limit)
+                if not isinstance(kl, list) or len(kl) < 30:
+                    return {}
+                return ChartAnalyzer._analyze_klines(kl)
             # 캐시 확인 (Redis TTL = interval별 다름!)
             from app.core.redis_client import get_redis_client
             r = get_redis_client()
@@ -271,52 +330,7 @@ class ChartAnalyzer:
             if not isinstance(kl, list) or len(kl) < 30:
                 return {}
 
-            from app.services.bb_4h_band_analyzer import BB4HBandAnalyzer
-            closes = [float(k[4]) for k in kl]
-            obv = [float(x) for x in ChartAnalyzer.compute_obv(kl)]
-            rsi_now = BB4HBandAnalyzer._calc_rsi(closes)
-            rsi_prev = BB4HBandAnalyzer._calc_rsi(closes[:-1])
-            cci = ChartAnalyzer.compute_cci(kl)
-            mid, up, lo = BB4HBandAnalyzer.bollinger(closes)
-
-            # MACD 히스토그램!
-            macd_hist = []
-            try:
-                if len(closes) >= 35:
-                    ema12 = BB4HBandAnalyzer._calc_ema(closes, 12)
-                    ema26 = BB4HBandAnalyzer._calc_ema(closes, 26)
-                    macd_line = [a - b for a, b in zip(ema12[26 - 12:], ema26)]
-                    if len(macd_line) >= 10:
-                        sig = BB4HBandAnalyzer._calc_ema(macd_line, 9)
-                        if sig:
-                            macd_hist = [m - s for m, s in zip(macd_line[-len(sig):], sig)]
-            except Exception:
-                pass
-
-            # 🎯 Fix 131 (2026-08-26): bb_mid / volumes 반환 추가.
-            #   BB 중단(mid)은 49행에서 이미 계산해놓고 「버리고」 있었다.
-            #   사장님 LONG 시나리오 (3) "급등후 조정 볼밴 중단 지지" 는 bb_mid 없이는
-            #   판정 자체가 불가능하다 = 그 사상이 구현될 수 없었던 이유.
-            #   volumes 도 볼륨 확인(사장님 사상 공통 조건)에 필요하다.
-            #   (기존 키는 그대로 두므로 하위 호환 100%)
-            try:
-                volumes = [float(k[5]) for k in kl]
-            except Exception:
-                volumes = []
-            return {
-                "closes": closes,
-                "volumes": volumes,
-                "obv": obv,
-                "rsi_now": rsi_now,
-                "rsi_prev": rsi_prev,
-                "macd_hist": macd_hist,
-                "cci_now": cci[-1] if cci else None,
-                "cci_prev": cci[-2] if len(cci) >= 2 else None,
-                "bb_up_last": up[-1] if up else None,
-                "bb_mid_last": mid[-1] if mid else None,
-                "bb_lo_last": lo[-1] if lo else None,
-                "kl_count": len(kl),
-            }
+            return ChartAnalyzer._analyze_klines(kl)
         except Exception as e:
             logger.warning("[chart_analyzer v222] analyze_timeframe %s %s 실패: %s",
                            symbol, interval, e)

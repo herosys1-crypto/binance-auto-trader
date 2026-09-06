@@ -67,7 +67,7 @@ MS_15M = 900_000
 MS_1H = 3_600_000
 MS_4H = 14_400_000
 MS_DAY = 86_400_000
-LABEL_VERSION = 1
+LABEL_VERSION = 2   # v2 (Fix 356): confirm_peak_111 · off8_267 추가
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -326,6 +326,60 @@ def _r_multiday_rebound_352(ctx: RuleCtx) -> bool:
     return bool(ok)
 
 
+class _BarsClient:
+    """규칙 함수가 **실매매와 같은 판정식**(confirm_peak 등, bc.get_klines 를 부르는 것)을 라벨링 시점 봉으로
+    돌릴 수 있게 하는 가짜 클라이언트 (Fix 356). 마지막에 「진행중 스텁 봉」(= 다음 봉 시가) 하나를 붙여
+    실매매가 보는 모양(완성봉 + 진행중 1봉)과 같게 한다. 12필드 바이낸스 형식으로 돌려준다.
+
+    🚨 심볼은 반드시 고유 문자열(`_learn_…`)로 넘긴다 — ChartAnalyzer 가 Redis 에 `kline_cache:{symbol}:…` 로
+       캐시하므로 실심볼을 쓰면 **실시간 봉이 과거 판정에 섞인다**(같은 키면 직전 봉 판정이 재사용된다).
+    """
+
+    _MS = {"15m": MS_15M, "1h": MS_1H, "4h": MS_4H}
+
+    def __init__(self, ctx: "RuleCtx"):
+        self.ctx = ctx
+
+    def get_klines(self, *, symbol: str, interval: str, limit: int = 500, start_time=None, end_time=None):
+        src = {"15m": self.ctx.kl15, "1h": self.ctx.kl1h, "4h": self.ctx.kl4h}[interval]
+        ms = self._MS[interval]
+        bars = [[int(b[0]), str(b[1]), str(b[2]), str(b[3]), str(b[4]), str(b[5]), int(b[0]) + ms - 1, "0", 0, "0", "0", "0"]
+                for b in src]
+        if not bars:
+            return []
+        o = bars[-1][4]
+        t0 = bars[-1][0] + ms
+        stub = [t0, o, o, o, o, "0", t0 + ms - 1, "0", 0, "0", "0", "0"]
+        return bars[-(limit - 1):] + [stub]
+
+    def get_24hr_ticker(self, symbol: str | None = None):
+        k = self.ctx.kl15
+        c = float(k[-1][4])
+        p = float(k[-97][4]) if len(k) > 97 else float(k[0][4])
+        return {"symbol": symbol, "priceChangePercent": f"{(c / p - 1) * 100:.3f}", "quoteVolume": "1", "lastPrice": f"{c}"}
+
+    def __getattr__(self, name):
+        def _f(*a, **k):
+            raise RuntimeError(f"_BarsClient: {name} 미지원")
+        return _f
+
+
+def _r_confirm_peak_111(ctx: RuleCtx) -> bool:
+    """실매매 정점 확인(Fix 111 peak_confirmation.confirm_peak): 15m 반복상승 ≥2 + RSI/MACD/CCI 꺾임 ≥2/3.
+    Day 2 실측(UP24 1,050 심볼-일): 첫 발동 n=3,242 평균 −0.32 (기준선 −0.71) — 무작위보단 낫지만 음수."""
+    from app.services.peak_confirmation import confirm_peak
+    tag = f"_learn_{ctx.j}_{int(ctx.kl15[-1][0]) if ctx.kl15 else 0}"
+    ok, _, _ = confirm_peak(_BarsClient(ctx), tag, "SHORT")
+    return bool(ok)
+
+
+def _r_off8_267(ctx: RuleCtx) -> bool:
+    """Fix 267 급등 사다리 M3: 창 안(24h) 최고가 대비 −8% 첫 도달. Day 2 실측 −1.09 (SL 2.5%) / −0.49 (정점+1% 손절)."""
+    j = ctx.j
+    hi = max(ctx.h[max(0, j - 96):j + 1])
+    return hi > 0 and ctx.c[j] <= hi * 0.92
+
+
 def _r_l1_hist_turn_up(ctx: RuleCtx) -> bool:
     H, j = ctx.hist, ctx.j
     return j >= 2 and H[j] > H[j - 1] > H[j - 2] and H[j - 2] < 0
@@ -345,6 +399,8 @@ RULES: tuple[Rule, ...] = (
     Rule("toprev_331", "SHORT", "정점 반전 (chart_events 9/3, 미배선)", "system", _r_toprev_331),
     Rule("s2_hist_turn_down", "SHORT", "반등 뒤 hist 꺾임 + 신고점 실패", "candidate", _r_s2_hist_turn_down),
     Rule("s1_breakdown", "SHORT", "hist 2봉 하락 + 20봉 신저점", "candidate", _r_s1_breakdown),
+    Rule("confirm_peak_111", "SHORT", "실매매 정점 확인 (Fix 111 confirm_peak, 배선됨)", "system", _r_confirm_peak_111),
+    Rule("off8_267", "SHORT", "정점 대비 −8% 첫 도달 (Fix 267 급등 사다리, shadow)", "system", _r_off8_267),
     Rule("pullback_331", "LONG", "상승 중 조정 (chart_events 9/3, 미배선)", "system", _r_pullback_331),
     Rule("bottom_331", "LONG", "저점 반전 (chart_events 9/3, 미배선)", "system", _r_bottom_331),
     Rule("surge_start_346", "LONG", "상승 초입 (Fix 346 배선됨)", "system", _r_surge_start_346),

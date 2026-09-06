@@ -98,13 +98,35 @@ def get_max_concurrent(db) -> tuple[int, str]:
     return MAX_CONCURRENT_DEFAULT, "default"
 
 
-def count_active_positions(db, side: str | None = None) -> int:
-    """지금 열려 있는 전략 인스턴스 수 (ACTIVE_LIKE).
+# 🎯 Fix 354 (2026-09-07 사장님): "v219와 볼밴 분할 전략의 동시포지션을 10 10으로 수정했는데 적용되고 있는지?"
+#   실측(09-06 22:19 UTC): sajangnim_top_short_daily_limit=10 인데 count_active_positions 는 **가족·수동 구분 없이**
+#   ACTIVE_LIKE 전체(사다리 14 + 중단선 3 = 17)를 세서 「17/10 도달」 = v219 신규 진입 전면 차단.
+#   볼밴 분할·중단선·급등 사다리·재진입은 각자 전용 상한이 따로 있는데(pump_split_max_concurrent 등),
+#   그 포지션들이 v219 의 10칸까지 먹고 있었다 = 사장님 「v219 10 / 볼밴 10」 이 뜻하는 가족별 상한이 아니었다.
+#   → 범위 설정 신설. "ladder" = v219 사다리(stage_ladder, 전용 상한이 있는 재진입·급등사다리 제외)만 센다.
+#     기본값은 옛 동작("all")을 유지하고 DB 설정으로 켠다 (되돌리기 = concurrent_cap_scope=all).
+SETTING_SCOPE_KEY = "concurrent_cap_scope"
+SCOPE_ALL = "all"
+SCOPE_LADDER = "ladder"
+# 자기 상한을 따로 가진 가족의 템플릿 이름 접두/포함 패턴 (ladder 범위에서 제외)
+_LADDER_EXCLUDE_NAME_PATTERNS = ("%REENTRY%", "%LASTCHANCE%", "SURGE_LADDER%", "PUMPSPLIT%", "BB_MIDLINE%")
 
-    side 를 주면 해당 방향만, 없으면 전체 (SHORT+LONG 합산).
-    사장님 사상: 자본 노출은 방향 무관 = 기본은 전체 합산!
-    """
-    from sqlalchemy import select, func
+
+def cap_scope(db) -> str:
+    """동시 상한이 무엇을 세는가: all(옛 동작, 전 전략) / ladder(v219 사다리 가족만)."""
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_SCOPE_KEY)
+        v = str(row.value).strip().lower() if row is not None and row.value is not None else ""
+        return SCOPE_LADDER if v == SCOPE_LADDER else SCOPE_ALL
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Fix354] %s 조회 실패 → all: %s", SETTING_SCOPE_KEY, e)
+        return SCOPE_ALL
+
+
+def active_positions_query(side: str | None = None, scope: str = SCOPE_ALL):
+    """count_active_positions 가 실행하는 select (테스트가 SQL 을 검사할 수 있게 분리)."""
+    from sqlalchemy import select, func, not_
     from app.core.strategy_status import ACTIVE_LIKE
     from app.models.strategy_instance import StrategyInstance
 
@@ -114,7 +136,23 @@ def count_active_positions(db, side: str | None = None) -> int:
     )
     if side:
         q = q.where(StrategyInstance.side == side)
-    return int(db.execute(q).scalar() or 0)
+    if scope == SCOPE_LADDER:
+        from app.models.strategy_template import StrategyTemplate
+        q = q.join(StrategyTemplate, StrategyTemplate.id == StrategyInstance.strategy_template_id).where(
+            StrategyInstance.capital_management_mode == "stage_ladder",
+            *[not_(StrategyTemplate.name.ilike(p)) for p in _LADDER_EXCLUDE_NAME_PATTERNS],
+        )
+    return q
+
+
+def count_active_positions(db, side: str | None = None, scope: str = SCOPE_ALL) -> int:
+    """지금 열려 있는 전략 인스턴스 수 (ACTIVE_LIKE).
+
+    side 를 주면 해당 방향만, 없으면 전체 (SHORT+LONG 합산).
+    scope="ladder" 면 capital_management_mode='stage_ladder' 이고 전용 상한이 따로 있는 가족
+    (재진입/라스트챈스/급등 사다리/볼밴 분할/중단선)이 아닌 것만 센다 (Fix 354).
+    """
+    return int(db.execute(active_positions_query(side, scope)).scalar() or 0)
 
 
 def check_position_slot(db, tag: str = "") -> tuple[bool, str, int, int]:
@@ -129,15 +167,17 @@ def check_position_slot(db, tag: str = "") -> tuple[bool, str, int, int]:
         if limit <= 0:
             return False, f"동시보유 상한=0 = 자동 진입 완전 OFF (src={src})", 0, 0
 
-        active = count_active_positions(db)
+        scope = cap_scope(db)
+        active = count_active_positions(db, scope=scope)
+        _sc = " · 범위=v219 사다리만(Fix354)" if scope == SCOPE_LADDER else ""
         if active >= limit:
             return (
                 False,
-                f"동시보유 상한 도달 {active}/{limit} (src={src}) "
+                f"동시보유 상한 도달 {active}/{limit} (src={src}{_sc}) "
                 f"= 포지션 하나 청산 전까지 신규 진입 X!",
                 active, limit,
             )
-        return True, f"슬롯 여유 {active}/{limit} (src={src})", active, limit
+        return True, f"슬롯 여유 {active}/{limit} (src={src}{_sc})", active, limit
 
     except Exception as e:
         # 🚨 fail-SAFE (다른 게이트와 반대!): 자본 노출 상한은 불확실하면 막는다!

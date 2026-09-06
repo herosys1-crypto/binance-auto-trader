@@ -154,3 +154,33 @@ def test_규칙_레지스트리는_시스템_규칙_넷을_담는다():
     keys = {r.key for r in CL.RULES}
     assert {"toprev_331", "pullback_331", "bottom_331", "surge_start_346", "multiday_rebound_352"} <= keys
     assert all(r.side in ("LONG", "SHORT") and r.origin in ("system", "candidate") for r in CL.RULES)
+
+
+# ── Fix 356: 실매매 판정식을 규칙으로 (confirm_peak_111 · off8_267) + 재라벨 ──────────
+
+def test_BarsClient_는_12필드와_진행중_스텁을_돌려준다():
+    pre15, pre4 = _pre()
+    ctx = CL.RuleCtx(j=len(pre15) - 1, c=[b[4] for b in pre15], h=[b[2] for b in pre15], l=[b[3] for b in pre15],
+                     v=[b[5] for b in pre15], hist=[0.0] * len(pre15), rsi14=[None] * len(pre15), obv=[0.0] * len(pre15),
+                     kl15=pre15[-120:], kl1h=[], kl4h=pre4[-60:])
+    bc = CL._BarsClient(ctx)
+    k = bc.get_klines(symbol="_learn_x", interval="15m", limit=80)
+    assert len(k) == 80 and len(k[0]) == 12
+    assert k[-1][0] == k[-2][0] + CL.MS_15M and k[-1][1] == k[-2][4]      # 스텁 = 다음 봉, 시가 = 직전 종가
+    assert "priceChangePercent" in bc.get_24hr_ticker("x")
+
+
+def test_off8_규칙은_창_최고가_대비_8퍼_아래서_발동():
+    pre15, pre4 = _pre()
+    fwd = _bars(T0, CL.MS_15M, [100 + i for i in range(10)] + [109 * (1 - 0.01 * i) for i in range(1, 30)] + [100.0] * 105)
+    o = CL.label_row(pre15, pre4, fwd)
+    f = o["rules"]["off8_267"]
+    assert f is not None and 15 <= f["bar"] <= 20, f            # 109×1.004 고점 대비 −8% 아래로 닫히는 봉
+    assert "confirm_peak_111" in o["rules"] and o["version"] == 2
+
+
+def test_레지스트리_10종_와_relabel_CLI():
+    keys = [r.key for r in CL.RULES]
+    assert len(keys) == 10 and "confirm_peak_111" in keys and "off8_267" in keys
+    s = (APP / "workers" / "chart_learning_worker.py").read_text(encoding="utf-8")
+    assert 'sub.add_parser("relabel")' in s and "def relabel(" in s and "only_old_version" in s
