@@ -307,6 +307,16 @@ def _indicator_gate_enabled(db) -> bool:
 
 SETTING_MIN_MOVE_PCT = "pyramid_min_move_pct"     # Fix 348: 추가 전 유리 가격 이동 최소 % (기본 3.0)
 SETTING_SIDES = "pyramid_sides"                   # Fix 348: 추가 허용 방향 (기본 "SHORT")
+
+# 🎯 Fix 358 (2026-09-07 사장님): "수익중일때 차트와 보조지표가 강력한 상승이 하락으로 포지션이 맞을 때
+#   최대2번 익절전 또는 익절후에도 가능하게 하는거야 익절후는 지금 처음 지시는거고"
+#   실측(7일): 익절 후 추가는 2건뿐이고 둘 다 추가 **18초 뒤** 트레일링이 전량을 닫았다(#3962 MAGMA, #3964 NAORIS).
+#   원인은 상태·게이트가 아니라 ① 2회 카운터가 익절 전에 소진 ② TP1→트레일링 전량청산 창이 중앙 12분
+#   ③ 그 창에서 15m 가속 게이트 81% 차단. → 익절 후 추가를 **명시 스위치**로 두고, 트레일링 청산이 임박한
+#   자리(남은 ROI 여유 < 최소 여유)에는 얹지 않는다. 숫자(여유 2.0%p)는 Claude 가 정함.
+SETTING_AFTER_TP = "pyramid_after_tp_enabled"                 # 익절(TP 부분체결·트레일링) 뒤 추가 허용, 기본 ON
+SETTING_AFTER_TP_MIN_ROOM = "pyramid_after_tp_min_trail_room_pct"   # 트레일링 청산까지 남은 ROI 여유 최소 %p, 기본 2.0
+DEFAULT_AFTER_TP_MIN_ROOM = 2.0
 MIN_MOVE_PCT_DEFAULT = 3.0
 SIDES_DEFAULT = "SHORT"
 
@@ -334,6 +344,51 @@ def _min_move_pct(db) -> float:
     except Exception as e:
         logger.warning("[Fix348] %s 조회 실패 = 기본 %.1f: %s", SETTING_MIN_MOVE_PCT, MIN_MOVE_PCT_DEFAULT, e)
         return MIN_MOVE_PCT_DEFAULT
+
+
+def _after_tp_enabled(db) -> bool:
+    """Fix 358: 익절 뒤(TP{n}_DONE_PARTIAL·TRAILING_ARMED) 추가 허용. 기본 ON (사장님 지시). 조회 실패 = ON."""
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_AFTER_TP)
+        if row is None or row.value is None or not str(row.value).strip():
+            return True
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Fix358] %s 조회 실패 = ON: %s", SETTING_AFTER_TP, e)
+        return True
+
+
+def _after_tp_min_room(db) -> float:
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_AFTER_TP_MIN_ROOM)
+        if row is None or row.value is None or not str(row.value).strip():
+            return DEFAULT_AFTER_TP_MIN_ROOM
+        v = float(str(row.value).strip())
+        return v if 0.0 <= v <= 50.0 else DEFAULT_AFTER_TP_MIN_ROOM
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Fix358] %s 조회 실패 → %.1f: %s", SETTING_AFTER_TP_MIN_ROOM, DEFAULT_AFTER_TP_MIN_ROOM, e)
+        return DEFAULT_AFTER_TP_MIN_ROOM
+
+
+def _is_after_tp(status: object) -> bool:
+    st = str(status or "").upper()
+    return st.startswith("TP") or st in ("TRAILING_ARMED", "CRISIS_TP1_DONE")
+
+
+def _trailing_room_pct(si, roi_pct: float) -> float | None:
+    """트레일링 전량청산까지 남은 ROI 여유(%p) = 되돌림 허용폭 − (최고 ROI − 지금 ROI). 모르면 None(= 막지 않음)."""
+    try:
+        mp = getattr(si, "max_profit_pct", None)
+        if mp is None:
+            return None
+        from app.core.risk_constants import TRAILING_RETRACE_PCT
+        tr = getattr(si, "trailing_retrace_pct", None)
+        retrace = float(tr) if tr is not None else float(TRAILING_RETRACE_PCT)
+        return retrace - max(0.0, float(mp) - float(roi_pct))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _allowed_sides(db) -> set[str]:
@@ -657,6 +712,24 @@ def run_success_pyramiding() -> dict:
                     skipped += 1
                     _bump("peak_not_sustained")
                     continue
+            # 🎯 Fix 358: 익절 뒤 추가 — 스위치 + 트레일링 여유
+            _after_tp = _is_after_tp(si.status)
+            if _after_tp:
+                if not _after_tp_enabled(db):
+                    skipped += 1
+                    _bump("after_tp_disabled")
+                    continue
+                _room = _trailing_room_pct(si, roi_pct)
+                _min_room = _after_tp_min_room(db)
+                if _room is not None and _room < _min_room:
+                    skipped += 1
+                    _bump("trailing_imminent")
+                    logger.info(
+                        "[Fix358] ⏸ %s %s #%s 익절 후 추가 보류 — 트레일링 청산까지 여유 %.2f%%p < %.1f%%p "
+                        "(최고 ROI %s, 지금 %.2f)", si.symbol, si.side, si.id, _room, _min_room,
+                        si.max_profit_pct, roi_pct,
+                    )
+                    continue
 
             # 급등/급락 필터 (헌법 64!)
             try:
@@ -874,6 +947,7 @@ def run_success_pyramiding() -> dict:
                 if not _add_order:
                     skipped += 1
                     _bump("add_position_failed")
+                    _set_cooldown(si.symbol, si.side)      # Fix 358b: 실패도 5분 쿨다운 (#3964 는 30초마다 74회 재시도)
                     continue
                 new_strategy = si          # 이후 기록은 부모 전략 기준
                 logger.info(
@@ -898,6 +972,8 @@ def run_success_pyramiding() -> dict:
                     "roi_pct_at_entry": roi_pct,
                     "entry_price": mp,
                     "entered_at": datetime.now(timezone.utc).isoformat(),
+                    "after_tp": bool(_after_tp),                          # Fix 358
+                    "status_at_add": str(si.status),
                 }
                 sugg = StrategySuggestion(
                     symbol=si.symbol, side=si.side,
@@ -944,6 +1020,10 @@ def run_success_pyramiding() -> dict:
                 skipped += 1
                 _bump("exception")
                 db.rollback()
+                try:
+                    _set_cooldown(si.symbol, si.side)      # Fix 358b: 예외(마진 부족 등)도 5분 쿨다운
+                except Exception:
+                    pass
 
         _reason_str = " ".join(
             f"{k}={v}" for k, v in sorted(_reasons.items(), key=lambda x: -x[1])
