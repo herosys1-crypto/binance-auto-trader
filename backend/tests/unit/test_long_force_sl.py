@@ -51,39 +51,33 @@ def _code(p: Path) -> str:
     )
 
 
-def test_long_stop_is_five_percent():
-    """사장님 원 지시(-5%)로 복귀. 근거는 이 파일 상단 실측."""
-    assert LONG_FORCE_SL_ROI == Decimal("5")
+def test_long_stop_default_is_fix362_25():
+    """🎯 Fix 362 (2026-09-08 사장님): 새 전략 기본 -25%. LONG 폴백 상수는 그 값의 사본이어야 한다."""
+    from app.core.risk_constants import FORCE_SL_ROI_NEW_DEFAULT
+    assert LONG_FORCE_SL_ROI == FORCE_SL_ROI_NEW_DEFAULT == Decimal("25")
 
 
 def test_long_and_short_now_match():
-    """🚨 두 방향이 다른 손절선을 쓰면 성적 비교가 오염된다.
-
-    LONG 평균손 -10.98 / SHORT -0.52 의 격차에는 이 설정 차이가 섞여 있었다.
-    """
+    """🚨 두 방향이 다른 손절선을 쓰면 성적 비교가 오염된다 — 둘 다 같은 설정 헬퍼를 런타임에 읽는다 (Fix 362)."""
     long_code = _code(LONG_W)
     short_code = _code(SHORT_W)
-    assert 'force_sl_roi_override = Decimal("5")' in short_code, (
-        "SHORT 가 5% 가 아니다 — 기준이 바뀌었으면 LONG 도 재검토해야 한다"
-    )
-    assert "LONG_FORCE_SL_ROI" in long_code
+    assert "_nfs362(db)" in short_code and "_nfs362(db)" in long_code
+    assert 'force_sl_roi_override = Decimal("5")' not in short_code
+    assert "force_sl_roi_override = LONG_FORCE_SL_ROI" not in long_code
 
 
 def test_no_magic_number_left_in_long_worker():
-    """🚨 두 곳에 흩어진 매직넘버가 다시 생기면 한쪽만 바뀌어 조용히 갈라진다."""
+    """🚨 매직넘버 대입이 다시 생기면 한쪽만 바뀌어 조용히 갈라진다."""
     code = _code(LONG_W)
-    assert 'force_sl_roi_override = Decimal("10")' not in code, (
-        "LONG 손절 10% 매직넘버가 되살아났다"
-    )
-    assert code.count("force_sl_roi_override = LONG_FORCE_SL_ROI") == 2, (
-        "두 진입 경로(스캔/알람)가 같은 상수를 쓰지 않는다"
-    )
+    assert 'force_sl_roi_override = Decimal("10")' not in code
+    assert 'force_sl_roi_override = Decimal("5")' not in code
+    assert code.count("force_sl_roi_override = _nfs362(db)") == 2, "두 진입 경로(스캔/알람)가 같은 헬퍼를 쓰지 않는다"
 
 
 def test_evidence_is_recorded_next_to_the_value():
     """값만 바뀌고 근거가 사라지면 다음 사람이 또 뒤집는다 (Fix 87 이 그랬다)."""
     src = LONG_W.read_text(encoding="utf-8")
-    for token in ("Fix 253", "승자 0명", "-5% 를 건드린 승자", "되돌리려면"):
+    for token in ("Fix 253", "승자 0명", "-5% 를 건드린 승자", "Fix 362"):
         assert token in src, f"근거 주석에 '{token}' 이 없다"
 
 

@@ -386,11 +386,12 @@ def run_auto_short_at_top() -> dict:
                 # 기존 활성 전략은 그대로! 신 진입만 -5%!
                 try:
                     new_strategy.force_sl_enabled_override = True
-                    new_strategy.force_sl_roi_override = Decimal("5")
+                    from app.services.system_settings_service import new_strategy_force_sl_roi as _nfs362
+                    new_strategy.force_sl_roi_override = _nfs362(db)   # Fix 362 (2026-09-08 사장님): 새 진입 기본 -25% (옛 Fix 49 = 5)
                     db.commit()
                     logger.info(
-                        "[sajangnim_top_v219] 🛡️ %s SL override -5%% 적용 (strategy_id=%s)",
-                        symbol, new_strategy.id,
+                        "[sajangnim_top_v219] 🛡️ %s SL override -%s%% 적용 (strategy_id=%s)",
+                        symbol, new_strategy.force_sl_roi_override, new_strategy.id,
                     )
                 except Exception as _sl_exc:
                     logger.warning(

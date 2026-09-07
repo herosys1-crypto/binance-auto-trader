@@ -1350,11 +1350,12 @@ def _apply_obv_hold_settings(db: Session, strategy: StrategyInstance) -> None:
         # 이전: force_sl_enabled_override=False (오래 버티기) → Liquidation 위험!
         # 신 (Fix 52 P1): SL -5% 강제 + 재진입 마틴게일 = 총 손실 44% 감소!
         strategy.force_sl_enabled_override = True
-        strategy.force_sl_roi_override = Decimal("5")  # ROI <= -5% 시 발동! (짧은 손절!)
+        from app.services.system_settings_service import new_strategy_force_sl_roi as _nfs362
+        strategy.force_sl_roi_override = _nfs362(db)   # Fix 362 (2026-09-08 사장님): 새 진입 기본 -25% (옛 Fix 52 = 5)
         db.commit()
         logger.info(
-            "[auto_obv_hold] 🎯 Fix 52 P1 OBV 전략 설정: strategy=%s SL 강제 -5%% (짧은 손절 + 재진입!)",
-            strategy.id,
+            "[auto_obv_hold] 🎯 Fix 52 P1→Fix 362 OBV 전략 설정: strategy=%s SL 강제 -%s%%",
+            strategy.id, strategy.force_sl_roi_override,
         )
     except Exception as e:
         logger.warning("[auto_obv_hold] 설정 실패: %s", e)
@@ -2032,11 +2033,12 @@ def _create_auto_bb_strategy(
     if not _is_obv_hold:
         try:
             strategy.force_sl_enabled_override = True
-            strategy.force_sl_roi_override = Decimal("5")  # ROI <= -5% 시 발동! (짧은 손절!)
+            from app.services.system_settings_service import new_strategy_force_sl_roi as _nfs362
+            strategy.force_sl_roi_override = _nfs362(db)   # Fix 362 (2026-09-08 사장님): 새 진입 기본 -25% (옛 Fix 52 = 5)
             db.commit()
             logger.info(
-                "[auto_bb_breakdown] 🎯 Fix 52 P1 SL 강제 -5%%: strategy=%s %s %s (짧은 손절 + 재도전!)",
-                strategy.id, symbol, side,
+                "[auto_bb_breakdown] 🎯 Fix 52 P1→Fix 362 SL 강제 -%s%%: strategy=%s %s %s",
+                strategy.force_sl_roi_override, strategy.id, symbol, side,
             )
         except Exception as _sl_e:
             logger.warning("[auto_bb_breakdown] Fix 52 P1 SL -5%% 세팅 실패 (fail-open): %s", _sl_e)

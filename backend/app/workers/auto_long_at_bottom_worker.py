@@ -161,7 +161,10 @@ PATTERN_B_MAX_CHG = -3.0      # 🌟 Fix 87: 0 → -3.0 (급락 확실!)
 #
 # ⚠️ 되돌리려면 이 값만 10 으로 바꾸면 된다. 바꿀 때는 위 실측을 다시 재고
 #    「이익 중인 LONG 이 -5% 아래로 간 적이 있는가」를 확인할 것.
-LONG_FORCE_SL_ROI = Decimal("5")
+# 🎯 Fix 362 (2026-09-08 사장님 verbatim): "기존 방식 새전략은 -25% 손실이면 청산하게 기본옵션을 설정해줘"
+#    → 새 진입의 손절은 설정 force_sl_roi_new_default(기본 25) 를 런타임에 읽는다 (new_strategy_force_sl_roi).
+#    아래 상수는 그 기본값의 사본(폴백·문서용)이다. 위 Fix 253 실측(5% 가 승자를 자르지 않았다)은 기록으로 남긴다.
+LONG_FORCE_SL_ROI = Decimal("25")
 
 TREND_EXTREME_BULL_PCT_3D = 30.0  # 3일 +30%↑ = extreme (skip! 정점 위험!)
 RSI_PATTERN_A_MIN = 35.0      # Fix 61 P1: 30 → 35 (더 엄격!)
@@ -1557,10 +1560,15 @@ def run_auto_long_at_bottom_once() -> dict:
                 #                        대기 모니터링" → 사장님 요구 상향 반영!
                 try:
                     new_strategy.force_sl_enabled_override = True
-                    new_strategy.force_sl_roi_override = LONG_FORCE_SL_ROI
+                    from app.services.system_settings_service import new_strategy_force_sl_roi as _nfs362
+                    new_strategy.force_sl_roi_override = _nfs362(db)   # Fix 362: 새 진입 기본 -25% (설정)
                     db.commit()
                     logger.info(
-                        "[Fix75/alert-long+Fix87] 🛡️ %s SL override -5%% 적용 (Fix253) "
+                        "[Fix75/alert-long+Fix362] 🛡️ %s SL override -%s%% 적용 "
+                        "(strategy_id=%s)", symbol, new_strategy.force_sl_roi_override, new_strategy.id,
+                    )
+                    logger.debug(
+                        "[Fix75/alert-long+Fix87] (옛 로그 자리) %s "
                         "(strategy_id=%s, 2x 상향 = 15m 노이즈 방지!)",
                         symbol, new_strategy.id,
                     )
@@ -1867,11 +1875,12 @@ def run_auto_long_at_bottom_once() -> dict:
                 # 기존 활성 전략은 그대로! 신 진입만 -10%!
                 try:
                     new_strategy.force_sl_enabled_override = True
-                    new_strategy.force_sl_roi_override = LONG_FORCE_SL_ROI
+                    from app.services.system_settings_service import new_strategy_force_sl_roi as _nfs362
+                    new_strategy.force_sl_roi_override = _nfs362(db)   # Fix 362: 새 진입 기본 -25% (설정)
                     db.commit()
                     logger.info(
-                        "[auto_long_bottom+Fix87] 🛡️ %s SL override -5%% 적용 (Fix253) (strategy_id=%s, 2x 상향!)",
-                        symbol, new_strategy.id,
+                        "[auto_long_bottom+Fix362] 🛡️ %s SL override -%s%% 적용 (strategy_id=%s)",
+                        symbol, new_strategy.force_sl_roi_override, new_strategy.id,
                     )
                 except Exception as _sl_exc:
                     logger.warning(

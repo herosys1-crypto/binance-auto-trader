@@ -95,6 +95,19 @@ class SystemSettingsService:
         """
         return self.get_bool("whitelist_enabled", default=default_from_env)
 
+    def get_new_strategy_force_sl_roi(self) -> Decimal:
+        """🎯 Fix 362: 새 전략 인스턴스의 강제손절 ROI 기본값 (양수, 예 25 = ROI −25%).
+        설정 force_sl_roi_new_default 가 있으면 그 값(허용 목록 안일 때만), 없으면 FORCE_SL_ROI_NEW_DEFAULT(25)."""
+        from app.core.risk_constants import FORCE_SL_ALLOWED_ROI, FORCE_SL_NEW_ROI_KEY, FORCE_SL_ROI_NEW_DEFAULT
+        try:
+            v = self.get_decimal(FORCE_SL_NEW_ROI_KEY, default=FORCE_SL_ROI_NEW_DEFAULT)
+        except Exception:  # noqa: BLE001
+            return FORCE_SL_ROI_NEW_DEFAULT
+        if v is None or v not in FORCE_SL_ALLOWED_ROI or v <= 0:
+            # 0(끔)은 허용 목록에 있지만 새 전략 전체의 강제손절을 조용히 끄는 값이라 거부한다 (Fix 362c).
+            return FORCE_SL_ROI_NEW_DEFAULT
+        return v
+
     def get_force_sl(self, side: str) -> tuple[bool, Decimal]:
         """손실 한도 강제 청산 전역 설정 (side별) — (enabled, roi_한도_양수).
 
@@ -117,3 +130,12 @@ class SystemSettingsService:
             enabled = self.get_bool(FORCE_SL_SHORT_ENABLED_KEY, default=FORCE_SL_SHORT_ENABLED_DEFAULT)
             roi = self.get_decimal(FORCE_SL_SHORT_ROI_KEY, default=FORCE_SL_ROI_DEFAULT)
         return enabled, roi
+
+
+def new_strategy_force_sl_roi(db) -> "Decimal":
+    """🎯 Fix 362 모듈 함수: 새 전략/새 진입의 강제손절 ROI 기본 (설정 force_sl_roi_new_default, 기본 25). 조회 실패 = 25."""
+    from decimal import Decimal as _D
+    try:
+        return SystemSettingsService(db).get_new_strategy_force_sl_roi()
+    except Exception:  # noqa: BLE001
+        return _D("25")

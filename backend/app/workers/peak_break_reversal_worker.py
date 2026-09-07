@@ -451,10 +451,14 @@ def _enter_next_stage(db, s, next_stage, snap, bc=None):
 
         # Fix 52 = 사장님 -5% 짧은 손절 방침 (모든 진입 워커 통일!)
         try:
-            s.force_sl_enabled_override = True
-            s.force_sl_roi_override = Decimal("5")
+            # Fix 362c: **기존 인스턴스의 손절값은 유지** — 사장님 지시는 「새전략」. 값이 없을 때만 새 기본(설정, 25).
+            #   (옛 Fix 52 는 무조건 5 로 덮어썼고, Fix 269 가 조인 값도 지워 버렸다.)
+            if s.force_sl_roi_override is None:
+                s.force_sl_enabled_override = True
+                from app.services.system_settings_service import new_strategy_force_sl_roi as _nfs362
+                s.force_sl_roi_override = _nfs362(db)
             db.commit()
-            logger.info("[Fix41+52] 🛡️ %s SL -5%% 적용 (stage=%s)", s.symbol, next_stage)
+            logger.info("[Fix41+52→362] 🛡️ %s SL -%s%% 적용 (stage=%s)", s.symbol, s.force_sl_roi_override, next_stage)
         except Exception as _sl_exc:
             logger.warning("[Fix41+52] ⚠️ %s SL override 실패: %s", s.symbol, _sl_exc)
             db.rollback()

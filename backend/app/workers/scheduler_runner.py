@@ -586,6 +586,19 @@ def start_scheduler() -> None:
         id="chart_learning_outcome",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 🧪 Fix 361 (2026-09-08 사장님): "가상으로 포지션 진입해서 성공과 실패를 기록저장 학습해서
+    #   다시 실시간 운영시작 하면 그때 적용할 수 있게 학습해줘" — 실시간 자동 진입은 꺼둔 채 15분마다
+    #   (봉 마감 직후) 감시 대상을 읽기만 해서 가상 진입·관리·기록하고, 사이클 끝에 학습 일지 백필도 이어간다.
+    #   paper_trading_enabled 로 끈다. 주문 0건 — get_24hr_ticker/get_klines 읽기만.
+    def _paper_trading():
+        from app.workers.paper_trading_worker import run_paper_trading_once
+        run_paper_trading_once(decrypt_text)
+    scheduler.add_job(
+        guarded_job("paper_trading", 800, _paper_trading),
+        trigger=CronTrigger(minute="1,16,31,46"),
+        id="paper_trading",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 2026-05-09 (rate limit 178건 사후): 1m → 2m 주기 변경. bulk fetch 최적화와 함께
     # API 호출 부담 ~80% 감소 (5 strategy × 60/m × 1 호출 = 300/h → 1 × 30/h = 30/h).
     # main loop 가 1 호출로 모든 active strategy 의 positionRisk 한 번에 가져옴.

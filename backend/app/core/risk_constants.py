@@ -79,6 +79,11 @@ FORCE_SL_LONG_ENABLED_DEFAULT: Final[bool] = True
 FORCE_SL_SHORT_ENABLED_DEFAULT: Final[bool] = False  # 원상태 복원!
 # 양수로 저장 (예: 5 = ROI <= -5% 시 발동, 모든 단계 진입 후에만!).
 FORCE_SL_ROI_DEFAULT: Final[Decimal] = Decimal("5")
+# 🎯 Fix 362 (2026-09-08 사장님 verbatim): "기존 방식 새전략은 -25% 손실이면 청산하게 기본옵션을 설정해줘"
+#   **새로 만드는** 전략 인스턴스의 force_sl_roi_override 기본값. 기존 인스턴스·전역 기본(위 5)은 그대로.
+#   설정키로 덮는다 (FORCE_SL_ALLOWED_ROI 안의 값만). 되돌리기: 설정 force_sl_roi_new_default=5.
+FORCE_SL_NEW_ROI_KEY: Final[str] = "force_sl_roi_new_default"
+FORCE_SL_ROI_NEW_DEFAULT: Final[Decimal] = Decimal("25")
 # 허용 ROI 한도 (사장님 선택지). 그 외 값은 API 400.
 # 🌟 2026-08-09 v131 사장님 확장: 0 (끔!) + 5 ~ 100 (5% 간격)!
 FORCE_SL_ALLOWED_ROI: Final[tuple[Decimal, ...]] = (
@@ -196,6 +201,8 @@ __all__ = [
     "FORCE_SL_LONG_ENABLED_DEFAULT",
     "FORCE_SL_SHORT_ENABLED_DEFAULT",
     "FORCE_SL_ROI_DEFAULT",
+    "FORCE_SL_NEW_ROI_KEY",
+    "FORCE_SL_ROI_NEW_DEFAULT",
     "FORCE_SL_ALLOWED_ROI",
     # TP
     "TP1_PCT_DEFAULT",
