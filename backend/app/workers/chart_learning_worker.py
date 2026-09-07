@@ -294,6 +294,13 @@ def run_chart_learning_outcome_once(decrypt_text, *, limit: int | None = None) -
             time.sleep(SLEEP)
         db.commit()
         pruned = _prune(db)
+        # 🕯 Fix 360: LABEL_VERSION 이 올라가도 이 잡은 PENDING 행만 보므로 옛 행이 **저절로 재라벨되지 않는다**(반박 검증이 잡음).
+        #   API 호출 없이(행당 ~20ms) 매시 최대 500건씩 옛 버전 행을 따라잡는다. keep_days(45) 안에 끝나야 klines 가 지워지기 전이다.
+        relabeled = None
+        try:
+            relabeled = relabel(days=CL.keep_days(db), limit=max(int(batch), 500), only_old_version=True)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[%s] 버전 재라벨 실패 (무시): %s", FIX, e)
         res = {"candidates": len(rows), "done": done, "expired": expired, "waiting": waiting,
                "pruned": pruned, "seconds": round(time.time() - t0, 1)}
         # 🚨 할 일이 0건이어도 한 줄 남긴다 — 「기록 없음」과 「대기 0건」을 같은 침묵으로 두면 고장을 정상으로 착각한다(9/3 교훈).
@@ -311,7 +318,7 @@ def run_chart_learning_outcome_once(decrypt_text, *, limit: int | None = None) -
 def backfill(decrypt_text, days: int, *, label: bool = True) -> dict[str, Any]:
     db, bc = _open(decrypt_text)
     if db is None:
-        return {"error": "no account"}
+        return {"relabeled": relabeled, "error": "no account"}
     try:
         n = CL.top_n(db)
         info = bc.get_exchange_info() or {}
@@ -413,6 +420,11 @@ def relabel(days: int = 60, *, limit: int | None = None, only_old_version: bool 
              .where(ChartLearningDay.snap_date >= cutoff, ChartLearningDay.outcome_status == "DONE",
                     ChartLearningDay.klines.isnot(None))
              .order_by(ChartLearningDay.snap_date, ChartLearningDay.id))
+        if only_old_version:
+            # Fix 360: limit 이 **옛 버전 행에만** 쓰이게 SQL 에서 거른다 — 아니면 앞쪽의 새 버전 행이 limit 을 소진해 진행이 멈춘다.
+            from sqlalchemy import Integer, cast, or_
+            _ver = ChartLearningDay.outcome["version"].astext
+            q = q.where(or_(ChartLearningDay.outcome.is_(None), _ver.is_(None), cast(_ver, Integer) < CL.LABEL_VERSION))
         if limit:
             q = q.limit(limit)
         for row in db.execute(q).scalars().yield_per(50):

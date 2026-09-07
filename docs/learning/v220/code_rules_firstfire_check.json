@@ -1,0 +1,66 @@
+{
+ "SHORT/UP": {
+  "rows": 1050,
+  "fired": 638,
+  "n": 638,
+  "mean": 0.431,
+  "win%": 43.6,
+  "baseline": -0.653,
+  "cv": {
+   "even/early": [
+    144,
+    0.12
+   ],
+   "even/late": [
+    146,
+    0.06
+   ],
+   "odd/early": [
+    167,
+    0.77
+   ],
+   "odd/late": [
+    181,
+    0.67
+   ]
+  }
+ },
+ "LONG/DOWN": {
+  "rows": 1050,
+  "fired": 814,
+  "n": 814,
+  "mean": 0.68,
+  "win%": 46.3,
+  "baseline": 0.262,
+  "cv": {
+   "even/early": [
+    183,
+    1.58
+   ],
+   "even/late": [
+    202,
+    0.07
+   ],
+   "odd/early": [
+    187,
+    1.17
+   ],
+   "odd/late": [
+    242,
+    0.13
+   ]
+  }
+ },
+ "SHORT_addon_recent_wick_bar_on_confirm_peak_first_fire_UP": {
+  "definition": "wick>=0.4 & wick>=body & range>=0.8xATR14(prior) & pctb20>=0.85 within 5 bars incl fire bar (code DEFAULT_CFG)",
+  "wick": {
+   "n": 437,
+   "mean": 0.099
+  },
+  "nowick": {
+   "n": 612,
+   "mean": -0.591
+  },
+  "measured_cell": "wick_short.md loose W0.4 incl_fire_bar: +0.10 n=437 / -0.59 n=611"
+ }
+}

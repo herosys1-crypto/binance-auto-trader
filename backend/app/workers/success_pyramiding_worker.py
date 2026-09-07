@@ -907,6 +907,7 @@ def run_success_pyramiding() -> dict:
                 #    더하는 게 최고였지만 여기선 +22.54 -> +0.31 로 무너진다.
                 #    용도가 다르면 반드시 그 용도로 다시 잰다.
                 # ══════════════════════════════════════════════════════
+                _bg_snap = None                                    # Fix 360: 몸통 성장 판정 기록
                 if _indicator_gate_enabled(db):
                     try:
                         from app.integrations.binance.client import BinanceClient as _BC273
@@ -927,6 +928,26 @@ def run_success_pyramiding() -> dict:
                             )
                             continue
                         logger.info("[Fix273] ✅ %s %s — %s", si.symbol, si.side, _why273)
+                        # 🕯 Fix 360 (기획서 v2.20 §④ 「몸통이 추세 방향으로 계속 성장할 때만 추가」):
+                        #    측정(실매매 172건·일지 1,028/920 진입)에서 어떤 몸통 정의도 채택 문턱을 못 넘고, 「봉마다 커짐」은
+                        #    가장 나쁨 — 배포된 15m hist 가속(위 Fix 273/348)이 더 잘 가른다. 그래서 기본 **shadow**(표식만).
+                        #    pyramid_body_growth_mode=gate 면 마지막 완성봉 몸통(≥0.5 범위·≥0.5×ATR·반대 꼬리≤0.3) 없이는 얹지 않는다.
+                        try:
+                            from app.services import candle_battle as _cb360
+                            _bg_mode = _cb360.mode(db, _cb360.S_MODE_PYRAMID)
+                            if _bg_mode != "off":
+                                _bg_bars = _cb360.completed_15m(_bc273, si.symbol, limit=40)
+                                _bg_ok, _bg_why, _bg_det = _cb360.body_growth(_bg_bars, si.side, _cb360.cfg_from_db(db))
+                                _bg_snap = {"mode": _bg_mode, **_cb360.compact(_bg_ok, _bg_why, _bg_det)}
+                                if not _bg_ok and _bg_mode == "gate" and len(_bg_bars) >= 15:   # 봉 조회 실패/부족 = fail-open
+                                    skipped += 1
+                                    _bump("body_not_growing")
+                                    logger.info("[Fix360] ⛔ %s %s 추가 보류 — %s (gate)", si.symbol, si.side, _bg_why)
+                                    continue
+                                logger.info("[Fix360] 🕯 %s %s 몸통 %s — %s (mode=%s)", si.symbol, si.side,
+                                            "✅" if _bg_ok else "✗", _bg_why, _bg_mode)
+                        except Exception as _e360:
+                            logger.warning("[Fix360] 몸통 판정 오류 (fail-open): %s", _e360)
                     except Exception as _e273:
                         # fail-open — 판정 하나가 피라미딩을 통째로 멈추면 안 된다 (Fix 252)
                         logger.warning("[Fix273] 지표 판정 오류 (fail-open): %s", _e273)
@@ -974,6 +995,7 @@ def run_success_pyramiding() -> dict:
                     "entered_at": datetime.now(timezone.utc).isoformat(),
                     "after_tp": bool(_after_tp),                          # Fix 358
                     "status_at_add": str(si.status),
+                    "body_growth": _bg_snap,                              # Fix 360 (shadow 실적 측정용)
                 }
                 sugg = StrategySuggestion(
                     symbol=si.symbol, side=si.side,

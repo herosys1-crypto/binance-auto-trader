@@ -336,8 +336,38 @@ def run_auto_short_at_top() -> dict:
                 except Exception as _e350:
                     logger.warning("[Fix350] %s 1h 판정 오류 (SHORT 유지): %s", symbol, _e350)
 
+                # ═══════════════════════════════════════════════════════
+                # 🕯 Fix 360 (2026-09-07, 기획서 v2.20 캔들 세력공방): confirm_peak·Fix 346·Fix 350 을 다 통과한 신호 중
+                #    「발동 봉 포함 5봉 안에 윗꼬리봉(꼬리 ≥0.4 범위·≥몸통·≥0.8×ATR14) + %B≥0.85」가 있는 것만 남기는 필터.
+                #    일지 UP 1,048 발동 실측: 꼬리봉 있음 +0.10(n=437) / 없음 −0.59(n=611).
+                #    180셀 중 2셀만 통과한 상호작용이라 기본 **shadow**(기록만 → entry_snapshot.candle_battle). 켜기 = candle_battle_mode_short=gate.
+                #    Fix 346(LONG 인계) 뒤에 두어 gate 가 인계를 가로채지 않는다. 봉이 모자라 판정을 못 하면(checked=0) gate 도 통과.
+                #    되돌리기: candle_battle_mode_short=off. 판정 오류는 fail-open (헌법 161).
+                # ═══════════════════════════════════════════════════════
+                _cb_snap = None
+                try:
+                    from app.services import candle_battle as _cb360
+                    _cb_mode = _cb360.mode(db, _cb360.S_MODE_SHORT)
+                    if _cb_mode != "off":
+                        _cb_cfg = _cb360.cfg_from_db(db)
+                        _cb_bars = _cb360.completed_15m(bc, symbol)
+                        _cb_ok, _cb_why, _cb_det = _cb360.recent_wick_bar(_cb_bars, "SHORT", _cb_cfg)
+                        _cb_snap = {"mode": _cb_mode, **_cb360.compact(_cb_ok, _cb_why, _cb_det)}
+                        if _cb_ok:
+                            logger.info("[Fix360] 🕯 %s SHORT 꼬리봉 ✅ %s (mode=%s)", symbol, _cb_why, _cb_mode)
+                        elif _cb_mode == "gate" and _cb_bars and int(_cb_det.get("checked", 0)) > 0:
+                            logger.warning("[Fix360] ⛔ %s SHORT 보류 — %s (gate)", symbol, _cb_why)
+                            skipped += 1
+                            continue
+                        else:
+                            logger.info("[Fix360] 🕯 %s SHORT 꼬리봉 ✗ %s (mode=%s, 기록만)", symbol, _cb_why, _cb_mode)
+                except Exception as _e360:
+                    logger.warning("[Fix360] %s 캔들 판정 오류 (fail-open): %s", symbol, _e360)
+
                 # 7. 자동 진입!
                 cfg = {"capitals": [capital_float], "leverage": DEFAULT_LEVERAGE}
+                if _cb_snap is not None:
+                    cfg["candle_battle"] = _cb_snap                  # Fix 360: 진입 근거 기록 (shadow 실적 측정용)
                 new_strategy = _create_auto_bb_strategy(
                     db, symbol, side, cfg,
                     strategy_type_suffix="_SAJANGNIM_TOP",
@@ -405,6 +435,8 @@ def run_auto_short_at_top() -> dict:
                         "signals_passed": alert.get("signals"),
                         "entered_at": _entered_iso,
                     }
+                if _cb_snap is not None:
+                    entry_snapshot["candle_battle"] = _cb_snap       # Fix 360: strategy_config.entry_snapshot 에 남는다 (cfg 는 저장 안 됨)
                 sugg = StrategySuggestion(
                     symbol=symbol, side=side,
                     suggestion_type="sajangnim_top_short",

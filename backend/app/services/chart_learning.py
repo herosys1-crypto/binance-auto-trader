@@ -67,7 +67,7 @@ MS_15M = 900_000
 MS_1H = 3_600_000
 MS_4H = 14_400_000
 MS_DAY = 86_400_000
-LABEL_VERSION = 2   # v2 (Fix 356): confirm_peak_111 · off8_267 추가
+LABEL_VERSION = 3   # v3 (Fix 360): v2.20 캔들 세력공방 wick_rev_long/short 추가 (v2: confirm_peak_111 · off8_267)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -380,6 +380,20 @@ def _r_off8_267(ctx: RuleCtx) -> bool:
     return hi > 0 and ctx.c[j] <= hi * 0.92
 
 
+def _r_wick_rev_long_v220(ctx: RuleCtx) -> bool:
+    """🕯 Fix 360 — v2.20 LONG: 단일봉 해머(아래꼬리 ≥ 0.5·범위 ≥ 0.8×ATR14·양봉·24h 최저 3% 안). 후보(기록).
+    일부러 DEFAULT_CFG(코드 기본)를 쓴다 — DB 설정으로 실매매 임계를 바꿔도 일지 라벨은 날마다 비교 가능해야 한다."""
+    from app.services.candle_battle import DEFAULT_CFG, reversal_signal
+    return bool(reversal_signal(ctx.kl15, "LONG", DEFAULT_CFG)[0])
+
+
+def _r_wick_rev_short_v220(ctx: RuleCtx) -> bool:
+    """🕯 Fix 360 — v2.20 SHORT: 윗꼬리봉(≥0.5·≥몸통·≥0.8×ATR14·%B≥0.85) → 음봉 확인(몸통≥0.3·종가<중간). 후보(기록).
+    일부러 DEFAULT_CFG(코드 기본)를 쓴다 — 실매매 필터(recent_wick_bar, 0.4·5봉)와는 다른 「두 봉 규칙」이다."""
+    from app.services.candle_battle import DEFAULT_CFG, reversal_signal
+    return bool(reversal_signal(ctx.kl15, "SHORT", DEFAULT_CFG)[0])
+
+
 def _r_l1_hist_turn_up(ctx: RuleCtx) -> bool:
     H, j = ctx.hist, ctx.j
     return j >= 2 and H[j] > H[j - 1] > H[j - 2] and H[j - 2] < 0
@@ -406,6 +420,8 @@ RULES: tuple[Rule, ...] = (
     Rule("surge_start_346", "LONG", "상승 초입 (Fix 346 배선됨)", "system", _r_surge_start_346),
     Rule("multiday_rebound_352", "LONG", "RSI14<35 뒤 첫 상승 마감 (Fix 352 배선됨)", "system", _r_multiday_rebound_352),
     Rule("l1_hist_turn_up", "LONG", "hist 2봉 상승 전환 (0 아래)", "candidate", _r_l1_hist_turn_up),
+    Rule("wick_rev_short_v220", "SHORT", "v2.20 윗꼬리봉→음봉 (Fix 360, shadow)", "candidate", _r_wick_rev_short_v220),
+    Rule("wick_rev_long_v220", "LONG", "v2.20 아래꼬리 해머 (Fix 360, 일지만)", "candidate", _r_wick_rev_long_v220),
 )
 
 
@@ -638,11 +654,15 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, rules: Sequence[Rule] = R
             "rules": {},
         }
         for key, rule in rule_by_key.items():
-            fired = [r["outcome"]["rules"].get(key) for r in grp]
+            # Fix 360: 그 규칙이 **평가된 행**(outcome.rules 에 키 존재)만 분모로 — 옛 버전 라벨 행이 새 규칙의
+            #   발동율·CV 를 희석하지 않게 (반박 검증: 500행만 재라벨된 상태에서 발동율 46% 가 7.7% 로 보였다).
+            evald = [r for r in grp if key in (r["outcome"].get("rules") or {})]
+            fired = [r["outcome"]["rules"].get(key) for r in evald]
             fired = [f for f in fired if f]
             st = _stat([f["roi"] for f in fired])
             b = g["baseline"][rule.side]["mean"]
-            st.update(side=rule.side, fire_rate=round(100 * len(fired) / len(grp), 1),
+            st.update(side=rule.side, evaluated=len(evald),
+                      fire_rate=(round(100 * len(fired) / len(evald), 1) if evald else None),
                       hours_med=_median([f["hours"] for f in fired]),
                       delta=(round(st["mean"] - b, 3) if st["mean"] is not None and b is not None else None))
             g["rules"][key] = st
@@ -655,7 +675,7 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, rules: Sequence[Rule] = R
                            ("sym_odd", lambda r: _parity(r["symbol"]) == 1),
                            ("date_early", lambda r: half is not None and str(r["snap_date"]) < half),
                            ("date_late", lambda r: half is not None and str(r["snap_date"]) >= half)):
-            sub = [r for r in done if pred(r)]
+            sub = [r for r in done if pred(r) and key in (r["outcome"].get("rules") or {})]   # Fix 360: 평가된 행만
             fired = [r["outcome"]["rules"].get(key) for r in sub]
             fired = [f for f in fired if f]
             st = _stat([f["roi"] for f in fired])
@@ -665,6 +685,8 @@ def build_report(rows: Sequence[Mapping[str, Any]], *, rules: Sequence[Rule] = R
         deltas = [cv[k]["delta"] for k in cv]
         cv["all_positive"] = bool(deltas) and all(d is not None and d > 0 for d in deltas)
         rep["cv"][key] = cv
+    from collections import Counter as _Counter
+    rep["versions"] = dict(sorted(_Counter(int((r.get("outcome") or {}).get("version") or 0) for r in done).items()))
     return rep
 
 
@@ -683,6 +705,9 @@ def render_markdown(rep: Mapping[str, Any], *, min_n: int = 15) -> str:
     L.append("잣대: 레버 2 · SL −5% ROI · TP +15% ROI · 12h. 기준선 = 같은 24h 창 안 3시간마다 1봉(무작위 진입). "
              "규칙 = 창 안 첫 충족 완성봉 종가 진입.")
     L.append("")
+    if rep.get("versions") and len(rep["versions"]) > 1:
+        L.append(f"⚠️ 라벨 버전 혼재 {rep['versions']} (매시 :20 잡이 옛 행을 재라벨 중) — 규칙 성적은 그 규칙이 평가된 행만 분모로 센다.")
+        L.append("")
     L.append("## 1. 자리별 기준선 (그 자리에 아무 때나 들어가면)")
     L.append("")
     L.append("| 자리 | n (심볼) | LONG 기준선 (승률) | SHORT 기준선 (승률) | 스냅샷 즉시 L / S | 정점까지(중앙 h) · 정점 % · 정점 뒤 12h 낙폭 | 저점까지 · 저점 % · 저점 뒤 12h 반등 |")
