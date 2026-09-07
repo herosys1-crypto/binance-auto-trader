@@ -540,7 +540,7 @@ for k,v in db.execute(text(\"select key, left(value,60) from system_settings ord
 | `excluded_symbols` | 행 없음 → 코드 기본 목록 적용 | Fix 303 BTC/ETH 11종 제외가 코드 기본으로 작동 |
 | `auto_bb_breakdown_enabled` | **0 (OFF)** | v224 통합으로 스케줄러에서도 주석 처리됨 (`scheduler_runner.py:307-318`) |
 | `unified_entry_enabled` | **0 (OFF)** | 🚨 v224 「유일한 진입」으로 만들어 놓고 꺼져 있다 |
-| `success_pyramiding_enabled` | 0 (OFF) | Fix 213 사고 이후 |
+| `success_pyramiding_enabled` | ~~0 (OFF)~~ **죽은 키** | 🚨 2026-09-07 정정: 워커는 이 키를 **읽지 않는다**(코드 0곳). 실제 스위치는 `sajangnim_pyramid_enabled`(행 없음 = **ON**) — 피라미딩은 8/23 이후에도 계속 켜져 있었다. 행 삭제 예정(DAY_02 §11.1) |
 | `support_breakdown_short_enabled` | 0 (OFF) | |
 | `surge_ladder_mode` | `shadow` | 실 진입 안 함 |
 | `whitelist_enabled` | false | |

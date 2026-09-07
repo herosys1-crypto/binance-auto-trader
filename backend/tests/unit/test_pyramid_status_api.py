@@ -28,17 +28,36 @@ def test_endpoint_exists():
 
 
 def test_uses_the_real_constant_names():
-    """🚨 상수명을 틀리면 런타임에 ImportError 로 화면이 죽는다.
+    """🚨 이름을 틀리면 런타임에 ImportError 로 화면이 죽는다.
 
-    실제 이름은 MIN_UNREALIZED_ROI_PCT 이다 (ROI_TRIGGER_PCT 가 아니다).
+    🎯 Fix 359 (2026-09-07): 화면은 더 이상 상수 MIN_UNREALIZED_ROI_PCT 를 트리거로 쓰지 않는다 —
+    엔진과 같은 DB 행(_trigger_roi) · 같은 마크가격(_get_mark_price) · 같은 게이트(_min_move_pct, _allowed_sides).
+    (하드코딩 5.0 을 보여주는 동안 엔진은 행 값 2 로 돌고 있었다 — 반박 검증에서 잡힘.)
     """
     from app.workers.success_pyramiding_worker import (
-        MAX_PYRAMID_COUNT, MIN_UNREALIZED_ROI_PCT, _cap_loss_enabled, _get_pyramid_count,
+        MAX_PYRAMID_COUNT, MIN_UNREALIZED_ROI_PCT, _allowed_sides, _cap_loss_enabled,
+        _get_mark_price, _get_pyramid_count, _min_move_pct, _trigger_roi,
     )
     assert float(MIN_UNREALIZED_ROI_PCT) == 5.0
     assert MAX_PYRAMID_COUNT == 2
-    assert callable(_get_pyramid_count) and callable(_cap_loss_enabled)
-    assert "MIN_UNREALIZED_ROI_PCT as _TRIG" in _src()
+    for fn in (_get_pyramid_count, _cap_loss_enabled, _trigger_roi, _get_mark_price, _min_move_pct, _allowed_sides):
+        assert callable(fn)
+    src = _src()
+    assert "MIN_UNREALIZED_ROI_PCT as _TRIG" not in src, "Fix 359: 트리거를 상수로 보여주면 안 된다"
+    assert "_TRIG = float(_trigger_roi(db))" in src
+    assert "_MIN_MOVE = float(_min_move_pct(db))" in src
+    assert "mp = _get_mark_price(s.symbol)" in src
+
+
+def test_gate_order_matches_worker():
+    """Fix 359: 화면의 차단 사유 순서 = 워커 순서 (상한 → ROI 트리거 → 방향 → 최소 이동 → 자격)."""
+    src = _src()
+    i = src.index('@router.get("/pyramid-status")')
+    body = src[i:]
+    order = [body.index(t) for t in ('"maxed"', '"below"', '"side"', '"below_move"', '"ready"')]
+    assert order == sorted(order), "게이트 순서가 워커와 다르다"
+    assert "roi = price_pct * _lev" in body, "ROI 식이 워커(가격% × 레버리지)와 다르다"
+    assert '"trigger_source"' in body and '"min_move_pct"' in body
 
 
 def test_imports_sqlalchemy_locally():

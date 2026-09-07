@@ -1599,10 +1599,20 @@ def pyramid_status(db: Session = Depends(get_db)) -> dict:
 
     from app.workers.success_pyramiding_worker import (
         MAX_PYRAMID_COUNT,
-        MIN_UNREALIZED_ROI_PCT as _TRIG,
+        _allowed_sides,
         _cap_loss_enabled,
+        _get_mark_price,
         _get_pyramid_count,
+        _min_move_pct,
+        _trigger_roi,
     )
+    # 🎯 Fix 359 (2026-09-07): 이 화면은 트리거를 **하드코딩 상수 5.0** 으로 보여줬고(엔진은 DB 행
+    #   sajangnim_pyramid_trigger_roi 를 읽는다 — 당시 2), ROI 식도 워커와 달랐다(unrealized/total_capital —
+    #   total_capital 은 추가로만 커지고 부분손절에도 안 줄어 ROI 가 과소). 반박 검증(14 에이전트)에서 잡힘.
+    #   → 워커와 **같은 소스·같은 식·같은 게이트 순서**(트리거 → 방향 → 최소 이동)로 맞춘다. 표시 전용, 매매 판정 변경 없음.
+    _TRIG = float(_trigger_roi(db))
+    _MIN_MOVE = float(_min_move_pct(db))
+    _SIDES = {str(x).upper() for x in _allowed_sides(db)}
 
     rows = db.execute(
         select(StrategyInstance)
@@ -1611,29 +1621,52 @@ def pyramid_status(db: Session = Depends(get_db)) -> dict:
     ).scalars().all()
 
     items = []
-    ready = maxed = below = 0
+    ready = maxed = below = below_move = side_blocked = 0
     for s in rows:
         try:
             cap = float(s.total_capital or 0)
-            roi = (float(s.unrealized_pnl or 0) / cap * 100) if cap > 0 else None
+            upnl = float(s.unrealized_pnl or 0)
+            # Fix 359: 워커(success_pyramiding_worker `roi_pct = price_pct * _lev`)와 같은 식 — 평단·Redis 마크·레버리지.
+            avg = float(s.avg_entry_price or 0)
+            mp = _get_mark_price(s.symbol)
+            price_pct = roi = None
+            try:
+                _lev = float(s.leverage or 1) or 1.0
+            except Exception:
+                _lev = 1.0
+            if avg > 0 and mp is not None:
+                if str(s.side).upper() == "LONG":
+                    price_pct = (float(mp) - avg) / avg * 100
+                else:
+                    price_pct = (avg - float(mp)) / avg * 100
+                roi = price_pct * _lev
             used = _get_pyramid_count(s.id)
             if used >= MAX_PYRAMID_COUNT:
                 why, cls = f"상한 도달 ({used}/{MAX_PYRAMID_COUNT})", "maxed"
                 maxed += 1
             elif roi is None:
-                why, cls = "ROI 계산 불가 (자본 0)", "unknown"
-            elif roi < float(_TRIG):
-                why, cls = f"ROI {roi:.2f}% < 트리거 {float(_TRIG):.1f}%", "below"
+                why, cls = "ROI 계산 불가 (평단 또는 마크가격 없음)", "unknown"
+            elif roi < _TRIG:
+                why, cls = f"ROI {roi:.2f}% < 트리거 {_TRIG:.1f}%", "below"
                 below += 1
+            elif str(s.side).upper() not in _SIDES:
+                why, cls = f"방향 {s.side} 추가 비허용 (pyramid_sides={','.join(sorted(_SIDES))})", "side"
+                side_blocked += 1
+            elif price_pct < _MIN_MOVE:
+                why, cls = f"유리 이동 {price_pct:.2f}% < 최소 {_MIN_MOVE:.1f}% (Fix 348)", "below_move"
+                below_move += 1
             else:
-                why, cls = "추가 자격 충족", "ready"
+                why, cls = "추가 자격 충족 (지표 게이트·지속 판정은 워커가 봉 기준으로 판단)", "ready"
                 ready += 1
             items.append({
                 "strategy_id": s.id, "symbol": s.symbol, "side": s.side,
                 "status": s.status, "capital": cap,
-                "unrealized_pnl": float(s.unrealized_pnl or 0),
-                "roi_pct": roi, "trigger_pct": float(_TRIG),
-                "gap_pct": (None if roi is None else round(float(_TRIG) - roi, 2)),
+                "unrealized_pnl": upnl,
+                "roi_pct": (round(roi, 2) if roi is not None else None),
+                "price_move_pct": (round(price_pct, 2) if price_pct is not None else None),
+                "leverage": _lev,
+                "trigger_pct": _TRIG, "min_move_pct": _MIN_MOVE,
+                "gap_pct": (None if roi is None else round(_TRIG - roi, 2)),
                 "pyramid_used": used, "pyramid_max": MAX_PYRAMID_COUNT,
                 "force_sl_roi": (
                     float(s.force_sl_roi_override)
@@ -1671,7 +1704,10 @@ def pyramid_status(db: Session = Depends(get_db)) -> dict:
     return {
         "summary": {
             "active": len(rows), "ready": ready, "maxed": maxed, "below_trigger": below,
-            "trigger_pct": float(_TRIG), "max_per_position": MAX_PYRAMID_COUNT,
+            "below_move": below_move, "side_blocked": side_blocked,
+            "trigger_pct": _TRIG, "min_move_pct": _MIN_MOVE, "sides": sorted(_SIDES),
+            "trigger_source": "system_settings.sajangnim_pyramid_trigger_roi (행 없음 = 코드 기본)",   # Fix 359
+            "max_per_position": MAX_PYRAMID_COUNT,
             "cap_loss_enabled": _cap_loss_enabled(db),   # Fix 269
         },
         "items": items,
