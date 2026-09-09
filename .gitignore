@@ -108,3 +108,33 @@ sync-from-office.ps1
 # 배치 실행기 상태/산출물 (Fix 292)
 tools/batch/.state/
 docs/batch-out/
+
+# Ruflo local secrets and runtime data
+.env.local
+.env.*.local
+.claude-flow/data/
+.claude-flow/logs/
+.claude-flow/sessions/
+
+# Ruflo 로컬 런타임 (공개 저장소 — DB·세션·신경망 파일은 올리지 않는다)
+.swarm/
+.claude-flow/neural/
+.claude-flow/*.db
+.claude-flow/**/*.db
+.hive-mind/
+
+# Ruflo 런타임 상태 파일
+.claude-flow/daemon-state.json
+.claude-flow/harness-active-policy.json
+.claude-flow/*.lock
+# Ruflo: .claude-flow 는 설정 4개만 추적, 나머지는 로컬 런타임
+.claude-flow/*
+!.claude-flow/config.yaml
+!.claude-flow/CAPABILITIES.md
+!.claude-flow/.gitignore
+!.claude-flow/memory-package.json
+# Ruflo 데몬이 만드는 로컬 파일
+ruvector.db
+ruvector.db-*
+.claude/proven-config.json
+.claude/.proven-config-version
