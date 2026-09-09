@@ -89,6 +89,21 @@ def _bool_setting(db: Any, key: str, default: bool) -> bool:
     return default if v is None else v.lower() in ("1", "true", "on", "yes")
 
 
+def _float_setting(db: Any, key: str, default: float, lo: float, hi: float) -> float:
+    v = _setting(db, key)
+    try:
+        f = float(v) if v is not None else float(default)
+    except (TypeError, ValueError):
+        f = float(default)
+    return f if lo <= f <= hi else float(default)
+
+
+ENGINE_VERSION_KEY = "paper_engine_version"     # Fix 366: 엔진 버전이 바뀌면 백필 커서를 0 으로 되돌려 옛 행을 갱신한다
+UPGRADE_PER_SYMBOL = 20                          # 실시간 CLOSED 옛 행 재계산 상한(심볼·사이클당, Claude가 정함)
+BREADTH_REDIS_KEY = "market:breadth"
+BREADTH_SETTING_KEY = "market_breadth_last"
+
+
 def _int_setting(db: Any, key: str, default: int, lo: int, hi: int) -> int:
     v = _setting(db, key)
     try:
@@ -149,6 +164,11 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
         # rets={} — 다일 순위는 자체 계산하지 않는다(속도 우선). 3·5일 태그는 아래서 학습 일지로 병합.
         uni = CL.tag_universe(chg, qv, {}, n=n, min_quote_volume=MIN_QUOTE_VOLUME)
         daily = _daily_tags(db)
+        # Fix 366 ⑦: 시장 국면 = 거래량 문턱 넘는 심볼 중 24h 상승 비율
+        breadth = PT.market_breadth(chg, qv, min_quote_volume=MIN_QUOTE_VOLUME)
+        mtag = PT.breadth_tag(breadth, up=_float_setting(db, "paper_breadth_up", PT.BREADTH_UP, 0.5, 1.0),
+                              down=_float_setting(db, "paper_breadth_down", PT.BREADTH_DOWN, 0.0, 0.5))
+        _publish_breadth(db, breadth, mtag)
 
         open_syms = set(db.execute(select(PaperTrade.symbol).where(PaperTrade.status == "OPEN")).scalars())
         process_symbols = sorted(set(uni) | open_syms)
@@ -159,11 +179,12 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
         now = datetime.now(timezone.utc)
         now_ms = _now_ms()
         opened = managed = closed = processed = 0
+        upgraded = upgrade_skipped = 0
         fails = 0
         for sym in process_symbols:
             try:
                 k15 = CL.compact(_klines(bc, symbol=sym, interval="15m", limit=262), now_ms=now_ms)
-                k4 = CL.compact(_klines(bc, symbol=sym, interval="4h", limit=62), now_ms=now_ms, interval_ms=CL.MS_4H)
+                k4 = CL.compact(_klines(bc, symbol=sym, interval="4h", limit=82), now_ms=now_ms, interval_ms=CL.MS_4H)   # Fix 366b: 게이트 재현 80봉
                 fails = 0
             except Exception as e:  # noqa: BLE001
                 if sym not in uni:
@@ -195,6 +216,13 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                 continue
             j = len(k15) - 1
 
+            # Fix 366: 엔진 v2 이전에 닫힌 실시간 행은 창(262봉) 안이면 다시 계산해 새 엔진 값을 채운다
+            try:
+                _u, _uskip = _upgrade_closed_live_rows(db, PaperTrade, sym, series)
+                upgraded += _u
+                upgrade_skipped += _uskip
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[%s] %s 옛 행 재계산 실패 (무시): %s", FIX, sym, e)
             open_rows = db.execute(
                 select(PaperTrade).where(PaperTrade.symbol == sym, PaperTrade.status == "OPEN")
             ).scalars().all()
@@ -219,6 +247,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                 row.bars_seen = res["bars_seen"]
                 row.mfe = round(float(res["mfe"]), 4)
                 row.mae = round(float(res["mae"]), 4)
+                row.version = PT.VERSION                    # Fix 366b: 엔진 값이 지금 버전으로 다시 계산됐다
                 managed += 1
                 if res["status"] == "CLOSED":
                     row.status = "CLOSED"
@@ -234,7 +263,8 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
             except Exception as e:  # noqa: BLE001
                 logger.warning("[%s] %s 규칙 평가 실패 → 신규 진입 없음: %s", FIX, sym, e)
                 fired = {}
-            tags = sorted(set(uni.get(sym, {}).get("tags") or []) | set(daily.get(sym, {}).get("tags") or []))
+            tags = sorted(set(uni.get(sym, {}).get("tags") or []) | set(daily.get(sym, {}).get("tags") or [])
+                          | ({mtag} if mtag else set()))
             chg24 = chg.get(sym)
             chg3 = daily.get(sym, {}).get("chg_3d")
             chg5 = daily.get(sym, {}).get("chg_5d")
@@ -247,6 +277,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                 try:
                     t = PT.open_trade(symbol=sym, side=side, rule=key, series=series, j=j, tags=tags,
                                       chg_24h=chg24, chg_3d=chg3, chg_5d=chg5, source="live", fired=fired)
+                    t["snapshot"]["market_breadth"] = breadth
                 except Exception as e:  # noqa: BLE001
                     logger.warning("[%s] %s/%s 가상 진입 기록 실패 → 건너뜀: %s", FIX, sym, key, e)
                     continue
@@ -278,13 +309,15 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                 logger.warning("[%s] 백필 실패 (무시): %s", FIX, e)
 
         res: dict[str, Any] = {"at": now.isoformat(), "symbols": len(process_symbols), "opened": opened,
-                               "managed": managed, "closed": closed, "seconds": round(time.time() - t0, 1)}
+                               "managed": managed, "closed": closed, "seconds": round(time.time() - t0, 1),
+                               "breadth": breadth, "regime": mtag, "engine_version": PT.VERSION,
+                               "upgraded": upgraded, "upgrade_skipped": upgrade_skipped}
         if backfill_res is not None:
             res["backfill"] = backfill_res
         _store_cycle_summary(res)
         # 🚨 할 일이 0건이어도 한 줄 남긴다 — 침묵을 고장으로 착각하지 않게 (Fix 353 교훈).
-        logger.info("[%s] 가상매매: 감시 %d · 열림 %d · 관리 %d · 마감 %d · %.0fs",
-                    FIX, res["symbols"], opened, managed, closed, res["seconds"])
+        logger.info("[%s] 가상매매: 감시 %d · 열림 %d · 관리 %d · 마감 %d · 옛행갱신 %d(창밖 %d) · 국면 %s(%s) · %.0fs",
+                    FIX, res["symbols"], opened, managed, closed, upgraded, upgrade_skipped, mtag, breadth, res["seconds"])
         return res
     finally:
         db.close()
@@ -327,9 +360,64 @@ def _close_unavailable(db: Any, sym: str, now: datetime, why: str) -> int:
     return len(rows)
 
 
+def _publish_breadth(db: Any, breadth: float | None, tag: str | None) -> None:
+    """Fix 366 ⑦: 국면을 Redis(1h) 와 system_settings 에 남긴다 — 나중에 실코드 방향 게이트가 읽을 자리."""
+    payload = json.dumps({"at": datetime.now(timezone.utc).isoformat(), "breadth": breadth, "tag": tag}, ensure_ascii=False)
+    try:
+        from app.core.redis_client import get_redis_client
+        get_redis_client().setex(BREADTH_REDIS_KEY, 3600, payload)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[%s] breadth redis 저장 실패 (무시): %s", FIX, e)
+    try:
+        _set_setting(db, BREADTH_SETTING_KEY, payload)
+        db.commit()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[%s] breadth 설정 저장 실패 (무시): %s", FIX, e)
+        db.rollback()
+
+
+def _upgrade_closed_live_rows(db: Any, PaperTrade, sym: str, series: "PT.Series") -> tuple[int, int]:
+    """Fix 366: 엔진 버전이 낮은 실시간 CLOSED 행을 현재 봉 창으로 다시 계산. 창 밖(gap)은 건너뛰고 버전만 그대로 둔다."""
+    rows = db.execute(
+        select(PaperTrade).where(PaperTrade.symbol == sym, PaperTrade.source == "live",
+                                 PaperTrade.status == "CLOSED", PaperTrade.version < PT.VERSION)
+        .order_by(PaperTrade.id.desc()).limit(UPGRADE_PER_SYMBOL)
+    ).scalars().all()
+    n = skipped = 0
+    for row in rows:
+        trade_map = {"side": row.side, "entry_price": float(row.entry_price), "entry_bar_ts": int(row.entry_bar_ts),
+                     "tp1_pct": float(row.tp1_pct) if row.tp1_pct is not None else None,
+                     "chg_24h": float(row.chg_24h) if row.chg_24h is not None else None}
+        res = PT.manage_trade(trade_map, series)
+        if res.get("engines") is None:                    # 진입 봉이 창 밖 = 여기선 못 고친다 (백필 경로가 CLOSED 행을 갱신)
+            skipped += 1
+            continue
+        row.engines, row.adds = res["engines"], res["adds"]
+        row.bars_seen = res["bars_seen"]
+        row.mfe, row.mae = round(float(res["mfe"]), 4), round(float(res["mae"]), 4)
+        if res["status"] == "OPEN":
+            # Fix 366b (C2/C7): 새 엔진(TP1 15·손절 10/15)이 아직 안 끝남 → 검열로 못 박지 않고 version 1 유지, 다음 사이클 재시도
+            #   (진입이 창 안이면 48h 안에 반드시 끝난다)
+            continue
+        row.close_reason = res["close_reason"]
+        _xb = int(res.get("exit_bars") or 0)
+        if _xb > 0:
+            row.closed_at = row.opened_at + timedelta(minutes=15 * _xb)
+        row.version = PT.VERSION
+        n += 1
+    return n, skipped
+
+
 def backfill_from_journal(db: Any, *, limit_rows: int = 300) -> dict[str, Any]:
     from app.models.paper_trade import PaperTrade
 
+    # Fix 366: 엔진 버전이 올라가면 커서를 0 으로 — 옛 백필 행을 새 엔진 값으로 갱신(on_conflict_do_update, version 조건)
+    if (_setting(db, ENGINE_VERSION_KEY) or "") != str(PT.VERSION):
+        _set_setting(db, CURSOR_KEY, "0")
+        _set_setting(db, DONE_KEY, "0")
+        _set_setting(db, ENGINE_VERSION_KEY, str(PT.VERSION))
+        db.commit()
+        logger.info("[%s] 엔진 v%d — 백필 커서 리셋 (옛 행 갱신 시작)", FIX, PT.VERSION)
     last_id = int(_setting(db, CURSOR_KEY) or "0")
     rows = db.execute(
         select(ChartLearningDay)
@@ -376,7 +464,16 @@ def backfill_from_journal(db: Any, *, limit_rows: int = 300) -> dict[str, Any]:
                 snapshot=t.get("snapshot"), engines=t.get("engines"), adds=t.get("adds"),
                 bars_seen=t.get("bars_seen") or 0, mfe=t.get("mfe"), mae=t.get("mae"),
                 version=t.get("version", PT.VERSION),
-            ).on_conflict_do_nothing(index_elements=["symbol", "rule", "entry_bar_ts"])
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["symbol", "rule", "entry_bar_ts"],
+                set_={"engines": stmt.excluded.engines, "adds": stmt.excluded.adds, "tp1_pct": stmt.excluded.tp1_pct,
+                      "close_reason": stmt.excluded.close_reason, "closed_at": stmt.excluded.closed_at,
+                      "tags": stmt.excluded.tags, "snapshot": stmt.excluded.snapshot,
+                      "bars_seen": stmt.excluded.bars_seen, "mfe": stmt.excluded.mfe, "mae": stmt.excluded.mae,
+                      "version": stmt.excluded.version},
+                where=((PaperTrade.version < PT.VERSION) & (PaperTrade.status == "CLOSED")),   # Fix 366b: 옛 엔진의 CLOSED 행만 갱신 (열린 실시간 행은 관리 루프가)
+            )
             result = db.execute(stmt)
             if result.rowcount:
                 inserted += 1
@@ -412,7 +509,7 @@ def build_report_from_db(db: Any, days: int = 60) -> dict[str, Any]:
     rows = db.execute(
         select(PaperTrade).where(PaperTrade.status == "CLOSED", PaperTrade.opened_at >= cutoff)
     ).scalars().all()
-    trades = [{"status": r.status, "engines": r.engines, "adds": r.adds, "rule": r.rule, "side": r.side,
+    trades = [{"status": r.status, "engines": r.engines, "adds": r.adds, "rule": r.rule, "side": r.side, "version": r.version,
               "symbol": r.symbol, "tags": r.tags, "source": r.source,
               "opened_at": r.opened_at.isoformat() if r.opened_at else None} for r in rows]
     return PT.build_report(trades)

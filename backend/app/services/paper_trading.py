@@ -38,7 +38,7 @@ from app.services.chart_learning import (
 logger = logging.getLogger(__name__)
 
 FIX = "Fix361"
-VERSION = 1
+VERSION = 2                 # Fix 366: 엔진 v2 (live=TP1 15 고정 · live_adaptive · live_sl10/15 · 실코드 게이트 재현 · 국면 태그)
 
 # ── 숫자 (Claude 가 정함 — 설정키로 덮을 수 있다) ──────────────────────────────
 S_ENABLED = "paper_trading_enabled"            # 기본 ON
@@ -56,15 +56,24 @@ TRAIL_RETRACE = 5.0         # 트레일링 되돌림 %p (TRAILING_RETRACE_PCT)
 TP1_SURGE_CHG = 15.0        # |24h| ≥ 15% → TP1 15 (adaptive_tp 기본)
 TP1_SURGE = 15.0
 TP1_CALM = 3.0
+TP1_FLAT = 15.0             # Fix 366: 실코드는 TP1 15 (strategy_service TP1_PCT_DEFAULT). 적응 TP(adaptive_tp) 는 배선돼 있지만 기본 OFF 이고
+                            #   켜져도 사다리(stages_count>1, Fix 343) 는 제외라 지금 운영 경로는 전부 15. 이 가정이 깨지면 live 엔진 정의를 바꿔야 한다.
+SL_VARIANTS = (10.0, 15.0)  # Fix 366 ②: 손절 깊이 변형 (사장님 「손절 −10/−15 가 나은지 측정」) — Claude가 정함
+ENGINES = ("house", "live", "live_adaptive", "live_sl10", "live_sl15")
+LIVE_LIKE = ("live", "live_adaptive", "live_sl10", "live_sl15")     # Fix 366b: 엔진 간 비교는 이 넷이 **모두 끝난** 건(짝 표본)으로만
+ENGINE_TP1 = {"live": TP1_FLAT, "live_sl10": TP1_FLAT, "live_sl15": TP1_FLAT}   # 저장된 값이 이와 다르면(v1 적응 TP 3) 그 엔진 통계에서 뺀다
+RECOMMEND_ENGINES = ("house", "live")                                 # 채택 제안은 잣대 둘만 — 변형 엔진은 진단(variants)으로
+BREADTH_UP = 0.60           # Fix 366 ⑦: 상위 거래량 심볼 중 24h 상승 비율 ≥ 0.60 = MKT_UP (Claude가 정함, 설정 paper_breadth_up)
+BREADTH_DOWN = 0.40         # ≤ 0.40 = MKT_DOWN (설정 paper_breadth_down)
 ADD_TRIGGER_ROI = 5.0       # sajangnim_pyramid_trigger_roi (2026-09-07 사장님 적용값)
 ADD_MIN_MOVE = 3.0          # pyramid_min_move_pct
 ADD_MAX = 2                 # MAX_PYRAMID_COUNT
 ADD_MAX_RETRACE = 2.5       # 정점 되돌림 허용 (가격 %)
-ADD_COOLDOWN_BARS = 1
+ADD_COOLDOWN_BARS = 0       # Fix 366 ⑤: 실코드 추가 쿨다운 5분(success_pyramiding COOLDOWN_SECONDS) = 다음 15m 봉부터 가능
 BASELINE_EVERY = 12         # 3h 마다 기준선 진입
 VARIANTS = ("live", "live_both", "after_tp1", "body", "noind")
 BASELINE_KEYS = {"baseline_LONG": "LONG", "baseline_SHORT": "SHORT"}
-GROUP_KEYS = ("ALL", "UP24", "DOWN24", "UP35_DOWN24")
+GROUP_KEYS = ("ALL", "UP24", "DOWN24", "UP35_DOWN24", "MKT_UP", "MKT_DOWN", "LIVE_OK")   # Fix 366: 국면 2 + 실코드 게이트 통과
 ADOPT_MIN_N = 100
 
 
@@ -77,7 +86,86 @@ def group_of(tags: Sequence[str]) -> list[str]:
         g.append("DOWN24")
     if "DOWN" in t and (t & {"UP3D", "UP5D"}):
         g.append("UP35_DOWN24")
+    if "MKT_UP" in t:
+        g.append("MKT_UP")
+    if "MKT_DOWN" in t:
+        g.append("MKT_DOWN")
+    if "LIVE_OK" in t:
+        g.append("LIVE_OK")
     return g
+
+
+def market_breadth(chg24: Mapping[str, float], qvol: Mapping[str, float], *, min_quote_volume: float) -> float | None:
+    """Fix 366 ⑦: 거래량 문턱을 넘는 USDT 심볼 중 24h 상승(>0) 비율. 심볼이 20개 미만이면 None (판정 보류)."""
+    syms = [s for s, q in qvol.items() if q is not None and float(q) >= float(min_quote_volume) and chg24.get(s) is not None]
+    if len(syms) < 20:
+        return None
+    up = sum(1 for s in syms if float(chg24[s]) > 0)
+    return round(up / len(syms), 4)
+
+
+def breadth_tag(breadth: float | None, *, up: float = BREADTH_UP, down: float = BREADTH_DOWN) -> str | None:
+    if breadth is None:
+        return None
+    if breadth >= up:
+        return "MKT_UP"
+    if breadth <= down:
+        return "MKT_DOWN"
+    return "MKT_FLAT"
+
+
+def live_gate_replay(series: "Series", j: int, side: str, symbol: str) -> dict[str, Any]:
+    """Fix 366 ⑤: 실코드가 이 진입을 실제로 잡았을지 — auto_short_at_top / stage_entry_signal 이 confirm_peak 앞뒤에 거는 게이트를
+    j 봉까지의 봉으로 다시 돌린다 (obv_gate · pump_dump_regime(SHORT) · Fix 350 1h hist 하락 skip(SHORT)). 실코드처럼 오류는 통과(fail-open).
+    반환 {"obv": bool|None, "regime": bool|None, "h1": bool|None, "all": bool}."""
+    out: dict[str, Any] = {"obv": None, "regime": None, "h1": None, "surge_veto": None}
+    _quiet = ("app.services.obv_gate", "app.services.pump_dump_regime", "app.services.trend_4h_gate",
+              "app.services.chart_analyzer", "app.services.momentum_phase")
+    _saved = {name: logging.getLogger(name).level for name in _quiet}
+    for name in _quiet:                                   # 재현 호출은 건당 로그를 남기지 않는다 (백필 수천 건)
+        logging.getLogger(name).setLevel(logging.ERROR)
+    try:
+        import dataclasses
+        from app.services.chart_learning import _BarsClient
+        ctx = series.ctx(j)
+        # C14: obv_gate 는 실코드처럼 4h 80봉 위에서 정규화한다 (RuleCtx 의 60봉은 일지 규칙용이라 건드리지 않음)
+        n4 = bisect.bisect_right(series.close4h, int(series.allk[j][0]) + MS_15M)
+        gate_ctx = dataclasses.replace(ctx, kl4h=series.k4h[max(0, n4 - 79):n4])
+        bc = _BarsClient(gate_ctx)
+        tag = f"_learn_paper_{j}_{int(series.allk[j][0])}"      # `_learn_` 접두사 = ChartAnalyzer 가 Redis 캐시를 건너뛴다 (Fix 356 규약)
+        assert tag.startswith("_learn_")
+        try:
+            from app.services.obv_gate import check_obv_gate
+            ok, _why = check_obv_gate(bc, tag, side)
+            out["obv"] = bool(ok)
+        except Exception:  # noqa: BLE001
+            out["obv"] = None
+        try:
+            from app.services.pump_dump_regime import is_regime_blocked_for_long, is_regime_blocked_for_short
+            blocked, _why = (is_regime_blocked_for_short if side == "SHORT" else is_regime_blocked_for_long)(bc, tag)
+            out["regime"] = not bool(blocked)
+        except Exception:  # noqa: BLE001
+            out["regime"] = None
+        if side == "SHORT":
+            try:
+                from app.services.trend_4h_gate import check_hist_rising
+                down1h, _d = check_hist_rising(bc, tag, "SHORT", "1h", use_completed=True, min_bars=2)
+                out["h1"] = not (down1h is True)
+            except Exception:  # noqa: BLE001
+                out["h1"] = None
+            try:                                              # C10: Fix 346 급등 초입이면 SHORT 거부 (기본 ON)
+                from app.services.momentum_phase import classify_surge_start
+                ss_ok, _d = classify_surge_start(list(series.c[max(0, j - 119):j + 1]), list(series.v[max(0, j - 119):j + 1]))
+                out["surge_veto"] = not bool(ss_ok)
+            except Exception:  # noqa: BLE001
+                out["surge_veto"] = None
+    except Exception as e:  # noqa: BLE001
+        out["error"] = str(e)[:120]
+    finally:
+        for name, lvl in _saved.items():
+            logging.getLogger(name).setLevel(lvl)
+    out["all"] = all(v is not False for k, v in out.items() if k in ("obv", "regime", "h1", "surge_veto"))
+    return out
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -149,6 +237,7 @@ class _Variant:
     name: str
     lots: list[_Lot] = field(default_factory=list)
     last_add_bar: int = -99
+    anchor: float = 0.0                          # Fix 366b: 실코드는 추가 뒤 **합산 평단** 기준으로 ROI≥5·이동≥3% 를 다시 잰다
 
     def open_lots(self) -> list[_Lot]:
         return [x for x in self.lots if x.exit_kind is None]
@@ -159,7 +248,7 @@ def _variant_allows(name: str, side: str, *, roi_c: float, move: float, accel: b
     if roi_c < ADD_TRIGGER_ROI or move < ADD_MIN_MOVE or not retrace_ok:
         return False
     if name == "live":
-        return side == "SHORT" and accel
+        return side == "LONG" and accel          # Fix 366b: 실코드 pyramid_sides=LONG (사장님 9/10 결정)
     if name == "live_both":
         return accel
     if name == "after_tp1":
@@ -177,7 +266,7 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
                   horizon: int = LIVE_HORIZON, variants: Sequence[str] = VARIANTS,
                   sl_roi: float = LIVE_SL_ROI) -> dict[str, Any]:
     """진입 뒤 완성봉 `bars` 로 실매매 청산 규칙을 근사한다. 판정 순서(한 봉 안): 손절 → TP1 → 트레일링(직전 봉까지의 최고 기준)
-    → 시간 만료. 추가 lot 은 봉 **종가**에서 열고, 자기 손절(−5% ROI) 또는 본 포지션 청산과 함께 닫힌다.
+    → 시간 만료. 추가 lot 은 봉 **종가**에서 열고, 자기 손절(`sl_roi`, 기본 −25% ROI) 또는 본 포지션 청산과 함께 닫힌다.
     `hist[hist_off + i]` = i 번째 봉의 MACD hist. `body_fn(i)` = i 번째 봉까지의 몸통 성장 판정. 봉이 모자라면 done=False."""
     long = side == "LONG"
     sl_price = price_at_roi(side, entry, -abs(float(sl_roi)))
@@ -192,7 +281,7 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
     exit_kind: str | None = None
     exit_bar: int | None = None
     exit_price: float | None = None
-    vs = {name: _Variant(name) for name in variants}
+    vs = {name: _Variant(name, anchor=entry) for name in variants}
     n = 0
 
     def _close_lots(i: int, price: float, kind: str) -> None:
@@ -254,10 +343,15 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
         for v in vs.values():
             if len(v.lots) >= ADD_MAX or i - v.last_add_bar <= ADD_COOLDOWN_BARS:
                 continue
-            if _variant_allows(v.name, side, roi_c=roi_c, move=move, accel=accel, tp1_hit=tp1_hit,
+            # Fix 366b (C11): 두 번째 lot 은 합산 평단(10 + 300·n) 기준 ROI·이동으로 판정 — 첫 진입가 기준이면 다음 봉에 바로 또 붙는다
+            roi_v = roi_of(side, v.anchor, c)
+            move_v = ((c / v.anchor - 1.0) if long else (1.0 - c / v.anchor)) * 100.0
+            if _variant_allows(v.name, side, roi_c=roi_v, move=move_v, accel=accel, tp1_hit=tp1_hit,
                                body_ok=body_ok, retrace_ok=retrace <= ADD_MAX_RETRACE):
                 v.lots.append(_Lot(v.name, len(v.lots) + 1, i, c, roi_c))
                 v.last_add_bar = i
+                _w = BASE_USDT + LOT_USDT * len(v.lots)
+                v.anchor = (BASE_USDT * entry + LOT_USDT * sum(x.price for x in v.lots)) / _w
         if i == horizon - 1:
             realized += remaining * roi_c
             exit_kind, exit_bar, exit_price = "TIME", i, c
@@ -375,11 +469,17 @@ def open_trade(*, symbol: str, side: str, rule: str, series: Series, j: int, tag
                fired: Mapping[str, bool]) -> dict[str, Any]:
     bar = series.allk[j]
     entry = float(bar[4])
+    tags = list(tags)
+    snap = entry_snapshot(series, j, side, chg_24h=chg_24h, tags=tags, fired=fired)
+    gates = live_gate_replay(series, j, side, symbol)            # Fix 366 ⑤: 실코드 게이트 재현
+    snap["live_gates"] = gates
+    if gates.get("all") and "LIVE_OK" not in tags:
+        tags.append("LIVE_OK")
     return {
-        "source": source, "symbol": symbol, "side": side, "rule": rule, "tags": list(tags),
+        "source": source, "symbol": symbol, "side": side, "rule": rule, "tags": tags,
         "chg_24h": chg_24h, "chg_3d": chg_3d, "chg_5d": chg_5d,
         "entry_bar_ts": int(bar[0]), "entry_price": entry, "tp1_pct": tp1_for(chg_24h),
-        "snapshot": entry_snapshot(series, j, side, chg_24h=chg_24h, tags=tags, fired=fired),
+        "snapshot": snap,
         "status": "OPEN", "version": VERSION,
     }
 
@@ -403,27 +503,43 @@ def manage_trade(trade: Mapping[str, Any], series: Series) -> dict[str, Any]:
     else:
         after = series.allk[j + 1:]
     house = run_house(side, entry, after)
-    tp1 = float(trade.get("tp1_pct") or tp1_for(trade.get("chg_24h")))
+    tp1_adaptive = float(trade.get("tp1_pct") or tp1_for(trade.get("chg_24h")))
     body_fn = None
     if j is not None:
         from app.services import candle_battle as CB
 
         def body_fn(i: int, _j: int = j) -> bool | None:      # i 번째 후속 봉까지의 몸통 성장
             return bool(CB.body_growth(series.allk[:_j + 2 + i], side, CB.DEFAULT_CFG)[0])
-    live = run_live_like(side, entry, after, tp1_pct=tp1, hist=series.hist if j is not None else None,
-                         hist_off=(j + 1) if j is not None else 0, body_fn=body_fn)
+    _hist = series.hist if j is not None else None
+    _off = (j + 1) if j is not None else 0
+    # Fix 366: live = 실코드 그대로(TP1 15 고정 · 손절 −25) — 추가 변형은 이 엔진 위에서만 센다
+    live = run_live_like(side, entry, after, tp1_pct=TP1_FLAT, hist=_hist, hist_off=_off, body_fn=body_fn)
     adds = live.pop("adds")
-    done = house["done"] and live["done"]
-    exit_bars = max(int(house.get("bars") or 0) if house["done"] else 0,
-                    (int(live["exit_bar"]) + 1) if live["done"] and live.get("exit_bar") is not None else 0)
+    # 변형: 적응 TP(3/15) · 손절 −10 · 손절 −15 (추가 lot 없음 = 계산량 절약)
+    live_adaptive = run_live_like(side, entry, after, tp1_pct=tp1_adaptive, hist=_hist, hist_off=_off, variants=())
+    live_adaptive.pop("adds", None)
+    engines: dict[str, Any] = {"house": house, "live": live, "live_adaptive": live_adaptive}
+    for _sl in SL_VARIANTS:
+        e = run_live_like(side, entry, after, tp1_pct=TP1_FLAT, hist=_hist, hist_off=_off, variants=(), sl_roi=_sl)
+        e.pop("adds", None)
+        engines[f"live_sl{int(_sl)}"] = e
+    done = all(bool(e.get("done")) for e in engines.values())
+    exit_bars = 0
+    for name, e in engines.items():
+        if not e.get("done"):
+            continue
+        if name == "house":
+            exit_bars = max(exit_bars, int(e.get("bars") or 0))
+        elif e.get("exit_bar") is not None:
+            exit_bars = max(exit_bars, int(e["exit_bar"]) + 1)
     return {
         "status": "CLOSED" if done else "OPEN",
-        "engines": {"house": house, "live": live},
+        "engines": engines,
         "adds": adds,
         "bars_seen": len(after),
         "exit_bars": exit_bars,                  # Fix 361b: 마지막 엔진이 끝난 봉(진입 뒤 n 번째) → closed_at 산정
-        "mfe": max(float(house.get("mfe") or 0), float(live.get("mfe") or 0)),
-        "mae": max(float(house.get("mae") or 0), float(live.get("mae") or 0)),
+        "mfe": max(float(e.get("mfe") or 0) for e in engines.values()),
+        "mae": max(float(e.get("mae") or 0) for e in engines.values()),
         "close_reason": (f"house={house['hit']} live={live['hit']}" if done else None),
     }
 
@@ -461,8 +577,9 @@ def backfill_row(*, symbol: str, pre15: Sequence[Sequence[float]], pre4h: Sequen
                 t["status"] = "CLOSED"
                 t["close_reason"] = "END_OF_DATA"
                 # Fix 361b: live 엔진(48h)은 일지 창(144봉)에 못 담긴다 → **검열(censored)** 표식. 보고서는 live 통계에서 뺀다.
-                if t.get("engines") and not t["engines"]["live"].get("done"):
-                    t["engines"]["live"]["hit"] = "END_OF_DATA"
+                for _en, _ev in (t.get("engines") or {}).items():
+                    if _en != "house" and not _ev.get("done"):
+                        _ev["hit"] = "END_OF_DATA"
             out.append(t)
             if key in pending:
                 del pending[key]
@@ -517,19 +634,38 @@ def build_report(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     rule_side = {r.key: r.side for r in RULES}
     rule_side.update(BASELINE_KEYS)
 
+    def _engine_ok(t, engine) -> bool:
+        """Fix 366b: house 는 자기 완결만. live 계열은 **넷이 모두 끝난 건**(짝 표본, C1)이고 저장된 TP1 이 정의와 같은 것(C3)만."""
+        e = (t.get("engines") or {}).get(engine)
+        if not e or e.get("roi") is None:
+            return False
+        if engine == "house":
+            return bool(e.get("done", True))
+        exp_tp1 = ENGINE_TP1.get(engine)
+        if exp_tp1 is not None and e.get("tp1_pct") is not None and float(e["tp1_pct"]) != float(exp_tp1):
+            return False                                                  # v1 적응 TP(3) 로 계산된 live 는 다른 정의 → 제외
+        present = [x for x in LIVE_LIKE if x in t["engines"]]            # v1 행은 live 만 있다 → 그 하나만 끝나면 된다
+        return all(bool((t["engines"].get(x) or {}).get("done", True)) for x in present)
+
     def _items(pred, engine):
-        # Fix 361b: 끝까지 간 결과만 (live 엔진의 END_OF_DATA 검열 표본은 제외 — 백필/실시간 비교 가능성)
         return [(t["symbol"], str(t.get("opened_at") or t.get("entry_bar_ts")), float(t["engines"][engine]["roi"]))
-                for t in closed if pred(t) and t["engines"].get(engine) and t["engines"][engine].get("roi") is not None
-                and t["engines"][engine].get("done", True)]
+                for t in closed if pred(t) and _engine_ok(t, engine)]
     rep["censored_live"] = sum(1 for t in closed if t["engines"].get("live") and not t["engines"]["live"].get("done", True))
+    rep["censored"] = {eng: sum(1 for t in closed if t["engines"].get(eng) is not None and not t["engines"][eng].get("done", True))
+                       for eng in ENGINES}
+    rep["paired_n"] = sum(1 for t in closed
+                          if all(bool((t["engines"].get(x) or {}).get("done", True)) for x in LIVE_LIKE if x in t["engines"]))
+    rep["versions"] = {"v2": sum(1 for t in closed if "live_adaptive" in (t.get("engines") or {})),
+                       "v1": sum(1 for t in closed if "live_adaptive" not in (t.get("engines") or {}))}
+    rep["recommend"]["variants"] = []
+    rep["recommend"]["hypotheses"] = (len(rule_side) - len(BASELINE_KEYS)) * len(GROUP_KEYS) * len(ENGINES)
 
     for key in list(rule_side):
         side = rule_side[key]
         rep["rules"][key] = {"side": side, "groups": {}}
         for g in GROUP_KEYS:
             gg: dict[str, Any] = {}
-            for eng in ("house", "live"):
+            for eng in ENGINES:
                 it = _items(lambda t: t["rule"] == key and g in group_of(t.get("tags") or []), eng)
                 bs = _items(lambda t: t["rule"] == f"baseline_{side}" and g in group_of(t.get("tags") or []), eng)
                 st = _stat([r for _, _, r in it])
@@ -539,14 +675,14 @@ def build_report(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 st["cv"] = _cv(it, bs)
                 st["hits"] = {}
                 for t in closed:
-                    if t["rule"] == key and g in group_of(t.get("tags") or []):
-                        hk = str(t["engines"].get(eng, {}).get("hit"))
+                    if t["rule"] == key and g in group_of(t.get("tags") or []) and t["engines"].get(eng):
+                        hk = str(t["engines"][eng].get("hit"))
                         st["hits"][hk] = st["hits"].get(hk, 0) + 1
                 gg[eng] = st
                 if (key not in BASELINE_KEYS and st["n"] >= ADOPT_MIN_N and st["delta"] is not None
                         and st["delta"] > 0 and st["cv"].get("all_positive")):
-                    rep["recommend"]["entries"].append({"rule": key, "side": side, "group": g, "engine": eng,
-                                                        "n": st["n"], "mean": st["mean"], "delta": st["delta"]})
+                    _rec = {"rule": key, "side": side, "group": g, "engine": eng, "n": st["n"], "mean": st["mean"], "delta": st["delta"]}
+                    (rep["recommend"]["entries"] if eng in RECOMMEND_ENGINES else rep["recommend"]["variants"]).append(_rec)
             rep["rules"][key]["groups"][g] = gg
 
     # 추가 변형: lot 단위 (실매매 추가 188건 포렌식과 같은 귀속 = lot 자체의 ROI/USDT)
@@ -586,14 +722,22 @@ def render_markdown(rep: Mapping[str, Any], *, min_n: int = 15) -> str:
     L.append(f"# 가상 매매 학습 보고서 (Fix 361) — 가상 포지션 {rep.get('n')}건 "
              f"(실시간 {rep.get('sources', {}).get('live', 0)} / 백필 {rep.get('sources', {}).get('backfill', 0)})")
     p = rep.get("period") or {}
-    L.append(f"기간 {p.get('from')} ~ {p.get('to')}. 잣대: 레버 2 · house = SL −5%/TP +15%/12h · live = SL −{LIVE_SL_ROI:g}% → TP1(3/15%) 25% → "
-             f"트레일링 5%p → 48h. 추가 lot 300 USDT, 자기 손절 −{LIVE_SL_ROI:g}%. CV = 심볼 홀짝 × 시간 반쪽. 채택 = CV 4/4 · n≥{ADOPT_MIN_N} · Δ>0.")
+    L.append(f"기간 {p.get('from')} ~ {p.get('to')}. 잣대: 레버 2 · house = SL −5%/TP +15%/12h · live = 실코드 그대로(SL −{LIVE_SL_ROI:g}% → "
+             f"TP1 {TP1_FLAT:g}% 25% → 트레일링 5%p → 48h) · live_adaptive = TP1 3/15%(|24h|) · live_sl10/sl15 = 손절 −10/−15. "
+             f"추가 lot 300 USDT(live 위), 자기 손절 −{LIVE_SL_ROI:g}%. 자리: UP24/DOWN24/UP35_DOWN24 + MKT_UP/MKT_DOWN(시장 국면, 9/10 부터) + "
+             f"LIVE_OK(실코드 게이트 통과). CV = 심볼 홀짝 × 시간 반쪽. 채택 = CV 4/4 · n≥{ADOPT_MIN_N} · Δ>0.")
     L.append("")
-    if rep.get("censored_live"):
-        L.append(f"⚠️ live 엔진 검열 표본 {rep['censored_live']}건(백필 창 144봉 < 48h) 은 live 통계·채택에서 제외. house 엔진은 전부 완결.")
+    if rep.get("censored"):
+        _c = rep["censored"]
+        L.append(f"⚠️ 엔진 간 비교는 **짝 표본**(live 계열 넷이 모두 끝난 {rep.get('paired_n', 0)}건)으로만 센다 — 백필 창(144봉 < 48h)에서 "
+                 f"엔진마다 검열이 달라 따로 세면 손절 깊이 비교가 왜곡된다. 검열 수: " + ", ".join(f"{k} {v}" for k, v in _c.items()) + ".")
+        _v = rep.get("versions") or {}
+        if _v.get("v1"):
+            L.append(f"ℹ️ 엔진 v1 행 {_v['v1']}건은 갱신 전(live 는 TP1 15 로 계산된 것만 셈) · v2 행 {_v.get('v2', 0)}건.")
         L.append("")
     rec = rep.get("recommend") or {}
-    L.append("## 0. 지금 채택 문턱을 넘는 것 (실 운영 재개 시 켤 후보)")
+    L.append(f"## 0. 지금 채택 문턱을 넘는 것 (실 운영 재개 시 켤 후보) — 잣대 house·live 만. 가설 {rec.get('hypotheses', '?')}개 중 "
+             f"통과 {len(rec.get('entries') or []) + len(rec.get('variants') or [])}개(변형 엔진 {len(rec.get('variants') or [])}개는 아래 진단)")
     if rec.get("entries"):
         for e in rec["entries"]:
             L.append(f"- 진입 **{e['rule']}** {e['side']} · {e['group']} · {e['engine']}: n={e['n']} 평균 {_f(e['mean'])} Δ{_f(e['delta'])}")
@@ -604,8 +748,10 @@ def render_markdown(rep: Mapping[str, Any], *, min_n: int = 15) -> str:
             L.append(f"- 추가 **{a['variant']}** {a['side']}: lot n={a['n']} 평균 {_f(a['mean'])} 합 {_f(a['pnl_usdt'])} USDT")
     else:
         L.append("- 추가: 아직 없음")
+    if rec.get("variants"):
+        L.append("- 변형 엔진 진단(채택 아님): " + " · ".join(f"{e['rule']} {e['side']} {e['group']} {e['engine']} Δ{_f(e['delta'])}" for e in rec["variants"][:12]))
     L.append("")
-    for eng in ("house", "live"):
+    for eng in ENGINES:
         L.append(f"## 진입 규칙 — {eng} 엔진 (자리별 · n≥{min_n}만 표시)")
         L.append("| 규칙 | 방향 | 자리 | n | 평균 ROI | 승률 | 기준선 | Δ | CV(짝/홀/전/후) | 종료 |")
         L.append("|---|---|---|---:|---:|---:|---:|---:|---|---|")
@@ -633,6 +779,6 @@ def render_markdown(rep: Mapping[str, Any], *, min_n: int = 15) -> str:
             br = ", ".join(f"{k} {v['n']}:{_f(v['mean'])}" for k, v in (st.get("by_rule") or {}).items() if v.get("n"))
             L.append(f"| {var} | {side} | {st['n']} | {_f(st['mean'])} | {_f(st.get('win'), 1)}% | {_f(st.get('pnl_usdt'))} | {cvs} | {br} |")
     L.append("")
-    L.append("변형: live = 현행(SHORT·ROI≥5·이동≥3%·15m hist 3봉 가속) / live_both = LONG 허용 / after_tp1 = 익절 뒤에만 / "
-             "body = +캔들 몸통(G3A) / noind = 지표 조건 없음.")
+    L.append("변형: live = 현행(LONG 만·ROI≥5·이동≥3%·15m hist 3봉 가속, 두 번째 lot 은 합산 평단 기준) / live_both = 양방향 / "
+             "after_tp1 = 익절 뒤에만 / body = +캔들 몸통(G3A) / noind = 지표 조건 없음.")
     return "\n".join(L)

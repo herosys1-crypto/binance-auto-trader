@@ -158,14 +158,15 @@ def test_봉이_모자라면_미완이다():
 # 추가(피라미딩) lot — ROI≥5 · 이동≥3% · 가속 · 최대 2회 · 쿨다운 1봉 · 되돌림≤2.5%
 # ══════════════════════════════════════════════════════════════════════
 
-def test_추가_lot_은_ROI5_이동3_가속에서_열리고_최대2회_쿨다운1봉():
+def test_추가_lot_은_ROI5_이동3_가속에서_열리고_최대2회_쿨다운1봉(monkeypatch):
+    monkeypatch.setattr(PT, "ADD_COOLDOWN_BARS", 1)      # Fix 366 기본은 0(다음 봉) — 이 테스트는 쿨다운 1봉 논리를 본다
     entry = 100.0
     hist = [20.0 - 2 * i for i in range(7)]     # 단조 하락 → idx≥3 이면 항상 SHORT 가속(True)
     closes = [99.0, 97.0, 95.0, 90.0, 85.0, 80.0, 75.0]
     bars = [_bar(0, c + 0.5, c + 1.0, c - 1.0, c) for c in closes]
     r = PT.run_live_like("SHORT", entry, bars, tp1_pct=500.0, hist=hist, hist_off=0,
-                         horizon=7, variants=("live",), sl_roi=PT.LIVE_SL_ROI)
-    adds = r["adds"]["live"]
+                         horizon=7, variants=("live_both",), sl_roi=PT.LIVE_SL_ROI)   # Fix 366b: live = LONG 만 → SHORT 는 live_both 로 본다
+    adds = r["adds"]["live_both"]
     assert [a["bar"] for a in adds] == [3, 5]           # i=4 는 직전 추가(3) + 1봉 쿨다운에 걸려 건너뜀
     assert [a["price"] for a in adds] == [90.0, 80.0]
     assert [a["roi_at_add"] for a in adds] == [pytest.approx(20.0), pytest.approx(40.0)]
@@ -179,31 +180,33 @@ def test_추가_lot_은_idx가_3_미만이면_가속_판정_전에_열리지_않
     closes = [90.0, 80.0, 70.0]                 # ROI·이동은 이미 문턱을 넘지만
     bars = [_bar(0, c + 0.5, c + 1.0, c - 1.0, c) for c in closes]
     r = PT.run_live_like("SHORT", entry, bars, tp1_pct=500.0, hist=hist, hist_off=0,
-                         horizon=3, variants=("live",))
-    assert r["adds"]["live"] == []
+                         horizon=3, variants=("live_both",))
+    assert r["adds"]["live_both"] == []
 
 
-def test_live_변형은_LONG에서_추가하지_않는다_live_both만_허용():
+def test_live_변형은_LONG_만_추가하고_SHORT는_live_both만_허용():
+    """Fix 366b: 실코드 pyramid_sides=LONG (사장님 9/10) → live 변형 = LONG 만, live_both = 양방향."""
     entry = 100.0
-    hist = [-20.0 + 2 * i for i in range(5)]    # 단조 상승 → idx≥3 이면 LONG 가속 True
-    closes = [101.0, 103.0, 106.0, 110.0, 115.0]
-    bars = [_bar(0, c - 1.0, c + 1.0, c - 0.5, c) for c in closes]
-    r = PT.run_live_like("LONG", entry, bars, tp1_pct=500.0, hist=hist, hist_off=0,
+    hist = [20.0 - 2 * i for i in range(5)]     # 단조 하락 → SHORT 가속 True
+    closes = [99.0, 97.0, 94.0, 90.0, 85.0]
+    bars = [_bar(0, c + 1.0, c + 1.0, c - 0.5, c) for c in closes]
+    r = PT.run_live_like("SHORT", entry, bars, tp1_pct=500.0, hist=hist, hist_off=0,
                          horizon=5, variants=("live", "live_both"))
-    assert r["adds"]["live"] == []                       # live = SHORT 전용
+    assert r["adds"]["live"] == []                       # live = LONG 전용
     assert len(r["adds"]["live_both"]) >= 1               # live_both = 양방향 허용
 
 
-def test_되돌림_2점5퍼_초과면_추가하지_않는다():
+def test_되돌림_2점5퍼_초과면_추가하지_않는다(monkeypatch):
+    monkeypatch.setattr(PT, "ADD_COOLDOWN_BARS", 1)      # Fix 366: 쿨다운 1봉 가정의 시나리오
     """bar3 추가 → bar4 는 쿨다운(직전+1봉) → bar5 는 쿨다운은 풀렸지만 정점(90) 대비 되돌림 5.6% > 2.5% 로 보류
-    → bar6 에서 신저점(88) 을 다시 찍어 되돌림 0%(문턱 통과)이 되면서 두 번째 추가가 열린다."""
+    → bar6 에서 신저점(85) 을 다시 찍어 되돌림 0%(문턱 통과)이 되면서 두 번째 추가가 열린다."""
     entry = 100.0
     hist = [20.0 - 2 * i for i in range(7)]                    # 단조 하락 → idx≥3 이면 항상 SHORT 가속
-    closes = [99.0, 97.0, 95.0, 90.0, 90.5, 95.0, 88.0]
+    closes = [99.0, 97.0, 95.0, 90.0, 90.5, 95.0, 85.0]      # Fix 366b: 두 번째 lot 은 합산 평단(≈90.3) 기준 3% 이동이 필요 → 85
     bars = [_bar(0, c + 0.5, c + 1.0, c - 1.0, c) for c in closes]
     r = PT.run_live_like("SHORT", entry, bars, tp1_pct=500.0, hist=hist, hist_off=0,
-                         horizon=7, variants=("live",))
-    fired_bars = [a["bar"] for a in r["adds"]["live"]]
+                         horizon=7, variants=("live_both",))
+    fired_bars = [a["bar"] for a in r["adds"]["live_both"]]
     assert fired_bars == [3, 6], "bar4(쿨다운)·bar5(되돌림 5.6%>2.5%) 는 막히고 bar3·bar6 만 추가돼야 한다"
 
 

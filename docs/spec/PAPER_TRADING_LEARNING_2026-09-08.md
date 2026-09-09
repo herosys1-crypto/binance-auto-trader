@@ -143,3 +143,19 @@ python -m app.workers.paper_trading_worker once   # 컨테이너 안에서 즉�
 - 사장님이 9/7 19:14 UTC 에 `sajangnim_top_short_daily_limit=0`(v219 정점 SHORT·저점 LONG 공용 캡)·`pump_split_enabled=0` 을 넣어 주력 진입은 이미 차단.
 - 남아 있던 경로: 재진입 워커(`sajangnim_reentry_daily_limit=10`, 전용 슬롯이라 캡 0 과 무관) · 중단선 가족(`bb_mid_line_mode=on`) · 예약 진입(`scheduled_entry_enabled=1`) · 열린 사다리 6개의 2·3단계(`sajangnim_ladder_stages_enabled=1`).
 - 지시 반영 = `sajangnim_reentry_daily_limit=1` · `bb_mid_line_mode=off` · `scheduled_entry_enabled=0` (사장님 실행). 사다리 2·3단계는 기존 포지션 관리라 유지(멈추려면 `sajangnim_ladder_stages_enabled=0`).
+
+## Fix 366 — 엔진 v2 (2026-09-10, 사장님 「2·5·7 진행하고 1번 롱만」)
+8일 보고(27,911건)에서 배운 것: ① 출구 구조가 최대 레버(이긴 건 +3.5~4.0, 진 건 −25 → 손절율 13~14% 가 손익분기) ② SHORT 추가 lot 은 전 변형 음수·LONG 추가는 양수(CV 4/4) → 사장님 결정 `pyramid_sides=LONG` ③ SHORT 진입은 confirm_peak_111 만 양 엔진·전 자리 통과 ④ LONG 은 bottom_331 / multiday_rebound_352(UP24) / surge_start_346(DOWN24) 채택, pullback_331·l1_hist_turn_up 은 무작위보다 못함 ⑤ 국면이 하루 만에 뒤집힘.
+
+엔진 v2 (`VERSION = 2`):
+| 엔진 | 규칙 | 목적 |
+|---|---|---|
+| house | SL −5 / TP +15 / 12h | 옛 잣대(유지) |
+| live | **TP1 15 고정** · SL −25 · TP1 25% · 트레일링 5%p · 48h | 실코드 그대로 (배선된 진입 경로는 전부 TP1 15; adaptive_tp 는 미배선 경로만) |
+| live_adaptive | TP1 3/15(|24h|) | 적응 TP 를 실코드에 배선할지 결정할 근거 |
+| live_sl10 / live_sl15 | SL −10 / −15 | 손절 깊이 결정 근거 |
+추가 변형(live/live_both/after_tp1/body/noind)은 live 엔진 위에서만. 추가 간격 = 다음 봉(실코드 5분).
+
+자리(그룹) 추가: **MKT_UP / MKT_DOWN** = 거래량 5M 이상 USDT 심볼 중 24h 상승 비율 ≥0.60 / ≤0.40 (Claude가 정함, 설정 `paper_breadth_up`/`paper_breadth_down`; 9/10 부터 실시간 행에만 붙음, Redis `market:breadth`·설정 `market_breadth_last` 에도 저장 = 나중에 실코드 방향 게이트가 읽을 자리). **LIVE_OK** = 실코드 게이트(obv_gate · regime(SHORT) · Fix 350 1h 하락 skip(SHORT))를 그 봉에서 다시 돌려 통과한 진입 — 「실코드가 실제로 잡았을 것」의 부분집합 근사(급등 초입 거부·blocklist·슬롯·일일 한도는 미반영).
+
+옛 행 갱신: 백필은 엔진 버전이 바뀌면 커서를 0 으로 되돌려 다시 걷고 `on_conflict_do_update(where version < 2)` 로 갱신(≈11 사이클). 실시간 CLOSED 행은 봉 창(262봉) 안이면 심볼당 20건/사이클 재계산. 창 밖 옛 행은 v1 그대로(보고서는 엔진별로 있는 값만 센다).
