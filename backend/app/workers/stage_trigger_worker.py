@@ -1073,6 +1073,8 @@ def run_stage_trigger_once(decrypt_text) -> None:
                             #   차단이 아니라 모드라 배지는 쓰지 않는다 (화면 「🧭 관리 심볼」 카드가 모드를 보여준다)
                             _sig_why = f"{_probe_why365} — 손실 구간 단계 진입 없음"
                             logger.debug("[stage-trigger Fix365] #%s %s", strategy.id, _sig_why)
+                            _clear_block_reason(_redis, strategy.id)      # 옛 배지 정리 — 모드는 「🧭 관리 심볼」 카드가 보여준다
+                            continue                                       # 아래 「Fix173 OBV 대기」 배지·15초 INFO 로그를 타지 않는다
                         elif _obv_stage_cooldown_active(_redis, strategy.id):
                             # Fix 363b: 직전 단계 발주 뒤 15분 — 평단이 갱신되기 전에 다음 단계가 연쇄로 나가는 것을 막는다
                             _sig_why = "Fix363 보류: 직전 단계 발주 직후 체결·평단 반영 대기"

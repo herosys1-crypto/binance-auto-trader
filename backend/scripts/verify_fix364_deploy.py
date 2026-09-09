@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 import sys
 import time
@@ -266,6 +267,11 @@ def check_ops() -> None:
             if n_plans < 4:
                 print(f"        ⚠ 단계 {n_plans}개 — 「3단계 한 번 더」(4단계)가 없다. 새로 만들 때 4칸을 채운다")
             if block:
+                try:
+                    _b = json.loads(block) if isinstance(block, str) and block.strip().startswith("{") else None
+                    block = _b.get("reason") if isinstance(_b, dict) else block
+                except Exception:  # noqa: BLE001
+                    pass
                 print(f"        차단/대기 사유: {str(block)[:220]}")
             else:
                 print("        차단/대기 사유: 없음 (이익 중 대기이거나 아직 1사이클 전)")
