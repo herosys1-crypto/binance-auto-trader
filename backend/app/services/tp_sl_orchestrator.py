@@ -557,21 +557,63 @@ class TPSLOrchestratorService:
         except Exception:  # noqa: BLE001
             return self.RESIDUE_MAX_WAIT_DEFAULT
 
+    RESIDUE_CLOCK_EVENTS = ("ADD_POSITION_PRESERVE", "ADD_POSITION_TP_RESET", "FORCE_SL_PARTIAL_TRIM")
+
+    def _residue_clock_anchor(self, strategy):
+        """Fix 363b/364c: 잔량 시계의 기준 시각 = max(마지막 단계 체결, 마지막 추가(피라미딩), 마지막 부분손절).
+        추가 → −5% 부분손절 → 잔량 이 반복되는 Fix 364 루프에서 옛 RESIDUE_KEPT(24h 전) 때문에 방금 생긴 잔량이 첫 사이클에 전량 청산되던 것(C3)."""
+        from sqlalchemy import func, select
+        cands = []
+        try:
+            from app.models.strategy_stage_plan import StrategyStagePlan
+            t = self.db.execute(
+                select(func.max(StrategyStagePlan.triggered_at))
+                .where(StrategyStagePlan.strategy_instance_id == strategy.id, StrategyStagePlan.is_triggered.is_(True))
+            ).scalar()
+            if t is not None:
+                cands.append(t)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            t = self.db.execute(
+                select(func.max(RiskEvent.created_at))
+                .where(RiskEvent.strategy_instance_id == strategy.id,
+                       RiskEvent.event_type.in_(self.RESIDUE_CLOCK_EVENTS))
+            ).scalar()
+            if t is not None:
+                cands.append(t)
+        except Exception:  # noqa: BLE001
+            pass
+        if not cands:
+            return None
+        from datetime import timezone as _tz
+        cands = [c if c.tzinfo is not None else c.replace(tzinfo=_tz.utc) for c in cands]
+        return max(cands)
+
+    def _record_partial_trim(self, strategy, close_qty, keep_qty, why: str) -> None:
+        """Fix 364c: 부분손절 **실행**을 사실대로 남긴다(잔량 시계 기준 + 감사). 실패해도 손절 흐름은 계속."""
+        try:
+            self.db.add(RiskEvent(
+                strategy_instance_id=strategy.id,
+                event_type="FORCE_SL_PARTIAL_TRIM",
+                severity="WARNING",
+                title=f"✂️ 부분 손절 — #{strategy.id} {strategy.symbol} {strategy.side}: {close_qty} 청산 / {keep_qty} 잔여",
+                message=f"{why} (Fix 319/326 잔량 10 USDT 유지 · Fix 364c 잔량 시계 재기동)",
+                event_payload={"close_qty": str(close_qty), "keep_qty": str(keep_qty),
+                               "current_stage": strategy.current_stage,
+                               "force_sl_roi_override": str(getattr(strategy, "force_sl_roi_override", None))},
+            ))
+            self.db.flush()
+        except Exception as _e:  # noqa: BLE001
+            logger.debug("[Fix364c] 부분손절 이벤트 기록 실패 (무시): %s", _e)
+
     def _residue_waited_hours(self, strategy) -> float | None:
         """Fix 363: 잔량이 다음 단계를 기다린 시간 = 첫 FORCE_SL_RESIDUE_KEPT 이벤트부터. 기록이 없으면 None."""
         try:
             from datetime import datetime, timezone
             from sqlalchemy import func, select
-            # Fix 363b: 시계는 **마지막 단계 체결 이후**의 첫 RESIDUE_KEPT 부터 — 2단계가 들어갔다 다시 잔량이 되면 새로 잰다
-            since = None
-            try:
-                from app.models.strategy_stage_plan import StrategyStagePlan
-                since = self.db.execute(
-                    select(func.max(StrategyStagePlan.triggered_at))
-                    .where(StrategyStagePlan.strategy_instance_id == strategy.id, StrategyStagePlan.is_triggered.is_(True))
-                ).scalar()
-            except Exception:  # noqa: BLE001
-                since = None
+            # Fix 363b/364c: 시계는 **마지막 체결·추가·부분손절 이후**의 첫 RESIDUE_KEPT 부터 (func.max(StrategyStagePlan.triggered_at) 포함)
+            since = self._residue_clock_anchor(strategy)
             q = (select(RiskEvent.created_at)
                  .where(RiskEvent.strategy_instance_id == strategy.id,
                         RiskEvent.event_type == "FORCE_SL_RESIDUE_KEPT"))
@@ -742,6 +784,7 @@ class TPSLOrchestratorService:
                             "[Fix319] %s #%s **부분 손절**: %s 청산 / %s 잔여 — %s",
                             strategy.symbol, strategy.id, _c, _k, _why,
                         )
+                        self._record_partial_trim(strategy, _c, _k, _why)      # Fix 364c
                     elif _act == ACTION_SKIP:
                         # 🚨 Fix 326: 이미 「10 USDT 잔량」 상태다.
                         #   여기서 전량 청산하면 사장님 사양이 사라진다.
@@ -897,6 +940,7 @@ class TPSLOrchestratorService:
                             "[Fix318] %s #%s 부분 손절: %s 청산 / %s 잔여 — %s",
                             strategy.symbol, strategy.id, _c, _k, _why,
                         )
+                        self._record_partial_trim(strategy, _c, _k, _why)      # Fix 364c
                     elif _act == ACTION_SKIP:
                         # 🚨 Fix 326: 이미 잔량 수준 → 손절하지 않고 그대로 둔다.
                         # 🩸 Fix 332: 단, 다음 단계가 있을 때만 (없으면 영구 방치가 된다).

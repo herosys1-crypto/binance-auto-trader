@@ -40,11 +40,11 @@ def test_obv_roi_and_threshold_helpers():
     assert abs(W._obv_unrealized_roi_pct(s_short, Decimal("97.5")) - 5.0) < 1e-9
     assert W._obv_unrealized_roi_pct(NS(avg_entry_price=None, leverage=2, side="LONG"), 100) is None
     assert W._obv_unrealized_roi_pct(s_long, None) is None
-    assert W._obv_stage_loss_threshold(_DB(), 2) == -5.0                                # 행 없음 = −5
+    assert W._obv_stage_loss_threshold(_DB(), 2) == -1.0                                # Fix 364c: 행 없음 = −1 (스프레드 제외, Claude가 정함)
     assert W._obv_stage_loss_threshold(_DB(obv_stage2_loss_roi_pct="-3"), 2) == -3.0
     assert W._obv_stage_loss_threshold(_DB(obv_stage3_loss_roi_pct="7"), 3) == -7.0      # 양수도 손실로 해석
-    assert W._obv_stage_loss_threshold(_DB(obv_stage2_loss_roi_pct="garbage"), 2) == -5.0
-    assert W._obv_stage_loss_threshold(_DB(), 9) == -5.0                                # 키 없는 단계 = 기본
+    assert W._obv_stage_loss_threshold(_DB(obv_stage2_loss_roi_pct="garbage"), 2) == -1.0
+    assert W._obv_stage_loss_threshold(_DB(), 9) == -1.0                                # 키 없는 단계 = 기본
 
 
 def test_stage_worker_sees_post_tp_states():
@@ -150,7 +150,7 @@ def test_fix363b_cascade_guards():
     i_cool = src.find("if _obv_stage_cooldown_active(_redis, strategy.id):", i_obv)
     i_roi = src.find("elif _roi363 > _thr363:", i_cool)
     assert 0 < i_obv < i_cool < i_roi, "쿨다운·직전 체결 확인이 ROI 판정보다 먼저"
-    i_set = src.find("_obv_set_stage_cooldown(_redis, strategy.id)")
+    i_set = src.find("_obv_set_stage_cooldown(_redis, strategy.id, ")          # Fix 364: 초 인자 추가
     i_fire = src.find("exec_service.trigger_next_stage(", i_set)
     assert 0 < i_set < i_fire, "쿨다운은 발주 **전에** 설정"
     assert "if strategy.status in TP_PARTIAL_WITH_NEXT and not _is_obv_mode:" in src, "익절 뒤 상태는 OBV 만"

@@ -273,6 +273,80 @@ def _strategy_type_of(si) -> str:
 CAP_LOSS_KEY = "pyramid_cap_loss_enabled"
 
 
+AFTER_ADD_SL_KEY = "pyramid_after_add_sl_roi"        # Fix 364 (2026-09-09 사장님): 이익 구간에서 추가한 뒤 손실이면 이 ROI 에서 정리 (기본 5, 0 = 안 바꿈)
+AFTER_ADD_SL_DEFAULT = 5.0
+AFTER_ADD_SL_SCOPE_KEY = "pyramid_after_add_sl_scope"   # Fix 364b: obv(기본 — OBV 자동 인스턴스만) | all(피라미딩이 닿는 모든 인스턴스)
+
+
+def _after_add_sl_scope(db) -> str:
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, AFTER_ADD_SL_SCOPE_KEY)
+        v = (str(row.value).strip().lower() if row is not None and row.value not in (None, "") else "obv")
+        return v if v in ("obv", "all") else "obv"
+    except Exception:  # noqa: BLE001
+        return "obv"
+
+
+def _is_obv_instance(si) -> bool:
+    tpl = getattr(si, "strategy_template", None)
+    if tpl is None:
+        tpl = getattr(si, "template", None)
+    return str(getattr(tpl, "trigger_mode", "") or "").upper() == "OBV_REVERSE" if tpl is not None else False
+
+
+def _after_add_sl_roi(db) -> float:
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, AFTER_ADD_SL_KEY)
+        if row is None or row.value in (None, "") or not str(row.value).strip():
+            return AFTER_ADD_SL_DEFAULT
+        v = float(str(row.value).strip())
+        return v if 0.0 <= v <= 100.0 else AFTER_ADD_SL_DEFAULT
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Fix364] %s 조회 실패 → 기본 %.1f: %s", AFTER_ADD_SL_KEY, AFTER_ADD_SL_DEFAULT, e)
+        return AFTER_ADD_SL_DEFAULT
+
+
+def _apply_after_add_sl(db, si, tpl=None, commit: bool = True) -> float | None:
+    """Fix 364: 사장님 "진입해서 바로 수익은 포지션추가후 손실이면 -5%에서 청산하고 다시 모니터링 대기해서 다시 진입시점이 나오면 진입".
+    추가(피라미딩) 직후 인스턴스 손절 ROI 를 −5% 로 — 다음 단계가 남아 있으면 부분손절(10 USDT 잔량)로 모니터링이 이어진다(Fix 326/332).
+    0 이면 손절을 바꾸지 않는다(옛 동작).
+    Fix 364c: `tpl` 은 호출자가 **이미 로드한** 템플릿(커밋 뒤 lazy-load 로 터지던 C8), `commit=False` 면 호출자의 커밋에 얹는다(추가 기록과
+    손절이 한 트랜잭션). 래칫(Fix 269)이 켜져 있으면 더 낮은 쪽을 쓴다(C6)."""
+    try:
+        v = _after_add_sl_roi(db)
+        if v <= 0:
+            return None
+        if _after_add_sl_scope(db) != "all":
+            _t = tpl if tpl is not None else (getattr(si, "strategy_template", None) or getattr(si, "template", None))
+            if str(getattr(_t, "trigger_mode", "") or "").upper() != "OBV_REVERSE":
+                return None        # Fix 364b: 가족별 적용 — 기본은 OBV 자동 인스턴스만
+        new_v = Decimal(str(v))
+        prev = getattr(si, "force_sl_roi_override", None)
+        if prev is not None and _cap_loss_enabled(db):
+            try:
+                if Decimal(str(prev)) < new_v:
+                    logger.info("[Fix364] #%s 래칫(Fix269) ON: %s < %s → 래칫 값 유지", si.id, prev, new_v)
+                    new_v = Decimal(str(prev))
+            except Exception:  # noqa: BLE001
+                pass
+        si.force_sl_enabled_override = True
+        si.force_sl_roi_override = new_v
+        if commit:
+            db.commit()
+        logger.info("[Fix364] #%s %s 추가 뒤 손절 ROI −%s%% (이익 구간 추가 = 짧은 손절)", si.id, si.symbol, new_v)
+        return float(new_v)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Fix364] #%s 추가 뒤 손절 적용 실패 (무시): %s", getattr(si, "id", "?"), e)
+        if commit:
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+        return None
+
+
 def _cap_loss_enabled(db) -> bool:
     """🎯 Fix 363 (2026-09-09 사장님): 기본 **OFF**. 사장님 로직은 「나머지는 인스턴스 옵션(손절 −25%)으로 운영」인데
     이 래칫이 추가마다 손절 ROI 를 25→18.8→15.1 로 몰래 낮췄고(기준 자본이 계획 합 910 이라 금액도 안 맞음),
@@ -1027,6 +1101,7 @@ def run_success_pyramiding() -> dict:
                     outcome_status="PENDING",
                 )
                 db.add(sugg)
+                _apply_after_add_sl(db, si, tpl=_parent_tpl, commit=False)   # Fix 364/364c: 추가 뒤 손절 −5% — 아래 커밋에 함께 실린다
                 db.commit()
 
                 _increment_pyramid_count(si.id)            # Fix 196: 전략 단위

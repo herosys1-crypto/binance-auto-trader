@@ -1948,6 +1948,13 @@ class ExecutionService:
                         for_stage_transition=True,      # Fix 305
                     )
                     self.db.refresh(strategy)
+                    # 🔁 Fix 364c (C1): 진입 전 정리도 「부분손절 = 새 사이클」이다 — 여기서 리셋하지 않으면 새 단계가 추가(피라미딩)를 못 받는다
+                    try:
+                        from app.workers.success_pyramiding_worker import reset_pyramid_count
+                        if reset_pyramid_count(strategy.id):
+                            logger.info("[Fix338] #%s 피라미딩 카운터 리셋 (진입 전 정리 = 새 사이클)", strategy.id)
+                    except Exception as _e364:
+                        logger.debug("[Fix338] 카운터 리셋 실패 (무시): %s", _e364)
 
 
     def _assert_symbol_allowed(self, strategy) -> None:

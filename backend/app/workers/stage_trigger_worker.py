@@ -39,7 +39,9 @@ from app.core.strategy_status import STAGES_WITH_NEXT, TP_PARTIAL_WITH_NEXT
 #   「손실 → 좋은 자리에 300/600」 이 이어진다. 옛날엔 STAGES_WITH_NEXT 밖이라 잔량이 거래소 청산까지 방치됐다(#4421).
 ACTIVE_STAGE_STATUSES = STAGES_WITH_NEXT | TP_PARTIAL_WITH_NEXT
 
-OBV_STAGE_LOSS_ROI_DEFAULT = -5.0    # Fix 363: OBV 단계 진입의 손실 조건 기본 (ROI −5% = 2배에서 가격 −2.5%)
+OBV_STAGE_LOSS_ROI_DEFAULT = -1.0    # Fix 364c: 「손실 구간」= ROI ≤ −1 (2배에서 가격 −0.5%). 사장님 「손실이면 언제든」인데 체결 직후 스프레드·수수료로
+                                     #   생기는 −0.03% 까지 손실로 보면 1단계가 결정점 없이 곧바로 300 이 된다(반박 검증 C5). −1 은 Claude가 정함 —
+                                     #   `obv_stage{n}_loss_roi_pct=0` 이면 사장님 원문 그대로(손실이면 곧).
 
 
 def _obv_unrealized_roi_pct(strategy, mark) -> float | None:
@@ -58,7 +60,62 @@ def _obv_unrealized_roi_pct(strategy, mark) -> float | None:
     return pct * lev
 
 
-OBV_STAGE_COOLDOWN_SEC = 900     # Fix 363b: 단계 발주 뒤 15분(1봉) 동안 다음 단계 금지 — 평단 갱신 전 연쇄(300→600 in 15s) 방지
+OBV_STAGE_COOLDOWN_SEC = 60      # Fix 364 (사장님 "15분은 의미가 없어"): 전략 대기가 아니라 **체결·평단 반영 대기**(기본 60초, 설정 obv_stage_cooldown_sec).
+OBV_STAGE_COOLDOWN_KEY = "obv_stage_cooldown_sec"
+OBV_STAGE_SL_KEY = "obv_stage_sl_roi_pcts"          # Fix 364: 단계별 손절 ROI (양수, 단계 순) — 기본 "25,15,25,25"
+OBV_STAGE_SL_DEFAULT = "25,15,25,25"                # 1단계 25(Fix 362) · 2단계(300 뒤) 15 부분손절 · 3단계(600 뒤) 25 부분손절 · 4단계(600 한 번 더) 25 전량
+
+
+def _obv_stage_cooldown_seconds(db) -> int:
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, OBV_STAGE_COOLDOWN_KEY)
+        if row is not None and row.value not in (None, "") and str(row.value).strip():
+            v = int(float(str(row.value).strip()))
+            return v if 10 <= v <= 3600 else OBV_STAGE_COOLDOWN_SEC
+    except Exception:  # noqa: BLE001
+        pass
+    return OBV_STAGE_COOLDOWN_SEC
+
+
+def _obv_stage_sl_roi(db, stage_no: int) -> float | None:
+    """Fix 364: 단계 n 진입 뒤 적용할 손절 ROI(양수 %). 설정 `obv_stage_sl_roi_pcts` = "25,15,25,25"(단계 순, 마지막 값 이후는 마지막 값).
+    사장님 verbatim: "2단계 진입후 손실이면 -15%에서 부분손절 … 3단계 … -25% … 한번더 진입하고 손실이면 -25%에서 청산"."""
+    raw = OBV_STAGE_SL_DEFAULT
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, OBV_STAGE_SL_KEY)
+        if row is not None and row.value not in (None, "") and str(row.value).strip():
+            raw = str(row.value)
+    except Exception:  # noqa: BLE001
+        raw = OBV_STAGE_SL_DEFAULT
+    try:
+        vals = [abs(float(x)) for x in raw.replace("/", ",").split(",") if x.strip()]
+        if not vals or any(not (0.5 <= v <= 100.0) for v in vals):
+            raise ValueError(raw)
+    except Exception:  # noqa: BLE001
+        vals = [abs(float(x)) for x in OBV_STAGE_SL_DEFAULT.split(",")]
+    i = max(1, int(stage_no)) - 1
+    return vals[i] if i < len(vals) else vals[-1]
+
+
+def _apply_obv_stage_sl(db, strategy, stage_no: int) -> float | None:
+    """Fix 364: OBV 단계 발주 직후 그 단계의 손절 ROI 를 인스턴스에 적용 (부분손절/전량은 다음 단계 유무로 정해진다 — Fix 326/332)."""
+    v = _obv_stage_sl_roi(db, stage_no)
+    if v is None:
+        return None
+    try:
+        strategy.force_sl_enabled_override = True
+        strategy.force_sl_roi_override = Decimal(str(v))
+        db.commit()
+        logger.info("[Fix364] #%s 단계%s 진입 → 손절 ROI −%s%% 적용", strategy.id, stage_no, v)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Fix364] #%s 단계%s 손절 적용 실패 (무시): %s", strategy.id, stage_no, e)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+    return v
 
 
 def _obv_stage_cooldown_key(strategy_id: int) -> str:
@@ -101,7 +158,99 @@ def _obv_prev_stage_filled(db, strategy, next_stage_no: int) -> tuple[bool, str]
         return True, ""
     if not bool(getattr(plan, "is_triggered", False)):
         return False, f"직전 단계 {prev_no} 체결 대기"
+    # Fix 364c (C5): 체결 직후엔 평단·수량이 DB 에 막 반영된 상태 — 1단계(수동/시장가)는 Redis 쿨다운이 없으니 체결 시각으로 같은 대기를 준다
+    try:
+        ta = getattr(plan, "triggered_at", None)
+        if ta is not None:
+            if ta.tzinfo is None:
+                ta = ta.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - ta).total_seconds()
+            wait = _obv_stage_cooldown_seconds(db)
+            if age < wait:
+                return False, f"직전 단계 {prev_no} 체결 직후 대기 ({age:.0f}s < {wait}s)"
+    except Exception:  # noqa: BLE001
+        pass
     return True, ""
+
+
+OBV_RESIDUE_MARGIN_KEY = "obv_stage_residue_margin_max_usdt"   # Fix 364b: 3단계 이상을 보기 위한 「잔량」 상한(증거금 USDT). 기본 = 잔량 목표(10)×2 (Claude가 정함)
+
+
+def _obv_residue_margin_max(db) -> float:
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, OBV_RESIDUE_MARGIN_KEY)
+        if row is not None and row.value not in (None, "") and str(row.value).strip():
+            v = float(str(row.value).strip())
+            if 1.0 <= v <= 100000.0:
+                return v
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from app.services.stage_trim import keep_notional
+        return float(keep_notional(db)) * 2.0
+    except Exception:  # noqa: BLE001
+        return 20.0
+
+
+def _obv_pyramid_count(strategy_id: int) -> int:
+    """피라미딩(이익 구간 추가) 횟수. 조회 실패 = 1 (추가가 있었다고 보고 게이트를 건다 — fail-closed)."""
+    try:
+        from app.workers.success_pyramiding_worker import _get_pyramid_count
+        return int(_get_pyramid_count(int(strategy_id)))
+    except Exception:  # noqa: BLE001
+        return 1
+
+
+def _obv_stage1_planned_capital(db, strategy) -> float:
+    try:
+        from app.models.strategy_stage_plan import StrategyStagePlan
+        plan = db.execute(
+            select(StrategyStagePlan).where(StrategyStagePlan.strategy_instance_id == strategy.id,
+                                            StrategyStagePlan.stage_no == 1)
+        ).scalar_one_or_none()
+        return float(getattr(plan, "planned_capital", 0) or 0)
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _obv_prev_stage_stopped(db, strategy, next_stage_no: int, mark) -> tuple[bool, str]:
+    """Fix 364b/364c: 다음 단계는 **지금 포지션이 잔량(10 USDT 급)일 때만** 본다 — 사장님 흐름은 「손실이면 부분손절(10 남김) →
+    다시 모니터링 → 다음 단계」, 「추가한 뒤 손실이면 −5% 에서 정리 → 다시 모니터링 → 진입」이다. 이 게이트가 없으면
+    같은 신호로 300→600 이 1분 만에 연쇄되고(364b), 이익 구간에서 추가한 610 이 −5% 정리 전에 2단계로 갈아타며 손절이 5→15 로
+    풀린다(반박 검증 C1/C7).
+    판정 순서: ① 증거금 ≤ 잔량 상한(기본 20) → 통과 ② 2단계이고 추가(피라미딩) 0회이고 증거금 ≤ 1단계 계획×1.2 → 통과(10 이 아닌
+    1단계도 사장님 흐름대로 2단계로) ③ 그 외엔 부분손절이 쓰는 `compute_trim` 과 **같은 판정**: SKIP(더 정리할 게 없는 잔량 크기,
+    스텝·최소명목·최소비율 반영) → 통과 / TRIM → 정리 대기 / BLOCK·예외 → 보류(fail-closed). (C2/C4: 상한 20 과 정리 경계 30 사이에서
+    정리도 진입도 못 하던 구간을 없앤다.)"""
+    if int(next_stage_no) < 2:
+        return True, ""
+    try:
+        qty = abs(float(getattr(strategy, "current_position_qty", 0) or 0))
+        lev = float(getattr(strategy, "leverage", 1) or 1)
+        if mark is None or float(mark) <= 0 or lev <= 0:
+            return False, "잔량 판정 불가(마크/레버 결손)"
+        margin = qty * float(mark) / lev
+    except Exception as e:  # noqa: BLE001
+        return False, f"잔량 판정 실패: {e}"
+    cap = _obv_residue_margin_max(db)
+    if margin <= cap:
+        return True, ""
+    if int(next_stage_no) == 2 and _obv_pyramid_count(strategy.id) <= 0:
+        cap1 = _obv_stage1_planned_capital(db, strategy) * 1.2
+        if cap1 > 0 and margin <= cap1:
+            return True, ""
+    try:
+        from app.services.stage_trim import ACTION_SKIP, ACTION_TRIM, compute_trim
+        _c, _k, _why, _act = compute_trim(db, strategy.symbol, qty, mark, leverage=lev)
+    except Exception as e:  # noqa: BLE001
+        return False, f"잔량 판정 실패(compute_trim): {e}"
+    if _act == ACTION_SKIP:
+        return True, ""
+    if _act == ACTION_TRIM:
+        what = "추가(피라미딩)분" if int(next_stage_no) == 2 else "직전 단계"
+        return False, f"{what} 정리 대기 (증거금 {margin:.1f} USDT > 잔량 — 손절선에서 10 USDT 남기고 부분손절 뒤 모니터링)"
+    return False, f"잔량 판정 불가: {_why}"
 
 
 def _obv_stage_loss_threshold(db, stage_no: int) -> float:
@@ -912,13 +1061,18 @@ def run_stage_trigger_once(decrypt_text) -> None:
                         _roi363 = _obv_unrealized_roi_pct(strategy, mark)
                         _thr363 = _obv_stage_loss_threshold(db, next_stage_no)
                         _prev_ok363, _prev_why363 = _obv_prev_stage_filled(db, strategy, next_stage_no)
+                        _stopped_ok364, _stopped_why364 = _obv_prev_stage_stopped(db, strategy, next_stage_no, mark)
                         _sig_ok = False
                         if _obv_stage_cooldown_active(_redis, strategy.id):
                             # Fix 363b: 직전 단계 발주 뒤 15분 — 평단이 갱신되기 전에 다음 단계가 연쇄로 나가는 것을 막는다
-                            _sig_why = "Fix363 보류: 직전 단계 발주 뒤 쿨다운(15분)"
+                            _sig_why = "Fix363 보류: 직전 단계 발주 직후 체결·평단 반영 대기"
                             _record_block_reason(_redis, strategy.id, _sig_why, next_stage_no)
                         elif not _prev_ok363:
                             _sig_why = f"Fix363 보류: {_prev_why363}"
+                            _record_block_reason(_redis, strategy.id, _sig_why, next_stage_no)
+                        elif not _stopped_ok364:
+                            # Fix 364b: 3단계 이상 = 직전 단계가 부분손절로 정리된 뒤(잔량)에만 — 같은 신호 연쇄 방지
+                            _sig_why = f"Fix364 보류: {_stopped_why364}"
                             _record_block_reason(_redis, strategy.id, _sig_why, next_stage_no)
                         elif _roi363 is None:
                             _sig_why = "Fix363 보류: ROI 계산 불가(평단/마크 결손)"
@@ -1558,7 +1712,7 @@ def run_stage_trigger_once(decrypt_text) -> None:
                                     strategy.id, next_stage_no, _roi_gate363)
                         continue
                 if _is_obv_mode:
-                    _obv_set_stage_cooldown(_redis, strategy.id)      # Fix 363b: 발주 **전에** 설정 — 예외로 재시도해도 15분 안엔 다시 안 나감
+                    _obv_set_stage_cooldown(_redis, strategy.id, _obv_stage_cooldown_seconds(db))   # Fix 363b/364: 발주 **전에** 설정(체결 반영 대기)
 
                 # Fix 129: trigger 는 가격 트리거 경로에서만 정의된다 → 모드를 함께 표기
                 _fire_mode = (
@@ -1582,6 +1736,8 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     strategy.id, next_stage_no, force_market=(_ps_force_market or _is_obv_mode),
                 )
                 _stat["fired"] += 1
+                if _is_obv_mode:
+                    _apply_obv_stage_sl(db, strategy, next_stage_no)      # Fix 364: 단계별 손절(25/15/25/25)
                 # 🌟 v18 fix: 정상 진입 = block_reason 정리 (= 화면 알림 해소)
                 _clear_block_reason(_redis, strategy.id)
 

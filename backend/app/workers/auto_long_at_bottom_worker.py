@@ -1560,8 +1560,11 @@ def run_auto_long_at_bottom_once() -> dict:
                 #                        대기 모니터링" → 사장님 요구 상향 반영!
                 try:
                     new_strategy.force_sl_enabled_override = True
-                    from app.services.system_settings_service import new_strategy_force_sl_roi as _nfs362
-                    new_strategy.force_sl_roi_override = _nfs362(db)   # Fix 362: 새 진입 기본 -25% (설정)
+                    try:
+                        from app.services.system_settings_service import new_strategy_force_sl_roi as _nfs362
+                        new_strategy.force_sl_roi_override = _nfs362(db)   # Fix 362: 새 진입 기본 -25% (설정)
+                    except Exception:  # noqa: BLE001
+                        new_strategy.force_sl_roi_override = Decimal(str(LONG_FORCE_SL_ROI))   # Fix 364c: 설정 조회 실패 폴백 (죽은 상수 → 실사용)
                     db.commit()
                     logger.info(
                         "[Fix75/alert-long+Fix362] 🛡️ %s SL override -%s%% 적용 "
@@ -1875,8 +1878,11 @@ def run_auto_long_at_bottom_once() -> dict:
                 # 기존 활성 전략은 그대로! 신 진입만 -10%!
                 try:
                     new_strategy.force_sl_enabled_override = True
-                    from app.services.system_settings_service import new_strategy_force_sl_roi as _nfs362
-                    new_strategy.force_sl_roi_override = _nfs362(db)   # Fix 362: 새 진입 기본 -25% (설정)
+                    try:
+                        from app.services.system_settings_service import new_strategy_force_sl_roi as _nfs362
+                        new_strategy.force_sl_roi_override = _nfs362(db)   # Fix 362: 새 진입 기본 -25% (설정)
+                    except Exception:  # noqa: BLE001
+                        new_strategy.force_sl_roi_override = Decimal(str(LONG_FORCE_SL_ROI))   # Fix 364c: 설정 조회 실패 폴백 (죽은 상수 → 실사용)
                     db.commit()
                     logger.info(
                         "[auto_long_bottom+Fix362] 🛡️ %s SL override -%s%% 적용 (strategy_id=%s)",
