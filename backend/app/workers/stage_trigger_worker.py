@@ -34,8 +34,90 @@ logger = logging.getLogger(__name__)
 
 # 다음 stage 진입 검사 대상 상태 (stage 1~9 가 OPEN 이면 그 다음 stage 진입 검사 — 10 은 마지막).
 # 2026-05-14 Phase 1 centralize: STAGES_WITH_NEXT (app.core.strategy_status).
-from app.core.strategy_status import STAGES_WITH_NEXT
-ACTIVE_STAGE_STATUSES = STAGES_WITH_NEXT
+from app.core.strategy_status import STAGES_WITH_NEXT, TP_PARTIAL_WITH_NEXT
+# 🎯 Fix 363 (2026-09-09 사장님): 익절 뒤 상태(TP{n}_DONE_PARTIAL·TRAILING_ARMED)에서 다시 손실이 나도 단계 워커가 봐야
+#   「손실 → 좋은 자리에 300/600」 이 이어진다. 옛날엔 STAGES_WITH_NEXT 밖이라 잔량이 거래소 청산까지 방치됐다(#4421).
+ACTIVE_STAGE_STATUSES = STAGES_WITH_NEXT | TP_PARTIAL_WITH_NEXT
+
+OBV_STAGE_LOSS_ROI_DEFAULT = -5.0    # Fix 363: OBV 단계 진입의 손실 조건 기본 (ROI −5% = 2배에서 가격 −2.5%)
+
+
+def _obv_unrealized_roi_pct(strategy, mark) -> float | None:
+    """Fix 363: 인스턴스 ROI% = 가격변동률 × 레버리지 (손절·피라미딩과 같은 자). 평단/마크 결손이면 None."""
+    try:
+        avg = float(strategy.avg_entry_price or 0)
+        m = float(mark or 0)
+        lev = float(strategy.leverage or 1) or 1.0
+    except Exception:  # noqa: BLE001
+        return None
+    if avg <= 0 or m <= 0:
+        return None
+    pct = (m - avg) / avg * 100.0
+    if str(strategy.side).upper() == "SHORT":
+        pct = -pct
+    return pct * lev
+
+
+OBV_STAGE_COOLDOWN_SEC = 900     # Fix 363b: 단계 발주 뒤 15분(1봉) 동안 다음 단계 금지 — 평단 갱신 전 연쇄(300→600 in 15s) 방지
+
+
+def _obv_stage_cooldown_key(strategy_id: int) -> str:
+    return f"stage_fire_cooldown:{int(strategy_id)}"
+
+
+def _obv_stage_cooldown_active(redis_client, strategy_id: int) -> bool:
+    """Fix 363b: 쿨다운 중이면 True. Redis 가 없거나 실패하면 **보류(True)** — 실자금 연쇄보다 한 사이클 늦는 쪽이 싸다."""
+    if redis_client is None:
+        return True
+    try:
+        return bool(redis_client.get(_obv_stage_cooldown_key(strategy_id)))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _obv_set_stage_cooldown(redis_client, strategy_id: int, seconds: int = OBV_STAGE_COOLDOWN_SEC) -> None:
+    try:
+        if redis_client is not None:
+            redis_client.set(_obv_stage_cooldown_key(strategy_id), "1", ex=int(seconds))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _obv_prev_stage_filled(db, strategy, next_stage_no: int) -> tuple[bool, str]:
+    """Fix 363b: 직전 단계(next−1)가 **체결**(is_triggered)돼야 다음 단계를 본다 — 발주만으로 올라간 current_stage 위에
+    평단이 옛값인 채 다음 단계가 나가는 것을 막는다. 계획 행이 없으면(1단계 등) 통과."""
+    prev_no = int(next_stage_no) - 1
+    if prev_no < 1:
+        return True, ""
+    try:
+        from app.models.strategy_stage_plan import StrategyStagePlan
+        plan = db.execute(
+            select(StrategyStagePlan).where(StrategyStagePlan.strategy_instance_id == strategy.id,
+                                            StrategyStagePlan.stage_no == prev_no)
+        ).scalar_one_or_none()
+    except Exception as e:  # noqa: BLE001
+        return False, f"직전 단계 {prev_no} 계획 조회 실패: {e}"
+    if plan is None:
+        return True, ""
+    if not bool(getattr(plan, "is_triggered", False)):
+        return False, f"직전 단계 {prev_no} 체결 대기"
+    return True, ""
+
+
+def _obv_stage_loss_threshold(db, stage_no: int) -> float:
+    """Fix 363: 단계 n 의 손실 조건 ROI%(≤0). 전용 설정 `obv_stage{n}_loss_roi_pct`(양수로 넣어도 음수로 봄), 행 없음 = −5.
+    (옛 `auto_obv_stage{n}_trigger` 는 자동 OBV 템플릿의 **가격%** 트리거라 의미가 달라 여기서 읽지 않는다 — Fix 363b.)
+    사장님 verbatim: "손실발생시 … 이익이 가능한 포지션에서 300"."""
+    key = f"obv_stage{int(stage_no)}_loss_roi_pct"
+    v = OBV_STAGE_LOSS_ROI_DEFAULT
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, key)
+        if row is not None and row.value not in (None, "") and str(row.value).strip():
+            v = float(str(row.value).strip())
+    except Exception:  # noqa: BLE001
+        v = OBV_STAGE_LOSS_ROI_DEFAULT
+    return max(-100.0, -abs(v))
 
 
 def _count_total_stages_from_template(tpl) -> int:
@@ -463,6 +545,10 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 _is_retry_mode = strategy.status == "LIQUIDATED_WAITING_RETRY"
                 _is_obv_mode = _tpl_trigger_mode == "OBV_REVERSE"
                 _is_liqbuf_mode = _plan_mode == "LIQUIDATION_BUFFER"
+                # 🎯 Fix 363b: 익절 뒤 상태(TP{n}_DONE_PARTIAL·TRAILING_ARMED)는 **OBV 자동 인스턴스만** 단계 후보로 본다 —
+                #   가격/사다리/분할 전략은 옛 동작(익절 뒤엔 단계 안 봄) 그대로. (반박 검증: 그쪽까지 바뀌면 TP 진행이 리셋된다)
+                if strategy.status in TP_PARTIAL_WITH_NEXT and not _is_obv_mode:
+                    continue
 
                 # ══════════════════════════════════════════════════════════
                 # 🚨 Fix 209 (2026-08-30 사장님 「b」): 볼밴 분할은 남은 단계 트리거를
@@ -820,16 +906,39 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     #    현재가 기준으로 수량 재계산된다. 사장님이 입력한 금액 그대로다.
                     # ══════════════════════════════════════════════════════════
                     try:
-                        from app.integrations.binance.client import BinanceClient
-                        from app.services.stage_entry_signal import check_stage_entry_signal
-                        _bc = BinanceClient(
-                            api_key=decrypt_text(account.api_key_enc),
-                            api_secret=decrypt_text(account.api_secret_enc),
-                            is_testnet=account.is_testnet,
-                        )
-                        _sig_ok, _sig_why, _sig_det = check_stage_entry_signal(
-                            _bc, db, strategy.symbol, strategy.side,
-                        )
+                        # 🎯 Fix 363 (2026-09-09 사장님 verbatim): "손실발생시 지속모니터링중 다시 이익이 가능한 포지션에서
+                        #   300USDT 포지션 추가". 옛 코드는 손익을 안 봐서 **이익 중에도** 단계가 나가고 정리까지 했다.
+                        #   손실 조건 = 인스턴스 ROI ≤ auto_obv_stage{n}_trigger(기본 −5). 판정 불가 = 보류 + 사유.
+                        _roi363 = _obv_unrealized_roi_pct(strategy, mark)
+                        _thr363 = _obv_stage_loss_threshold(db, next_stage_no)
+                        _prev_ok363, _prev_why363 = _obv_prev_stage_filled(db, strategy, next_stage_no)
+                        _sig_ok = False
+                        if _obv_stage_cooldown_active(_redis, strategy.id):
+                            # Fix 363b: 직전 단계 발주 뒤 15분 — 평단이 갱신되기 전에 다음 단계가 연쇄로 나가는 것을 막는다
+                            _sig_why = "Fix363 보류: 직전 단계 발주 뒤 쿨다운(15분)"
+                            _record_block_reason(_redis, strategy.id, _sig_why, next_stage_no)
+                        elif not _prev_ok363:
+                            _sig_why = f"Fix363 보류: {_prev_why363}"
+                            _record_block_reason(_redis, strategy.id, _sig_why, next_stage_no)
+                        elif _roi363 is None:
+                            _sig_why = "Fix363 보류: ROI 계산 불가(평단/마크 결손)"
+                            _record_block_reason(_redis, strategy.id, _sig_why, next_stage_no)
+                        elif _roi363 > _thr363:
+                            # 이익 중/손실 얕음 = **정상 대기** — 배지(차단 사유)는 쓰지 않는다 (이기고 있는 포지션이 「차단」으로 보이면 안 된다)
+                            _sig_why = f"Fix363 대기: 손실 조건 미충족 (ROI {_roi363:+.2f}% > {_thr363:+.1f}%)"
+                            logger.debug("[stage-trigger Fix363] #%s stage%s %s", strategy.id, next_stage_no, _sig_why)
+                        else:
+                            from app.integrations.binance.client import BinanceClient
+                            from app.services.stage_entry_signal import check_stage_entry_signal
+                            _bc = BinanceClient(
+                                api_key=decrypt_text(account.api_key_enc),
+                                api_secret=decrypt_text(account.api_secret_enc),
+                                is_testnet=account.is_testnet,
+                            )
+                            _sig_ok, _sig_why, _sig_det = check_stage_entry_signal(
+                                _bc, db, strategy.symbol, strategy.side,
+                            )
+                            _sig_why = f"{_sig_why} (ROI {_roi363:+.2f}% ≤ {_thr363:+.1f}%)"
                         should_fire = _sig_ok
                         if _sig_ok:
                             logger.info(
@@ -1440,6 +1549,17 @@ def run_stage_trigger_once(decrypt_text) -> None:
                             )
                             continue
 
+                # 🎯 Fix 363b: 가격/사다리/분할 단계도 **손실 중에만** 나간다 (사장님: 2·3단계는 손실 뒤). 이익 중이면 대기 —
+                #   정리 함수가 이익 포지션을 안 자르게 된 뒤로, 이걸 안 막으면 「이긴 포지션에 600 얹기」가 된다.
+                if not _is_obv_mode and not _is_retry_mode and int(next_stage_no) >= 2:
+                    _roi_gate363 = _obv_unrealized_roi_pct(strategy, mark)
+                    if _roi_gate363 is not None and _roi_gate363 > 0:
+                        logger.info("[stage-trigger Fix363] #%s stage%s 이익 중(ROI %+.2f%%) → 단계 대기 (손실에서만)",
+                                    strategy.id, next_stage_no, _roi_gate363)
+                        continue
+                if _is_obv_mode:
+                    _obv_set_stage_cooldown(_redis, strategy.id)      # Fix 363b: 발주 **전에** 설정 — 예외로 재시도해도 15분 안엔 다시 안 나감
+
                 # Fix 129: trigger 는 가격 트리거 경로에서만 정의된다 → 모드를 함께 표기
                 _fire_mode = (
                     "RETRY(청산가)" if _is_retry_mode
@@ -1456,8 +1576,10 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 #   mark 가 trigger 반대편(되돌아온 자리)이라 LIMIT 이면 미체결인데,
                 #   current_stage 는 발주만으로 오르고 reconcile 이 2분 뒤
                 #   is_triggered=True 로 거짓 회복시켜 **자본 없이 단계만 소진**된다.
+                # 🎯 Fix 363: OBV 모드는 **신호 시점 시장가** — 옛날엔 모달이 남긴 트리거%(기본 10/20%)로 시작가 ±10/32% 지정가가
+                #   나가 좋은 자리에 신호가 떠도 호가창에 걸린 채 단계만 소진됐다(실측 2단계 3건 전부, 3단계 0건).
                 exec_service.trigger_next_stage(
-                    strategy.id, next_stage_no, force_market=_ps_force_market,
+                    strategy.id, next_stage_no, force_market=(_ps_force_market or _is_obv_mode),
                 )
                 _stat["fired"] += 1
                 # 🌟 v18 fix: 정상 진입 = block_reason 정리 (= 화면 알림 해소)

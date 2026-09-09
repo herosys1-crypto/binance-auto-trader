@@ -263,7 +263,7 @@ def test_not_wired_into_the_dead_fix55_block():
 def test_forces_market_order():
     """🚨 ⑦  LIMIT 이면 미체결인데 current_stage 는 오르고 reconcile 이
     is_triggered 를 거짓 회복시켜 **자본 없이 단계만 소진**된다."""
-    assert "force_market=_ps_force_market" in _code()
+    assert "force_market=(_ps_force_market or _is_obv_mode)" in _code()   # Fix 363: OBV 모드도 시장가
     e = EXEC.read_text(encoding="utf-8")
     assert "force_market: bool = False" in e
     assert "if stage_plan.trigger_price is None or force_market:" in e

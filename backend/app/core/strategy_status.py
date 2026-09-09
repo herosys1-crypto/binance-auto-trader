@@ -119,6 +119,12 @@ STAGES_WITH_NEXT: frozenset[str] = frozenset(
     | {"LIQUIDATED_WAITING_RETRY"}  # v131: 청산 후 재진입 대기 = stage_trigger 감시!
 )
 
+# 🎯 Fix 363 (2026-09-09 사장님): 익절 뒤(TP 부분체결·트레일링 무장) 다시 손실이 나면 다음 단계(300/600)로 이어져야 한다.
+#   stage_trigger_worker 만 이 집합을 STAGES_WITH_NEXT 에 더해 쓴다 (다른 소비처의 「활성 단계」 의미는 그대로).
+TP_PARTIAL_WITH_NEXT: frozenset[str] = frozenset(
+    {f"TP{n}_DONE_PARTIAL" for n in range(1, TOTAL_TP_LEVELS + 1)} | {"TRAILING_ARMED"}
+)
+
 
 # ===== 청산 후 재진입 대기 (v131, 2026-08-09 사장님!) =====
 # 사장님 신 사상: 1단계 청산 → 다음 단계 대기 → 트리거 도달 → 자동 진입!

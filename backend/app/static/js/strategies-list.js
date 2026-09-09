@@ -584,7 +584,10 @@ async function refreshStrategies() {
       // fallback = initial margin (Binance 데이터 없을 때!)
       const positionMargin = _bnMargin > 0 ? _bnMargin : _initialMargin;
       const positionRoi = positionMargin > 0 ? (pnlNum / positionMargin * 100) : 0;
-      const strategyRoi = sCap > 0 ? (pnlNum * sLev / sCap * 100) : 0;
+      // 🎯 Fix 363: 분모 = 실제 투입 증거금(invested_capital_computed, Fix 333-b). 계획 자본(10/300/600 합)으로 나누면 91배 과소.
+      const _investedCap = Number(s.invested_capital_computed || 0);
+      const _roiBase = _investedCap > 0 ? _investedCap : sCap;
+      const strategyRoi = _roiBase > 0 ? (pnlNum * sLev / _roiBase * 100) : 0;
       // 2026-06-05 옵션 A (사장님 사상 정확 반영):
       // total_capital = 사장님 입력 「자본」 = 마진 단위 (PR #57 SL 계산식 확정)
       //   = "투자금 대비 손실 %" 의 기준 (index.html L826 사장님 사상 명시)

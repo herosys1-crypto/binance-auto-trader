@@ -291,4 +291,4 @@ def test_정리_메서드가_하나뿐이다():
     from pathlib import Path
     src = Path(E.__file__).read_text(encoding="utf-8")
     assert src.count("def _trim_before_stage") == 1
-    assert src.count("self._trim_before_stage(strategy, stage_no)") == 2
+    assert src.count("self._trim_before_stage(strategy, stage_no") == 2   # Fix 363b: 수동 경로는 auto=False 인자

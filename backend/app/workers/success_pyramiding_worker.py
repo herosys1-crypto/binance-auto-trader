@@ -274,15 +274,18 @@ CAP_LOSS_KEY = "pyramid_cap_loss_enabled"
 
 
 def _cap_loss_enabled(db) -> bool:
+    """🎯 Fix 363 (2026-09-09 사장님): 기본 **OFF**. 사장님 로직은 「나머지는 인스턴스 옵션(손절 −25%)으로 운영」인데
+    이 래칫이 추가마다 손절 ROI 를 25→18.8→15.1 로 몰래 낮췄고(기준 자본이 계획 합 910 이라 금액도 안 맞음),
+    부분손절이 복원도 안 했다. 켜려면 SystemSetting pyramid_cap_loss_enabled = 1 (Fix 269 실측은 문서에 남김)."""
     try:
         from app.models.system_setting import SystemSetting
         row = db.get(SystemSetting, CAP_LOSS_KEY)
         if row is None or row.value is None or str(row.value).strip() == "":
-            return True                      # 기본 ON
+            return False                     # Fix 363: 기본 OFF (인스턴스 손절 옵션이 진실)
         return str(row.value).strip().lower() in ("1", "true", "on", "yes")
     except Exception as e:
-        logger.warning("[Fix269] %s 조회 실패 = ON 유지: %s", CAP_LOSS_KEY, e)
-        return True                          # fail-safe = 손실을 묶는 쪽
+        logger.warning("[Fix269] %s 조회 실패 = OFF: %s", CAP_LOSS_KEY, e)
+        return False
 
 
 # 💉 Fix 273: 피라미딩 보조지표 조건 스위치.
@@ -318,7 +321,7 @@ SETTING_AFTER_TP = "pyramid_after_tp_enabled"                 # 익절(TP 부분
 SETTING_AFTER_TP_MIN_ROOM = "pyramid_after_tp_min_trail_room_pct"   # 트레일링 청산까지 남은 ROI 여유 최소 %p, 기본 2.0
 DEFAULT_AFTER_TP_MIN_ROOM = 2.0
 MIN_MOVE_PCT_DEFAULT = 3.0
-SIDES_DEFAULT = "SHORT"
+SIDES_DEFAULT = "LONG,SHORT"     # Fix 363 (2026-09-09 사장님): 「이익 지속이면 300 최대 2번」은 방향 무관. 되돌리기 = 설정 pyramid_sides=SHORT
 
 
 def _min_move_pct(db) -> float:
@@ -391,6 +394,11 @@ def _trailing_room_pct(si, roi_pct: float) -> float | None:
         return None
 
 
+def _default_sides() -> set[str]:
+    """Fix 363: 기본 방향 문자열("LONG,SHORT")을 집합으로 — 옛 {SIDES_DEFAULT} 는 한 글자열을 원소로 넣는 버그."""
+    return {p.strip().upper() for p in SIDES_DEFAULT.split(",") if p.strip()}
+
+
 def _allowed_sides(db) -> set[str]:
     """Fix 348: 추가 허용 방향. 기본 {"SHORT"}. "LONG,SHORT" 로 둘 다. 빈 값/오류 = 기본."""
     try:
@@ -399,10 +407,10 @@ def _allowed_sides(db) -> set[str]:
         raw = SIDES_DEFAULT if (row is None or row.value is None or not str(row.value).strip()) else str(row.value)
         s = {x.strip().upper() for x in raw.replace("/", ",").split(",") if x.strip()}
         s = {x for x in s if x in ("LONG", "SHORT")}
-        return s or {SIDES_DEFAULT}
+        return s or _default_sides()
     except Exception as e:
         logger.warning("[Fix348] %s 조회 실패 = 기본 %s: %s", SETTING_SIDES, SIDES_DEFAULT, e)
-        return {SIDES_DEFAULT}
+        return _default_sides()
 
 
 def _trigger_roi(db) -> float:

@@ -77,10 +77,10 @@ def test_최소_이동_기본_3_설정_가능():
     assert W._min_move_pct(_DB(pyramid_min_move_pct="999")) == 3.0, "범위 밖은 기본"
 
 
-def test_허용_방향_기본_SHORT():
-    assert W._allowed_sides(_DB()) == {"SHORT"}
+def test_허용_방향_기본_양방향_Fix363():
+    assert W._allowed_sides(_DB()) == {"LONG", "SHORT"}   # Fix 363
     assert W._allowed_sides(_DB(pyramid_sides="LONG,SHORT")) == {"LONG", "SHORT"}
-    assert W._allowed_sides(_DB(pyramid_sides="garbage")) == {"SHORT"}
+    assert W._allowed_sides(_DB(pyramid_sides="garbage")) == {"LONG", "SHORT"}   # Fix 363: 기본 양방향
 
 
 def test_워커_배선_순서_ROI_다음에_방향_이동():

@@ -193,14 +193,14 @@ def _fn_src(name):
 def test_다음단계_주문보다_먼저_실행된다():
     """🚨 순서가 뒤바뀌면 평단이 오염된 뒤에 청산하게 된다 = 의미 없음."""
     src = _fn_src("trigger_next_stage")
-    i_trim = src.index("self._trim_before_stage(strategy, stage_no)")
+    i_trim = src.index("self._trim_before_stage(strategy, stage_no")
     i_order = src.index("order = self._place_stage_entry_order(strategy, stage_plan")
     assert i_trim < i_order
 
 
 def test_수동경로도_주문보다_먼저_정리한다():
     src = _fn_src("enter_stage_at_market")
-    assert src.index("self._trim_before_stage(strategy, stage_no)") < src.index(
+    assert src.index("self._trim_before_stage(strategy, stage_no") < src.index(
         "order = self._place_market_entry("
     )
 
@@ -335,7 +335,7 @@ def test_BLOCKER5_수동_다음단계도_정리를_거친다():
 def test_자동과_수동이_같은_코드를_쓴다():
     """두 경로가 각자 구현하면 한쪽만 고쳐지는 사고가 난다."""
     assert ESRC.count("def _trim_before_stage") == 1
-    assert ESRC.count("self._trim_before_stage(strategy, stage_no)") == 2
+    assert ESRC.count("self._trim_before_stage(strategy, stage_no") == 2   # Fix 363b: 수동 경로는 auto=False 인자
 
 
 def test_알림_쿨다운이_있다():

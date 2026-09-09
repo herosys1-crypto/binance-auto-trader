@@ -123,31 +123,28 @@ def test_pyramiding_worker_passes_cap_loss():
     assert "_cap_loss_enabled(db)" in code
 
 
-def test_default_is_on_and_failsafe_is_on():
-    """손실을 **줄이는** 방향이므로 기본 ON, 조회 실패도 ON 이어야 한다."""
-    from app.workers.success_pyramiding_worker import CAP_LOSS_KEY, _cap_loss_enabled
-
-    class _Row:
-        def __init__(self, v):
-            self.value = v
+def test_default_is_off_and_failsafe_is_off():
+    """🎯 Fix 363 (2026-09-09 사장님): 기본 **OFF** — 「나머지는 인스턴스 옵션(손절 −25%)으로 운영」.
+    Fix 269 래칫은 추가마다 손절 ROI 를 25→18.8→15.1 로 몰래 낮추고(기준 자본 = 계획 합) 부분손절이 복원도 안 했다.
+    켜려면 pyramid_cap_loss_enabled=1. (옛 테스트 이름 test_default_is_on_and_failsafe_is_on 을 대체.)"""
+    from app.workers.success_pyramiding_worker import _cap_loss_enabled
 
     class _DB:
-        def __init__(self, v=None):
-            self._v = v
+        def __init__(self, v):
+            self.v = v
 
-        def get(self, m, k):
-            return _Row(self._v) if self._v is not None else None
+        def get(self, _m, _k):
+            return None if self.v is None else type("R", (), {"value": self.v})()
 
     class _Boom:
-        def get(self, m, k):
-            raise RuntimeError("DB 끊김")
+        def get(self, *_a):
+            raise RuntimeError("db down")
 
-    assert CAP_LOSS_KEY == "pyramid_cap_loss_enabled"
-    assert _cap_loss_enabled(_DB(None)) is True          # 설정 없음 = ON
+    assert _cap_loss_enabled(_DB(None)) is False
+    assert _cap_loss_enabled(_DB("")) is False
     assert _cap_loss_enabled(_DB("1")) is True
-    assert _cap_loss_enabled(_DB("0")) is False          # 명시 OFF 존중
-    assert _cap_loss_enabled(_Boom()) is True            # 실패해도 묶는 쪽
-
+    assert _cap_loss_enabled(_DB("0")) is False
+    assert _cap_loss_enabled(_Boom()) is False
 
 def test_evidence_is_recorded():
     src = EXEC.read_text(encoding="utf-8")

@@ -543,6 +543,49 @@ class TPSLOrchestratorService:
         )
 
 
+    RESIDUE_MAX_WAIT_KEY = "stage_residue_max_wait_hours"     # Fix 363: 잔량 대기 상한 (시간), 기본 24 (Claude 가 정함)
+    RESIDUE_MAX_WAIT_DEFAULT = 24.0
+
+    def _residue_max_wait_hours(self) -> float:
+        try:
+            from app.models.system_setting import SystemSetting
+            row = self.db.get(SystemSetting, self.RESIDUE_MAX_WAIT_KEY)
+            if row is None or row.value in (None, "") or not str(row.value).strip():
+                return self.RESIDUE_MAX_WAIT_DEFAULT
+            v = float(str(row.value).strip())
+            return v if 1.0 <= v <= 720.0 else self.RESIDUE_MAX_WAIT_DEFAULT
+        except Exception:  # noqa: BLE001
+            return self.RESIDUE_MAX_WAIT_DEFAULT
+
+    def _residue_waited_hours(self, strategy) -> float | None:
+        """Fix 363: 잔량이 다음 단계를 기다린 시간 = 첫 FORCE_SL_RESIDUE_KEPT 이벤트부터. 기록이 없으면 None."""
+        try:
+            from datetime import datetime, timezone
+            from sqlalchemy import func, select
+            # Fix 363b: 시계는 **마지막 단계 체결 이후**의 첫 RESIDUE_KEPT 부터 — 2단계가 들어갔다 다시 잔량이 되면 새로 잰다
+            since = None
+            try:
+                from app.models.strategy_stage_plan import StrategyStagePlan
+                since = self.db.execute(
+                    select(func.max(StrategyStagePlan.triggered_at))
+                    .where(StrategyStagePlan.strategy_instance_id == strategy.id, StrategyStagePlan.is_triggered.is_(True))
+                ).scalar()
+            except Exception:  # noqa: BLE001
+                since = None
+            q = (select(RiskEvent.created_at)
+                 .where(RiskEvent.strategy_instance_id == strategy.id,
+                        RiskEvent.event_type == "FORCE_SL_RESIDUE_KEPT"))
+            if since is not None:
+                q = q.where(RiskEvent.created_at > since)
+            first = self.db.execute(q.order_by(RiskEvent.created_at.asc()).limit(1)).scalar()
+            if first is None:
+                return None
+            if first.tzinfo is None:
+                first = first.replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - first).total_seconds() / 3600.0
+        except Exception:  # noqa: BLE001
+            return None
+
     def _record_residue_kept(self, strategy, why: str, next_why: str) -> None:
         """Fix 357: FORCE_SL_RESIDUE_KEPT 이벤트 — 같은 전략 60분에 1건, 실패해도 매매에 영향 없음."""
         try:
@@ -705,6 +748,17 @@ class TPSLOrchestratorService:
                         # 🩸 Fix 332: 단, **다음 단계가 있을 때만** 유지한다.
                         #   없으면 그 잔량은 영원히 안 닫혀 손절이 사라진다.
                         _nx, _nxwhy = self._has_next_stage(strategy)
+                        # 🎯 Fix 363: 잔량 대기가 상한(stage_residue_max_wait_hours, 기본 24h)을 넘으면 「다음 단계 없음」으로 보고
+                        #   전량 손절 — 신호가 영영 안 오면 거래소 청산까지 방치되던 것(#4421 SOPH: 7시간 2단계 0회, 청산 경보 5회).
+                        if _nx:
+                            _waited363 = self._residue_waited_hours(strategy)
+                            _max363 = self._residue_max_wait_hours()
+                            if _waited363 is not None and _waited363 >= _max363:
+                                logger.warning(
+                                    "[Fix363] %s #%s 잔량 대기 %.1fh ≥ 상한 %.0fh → 전량 손절",
+                                    strategy.symbol, strategy.id, _waited363, _max363,
+                                )
+                                _nx, _nxwhy = False, f"잔량 대기 {_waited363:.1f}h ≥ 상한 {_max363:.0f}h (Fix 363)"
                         if _nx:
                             logger.info(
                                 "[Fix326] %s #%s 잔량 유지 — 손절하지 않음 (%s): %s | %s",

@@ -1328,7 +1328,7 @@ class ExecutionService:
         # ✂️ Fix 305: 수동 「▶ 다음 단계」도 자동과 **같은 정리**를 거친다.
         #   여기를 빠뜨리면 사장님이 손으로 누른 단계만 물타기가 된다
         #   (「게이트는 있는데 한 경로가 안 부른다」 — 이 저장소의 반복 사고).
-        self._trim_before_stage(strategy, stage_no)
+        self._trim_before_stage(strategy, stage_no, auto=False)   # Fix 363b: 사장님 「▶ 다음단계」 수동 = 이익 중이어도 진행
 
         # Phase 3 (2026-05-21 사장님 요구): 사전 마진 검증 — -2027 거래소 거절 사전 차단.
         self._preflight_entry_market_check(
@@ -1781,7 +1781,23 @@ class ExecutionService:
         )
         return self.client.place_order(payload)
 
-    def _trim_before_stage(self, strategy, stage_no: int) -> None:
+    @staticmethod
+    def _unrealized_roi_pct(strategy, mark) -> float | None:
+        """Fix 363: 인스턴스 ROI% = 가격변동률 × 레버리지 (손절·피라미딩·단계 판정과 같은 자). 결손이면 None."""
+        try:
+            avg = float(strategy.avg_entry_price or 0)
+            m = float(mark or 0)
+            lev = float(strategy.leverage or 1) or 1.0
+        except Exception:  # noqa: BLE001
+            return None
+        if avg <= 0 or m <= 0:
+            return None
+        pct = (m - avg) / avg * 100.0
+        if str(strategy.side).upper() == "SHORT":
+            pct = -pct
+        return pct * lev
+
+    def _trim_before_stage(self, strategy, stage_no: int, *, auto: bool = True) -> None:
         """✂️ Fix 304 — 다음 단계 진입 **전에** 「10 USDT 만 남기고」 정리한다.
 
         🚨 Fix 305: 자동(`trigger_next_stage`) 과 수동(`enter_stage_at_market`)
@@ -1884,6 +1900,20 @@ class ExecutionService:
                 except Exception as _me:
                     _mark = None
                     logger.warning("[Fix304] %s 현재가 조회 실패: %s", strategy.symbol, _me)
+                # 🎯 Fix 363 (2026-09-09 사장님): 「10 USDT 만 남기고 정리」는 **손실일 때** 이야기다. 이익 중인 포지션을
+                #   잘라내고 300 을 넣던 것을 막는다 (이익 중이면 정리 없이 그대로 다음 단계).
+                _roi363 = self._unrealized_roi_pct(strategy, _mark)
+                if _roi363 is not None and _roi363 > 0:
+                    if auto:
+                        # Fix 363b: 자동 단계 진입은 손실에서만 — 이익 중이면 정리도 진입도 하지 않는다 (워커의 대기 게이트와 이중 방어)
+                        raise ValueError(
+                            f"[Fix363] {strategy.symbol} 단계 {stage_no}: 이익 중(ROI {_roi363:+.2f}%) — 자동 단계 진입 중단"
+                        )
+                    logger.info(
+                        "[Fix363] %s #%s 단계%s 이익 중(ROI %+.2f%%) → (수동) 정리 없이 진입",
+                        strategy.symbol, strategy.id, stage_no, _roi363,
+                    )
+                    return
                 _close_qty, _keep_qty, _why, _act = compute_trim(
                     self.db, strategy.symbol, _cur_qty, _mark,
                     leverage=strategy.leverage,      # Fix 324: 「10 usdt」는 증거금
