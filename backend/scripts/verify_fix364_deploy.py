@@ -308,7 +308,7 @@ def check_managed_symbols() -> None:
         db = SessionLocal()
         try:
             rows = db.execute(select(ManagedSymbol).order_by(ManagedSymbol.updated_at.desc())).scalars().all()
-            print(f"  ▸ 명부 {len(rows)}건 (모드 {MS.loss_ladder_mode(db)} · 진입 {'ON' if MS.get_bool(db, MS.S_ENTRY) else 'OFF'} · 상한 {MS.get_int(db, MS.S_MAX_ATTEMPTS, 1, 100)}회 · 일일 {MS.get_int(db, MS.S_DAILY, 0, 1000)})")
+            print(f"  ▸ 명부 {len(rows)}건 (모드 {MS.loss_ladder_mode(db)} · 진입 {'ON' if MS.get_bool(db, MS.S_ENTRY) else 'OFF'} · 상한 {MS.get_int(db, MS.S_MAX_ATTEMPTS, 1, 100)}회 · 일일 {MS.get_int(db, MS.S_DAILY, 0, 1000)} · 전용 슬롯 {MS.managed_slots_used(db)}/{MS.get_int(db, MS.S_SLOTS, 0, 100)})")
             for r in rows[:30]:
                 lr = r.last_reasons or {}
                 print(f"     {r.symbol:<12} {r.status:<9} 실패 {r.attempts}/{r.max_attempts} 성공 {r.successes} 재진입 {r.total_entries} "

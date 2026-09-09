@@ -42,6 +42,7 @@ def test_settings_defaults_and_probe_mode():
     assert MS.get_int(db, MS.S_MAX_ATTEMPTS, 1, 100) == 10                             # 사장님 「10번까지」
     assert MS.get_int(_DB(managed_symbol_max_attempts="999"), MS.S_MAX_ATTEMPTS, 1, 100) == 10   # 범위 밖 = 기본
     assert MS.get_int(db, MS.S_DAILY, 0, 1000) == 10 and MS.get_int(db, MS.S_MAX_SYMBOLS, 1, 200) == 20
+    assert MS.get_int(db, MS.S_SLOTS, 0, 100) == 5                                     # Fix 365d 전용 슬롯 (자동 워커 상한과 무관)
     # 프로브 술어: OBV 인스턴스 + probe 모드 → (True, why); 가격 트리거 인스턴스 → False; ladder 모드 → False
     obv = NS(strategy_template=NS(trigger_mode="OBV_REVERSE"), strategy_template_id=1)
     px = NS(strategy_template=NS(trigger_mode="PRICE_DOWN_PCT"), strategy_template_id=2)
@@ -128,7 +129,7 @@ def test_wiring_pins():
     assert svc.count(".start_stage1(") == 1, "주문이 나가는 지점은 enter_symbol 하나"
     wk = (ROOT / "workers" / "managed_symbol_worker.py").read_text(encoding="utf-8")
     for pin in ("MS.register_closed_instances(db, now=now)", 'check_stage_entry_signal(bc, db, ms.symbol, "LONG")',
-                'check_stage_entry_signal(bc, db, ms.symbol, "SHORT")', "MS.decide_entry(", "check_position_slot(db, \"managed_symbols\")",
+                'check_stage_entry_signal(bc, db, ms.symbol, "SHORT")', "MS.decide_entry(", "slots_used = MS.managed_slots_used(db)",
                 "MS.daily_used(now)", "MS.enter_symbol(db, ms, side, account=account, decrypt_text=decrypt_text, now=now)",
                 "AccountKillSwitchService(db).is_enabled(account.id)", "probe = MS.probe_mode(db)", "if not probe:",
                 "MS.entry_cooldown_active(ms.symbol)", "MS.set_entry_cooldown(ms.symbol, cooldown_sec)",
@@ -142,5 +143,9 @@ def test_wiring_pins():
     assert "is_excluded(db, ms.symbol)" in wk and wk.find("is_excluded(db, ms.symbol)") < wk.find("MS.active_sides_for(db, ms.symbol)"), "제외 심볼은 판정 전에 건너뜀"
     i_start = svc.find(".start_stage1(")
     assert 'new_si.status = "STOPPED"' in svc[i_start:i_start + 900], "주문 실패 = WAITING 고아 대신 STOPPED (control.py 와 동일)"
+    assert "check_position_slot" not in wk, "Fix 365d: 자동 워커 상한 대신 전용 슬롯"
+    mig38 = (ROOT.parent / "alembic" / "versions" / "0038_managed_symbols_entry_ids.py").read_text(encoding="utf-8")
+    assert "down_revision = '0037_managed_symbols'" in mig38 and "entry_ids" in mig38
+    assert "ms.entry_ids = (" in svc[svc.find("def enter_symbol("):], "재진입 인스턴스 id 기록"
     # 순서: 일일 한도 → 슬롯 → 진입
-    assert wk.find("MS.daily_used(now)") < wk.find('check_position_slot(db, "managed_symbols")') < wk.find("MS.enter_symbol(")
+    assert wk.find("MS.daily_used(now)") < wk.find("slots_used = MS.managed_slots_used(db)") < wk.find("MS.enter_symbol(")

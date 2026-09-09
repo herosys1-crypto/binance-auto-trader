@@ -45,6 +45,7 @@ class ManagedSymbol(Base):
     last_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_reasons: Mapped[dict | None] = mapped_column(JSONB, nullable=True)         # {"LONG": "...", "SHORT": "...", "state": "..."}
     counted_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)          # 집계한 종료 인스턴스 id 목록 (워터마크 대신, Fix 365b)
+    entry_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)            # 워커가 낸 재진입 인스턴스 id 목록 (전용 슬롯 계산, Fix 365d)
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     note: Mapped[str | None] = mapped_column(String(200), nullable=True)
 

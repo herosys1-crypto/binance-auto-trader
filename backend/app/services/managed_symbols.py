@@ -38,10 +38,11 @@ S_IDLE_DAYS = "managed_symbol_idle_release_days"  # 7 (Claude가 정함) — 신
 S_HEDGE = "managed_symbol_allow_hedge"          # 0 (Claude가 정함) — 반대 방향 포지션이 있어도 진입
 S_LOOKBACK_H = "managed_symbol_lookback_hours"  # 48 (Claude가 정함) — 종료 인스턴스 집계 창
 S_COOLDOWN = "managed_symbol_entry_cooldown_sec"  # 900 (Claude가 정함) — 한 심볼 재진입 시도 뒤 다음 시도까지 (실패 반복 방지)
+S_SLOTS = "managed_symbol_concurrent_slots"      # 5 (Claude가 정함, 사장님 「진행해줘」 9/9) — 관리 재진입 전용 동시보유 슬롯 (자동 워커 상한과 무관)
 
 DEFAULTS: dict[str, Any] = {
     S_MODE: "probe", S_ENABLED: True, S_ENTRY: True, S_MAX_ATTEMPTS: 10, S_DAILY: 10,
-    S_MAX_SYMBOLS: 20, S_IDLE_DAYS: 7, S_HEDGE: False, S_LOOKBACK_H: 48, S_COOLDOWN: 900,
+    S_MAX_SYMBOLS: 20, S_IDLE_DAYS: 7, S_HEDGE: False, S_LOOKBACK_H: 48, S_COOLDOWN: 900, S_SLOTS: 5,
 }
 
 STATUS_WATCHING = "WATCHING"
@@ -370,8 +371,32 @@ def enter_symbol(db, ms, side: str, *, account, decrypt_text, now: datetime | No
     ms.total_entries = int(ms.total_entries or 0) + 1
     ms.last_entry_at = now
     ms.last_side = side
+    ms.entry_ids = ([int(x) for x in (ms.entry_ids or [])] + [int(new_si.id)])[-COUNTED_IDS_CAP:]   # Fix 365d: 전용 슬롯 계산용
     db.commit()
     return new_si
+
+
+def managed_slots_used(db) -> int:
+    """Fix 365d: 워커가 낸 재진입 인스턴스 중 아직 살아 있는 것의 수 (= 관리 재진입 전용 슬롯 사용량). 조회 실패 = 매우 큰 수(fail-closed)."""
+    try:
+        from app.core.strategy_status import TERMINAL_STATUSES
+        from app.models.managed_symbol import ManagedSymbol
+        from app.models.strategy_instance import StrategyInstance
+        ids: set[int] = set()
+        for lst in db.execute(select(ManagedSymbol.entry_ids)).scalars().all():
+            for x in (lst or []):
+                ids.add(int(x))
+        if not ids:
+            return 0
+        return int(db.execute(
+            select(func.count()).select_from(StrategyInstance)
+            .where(StrategyInstance.id.in_(list(ids)))
+            .where(StrategyInstance.status.notin_(list(TERMINAL_STATUSES)))
+            .where(StrategyInstance.is_archived.is_(False))
+        ).scalar() or 0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] 전용 슬롯 계산 실패 → 소진으로 본다: %s", FIX, e)
+        return 10 ** 6
 
 
 # ── 일일 카운터 (Redis, KST) ─────────────────────────────────────────────────────

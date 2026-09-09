@@ -7,7 +7,7 @@
   1) 최근 종료된 OBV 자동 인스턴스를 명부에 반영 (시스템 손절 = 실패 +1 / 익절 = 성공, 0 / 수동·외부 = 세지 않음)
   2) 신호도 진입도 없이 오래된 심볼은 자동 해제 (전체 WATCHING 대상)
   3) 판정 대상 = 오래 안 본 순서로 max_symbols 건 (회전) — 롱·숏 운영 진입 로직 판정 → 사유 저장(화면)
-  4) 한쪽만 신호 + 포지션 없음 + 프로브 모드 + 진입 ON + 쿨다운 아님 + 일일 한도 + 슬롯 → 같은 템플릿으로 10 USDT 시장가
+  4) 한쪽만 신호 + 포지션 없음 + 프로브 모드 + 진입 ON + 쿨다운 아님 + 일일 한도 + 전용 슬롯(자동 워커 상한과 무관) → 같은 템플릿으로 10 USDT 시장가
 새 심볼은 고르지 않는다 — 명부는 사장님이 만든 인스턴스에서만 생긴다.
 """
 from __future__ import annotations
@@ -119,6 +119,7 @@ def run_managed_symbols_once() -> dict:
         max_attempts = MS.get_int(db, MS.S_MAX_ATTEMPTS, 1, 100)
         daily_limit = MS.get_int(db, MS.S_DAILY, 0, 1000)
         cooldown_sec = MS.get_int(db, MS.S_COOLDOWN, 10, 86400)
+        slots = MS.get_int(db, MS.S_SLOTS, 0, 100)
 
         for ms in rows:
             stat["checked"] += 1
@@ -171,10 +172,10 @@ def run_managed_symbols_once() -> dict:
                     ms.last_reasons = reasons
                     _skip("daily_limit")
                     continue
-                from app.services.position_limit import check_position_slot
-                slot_ok, slot_why, _a, _c = check_position_slot(db, "managed_symbols")
-                if not slot_ok:
-                    reasons["state"] = f"{side} 신호 — {slot_why}"
+                # Fix 365d (사장님 「진행해줘」): 자동 워커 동시보유 상한과 무관한 **전용 슬롯** — 워커가 낸 재진입 중 살아 있는 수
+                slots_used = MS.managed_slots_used(db)
+                if slots_used >= slots:
+                    reasons["state"] = f"{side} 신호 — 관리 재진입 전용 슬롯 소진 {slots_used}/{slots} (설정 {MS.S_SLOTS})"
                     ms.last_reasons = reasons
                     _skip("slot_full")
                     continue

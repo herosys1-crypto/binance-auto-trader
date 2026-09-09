@@ -14,7 +14,7 @@
 | 3 | 10 USDT 가 **손실** → 손절선(인스턴스 −25%, 추가 뒤 −5%) | **전량 청산** (프로브 모드: 손실 구간 300/600 단계 없음, 잔량 10 유지 없음) | `obv_loss_ladder_mode=probe` → `tp_sl_orchestrator._has_next_stage` False + 정리(TRIM) 생략, `stage_trigger_worker` OBV 분기 진입 없음 |
 | 4 | 청산된 인스턴스 | **종료 사유**로 센다: 시스템 손절(FORCE_SL/SL/좀비 강제정지, 프로브 전량 청산 마커) → 연속 실패 +1 / 익절(TP·트레일링·수동 익절·COMPLETED) → 성공 +1, 연속 실패 0 / **사장님 ⏸정지·외부 청산·사유 불명 → 세지 않음**(사장님이 버린 심볼을 되살리지 않는다) | `close_outcome` + `apply_closed_instance` |
 | 5 | 명부 심볼(WATCHING) 1분마다 | 롱·숏 **둘 다** 운영 진입 로직(`check_stage_entry_signal` = OBV 게이트 + 15분 정점/저점 확인 + 진입창) 판정. 사유는 DB(`last_reasons`)와 화면에 남김 | `managed_symbol_worker` |
-| 6 | 한쪽만 신호 + 그 심볼에 우리 포지션 없음 + 슬롯·일일 한도 OK | 같은 템플릿(10/300/600/600)으로 새 인스턴스 → 1단계 **시장가 10 USDT** | `StrategyService.create_strategy_instance` + `ExecutionService.start_stage1` |
+| 6 | 한쪽만 신호 + 그 심볼에 우리 포지션 없음 + **전용 슬롯**(워커가 낸 재진입 중 살아 있는 수 < 5, 자동 워커 동시보유 상한과 무관)·일일 한도 OK | 같은 템플릿(10/300/600/600)으로 새 인스턴스 → 1단계 **시장가 10 USDT** | `StrategyService.create_strategy_instance` + `ExecutionService.start_stage1` |
 | 7 | 양쪽 동시 신호 | 보류(사유 기록). 다음 사이클 다시 | `decide_entry` |
 | 8 | 연속 실패 10회(설정 `managed_symbol_max_attempts`) | EXHAUSTED — 명부에 남되 진입 없음. 화면 「↺ 초기화」로 다시 | API |
 | 9 | 신호가 7일(설정 `managed_symbol_idle_release_days`) 동안 한 번도 없음 | RELEASED (자동 해제) | worker |
@@ -37,9 +37,10 @@
 | `managed_symbol_idle_release_days` | 7 | 신호 없이 이 일수 지나면 자동 해제 | Claude가 정함 |
 | `managed_symbol_allow_hedge` | 0 | 같은 심볼 반대 방향 포지션이 있을 때도 진입 | Claude가 정함 |
 | `managed_symbol_entry_cooldown_sec` | 900 | 한 심볼 재진입 시도 뒤 다음 시도까지(실패 시도 반복 방지) | Claude가 정함 |
+| `managed_symbol_concurrent_slots` | 5 | 관리 재진입 전용 동시보유 슬롯 — `sajangnim_top_short_daily_limit`(자동 워커 상한)과 **무관** (사장님 9/9 「진행해줘」) | Claude가 정함 |
 | (재진입 금액) | 템플릿 1단계 | 사장님이 모달에 넣은 1단계(10 USDT) 그대로 — 별도 설정 없음 | 사장님 「10 USDT」 |
 
-기존 상한도 그대로 적용: 동시보유 상한(`position_limit.check_position_slot`), 심볼 제외 목록(BTC/ETH 계열), API ban, 양방향 실패 blocklist.
+기존 상한 중 그대로 적용: 심볼 제외 목록(BTC/ETH 계열), API ban, Kill-Switch, 양방향 실패 blocklist. 자동 워커 동시보유 상한(`position_limit.check_position_slot`)은 **보지 않는다** — 전용 슬롯이 대신한다(첫 배포에서 XANUSDT LONG 재진입이 상한 1 에 막힌 것을 보고 사장님이 결정).
 
 ## 3. 바뀌는 실자금 경로
 - OBV 자동 인스턴스의 **손절 실행**: 프로브 모드에선 부분손절(10 잔량)이 아니라 **전량**. 피라미딩으로 커진 610 도 −5% 에서 전량. 되돌리기 = `obv_loss_ladder_mode=ladder`.
