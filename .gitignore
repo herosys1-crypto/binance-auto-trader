@@ -108,3 +108,17 @@ sync-from-office.ps1
 # 배치 실행기 상태/산출물 (Fix 292)
 tools/batch/.state/
 docs/batch-out/
+
+# Ruflo local secrets and runtime data
+.env.local
+.env.*.local
+.claude-flow/data/
+.claude-flow/logs/
+.claude-flow/sessions/
+
+# Ruflo 로컬 런타임 (공개 저장소 — DB·세션·신경망 파일은 올리지 않는다)
+.swarm/
+.claude-flow/neural/
+.claude-flow/*.db
+.claude-flow/**/*.db
+.hive-mind/
