@@ -662,6 +662,31 @@ class TPSLOrchestratorService:
             except Exception:
                 pass
 
+    def _loss_ladder_disabled(self, strategy) -> tuple[bool, str]:
+        """🧭 Fix 365: (True, why) 면 손실 구간 사다리·잔량 유지 없이 전량 청산 → 재진입 관리. 판정 실패 = 옛 동작."""
+        try:
+            from app.services.managed_symbols import loss_ladder_disabled
+            return loss_ladder_disabled(self.db, strategy)
+        except Exception as _e:  # noqa: BLE001
+            logger.debug("[Fix365] 프로브 판정 실패 → 옛 동작: %s", _e)
+            return False, ""
+
+    def _record_probe_full_close(self, strategy, why: str) -> None:
+        """🧭 Fix 365b: 프로브 전량 청산을 RiskEvent 로 남긴다 — managed_symbols 가 수동 정지와 구분해 「실패」로 센다."""
+        try:
+            self.db.add(RiskEvent(
+                strategy_instance_id=strategy.id,
+                event_type="FORCE_SL_FULL_CLOSE",
+                severity="WARNING",
+                title=f"🧭 프로브 전량 손절 — #{strategy.id} {strategy.symbol} {strategy.side}",
+                message=f"{why} (Fix 365: 손실이면 청산 → 관리 명부 → 신호에 10 USDT 재진입)",
+                event_payload={"current_stage": strategy.current_stage,
+                               "force_sl_roi_override": str(getattr(strategy, "force_sl_roi_override", None))},
+            ))
+            self.db.flush()
+        except Exception as _e:  # noqa: BLE001
+            logger.debug("[Fix365] 마커 이벤트 기록 실패 (무시): %s", _e)
+
     def _has_next_stage(self, strategy) -> tuple[bool, str]:
         """다음 단계 계획이 남아 있는가.
 
@@ -685,6 +710,9 @@ class TPSLOrchestratorService:
            (단계 진입 게이트의 fail 방향과 반대다 — 거기선 안 사면 그만이지만
             여기선 안 닫으면 손실이 커진다).
         """
+        _probe365, _probe_why365 = self._loss_ladder_disabled(strategy)      # 🧭 Fix 365: 프로브 = 다음 단계 없음
+        if _probe365:
+            return False, _probe_why365
         try:
             from sqlalchemy import select
             from app.models.strategy_stage_plan import StrategyStagePlan
@@ -763,7 +791,12 @@ class TPSLOrchestratorService:
                 from app.services.stage_trim import (
                     ACTION_SKIP, ACTION_TRIM, compute_trim, trim_enabled,
                 )
-                if trim_enabled(self.db, strategy):
+                # 🧭 Fix 365 (사장님 9/9 저녁): OBV 자동 인스턴스 + 프로브 모드 = 부분손절·잔량 유지 없이 **전량** → 재진입 관리
+                _probe365, _probe_why365 = self._loss_ladder_disabled(strategy)
+                if _probe365:
+                    logger.warning("[Fix365] %s #%s 전량 손절 — %s", strategy.symbol, strategy.id, _probe_why365)
+                    self._record_probe_full_close(strategy, _probe_why365)      # 명부가 「시스템 손절」로 세는 근거
+                elif trim_enabled(self.db, strategy):
                     _mark = self.execution_service._fetch_current_mark_price(strategy.symbol)
                     _c, _k, _why, _act = compute_trim(
                         self.db, strategy.symbol, current_qty, _mark,
@@ -920,7 +953,11 @@ class TPSLOrchestratorService:
                 from app.services.stage_trim import (
                     ACTION_SKIP, ACTION_TRIM, compute_trim, trim_enabled,
                 )
-                if trim_enabled(self.db, strategy):
+                _probe365, _probe_why365 = self._loss_ladder_disabled(strategy)      # 🧭 Fix 365
+                if _probe365:
+                    logger.warning("[Fix365] %s #%s 전량 손절 — %s", strategy.symbol, strategy.id, _probe_why365)
+                    self._record_probe_full_close(strategy, _probe_why365)      # 명부가 「시스템 손절」로 세는 근거
+                elif trim_enabled(self.db, strategy):
                     _mark = self.execution_service._fetch_current_mark_price(strategy.symbol)
                     _c, _k, _why, _act = compute_trim(
                         self.db, strategy.symbol, current_qty, _mark,

@@ -273,6 +273,61 @@ def check_ops() -> None:
         db.close()
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# ④ Fix 365 심볼 관리 재진입 (명부 · 워커 마지막 사이클 · 프로브 모드 배선)
+# ─────────────────────────────────────────────────────────────────────────
+def check_managed_symbols() -> None:
+    print("④ Fix 365 심볼 관리 재진입")
+    try:
+        from app.services import managed_symbols as MS
+        ok(f"모드 = {MS.loss_ladder_mode(_NoDB())} (probe = 손실이면 전량 청산 → 재진입 관리 / ladder = Fix 364)")
+        assert MS.decide_entry(long_ok=True, short_ok=True, active_sides=set(), allow_hedge=False, attempts=0, max_attempts=10)[0] is None
+        ok("진입 판정 함수 존재 (양방향 동시 신호 = 보류)")
+    except Exception as e:  # noqa: BLE001
+        fail(f"managed_symbols 모듈: {e!r}")
+        return
+    or_src = open(os.path.join(_ROOT, "app", "services", "tp_sl_orchestrator.py"), encoding="utf-8").read()
+    (ok if or_src.count("_probe365, _probe_why365 = self._loss_ladder_disabled(strategy)") == 3 else fail)("orchestrator 프로브 훅 3곳 (손절 2 + 다음단계)")
+    st_src = open(os.path.join(_ROOT, "app", "workers", "stage_trigger_worker.py"), encoding="utf-8").read()
+    (ok if "if _probe365:" in st_src else fail)("stage 워커 OBV 분기 프로브 훅")
+    sch = open(os.path.join(_ROOT, "app", "workers", "scheduler_runner.py"), encoding="utf-8").read()
+    (ok if 'id="managed_symbols"' in sch else fail)("스케줄러 잡 managed_symbols (60초)")
+    if CODE_ONLY:
+        return
+    try:
+        import json as _json
+        from sqlalchemy import select
+        from app.core.database import SessionLocal
+        from app.models.managed_symbol import ManagedSymbol
+        db = SessionLocal()
+        try:
+            rows = db.execute(select(ManagedSymbol).order_by(ManagedSymbol.updated_at.desc())).scalars().all()
+            print(f"  ▸ 명부 {len(rows)}건 (모드 {MS.loss_ladder_mode(db)} · 진입 {'ON' if MS.get_bool(db, MS.S_ENTRY) else 'OFF'} · 상한 {MS.get_int(db, MS.S_MAX_ATTEMPTS, 1, 100)}회 · 일일 {MS.get_int(db, MS.S_DAILY, 0, 1000)})")
+            for r in rows[:30]:
+                lr = r.last_reasons or {}
+                print(f"     {r.symbol:<12} {r.status:<9} 실패 {r.attempts}/{r.max_attempts} 성공 {r.successes} 재진입 {r.total_entries} "
+                      f"마지막 {r.last_side or '-'} {r.last_pnl if r.last_pnl is not None else '-'} 판정 {r.last_check_at:%m-%d %H:%M:%S} " if r.last_check_at else
+                      f"     {r.symbol:<12} {r.status:<9} 실패 {r.attempts}/{r.max_attempts} 성공 {r.successes} 재진입 {r.total_entries} 마지막 {r.last_side or '-'} 판정 -")
+                if lr:
+                    print(f"        state: {str(lr.get('state', ''))[:120]}")
+                    print(f"        LONG : {str(lr.get('LONG', ''))[:120]}")
+                    print(f"        SHORT: {str(lr.get('SHORT', ''))[:120]}")
+        finally:
+            db.close()
+        try:
+            from app.core.redis_client import get_redis_client
+            raw = get_redis_client().get(MS.REDIS_CYCLE_KEY)
+            if raw:
+                c = _json.loads(raw)
+                print(f"  ▸ 워커 마지막 사이클 {c.get('at')}: 감시 {c.get('watching')} 판정 {c.get('checked')} 진입 {c.get('entered')} 해제 {c.get('released')} 사유 {c.get('skipped')} 등록 {c.get('register')}")
+            else:
+                skip("워커 사이클 기록 없음 (Redis) — 아직 한 번도 안 돌았거나 10분 넘게 멈춤")
+        except Exception as e:  # noqa: BLE001
+            skip(f"Redis 조회 실패: {e!r}")
+    except Exception as e:  # noqa: BLE001
+        fail(f"명부 조회 실패 (마이그레이션 0037 적용됐는지 확인): {e!r}")
+
+
 if __name__ == "__main__":
     print(f"verify_fix364_deploy — {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z} (cwd {_ROOT})")
     check_code()
@@ -281,6 +336,7 @@ if __name__ == "__main__":
         skip("--code-only: 운영 층 생략")
     else:
         check_ops()
+    check_managed_symbols()
     print("─" * 70)
     if _fails:
         print(f"결과: FAIL {len(_fails)}건")

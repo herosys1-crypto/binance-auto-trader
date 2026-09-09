@@ -1063,7 +1063,17 @@ def run_stage_trigger_once(decrypt_text) -> None:
                         _prev_ok363, _prev_why363 = _obv_prev_stage_filled(db, strategy, next_stage_no)
                         _stopped_ok364, _stopped_why364 = _obv_prev_stage_stopped(db, strategy, next_stage_no, mark)
                         _sig_ok = False
-                        if _obv_stage_cooldown_active(_redis, strategy.id):
+                        try:
+                            from app.services.managed_symbols import loss_ladder_disabled as _lld365
+                            _probe365, _probe_why365 = _lld365(db, strategy)
+                        except Exception:  # noqa: BLE001
+                            _probe365, _probe_why365 = False, ""
+                        if _probe365:
+                            # 🧭 Fix 365 (사장님 9/9 저녁): 손실이면 청산 → 명부 → 10 USDT 재진입. 손실 구간 300/600 단계는 없다.
+                            #   차단이 아니라 모드라 배지는 쓰지 않는다 (화면 「🧭 관리 심볼」 카드가 모드를 보여준다)
+                            _sig_why = f"{_probe_why365} — 손실 구간 단계 진입 없음"
+                            logger.debug("[stage-trigger Fix365] #%s %s", strategy.id, _sig_why)
+                        elif _obv_stage_cooldown_active(_redis, strategy.id):
                             # Fix 363b: 직전 단계 발주 뒤 15분 — 평단이 갱신되기 전에 다음 단계가 연쇄로 나가는 것을 막는다
                             _sig_why = "Fix363 보류: 직전 단계 발주 직후 체결·평단 반영 대기"
                             _record_block_reason(_redis, strategy.id, _sig_why, next_stage_no)

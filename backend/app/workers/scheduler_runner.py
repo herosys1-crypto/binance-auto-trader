@@ -622,6 +622,11 @@ def start_scheduler() -> None:
         from app.workers.ladder_restart_worker import run_ladder_restart_once
         run_ladder_restart_once()
     scheduler.add_job(guarded_job("ladder_restart", 240, _ladder_restart), trigger=IntervalTrigger(seconds=300), id="ladder_restart", replace_existing=True, max_instances=1, coalesce=True)
+    # 🧭 Fix 365 (2026-09-09 사장님): 심볼 관리 재진입 — 첫 진입 실패 → 청산 → 명부 → 롱·숏 신호에 10 USDT 재진입(10회) → 성공하면 추가
+    def _managed_symbols():
+        from app.workers.managed_symbol_worker import run_managed_symbols_once
+        run_managed_symbols_once()
+    scheduler.add_job(guarded_job("managed_symbols", 50, _managed_symbols), trigger=IntervalTrigger(seconds=60), id="managed_symbols", replace_existing=True, max_instances=1, coalesce=True)
     # 📊 Fix 179 (2026-08-27 사장님): 급등락 심볼 볼밴 이탈 분할 매수 (100/200/300)
     #   사장님 verbatim: "상승중인 심볼은 볼밴 하단 이탈 하면 분할 매수 1-3번 ...
     #                     긴상승에는 중단 이탈시 ... -5% 청산하고 tp1 익절도 5%부터 25%씩"

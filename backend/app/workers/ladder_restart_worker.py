@@ -135,6 +135,15 @@ def run_ladder_restart_once() -> dict:
         stat["skipped"][why] = stat["skipped"].get(why, 0) + 1
 
     try:
+        # 🧭 Fix 365: 프로브 모드(기본)면 OBV 재진입은 managed_symbol_worker 가 맡는다 (10 USDT × 10회, 양방향). 여기선 양보.
+        try:
+            from app.services.managed_symbols import probe_mode as _probe365
+            if _probe365(db):
+                logger.info("[ladder_restart] Fix365 프로브 모드 — 재시작은 managed_symbols 워커가 담당 (생략)")
+                _skip("probe_mode")
+                return stat
+        except Exception as _e365:  # noqa: BLE001
+            logger.debug("[ladder_restart] 프로브 판정 실패 → 계속: %s", _e365)
         cutoff = datetime.now(timezone.utc) - timedelta(hours=LOOKBACK_HOURS)
         rows = db.execute(
             select(StrategyInstance, StrategyTemplate)

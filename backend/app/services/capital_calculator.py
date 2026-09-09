@@ -80,6 +80,13 @@ def ladder_reserves_untriggered(db: Session, strategy: StrategyInstance) -> bool
       되돌리기: SystemSetting ladder_reserve_untriggered_enabled = 1 (재시작 불필요).
     다른 방식(수동 기본·볼밴 분할·OBV)은 그대로 예약한다.
     """
+    # 🧭 Fix 365b (반박 검증 C3): 프로브 모드의 OBV 인스턴스는 2단계 이후가 나가지 않으므로 그 계획(300/600/600)은 예약이 아니다
+    try:
+        from app.services.managed_symbols import loss_ladder_disabled as _lld365
+        if _lld365(db, strategy)[0]:
+            return False
+    except Exception:  # noqa: BLE001
+        pass
     mode = str(getattr(strategy, "capital_management_mode", "") or "").lower()
     if mode != "stage_ladder":
         return True
