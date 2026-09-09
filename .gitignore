@@ -122,3 +122,8 @@ docs/batch-out/
 .claude-flow/*.db
 .claude-flow/**/*.db
 .hive-mind/
+
+# Ruflo 런타임 상태 파일
+.claude-flow/daemon-state.json
+.claude-flow/harness-active-policy.json
+.claude-flow/*.lock
