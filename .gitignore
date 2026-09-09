@@ -127,3 +127,14 @@ docs/batch-out/
 .claude-flow/daemon-state.json
 .claude-flow/harness-active-policy.json
 .claude-flow/*.lock
+# Ruflo: .claude-flow 는 설정 4개만 추적, 나머지는 로컬 런타임
+.claude-flow/*
+!.claude-flow/config.yaml
+!.claude-flow/CAPABILITIES.md
+!.claude-flow/.gitignore
+!.claude-flow/memory-package.json
+# Ruflo 데몬이 만드는 로컬 파일
+ruvector.db
+ruvector.db-*
+.claude/proven-config.json
+.claude/.proven-config-version
