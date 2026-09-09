@@ -38,7 +38,7 @@
 | `managed_symbol_allow_hedge` | 0 | 같은 심볼 반대 방향 포지션이 있을 때도 진입 | Claude가 정함 |
 | `managed_symbol_entry_cooldown_sec` | 900 | 한 심볼 재진입 시도 뒤 다음 시도까지(실패 시도 반복 방지) | Claude가 정함 |
 | `managed_symbol_concurrent_slots` | 5 | 관리 재진입 전용 동시보유 슬롯 — `sajangnim_top_short_daily_limit`(자동 워커 상한)과 **무관** (사장님 9/9 「진행해줘」) | Claude가 정함 |
-| (재진입 금액) | 템플릿 1단계 | 사장님이 모달에 넣은 1단계(10 USDT) 그대로 — 별도 설정 없음 | 사장님 「10 USDT」 |
+| `managed_symbol_stage1_capital` | 10 | 재진입 1단계 증거금. 템플릿 1단계가 100 이어도 이 값으로 덮는다(Fix 365e — 첫 재진입 #4429 XANUSDT 가 옛 템플릿 100 으로 나간 사고 뒤) | 사장님 「10 USDT」 |
 
 기존 상한 중 그대로 적용: 심볼 제외 목록(BTC/ETH 계열), API ban, Kill-Switch, 양방향 실패 blocklist. 자동 워커 동시보유 상한(`position_limit.check_position_slot`)은 **보지 않는다** — 전용 슬롯이 대신한다(첫 배포에서 XANUSDT LONG 재진입이 상한 1 에 막힌 것을 보고 사장님이 결정).
 

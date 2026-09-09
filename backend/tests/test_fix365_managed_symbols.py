@@ -43,6 +43,9 @@ def test_settings_defaults_and_probe_mode():
     assert MS.get_int(_DB(managed_symbol_max_attempts="999"), MS.S_MAX_ATTEMPTS, 1, 100) == 10   # 범위 밖 = 기본
     assert MS.get_int(db, MS.S_DAILY, 0, 1000) == 10 and MS.get_int(db, MS.S_MAX_SYMBOLS, 1, 200) == 20
     assert MS.get_int(db, MS.S_SLOTS, 0, 100) == 5                                     # Fix 365d 전용 슬롯 (자동 워커 상한과 무관)
+    assert MS.stage1_capital(db) == Decimal("10")                                       # Fix 365e 재진입 1단계 = 10 USDT (사장님)
+    assert MS.stage1_capital(_DB(managed_symbol_stage1_capital="20")) == Decimal("20")
+    assert MS.stage1_capital(_DB(managed_symbol_stage1_capital="0")) == Decimal("10")   # 이상값 = 10
     # 프로브 술어: OBV 인스턴스 + probe 모드 → (True, why); 가격 트리거 인스턴스 → False; ladder 모드 → False
     obv = NS(strategy_template=NS(trigger_mode="OBV_REVERSE"), strategy_template_id=1)
     px = NS(strategy_template=NS(trigger_mode="PRICE_DOWN_PCT"), strategy_template_id=2)
@@ -147,5 +150,8 @@ def test_wiring_pins():
     mig38 = (ROOT.parent / "alembic" / "versions" / "0038_managed_symbols_entry_ids.py").read_text(encoding="utf-8")
     assert "down_revision = '0037_managed_symbols'" in mig38 and "entry_ids" in mig38
     assert "ms.entry_ids = (" in svc[svc.find("def enter_symbol("):], "재진입 인스턴스 id 기록"
+    i_e = svc.find("def enter_symbol(")
+    assert 0 < svc.find("s1.planned_capital = _cap", i_e) < svc.find(".start_stage1(", i_e), "Fix 365e: 1단계 금액 덮어쓰기가 발주 앞"
+    assert "s1.planned_qty = None" in svc[i_e:]
     # 순서: 일일 한도 → 슬롯 → 진입
     assert wk.find("MS.daily_used(now)") < wk.find("slots_used = MS.managed_slots_used(db)") < wk.find("MS.enter_symbol(")

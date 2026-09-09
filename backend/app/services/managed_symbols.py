@@ -39,10 +39,11 @@ S_HEDGE = "managed_symbol_allow_hedge"          # 0 (Claude가 정함) — 반�
 S_LOOKBACK_H = "managed_symbol_lookback_hours"  # 48 (Claude가 정함) — 종료 인스턴스 집계 창
 S_COOLDOWN = "managed_symbol_entry_cooldown_sec"  # 900 (Claude가 정함) — 한 심볼 재진입 시도 뒤 다음 시도까지 (실패 반복 방지)
 S_SLOTS = "managed_symbol_concurrent_slots"      # 5 (Claude가 정함, 사장님 「진행해줘」 9/9) — 관리 재진입 전용 동시보유 슬롯 (자동 워커 상한과 무관)
+S_STAGE1 = "managed_symbol_stage1_capital"       # 10 (사장님 「다시 10usdt로 진입」) — 재진입 1단계 증거금. 템플릿 1단계가 100 이어도 이 값으로 덮는다 (Fix 365e: #4429 가 100 으로 나간 사고)
 
 DEFAULTS: dict[str, Any] = {
     S_MODE: "probe", S_ENABLED: True, S_ENTRY: True, S_MAX_ATTEMPTS: 10, S_DAILY: 10,
-    S_MAX_SYMBOLS: 20, S_IDLE_DAYS: 7, S_HEDGE: False, S_LOOKBACK_H: 48, S_COOLDOWN: 900, S_SLOTS: 5,
+    S_MAX_SYMBOLS: 20, S_IDLE_DAYS: 7, S_HEDGE: False, S_LOOKBACK_H: 48, S_COOLDOWN: 900, S_SLOTS: 5, S_STAGE1: 10,
 }
 
 STATUS_WATCHING = "WATCHING"
@@ -81,6 +82,16 @@ def get_int(db, key: str, lo: int, hi: int) -> int:
     except (TypeError, ValueError):
         n = int(DEFAULTS[key])
     return n if lo <= n <= hi else int(DEFAULTS[key])
+
+
+def stage1_capital(db) -> Decimal:
+    """재진입 1단계 증거금(USDT). 설정 없음/이상값 = 10 (사장님 「10usdt」)."""
+    v = _raw(db, S_STAGE1)
+    try:
+        d = Decimal(str(v)) if v is not None else Decimal(str(DEFAULTS[S_STAGE1]))
+    except Exception:  # noqa: BLE001
+        d = Decimal(str(DEFAULTS[S_STAGE1]))
+    return d if Decimal("1") <= d <= Decimal("10000") else Decimal(str(DEFAULTS[S_STAGE1]))
 
 
 def loss_ladder_mode(db) -> str:
@@ -349,7 +360,18 @@ def enter_symbol(db, ms, side: str, *, account, decrypt_text, now: datetime | No
     ).scalar_one_or_none()
     if s1 is not None:
         s1.trigger_price = None          # 시장가 강제 (ladder_restart 와 같은 방식)
+        # Fix 365e: 재진입 1단계 = 설정 금액(기본 10 USDT). 템플릿 1단계(사장님이 옛날에 100 으로 만든 것)를 그대로 쓰면 100 이 나간다 (#4429 사고).
+        #   execution_service 의 MARKET 경로는 planned_capital 로 수량을 현재가에 맞춰 다시 계산한다(Fix 130).
+        _cap = stage1_capital(db)
+        if Decimal(str(s1.planned_capital or 0)) != _cap:
+            logger.warning("[%s] %s 재진입 1단계 금액 %s → %s USDT 로 덮음 (템플릿 #%s)", FIX, ms.symbol, s1.planned_capital, _cap, tpl.id)
+        s1.planned_capital = _cap
+        s1.planned_qty = None
+        if getattr(s1, "additional_margin_usdt", None) is not None:
+            s1.additional_margin_usdt = None
         db.commit()
+    else:
+        raise ValueError(f"{ms.symbol} 1단계 계획 없음 — 진입 중단")
     try:
         ExecutionService(
             db,
