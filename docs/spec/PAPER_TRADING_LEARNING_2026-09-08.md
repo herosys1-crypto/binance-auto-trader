@@ -159,3 +159,10 @@ python -m app.workers.paper_trading_worker once   # 컨테이너 안에서 즉�
 자리(그룹) 추가: **MKT_UP / MKT_DOWN** = 거래량 5M 이상 USDT 심볼 중 24h 상승 비율 ≥0.60 / ≤0.40 (Claude가 정함, 설정 `paper_breadth_up`/`paper_breadth_down`; 9/10 부터 실시간 행에만 붙음, Redis `market:breadth`·설정 `market_breadth_last` 에도 저장 = 나중에 실코드 방향 게이트가 읽을 자리). **LIVE_OK** = 실코드 게이트(obv_gate · regime(SHORT) · Fix 350 1h 하락 skip(SHORT))를 그 봉에서 다시 돌려 통과한 진입 — 「실코드가 실제로 잡았을 것」의 부분집합 근사(급등 초입 거부·blocklist·슬롯·일일 한도는 미반영).
 
 옛 행 갱신: 백필은 엔진 버전이 바뀌면 커서를 0 으로 되돌려 다시 걷고 `on_conflict_do_update(where version < 2)` 로 갱신(≈11 사이클). 실시간 CLOSED 행은 봉 창(262봉) 안이면 심볼당 20건/사이클 재계산. 창 밖 옛 행은 v1 그대로(보고서는 엔진별로 있는 값만 센다).
+
+### Fix 366b — 반박 검증(3렌즈 27 에이전트, 확정 14) 반영
+- **엔진 간 비교는 짝 표본**: 백필 창 144봉 < 48h 라 손절이 얕은 엔진일수록 먼저 끝나고 깊은 엔진은 검열(END_OF_DATA)된다 → 따로 세면 sl25 가 유리해 보이는 가짜 우위(합성 실험 +11). live 계열 넷이 **모두 끝난 건**만 비교하고 엔진별 검열 수를 헤더에 적는다.
+- live 통계는 TP1 15 로 계산된 행만(v1 적응 TP 행 제외), v1/v2 행 수 표시. 채택 제안(§0)은 house·live 만, 변형 엔진 통과는 「진단」 줄로 분리. 가설 수(규칙×자리×엔진)와 통과 수를 같이 적는다.
+- 추가 변형 `live` = LONG 만(실코드 `pyramid_sides=LONG`), 두 번째 lot 은 합산 평단(10+300n) 기준으로 ROI≥5·이동≥3% 재측정(실코드와 동일).
+- 게이트 재현: `_learn_` 접두사(Redis 캐시 우회), 4h 80봉(실코드 정규화 창), LONG 은 obv+LONG regime, SHORT 는 obv+regime+1h 하락+급등 초입 거부. 미반영: blocklist·슬롯·일일 한도·24h/순위 유니버스 → LIVE_OK 는 여전히 상위집합.
+- 옛 행 갱신: 실시간 CLOSED 행은 새 엔진이 다 끝났을 때만 v2 로(미완이면 다음 사이클), 백필 upsert 는 CLOSED 행만.
