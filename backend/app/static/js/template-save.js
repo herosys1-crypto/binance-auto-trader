@@ -47,6 +47,7 @@ async function saveAsTemplate() {
       additional_margins: inp.additional_margins,
       last_stage_trigger_percent: inp.last_stage_trigger_percent,
       ..._tpFields,
+      trigger_mode: cmState._triggerMode || 'PRICE_DOWN_PCT',   // Fix 367d: OBV 모달에서 저장한 템플릿이 PRICE_DOWN_PCT 로 남던 누락
       stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
       crisis_max_loss_threshold: tpsl.crisis_max_loss_threshold,  // 2026-06-01 fix: cm-submit.js 와 일관성 (직접입력 모드 누락)
       reentry_policy: 'manual_ready',
@@ -88,6 +89,7 @@ async function saveAsTemplate() {
       stop_loss_percent_of_capital: srcTpl.stop_loss_percent_of_capital,
       crisis_max_loss_threshold: srcTpl.crisis_max_loss_threshold,
       reentry_policy: srcTpl.reentry_policy || 'manual_ready',
+      trigger_mode: srcTpl.trigger_mode || 'PRICE_DOWN_PCT',   // Fix 367d
     };
     sourceDesc = `선택한 템플릿 「${srcTpl.name}」 (#${srcTpl.id}) 의 설정 복제`;
   } else {

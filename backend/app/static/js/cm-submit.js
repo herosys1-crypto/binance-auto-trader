@@ -31,7 +31,7 @@ async function submitCreate(scheduled = false) {
   const isMulti = document.getElementById('cm-multi-symbol-toggle')?.checked;
   const editingId = cmState.editingStrategyId;
   if (isMulti && !editingId) {
-    return submitCreateMulti();  // 신규 batch 함수 호출
+    return submitCreateMulti(scheduled);  // 신규 batch 함수 호출 (Fix 367d: 예약 여부 전달 — 전엔 버려져 즉시 발주됐다)
   }
   // 🚨 2026-06-19 사장님 critical fix: 트리거 % 검증! (= SYNUSDT -585 USDT 손실!)
   // 사장님: '전략설정은 완벽해야 해!'
@@ -188,8 +188,9 @@ async function submitCreate(scheduled = false) {
     if (cmState.mode === 'direct') {
       const ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
       const leverage = leverageFromInput;
-      const inp = cmState._directInputs || _collectDirectInputs();
-      const tpsl = cmState._directTpsl || _collectTpSl();
+      // Fix 367d (2차 반박 검증): 미리보기 때 캡처한 캐시를 보내면 그 뒤 칸에서 고친 TP1 청산 % 가 버려진다 → 제출 시 DOM 을 다시 읽는다
+      const inp = (typeof _collectDirectInputs === 'function') ? _collectDirectInputs() : cmState._directInputs;
+      const tpsl = (typeof _collectTpSl === 'function') ? _collectTpSl() : cmState._directTpsl;
       // 2026-05-06 사용자 보고 fix: 이전엔 TP1~5 만 전송 → 신규 strategy 의 template 에
       // TP6~10 NULL 저장됨. _collectTpSl 는 TP1~10 수집하지만 여기서 안 보내서 누락.
       // dict comprehension 으로 TP1~10 모두 동적 전송 (TP4~10 NULL 이면 그대로 NULL).

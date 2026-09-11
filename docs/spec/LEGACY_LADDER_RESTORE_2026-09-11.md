@@ -26,15 +26,15 @@ Fix 326), 3단계는 그 뒤 트리거에 닿아야 들어간다 = 「부분손�
 ## 2. 변경 (가족 = 모달 + 가격 트리거 + fixed/scheduled 만)
 
 - `app/services/strategy_service.py`
-  - 모듈 함수 `legacy_manual_family(trigger_mode, capital_management_mode, entry_origin)`:
-    `entry_origin == "manual_modal"` **and** 템플릿 `trigger_mode ∈ {PRICE_DOWN_PCT, PRICE_UP_PCT}`(없으면 PRICE_DOWN_PCT)
-    **and** `capital_management_mode ∈ {fixed, scheduled}` 일 때만 True.
+  - 모듈 함수 `legacy_manual_family(trigger_mode, capital_management_mode, entry_origin, strategy_type)`:
+    `entry_origin == "manual_modal"` **and** `legacy_manual_template(...)` = 템플릿 `trigger_mode ∈ {PRICE_DOWN_PCT, PRICE_UP_PCT}`(없으면 PRICE_DOWN_PCT)
+    **and** `capital_management_mode ∈ {fixed, scheduled}` **and** `strategy_type` 이 `DYNAMIC_*` 일 때만 True.
   - `create_strategy_instance(..., entry_origin=None)`: 가족이면 `SystemSettingsService.get_legacy_ladder_defaults()`
     → `(tp1, fs_on, fs_roi)`; 아니면 종전 `(TP1_PCT_DEFAULT=15, True, force_sl_roi_new_default=25)`.
   - 생성 뒤 로그 `[Fix367] 기존 방식 새 전략 #… TP1 +25% · 강제손절 없음 (템플릿 TP1 청산 25%)`.
   - 판정의 템플릿 부분은 `legacy_manual_template(trigger_mode, capital_management_mode, strategy_type)` —
     **strategy_type 이 `DYNAMIC_*`**(모달·다중심볼·저장 템플릿) 이어야 한다. 퍼프 터미널(`terminal_manual`)·AUTO_BB·PUMPSPLIT 은 아니다.
-    생성 시(strategy_service)와 런타임(stage_trim)이 같은 함수를 쓴다.
+    이 판정은 **생성 시에만** 쓰고, 런타임(stage_trim)은 그때 찍힌 표식 `entry_profile` 만 본다 (Fix 367c).
 - **Fix 367c — 가족 표식 `strategy_instances.entry_profile`** (alembic 0039, String(20) NULL): 생성 시 가족이면 `'legacy_manual'`.
   런타임 판정 `stage_trim.is_legacy_manual_instance` 는 **이 표식만** 본다(템플릿 추정 없음). 반박 검증이 잡은 대로, 템플릿으로 추정하면
   배포 **전**에 만든 살아 있는 #4478 RAYSOL·#4480 KAT(손절 −25 ON)까지 정리 제외가 소급돼 손절이 「잔량 10 부분정리」에서
@@ -62,6 +62,12 @@ Fix 326), 3단계는 그 뒤 트리거에 닿아야 들어간다 = 「부분손�
 - `app/services/system_settings_service.py`: `get_legacy_ladder_defaults()`.
 - `cm-submit.js`: 생성 토스트가 **서버 응답값**(`tp1_pct_override`, `force_sl_enabled_override`) 을 보여준다
   (「➕ 기존 방식 (처음 방식: TP1 +25% · 강제손절 없음)」). `index.html` 버튼 설명 갱신.
+- **Fix 367d (2차 반박 검증, UI 경로)**: ① `openCreateModal` 이 `cmState` 를 새 객체로 갈아끼워 `_pendingObv` 가 죽어 있었다(OBV 모달도 TP1 청산 25) → 승계.
+  ② ✏️ 수정 → 「🔄 종료 후 새로 시작」·🔄 다시 시작 은 blueprint 에 trigger_mode 가 없어 **OBV 전략도 PRICE_DOWN_PCT(기존 방식 가족)로 재생성**됐다
+  (Fix 367 전부터의 강등 버그, 367 뒤엔 손절까지 사라짐) → 원 전략 `GET /strategies/{id}` 의 trigger_mode 복원. ③ 「📅 예약」+다중 심볼이 예약을 버리고
+  즉시 발주하던 것 → `submitCreateMulti(scheduled)` 전달, 예약이면 `/start` 안 부름. ④ 제출이 미리보기 때 캐시한 TP/SL 을 보내 칸에서 고친
+  TP1 청산 % 가 버려지던 것 → 제출 시 DOM 재수집(단일·다중). ⑤ 「💾 템플릿으로 저장」도 trigger_mode 를 남긴다. ⑥ 기존 방식 신규 모달은
+  직전 전략의 「🔄 청산 후 재진입」 체크를 복원하지 않고 OFF 로 시작(손절 없는 가족에서 그 체크는 「청산 후만 진입」이라 정상 단계 진입을 건너뛴다).
 - `scripts/verify_fix364_deploy.py` ⑤절: 코드 핀 19개 + 설정 실효값 5개(`stage_trim_before_next_enabled` 포함)
   + 최근 기존 방식(모달·가격·DYNAMIC_*) 인스턴스 5건에 표식(`✔Fix367` / 표식 없음 = 배포 전 생성)·TP1 청산 ⚠·단계정리 적용/제외 표시.
   FAIL 은 「표식 인스턴스인데 제외 설정이 켜진 상태에서 정리가 적용될 때」만 (되돌리기 `=0` 이면 FAIL 아님).
@@ -103,5 +109,8 @@ stage_trim_exclude_legacy_manual = 0   → 기존 방식도 Fix 304 대로 다�
 - 반박 검증(9/11, 렌즈 8 → 후보 41 → 반박자 2명씩): 확정 34건은 6주제 — ① 런타임 판정이 템플릿 추정이라 배포 전 인스턴스에 소급(→ 표식 컬럼)
   ② TP1 청산 25 가 blueprint 자동 복원에 덮임(→ 모달 기본 25 + 경고) ③ OBV 다중심볼 템플릿 trigger_mode 누락(→ 전송) ④ 급등락 알림 진입도 같은 가족(→ 문서 정정)
   ⑤ 검사기 ✔ 판정 TP1==25 하드코딩·되돌리기 시 거짓 FAIL(→ 표식·설정 기준) ⑥ 설정 NaN 이면 500(→ is_finite). 반박 7건(재진입 체크박스 = v131 설계 등).
-- 배포: `alembic upgrade head`(0039) 필요.
+- 배포: `alembic upgrade head`(0039) 필요. 🚨 첫 배포(9/11 01:37 UTC)는 리비전 id 37자가 `alembic_version.version_num VARCHAR(32)` 를 넘어
+  롤백됐는데 체인이 재시작까지 진행해 약 90초간 새 코드가 옛 스키마에서 UndefinedColumn 을 냈다(346줄, 주문 영향 없음) → id `0039_si_entry_profile` 로 재배포.
+  교훈: alembic id ≤ 32자, `upgrade head` 성공을 확인한 뒤에만 restart.
+- 2차 반박 검증(367c 델타, 렌즈 4 → 후보 17 → 확정 13/기각 4) → Fix 367d 로 반영.
 - 배포 후 `docker compose exec -T scheduler python scripts/verify_fix364_deploy.py` ⑤절 PASS, 새로 만든 기존 방식 인스턴스가 `✔Fix367`.

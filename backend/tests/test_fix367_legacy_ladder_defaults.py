@@ -231,6 +231,22 @@ def test_checker_and_ui_pins():
     assert i_bp > 0 and "if (cmState && !cmState._pendingObv)" in om[i_bp:i_bp + 3000] and "_q1.value = '25'" in om[i_bp:i_bp + 3000]
     i_obv = om.find("async function openCreateChartObvModal()")
     assert "cmState._pendingObv = true;" in om[i_obv:i_obv + 600] and "cmState._pendingObv = false;" in om[i_obv:i_obv + 600]
-    # 다중 심볼도 trigger_mode 를 보낸다 (OBV 모달 + 다중심볼이 가격 사다리로 저장되던 누락, 반박 검증 C8)
+    # Fix 367d: openCreateModal 이 cmState 를 새 객체로 갈아끼우므로 플래그를 승계해야 OBV 모달이 25 를 받지 않는다 (2차 반박 검증)
+    i_re = om.find("cmState = { accountId: null, side: 'SHORT', templateId: null, mode: 'direct',")
+    assert i_re > 0 and "_pendingObv: _pendingObv367" in om[i_re:i_re + 400] and "const _pendingObv367 = !!(cmState && cmState._pendingObv);" in om[i_re - 400:i_re]
+    # Fix 367d: ✏️ 수정·🔄 다시 시작 은 원 전략의 trigger_mode 를 복원한다 (OBV 전략이 기존 방식으로 재생성되던 것)
+    i_ed = om.find("await loadPrevBlueprint(editStrategyId, /*silent=*/true);")
+    assert i_ed > 0 and "cmState._triggerMode = _tm;" in om[i_ed:i_ed + 1200] and "api(`/strategies/${editStrategyId}`)" in om[i_ed:i_ed + 1200]
+    # Fix 367d: 기존 방식 신규 모달은 「🔄 청산 후 재진입」 체크 기본 OFF (blueprint 복원에 안 덮임)
+    assert "'cm-retry-after-liq-enabled', 'cm-retry-after-liq-enabled-top'" in om[i_bp:i_bp + 3500]
+    # 다중 심볼도 trigger_mode 를 보낸다 (OBV 모달 + 다중심볼이 가격 사다리로 저장되던 누락, 반박 검증 C8) + 예약 전달 (367d)
     ms = (APP / "static" / "js" / "multi-symbol.js").read_text(encoding="utf-8")
-    assert "trigger_mode: cmState._triggerMode || 'PRICE_DOWN_PCT'" in ms and "capital_management_mode: 'fixed'" in ms
+    assert "trigger_mode: cmState._triggerMode || 'PRICE_DOWN_PCT'" in ms and "capital_management_mode: scheduled ? 'scheduled' : 'fixed'" in ms
+    assert "async function submitCreateMulti(scheduled = false)" in ms and "if (scheduled) {" in ms
+    assert "return submitCreateMulti(scheduled);" in js
+    # Fix 367d: 제출 시 TP/SL 을 DOM 에서 다시 읽는다 (미리보기 캐시가 칸 수정을 버리던 것)
+    assert "const tpsl = (typeof _collectTpSl === 'function') ? _collectTpSl() : cmState._directTpsl;" in js
+    assert "const tpsl = (typeof _collectTpSl === 'function') ? _collectTpSl() : cmState._directTpsl;" in ms
+    # Fix 367d: 저장 템플릿도 trigger_mode 를 남긴다
+    tsv = (APP / "static" / "js" / "template-save.js").read_text(encoding="utf-8")
+    assert tsv.count("trigger_mode:") >= 2

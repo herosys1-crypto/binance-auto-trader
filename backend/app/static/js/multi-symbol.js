@@ -139,7 +139,7 @@ function _renderMultiSymbolChips() {
   }
 }
 
-async function submitCreateMulti() {
+async function submitCreateMulti(scheduled = false) {
   // 다중 심볼 모드 — chip 검증된 ✓ valid 심볼만 사용 (사용자 UX v3, 2026-05-12)
   const symbols = _cmMultiSymbols.filter(s => s.status === 'valid').map(s => s.symbol);
   if (!symbols.length) { toast('✓ 유효한 심볼이 1개 이상 필요 (chip 으로 추가 + 검증)', 'error'); return; }
@@ -154,7 +154,7 @@ async function submitCreateMulti() {
     try {
       const ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
       const inp = cmState._directInputs || _collectDirectInputs();
-      const tpsl = cmState._directTpsl || _collectTpSl();
+      const tpsl = (typeof _collectTpSl === 'function') ? _collectTpSl() : cmState._directTpsl;   // Fix 367d: 제출 시 재수집
       const _tpFields = {};
       for (let n = 1; n <= 10; n++) {
         _tpFields[`tp${n}_percent`] = tpsl[`tp${n}_percent`];
@@ -235,7 +235,7 @@ async function submitCreateMulti() {
               strategy_template_id: templateId,
               symbol: sym, side: cmState.side, start_price: String(startPrice),
               leverage_override: leverageFromInput,
-              capital_management_mode: 'fixed',   // Fix 367c: 단일 경로와 같게 명시 (서버 기본과 동일)
+              capital_management_mode: scheduled ? 'scheduled' : 'fixed',   // Fix 367c/367d: 단일 경로(cm-submit.js)와 같게 — 예약이면 scheduled
             },
           });
           console.log(`[batch] ${sym} created`, created);
@@ -243,6 +243,11 @@ async function submitCreateMulti() {
           console.error(`[batch] ${sym} create failed`, createErr);
           results.push({ symbol: sym, status: 'fail', message: `생성 실패: ${createErr.message}` });
           continue;  // start 시도 안 함
+        }
+        // 📅 Fix 367d: 예약이면 지금 주문을 내지 않는다 (단일 경로와 같게 — scheduled_entry_worker 가 조건 충족 시 시작)
+        if (scheduled) {
+          results.push({ symbol: sym, status: 'ok', strategy_id: created.id, message: `#${created.id} 예약 완료 (조건 충족 시 자동 진입)` });
+          continue;
         }
         try {
           await api(`/strategies/${created.id}/start`, { method: 'POST' });

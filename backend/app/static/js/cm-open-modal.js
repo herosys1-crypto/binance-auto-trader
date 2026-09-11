@@ -230,9 +230,11 @@ async function openCreateModal(editStrategyId) {
       });
     });
   });
+  // Fix 367d: 이 재할당이 openCreateChartObvModal 이 찍은 _pendingObv 를 지워 OBV 모달에도 TP1 청산 25 가 들어갔다 (2차 반박 검증) → 승계
+  const _pendingObv367 = !!(cmState && cmState._pendingObv);
   cmState = { accountId: null, side: 'SHORT', templateId: null, mode: 'direct',
               capitals: ['', '', '', '', '', '', '', '', '', ''], preview: null,
-              editingStrategyId: editStrategyId || null };
+              editingStrategyId: editStrategyId || null, _pendingObv: _pendingObv367 };
   buildCapitalsGrid();  // 트리거 % 는 기본값 (2~4=10, 5~9=20) pre-fill 된 상태로 생성됨
   // capital 만 초기화 (트리거 기본값은 유지)
   for (let i = 1; i <= 10; i++) {
@@ -277,6 +279,20 @@ async function openCreateModal(editStrategyId) {
     submit.textContent = '🔄 종료 후 새로 시작 (신 시작가)';
     if (inplaceBtn) inplaceBtn.classList.remove('hidden');  // in-place 버튼 노출
     await loadPrevBlueprint(editStrategyId, /*silent=*/true);
+    // 🎯 Fix 367d (2차 반박 검증): ✏️ 수정 → 「🔄 종료 후 새로 시작」·🔄 다시 시작 은 blueprint 에 trigger_mode 가 없어
+    //   OBV 자동 전략도 PRICE_DOWN_PCT(기존 방식 가족 = TP1 25·강제손절 없음)로 재생성됐다 → 원 전략의 trigger_mode 를 복원한다.
+    try {
+      const _orig = await api(`/strategies/${editStrategyId}`);
+      const _tm = _orig && _orig.trigger_mode ? String(_orig.trigger_mode).toUpperCase() : 'PRICE_DOWN_PCT';
+      cmState._triggerMode = _tm;
+      if (_tm === 'OBV_REVERSE') {
+        cmState.mode = 'direct';
+        cmState.templateId = null;
+        console.log(`[Fix367d] 전략 #${editStrategyId} = OBV 자동 → 재생성도 OBV_REVERSE 로`);
+      }
+    } catch (_tme) {
+      console.warn('[Fix367d] 원 전략 trigger_mode 조회 실패 → PRICE_DOWN_PCT 유지:', _tme);
+    }
   } else {
     banner.classList.add('hidden');
     title.textContent = '➕ 새 전략 시작';
@@ -325,6 +341,13 @@ async function openCreateModal(editStrategyId) {
             if (cmState && !cmState._pendingObv) {
               const _q1 = document.getElementById('cm-tp1-qty');
               if (_q1) _q1.value = '25';
+              // Fix 367d: 직전 전략의 「🔄 청산 후 재진입」 체크가 새 기존 방식에 복원되면 손절 없는 가족에서 정상 단계 진입을 건너뛴다
+              //   (v131 체크박스 = 「청산 후만 진입」) → 신규 기존 방식은 기본 OFF 로 시작한다. 사장님이 켜면 그 값.
+              for (const _rid of ['cm-retry-after-liq-enabled', 'cm-retry-after-liq-enabled-top']) {
+                const _rel = document.getElementById(_rid);
+                if (_rel) _rel.checked = false;
+              }
+              if (typeof _syncRetryTopHighlight === 'function') { try { _syncRetryTopHighlight(); } catch (_e2) {} }
             }
           } catch (_qe) {
             console.warn('[Fix367c] TP1 청산 기본 세팅 실패:', _qe);
