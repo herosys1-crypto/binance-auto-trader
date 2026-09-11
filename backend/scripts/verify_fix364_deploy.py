@@ -5,6 +5,8 @@
   ② 프로세스 층: 이 컨테이너의 프로세스가 그 파일보다 **나중에** 시작됐는가 (= 재시작 됐는가. grep 은 디스크지 프로세스가 아니다)
   ③ 운영 층  : 살아 있는 OBV 자동 인스턴스마다 단계 계획·손절 override·잔량·차단 사유(Redis)·피라미딩 횟수를 그대로 찍는다
                + Fix 364 설정 키의 **실효값**(DB 행 없으면 기본값)
+  ④ Fix 365  : 심볼 관리 재진입 명부·워커 사이클·프로브 배선
+  ⑤ Fix 367  : 「➕ 새 전략 (기존 방식)」 = 처음 방식(TP1 +25 · 강제손절 없음) 배선 + 설정 실효값 + 최근 기존 방식 인스턴스 5건
 
 사용 (VPS, ~/binance-auto-trader/backend):
   docker compose exec -T scheduler python scripts/verify_fix364_deploy.py     # 워커가 도는 컨테이너 (②가 중요)
@@ -334,6 +336,133 @@ def check_managed_symbols() -> None:
         fail(f"명부 조회 실패 (마이그레이션 0037 적용됐는지 확인): {e!r}")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# ⑤ Fix 367 「➕ 새 전략 (기존 방식)」 = 처음 방식 (TP1 +25 · 강제손절 없음)
+# ─────────────────────────────────────────────────────────────────────────
+LEGACY_SETTING_KEYS = [
+    ("legacy_ladder_tp1_pct", "25", "기존 방식 새 전략 TP1 임계 (사장님 verbatim 25)"),
+    ("legacy_ladder_force_sl_enabled", "0", "기존 방식 새 전략 강제손절 (0 = 없음, 1 = Fix 362 기본 -25)"),
+    ("stage_trim_before_next_enabled", "(코드 기본 OFF)", "단계 정리(Fix 304) 전역 스위치"),
+    ("stage_trim_exclude_legacy_manual", "1", "기존 방식은 단계 정리 제외 (1 = 처음 방식, 0 = Fix 304 대로 잔량 10 정리)"),
+]
+
+
+class _NoRowDB(_NoDB):
+    """SystemSettingsService.get 이 쓰는 execute().scalar_one_or_none() 도 None 을 돌려주는 빈 DB."""
+
+    def execute(self, *_a, **_k):
+        class _R:
+            def scalar_one_or_none(self):
+                return None
+        return _R()
+
+
+def check_legacy_ladder() -> None:
+    print("⑤ Fix 367 기존 방식 새 전략 = 처음 방식 (TP1 +25 · 강제손절 없음)")
+
+    def _read(rel: str) -> str:
+        with open(os.path.join(_ROOT, rel), encoding="utf-8") as f:
+            return f.read()
+
+    try:
+        ss_src = _read("app/services/strategy_service.py")
+        crud_src = _read("app/api/v1/strategies/crud.py")
+        tree = ast.parse(ss_src)
+        n = _def_count(tree, "legacy_manual_family")
+        (ok if n == 1 else fail)(f"strategy_service.legacy_manual_family 정의 {n}개 (1 이어야)")
+        has_param = any(
+            isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name == "create_strategy_instance"
+            and "entry_origin" in [a.arg for a in fn.args.kwonlyargs]
+            for fn in ast.walk(tree)
+        )
+        (ok if has_param else fail)("create_strategy_instance(entry_origin=…) 파라미터")
+        for pin, label in (
+            ("get_legacy_ladder_defaults()", "기존 방식 → 설정 실효값 사용"),
+            ("tp1_pct_override=_tp1_default", "TP1 임계가 가족 판정을 따른다"),
+            ("force_sl_enabled_override=_fs_on_default", "강제손절 ON/OFF 가 가족 판정을 따른다"),
+            ("force_sl_roi_override=_fs_roi_default", "강제손절 ROI 가 가족 판정을 따른다"),
+            ("TP1_PCT_DEFAULT, True, _new_force_sl_roi", "OBV 자동·워커 경로는 Fix 362 기본 그대로"),
+        ):
+            (ok if pin in ss_src else fail)(f"{label}: {pin}")
+        (ok if "entry_origin=ENTRY_ORIGIN_MANUAL" in crud_src else fail)("POST /strategies 가 entry_origin=manual_modal 을 넘긴다")
+        from app.core import risk_constants as RC
+        (ok if RC.LEGACY_LADDER_TP1_DEFAULT == 25 and RC.LEGACY_LADDER_FORCE_SL_DEFAULT is False else fail)(
+            f"코드 기본값 TP1 {RC.LEGACY_LADDER_TP1_DEFAULT} / 강제손절 {RC.LEGACY_LADDER_FORCE_SL_DEFAULT}")
+        from app.services.strategy_service import ENTRY_ORIGIN_MANUAL as _M, legacy_manual_family as _fam
+        _D = "DYNAMIC_LONG"
+        _cases = (
+            (_fam("PRICE_DOWN_PCT", "fixed", _M, _D), True), (_fam("PRICE_UP_PCT", "scheduled", _M, "DYNAMIC_SHORT"), True),
+            (_fam(None, None, _M, _D), True),
+            (_fam("OBV_REVERSE", "fixed", _M, _D), False), (_fam("PRICE_DOWN_PCT", "fixed", None, _D), False),
+            (_fam("PRICE_DOWN_PCT", "split_entry", _M, _D), False), (_fam("PRICE_DOWN_PCT", "stage_ladder", _M, _D), False),
+            (_fam("PRICE_DOWN_PCT", "fixed", _M, "terminal_manual"), False), (_fam("PRICE_DOWN_PCT", "fixed", _M, None), False),
+        )
+        (ok if all(a == b for a, b in _cases) else fail)("가족 판정 9례 (모달 + 가격 트리거 + fixed/scheduled + DYNAMIC_* 만 True)")
+        trim_src = _read("app/services/stage_trim.py")
+        trim_tree = ast.parse(trim_src)
+        (ok if _def_count(trim_tree, "is_legacy_manual_instance") == 1 and _def_count(trim_tree, "legacy_manual_excluded") == 1 else fail)(
+            "stage_trim.is_legacy_manual_instance / legacy_manual_excluded 정의 1개씩")
+        i_te = trim_src.find("def trim_enabled(")
+        (ok if "if legacy_manual_excluded(db) and is_legacy_manual_instance(db, strategy):" in trim_src[i_te:i_te + 4000] else fail)(
+            "trim_enabled 안에 기존 방식 제외 훅 (Fix 304 정리는 기존 방식에 안 붙는다)")
+        es_src = _read("app/services/execution_service.py")
+        (ok if "if trim_enabled(self.db, strategy) and stage_no > 1:" in es_src else fail)("_trim_before_stage 가 여전히 trim_enabled(db, strategy) 를 통과한다")
+        from app.services.system_settings_service import SystemSettingsService as _SSS
+        d = _SSS(_NoRowDB()).get_legacy_ladder_defaults()
+        (ok if d == (RC.LEGACY_LADDER_TP1_DEFAULT, False, 0) else fail)(f"설정 행 없을 때 실효값 = {d} (25, False, 0 이어야)")
+    except Exception as e:  # noqa: BLE001
+        fail(f"코드 층 검사 실패: {e!r}")
+        return
+    if CODE_ONLY:
+        skip("--code-only: 운영 층 생략")
+        return
+    try:
+        from sqlalchemy import select
+        from app.core.database import SessionLocal
+        from app.models.system_setting import SystemSetting
+        from app.models.strategy_instance import StrategyInstance
+        from app.models.strategy_template import StrategyTemplate
+    except Exception as e:  # noqa: BLE001
+        skip(f"DB 모듈 import 실패 → 운영 층 생략: {e!r}")
+        return
+    db = SessionLocal()
+    try:
+        print("  ▸ 설정 실효값 (DB 행 없음 = 기본값)")
+        for key, default, label in LEGACY_SETTING_KEYS:
+            row = db.get(SystemSetting, key)
+            v = None if row is None else row.value
+            src = "DB" if v not in (None, "") else "기본"
+            print(f"     {key:<36} = {str(v) if src == 'DB' else default:<14} [{src}]  {label}")
+        rows = db.execute(
+            select(StrategyInstance, StrategyTemplate)
+            .join(StrategyTemplate, StrategyInstance.strategy_template_id == StrategyTemplate.id)
+            .where(StrategyTemplate.trigger_mode.in_(("PRICE_DOWN_PCT", "PRICE_UP_PCT")))
+            .where(StrategyTemplate.strategy_type.startswith("DYNAMIC_", autoescape=True))
+            .where(StrategyInstance.capital_management_mode.in_(("fixed", "scheduled")))
+            .order_by(StrategyInstance.id.desc())
+            .limit(5)
+        ).all()
+        print(f"  ▸ 최근 기존 방식(모달·가격 트리거·DYNAMIC_*) 인스턴스 {len(rows)}건 — 배포 뒤 새로 만든 것은 ✔Fix367 로 보여야 한다")
+        if not rows:
+            skip("없음 — 「➕ 새 전략 (기존 방식)」 으로 하나 만들면 여기에 나타난다")
+        from app.services.stage_trim import is_legacy_manual_instance as _is_leg, trim_enabled as _trim_on
+        for si, tpl in rows:
+            _tp1, _on, _roi = si.tp1_pct_override, si.force_sl_enabled_override, si.force_sl_roi_override
+            _mark = "✔Fix367" if (_on is False and _tp1 is not None and float(_tp1) == 25.0) else "(Fix 362 기본 = 배포 전 생성)"
+            _made = f"{si.created_at:%m-%d %H:%M}" if getattr(si, "created_at", None) else "?"
+            _fam_rt = _is_leg(db, si, tpl)
+            _trim = _trim_on(db, si)
+            print(f"     #{si.id} {si.symbol} {si.side} status={si.status} stage={si.current_stage} made={_made} "
+                  f"TP1={_tp1} 강제SL={'끔' if _on is False else ('ON' if _on else '전역')}/{_roi} "
+                  f"템플릿TP1청산={tpl.tp1_qty_ratio}% 런타임가족={'기존방식' if _fam_rt else '아님'} 단계정리={'적용' if _trim else '제외'} {_mark}")
+            if _fam_rt and _trim:
+                fail(f"#{si.id} 기존 방식인데 단계 정리가 적용된다 — stage_trim_exclude_legacy_manual 확인")
+    except Exception as e:  # noqa: BLE001
+        fail(f"운영 층 조회 실패: {e!r}")
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":
     print(f"verify_fix364_deploy — {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z} (cwd {_ROOT})")
     check_code()
@@ -343,6 +472,7 @@ if __name__ == "__main__":
     else:
         check_ops()
     check_managed_symbols()
+    check_legacy_ladder()
     print("─" * 70)
     if _fails:
         print(f"결과: FAIL {len(_fails)}건")

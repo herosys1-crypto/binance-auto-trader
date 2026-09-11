@@ -108,6 +108,33 @@ class SystemSettingsService:
             return FORCE_SL_ROI_NEW_DEFAULT
         return v
 
+    def get_legacy_ladder_defaults(self) -> tuple[Decimal, bool, Decimal]:
+        """🎯 Fix 367: 「➕ 새 전략 (기존 방식)」 새 인스턴스의 (TP1 임계, 강제손절 ON?, 강제손절 ROI).
+
+        TP1 = 설정 legacy_ladder_tp1_pct (기본 25 = 사장님 verbatim). 0 이하·300 초과·파싱 실패는 25 —
+        0(TP 끔)은 목록 드롭다운으로 전략마다 고르는 값이지 새 전략 전체를 조용히 끄는 설정이 아니다 (Fix 362c 와 같은 이유).
+        강제손절 = 설정 legacy_ladder_force_sl_enabled (기본 끔). 켜면 ROI 는 Fix 362 기본(get_new_strategy_force_sl_roi),
+        끔이면 ROI 0 (= 전략 목록 「강제:끔」 표시값, 손절 단계 게이트 면제(Fix 322)도 받지 않는다)."""
+        from app.core.risk_constants import (
+            LEGACY_LADDER_FORCE_SL_DEFAULT,
+            LEGACY_LADDER_FORCE_SL_KEY,
+            LEGACY_LADDER_TP1_DEFAULT,
+            LEGACY_LADDER_TP1_KEY,
+            LEGACY_LADDER_TP1_MAX,
+        )
+        try:
+            tp1 = self.get_decimal(LEGACY_LADDER_TP1_KEY, default=LEGACY_LADDER_TP1_DEFAULT)
+        except Exception:  # noqa: BLE001
+            tp1 = LEGACY_LADDER_TP1_DEFAULT
+        if tp1 is None or tp1 <= 0 or tp1 > LEGACY_LADDER_TP1_MAX:
+            tp1 = LEGACY_LADDER_TP1_DEFAULT
+        try:
+            fs_on = bool(self.get_bool(LEGACY_LADDER_FORCE_SL_KEY, default=LEGACY_LADDER_FORCE_SL_DEFAULT))
+        except Exception:  # noqa: BLE001
+            fs_on = LEGACY_LADDER_FORCE_SL_DEFAULT
+        fs_roi = self.get_new_strategy_force_sl_roi() if fs_on else Decimal("0")
+        return tp1, fs_on, fs_roi
+
     def get_force_sl(self, side: str) -> tuple[bool, Decimal]:
         """손실 한도 강제 청산 전역 설정 (side별) — (enabled, roi_한도_양수).
 

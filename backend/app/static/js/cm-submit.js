@@ -263,9 +263,14 @@ async function submitCreate(scheduled = false) {
       },
     });
     // 🌟 v130: trigger_mode 명시 표시 = 사장님 어떤 방식인지 즉시 확인!
+    // 🎯 Fix 367 (2026-09-11 사장님): 기존 방식 = 처음 방식 (TP1 +25% · 강제손절 없음) — 서버가 정한 값을 응답에서 그대로 보여준다
+    const _tp367 = (created && created.tp1_pct_override != null) ? `TP1 +${Number(created.tp1_pct_override)}%` : '';
+    const _fx367 = (created && created.force_sl_enabled_override === false)
+      ? '강제손절 없음'
+      : ((created && created.force_sl_roi_override != null) ? `강제손절 -${Number(created.force_sl_roi_override)}%` : '');
     const _modeLabel = (cmState._triggerMode === 'OBV_REVERSE')
       ? '📊 OBV 자동 재진입'
-      : '➕ 기존 방식';
+      : `➕ 기존 방식 (처음 방식: ${[_tp367, _fx367].filter(Boolean).join(' · ') || '서버 기본'})`;
     // 🌟 v131: 청산 후 재진입 옵션 = 사장님 안내
     let _retryLabel = '';
     if (_retryAfterLiqEnabled) {

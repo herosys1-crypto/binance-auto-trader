@@ -58,6 +58,7 @@ __all__ = [
     "KEEP_NOTIONAL_DEFAULT", "MIN_NOTIONAL_SAFETY",
     "SETTING_MAX_CUM_LOSS", "SETTING_MIN_TRIM_RATIO", "MIN_TRIM_RATIO_DEFAULT",
     "SETTING_EXCLUDE_MODES", "ALWAYS_EXCLUDED_MODES",
+    "SETTING_EXCLUDE_LEGACY", "legacy_manual_excluded", "is_legacy_manual_instance",
     "trim_enabled", "keep_notional", "compute_trim", "cumulative_loss_exceeded",
     "min_trim_ratio", "ACTION_TRIM", "ACTION_SKIP", "ACTION_BLOCK",
 ]
@@ -73,6 +74,12 @@ SETTING_EXCLUDE_MODES = "stage_trim_exclude_modes"        # Fix 313: 추가 제�
 #   단계마다 청산하면 그 설계가 정면으로 파괴된다. 설정으로도 켤 수 없게
 #   코드에 박아 둔다 — 전역 스위치 하나로 다른 전략의 설계를 부수면 안 된다.
 ALWAYS_EXCLUDED_MODES: frozenset[str] = frozenset({"split_entry"})
+# 🎯 Fix 367 (2026-09-11 사장님): 「➕ 새 전략 (기존 방식)」은 처음 방식 — 정리 없이 트리거에 다음 단계.
+#   "새전략 기존 방식은 손절없고 단계별 트리거에 다음단계 포지션 진입할수 있게 해주 … 과거로 돌악가는것과 같아"
+#   Fix 304 원문("기본전략과 같이 10usdt 남기고 청산하고 다음단계 진입")을 **기본방식에 대해서만** 되돌린다.
+#   OBV 자동·v219 사다리·볼밴 분할은 그대로. 판정 = strategy_service.legacy_manual_template (생성 시와 같은 함수).
+#   되돌리기(재시작 불필요): stage_trim_exclude_legacy_manual = 0.  기본 1 은 Claude가 정함(사장님 지시를 켠 상태).
+SETTING_EXCLUDE_LEGACY = "stage_trim_exclude_legacy_manual"
 
 KEEP_NOTIONAL_DEFAULT = Decimal("10")
 # 잔량이 가격 변동으로 MIN_NOTIONAL 아래로 떨어지면 나중에 못 판다.
@@ -150,6 +157,13 @@ def trim_enabled(db, strategy=None) -> bool:
             getattr(strategy, "symbol", "?"), getattr(strategy, "id", "?"), mode,
         )
         return False
+    # 🎯 Fix 367: 기존 방식(모달·가격 트리거·DYNAMIC_*)은 처음 방식 = 정리 없이 트리거에 다음 단계
+    if legacy_manual_excluded(db) and is_legacy_manual_instance(db, strategy):
+        logger.info(
+            "[Fix367] %s #%s 단계 정리 제외 — 기존 방식(모달·가격 트리거)은 처음 방식 (설정 %s)",
+            getattr(strategy, "symbol", "?"), getattr(strategy, "id", "?"), SETTING_EXCLUDE_LEGACY,
+        )
+        return False
     try:
         from app.models.system_setting import SystemSetting
         row2 = db.get(SystemSetting, SETTING_EXCLUDE_MODES)
@@ -163,6 +177,42 @@ def trim_enabled(db, strategy=None) -> bool:
     except Exception:
         pass
     return True
+
+
+def legacy_manual_excluded(db) -> bool:
+    """🎯 Fix 367: 설정 stage_trim_exclude_legacy_manual (기본 1 = 기존 방식은 정리 제외). 조회 실패 = 기본."""
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, SETTING_EXCLUDE_LEGACY)
+        if row is None or row.value is None or not str(row.value).strip():
+            return True
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:
+        logger.warning("[Fix367] %s 조회 실패 → 기본(제외): %s", SETTING_EXCLUDE_LEGACY, e)
+        return True
+
+
+def is_legacy_manual_instance(db, strategy, template=None) -> bool:
+    """🎯 Fix 367: 이 인스턴스가 「➕ 새 전략 (기존 방식)」인가 — 템플릿을 읽어 strategy_service.legacy_manual_template 로 판정.
+    템플릿이 없거나 조회 실패 = False (정리 유지 = 옛 동작)."""
+    try:
+        from app.services.strategy_service import legacy_manual_template
+        mode = str(getattr(strategy, "capital_management_mode", "") or "")
+        tpl = template
+        if tpl is None:
+            tid = getattr(strategy, "strategy_template_id", None)
+            if not tid:
+                return False
+            from app.models.strategy_template import StrategyTemplate
+            tpl = db.get(StrategyTemplate, tid)
+        if tpl is None:
+            return False
+        return bool(legacy_manual_template(
+            getattr(tpl, "trigger_mode", None), mode, getattr(tpl, "strategy_type", None),
+        ))
+    except Exception as e:
+        logger.warning("[Fix367] 기존 방식 판정 실패 → 정리 유지: %s", e)
+        return False
 
 
 def keep_notional(db) -> Decimal:

@@ -23,7 +23,7 @@ from app.schemas.strategy import (
     StrategyCreateRequest,
     StrategyDetailResponse,
 )
-from app.services.strategy_service import StrategyService
+from app.services.strategy_service import ENTRY_ORIGIN_MANUAL, StrategyService
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,8 @@ def create_strategy(
             capital_management_mode=payload.capital_management_mode,
             # 🌟 v131 단계별 개별 트리거 (사장님 하이브리드!)
             retry_stage_trigger_pcts=payload.retry_stage_trigger_pcts,
+            # 🎯 Fix 367: 사람이 모달로 만든 전략 — 「➕ 새 전략 (기존 방식)」 판정(TP1 +25 · 강제손절 없음)에 쓴다
+            entry_origin=ENTRY_ORIGIN_MANUAL,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e

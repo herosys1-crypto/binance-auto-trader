@@ -95,6 +95,23 @@ FORCE_SL_ALLOWED_ROI: Final[tuple[Decimal, ...]] = (
 )
 
 
+# ===== 🎯 Fix 367 (2026-09-11) — 「➕ 새 전략 (기존 방식)」 = 처음 방식 =====
+# 사장님 verbatim: "새전략 기존 방식은 손절없고 단계별 트리거에 다음단계 포지션 진입할수 있게 해주
+#   처음 개발한 것과 그의 동일해 tp1 익절은 +25% 부터 포지션진입한 금액의 25%부터 익절 할 수 있게
+#   설정해줘 과거로 돌악가는것과 같아"
+# 대상 = 화면 모달로 **새로** 만드는 가격 트리거(PRICE_*) + capital_management_mode fixed/scheduled 인스턴스만
+#   (strategy_service.legacy_manual_family). OBV 자동(Fix 362~365)·자동 워커·기존 인스턴스는 그대로.
+#   - TP1 임계 = 25 (사장님 verbatim). 사다리 나머지는 Fix 184 대로 같은 폭만큼 이동 (10/15/20… → 25/30/35…).
+#   - 강제손절 = 끔 (force_sl_enabled_override=False, roi 0 = 목록 「강제:끔」). 단계는 가격 트리거만으로 진행(Fix 232).
+#   - TP1 청산 비율 25% = 모달 기본(cm-open-modal.js _tpDefaults) 그대로 템플릿 tp1_qty_ratio 에 저장된다.
+#   되돌리기(재시작 불필요): legacy_ladder_force_sl_enabled=1 → 새 기존 방식도 Fix 362 기본(-25) / legacy_ladder_tp1_pct=15.
+LEGACY_LADDER_TP1_KEY: Final[str] = "legacy_ladder_tp1_pct"
+LEGACY_LADDER_TP1_DEFAULT: Final[Decimal] = Decimal("25")          # 사장님 verbatim "+25%"
+LEGACY_LADDER_TP1_MAX: Final[Decimal] = Decimal("300")             # 목록 드롭다운 최댓값과 같게 (Claude가 정함)
+LEGACY_LADDER_FORCE_SL_KEY: Final[str] = "legacy_ladder_force_sl_enabled"
+LEGACY_LADDER_FORCE_SL_DEFAULT: Final[bool] = False                # 사장님 "손절없고"
+
+
 # ===== Take Profit (TP) — 정상 모드 =====
 # TP1~9 default qty ratio (잔량의 %). v6 정책 (2026-05-12): 균일 25%.
 # TP10 만 100% (마지막 안전망 — trailing 미발동 + 가격 계속 상승 케이스).
@@ -204,6 +221,12 @@ __all__ = [
     "FORCE_SL_NEW_ROI_KEY",
     "FORCE_SL_ROI_NEW_DEFAULT",
     "FORCE_SL_ALLOWED_ROI",
+    # Fix 367 기존 방식 새 전략
+    "LEGACY_LADDER_TP1_KEY",
+    "LEGACY_LADDER_TP1_DEFAULT",
+    "LEGACY_LADDER_TP1_MAX",
+    "LEGACY_LADDER_FORCE_SL_KEY",
+    "LEGACY_LADDER_FORCE_SL_DEFAULT",
     # TP
     "TP1_PCT_DEFAULT",
     "DEFAULT_TP_QTY_RATIO_PCT",

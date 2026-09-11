@@ -45,7 +45,8 @@ def test_helper_reads_setting_with_guard(monkeypatch):
 def test_creation_sites_use_new_default():
     s = (ROOT / "services" / "strategy_service.py").read_text(encoding="utf-8")
     assert 'force_sl_roi_override=D("5")' not in s, "새 인스턴스에 -5% 하드코딩이 남아 있다"
-    assert "force_sl_roi_override=_new_force_sl_roi" in s
+    # Fix 367: 생성 줄은 가족 판정 변수를 거친다 — OBV 자동·워커 경로(else)는 여전히 Fix 362 기본을 쓴다
+    assert "force_sl_roi_override=_fs_roi_default" in s and "TP1_PCT_DEFAULT, True, _new_force_sl_roi" in s
     assert "get_new_strategy_force_sl_roi()" in s
     js = (ROOT / "static" / "js" / "live-pump-dump-alerts.js").read_text(encoding="utf-8")
     assert "force_sl_roi_override: 25," in js

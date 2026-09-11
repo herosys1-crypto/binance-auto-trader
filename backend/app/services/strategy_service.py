@@ -8,6 +8,36 @@ from app.models.strategy_stage_plan import StrategyStagePlan
 from app.repositories.strategy_repository import StrategyRepository
 from app.services.strategy_calculator import StrategyCalculator, SymbolRule
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 🎯 Fix 367 (2026-09-11 사장님): 「➕ 새 전략 (기존 방식)」 = 처음 방식.
+#   "새전략 기존 방식은 손절없고 단계별 트리거에 다음단계 포지션 진입할수 있게 해주 처음 개발한 것과 그의 동일해
+#    tp1 익절은 +25% 부터 포지션진입한 금액의 25%부터 익절 할 수 있게 설정해줘 과거로 돌악가는것과 같아"
+#   가족 판정은 아래 순수 함수 하나 — 사람이 화면 모달(POST /strategies → entry_origin=manual_modal)로 만들고,
+#   템플릿 트리거가 가격(PRICE_*)이며, capital_management_mode 가 fixed/scheduled(모달이 보내는 두 값)일 때만.
+#   OBV 자동(OBV_REVERSE)·자동 워커(entry_origin 없음)·볼밴 분할(split_entry)·v219 사다리(stage_ladder)는 아니다.
+# ═══════════════════════════════════════════════════════════════════════════
+LEGACY_PRICE_TRIGGER_MODES = ("PRICE_DOWN_PCT", "PRICE_UP_PCT")
+LEGACY_CAPITAL_MODES = ("fixed", "scheduled")
+LEGACY_STRATEGY_TYPE_PREFIX = "DYNAMIC_"      # 모달·다중심볼·저장 템플릿 = DYNAMIC_LONG/SHORT (터미널 terminal_manual·AUTO_BB·PUMPSPLIT 은 아님)
+ENTRY_ORIGIN_MANUAL = "manual_modal"
+
+
+def legacy_manual_template(trigger_mode, capital_management_mode, strategy_type) -> bool:
+    """🎯 Fix 367: 템플릿 + 자본 모드만으로 「기존 방식」인가 — 생성 시와 런타임(stage_trim) 이 같은 판정을 쓴다.
+    가격 트리거(PRICE_*, 없으면 PRICE_DOWN_PCT) · fixed/scheduled · strategy_type DYNAMIC_* 셋 다 맞아야 True."""
+    if str(trigger_mode or "PRICE_DOWN_PCT").upper() not in LEGACY_PRICE_TRIGGER_MODES:
+        return False
+    if str(capital_management_mode or "fixed").lower() not in LEGACY_CAPITAL_MODES:
+        return False
+    return str(strategy_type or "").upper().startswith(LEGACY_STRATEGY_TYPE_PREFIX)
+
+
+def legacy_manual_family(trigger_mode, capital_management_mode, entry_origin, strategy_type=None) -> bool:
+    """🎯 Fix 367: 이 **생성 요청**이 「➕ 새 전략 (기존 방식)」 가족인가 = 사람이 모달로(entry_origin) + legacy_manual_template."""
+    if entry_origin != ENTRY_ORIGIN_MANUAL:
+        return False
+    return legacy_manual_template(trigger_mode, capital_management_mode, strategy_type)
+
 
 class StrategyService:
     def __init__(self, db) -> None:
@@ -116,6 +146,8 @@ class StrategyService:
         capital_management_mode: str | None = "fixed",
         # 🌟 v131 단계별 개별 트리거 (사장님 하이브리드!)
         retry_stage_trigger_pcts: dict | None = None,
+        # 🎯 Fix 367: 누가 만드는가 — API(모달) 는 ENTRY_ORIGIN_MANUAL, 워커는 None. 기존 방식 판정에만 쓴다.
+        entry_origin: str | None = None,
     ) -> StrategyInstance:
         template_model = self.repo.get_template(strategy_template_id)
         symbol_model = self.repo.get_symbol(symbol)
@@ -574,6 +606,16 @@ class StrategyService:
         #   v166 사장님 지시 (2026-08-16): -15% → -5% / 🎯 Fix 362 (2026-09-08 사장님): "새전략은 -25% 손실이면 청산" → 25
         from app.services.system_settings_service import SystemSettingsService as _SS362
         _new_force_sl_roi = _SS362(self.db).get_new_strategy_force_sl_roi()
+        # 🎯 Fix 367 (2026-09-11 사장님): 「➕ 새 전략 (기존 방식)」은 처음 방식 — TP1 +25% · 강제손절 없음.
+        #   판정 = legacy_manual_family (모듈 함수). OBV 자동·자동 워커는 위 Fix 362 기본(TP1 15 / −25) 그대로.
+        _is_legacy367 = legacy_manual_family(
+            getattr(template_model, "trigger_mode", "PRICE_DOWN_PCT"), capital_management_mode, entry_origin,
+            getattr(template_model, "strategy_type", None),
+        )
+        if _is_legacy367:
+            _tp1_default, _fs_on_default, _fs_roi_default = _SS362(self.db).get_legacy_ladder_defaults()
+        else:
+            _tp1_default, _fs_on_default, _fs_roi_default = TP1_PCT_DEFAULT, True, _new_force_sl_roi
         instance = StrategyInstance(
             user_id=user_id,
             exchange_account_id=exchange_account_id,
@@ -585,9 +627,9 @@ class StrategyService:
             leverage=preview.leverage,
             total_capital=template_model.total_capital,
             status="WAITING",
-            tp1_pct_override=TP1_PCT_DEFAULT,  # v147: 15% (사장님 지시)
-            force_sl_enabled_override=True,  # 강제 SL ON!
-            force_sl_roi_override=_new_force_sl_roi,  # Fix 362: 기본 -25% (설정 force_sl_roi_new_default), 옛 v166 = 5
+            tp1_pct_override=_tp1_default,  # v147: 15% (사장님 지시) / Fix 367 기존 방식 = 25
+            force_sl_enabled_override=_fs_on_default,  # 강제 SL ON! / Fix 367 기존 방식 = 끔
+            force_sl_roi_override=_fs_roi_default,  # Fix 362: 기본 -25% (설정 force_sl_roi_new_default), 옛 v166 = 5 / Fix 367 기존 방식 = 0
             # 🌟 v131 신 (2026-08-09 사장님!): 청산 후 자동 재진입 옵션 저장!
             retry_after_liquidation_enabled=bool(retry_after_liquidation_enabled),
             retry_trigger_pct=D(str(retry_trigger_pct)) if retry_trigger_pct is not None else D("10"),
@@ -613,4 +655,12 @@ class StrategyService:
         self.repo.create_stage_plans(plans)
         self.db.commit()
         self.db.refresh(instance)
+        if _is_legacy367:
+            import logging
+            logging.getLogger(__name__).info(
+                "[Fix367] 기존 방식 새 전략 #%s %s %s — 처음 방식: TP1 +%s%% · 강제손절 %s (템플릿 TP1 청산 %s%%)",
+                instance.id, symbol, side, _tp1_default,
+                ("없음" if not _fs_on_default else f"-{_fs_roi_default}%"),
+                getattr(template_model, "tp1_qty_ratio", None),
+            )
         return instance
