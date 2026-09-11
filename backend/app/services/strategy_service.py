@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import Any
 
-from app.core.risk_constants import TP1_PCT_DEFAULT
+from app.core.risk_constants import LEGACY_MANUAL_PROFILE, TP1_PCT_DEFAULT
 from app.core.strategy_status import TERMINAL_STATUSES
 from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_stage_plan import StrategyStagePlan
@@ -616,6 +616,9 @@ class StrategyService:
             _tp1_default, _fs_on_default, _fs_roi_default = _SS362(self.db).get_legacy_ladder_defaults()
         else:
             _tp1_default, _fs_on_default, _fs_roi_default = TP1_PCT_DEFAULT, True, _new_force_sl_roi
+        # Fix 367c: 커밋 뒤 lazy-load 를 피하려 로그·경고에 쓸 값은 지금 캡처한다 (템플릿 TP1 청산 비율 = 모달 값)
+        _tpl_tp1_qty367 = getattr(template_model, "tp1_qty_ratio", None)
+        _qty_ref367 = _SS362(self.db).get_legacy_ladder_tp1_qty_ratio() if _is_legacy367 else None
         instance = StrategyInstance(
             user_id=user_id,
             exchange_account_id=exchange_account_id,
@@ -630,6 +633,7 @@ class StrategyService:
             tp1_pct_override=_tp1_default,  # v147: 15% (사장님 지시) / Fix 367 기존 방식 = 25
             force_sl_enabled_override=_fs_on_default,  # 강제 SL ON! / Fix 367 기존 방식 = 끔
             force_sl_roi_override=_fs_roi_default,  # Fix 362: 기본 -25% (설정 force_sl_roi_new_default), 옛 v166 = 5 / Fix 367 기존 방식 = 0
+            entry_profile=(LEGACY_MANUAL_PROFILE if _is_legacy367 else None),  # Fix 367c: 런타임(단계 정리 제외)은 이 표식만 본다
             # 🌟 v131 신 (2026-08-09 사장님!): 청산 후 자동 재진입 옵션 저장!
             retry_after_liquidation_enabled=bool(retry_after_liquidation_enabled),
             retry_trigger_pct=D(str(retry_trigger_pct)) if retry_trigger_pct is not None else D("10"),
@@ -657,10 +661,19 @@ class StrategyService:
         self.db.refresh(instance)
         if _is_legacy367:
             import logging
-            logging.getLogger(__name__).info(
-                "[Fix367] 기존 방식 새 전략 #%s %s %s — 처음 방식: TP1 +%s%% · 강제손절 %s (템플릿 TP1 청산 %s%%)",
+            _log367 = logging.getLogger(__name__)
+            _log367.info(
+                "[Fix367] 기존 방식 새 전략 #%s %s %s — 처음 방식: TP1 +%s%% · 강제손절 %s · 템플릿 TP1 청산 %s%% (entry_profile=%s)",
                 instance.id, symbol, side, _tp1_default,
                 ("없음" if not _fs_on_default else f"-{_fs_roi_default}%"),
-                getattr(template_model, "tp1_qty_ratio", None),
+                _tpl_tp1_qty367, LEGACY_MANUAL_PROFILE,
             )
+            try:
+                if _tpl_tp1_qty367 is None or Decimal(str(_tpl_tp1_qty367)) != Decimal(str(_qty_ref367)):
+                    _log367.warning(
+                        "[Fix367] ⚠ #%s 템플릿 TP1 청산 비율 %s%% ≠ 기준 %s%% (설정 legacy_ladder_tp1_qty_ratio) — 모달 값 그대로 둔다",
+                        instance.id, _tpl_tp1_qty367, _qty_ref367,
+                    )
+            except Exception:  # noqa: BLE001
+                pass
         return instance

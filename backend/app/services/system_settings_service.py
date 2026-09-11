@@ -126,7 +126,7 @@ class SystemSettingsService:
             tp1 = self.get_decimal(LEGACY_LADDER_TP1_KEY, default=LEGACY_LADDER_TP1_DEFAULT)
         except Exception:  # noqa: BLE001
             tp1 = LEGACY_LADDER_TP1_DEFAULT
-        if tp1 is None or tp1 <= 0 or tp1 > LEGACY_LADDER_TP1_MAX:
+        if tp1 is None or not tp1.is_finite() or tp1 <= 0 or tp1 > LEGACY_LADDER_TP1_MAX:   # NaN/Inf 도 25 (Decimal("NaN") 은 비교에서 터진다)
             tp1 = LEGACY_LADDER_TP1_DEFAULT
         try:
             fs_on = bool(self.get_bool(LEGACY_LADDER_FORCE_SL_KEY, default=LEGACY_LADDER_FORCE_SL_DEFAULT))
@@ -134,6 +134,18 @@ class SystemSettingsService:
             fs_on = LEGACY_LADDER_FORCE_SL_DEFAULT
         fs_roi = self.get_new_strategy_force_sl_roi() if fs_on else Decimal("0")
         return tp1, fs_on, fs_roi
+
+    def get_legacy_ladder_tp1_qty_ratio(self) -> Decimal:
+        """🎯 Fix 367c: 기존 방식 TP1 청산 비율 기준 (설정 legacy_ladder_tp1_qty_ratio, 기본 25 = 사장님 「포지션진입한 금액의 25%」).
+        모달이 이 값을 기본으로 채우고, 생성된 템플릿이 다르면 경고 로그·검사기 ⚠ 로 보인다 (강제로 덮진 않는다 — 모달에서 고친 값은 사장님 뜻)."""
+        from app.core.risk_constants import LEGACY_LADDER_TP1_QTY_DEFAULT, LEGACY_LADDER_TP1_QTY_KEY
+        try:
+            v = self.get_decimal(LEGACY_LADDER_TP1_QTY_KEY, default=LEGACY_LADDER_TP1_QTY_DEFAULT)
+        except Exception:  # noqa: BLE001
+            return LEGACY_LADDER_TP1_QTY_DEFAULT
+        if v is None or not v.is_finite() or v <= 0 or v > 100:
+            return LEGACY_LADDER_TP1_QTY_DEFAULT
+        return v
 
     def get_force_sl(self, side: str) -> tuple[bool, Decimal]:
         """손실 한도 강제 청산 전역 설정 (side별) — (enabled, roi_한도_양수).

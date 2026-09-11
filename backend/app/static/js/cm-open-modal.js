@@ -35,7 +35,13 @@
 // 구현: 기존 openCreateModal() 재사용 + trigger_mode='OBV_REVERSE' flag!
 async function openCreateChartObvModal() {
   // 기존 모달 오픈
-  await openCreateModal();
+  // Fix 367c: 여는 동안 「OBV 모달」 임을 알린다 — openCreateModal 이 기존 방식 전용 기본(TP1 청산 25)을 OBV 에 적용하지 않게
+  cmState._pendingObv = true;
+  try {
+    await openCreateModal();
+  } finally {
+    cmState._pendingObv = false;
+  }
   // 🚨 v130 CRITICAL fix (2026-08-06): OBV 모드 = 「직접 입력」 강제!
   //   옛 silent bug: template 모드 = 옛 template 재사용 = trigger_mode=PRICE_DOWN_PCT!
   //   = 사장님 OBV 원했는데 = 「➕ 기존」 저장!
@@ -311,6 +317,17 @@ async function openCreateModal(editStrategyId) {
             cmState.editingStrategyId = null;
             cmState.editingStrategyBp = null;
             cmState.mode = 'direct';
+          }
+          // 🎯 Fix 367c (사장님 2026-09-11 「포지션진입한 금액의 25%부터 익절」): 기존 방식 신규 모달의 TP1 청산 비율은
+          //   직전 전략 blueprint 값(auto_bb/OBV 는 10)에 덮이지 않고 25 로 시작한다 (반박 검증 C7). 사장님이 칸에서 고치면 그 값.
+          //   OBV 모달(openCreateChartObvModal → _pendingObv)은 손대지 않는다.
+          try {
+            if (cmState && !cmState._pendingObv) {
+              const _q1 = document.getElementById('cm-tp1-qty');
+              if (_q1) _q1.value = '25';
+            }
+          } catch (_qe) {
+            console.warn('[Fix367c] TP1 청산 기본 세팅 실패:', _qe);
           }
         } else {
           // fallback: 심볼만 비우기

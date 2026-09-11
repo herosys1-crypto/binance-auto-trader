@@ -344,6 +344,7 @@ LEGACY_SETTING_KEYS = [
     ("legacy_ladder_force_sl_enabled", "0", "기존 방식 새 전략 강제손절 (0 = 없음, 1 = Fix 362 기본 -25)"),
     ("stage_trim_before_next_enabled", "(코드 기본 OFF)", "단계 정리(Fix 304) 전역 스위치"),
     ("stage_trim_exclude_legacy_manual", "1", "기존 방식은 단계 정리 제외 (1 = 처음 방식, 0 = Fix 304 대로 잔량 10 정리)"),
+    ("legacy_ladder_tp1_qty_ratio", "25", "기존 방식 TP1 청산 비율 기준 (모달 기본, 어긋나면 ⚠)"),
 ]
 
 
@@ -402,6 +403,14 @@ def check_legacy_ladder() -> None:
         trim_tree = ast.parse(trim_src)
         (ok if _def_count(trim_tree, "is_legacy_manual_instance") == 1 and _def_count(trim_tree, "legacy_manual_excluded") == 1 else fail)(
             "stage_trim.is_legacy_manual_instance / legacy_manual_excluded 정의 1개씩")
+        i_il = trim_src.find("def is_legacy_manual_instance(")
+        (ok if 'getattr(strategy, "entry_profile", None)' in trim_src[i_il:i_il + 1500] and "db.get(StrategyTemplate" not in trim_src[i_il:i_il + 1500] else fail)(
+            "런타임 판정은 entry_profile 표식만 본다 (템플릿 추정 없음 = 배포 전 인스턴스 불변)")
+        (ok if "entry_profile=(LEGACY_MANUAL_PROFILE if _is_legacy367 else None)" in ss_src else fail)("생성 시 entry_profile 표식 저장")
+        (ok if "entry_profile" in _read("app/models/strategy_instance.py") and os.path.exists(os.path.join(_ROOT, "alembic/versions/0039_strategy_instances_entry_profile.py")) else fail)(
+            "모델 컬럼 + alembic 0039 파일")
+        ms_src = _read("app/static/js/multi-symbol.js")
+        (ok if "trigger_mode: cmState._triggerMode || 'PRICE_DOWN_PCT'" in ms_src else fail)("다중 심볼 템플릿도 trigger_mode 를 보낸다 (OBV 다중심볼이 가격 사다리로 저장되던 누락)")
         i_te = trim_src.find("def trim_enabled(")
         (ok if "if legacy_manual_excluded(db) and is_legacy_manual_instance(db, strategy):" in trim_src[i_te:i_te + 4000] else fail)(
             "trim_enabled 안에 기존 방식 제외 훅 (Fix 304 정리는 기존 방식에 안 붙는다)")
@@ -445,18 +454,24 @@ def check_legacy_ladder() -> None:
         print(f"  ▸ 최근 기존 방식(모달·가격 트리거·DYNAMIC_*) 인스턴스 {len(rows)}건 — 배포 뒤 새로 만든 것은 ✔Fix367 로 보여야 한다")
         if not rows:
             skip("없음 — 「➕ 새 전략 (기존 방식)」 으로 하나 만들면 여기에 나타난다")
-        from app.services.stage_trim import is_legacy_manual_instance as _is_leg, trim_enabled as _trim_on
+        from app.services.stage_trim import is_legacy_manual_instance as _is_leg, legacy_manual_excluded as _lex, trim_enabled as _trim_on
+        from app.services.system_settings_service import SystemSettingsService as _SSS2
+        _qty_ref = _SSS2(db).get_legacy_ladder_tp1_qty_ratio()
+        _excl_on = _lex(db)
         for si, tpl in rows:
             _tp1, _on, _roi = si.tp1_pct_override, si.force_sl_enabled_override, si.force_sl_roi_override
-            _mark = "✔Fix367" if (_on is False and _tp1 is not None and float(_tp1) == 25.0) else "(Fix 362 기본 = 배포 전 생성)"
+            _prof = getattr(si, "entry_profile", None)
+            _mark = "✔Fix367" if _prof == "legacy_manual" else "(표식 없음 = 배포 전 생성 → 옛 동작 그대로)"
             _made = f"{si.created_at:%m-%d %H:%M}" if getattr(si, "created_at", None) else "?"
             _fam_rt = _is_leg(db, si, tpl)
             _trim = _trim_on(db, si)
+            _qty = tpl.tp1_qty_ratio
+            _qty_flag = "" if (_qty is not None and float(_qty) == float(_qty_ref)) else f" ⚠TP1청산≠{_qty_ref}"
             print(f"     #{si.id} {si.symbol} {si.side} status={si.status} stage={si.current_stage} made={_made} "
                   f"TP1={_tp1} 강제SL={'끔' if _on is False else ('ON' if _on else '전역')}/{_roi} "
-                  f"템플릿TP1청산={tpl.tp1_qty_ratio}% 런타임가족={'기존방식' if _fam_rt else '아님'} 단계정리={'적용' if _trim else '제외'} {_mark}")
-            if _fam_rt and _trim:
-                fail(f"#{si.id} 기존 방식인데 단계 정리가 적용된다 — stage_trim_exclude_legacy_manual 확인")
+                  f"템플릿TP1청산={_qty}%{_qty_flag} 표식={_prof} 단계정리={'적용' if _trim else '제외'} {_mark}")
+            if _fam_rt and _trim and _excl_on:
+                fail(f"#{si.id} 기존 방식(표식)인데 단계 정리가 적용된다 — stage_trim_exclude_legacy_manual=1 인데도 제외가 안 됨")
     except Exception as e:  # noqa: BLE001
         fail(f"운영 층 조회 실패: {e!r}")
     finally:

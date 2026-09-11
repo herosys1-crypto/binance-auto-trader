@@ -85,6 +85,9 @@ class StrategyInstance(Base):
     retry_stage_trigger_pcts: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
     # 자본 관리 모드 = 'fixed' (그대로) or 'auto_deduct' (손실 차감)
     capital_management_mode: Mapped[str] = mapped_column(String(20), default="fixed", nullable=False)
+    # 🎯 Fix 367c (alembic 0039): 생성 시 찍는 가족 표식 — 'legacy_manual' = 「➕ 새 전략 (기존 방식)」(TP1 25 · 강제손절 없음 ·
+    #   단계 정리 제외). NULL = 그 밖(OBV 자동·자동 워커·배포 전 인스턴스). 런타임 판정(stage_trim)은 이 값만 본다.
+    entry_profile: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # 누적 실현 손실 (USDT!) - 자본 차감 계산용!
     cumulative_realized_loss: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"), nullable=False)
     # 마지막 청산가 - 다음 단계 트리거 기준!

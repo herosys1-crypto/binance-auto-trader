@@ -105,6 +105,8 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # spec: FORCE_SL_LOSS_LIMIT_SPEC_2026-06-24.md
     force_sl_enabled_override: bool | None = None
     force_sl_roi_override: Decimal | None = None
+    # 🎯 Fix 367c: 가족 표식 ('legacy_manual' = 기존 방식 처음 방식 / None)
+    entry_profile: str | None = None
     # ─── 진입 일시 (대시보드 표시용) ───
     created_at: datetime | None = None       # strategy 생성 시점
     # 2026-05-21 STOPPING 갇힘 감지용 — frontend 가 updated_at 기준 5분 초과 시

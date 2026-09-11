@@ -110,6 +110,9 @@ LEGACY_LADDER_TP1_DEFAULT: Final[Decimal] = Decimal("25")          # 사장님 v
 LEGACY_LADDER_TP1_MAX: Final[Decimal] = Decimal("300")             # 목록 드롭다운 최댓값과 같게 (Claude가 정함)
 LEGACY_LADDER_FORCE_SL_KEY: Final[str] = "legacy_ladder_force_sl_enabled"
 LEGACY_LADDER_FORCE_SL_DEFAULT: Final[bool] = False                # 사장님 "손절없고"
+LEGACY_LADDER_TP1_QTY_KEY: Final[str] = "legacy_ladder_tp1_qty_ratio"
+LEGACY_LADDER_TP1_QTY_DEFAULT: Final[Decimal] = Decimal("25")      # 사장님 verbatim "포지션진입한 금액의 25%" — 모달 기본이자 어긋나면 경고
+LEGACY_MANUAL_PROFILE: Final[str] = "legacy_manual"                 # strategy_instances.entry_profile 값 (alembic 0039)
 
 
 # ===== Take Profit (TP) — 정상 모드 =====
@@ -227,6 +230,9 @@ __all__ = [
     "LEGACY_LADDER_TP1_MAX",
     "LEGACY_LADDER_FORCE_SL_KEY",
     "LEGACY_LADDER_FORCE_SL_DEFAULT",
+    "LEGACY_LADDER_TP1_QTY_KEY",
+    "LEGACY_LADDER_TP1_QTY_DEFAULT",
+    "LEGACY_MANUAL_PROFILE",
     # TP
     "TP1_PCT_DEFAULT",
     "DEFAULT_TP_QTY_RATIO_PCT",

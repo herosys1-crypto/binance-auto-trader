@@ -77,7 +77,7 @@ ALWAYS_EXCLUDED_MODES: frozenset[str] = frozenset({"split_entry"})
 # 🎯 Fix 367 (2026-09-11 사장님): 「➕ 새 전략 (기존 방식)」은 처음 방식 — 정리 없이 트리거에 다음 단계.
 #   "새전략 기존 방식은 손절없고 단계별 트리거에 다음단계 포지션 진입할수 있게 해주 … 과거로 돌악가는것과 같아"
 #   Fix 304 원문("기본전략과 같이 10usdt 남기고 청산하고 다음단계 진입")을 **기본방식에 대해서만** 되돌린다.
-#   OBV 자동·v219 사다리·볼밴 분할은 그대로. 판정 = strategy_service.legacy_manual_template (생성 시와 같은 함수).
+#   OBV 자동·v219 사다리·볼밴 분할·배포 전 인스턴스는 그대로. 판정 = 생성 시 표식 entry_profile (Fix 367c, alembic 0039).
 #   되돌리기(재시작 불필요): stage_trim_exclude_legacy_manual = 0.  기본 1 은 Claude가 정함(사장님 지시를 켠 상태).
 SETTING_EXCLUDE_LEGACY = "stage_trim_exclude_legacy_manual"
 
@@ -159,8 +159,8 @@ def trim_enabled(db, strategy=None) -> bool:
         return False
     # 🎯 Fix 367: 기존 방식(모달·가격 트리거·DYNAMIC_*)은 처음 방식 = 정리 없이 트리거에 다음 단계
     if legacy_manual_excluded(db) and is_legacy_manual_instance(db, strategy):
-        logger.info(
-            "[Fix367] %s #%s 단계 정리 제외 — 기존 방식(모달·가격 트리거)은 처음 방식 (설정 %s)",
+        logger.debug(   # 15초마다 여러 소비처가 부르므로 INFO 면 로그가 넘친다 (반박 검증 C24)
+            "[Fix367] %s #%s 단계 정리 제외 — 기존 방식(entry_profile=legacy_manual)은 처음 방식 (설정 %s)",
             getattr(strategy, "symbol", "?"), getattr(strategy, "id", "?"), SETTING_EXCLUDE_LEGACY,
         )
         return False
@@ -193,23 +193,15 @@ def legacy_manual_excluded(db) -> bool:
 
 
 def is_legacy_manual_instance(db, strategy, template=None) -> bool:
-    """🎯 Fix 367: 이 인스턴스가 「➕ 새 전략 (기존 방식)」인가 — 템플릿을 읽어 strategy_service.legacy_manual_template 로 판정.
-    템플릿이 없거나 조회 실패 = False (정리 유지 = 옛 동작)."""
+    """🎯 Fix 367c: 이 인스턴스가 「➕ 새 전략 (기존 방식)」인가 = 생성 시 찍힌 표식 `entry_profile == 'legacy_manual'` 만 본다.
+
+    반박 검증(9/11)이 잡은 것: 템플릿(PRICE_*/DYNAMIC_*/fixed)으로 추정하면 배포 **전**에 만든 살아 있는
+    #4478 RAYSOL·#4480 KAT(손절 −25 ON) 까지 정리 제외가 소급돼 손절이 「잔량 10 부분정리」에서 「전량 청산」으로
+    바뀐다. 표식은 Fix 367 이후 API 생성에서만 찍히므로 옛 인스턴스는 NULL = 옛 동작 그대로. db/template 인자는
+    호환용(안 씀). 실패 = False (정리 유지)."""
     try:
-        from app.services.strategy_service import legacy_manual_template
-        mode = str(getattr(strategy, "capital_management_mode", "") or "")
-        tpl = template
-        if tpl is None:
-            tid = getattr(strategy, "strategy_template_id", None)
-            if not tid:
-                return False
-            from app.models.strategy_template import StrategyTemplate
-            tpl = db.get(StrategyTemplate, tid)
-        if tpl is None:
-            return False
-        return bool(legacy_manual_template(
-            getattr(tpl, "trigger_mode", None), mode, getattr(tpl, "strategy_type", None),
-        ))
+        from app.core.risk_constants import LEGACY_MANUAL_PROFILE
+        return str(getattr(strategy, "entry_profile", None) or "") == LEGACY_MANUAL_PROFILE
     except Exception as e:
         logger.warning("[Fix367] 기존 방식 판정 실패 → 정리 유지: %s", e)
         return False

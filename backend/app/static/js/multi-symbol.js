@@ -173,6 +173,9 @@ async function submitCreateMulti() {
           stop_loss_percent_of_capital: tpsl.stop_loss_percent_of_capital,
           crisis_max_loss_threshold: tpsl.crisis_max_loss_threshold,
           reentry_policy: 'manual_ready',
+          // 🎯 Fix 367c: 단일 경로(cm-submit.js)와 같게 — 안 보내면 서버 기본 PRICE_DOWN_PCT 가 되어
+          //   「📊 OBV 자동」 모달에서 다중 심볼로 만든 전략이 가격 사다리(기존 방식 가족)로 저장됐다 (반박 검증 C8)
+          trigger_mode: cmState._triggerMode || 'PRICE_DOWN_PCT',
         },
       });
       templateId = tplCreated.id;
@@ -232,6 +235,7 @@ async function submitCreateMulti() {
               strategy_template_id: templateId,
               symbol: sym, side: cmState.side, start_price: String(startPrice),
               leverage_override: leverageFromInput,
+              capital_management_mode: 'fixed',   // Fix 367c: 단일 경로와 같게 명시 (서버 기본과 동일)
             },
           });
           console.log(`[batch] ${sym} created`, created);
