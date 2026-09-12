@@ -95,3 +95,5 @@
   (DOWN24 는 house +0.74 이지만 live −0.82 1/4) / 3D DOWN24 house +0.57 4/4 · live +0.21 3/4. 자본 10 · 손절 ROI 25 · 전용 상한 2 · 쿨다운 4h · TP 15/20/25/30.
   on 전 확인: 그림자 기록(`rf:shadow:*`)의 `guards_ok` 비율과 가상 보고서 Δ·CV. 3A 손절 대안 `rf_s2_short_stop_mode=swing8`.
 - 전체 스위트 28 실패는 main HEAD(8289bc1) 스냅샷에서도 같은 28 = 기존 결함 (별도 작업).
+- **배포 2026-09-12 23:06 UTC** (사장님 직접 실행 — Claude 자동 모드는 운영 재시작이 권한 검사에 막힘): `7970a69`, api 23:05:27 · scheduler 23:06:07 기동,
+  검사기 scheduler·api PASS. 사장님 결정(9/13): **2① 켬** `manual_add_after_sl_enabled=1` · 2② 기본 유지(1주 뒤 재측정) · 3C UP24·3A/3B/3D 는 그림자 1주 뒤(9/20경) 보고 후 결정.

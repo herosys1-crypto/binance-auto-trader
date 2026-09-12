@@ -673,7 +673,9 @@ def check_queue3_rules() -> None:
         from app.services.surge_ladder_entry import count_surge_active
         db = SessionLocal()
         try:
-            print(f"  ▸ 3C multiday_context = {MM.pullback_context(db)} (UP24 기본 · DOWN24 = 옛 자리)")
+            _live3c = MM.pullback_context(db)
+            print(f"  ▸ 3C 실알람 자리 multiday_context = {_live3c} (기본 DOWN24 = 옛 자리) · "
+                  f"그림자 multiday_context_shadow = {MM.pullback_shadow_context(db, _live3c)} (기본 UP24, 알람 키 없이 기록)")
             print("  ▸ 규칙 가족 설정 실효값 (DB 행 없음 = 기본값)")
             for key, (default, label, origin) in RF.SETTINGS.items():
                 v = RF.setting(db, key)
