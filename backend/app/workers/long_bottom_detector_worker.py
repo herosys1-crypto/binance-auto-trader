@@ -401,53 +401,72 @@ def _multiday_pullback_scan(bc, db, ranked) -> int:
 
     사장님: "1일에서 5일 사이 이렇게 조정받는 심볼을 찾아서 숏과 롱으로 수익을 만들어야 하는게 우리 시스템"
     실측(263 심볼-일, 12일): 이 규칙 LONG +0.63 (n=173, 승률 43%) vs 기준선 −0.73; 숏 규칙은 전부 음수.
-    자본은 v219 사다리 1단계 10 USDT. 되돌리기: multiday_pullback_long_enabled = 0.
+    되돌리기: multiday_pullback_long_enabled = 0.
+    ⚠️ 알람은 auto_long_at_bottom → _create_auto_bb_strategy 로 가서 Fix 315 단계 사다리(10/300/600)·피라미딩·재진입
+       대상이 된다 — 1회 10 USDT 진입이 아니다 (2026-09-13 반박 검증).
+
+    🎯 대기열 3C: 자리 = 설정 multiday_context (기본 DOWN24 = 옛 자리) + 그림자 자리 multiday_context_shadow (기본 UP24).
+       그림자는 알람 키를 쓰지 않고 multiday:shadow:{자리}:{심볼}:{ts} (7일) 에 발생만 남긴다 → 사장님이 발생량을 보고 켠다.
+       근거·수치는 app/services/multiday_movers.py 주석.
     """
     from app.services.multiday_movers import (
-        PATTERN_PULLBACK, is_pullback_rebound, pullback_enabled, pullback_params,
+        PATTERN_PULLBACK, is_pullback_rebound, pullback_context, pullback_enabled, pullback_params, pullback_place_ok,
+        pullback_shadow_context,
     )
     if not pullback_enabled(db):
         return 0
     min_drop, rsi_max = pullback_params(db)
+    ctx = pullback_context(db)
+    sctx = pullback_shadow_context(db, ctx)
     try:
         from app.core.redis_client import get_redis_client
         r = get_redis_client()
     except Exception as e:  # noqa: BLE001
         logger.debug("[Fix352] redis 없음: %s", e)
         return 0
-    n_alert = 0
+    n_alert = n_shadow = 0
     for t, tag, rank in ranked:
-        if tag not in ("UP3D", "UP5D"):
-            continue
         symbol = str(t.get("symbol") or "")
         try:
             chg24 = float(t.get("priceChangePercent") or 0)
         except (TypeError, ValueError):
             continue
-        if chg24 > -min_drop:
+        live = pullback_place_ok(ctx, tag, chg24, min_drop)
+        shadow = (not live) and sctx is not None and pullback_place_ok(sctx, tag, chg24, min_drop)
+        if not (live or shadow):
             continue
-        alert_key = f"sajangnim:bottom_long:{symbol}"
+        dedup_key = f"sajangnim:bottom_long:{symbol}" if live else f"multiday:shadow_last:{sctx}:{symbol}"
         try:
-            if r.exists(alert_key):
-                continue                                  # 이미 알람 있음 (30분 TTL)
+            if r.exists(dedup_key):
+                continue  # 이미 알람(또는 그림자 기록) 있음 — 30분 TTL
             kl = bc.get_klines(symbol=symbol, interval="15m", limit=60)
             if not kl or len(kl) < 30:
                 continue
-            closes = [float(k[4]) for k in kl[:-1]]        # 진행중 봉 제거
+            closes = [float(k[4]) for k in kl[:-1]]  # 진행중 봉 제거
             ok, det = is_pullback_rebound(closes, rsi_max=rsi_max)
             if not ok:
                 continue
+            now = datetime.now(timezone.utc)
             alert_data = {
                 "symbol": symbol, "side": "LONG", "pattern": PATTERN_PULLBACK, "confidence": 0.85,
                 "chg_24h": chg24, "change_24h": chg24, "multiday_tag": tag, "multiday_rank": rank,
-                "rsi_prev": det.get("rsi_prev"), "detected_at": datetime.now(timezone.utc).isoformat(),
-                "source": "fix352_multiday_pullback", "spec_version": SPEC_VERSION,
+                "rsi_prev": det.get("rsi_prev"), "detected_at": now.isoformat(),
+                "source": "fix352_multiday_pullback", "spec_version": SPEC_VERSION, "context": ctx if live else sctx,
             }
-            r.setex(alert_key, ALERT_TTL_SEC, json.dumps(alert_data, default=str))
-            n_alert += 1
-            logger.info("[Fix352] 📅 %s %s %d위 · 24h %+.1f%% · RSI14 %s→상승마감 → LONG 알람", symbol, tag, rank, chg24, det.get("rsi_prev"))
+            if live:
+                r.setex(dedup_key, ALERT_TTL_SEC, json.dumps(alert_data, default=str))
+                n_alert += 1
+                logger.info("[Fix352] 📅 %s %s %d위 · 24h %+.1f%% · RSI14 %s→상승마감 → LONG 알람 (자리 %s)",
+                            symbol, tag, rank, chg24, det.get("rsi_prev"), ctx)
+            else:
+                r.setex(dedup_key, ALERT_TTL_SEC, "1")
+                r.setex(f"multiday:shadow:{sctx}:{symbol}:{int(now.timestamp())}", 7 * 86400,
+                        json.dumps(alert_data, default=str))
+                n_shadow += 1
         except Exception as e:  # noqa: BLE001
             logger.debug("[Fix352] %s 스캔 실패 (무시): %s", symbol, e)
+    if n_shadow:
+        logger.info("[Q3C] 그림자 자리 %s 알람 %d건 기록 (실알람 아님 · 실알람 자리 %s)", sctx, n_shadow, ctx)
     return n_alert
 
 

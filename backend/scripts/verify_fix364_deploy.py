@@ -9,6 +9,7 @@
   ⑤ Fix 367  : 「➕ 새 전략 (기존 방식)」 = 처음 방식(TP1 +25 · 강제손절 없음) 배선 + 설정 실효값 + 최근 기존 방식 인스턴스 5건
   ⑥ Fix 368  : 외부 전략 2종(후지모토·마하세븐) 배선 · 모드 · 가상 규칙 8개 · 마지막 사이클 · 그림자 신호 수 · 활성 인스턴스
   ⑦ 대기열 2 : 손실 방어 — 2① 수동 추가 뒤 손절(시장가·이익 구간·손절 명시 ON) · 2② LONG 자동 추가 국면 게이트 + 설정 실효값
+  ⑧ 대기열 3 : 3C 다일 조정 반등 자리(multiday_context) · 3A·3B·3D 규칙 가족 러너 모드·설정·마지막 사이클·그림자 수
 
 사용 (VPS, ~/binance-auto-trader/backend):
   docker compose exec -T scheduler python scripts/verify_fix364_deploy.py     # 워커가 도는 컨테이너 (②가 중요)
@@ -626,6 +627,81 @@ def check_queue2_loss_defense() -> None:
         fail(f"운영 층 조회 실패: {e!r}")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# ⑧ 대기열 3 자동 진입 규칙 (3C 다일 조정 반등 자리 · 3A·3B·3D 규칙 가족 러너)
+# ─────────────────────────────────────────────────────────────────────────
+def check_queue3_rules() -> None:
+    print("⑧ 대기열 3 자동 진입 규칙 (3C 다일 조정 반등 자리 · 3A·3B·3D 규칙 가족 — 기본 shadow)")
+    try:
+        from app.services import multiday_movers as MM
+        from app.services import rule_families as RF
+        from app.services.chart_learning import RULES
+        from app.services.single_entry_guard import SINGLE_ENTRY_STRATEGY_TYPES as _SET, SINGLE_ENTRY_TEMPLATE_PREFIXES as _SEP
+        (ok if MM.pullback_context(_NoDB()) == "DOWN24" and MM.pullback_shadow_context(_NoDB(), "DOWN24") == "UP24"
+         and MM.pullback_place_ok("UP24", "UP", 12.0, 8.0) and not MM.pullback_place_ok("UP24", "UP5D", -13.0, 8.0)
+         and MM.pullback_place_ok("DOWN24", "UP5D", -13.0, 8.0) else fail)(
+            "3C 자리 판정 (실알람 기본 DOWN24 = 옛 자리 · UP24 는 그림자)")
+        with open(os.path.join(_ROOT, "app/workers/long_bottom_detector_worker.py"), encoding="utf-8") as f:
+            lb = f.read()
+        (ok if "live = pullback_place_ok(ctx, tag, chg24, min_drop)" in lb and "multiday:shadow:" in lb
+         and 'if tag not in ("UP3D", "UP5D"):' not in lb else fail)("3C 스캐너 = 자리 판정 함수 + 그림자 기록 (옛 하드코딩 필터 없음)")
+        with open(os.path.join(_ROOT, "app/workers/auto_long_at_bottom_worker.py"), encoding="utf-8") as f:
+            al = f.read()
+        (ok if '"multiday_context": alert.get("context")' in al else fail)("3C 알람 자리가 제안 기록(strategy_config)에 남는다")
+        by = {r.key: r.side for r in RULES}
+        (ok if all(by.get(fm.rule) == fm.side for fm in RF.FAMILIES) else fail)("3A·3B·3D 규칙 키 = 가상매매 레지스트리 (방향까지)")
+        (ok if all(RF.mode_of(_NoDB(), fm.key) == "shadow" for fm in RF.FAMILIES) else fail)("코드 기본 모드 = shadow (주문 없음)")
+        (ok if RF.RF_STRATEGY_TYPES <= set(_SET) and set(RF.RF_TEMPLATE_PREFIXES) <= set(_SEP) else fail)(
+            "피라미딩 제외 목록(single_entry_guard) 등록")
+        with open(os.path.join(_ROOT, "app/workers/scheduler_runner.py"), encoding="utf-8") as f:
+            sr = f.read()
+        (ok if 'id="rule_families"' in sr and "run_rule_families_once" in sr else fail)("스케줄러 잡 rule_families (60초)")
+        with open(os.path.join(_ROOT, "app/workers/rule_family_worker.py"), encoding="utf-8") as f:
+            wk = f.read()
+        (ok if "create_surge_position(" in wk and "_guards_ok" in wk and "rf:seen:" in wk else fail)(
+            "실주문 = create_surge_position · 그림자에서도 가드 결과 기록 · 가상행당 1회")
+    except Exception as e:  # noqa: BLE001
+        fail(f"코드 층 검사 실패: {e!r}")
+        return
+    if CODE_ONLY:
+        skip("--code-only: 운영 층 생략")
+        return
+    try:
+        from app.core.database import SessionLocal
+        from app.services import multiday_movers as MM
+        from app.services import rule_families as RF
+        from app.services.surge_ladder_entry import count_surge_active
+        db = SessionLocal()
+        try:
+            print(f"  ▸ 3C multiday_context = {MM.pullback_context(db)} (UP24 기본 · DOWN24 = 옛 자리)")
+            print("  ▸ 규칙 가족 설정 실효값 (DB 행 없음 = 기본값)")
+            for key, (default, label, origin) in RF.SETTINGS.items():
+                v = RF.setting(db, key)
+                print(f"     {key:30} = {v:<18} [{'DB' if v != default else '기본'}]  {label} ({origin})")
+            for fm in RF.FAMILIES:
+                print(f"  ▸ {fm.label}: 모드 {RF.mode_of(db, fm.key)} · 활성 인스턴스 {count_surge_active(db, prefix=fm.prefix, fallback=-1)}건")
+        finally:
+            db.close()
+        try:
+            from app.core.redis_client import get_redis_client
+            r = get_redis_client()
+            raw = r.get("rf:last_cycle")
+            raw = raw.decode() if isinstance(raw, bytes) else raw
+            if raw:
+                cyc = json.loads(raw)
+                print(f"  ▸ 마지막 사이클 {cyc.get('at')}: 새 가상행={cyc.get('rows')} 그림자={cyc.get('shadow')} 진입={cyc.get('entered')} "
+                      f"오류={cyc.get('err')} 가족별={cyc.get('fam')} 마지막 가상진입={cyc.get('last_paper_open')}")
+            else:
+                skip("러너 사이클 기록 없음 (Redis rf:last_cycle) — 아직 안 돌았거나 세 가족 모두 off")
+            for fm in RF.FAMILIES:
+                n = sum(1 for _ in r.scan_iter(f"rf:shadow:{fm.key}:*", count=500))
+                print(f"  ▸ 그림자 신호(7일 보관) {fm.key}: {n}")
+        except Exception as e:  # noqa: BLE001
+            skip(f"Redis 조회 실패: {e!r}")
+    except Exception as e:  # noqa: BLE001
+        fail(f"운영 층 조회 실패: {e!r}")
+
+
 if __name__ == "__main__":
     print(f"verify_fix364_deploy — {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z} (cwd {_ROOT})")
     check_code()
@@ -638,6 +714,7 @@ if __name__ == "__main__":
     check_legacy_ladder()
     check_external_strategies()
     check_queue2_loss_defense()
+    check_queue3_rules()
     print("─" * 70)
     if _fails:
         print(f"결과: FAIL {len(_fails)}건")

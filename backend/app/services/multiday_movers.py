@@ -169,6 +169,50 @@ def pullback_params(db: Any) -> tuple[float, float]:
     return (drop if 1.0 <= drop <= 60.0 else 8.0), (rmax if 10.0 <= rmax <= 60.0 else 35.0)
 
 
+# 🎯 대기열 3C (2026-09-12 사장님 승인, docs/spec/PENDING_DEV_QUEUE_2026-09-12.md): 다일 조정 반등 LONG 의 **자리** 뒤집기.
+#   가상매매 multiday_rebound_352 (2026-09-13 재측정, house 엔진 · 기준선 대비 Δ · 심볼 홀짝×시간 반쪽 CV):
+#     현행 자리 (3·5일 상승 + 당일 −8%↓)  n=151  Δ −0.13  CV 2/4   (live 엔진 Δ −3.80, 0/4)
+#     당일 하락50 (DOWN24)               n=1353 Δ −0.04  CV 2/4
+#     당일 상승50 (UP24)                 n=1122 Δ +0.35  CV 4/4   (live 엔진 Δ −1.26 — 현행보다 덜 나쁨)
+#   🚨 반박 검증(2026-09-13)이 잡은 것: 실알람은 가상매매의 「1회 진입」이 아니다 — auto_long_at_bottom → _create_auto_bb_strategy 로 가서
+#      Fix 315 단계 사다리(10/300/600 = 910 USDT) · LONG 피라미딩 · 손절 뒤 재진입 대상이 된다. UP24 발생량은 옛 자리의 5~7배
+#      (가상 실시간 9/9~9/12: UP24 29~58/일 vs 옛 자리 근사 7~11/일), live 엔진 Δ 는 두 자리 모두 음수.
+#   → 실알람 기본은 **DOWN24(옛 자리 = 배포해도 실진입 불변)**, UP24 는 **그림자**(multiday_context_shadow, 알람 키를 쓰지 않고 발생만 기록).
+#     사장님이 그림자 수·가상 보고서를 보고 multiday_context=UP24 로 켠다. (둘 다 Claude가 정함)
+SETTING_PB_CONTEXT = "multiday_context"
+SETTING_PB_SHADOW = "multiday_context_shadow"
+PB_CONTEXTS = ("UP24", "DOWN24", "ANY")
+PB_CONTEXT_DEFAULT = "DOWN24"
+PB_SHADOW_DEFAULT = "UP24"
+
+
+def pullback_context(db: Any) -> str:
+    """실알람 자리. 빈 값·알 수 없는 값·조회 실패 = 기본(DOWN24 = 옛 동작)."""
+    v = (_setting(db, SETTING_PB_CONTEXT) or PB_CONTEXT_DEFAULT).strip().upper()
+    return v if v in PB_CONTEXTS else PB_CONTEXT_DEFAULT
+
+
+def pullback_shadow_context(db: Any, live_ctx: str) -> str | None:
+    """그림자 자리 (알람 키 없이 발생만 기록). OFF·빈 문자열·실알람과 같음·실알람이 ANY(상위집합) = None."""
+    raw = _setting(db, SETTING_PB_SHADOW)
+    v = (PB_SHADOW_DEFAULT if raw is None else raw).strip().upper()
+    if v not in PB_CONTEXTS or v == live_ctx or live_ctx == "ANY":
+        return None
+    return v
+
+
+def pullback_place_ok(ctx: str, tag: str, chg24: float, min_drop: float) -> bool:
+    """감시 목록 한 줄(`rank_map_multiday` 의 태그)이 다일 조정 반등 자리인가.
+    UP24   = 당일 상승 N위 (`rank_map` 의 "UP" = 거래대금 5M↑ 24h 상승 순위 — 가상매매 UP24 와 같은 정의)
+    DOWN24 = 옛 Fix 352 자리: 3·5일 상승 N위 + 당일 −min_drop% 이하
+    ANY    = 두 목록 합집합(당일 상승 N위 ∪ 3·5일 상승 N위), 24h 조건 없음"""
+    if ctx == "DOWN24":
+        return tag in ("UP3D", "UP5D") and chg24 <= -min_drop
+    if ctx == "ANY":
+        return tag in ("UP", "UP3D", "UP5D")
+    return tag == "UP"
+
+
 def is_pullback_rebound(closes: list[float], *, rsi_max: float = 35.0) -> tuple[bool, dict[str, Any]]:
     """완성봉 종가(오래된→최근)에서 「직전 봉 RSI14 < rsi_max 이고 마지막 봉이 상승 마감」."""
     d: dict[str, Any] = {"decided": False}

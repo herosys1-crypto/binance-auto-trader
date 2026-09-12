@@ -1641,6 +1641,9 @@ def run_auto_long_at_bottom_once() -> dict:
                             _mtf_merge(entry_snapshot, symbol, "LONG")),   # Fix 208
                         "alert_source": alert.get("source"),
                         "pattern": alert.get("pattern"),
+                        # 대기열 3C: 다일 조정 반등 알람의 자리(UP24/DOWN24/ANY)·순위 태그 — 자리별 사후 검증용 (다른 알람은 None)
+                        "multiday_context": alert.get("context"),
+                        "multiday_tag": alert.get("multiday_tag"),
                     },
                     confidence_score=Decimal(str(round(confidence, 4))),
                     reason=(

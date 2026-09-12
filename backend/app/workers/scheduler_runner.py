@@ -776,6 +776,17 @@ def start_scheduler() -> None:
         id="external_strategies", replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🎯 대기열 3A·3B·3D (2026-09-12 사장님 승인): 가상매매가 채택한 진입 규칙 3가족 — 신호 = 가상매매 실시간 진입 행.
+    #   기본 **shadow** (주문 없음). SystemSetting rf_s2_short_mode / rf_bottom_long_mode / rf_surge_long_mode = off|shadow|on.
+    def _rule_families():
+        from app.workers.rule_family_worker import run_rule_families_once
+        run_rule_families_once()
+    scheduler.add_job(
+        guarded_job("rule_families", 50, _rule_families),
+        trigger=IntervalTrigger(seconds=60),
+        id="rule_families", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     def _pump_top_detector_v219():
         from app.workers.pump_top_detector_worker import run_pump_top_detector
         run_pump_top_detector()
