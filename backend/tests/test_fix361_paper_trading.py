@@ -356,7 +356,7 @@ def test_group_of_태그_조합():
 # ══════════════════════════════════════════════════════════════════════
 
 def test_evaluate_rules_는_규칙_12종과_기준선_두_개를_돌려준다():
-    assert len(CL.RULES) == 12
+    assert len(CL.RULES) == 20   # Fix 368: +fujimoto 6 +mach7 2
     series = PT.Series.build(_flat15(60), [])
     fired = PT.evaluate_rules(series, 40)
     assert set(fired) >= {r.key for r in CL.RULES} | set(PT.BASELINE_KEYS)

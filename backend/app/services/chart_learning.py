@@ -67,7 +67,7 @@ MS_15M = 900_000
 MS_1H = 3_600_000
 MS_4H = 14_400_000
 MS_DAY = 86_400_000
-LABEL_VERSION = 3   # v3 (Fix 360): v2.20 캔들 세력공방 wick_rev_long/short 추가 (v2: confirm_peak_111 · off8_267)
+LABEL_VERSION = 4   # v4 (Fix 368): 후지모토 3역 호전 6 + 마하세븐 속임수 돌파 2 (v3: wick_rev / v2: confirm_peak_111 · off8_267)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -283,6 +283,8 @@ class Rule:
     fn: Callable[[RuleCtx], bool]
 
 
+from app.services.external_strategies import PAPER_RULES as _EXT_RULES   # Fix 368 (가벼운 모듈, 순환 없음)
+
 _CFG = None
 
 
@@ -422,6 +424,8 @@ RULES: tuple[Rule, ...] = (
     Rule("l1_hist_turn_up", "LONG", "hist 2봉 상승 전환 (0 아래)", "candidate", _r_l1_hist_turn_up),
     Rule("wick_rev_short_v220", "SHORT", "v2.20 윗꼬리봉→음봉 (Fix 360, shadow)", "candidate", _r_wick_rev_short_v220),
     Rule("wick_rev_long_v220", "LONG", "v2.20 아래꼬리 해머 (Fix 360, 일지만)", "candidate", _r_wick_rev_long_v220),
+    # 🎯 Fix 368 (2026-09-12): 외부 전략 2종 — 판정은 app/services/external_strategies.py (시리즈당 지표 1회 캐시)
+    *tuple(Rule(_k, _s, _lbl, "candidate", _fn) for _k, _s, _lbl, _fn in _EXT_RULES),
 )
 
 

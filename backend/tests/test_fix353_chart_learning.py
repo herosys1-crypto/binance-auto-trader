@@ -181,6 +181,6 @@ def test_off8_규칙은_창_최고가_대비_8퍼_아래서_발동():
 
 def test_레지스트리_12종_와_relabel_CLI():
     keys = [r.key for r in CL.RULES]
-    assert len(keys) == 12 and "confirm_peak_111" in keys and "off8_267" in keys   # Fix 360: +wick_rev_long/short_v220
+    assert len(keys) == 20 and "confirm_peak_111" in keys and "off8_267" in keys   # Fix 360: +wick_rev_long/short_v220
     s = (APP / "workers" / "chart_learning_worker.py").read_text(encoding="utf-8")
     assert 'sub.add_parser("relabel")' in s and "def relabel(" in s and "only_old_version" in s

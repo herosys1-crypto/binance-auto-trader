@@ -7,6 +7,7 @@
                + Fix 364 설정 키의 **실효값**(DB 행 없으면 기본값)
   ④ Fix 365  : 심볼 관리 재진입 명부·워커 사이클·프로브 배선
   ⑤ Fix 367  : 「➕ 새 전략 (기존 방식)」 = 처음 방식(TP1 +25 · 강제손절 없음) 배선 + 설정 실효값 + 최근 기존 방식 인스턴스 5건
+  ⑥ Fix 368  : 외부 전략 2종(후지모토·마하세븐) 배선 · 모드 · 가상 규칙 8개 · 마지막 사이클 · 그림자 신호 수 · 활성 인스턴스
 
 사용 (VPS, ~/binance-auto-trader/backend):
   docker compose exec -T scheduler python scripts/verify_fix364_deploy.py     # 워커가 도는 컨테이너 (②가 중요)
@@ -478,6 +479,72 @@ def check_legacy_ladder() -> None:
         db.close()
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# ⑥ Fix 368 외부 전략 2종 (후지모토 3역 호전 · 마하세븐 속임수 돌파)
+# ─────────────────────────────────────────────────────────────────────────
+def check_external_strategies() -> None:
+    print("⑥ Fix 368 외부 전략 2종 (후지모토 3역 호전 · 마하세븐 속임수 돌파)")
+    try:
+        from app.services import external_strategies as ES
+        from app.services import chart_learning as CL
+        keys = {r.key for r in CL.RULES}
+        want = {k for k, _s, _l, _f in ES.PAPER_RULES}
+        (ok if want <= keys else fail)(f"가상 규칙 등록 {len(want & keys)}/{len(want)} (chart_learning.RULES)")
+        (ok if CL.LABEL_VERSION >= 4 else fail)(f"LABEL_VERSION = {CL.LABEL_VERSION} (4 이상 = 옛 행 재라벨)")
+        from app.services.single_entry_guard import SINGLE_ENTRY_STRATEGY_TYPES as _SET, SINGLE_ENTRY_TEMPLATE_PREFIXES as _SEP
+        (ok if {ES.FUJIMOTO_TYPE, ES.MACH7_TYPE} <= set(_SET) and {ES.FUJIMOTO_PREFIX, ES.MACH7_PREFIX} <= set(_SEP) else fail)(
+            "피라미딩 워커 제외 목록(single_entry_guard)에 두 가족 등록")
+        with open(os.path.join(_ROOT, "app/workers/scheduler_runner.py"), encoding="utf-8") as f:
+            sr = f.read()
+        (ok if 'id="external_strategies"' in sr and "run_external_strategies_once" in sr else fail)("스케줄러 잡 external_strategies (60초)")
+        with open(os.path.join(_ROOT, "app/workers/external_strategies_worker.py"), encoding="utf-8") as f:
+            wk = f.read()
+        for pin, label in (("create_surge_position(", "1차/단일 진입 = 검증된 create_surge_position 경로"),
+                           ('mode="preserve"', "후지모토 2·3차 = preserve 추가"),
+                           ("bars = kl[:-1]", "진행 중 봉 제외(완성봉만 판정)")):
+            (ok if pin in wk else fail)(f"{label}: {pin}")
+        (ok if ES.SETTINGS["fujimoto_mode"][0] == "shadow" and ES.SETTINGS["mach7_mode"][0] == "shadow" else fail)("코드 기본 모드 = shadow (주문 없음)")
+    except Exception as e:  # noqa: BLE001
+        fail(f"코드 층 검사 실패: {e!r}")
+        return
+    if CODE_ONLY:
+        skip("--code-only: 운영 층 생략")
+        return
+    try:
+        from app.core.database import SessionLocal
+        from app.services import external_strategies as ES
+        db = SessionLocal()
+        try:
+            print("  ▸ 설정 실효값 (DB 행 없음 = 기본값)")
+            for key, (default, label, origin) in ES.SETTINGS.items():
+                v = ES.setting(db, key)
+                print(f"     {key:28} = {v:<12} [{'DB' if v != default else '기본'}]  {label} ({origin})")
+            from app.workers.external_strategies_worker import _active_by_prefix
+            for fam, prefix in (("후지모토", ES.FUJIMOTO_PREFIX), ("마하세븐", ES.MACH7_PREFIX)):
+                act = _active_by_prefix(db, prefix)
+                print(f"  ▸ {fam} 활성 인스턴스 {len(act)}건: " + ", ".join(f"#{si.id} {s} {si.side}" for s, si in act.items()))
+        finally:
+            db.close()
+        try:
+            from app.core.redis_client import get_redis_client
+            r = get_redis_client()
+            raw = r.get("ext:last_cycle")
+            raw = raw.decode() if isinstance(raw, bytes) else raw
+            if raw:
+                cyc = json.loads(raw)
+                print(f"  ▸ 마지막 사이클 {cyc.get('at')}: fujimoto={cyc.get('fujimoto')} mach7={cyc.get('mach7')} 심볼={cyc.get('symbols')} "
+                      f"평가={cyc.get('eval')} 신호={cyc.get('sig')} 그림자={cyc.get('shadow')} 진입={cyc.get('entered')} 추가={cyc.get('added')} 오류={cyc.get('err')}")
+            else:
+                skip("워커 사이클 기록 없음 (Redis ext:last_cycle) — 아직 한 번도 안 돌았거나 두 모드 모두 off")
+            n_fj = sum(1 for _ in r.scan_iter("ext:shadow:fujimoto:*", count=500))
+            n_m7 = sum(1 for _ in r.scan_iter("ext:shadow:mach7:*", count=500))
+            print(f"  ▸ 그림자 신호(7일 보관): 후지모토 {n_fj} · 마하세븐 {n_m7}")
+        except Exception as e:  # noqa: BLE001
+            skip(f"Redis 조회 실패: {e!r}")
+    except Exception as e:  # noqa: BLE001
+        fail(f"운영 층 조회 실패: {e!r}")
+
+
 if __name__ == "__main__":
     print(f"verify_fix364_deploy — {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z} (cwd {_ROOT})")
     check_code()
@@ -488,6 +555,7 @@ if __name__ == "__main__":
         check_ops()
     check_managed_symbols()
     check_legacy_ladder()
+    check_external_strategies()
     print("─" * 70)
     if _fails:
         print(f"결과: FAIL {len(_fails)}건")

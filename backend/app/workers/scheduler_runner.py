@@ -764,6 +764,18 @@ def start_scheduler() -> None:
         id="surge_peak_ladder", replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🎯 Fix 368 (2026-09-12 사장님): 외부 전략 2종 — 후지모토 3역 호전 + 마하세븐 속임수 돌파.
+    #   기본 **shadow** (신호만 기록, 주문 없음). SystemSetting fujimoto_mode / mach7_mode = off|shadow|on.
+    #   15분 완성봉마다 심볼당 1회 판정이라 60초 주기면 충분하다.
+    def _external_strategies():
+        from app.workers.external_strategies_worker import run_external_strategies_once
+        run_external_strategies_once()
+    scheduler.add_job(
+        guarded_job("external_strategies", 50, _external_strategies),
+        trigger=IntervalTrigger(seconds=60),
+        id="external_strategies", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     def _pump_top_detector_v219():
         from app.workers.pump_top_detector_worker import run_pump_top_detector
         run_pump_top_detector()

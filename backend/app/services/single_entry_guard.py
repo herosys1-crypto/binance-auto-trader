@@ -49,8 +49,10 @@ __all__ = [
 SINGLE_ENTRY_STRATEGY_TYPES: frozenset[str] = frozenset({
     "bb_mid_line",        # Fix 278 볼밴 중단선 4종
     "surge_peak_ladder",  # Fix 267 급등 정점 사다리 (자기 추가 로직 보유)
+    "fujimoto_3stage",    # Fix 368 후지모토 3역 호전 (자기 2·3차 추가 보유)
+    "mach7_ma_trap",      # Fix 368 마하세븐 속임수 돌파 (1회 진입)
 })
-SINGLE_ENTRY_TEMPLATE_PREFIXES: tuple[str, ...] = ("BB_MIDLINE", "SURGE_LADDER")
+SINGLE_ENTRY_TEMPLATE_PREFIXES: tuple[str, ...] = ("BB_MIDLINE", "SURGE_LADDER", "FUJIMOTO", "MACH7")
 
 
 def _template_of(si: Any):
