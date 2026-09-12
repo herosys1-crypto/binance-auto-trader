@@ -136,6 +136,7 @@ def add_position_to_strategy(
             api_secret=decrypt_text(account.api_secret_enc),
             is_testnet=account.is_testnet,
         )
+        _avg_before = strategy.avg_entry_price   # 대기열 2①: 추가 **전** 평단 (체결 뒤 스트림이 평단을 바꾸기 전에 읽는다)
         order = execution_service.add_position_now(
             strategy.id,
             amount_usdt=payload.amount_usdt,
@@ -174,9 +175,22 @@ def add_position_to_strategy(
     except Exception:
         # 알림 실패는 본 작업 성공에 영향 X
         pass
+    # 🛡 대기열 2① (2026-09-12 사장님 승인): 수동 추가에도 추가 뒤 손절 — 스위치 manual_add_after_sl_enabled(기본 0) ·
+    #   이익 구간 추가만(손실 구간 추가에 −5 를 걸면 커진 물량이 즉시 손절) · 범위 pyramid_after_add_sl_scope 존중.
+    sl_note = ""
+    try:
+        from app.workers.success_pyramiding_worker import apply_manual_add_sl
+        _ref_px = order.avg_price or order.price or payload.limit_price
+        _sl_v, _sl_why = apply_manual_add_sl(db, strategy, avg_before=_avg_before, ref_price=_ref_px,
+                                             order_type=payload.order_type)
+        if _sl_v is not None:
+            sl_note = f" 이익 구간 추가 → 추가 뒤 손절 ROI −{_sl_v:g}% 적용."
+    except Exception as e:  # noqa: BLE001 — 이미 나간 추가 주문의 응답을 막지 않는다
+        import logging
+        logging.getLogger(__name__).warning("[Q2①] #%s 수동 추가 뒤 손절 처리 실패 (주문은 정상): %s", strategy.id, e)
     msg = (
         f"포지션 추가 — {order_type_label} 주문 발송됨 (amount={payload.amount_usdt} USDT, qty={order.orig_qty}). "
-        f"체결되면 평단/qty 자동 갱신."
+        f"체결되면 평단/qty 자동 갱신.{sl_note}"
     )
     return StrategyActionResponse(
         strategy_id=strategy.id,

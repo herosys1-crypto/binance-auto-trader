@@ -8,6 +8,7 @@
   ④ Fix 365  : 심볼 관리 재진입 명부·워커 사이클·프로브 배선
   ⑤ Fix 367  : 「➕ 새 전략 (기존 방식)」 = 처음 방식(TP1 +25 · 강제손절 없음) 배선 + 설정 실효값 + 최근 기존 방식 인스턴스 5건
   ⑥ Fix 368  : 외부 전략 2종(후지모토·마하세븐) 배선 · 모드 · 가상 규칙 8개 · 마지막 사이클 · 그림자 신호 수 · 활성 인스턴스
+  ⑦ 대기열 2 : 손실 방어 — 2① 수동 추가 뒤 손절(시장가·이익 구간·손절 명시 ON) · 2② LONG 자동 추가 국면 게이트 + 설정 실효값
 
 사용 (VPS, ~/binance-auto-trader/backend):
   docker compose exec -T scheduler python scripts/verify_fix364_deploy.py     # 워커가 도는 컨테이너 (②가 중요)
@@ -171,7 +172,8 @@ def check_process() -> None:
     files = [os.path.join(_ROOT, "app", "workers", "stage_trigger_worker.py"),
              os.path.join(_ROOT, "app", "workers", "success_pyramiding_worker.py"),
              os.path.join(_ROOT, "app", "services", "tp_sl_orchestrator.py"),
-             os.path.join(_ROOT, "app", "services", "execution_service.py")]
+             os.path.join(_ROOT, "app", "services", "execution_service.py"),
+             os.path.join(_ROOT, "app", "api", "v1", "strategies", "lifecycle.py")]   # 대기열 2① (api 컨테이너에서 의미)
     newest = max(os.path.getmtime(p) for p in files)
     s_dt = datetime.fromtimestamp(start, tz=timezone.utc).astimezone()
     f_dt = datetime.fromtimestamp(newest, tz=timezone.utc).astimezone()
@@ -545,6 +547,85 @@ def check_external_strategies() -> None:
         fail(f"운영 층 조회 실패: {e!r}")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# ⑦ 대기열 2 손실 방어 (2① 수동 추가 뒤 손절 · 2② LONG 자동 추가 = MKT_UP 만)
+# ─────────────────────────────────────────────────────────────────────────
+Q2_SETTING_KEYS = [
+    ("manual_add_after_sl_enabled", "0", "2① 수동 💉 추가 뒤 손절 (1 = 켬, 이익 구간 추가만)"),
+    ("pyramid_after_add_sl_roi", "5", "추가 뒤 손절 ROI (2①·피라미딩 공용)"),
+    ("pyramid_after_add_sl_scope", "obv", "적용 범위 obv | all (obv 면 기존 방식 제외)"),
+    ("pyramid_require_breadth_up", "1", "2② LONG 자동 추가 국면 게이트 (0 = 국면 무관)"),
+    ("pyramid_breadth_allow_tags", "MKT_UP", "2② 허용 국면 (사장님 승인 MKT_UP · 넓히기 예: MKT_UP,MKT_FLAT)"),
+    ("pyramid_breadth_max_age_min", "60", "국면 값이 이보다 오래되면 허용 (fail-open)"),
+    ("pyramid_sides", "LONG,SHORT", "자동 추가 허용 방향"),
+]
+
+
+def check_queue2_loss_defense() -> None:
+    print("⑦ 대기열 2 손실 방어 (2① 수동 추가 뒤 손절 · 2② LONG 자동 추가 = MKT_UP 만)")
+    try:
+        with open(os.path.join(_ROOT, "app/workers/success_pyramiding_worker.py"), encoding="utf-8") as f:
+            wk = f.read()
+        with open(os.path.join(_ROOT, "app/api/v1/strategies/lifecycle.py"), encoding="utf-8") as f:
+            lc = f.read()
+        tree = ast.parse(wk)
+        for name in ("apply_manual_add_sl", "_manual_add_sl_enabled", "_breadth_gate_long"):
+            n = _def_count(tree, name)
+            (ok if n == 1 else fail)(f"success_pyramiding_worker.{name} 정의 {n}개 (1 이어야)")
+        i_fn = lc.find("def add_position_to_strategy(")
+        i_avg = lc.find("_avg_before = strategy.avg_entry_price", i_fn)
+        i_add = lc.find("execution_service.add_position_now(", i_fn)
+        i_sl = lc.find("apply_manual_add_sl(", i_fn)
+        i_next = lc.find("\ndef ", i_fn + 10)
+        (ok if 0 < i_fn < i_avg < i_add < i_sl < i_next else fail)("add-position 엔드포인트: 주문 전 평단 → add_position_now → apply_manual_add_sl")
+        i_peak = wk.find("peak = _update_peak_price(")
+        i_br = wk.find('_bump("breadth_not_up")')
+        i_tk = wk.find("# 급등/급락 필터 (헌법 64!)")
+        (ok if 0 < i_peak < i_br < i_tk and wk.count('_bump("breadth_not_up")') == 1 else fail)(
+            "피라미딩 워커: 고점 추적 → 국면 게이트 → 24h 필터 순서 (차단 중에도 고점 추적)")
+        (ok if '_reasons.get("breadth_unknown_allowed")' in wk else fail)("국면 값 없음(게이트 무력) 사이클 경고")
+        from types import SimpleNamespace as _NS
+        from app.workers import success_pyramiding_worker as W
+
+        class _OnDB:
+            def get(self, _m, key):
+                return type("R", (), {"value": "1"})() if key == W.MANUAL_ADD_SL_KEY else None
+        (ok if W._manual_add_sl_enabled(_NoDB()) is False and W._manual_add_sl_enabled(_OnDB()) is True else fail)(
+            "2① 스위치 판독 (행 없음 = OFF · 1 = ON)")
+        _si = _NS(id=0, symbol="X", side="LONG", force_sl_enabled_override=True, force_sl_roi_override=None, strategy_template=None)
+        (ok if W.apply_manual_add_sl(_OnDB(), _si, avg_before=1, ref_price=1.1, order_type="LIMIT") == (None, "limit_skipped")
+         and W.apply_manual_add_sl(_OnDB(), _si, avg_before=1, ref_price=0.9) == (None, "loss_zone") else fail)(
+            "2① 지정가 건너뜀 · 손실 구간 미적용")
+        (ok if W._breadth_gate_long(_NoDB()) == (True, "breadth_missing") and W._breadth_allowed_tags(_NoDB()) == {"MKT_UP"} else fail)(
+            "2② 국면 값 없음 = 허용 (fail-open) · 허용 국면 기본 MKT_UP")
+    except Exception as e:  # noqa: BLE001
+        fail(f"코드 층 검사 실패: {e!r}")
+        return
+    if CODE_ONLY:
+        skip("--code-only: 운영 층 생략")
+        return
+    try:
+        from app.core.database import SessionLocal
+        from app.models.system_setting import SystemSetting
+        from app.workers import success_pyramiding_worker as W
+        db = SessionLocal()
+        try:
+            print("  ▸ 설정 실효값 (DB 행 없음 = 기본값)")
+            for key, default, label in Q2_SETTING_KEYS:
+                row = db.get(SystemSetting, key)
+                v = None if row is None else row.value
+                src = "DB" if v not in (None, "") else "기본"
+                print(f"     {key:<32} = {str(v) if src == 'DB' else default:<12} [{src}]  {label}")
+            row = db.get(SystemSetting, W.BREADTH_LAST_KEY)
+            print(f"  ▸ {W.BREADTH_LAST_KEY} = {None if row is None else row.value}")
+            allowed, why = W._breadth_gate_long(db)
+            print(f"  ▸ 지금 LONG 자동 추가 = {'허용' if allowed else '보류'} ({why})")
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        fail(f"운영 층 조회 실패: {e!r}")
+
+
 if __name__ == "__main__":
     print(f"verify_fix364_deploy — {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z} (cwd {_ROOT})")
     check_code()
@@ -556,6 +637,7 @@ if __name__ == "__main__":
     check_managed_symbols()
     check_legacy_ladder()
     check_external_strategies()
+    check_queue2_loss_defense()
     print("─" * 70)
     if _fails:
         print(f"결과: FAIL {len(_fails)}건")

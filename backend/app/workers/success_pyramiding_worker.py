@@ -347,6 +347,154 @@ def _apply_after_add_sl(db, si, tpl=None, commit: bool = True) -> float | None:
         return None
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# 🛡 대기열 2① (2026-09-12 사장님 승인, docs/spec/PENDING_DEV_QUEUE_2026-09-12.md):
+#   수동 「💉 포지션 추가」에도 추가 뒤 손절. 근거 = 수동 추가 뒤 손절 미조정 3건
+#   (BTR #4436 −392 · USELESS #4434 −144 · SOPH #4479 −129).
+#   ⚠️ **이익 구간 · 시장가 추가에만** 건다. 실측 주문(9/9~9/11):
+#      피해를 키운 건 이익 구간 추가였다 — BTR 0.06596·0.0567 (추가 전 평단 ~0.0508·~0.0542),
+#      SOPH +1.6%·+0.4%, USELESS 마지막 0.2585 (평단 ~0.251).
+#      반대로 USELESS 0.2614·0.247 추가는 평단 0.278 아래(ROI −12~−22%) — 여기에 −5 를 걸면
+#      커진 물량이 다음 틱에 바로 손절된다.
+#   반박 검증(2026-09-13, 렌즈 3) 반영:
+#     · 지정가는 건너뛴다 — 체결가를 모르고(시장가 위 매수 지정가는 시장가에 즉시 체결돼 손실 구간일 수 있다),
+#       미체결·취소돼도 −5 가 남는다 (체결 시점 훅이 없다 = execution_service v127 과 같은 이유).
+#     · 인스턴스 손절이 **명시적으로 켜진(True)** 경우만 조인다. False(사장님 「이 전략만 강제청산 끔」·Fix 367 손절 없음)는
+#       존중하고, None(전역 상속)은 새로 만들지 않는다 — override 가 생기면 stage_trigger `_sl_explicit`(Fix 323)가
+#       바뀌어 멈춰 있던 단계 진입이 재개된다.
+#     · 이미 더 짧은 손절(0 < 저장값 < 목표)은 풀지 않는다.
+#   범위는 pyramid_after_add_sl_scope(obv|all) 그대로 — 기본 obv 면 기존 방식(BTR 같은 PRICE_DOWN_PCT)은 제외(가족별).
+# ─────────────────────────────────────────────────────────────────────────
+MANUAL_ADD_SL_KEY = "manual_add_after_sl_enabled"     # 기본 0 (Claude가 정함 — 켜는 건 사장님)
+
+
+def _manual_add_sl_enabled(db) -> bool:
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, MANUAL_ADD_SL_KEY)
+        if row is None or row.value is None or not str(row.value).strip():
+            return False
+        return str(row.value).strip().lower() in ("1", "true", "on", "yes")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Q2①] %s 조회 실패 = OFF: %s", MANUAL_ADD_SL_KEY, e)
+        return False
+
+
+def apply_manual_add_sl(db, si, *, avg_before, ref_price, order_type: str = "MARKET") -> tuple[float | None, str]:
+    """대기열 2①: 수동 추가 직후 엔드포인트가 부른다. 돌려주는 값 = (적용한 손절 ROI 또는 None, 사유).
+    사유: off | limit_skipped | sl_not_explicit_on | no_price | loss_zone | already_tighter | applied | not_applied(범위 밖·ROI 0).
+    avg_before = 추가 **전** 평단(주문 전에 읽은 값 — 체결 뒤 스트림이 평단을 바꾸기 때문),
+    ref_price  = 시장가 주문의 기준가(주문 직전 마크가 — execution_service 가 order.price 에 남긴다)."""
+    if not _manual_add_sl_enabled(db):
+        return None, "off"
+    sid = getattr(si, "id", "?")
+    if str(order_type or "").strip().upper() != "MARKET":
+        logger.info("[Q2①] #%s 지정가 추가 = 추가 뒤 손절 미적용 (체결가·체결 여부를 모른다)", sid)
+        return None, "limit_skipped"
+    _on = getattr(si, "force_sl_enabled_override", None)
+    if _on is not True:
+        logger.info("[Q2①] #%s 인스턴스 손절이 명시적으로 켜져 있지 않음(override=%s) = 그대로 (끔 존중 · 전역 상속은 새로 만들지 않음)",
+                    sid, _on)
+        return None, "sl_not_explicit_on"
+    try:
+        avg = float(avg_before or 0)
+        px = float(ref_price or 0)
+    except (TypeError, ValueError):
+        avg = px = 0.0
+    if avg <= 0 or px <= 0:
+        logger.warning("[Q2①] #%s 수동 추가 뒤 손절 보류 — 평단/가격 모름 (avg=%s price=%s)", sid, avg_before, ref_price)
+        return None, "no_price"
+    side = str(getattr(si, "side", "") or "").upper()
+    move = (px - avg) / avg * 100 if side == "LONG" else (avg - px) / avg * 100
+    if move < 0:
+        logger.info("[Q2①] #%s %s 손실 구간 추가 (평단 %.8g → 추가가 %.8g, %+.2f%%) = 추가 뒤 손절 미적용 (즉시 손절 방지)",
+                    sid, side, avg, px, move)
+        return None, "loss_zone"
+    target = _after_add_sl_roi(db)
+    prev = getattr(si, "force_sl_roi_override", None)
+    try:
+        if target > 0 and prev is not None and 0 < Decimal(str(prev)) < Decimal(str(target)):
+            logger.info("[Q2①] #%s 이미 더 짧은 손절 −%s%% (목표 −%s%%) = 그대로", sid, prev, target)
+            return None, "already_tighter"
+    except Exception:  # noqa: BLE001
+        pass
+    v = _apply_after_add_sl(db, si, commit=True)
+    if v is None:
+        logger.info("[Q2①] #%s 수동 추가 뒤 손절 미적용 — 범위(%s) 밖이거나 %s=0", sid, _after_add_sl_scope(db), AFTER_ADD_SL_KEY)
+        return None, "not_applied"
+    logger.warning("[Q2①] 🛡 #%s %s 수동 이익 구간 추가 (%+.2f%%) → 손절 ROI −%s%%", sid, side, move, v)
+    return v, "applied"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 🛡 대기열 2② (2026-09-12 사장님 승인): LONG 자동 추가는 시장 국면 MKT_UP 일 때만.
+#   근거(사양) = 자동 피라미딩 지난주 0/7 (MKT_DOWN 주간), 가상 추가 lot 은 상승 국면에서만 양수.
+#   ⚠️ 2026-09-13 재측정 (가상 LONG 추가 lot · live 변형 · 진입 시점 국면 · 9/9~9/12 실시간 행):
+#        MKT_UP n=216 ROI +3.60 (심볼 홀짝·시간 반쪽 4조각 전부 +) / MKT_DOWN n=883 +0.84 (시간 앞쪽 −0.28) /
+#        MKT_FLAT n=97 +4.24 / 국면 계산 전(9/10 이전) n=773 −3.36.
+#      → 「상승 국면에서만 양수」는 9/10 이후 표본으로는 확인되지 않는다. 승인된 기본(MKT_UP 만 = 보수적)은 유지하고
+#        허용 국면을 설정 pyramid_breadth_allow_tags 로 뺀다 (넓히기 = 설정 한 줄).
+#   국면 = paper_trading_worker._publish_breadth 가 15분마다 쓰는 system_settings.market_breadth_last {"at","breadth","tag"}.
+#   값이 없거나 오래됐으면 **허용**(fail-open) — 가상매매가 멈춰도 추가가 영구히 막히지 않게. 대신 사이클마다 경고 1줄.
+# ─────────────────────────────────────────────────────────────────────────
+BREADTH_REQUIRE_KEY = "pyramid_require_breadth_up"    # 기본 1 (Claude가 정함). 0 = 국면 무관(옛 동작)
+BREADTH_ALLOW_KEY = "pyramid_breadth_allow_tags"      # 기본 MKT_UP (사장님 승인 9/12). 예: MKT_UP,MKT_FLAT
+BREADTH_ALLOW_DEFAULT = "MKT_UP"
+BREADTH_TAGS = ("MKT_UP", "MKT_FLAT", "MKT_DOWN")     # paper_trading.breadth_tag 가 내는 값
+BREADTH_MAX_AGE_KEY = "pyramid_breadth_max_age_min"   # 기본 60분 (Claude가 정함 — 15분 주기 4회분)
+BREADTH_MAX_AGE_DEFAULT = 60.0
+BREADTH_LAST_KEY = "market_breadth_last"
+
+
+def _breadth_allowed_tags(db) -> set[str]:
+    """허용 국면 집합. 빈 값·알 수 없는 값만 있으면 기본 {MKT_UP}."""
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, BREADTH_ALLOW_KEY)
+        raw = BREADTH_ALLOW_DEFAULT if row is None or row.value is None or not str(row.value).strip() else str(row.value)
+        s = {x.strip().upper() for x in raw.replace("/", ",").split(",") if x.strip().upper() in BREADTH_TAGS}
+        return s or {BREADTH_ALLOW_DEFAULT}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Q2②] %s 조회 실패 → 기본 %s: %s", BREADTH_ALLOW_KEY, BREADTH_ALLOW_DEFAULT, e)
+        return {BREADTH_ALLOW_DEFAULT}
+
+
+def _breadth_gate_long(db, now: datetime | None = None) -> tuple[bool, str]:
+    """(허용?, 사유) — LONG 추가 직전에만 부른다. 사유: require_off | breadth_missing | breadth_stale | breadth_error | tag=MKT_…"""
+    try:
+        import json as _json
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, BREADTH_REQUIRE_KEY)
+        if row is not None and row.value is not None and str(row.value).strip().lower() in ("0", "false", "off", "no"):
+            return True, "require_off"
+        max_age = BREADTH_MAX_AGE_DEFAULT
+        arow = db.get(SystemSetting, BREADTH_MAX_AGE_KEY)
+        if arow is not None and arow.value not in (None, ""):
+            try:
+                _a = float(str(arow.value).strip())
+                max_age = _a if 5.0 <= _a <= 1440.0 else BREADTH_MAX_AGE_DEFAULT
+            except (TypeError, ValueError):
+                pass
+        brow = db.get(SystemSetting, BREADTH_LAST_KEY)
+        raw = None if brow is None else brow.value
+        if raw in (None, ""):
+            return True, "breadth_missing"
+        d = raw if isinstance(raw, dict) else _json.loads(str(raw))
+        tag, at = d.get("tag"), d.get("at")
+        if not tag or not at:
+            return True, "breadth_missing"
+        ts = datetime.fromisoformat(str(at))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_min = ((now or datetime.now(timezone.utc)) - ts).total_seconds() / 60.0
+        if age_min > max_age:
+            return True, "breadth_stale"
+        return tag in _breadth_allowed_tags(db), f"tag={tag}"
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Q2②] 시장 국면 조회 실패 = 허용: %s", e)
+        return True, "breadth_error"
+
+
 def _cap_loss_enabled(db) -> bool:
     """🎯 Fix 363 (2026-09-09 사장님): 기본 **OFF**. 사장님 로직은 「나머지는 인스턴스 옵션(손절 −25%)으로 운영」인데
     이 래칫이 추가마다 손절 ROI 를 25→18.8→15.1 로 몰래 낮췄고(기준 자본이 계획 합 910 이라 금액도 안 맞음),
@@ -813,6 +961,18 @@ def run_success_pyramiding() -> dict:
                     )
                     continue
 
+            # 🛡 대기열 2②: LONG 자동 추가는 허용 국면(기본 MKT_UP)일 때만. 고점 추적(위 _update_peak_price) 뒤에 둬서
+            #   막혀 있는 동안에도 되돌림 기준이 이어진다 (반박 검증 2026-09-13). 값 없음·낡음 = 허용 + 사이클 경고.
+            if str(si.side).upper() == "LONG":
+                _br_ok, _br_why = _breadth_gate_long(db)
+                if not _br_ok:
+                    skipped += 1
+                    _bump("breadth_not_up")
+                    logger.debug("[Q2②] ⏸ %s LONG #%s 추가 보류 — 시장 국면 %s", si.symbol, si.id, _br_why)
+                    continue
+                if _br_why.startswith("breadth_"):
+                    _bump("breadth_unknown_allowed")
+
             # 급등/급락 필터 (헌법 64!)
             try:
                 from app.integrations.binance.client import BinanceClient
@@ -1130,6 +1290,12 @@ def run_success_pyramiding() -> dict:
                 except Exception:
                     pass
 
+        if _reasons.get("breadth_unknown_allowed"):
+            logger.warning("[Q2②] ⚠ 시장 국면 값이 없거나 낡아 LONG 추가 국면 게이트가 무력(fail-open) %d건 — "
+                           "paper_trading 워커의 %s 갱신 확인", _reasons["breadth_unknown_allowed"], BREADTH_LAST_KEY)
+        if _reasons.get("breadth_not_up"):
+            logger.info("[Q2②] LONG 추가 %d건 국면 게이트로 보류 (허용 국면 %s · 설정 %s)",
+                        _reasons["breadth_not_up"], ",".join(sorted(_breadth_allowed_tags(db))), BREADTH_ALLOW_KEY)
         _reason_str = " ".join(
             f"{k}={v}" for k, v in sorted(_reasons.items(), key=lambda x: -x[1])
         ) or "-"
