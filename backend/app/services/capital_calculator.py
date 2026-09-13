@@ -101,8 +101,48 @@ def ladder_reserves_untriggered(db: Session, strategy: StrategyInstance) -> bool
         return False
 
 
-def calc_untriggered_margin_for_strategy(db: Session, strategy: StrategyInstance) -> Decimal:
+LEGACY_RESERVE_KEY = "legacy_reserve_untriggered_enabled"   # Fix 369: 1 = 기존 방식 미진입 단계도 예약(옛 동작). 기본 = 제외(사장님 9/13)
+
+
+def legacy_manual_skips_reserve(db: Session, strategy: StrategyInstance) -> bool:
+    """🧾 Fix 369 (2026-09-13 사장님 결정 「기존 방식 미진입 단계 예약 제외」): 기존 방식(entry_profile='legacy_manual')의
+    **미진입 단계**는 130% 「예약」에서 뺀다 — v219 사다리 ③-a(Fix 344)와 같은 결정.
+
+    실측 (9/13, 이 함수들로 계산): 예약 7,159 중 기존 방식 7건 = 6,509 (건당 미진입 800 + 실 마진) → 한도(지갑 3,890 × 1.3 ≈ 5,058)를
+    넘어 **기존 방식 2단계가 전부 막혔다**. #4496·#4506 LSKUSDT 는 2단계 가격 도달 직후 「130% 초과 차단」 → 사장님 수동 추가 → 강제청산.
+
+    🔀 적용 범위 (반박 검증 9/13): **기존 방식 전략이 자기 다음 단계를 넣을 때의 판정에서만** 뺀다
+    (stage_trigger_worker → calc_reserved_for_account(..., exclude_legacy_untriggered=True)).
+    공용 합계(기본값) · 생성 시 검사 · 화면 · 다른 가족(OBV·볼밴 분할·기타)의 단계 판정은 그대로 센다 — 공용 규칙
+    (ladder_reserves_untriggered)에서 빼면 다른 가족의 130% 판정까지 느슨해진다 (가족별 적용 원칙).
+    = 기존 방식끼리는 서로의 2단계를 막지 않고, 다른 가족의 예약은 기존 방식 판정에서도 여전히 센다.
+    대신 stage_trigger_worker 가 발주 직전 **가용 잔고**로 -2019 를 막는다 (잔고 조회 실패 = 보류).
+    표식 없는 옛 인스턴스(Fix 367 이전)는 그대로 예약한다. 되돌리기: SystemSetting legacy_reserve_untriggered_enabled = 1 (재시작 불필요).
+    설정 조회 실패 = 제외 (사장님 결정 쪽, Fix 344 와 같은 방향)."""
+    try:
+        # 재검증 L3: 가족 판정은 단일 권한(family_of) — 생성 뒤 자본 모드를 분할로 바꾸면 기존 방식 표식이 있어도 SPLIT 이다
+        from app.services.strategy_family import LEGACY_MANUAL, family_of
+        if family_of(strategy) != LEGACY_MANUAL:
+            return False
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, LEGACY_RESERVE_KEY)
+        if row is None or row.value is None or not str(row.value).strip():
+            return True
+        return str(row.value).strip().lower() not in ("1", "true", "on", "yes")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Fix369] %s 조회 실패 → 기존 방식 미진입 단계는 예약 제외: %s", LEGACY_RESERVE_KEY, e)
+        return True
+
+
+def calc_untriggered_margin_for_strategy(
+    db: Session, strategy: StrategyInstance, *, exclude_legacy_untriggered: bool = False,
+) -> Decimal:
     """strategy 의 미진입 단계 자본 합.
+
+    exclude_legacy_untriggered=True: 기존 방식(legacy_manual) 전략이면 0 (Fix 369 — 기존 방식 단계 진입 판정 전용, 위 docstring).
 
     🚨 v112 (2026-07-18) 사장님 CRITICAL fix:
     옛 v6 (2026-06-09): '예약 = 자본 / leverage = 마진 단위'
@@ -113,6 +153,8 @@ def calc_untriggered_margin_for_strategy(db: Session, strategy: StrategyInstance
     """
     # 🧾 Fix 344: 사다리(stage_ladder)의 미진입 단계는 예약이 아니다 (위 docstring)
     if not ladder_reserves_untriggered(db, strategy):
+        return Decimal("0")
+    if exclude_legacy_untriggered and legacy_manual_skips_reserve(db, strategy):
         return Decimal("0")
     try:
         untriggered_plans = db.execute(
@@ -132,21 +174,26 @@ def calc_untriggered_margin_for_strategy(db: Session, strategy: StrategyInstance
         return Decimal("0")
 
 
-def calc_reserved_for_strategy(db: Session, strategy: StrategyInstance) -> Decimal:
+def calc_reserved_for_strategy(
+    db: Session, strategy: StrategyInstance, *, exclude_legacy_untriggered: bool = False,
+) -> Decimal:
     """strategy 의 「예약」 = actual 실 마진 + 미진입 단계 마진.
 
     사장님 진짜 사상 v6: actual + 미진입 단계 = 마진 단위 일치.
     = 모든 곳에서 이 함수만 호출!
     """
     actual = calc_actual_margin_for_strategy(strategy)
-    untriggered = calc_untriggered_margin_for_strategy(db, strategy)
+    untriggered = calc_untriggered_margin_for_strategy(
+        db, strategy, exclude_legacy_untriggered=exclude_legacy_untriggered,
+    )
     return actual + untriggered
 
 
-def calc_reserved_for_account(db: Session, account_id: int) -> Decimal:
+def calc_reserved_for_account(db: Session, account_id: int, *, exclude_legacy_untriggered: bool = False) -> Decimal:
     """계정 단위 「예약」 = 모든 active strategy 의 예약 합.
 
     화면 (exchange_accounts.py) + worker (stage_trigger_worker.py) = 모두 이 함수만 사용!
+    exclude_legacy_untriggered=True 는 **기존 방식 전략의 단계 진입 판정에서만** 쓴다 (Fix 369, legacy_manual_skips_reserve).
     """
     # 🚨 2026-06-10 v24 critical fix: app.core.constants 모듈 없음 (= 정확 = strategy_status)
     from app.core.strategy_status import STAGES_WITH_NEXT
@@ -157,7 +204,7 @@ def calc_reserved_for_account(db: Session, account_id: int) -> Decimal:
         .where(StrategyInstance.status.in_(STAGES_WITH_NEXT))
     ).scalars().all()
     return sum(
-        (calc_reserved_for_strategy(db, s) for s in strategies),
+        (calc_reserved_for_strategy(db, s, exclude_legacy_untriggered=exclude_legacy_untriggered) for s in strategies),
         Decimal("0")
     )
 

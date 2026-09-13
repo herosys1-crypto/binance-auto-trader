@@ -113,6 +113,7 @@ LEGACY_LADDER_FORCE_SL_DEFAULT: Final[bool] = False                # 사장님 "
 LEGACY_LADDER_TP1_QTY_KEY: Final[str] = "legacy_ladder_tp1_qty_ratio"
 LEGACY_LADDER_TP1_QTY_DEFAULT: Final[Decimal] = Decimal("25")      # 사장님 verbatim "포지션진입한 금액의 25%" — 모달 기본이자 어긋나면 경고
 LEGACY_MANUAL_PROFILE: Final[str] = "legacy_manual"                 # strategy_instances.entry_profile 값 (alembic 0039)
+OBV_AUTO_PROFILE: Final[str] = "obv_auto"                           # Fix 369: 「새 전략 (OBV 자동)」·관리 재진입 복제 표식 (String(20) 안, 마이그레이션 없음)
 
 
 # ===== Take Profit (TP) — 정상 모드 =====

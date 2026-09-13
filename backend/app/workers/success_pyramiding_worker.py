@@ -803,6 +803,9 @@ def run_success_pyramiding() -> dict:
         if len(active) != _before:
             logger.info("[pyramid] Fix282 제외 %d건 (1회 진입 전략)", _before - len(active))
 
+        # 🔀 Fix 369 (9/13 반박 검증): 기존 방식(legacy_manual)도 수익 추가 대상에 **그대로 둔다** — 가족 분리 때 제외하지 않는다.
+        #   Fix 185 사장님 verbatim 「모든 전략 — 수동/모달 전략도 수익 나면 추가 진입」(아래 주석)과 충돌하므로.
+
         # 3. 심볼별 이미 pyramid 활성 = skip 집합!
         pyramid_active_syms: set[tuple[str, str]] = set()
         for si in active:

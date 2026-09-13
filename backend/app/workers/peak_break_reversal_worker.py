@@ -527,7 +527,13 @@ def _get_active_short_strategies(db):
     #   시장가로 얹는다. bb_mid_line(ROI -10% 손절, 1단계 템플릿)에 그게 들어가면
     #   손절선이 반토막 나고 1단계 plan 이 재사용돼 물량이 2배가 된다.
     from app.services.single_entry_guard import drop_single_entry
-    return drop_single_entry(_rows, tag="[peak_break_reversal]")
+    # 🔀 Fix 369 (2026-09-13 사장님 「기존 방식 / OBV 자동 완전 분리」): 두 수동 가족은 이 워커의 대상이 아니다 —
+    #   기존 방식은 가격 트리거로만(Fix 232), OBV 자동은 stage_entry_signal 로만 다음 단계에 들어간다.
+    #   (9/12 기존 방식 SHORT #4496 LSKUSDT 에 끼어들어 진입을 시도한 사례)
+    #   ⚠️ 아래 _enter_next_stage 의 ExecutionService(db) 호출 오류(Fix 41 도입 이후 한 번도 진입 못 함)는 **일부러 고치지 않았다** —
+    #      고치면 한 번도 돈 적 없는 시장가 단계 진입이 남은 가족(자동 워커·사다리)에 켜진다. 살릴지는 사장님 결정.
+    from app.services.strategy_family import MANUAL_FAMILIES, drop_families
+    return drop_families(drop_single_entry(_rows, tag="[peak_break_reversal]"), MANUAL_FAMILIES, tag="[peak_break_reversal]")
 
 
 def run_peak_break_reversal_once():

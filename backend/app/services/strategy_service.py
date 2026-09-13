@@ -619,6 +619,13 @@ class StrategyService:
         # Fix 367c: 커밋 뒤 lazy-load 를 피하려 로그·경고에 쓸 값은 지금 캡처한다 (템플릿 TP1 청산 비율 = 모달 값)
         _tpl_tp1_qty367 = getattr(template_model, "tp1_qty_ratio", None)
         _qty_ref367 = _SS362(self.db).get_legacy_ladder_tp1_qty_ratio() if _is_legacy367 else None
+        # 🔀 Fix 369 (2026-09-13 사장님 「기존 방식 / OBV 자동 완전 분리」): 두 가족 **모두** 생성 시 표식을 찍는다.
+        #   OBV 자동(템플릿 OBV_REVERSE — 모달 · 관리 재진입 복제)은 'obv_auto'. 런타임 판정은 strategy_family.family_of 하나.
+        from app.core.risk_constants import OBV_AUTO_PROFILE as _OBV_PROFILE369
+        _entry_profile369 = (
+            LEGACY_MANUAL_PROFILE if _is_legacy367
+            else (_OBV_PROFILE369 if str(getattr(template_model, "trigger_mode", "") or "").upper() == "OBV_REVERSE" else None)
+        )
         instance = StrategyInstance(
             user_id=user_id,
             exchange_account_id=exchange_account_id,
@@ -633,7 +640,7 @@ class StrategyService:
             tp1_pct_override=_tp1_default,  # v147: 15% (사장님 지시) / Fix 367 기존 방식 = 25
             force_sl_enabled_override=_fs_on_default,  # 강제 SL ON! / Fix 367 기존 방식 = 끔
             force_sl_roi_override=_fs_roi_default,  # Fix 362: 기본 -25% (설정 force_sl_roi_new_default), 옛 v166 = 5 / Fix 367 기존 방식 = 0
-            entry_profile=(LEGACY_MANUAL_PROFILE if _is_legacy367 else None),  # Fix 367c: 런타임(단계 정리 제외)은 이 표식만 본다
+            entry_profile=_entry_profile369,  # Fix 367c 기존 방식 표식 + Fix 369 OBV 자동 표식 (런타임 판정 = strategy_family.family_of)
             # 🌟 v131 신 (2026-08-09 사장님!): 청산 후 자동 재진입 옵션 저장!
             retry_after_liquidation_enabled=bool(retry_after_liquidation_enabled),
             retry_trigger_pct=D(str(retry_trigger_pct)) if retry_trigger_pct is not None else D("10"),

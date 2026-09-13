@@ -67,6 +67,14 @@ def _check_auto_entry_silent_bug(db, strategy, mark_price):
     bugs = []
     if not mark_price or strategy.status not in ("STAGE1_OPEN", "STAGE2_OPEN", "STAGE3_OPEN", "STAGE4_OPEN", "STAGE5_OPEN"):
         return bugs
+    # 🔀 Fix 369: OBV 자동은 가격이 아니라 stage_entry_signal 로 단계에 들어간다 — 계획에 남은 가격 트리거로 「진입 누락」을 판정하면
+    #   CRITICAL 오탐이다 (워커 감사 9/13). 가격 트리거 가족(기존 방식 등)만 본다.
+    try:
+        from app.services.strategy_family import OBV_AUTO, family_of
+        if family_of(strategy) == OBV_AUTO:
+            return bugs
+    except Exception:  # noqa: BLE001
+        pass
     # 미진입 stage_plans 조회
     plans = db.execute(
         select(StrategyStagePlan)

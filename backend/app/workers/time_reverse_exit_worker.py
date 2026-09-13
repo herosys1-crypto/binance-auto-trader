@@ -132,6 +132,9 @@ def run_time_reverse_exit_once():
                               StrategyInstance.current_stage == 1,
                               StrategyInstance.started_at.isnot(None))
                       .limit(MAX_STRATEGIES_PER_CYCLE).all())
+        # 🔀 Fix 369 (2026-09-13 사장님 「기존 방식 / OBV 자동 완전 분리」): 두 수동 가족은 이 워커(전량 청산 + retry)의 대상이 아니다.
+        from app.services.strategy_family import MANUAL_FAMILIES, drop_families
+        candidates = drop_families(candidates, MANUAL_FAMILIES, tag="[time_reverse_exit]")
         result["scanned"] = len(candidates)
         # 🚨 Fix 197: 옛 코드는 여기서 무로그 return 이라 **실행 흔적조차 없었다.**
         #   started_at 이 전 행 NULL 이라 위 필터가 항상 0건을 만들어,

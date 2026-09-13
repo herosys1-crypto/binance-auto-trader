@@ -389,7 +389,10 @@ def _query_candidates(db):
     # 🚨 Fix 283: 볼밴만 예외였던 것을 「1회 진입 전략」 전체로 넓힌다.
     #   이 워커도 stage_no=2 시장가 진입 + force_sl_roi_override=5 덮어쓰기를 한다.
     from app.services.single_entry_guard import drop_single_entry
-    return drop_single_entry(_rows2, tag="[resistance_reversal]")
+    # 🔀 Fix 369 (2026-09-13 사장님 「기존 방식 / OBV 자동 완전 분리」): 두 수동 가족은 이 워커의 대상이 아니다.
+    #   ⚠️ _enter_stage2 의 ExecutionService(db) 호출 오류(Fix 29 이후 진입 불가)는 일부러 고치지 않았다 — 살릴지는 사장님 결정.
+    from app.services.strategy_family import MANUAL_FAMILIES, drop_families
+    return drop_families(drop_single_entry(_rows2, tag="[resistance_reversal]"), MANUAL_FAMILIES, tag="[resistance_reversal]")
 
 
 def run_resistance_reversal_once():

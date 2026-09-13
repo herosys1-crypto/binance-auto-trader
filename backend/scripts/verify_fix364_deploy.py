@@ -410,7 +410,8 @@ def check_legacy_ladder() -> None:
         i_il = trim_src.find("def is_legacy_manual_instance(")
         (ok if 'getattr(strategy, "entry_profile", None)' in trim_src[i_il:i_il + 1500] and "db.get(StrategyTemplate" not in trim_src[i_il:i_il + 1500] else fail)(
             "런타임 판정은 entry_profile 표식만 본다 (템플릿 추정 없음 = 배포 전 인스턴스 불변)")
-        (ok if "entry_profile=(LEGACY_MANUAL_PROFILE if _is_legacy367 else None)" in ss_src else fail)("생성 시 entry_profile 표식 저장")
+        (ok if "entry_profile=_entry_profile369" in ss_src and "LEGACY_MANUAL_PROFILE if _is_legacy367" in ss_src else fail)(
+            "생성 시 entry_profile 표식 저장 (Fix 369: 기존 방식 legacy_manual · OBV 자동 obv_auto)")
         (ok if "entry_profile" in _read("app/models/strategy_instance.py") and os.path.exists(os.path.join(_ROOT, "alembic/versions/0039_strategy_instances_entry_profile.py")) else fail)(
             "모델 컬럼 + alembic 0039 파일")
         ms_src = _read("app/static/js/multi-symbol.js")
@@ -704,6 +705,94 @@ def check_queue3_rules() -> None:
         fail(f"운영 층 조회 실패: {e!r}")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# ⑨ Fix 369 기존 방식 / OBV 자동 분리 (S1 130% 예약 · S2 가족 판정 단일 권한·워커 제한)
+# ─────────────────────────────────────────────────────────────────────────
+F369_PINS = [
+    ("app/workers/stage_trigger_worker.py", "calc_reserved_for_account(db, account.id, exclude_legacy_untriggered=_legacy_nores369)",
+     "S1 예약 제외 = 기존 방식이 자기 단계를 넣을 때의 판정에서만 (다른 가족·생성 검사·화면은 옛 합계)"),
+    ("app/workers/stage_trigger_worker.py", "if _is_ladder or _legacy_nores369:", "S1 기존 방식도 발주 직전 가용 잔고 검사"),
+    ("app/workers/stage_trigger_worker.py", "if _avail is None and _legacy_nores369:", "S1 기존 방식 잔고 조회 실패 = 보류 (fail-closed)"),
+    ("app/workers/stage_trigger_worker.py", "_need = _stage_order_margin369(strategy, next_plan, mark, _legacy_margin_buffer369(db))",
+     "S1 필요 금액 = 실제 주문 비용 (qty × max(mark, 주문가) ÷ lev + 개시 손실)"),
+    ("app/workers/stage_trigger_worker.py", "Fix369 기존 방식 가용 잔고 부족 (단계 보류)", "S1 기존 방식 보류 = 사장님 텔레그램 (1시간 dedup)"),
+    ("app/services/capital_calculator.py", "if family_of(strategy) != LEGACY_MANUAL:", "S1 기존 방식 판정 = family_of 단일 권한"),
+    ("app/workers/peak_break_reversal_worker.py", "drop_families(drop_single_entry(", "S2 Fix 41 반전 워커 = 두 수동 가족 제외"),
+    ("app/workers/resistance_reversal_worker.py", "drop_families(drop_single_entry(", "S2 Fix 29 저항 반전 워커 = 두 수동 가족 제외"),
+    ("app/workers/time_reverse_exit_worker.py", "candidates = drop_families(candidates, MANUAL_FAMILIES", "S2 시간 역행 청산 = 두 수동 가족 제외"),
+    ("app/workers/setting_preservation_agent.py", "family_of(strategy) == OBV_AUTO", "S2 진입 누락 알림 = OBV 제외 (오탐)"),
+    ("app/services/strategy_service.py", "entry_profile=_entry_profile369", "S2 생성 시 두 가족 모두 표식"),
+]
+
+
+def check_family_separation() -> None:
+    print("⑨ Fix 369 기존 방식 / OBV 자동 분리 (S1 130% 예약 제외 · S2 가족 판정 단일 권한)")
+    try:
+        from types import SimpleNamespace as _NS
+        from app.services import capital_calculator as CC
+        from app.services import strategy_family as SF
+        with open(os.path.join(_ROOT, "app/services/strategy_family.py"), encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        for name in ("family_of", "drop_families"):
+            n = _def_count(tree, name)
+            (ok if n == 1 else fail)(f"strategy_family.{name} 정의 {n}개 (1 이어야)")
+        for rel, pin, label in F369_PINS:
+            with open(os.path.join(_ROOT, rel), encoding="utf-8") as f:
+                (ok if pin in f.read() else fail)(f"{label}: {pin}")
+        _leg = _NS(id=0, entry_profile="legacy_manual", capital_management_mode="fixed",
+                   strategy_template=_NS(trigger_mode="PRICE_DOWN_PCT", strategy_type="DYNAMIC_LONG", name="_quick_x"))
+        _obv = _NS(id=0, entry_profile=None, capital_management_mode="fixed",
+                   strategy_template=_NS(trigger_mode="OBV_REVERSE", strategy_type="DYNAMIC_LONG", name="_quick_m_x"))
+        (ok if SF.family_of(_leg) == SF.LEGACY_MANUAL and SF.family_of(_obv) == SF.OBV_AUTO else fail)("가족 판정 (기존 방식 표식 · 표식 없는 OBV)")
+        (ok if CC.legacy_manual_skips_reserve(_NoDB(), _leg) is True and CC.legacy_manual_skips_reserve(_NoDB(), _obv) is False else fail)(
+            "S1 기존 방식 미진입 단계 예약 제외 (설정 행 없음 = 사장님 결정 9/13)")
+        (ok if CC.ladder_reserves_untriggered(_NoDB(), _leg) is True else fail)(
+            "S1 공용 예약 규칙(생성 시 검사·화면·다른 가족 판정)은 기존 방식 미진입 단계도 그대로 셈")
+        with open(os.path.join(_ROOT, "app/workers/success_pyramiding_worker.py"), encoding="utf-8") as f:
+            (ok if "_family369(si) != LEGACY_MANUAL" not in f.read() else fail)(
+                "S2 수익 추가 = 기존 방식도 대상 (Fix 185 사장님 「모든 전략 — 수동/모달 전략도」)")
+    except Exception as e:  # noqa: BLE001
+        fail(f"코드 층 검사 실패: {e!r}")
+        return
+    if CODE_ONLY:
+        skip("--code-only: 운영 층 생략")
+        return
+    try:
+        from sqlalchemy import select
+        from app.core.database import SessionLocal
+        from app.core.strategy_status import STAGES_WITH_NEXT
+        from app.models.strategy_instance import StrategyInstance
+        from app.models.system_setting import SystemSetting
+        from app.services import capital_calculator as CC
+        from app.services import strategy_family as SF
+        db = SessionLocal()
+        try:
+            for key, default, label in (("legacy_reserve_untriggered_enabled", "(행 없음 = 제외)", "S1 1 = 기존 방식 미진입 단계도 예약(옛 동작)"),
+                                        ("legacy_stage_margin_buffer", "1.05", "S1 기존 방식 잔고 검사 여유 배율 (Claude가 정함, 1.0~1.5)")):
+                row = db.get(SystemSetting, key)
+                v = None if row is None else row.value
+                print(f"     {key:<36} = {v if v not in (None, '') else default:<16} [{'DB' if v not in (None, '') else '기본'}]  {label}")
+            rows = db.execute(select(StrategyInstance).where(StrategyInstance.is_archived.is_(False))
+                              .where(StrategyInstance.status.in_(STAGES_WITH_NEXT))).scalars().all()
+            fam_n: dict = {}
+            fam_res: dict = {}
+            _legacy_view = 0.0
+            for si in rows:
+                fm = SF.family_of(si)
+                fam_n[fm] = fam_n.get(fm, 0) + 1
+                fam_res[fm] = fam_res.get(fm, 0.0) + float(CC.calc_reserved_for_strategy(db, si))
+                _legacy_view += float(CC.calc_reserved_for_strategy(db, si, exclude_legacy_untriggered=True))
+            print(f"  ▸ 활성 전략 {len(rows)}건 가족별: " + ", ".join(f"{k} {fam_n[k]}건/예약 {fam_res[k]:.0f}" for k in sorted(fam_n)))
+            print(f"  ▸ 예약 합 (전 계정): 공용 판정 {sum(fam_res.values()):.0f} · 기존 방식 단계 판정 {_legacy_view:.0f} USDT"
+                  f" · 한도 = 지갑 × {CC.get_wallet_limit_pct()}% (지갑은 거래소 조회라 여기선 안 봄)")
+            if fam_n.get(SF.UNKNOWN):
+                fail(f"가족 판정 실패(unknown) {fam_n[SF.UNKNOWN]}건 — 주문 워커에서 제외된다")
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        fail(f"운영 층 조회 실패: {e!r}")
+
+
 if __name__ == "__main__":
     print(f"verify_fix364_deploy — {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z} (cwd {_ROOT})")
     check_code()
@@ -717,6 +806,7 @@ if __name__ == "__main__":
     check_external_strategies()
     check_queue2_loss_defense()
     check_queue3_rules()
+    check_family_separation()
     print("─" * 70)
     if _fails:
         print(f"결과: FAIL {len(_fails)}건")

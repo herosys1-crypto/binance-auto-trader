@@ -202,16 +202,18 @@ def _obv_pyramid_count(strategy_id: int) -> int:
         return 1
 
 
-def _obv_stage1_planned_capital(db, strategy) -> float:
+def _obv_stage1_planned_capital(db, strategy) -> float | None:
+    """1단계 계획 자본. 모르면 None — 금액을 지어내지 않고 호출자가 완화를 건너뛴다 (test_capital_authority)."""
     try:
         from app.models.strategy_stage_plan import StrategyStagePlan
         plan = db.execute(
             select(StrategyStagePlan).where(StrategyStagePlan.strategy_instance_id == strategy.id,
                                             StrategyStagePlan.stage_no == 1)
         ).scalar_one_or_none()
-        return float(getattr(plan, "planned_capital", 0) or 0)
+        v = getattr(plan, "planned_capital", None)
+        return float(v) if v is not None else None
     except Exception:  # noqa: BLE001
-        return 0.0
+        return None
 
 
 def _obv_prev_stage_stopped(db, strategy, next_stage_no: int, mark) -> tuple[bool, str]:
@@ -237,8 +239,8 @@ def _obv_prev_stage_stopped(db, strategy, next_stage_no: int, mark) -> tuple[boo
     if margin <= cap:
         return True, ""
     if int(next_stage_no) == 2 and _obv_pyramid_count(strategy.id) <= 0:
-        cap1 = _obv_stage1_planned_capital(db, strategy) * 1.2
-        if cap1 > 0 and margin <= cap1:
+        _p1 = _obv_stage1_planned_capital(db, strategy)
+        if _p1 is not None and _p1 > 0 and margin <= _p1 * 1.2:
             return True, ""
     try:
         from app.services.stage_trim import ACTION_SKIP, ACTION_TRIM, compute_trim
@@ -305,6 +307,75 @@ _BLOCK_REASON_KEY = "stage_trigger_block:strategy:{sid}"
 _BLOCK_REASON_TTL = 600  # 10분 (= 다음 cycle 까지 표시)
 _BLOCK_ALERT_DEDUP_KEY = "stage_trigger_block_alert:strategy:{sid}:reason:{r}"
 _BLOCK_ALERT_DEDUP_TTL = 3600  # 1시간 (= 알림 spam 차단)
+
+
+LEGACY_MARGIN_BUFFER_KEY = "legacy_stage_margin_buffer"   # Fix 369: 기존 방식 발주 직전 잔고 검사 여유 배율 (Claude가 정함 1.05 = MARKET preflight 와 같은 값)
+
+
+def _legacy_margin_buffer369(db) -> Decimal:
+    """기존 방식 잔고 검사 여유 배율. 설정 없음·범위 밖(1.0~1.5)·조회 실패 = 1.05 (Claude가 정함)."""
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, LEGACY_MARGIN_BUFFER_KEY)
+        if row is not None and row.value not in (None, "") and str(row.value).strip():
+            v = Decimal(str(row.value).strip())
+            if Decimal("1") <= v <= Decimal("1.5"):
+                return v
+    except Exception:  # noqa: BLE001
+        pass
+    return Decimal("1.05")
+
+
+def _stage_order_margin369(strategy, plan, mark, buffer=Decimal("1.05")) -> Decimal:
+    """🧾 Fix 369 (반박 검증 9/13 ×2): 기존 방식 단계 발주가 **실제로** 잡는 금액 추정 — 발주 직전 가용 잔고 검사용.
+
+    Binance USDT-M 주문 비용 = 개시 증거금 + 개시 손실:
+      매도(SHORT) = qty × max(mark, 주문가) ÷ lev + qty × max(0, mark − 주문가)
+      매수(LONG)  = qty × 주문가 ÷ lev          + qty × max(0, 주문가 − mark)
+    기존 방식 단계는 가격이 트리거를 **넘어선 뒤** LIMIT @ trigger_price 로 나가므로(바로 체결) 개시 손실이 붙는다
+    — 트리거가만 보면 레버리지 10 · 1% 초과에서 +11% 가 모자라 -2019 (LSKUSDT 사고 모양 재발).
+    수량 = planned_qty (단계 수정이 qty 를 안 바꾸는 경로가 있어 planned_capital 과 어긋날 수 있다; 없으면 planned_capital × lev ÷ 주문가).
+    trigger_price 없음 = MARKET (수량을 planned_capital 로 다시 계산) = planned_capital.
+    필요 = max(planned_capital, 위 비용) × buffer + additional_margin_usdt (발주 직후 같은 주기에 투입). 못 읽는 항목은 건너뛴다."""
+    D = Decimal
+    try:
+        cap = D(str(getattr(plan, "planned_capital", 0) or 0))
+    except Exception:  # noqa: BLE001
+        cap = D("0")
+    need = cap
+    try:
+        lev = D(str(getattr(strategy, "leverage", None) or 1))
+        px_raw = getattr(plan, "trigger_price", None)
+        if px_raw is not None and lev > 0:
+            px = D(str(px_raw))
+            q_raw = getattr(plan, "planned_qty", None)
+            qty = abs(D(str(q_raw))) if q_raw is not None else ((cap * lev / px) if px > 0 else D("0"))
+            m = D(str(mark)) if mark is not None and D(str(mark)) > 0 else px
+            if str(getattr(strategy, "side", "") or "").upper() == "SHORT":
+                cost = qty * max(m, px) / lev + qty * max(D("0"), m - px)
+            else:
+                cost = qty * px / lev + qty * max(D("0"), px - m)
+            need = max(need, cost)
+    except Exception:  # noqa: BLE001
+        pass
+    need = need * D(str(buffer))
+    try:
+        _add = D(str(getattr(plan, "additional_margin_usdt", 0) or 0))
+        if _add > 0:
+            need += _add
+    except Exception:  # noqa: BLE001
+        pass
+    return need
+
+
+def _f369_log_once(redis_client, sid: int, stage_no: int, ttl: int = 600) -> bool:
+    """Fix 369 (재검증 M2): 워커가 15초 주기라 같은 보류 WARNING 은 10분에 한 번만 (Redis 없음·오류 = 매번)."""
+    if redis_client is None:
+        return True
+    try:
+        return bool(redis_client.set(f"stage_trigger:f369_hold_log:{sid}:{stage_no}", "1", nx=True, ex=ttl))
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def _record_block_reason(
@@ -1611,13 +1682,21 @@ def run_stage_trigger_once(decrypt_text) -> None:
                     calc_wallet_limit,
                     get_wallet_limit_pct,
                 )
+                # 🧾 Fix 369 (사장님 9/13 「기존 방식 미진입 단계 예약 제외」 + 반박 검증): **기존 방식 전략이 자기 다음 단계를 넣을 때만**
+                #   기존 방식 미진입 단계를 예약에서 뺀다 (기존 방식끼리 서로 막지 않게). 다른 가족(OBV·볼밴 분할·기타)의 예약은 그대로 세고,
+                #   다른 가족의 판정·생성 시 검사·화면은 옛 합계 그대로다. 판정 실패 = False = 옛 합계(보수적).
+                try:
+                    from app.services.capital_calculator import legacy_manual_skips_reserve as _lmsr369
+                    _legacy_nores369 = bool(_lmsr369(db, strategy))
+                except Exception:  # noqa: BLE001
+                    _legacy_nores369 = False
                 try:
                     _bal_info = None  # Fix 344: 이전 전략의 잔고 응답을 재사용하지 않는다
                     _bal_info = exec_service.client.get_account()
                     _wallet_total = Decimal(str(_bal_info.get('totalWalletBalance', '0')))
                     _real_margin = Decimal(str(_bal_info.get('totalPositionInitialMargin', '0')))
                     # 단일 진실 함수 호출 (= 화면과 동일!)
-                    _total_reserved = calc_reserved_for_account(db, account.id)
+                    _total_reserved = calc_reserved_for_account(db, account.id, exclude_legacy_untriggered=_legacy_nores369)
                     _max_allowed = calc_wallet_limit(_wallet_total)
                     _user_limit_pct = get_wallet_limit_pct()
                     # 🚨 2026-06-09 v17 silent bug fix (사장님 검증 발견!):
@@ -1652,21 +1731,22 @@ def run_stage_trigger_once(decrypt_text) -> None:
                         )
                         _first = _set_margin_cooldown(_redis, strategy.id, next_stage_no)
                         logger.warning(
+                            # Fix 369: 옛 라벨 「실=A + 예약=B = C」는 틀렸다 — 판정값은 예약 하나이고 실 마진이 이미 포함돼 있다
                             "[stage-trigger] 130%% 초과 차단 strategy=%s stage=%s — "
-                            "실=%s + 예약=%s = %s (%.1f%%) > 허용=%s (130%%) wallet=%s (alert=%s)",
-                            strategy.id, next_stage_no, _real_margin, _total_reserved,
-                            _total_committed, _committed_ratio, _max_allowed, _wallet_total, _first,
+                            "예약(실 마진 포함, 판정값)=%s (%.1f%%) > 허용=%s (130%%) · 거래소 실 마진(참고)=%s · wallet=%s (alert=%s)",
+                            strategy.id, next_stage_no, _total_committed, _committed_ratio, _max_allowed,
+                            _real_margin, _wallet_total, _first,
                         )
                         if _first:
                             try:
                                 NotificationService(db).send_system_alert(
                                     title=f"🚨 [Wallet 130% 초과 — 자동 진입 차단] #{strategy.id} {strategy.symbol} 단계{next_stage_no}",
                                     body=(
-                                        f"사장님 정책 (2026-06-08 v2): 실 + 예약 ≤ wallet × 1.30 위반 → 차단.\n\n"
-                                        f"📌 계산 (예약률 = 실 + 예약 / wallet × 100):\n"
-                                        f"  • 🔒 실 사용 마진 (Binance lock): {_real_margin:.2f} USDT\n"
-                                        f"  • 📦 포지션 예약됨 (활성 {len(_all_active)}개 자본 잔여): {_total_reserved:.2f} USDT\n"
-                                        f"  • 합 (실 + 예약): {_total_committed:.2f} USDT\n"
+                                        f"사장님 정책 (2026-06-08 v2): 예약 합계 ≤ wallet × 1.30 위반 → 차단.\n\n"
+                                        f"📌 계산 (예약률 = 예약 합계 / wallet × 100 — 예약 합계에 실 마진이 이미 들어 있다):\n"
+                                        f"  • 📦 예약 합계 = 판정값 (활성 {len(_all_active)}개 · 실 마진 + 미진입 단계"
+                                        f"{' · 기존 방식 미진입 단계 제외(Fix 369)' if _legacy_nores369 else ''}): {_total_committed:.2f} USDT\n"
+                                        f"  • 🔒 거래소 실 사용 마진 (참고 — 위 합계에 포함): {_real_margin:.2f} USDT\n"
                                         f"  • 💼 Wallet: {_wallet_total:.2f} USDT\n"
                                         f"  • 📊 예약률: {_committed_ratio:.1f}% (허용 한도: 130%)\n"
                                         f"  • 초과: {(_total_committed - _max_allowed):.2f} USDT\n\n"
@@ -1694,25 +1774,54 @@ def run_stage_trigger_once(decrypt_text) -> None:
                 #    필요 증거금 = planned_capital (사장님 헌법 capital = margin) × 1.02
                 #    (수수료 여유 2% 는 Claude 값). 잔고 조회가 안 되면 기존 preflight 에 맡긴다(fail-open).
                 # ═══════════════════════════════════════════════════════
-                if _is_ladder:
+                # 🧾 Fix 369 (2026-09-13 사장님 결정 + 반박 검증): 기존 방식(legacy_manual)도 자기 단계 판정에서 미진입 단계를 예약에서 뺐으므로
+                #   같은 잔고 검사를 받는다. 기존 방식은 더 엄격하게: ① 필요 증거금 = 실제 주문 크기(_stage_order_margin369 — LIMIT 은
+                #   planned_qty × trigger_price ÷ 레버리지) ② 잔고를 모르면 발주하지 않고 다음 주기에 다시 본다(fail-closed).
+                #   사다리 경로(planned_capital · 조회 실패 = preflight 에 맡김)는 그대로 둔다 (가족별 적용).
+                if _is_ladder or _legacy_nores369:
                     _avail = None
                     try:
                         _avail = Decimal(str(_bal_info.get("availableBalance", "0")))
                     except Exception:
                         _avail = None
+                    if _avail is None and _legacy_nores369:
+                        _record_block_reason(
+                            _redis, strategy.id,
+                            "Fix369 가용 잔고 조회 실패 — 기존 방식 단계 보류 (다음 주기 재시도)",
+                            next_stage_no,
+                        )
+                        if _f369_log_once(_redis, strategy.id, next_stage_no):
+                            logger.warning(
+                                "[Fix369] #%s %s %s 단계%s 보류 — 가용 잔고 조회 실패 (기존 방식은 130%% 예약에서 빠져 잔고 확인 없이 발주하지 않음)",
+                                strategy.id, strategy.symbol, strategy.side, next_stage_no,
+                            )
+                        # 재검증 M1: 사장님이 「2단계가 막혔다」를 알아야 한다 (1시간 dedup — 이유 앞 30자 고정)
+                        _alert_silent_block_once(_redis, db, strategy, "Fix369 기존 방식 잔고 조회 실패 (단계 보류)", next_stage_no)
+                        continue
                     if _avail is not None:
                         _need = Decimal(str(getattr(next_plan, "planned_capital", 0) or 0)) * Decimal("1.02")
+                        if _legacy_nores369:
+                            _need = _stage_order_margin369(strategy, next_plan, mark, _legacy_margin_buffer369(db))
                         if _need > 0 and _avail < _need:
                             _record_block_reason(
                                 _redis, strategy.id,
                                 f"Fix344 가용 잔고 부족 (avail={_avail:.2f} < 필요={_need:.2f})",
                                 next_stage_no,
                             )
-                            logger.warning(
-                                "[Fix344] #%s %s %s 단계%s 보류 — 가용 잔고 %.2f < 필요 %.2f (planned=%s×1.02)",
-                                strategy.id, strategy.symbol, strategy.side, next_stage_no,
-                                _avail, _need, getattr(next_plan, "planned_capital", None),
-                            )
+                            if not _legacy_nores369 or _f369_log_once(_redis, strategy.id, next_stage_no):   # 사다리 경로 로그는 옛 동작 그대로
+                                logger.warning(
+                                    "[Fix344] #%s %s %s 단계%s 보류 — 가용 잔고 %.2f < 필요 %.2f (planned=%s qty=%s @%s mark=%s 기존방식=%s)",
+                                    strategy.id, strategy.symbol, strategy.side, next_stage_no,
+                                    _avail, _need, getattr(next_plan, "planned_capital", None),
+                                    getattr(next_plan, "planned_qty", None), getattr(next_plan, "trigger_price", None),
+                                    mark, _legacy_nores369,
+                                )
+                            if _legacy_nores369:
+                                _alert_silent_block_once(
+                                    _redis, db, strategy,
+                                    f"Fix369 기존 방식 가용 잔고 부족 (단계 보류) · 가용 {_avail:.2f} < 필요 {_need:.2f} USDT",
+                                    next_stage_no,
+                                )
                             continue
 
                 # 🎯 Fix 363b: 가격/사다리/분할 단계도 **손실 중에만** 나간다 (사장님: 2·3단계는 손실 뒤). 이익 중이면 대기 —
