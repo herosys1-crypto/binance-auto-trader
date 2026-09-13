@@ -143,6 +143,7 @@ def add_position_to_strategy(
             order_type=payload.order_type,
             limit_price=payload.limit_price,
             mode=payload.mode,  # 🌟 헌법 51: preserve / reset
+            origin="manual",  # ⛔ Fix 371: 사람 「💉 포지션 추가」 — 자동매매 중단 중에도 모달로 만든 전략엔 허용
         )
     except PreflightCheckFailed as e:
         # Phase 3: 사전 마진 검증 실패 — 거래소 호출 0, 친절 400 에러.

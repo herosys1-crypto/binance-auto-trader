@@ -44,7 +44,7 @@ def start_strategy(
             api_secret=decrypt_text(account.api_secret_enc),
             is_testnet=account.is_testnet,
         )
-        execution_service.start_stage1(strategy.id)
+        execution_service.start_stage1(strategy.id, origin="manual")  # ⛔ Fix 371: 사람 「전략 시작」 — 자동매매 중단 중에도 허용
     except ValueError as e:
         # Bug #12 fix (2026-04-29): start_stage1 실패 시 DB 의 strategy 를 STOPPED
         # 로 마킹해서 orphan WAITING/PENDING 안 남김. 사용자는 retry 시 새 전략 만들면 됨.
@@ -799,7 +799,7 @@ def trigger_next_stage_manually(
         # 2026-05-04 (사용자 요청): 수동 「▶ 다음 단계」 = 시장가 즉시 진입.
         # enter_stage_at_market: 현재가 MARKET, planned_capital 로 qty 재계산.
         # 자체 is_triggered=True 마킹은 우리가 위에서 이미 처리 → no-op.
-        execution_service.enter_stage_at_market(strategy.id, stage_no=next_stage_no)
+        execution_service.enter_stage_at_market(strategy.id, stage_no=next_stage_no, origin="manual")  # ⛔ Fix 371: 사람 ▶
     except PreflightCheckFailed as e:
         # Phase 3: 사전 마진 검증 실패 — 거래소 호출 0, 친절 400 에러로 안내.
         db.execute(

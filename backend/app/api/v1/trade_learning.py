@@ -566,3 +566,20 @@ def tp_sl_advisor(
             continue
 
     return {"suggestions": suggestions, "total": len(suggestions)}
+
+# --- 📉 Fix 371b 손실 원인 학습 (읽기 전용) ---
+@router.get("/loss-causes")
+def loss_causes(
+    days: int = 30,
+    format: str = "json",
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> Any:
+    """손실 거래 원인 태그 집계 — 태깅은 loss_cause_worker(매시간). format=md 면 마크다운 표."""
+    from fastapi.responses import PlainTextResponse
+    from app.services import loss_cause as LC
+    days = max(1, min(int(days or 30), 365))
+    report = LC.build_report(db, days=days)
+    if str(format).lower() in ("md", "markdown"):
+        return PlainTextResponse(LC.render_markdown(report))
+    return report

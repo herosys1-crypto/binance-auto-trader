@@ -107,6 +107,12 @@ def run_managed_symbols_once() -> dict:
             logger.warning("[%s] Kill-Switch 확인 실패 → 보류: %s", MS.FIX, e)
             _store_cycle({**stat, "error": "kill_switch_check"})
             return stat
+        from app.services import auto_trading_halt as _halt371
+        if _halt371.halt_enabled(db):
+            # ⛔ Fix 371: 자동매매 중단 — Kill-Switch 와 같게 판정 전에 멈춘다 (안 그러면 일일 한도·쿨다운만 소비된다, 반박 검증 A/B)
+            logger.info("[%s] ⛔ 자동매매 중단(Fix 371) — 판정·진입 생략", MS.FIX)
+            _store_cycle({**stat, "error": "auto_trading_halt"})
+            return stat
         from app.core.crypto import decrypt_text
         from app.integrations.binance.client import BinanceClient
         from app.services.stage_entry_signal import check_stage_entry_signal

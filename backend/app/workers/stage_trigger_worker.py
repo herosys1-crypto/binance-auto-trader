@@ -1893,6 +1893,15 @@ def run_stage_trigger_once(decrypt_text) -> None:
                             pass
             except Exception as e:
                 # rate limit/ban 이면 기록 + 이 account 나머지 strategy skip (스파이럴 차단)
+                from app.services.auto_trading_halt import is_halt_error as _is_halt371
+                if _is_halt371(e):
+                    # ⛔ Fix 371: 자동매매 중단 — 「시스템 오류」 알림·스택 로그 대신 화면 차단 사유만 남긴다 (반박 검증 A)
+                    _stat["halt"] = _stat.get("halt", 0) + 1
+                    try:
+                        _record_block_reason(_redis, strategy.id, "⛔ 자동매매 중단(Fix 371) — 사람이 모달로 만든 전략만 자동 단계 진입", next_stage_no)
+                    except Exception:
+                        pass
+                    continue
                 if maybe_record_ban_from_exc(e, account.id, notification_service=NotificationService(db)):
                     _banned_accounts.add(account.id)
                     logger.warning("[stage-trigger] rate limit detected account=%s — skip rest of cycle", account.id)
