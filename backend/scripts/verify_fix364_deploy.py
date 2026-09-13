@@ -871,7 +871,8 @@ def check_bb_swing() -> None:
         for pin, label in (("capital_management_mode=SPLIT_ENTRY_MODE", "볼밴 분할 실행 경로(split_entry) — 손절·재앵커·제외 목록 상속"),
                            ("_guards_ok(db, account", "진입 가드 (킬스위치·ban·잔액·중복·전용 슬롯)"),
                            ("verify_stage_plans(plans", "주문 전 죽은 단계 검산"),
-                           ("_completed(bc.get_klines", "진행 중 봉 제외")):
+                           ("_completed(bc.get_klines", "진행 중 봉 제외"),
+                           ("halt_enabled(db)", "Fix 371 자동매매 중단 중이면 on 이어도 그림자로만 기록")):
             (ok if pin in wk else fail)(f"{label}: {pin}")
         i_v, i_s = wk.find("verify_stage_plans(plans"), wk.find(".start_stage1(")
         (ok if 0 < i_v < i_s and wk.count(".start_stage1(") == 1 else fail)("검산 → 1차 주문 순서 (주문 경로 1곳)")

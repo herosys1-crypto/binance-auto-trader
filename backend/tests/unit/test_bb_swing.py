@@ -166,8 +166,9 @@ def test_worker_completed_fresh_and_same_bar():
 def test_worker_order_shadow_guard_open_then_flip():
     wk = APP / "workers" / "bb_swing_worker.py"
     run = _fn_src(wk, "run_bb_swing_once")
-    assert 0 < run.find('if mode != "on":') < run.find("_enter(db")
-    assert 0 < run.find("_resolve_same_bar(sigs)") < run.find('if mode != "on":')
+    i_shadow = run.find('if mode != "on" or halted:')
+    assert 0 < run.find("halt_enabled(db)") < i_shadow < run.find("_enter(db")   # Fix 371 중단 중 = 그림자
+    assert 0 < run.find("_resolve_same_bar(sigs)") < i_shadow
     assert run.count("_completed(bc.get_klines") == 2                 # 15m · 4H 둘 다
     assert "nx=True" in run and "_is_fresh_15m(kl, bucket)" in run and ".isascii()" in run
     enter = _fn_src(wk, "_enter")

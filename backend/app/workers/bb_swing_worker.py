@@ -385,6 +385,11 @@ def run_bb_swing_once() -> dict:
         trail = R.setting_float(db, "bb_swing_trailing_pct", 0.5, 20)
         flip = R.setting(db, "bb_swing_flip_close") == "1"
         cap_n = R.setting_int(db, "bb_swing_max_concurrent", 0, 1000)   # 가드(get_surge_max_concurrent)와 같은 원값 범위
+        # ⛔ Fix 371 (2026-09-14 사장님 「모든 자동매매 중단하고 가상으로만 매매하고 학습」): 중단 중이면 on 이어도 그림자로만 기록한다.
+        #   생성 게이트(strategy_service.check_create)가 어차피 막지만, 막힐 때마다 템플릿 생성→롤백·오류 로그가 쌓이고 신호 기록이 사라진다.
+        from app.services.auto_trading_halt import halt_enabled
+        halted = mode == "on" and halt_enabled(db)
+        stat["halted"] = halted
 
         for sym in syms:
             try:
@@ -425,8 +430,10 @@ def run_bb_swing_once() -> dict:
                 for side, band, why in sigs:
                     stat["sig"] += 1
                     opp = _active_family(db, sym, "LONG" if side == "SHORT" else "SHORT")
-                    if mode != "on":
+                    if mode != "on" or halted:
                         stat["shadow"] += 1
+                        if halted:
+                            miss("자동매매 중단 Fix371 = 그림자 기록")
                         payload = {"symbol": sym, "side": side, "bar_ts": bar_ts, "band": float(band),
                                    "close": closes[-1], "why": why, "trend": twhy,
                                    "would_flip": [o.id for o in opp],

@@ -106,6 +106,10 @@
 ---
 
 ## 4. 켜는 법 · 되돌리는 법
+
+> ⛔ **Fix 371 (같은 날 사장님 「모든 자동매매 중단하고 가상으로만 매매하고 학습」)** 이 켜져 있는 동안(`auto_trading_halt` 행 없음 = 중단)은
+> `bb_swing_mode=on` 이어도 **주문을 내지 않고 그림자로만 기록**한다 (워커가 `halt_enabled` 를 먼저 본다 · 생성 게이트도 이중으로 막는다).
+> 실주문은 사장님이 자동매매 재개(`auto_trading_halt=0`)와 이 전략 켜기를 **둘 다** 해야 나간다.
 1. 배포(사장님): `git pull origin main` → `docker compose restart api scheduler` (DB 마이그레이션 없음).
 2. 배포 확인: `python scripts/verify_fix364_deploy.py` 의 「🌊 볼밴 스윙」 절 — 설정 실효값 · 마지막 스캔 · 그림자 신호 수.
 3. **1주 그림자** 뒤 신호 수·결과 확인. 켤 때 권장: `bb_swing_sides=LONG` + `bb_swing_mode=on` (SHORT 제외).
