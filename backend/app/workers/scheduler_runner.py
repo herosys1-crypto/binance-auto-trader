@@ -281,6 +281,17 @@ def start_scheduler() -> None:
         id="learning_sync",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 📉 Fix 371b (2026-09-14 사장님 「손실이 발행하는 원일을 학습해서 수정할수 있게 기록」): 손실 거래 원인 태깅 + 30일 보고서.
+    #   주문 없음 — trade_learning_records.insights["loss_causes"] 와 system_settings.loss_cause_report_last 만 쓴다.
+    def _loss_cause():
+        from app.workers.loss_cause_worker import run_loss_cause_once
+        run_loss_cause_once()
+    scheduler.add_job(
+        guarded_job("loss_cause", 600, _loss_cause),
+        trigger=IntervalTrigger(minutes=60),
+        id="loss_cause",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 🎓 v135 (2026-08-13 사장님!): 예측 outcome 학습!
     # 예측된 카드 = 실제 시장 변동 학습 → 심볼별 성공률!
     def _prediction_outcome():

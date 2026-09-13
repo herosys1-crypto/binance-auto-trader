@@ -183,6 +183,12 @@ def run_auto_reentry_once(decrypt_text: Callable[[str], str]) -> None:
                 logger.info("auto_reentry: strategy #%s → new #%s (start_price=%s)",
                            strategy.id, new_strategy.id, new_start_price)
             except Exception as e:
+                from app.services.auto_trading_halt import is_halt_error as _is_halt371
+                if _is_halt371(e):
+                    # ⛔ Fix 371: 자동매매 중단 — ban 과 같게 REENTRY_FAILED 로 영구 마킹하지 않는다 (재개 뒤 재진입 기회 보존, 반박 검증 A)
+                    db.rollback()
+                    logger.info("auto_reentry: #%s 자동매매 중단(Fix 371) — 상태 유지, 재개 뒤 다시 판정", strategy.id)
+                    continue
                 # 2026-05-17: rate limit/ban 이면 REENTRY_FAILED 마킹 금지 — rollback 후
                 # status 그대로 두어 ban 만료 후 다음 cycle 에서 재시도 (일시적 ban 으로
                 # 재진입 영구 상실 방지). ban 기록만 하고 다음 strategy 로.

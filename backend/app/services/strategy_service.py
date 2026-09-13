@@ -626,6 +626,10 @@ class StrategyService:
             LEGACY_MANUAL_PROFILE if _is_legacy367
             else (_OBV_PROFILE369 if str(getattr(template_model, "trigger_mode", "") or "").upper() == "OBV_REVERSE" else None)
         )
+        # ⛔ Fix 371 (2026-09-14 사장님 「새전략 기본방식과 새전략 obv 자동만 … 수동으로 전략을 만들수 있게 남기고 모든 자동매매 중단」):
+        #   중단 중(auto_trading_halt, 행 없음 = 중단)에는 화면 모달 생성(entry_origin=manual_modal) + 가족 기존 방식·OBV 자동만 통과한다.
+        from app.services.auto_trading_halt import check_create as _halt_create371
+        _halt_create371(self.db, entry_origin=entry_origin, entry_profile=_entry_profile369)
         instance = StrategyInstance(
             user_id=user_id,
             exchange_account_id=exchange_account_id,
@@ -641,6 +645,7 @@ class StrategyService:
             force_sl_enabled_override=_fs_on_default,  # 강제 SL ON! / Fix 367 기존 방식 = 끔
             force_sl_roi_override=_fs_roi_default,  # Fix 362: 기본 -25% (설정 force_sl_roi_new_default), 옛 v166 = 5 / Fix 367 기존 방식 = 0
             entry_profile=_entry_profile369,  # Fix 367c 기존 방식 표식 + Fix 369 OBV 자동 표식 (런타임 판정 = strategy_family.family_of)
+            entry_origin=(entry_origin or None),  # ⛔ Fix 371 (alembic 0040): 누가 만들었나 — 모달 = manual_modal, 워커 = NULL (중단 게이트가 이 값만 본다)
             # 🌟 v131 신 (2026-08-09 사장님!): 청산 후 자동 재진입 옵션 저장!
             retry_after_liquidation_enabled=bool(retry_after_liquidation_enabled),
             retry_trigger_pct=D(str(retry_trigger_pct)) if retry_trigger_pct is not None else D("10"),

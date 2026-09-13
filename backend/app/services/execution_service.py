@@ -15,6 +15,7 @@ from app.models.risk_event import RiskEvent
 from app.repositories.order_repository import OrderRepository
 from app.repositories.strategy_repository import StrategyRepository
 from app.services.account_kill_switch_service import AccountKillSwitchService
+from app.services import auto_trading_halt as _halt371   # ⛔ Fix 371: 자동매매 중단 게이트 (사람이 모달로 만든 전략만 주문)
 from app.core.sentry import capture_strategy_event
 
 # 2026-05-21 Phase 2 (#77/#78 사후 사장님 요구):
@@ -185,12 +186,13 @@ class ExecutionService:
                 f"   error: {err_msg}"
             )
 
-    def start_stage1(self, strategy_id: int) -> Order:
+    def start_stage1(self, strategy_id: int, *, origin: str = "auto") -> Order:   # ⛔ Fix 371: 「전략 시작」 버튼만 origin="manual"
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
             raise ValueError("Strategy not found")
         if AccountKillSwitchService(self.db).is_enabled(strategy.exchange_account_id):
             raise ValueError("Account kill-switch is enabled; new orders are blocked")
+        _halt371.check_order(self.db, strategy, action="stage1", manual_action=_halt371.is_manual_action(origin))   # ⛔ Fix 371
         stage_plan = next((p for p in strategy.stage_plans if p.stage_no == 1), None)
         if not stage_plan:
             raise ValueError("Stage 1 plan not found")
@@ -303,7 +305,7 @@ class ExecutionService:
         return order
 
     def trigger_next_stage(
-        self, strategy_id: int, stage_no: int, *, force_market: bool = False,
+        self, strategy_id: int, stage_no: int, *, force_market: bool = False, origin: str = "auto",
     ) -> Order:
         """단계 진입 발주.
 
@@ -330,6 +332,8 @@ class ExecutionService:
                 f"Account kill-switch is enabled; stage {stage_no} entry blocked. "
                 "Kill-switch 를 해제한 후 재시도하세요."
             )
+        _halt371.check_order(self.db, strategy, action=f"stage{stage_no}",
+                             manual_action=_halt371.is_manual_action(origin))   # ⛔ Fix 371 (단계 정리 Fix 304 보다 먼저)
         stage_plan = next((p for p in strategy.stage_plans if p.stage_no == stage_no), None)
         if not stage_plan:
             raise ValueError(f"Stage {stage_no} plan not found")
@@ -1264,7 +1268,7 @@ class ExecutionService:
     # 2026-05-04 (사용자 요청): 수동 「▶ 다음 단계」 = 시장가 즉시 진입.
     # 기존 trigger_next_stage 는 LIMIT @ trigger_price 라서 자동 워커와 동일 — 수동의 의미 없음.
     # 새 메서드: 현재가에 MARKET 주문 + planned_capital 기준 수량 재계산 + stage_plan.is_triggered=True.
-    def enter_stage_at_market(self, strategy_id: int, stage_no: int) -> Order:
+    def enter_stage_at_market(self, strategy_id: int, stage_no: int, *, origin: str = "auto") -> Order:   # ⛔ Fix 371: ▶ 버튼만 "manual"
         """수동 ▶: 트리거 비율 무시, planned_capital 로 현재가 시장가 즉시 진입.
 
         검증/효과:
@@ -1295,6 +1299,8 @@ class ExecutionService:
                 f"Account kill-switch is enabled; stage {stage_no} entry blocked. "
                 "Kill-switch 를 해제한 후 재시도하세요."
             )
+        _halt371.check_order(self.db, strategy, action=f"시장가 단계{stage_no}",
+                             manual_action=_halt371.is_manual_action(origin), manual_only=True)   # ⛔ Fix 371 (반전 워커 등 자동 호출 차단)
         stage_plan = next((p for p in strategy.stage_plans if p.stage_no == stage_no), None)
         # 🌟 2026-08-06 v130 사장님 fix: 미세팅 단계 = 마지막 stage_plan의 자본 재사용!
         #   옛: stage_plan 없으면 400 에러!
@@ -1393,6 +1399,7 @@ class ExecutionService:
         limit_price: Decimal | None = None,
         mode: str = "reset",
         cap_loss: bool = False,
+        origin: str = "auto",   # ⛔ Fix 371: 「💉 포지션 추가」 엔드포인트만 "manual" — 그 밖(워커)은 자동
     ) -> Order:
         """사용자 지정 USDT 금액으로 즉시 포지션 추가.
 
@@ -1424,6 +1431,8 @@ class ExecutionService:
                 "Account kill-switch is enabled; new position entry blocked. "
                 "Kill-switch 를 해제한 후 재시도하세요."
             )
+        _manual371 = _halt371.is_manual_action(origin)
+        _halt371.check_order(self.db, strategy, action="포지션 추가", manual_action=_manual371, manual_only=True)   # ⛔ Fix 371
         if amount_usdt is None or Decimal(str(amount_usdt)) <= 0:
             raise ValueError(f"amount_usdt must be > 0, got {amount_usdt}")
         order_type_u = (order_type or "").upper()
@@ -1479,7 +1488,7 @@ class ExecutionService:
                 stage_no=None,  # ad-hoc — stage_no 없음
                 qty=qty,
                 current_price=ref_price,
-                suffix="ADHOC_M",
+                suffix="ADHOC_M" if _manual371 else "ADHOC_AM",   # Fix 371b: 자동 추가는 ADHOC_AM — 손실 원인 학습이 주문만으로 출처를 가른다
             )
         else:
             # 🚨 2026-07-24 v127 CRITICAL fix: LIMIT 도 preflight 검증!
@@ -1493,7 +1502,7 @@ class ExecutionService:
                 stage_no=None,  # ad-hoc
                 qty=qty,
                 limit_price=ref_price,
-                suffix="ADHOC_L",
+                suffix="ADHOC_L" if _manual371 else "ADHOC_AL",   # Fix 371b
             )
         # 🌟 2026-07-01 사장님 critical 헌법 51 영구 (옵션 A — 2 모드!):
         # 사장님 사상: 「💉 포지션 추가」 = 2가지 의도 = 사장님 자율 선택!
