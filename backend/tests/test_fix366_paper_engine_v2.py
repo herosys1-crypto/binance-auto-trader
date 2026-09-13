@@ -30,7 +30,9 @@ def test_breadth_and_tags():
     g = PT.group_of(["UP", "MKT_DOWN", "LIVE_OK"])
     assert "UP24" in g and "MKT_DOWN" in g and "LIVE_OK" in g and "MKT_UP" not in g
     assert set(PT.GROUP_KEYS) >= {"MKT_UP", "MKT_DOWN", "LIVE_OK"}
-    assert PT.ENGINES == ("house", "live", "live_adaptive", "live_sl10", "live_sl15")
+    # Fix 370: 적응 TP·손절 −10 계산 중단 → 청산 개선 3종 (옛 행 값은 LEGACY_ENGINES 로 남는다)
+    assert PT.ENGINES == ("house", "live", "live_sl15", "live_be10", "live_lock5", "live_stale24")
+    assert PT.LEGACY_ENGINES == ("live_adaptive", "live_sl10") and set(PT.LIVE_LIKE) >= set(PT.LEGACY_ENGINES)
 
 
 def test_manage_trade_has_five_engines_and_live_uses_flat_tp1():
@@ -41,8 +43,9 @@ def test_manage_trade_has_five_engines_and_live_uses_flat_tp1():
     eng = res["engines"]
     assert set(eng) == set(PT.ENGINES)
     assert eng["live"]["tp1_pct"] == PT.TP1_FLAT == 15.0                                  # 실코드 = TP1 15 고정
-    assert eng["live_adaptive"]["tp1_pct"] == 3.0                                         # 적응 TP 변형은 저장된 3/15
-    assert eng["live_sl10"]["sl_roi"] == 10.0 and eng["live_sl15"]["sl_roi"] == 15.0 and eng["live"]["sl_roi"] == 25.0
+    assert "live_adaptive" not in eng and "live_sl10" not in eng                          # Fix 370: 계산 중단
+    assert eng["live_sl15"]["sl_roi"] == 15.0 and eng["live"]["sl_roi"] == 25.0
+    assert all(eng[k]["tp1_pct"] == 15.0 and eng[k]["sl_roi"] == 25.0 for k in PT.EXIT_VARIANT_ENGINES)
     assert "adds" in res and set(res["adds"]) == set(PT.VARIANTS)                         # 추가 변형은 live 엔진 위에서만
     assert res["status"] == "OPEN"                                                        # 평탄봉 = 아무 엔진도 안 끝남
 
@@ -102,18 +105,18 @@ def test_report_paired_sample_and_recommend_split():
     def eng(done, roi, tp1=15.0, sl=25.0):
         return {"done": done, "roi": roi, "hit": "TRAIL" if done else "END_OF_DATA", "tp1_pct": tp1, "sl_roi": sl}
 
-    def trade(i, sym, roi, *, sl10_done=True, tp1=15.0):
+    def trade(i, sym, roi, *, sl15_done=True, tp1=15.0):
         return {"status": "CLOSED", "source": "backfill", "symbol": sym, "rule": "confirm_peak_111", "side": "SHORT",
                 "tags": ["UP"], "opened_at": f"2026-09-0{1 + i % 9}T00:00:00", "adds": {},
-                "engines": {"house": eng(True, roi), "live": eng(True, roi, tp1), "live_adaptive": eng(True, roi, 3.0),
-                            "live_sl10": eng(sl10_done, roi, 15.0, 10.0), "live_sl15": eng(True, roi, 15.0, 15.0)}}
+                "engines": {"house": eng(True, roi), "live": eng(True, roi, tp1),
+                            "live_sl15": eng(sl15_done, roi, 15.0, 15.0), "live_be10": eng(True, roi, 15.0, 25.0)}}
     trades = [trade(i, f"S{i}USDT", 1.0) for i in range(6)]
-    trades += [trade(6, "CENSUSDT", 9.0, sl10_done=False)]                                # sl10 미완 → 짝 표본에서 전부 제외
+    trades += [trade(6, "CENSUSDT", 9.0, sl15_done=False)]                                # sl15 미완 → 짝 표본에서 전부 제외
     trades += [trade(7, "V1USDT", 9.0, tp1=3.0)]                                           # v1 적응 TP 행 → live 통계에서 제외
     rep = PT.build_report(trades)
     st = rep["rules"]["confirm_peak_111"]["groups"]["ALL"]
-    assert st["live"]["n"] == 6 and st["live_sl10"]["n"] == 7 and st["house"]["n"] == 8
-    assert rep["censored"]["live_sl10"] == 1 and rep["paired_n"] == 7 and rep["versions"]["v2"] == 8
+    assert st["live"]["n"] == 6 and st["live_sl15"]["n"] == 7 and st["house"]["n"] == 8
+    assert rep["censored"]["live_sl15"] == 1 and rep["paired_n"] == 7 and rep["versions"]["v2"] == 8   # Fix 370: live_sl15 로도 v2
     assert "variants" in rep["recommend"] and rep["recommend"]["hypotheses"] > 0
     md = PT.render_markdown(rep)
     assert "짝 표본" in md and "잣대 house·live 만" in md
@@ -131,4 +134,4 @@ def test_worker_pins():
     i_bf = svc.find("def backfill_row(")
     assert '_ev["hit"] = "END_OF_DATA"' in svc[i_bf:], "검열 표시는 live 계열 엔진 전부"
     i_r = svc.find("def render_markdown(")
-    assert "for eng in ENGINES:" in svc[i_r:] and "live_adaptive = TP1 3/15%" in svc[i_r:]
+    assert "for eng in REPORT_V2_ENGINES:" in svc[i_r:] and "live_adaptive = TP1 3/15%" in svc[i_r:]   # Fix 370 H1: 옛 보고서는 공통 엔진만

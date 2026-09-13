@@ -793,6 +793,62 @@ def check_family_separation() -> None:
         fail(f"운영 층 조회 실패: {e!r}")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# ⑩ Fix 370 가상매매 개선 (청산 변형 3종 · 엔진 VERSION 2 유지)
+# ─────────────────────────────────────────────────────────────────────────
+def check_paper_improvement() -> None:
+    print("⑩ Fix 370 가상매매 개선 (청산 변형 live_be10 · live_lock5 · live_stale24)")
+    try:
+        from app.services import paper_trading as PT
+        (ok if PT.EXIT_VARIANT_ENGINES == ("live_be10", "live_lock5", "live_stale24") else fail)(f"청산 변형 엔진 = {PT.EXIT_VARIANT_ENGINES}")
+        (ok if PT.VERSION == 2 else fail)(f"엔진 VERSION = {PT.VERSION} (2 유지 — 올리면 백필 전체·실시간 CLOSED 재계산)")
+        (ok if set(PT.ENGINES) == {"house", "live", "live_sl15", *PT.EXIT_VARIANT_ENGINES} else fail)(f"ENGINES = {PT.ENGINES}")
+        _bars = [[0, 100.0, 105.5, 100.5, 105.0, 1.0], [1, 105.0, 105.2, 99.5, 100.0, 1.0]]
+        _r = PT.run_live_like("LONG", 100.0, _bars, tp1_pct=15.0, variants=(), **PT.EXIT_VARIANTS["live_be10"])
+        (ok if _r["hit"] == "PROTECT" and _r["roi"] == 0.0 else fail)(f"be10 동작 (+11 뒤 본전 이탈 → PROTECT ROI 0): {_r['hit']} {_r['roi']}")
+        with open(os.path.join(_ROOT, "app/services/paper_trading.py"), encoding="utf-8") as f:
+            _src = f.read()
+        (ok if "execution_service" not in _src and "place_order" not in _src else fail)("가상 엔진에 실주문 경로 없음")
+        with open(os.path.join(_ROOT, "app/services/paper_report_v3.py"), encoding="utf-8") as f:
+            _r3 = f.read()
+        # 설명문(docstring)에 옛 결함 설명으로 `select(PaperTrade)` 글자가 있어 문자열 검색은 오탐 → 실제 호출만 AST 로 센다
+        _orm_calls = sum(1 for _n in ast.walk(ast.parse(_r3))
+                         if isinstance(_n, ast.Call) and getattr(_n.func, "id", None) == "select"
+                         and any(isinstance(_a, ast.Name) and _a.id == "PaperTrade" for _a in _n.args))
+        (ok if _orm_calls == 0 and ".astext" in _r3 else fail)(f"보고서 v3 = 전체 행 ORM 로딩 없음 (select(PaperTrade) 호출 {_orm_calls}개 · JSONB 스칼라만)")
+        with open(os.path.join(_ROOT, "app/api/v1/paper_trading.py"), encoding="utf-8") as f:
+            _api = f.read()
+        (ok if "_build_report_v3(db" in _api and '"/report/legacy"' in _api else fail)("/report = v3 · 옛 보고서 = /report/legacy")
+        with open(os.path.join(_ROOT, "app/workers/paper_trading_worker.py"), encoding="utf-8") as f:
+            _wk = f.read()
+        (ok if "if not _setting(db, PR3.PREREG_SETTING_KEY):" in _wk else fail)("워커 첫 사이클 사전등록 시각 기록 (있으면 덮지 않음)")
+    except Exception as e:  # noqa: BLE001
+        fail(f"코드 층 검사 실패: {e!r}")
+        return
+    if CODE_ONLY:
+        skip("--code-only: 운영 층 생략")
+        return
+    try:
+        from sqlalchemy import func, select
+        from app.core.database import SessionLocal
+        from app.models.paper_trade import PaperTrade
+        db = SessionLocal()
+        try:
+            n_open = db.execute(select(func.count()).where(PaperTrade.source == "live", PaperTrade.status == "OPEN")).scalar() or 0
+            n_new = db.execute(select(func.count()).where(PaperTrade.source == "live", PaperTrade.status == "OPEN",
+                                                          PaperTrade.engines.has_key("live_be10"))).scalar() or 0
+            print(f"  ▸ 실시간 OPEN {n_open}건 중 새 청산 변형 키 보유 {n_new}건 "
+                  f"(배포 직후 0 = 첫 15분 사이클 전 · 사이클 뒤엔 대부분이어야)")
+            from app.models.system_setting import SystemSetting
+            _pr = db.get(SystemSetting, "paper_prereg_at")
+            print(f"  ▸ 사전등록 시각 paper_prereg_at = {(_pr.value if _pr is not None and _pr.value else '(아직 없음 — 첫 사이클 전)')} "
+                  f"· 채택 판단은 이 시각 이후 진입만")
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        fail(f"운영 층 조회 실패: {e!r}")
+
+
 if __name__ == "__main__":
     print(f"verify_fix364_deploy — {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z} (cwd {_ROOT})")
     check_code()
@@ -807,6 +863,7 @@ if __name__ == "__main__":
     check_queue2_loss_defense()
     check_queue3_rules()
     check_family_separation()
+    check_paper_improvement()
     print("─" * 70)
     if _fails:
         print(f"결과: FAIL {len(_fails)}건")
