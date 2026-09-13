@@ -200,7 +200,8 @@ def classify_family(*, template_name: str | None, strategy_type: str | None,
         return FAMILY_MANUAL
     if cmm == "stage_ladder":
         return FAMILY_A_LADDER
-    if cmm == SPLIT_ENTRY_MODE or st == "pump_split":
+    # 🌊 볼밴 스윙(bb_swing, 2026-09-14)은 실행 경로만 split_entry 를 빌린다 — 볼밴 분할 통계에 섞지 않는다
+    if (cmm == SPLIT_ENTRY_MODE and not st.startswith("bb_swing")) or st == "pump_split":
         return FAMILY_B_BBSPLIT
     return FAMILY_C_OTHER
 

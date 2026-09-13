@@ -911,6 +911,10 @@ def run_pump_split_entry_once() -> dict:
                     #   (「다시 한번더」가 「한 번도 못 함」이 된다).
                     StrategyInstance.is_archived.is_(False),
                     StrategyInstance.current_stage >= 1,
+                    # 🌊 볼밴 스윙(2026-09-14)도 split_entry 모드를 쓴다 — 이 전략의 재시작 예산에 섞이지 않게 종류로 한정 (가족별)
+                    StrategyInstance.strategy_template_id.in_(
+                        select(StrategyTemplate.id).where(StrategyTemplate.strategy_type == STRATEGY_TYPE)
+                    ),
                 )
             ).scalar() or 0
             if _cycles >= SPLIT_MAX_CYCLES_PER_DAY:

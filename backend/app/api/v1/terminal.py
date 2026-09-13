@@ -647,6 +647,7 @@ def get_account_summary(
 _TYPE_BADGES: tuple[tuple[str, str], ...] = (
     ("auto_bb_break", "🤖 자동(BB이탈)"),
     ("pump_split", "🤖 볼밴분할"),
+    ("bb_swing", "🤖 볼밴스윙"),
     ("bb_mid_line", "🤖 중단선"),
     ("surge_peak_ladder", "🤖 급등사다리"),
     ("realtime_reentry", "🤖 재진입"),

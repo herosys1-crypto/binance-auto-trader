@@ -849,6 +849,72 @@ def check_paper_improvement() -> None:
         fail(f"운영 층 조회 실패: {e!r}")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# 볼밴 스윙 (2026-09-14 사장님) — 상승중 상단 꺾임+RSI 고점 = SHORT 분할 · 하단 지지 = LONG 분할 · 반대 신호에 전환
+# ─────────────────────────────────────────────────────────────────────────
+def check_bb_swing() -> None:
+    print("🌊 볼밴 스윙 (bb_swing — 기본 shadow)")
+    try:
+        from app.services import bb_swing_rules as R
+        from app.workers import pump_split_entry_worker as PS
+        (ok if R.SETTINGS["bb_swing_mode"][0] == "shadow" else fail)("코드 기본 모드 = shadow (주문 없음)")
+        caps = PS._parse_capitals(R.SETTINGS["bb_swing_capitals"][0])
+        steps = PS._parse_steps(R.SETTINGS["bb_swing_steps"][0])
+        sl = PS._parse_sl_roi(R.SETTINGS["bb_swing_sl_roi"][0])
+        _ok, _why = PS.check_no_dead_stage(caps, steps, sl, R.LEVERAGE)
+        (ok if _ok else fail)(f"기본 자본·단계·손절 정합성: {_why}")
+        with open(os.path.join(_ROOT, "app/workers/scheduler_runner.py"), encoding="utf-8") as f:
+            sr = f.read()
+        (ok if 'id="bb_swing"' in sr and "run_bb_swing_once" in sr else fail)("스케줄러 잡 bb_swing (60초, 15분 완성봉당 1회)")
+        with open(os.path.join(_ROOT, "app/workers/bb_swing_worker.py"), encoding="utf-8") as f:
+            wk = f.read()
+        for pin, label in (("capital_management_mode=SPLIT_ENTRY_MODE", "볼밴 분할 실행 경로(split_entry) — 손절·재앵커·제외 목록 상속"),
+                           ("_guards_ok(db, account", "진입 가드 (킬스위치·ban·잔액·중복·전용 슬롯)"),
+                           ("verify_stage_plans(plans", "주문 전 죽은 단계 검산"),
+                           ("_completed(bc.get_klines", "진행 중 봉 제외")):
+            (ok if pin in wk else fail)(f"{label}: {pin}")
+        i_v, i_s = wk.find("verify_stage_plans(plans"), wk.find(".start_stage1(")
+        (ok if 0 < i_v < i_s and wk.count(".start_stage1(") == 1 else fail)("검산 → 1차 주문 순서 (주문 경로 1곳)")
+    except Exception as e:  # noqa: BLE001
+        fail(f"코드 층 검사 실패: {e!r}")
+        return
+    if CODE_ONLY:
+        skip("--code-only: 운영 층 생략")
+        return
+    try:
+        from app.core.database import SessionLocal
+        from app.services import bb_swing_rules as R
+        from app.workers.bb_swing_worker import CYCLE_KEY, _active_family
+        db = SessionLocal()
+        try:
+            print("  ▸ 설정 실효값 (DB 행 없음 = 기본값)")
+            for key, (default, label, origin) in R.SETTINGS.items():
+                v = R.setting(db, key)
+                print(f"     {key:28} = {v:<12} [{'DB' if v != default else '기본'}]  {label} ({origin})")
+            act = _active_family(db)
+            print(f"  ▸ 활성 인스턴스 {len(act)}건: " + ", ".join(f"#{si.id} {si.symbol} {si.side}" for si in act))
+        finally:
+            db.close()
+        try:
+            from app.core.redis_client import get_redis_client
+            r = get_redis_client()
+            raw = r.get(CYCLE_KEY)
+            raw = raw.decode() if isinstance(raw, bytes) else raw
+            if raw:
+                cyc = json.loads(raw)
+                print(f"  ▸ 마지막 스캔 {cyc.get('at')}: mode={cyc.get('mode')} 심볼={cyc.get('symbols')} 신호={cyc.get('sig')} "
+                      f"그림자={cyc.get('shadow')} 진입={cyc.get('entered')} 전환={cyc.get('flipped')} 오류={cyc.get('err')} 사유={cyc.get('miss')}")
+            else:
+                skip(f"스캔 기록 없음 (Redis {CYCLE_KEY}) — 아직 15분봉 마감을 한 번도 안 지났거나 mode=off")
+            n_s = sum(1 for _ in r.scan_iter("bbswing:shadow:*:SHORT:*", count=500))
+            n_l = sum(1 for _ in r.scan_iter("bbswing:shadow:*:LONG:*", count=500))
+            print(f"  ▸ 그림자 신호(7일 보관): SHORT {n_s} · LONG {n_l}")
+        except Exception as e:  # noqa: BLE001
+            skip(f"Redis 조회 실패: {e!r}")
+    except Exception as e:  # noqa: BLE001
+        fail(f"운영 층 조회 실패: {e!r}")
+
+
 if __name__ == "__main__":
     print(f"verify_fix364_deploy — {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z} (cwd {_ROOT})")
     check_code()
@@ -864,6 +930,7 @@ if __name__ == "__main__":
     check_queue3_rules()
     check_family_separation()
     check_paper_improvement()
+    check_bb_swing()
     print("─" * 70)
     if _fails:
         print(f"결과: FAIL {len(_fails)}건")
