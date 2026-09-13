@@ -151,6 +151,21 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
 
         if not _bool_setting(db, PT.S_ENABLED, True):
             return {"skipped": "disabled"}
+
+        # Fix 370 (리드 지시 2026-09-14): 이 코드가 실제로 도는 첫 사이클 시각을 못박는다(있으면 절대 덮지 않는다) —
+        #   배포 전에 이미 열려 있던 실시간 행(구 청산 정의로 관리되다 새 엔진값이 그대로 덧씌워진 것)이
+        #   새 청산 변형·필터 채택(paper_report_v3) 표본에 섞이면 9/14 분석 창과 겹쳐 사전등록이 무의미해진다.
+        #   가상매매가 꺼진 사이클에서는 기록하지 않는다(위 disabled 뒤). 보고서 모듈 문제로 가상 엔진 사이클이 멈추면 안 된다 → try.
+        try:
+            from app.services import paper_report_v3 as PR3
+            if not _setting(db, PR3.PREREG_SETTING_KEY):
+                _prereg_now = datetime.now(timezone.utc).isoformat()
+                _set_setting(db, PR3.PREREG_SETTING_KEY, _prereg_now)
+                db.commit()
+                logger.info("[Fix370] 사전등록 시각 기록(최초 1회, 이후 절대 덮지 않음): %s", _prereg_now)
+        except Exception as _e370:  # noqa: BLE001
+            db.rollback()
+            logger.warning("[Fix370] 사전등록 시각 기록 실패 (무시 · 다음 사이클 재시도): %s", _e370)
         t0 = time.time()
         n = _int_setting(db, PT.S_TOP_N, 50, 5, 200)
 
@@ -515,6 +530,19 @@ def build_report_from_db(db: Any, days: int = 60) -> dict[str, Any]:
     return PT.build_report(trades)
 
 
+def build_report_v3_from_db(db: Any, days: int = 30) -> dict[str, Any]:
+    """🧪 Fix 370 — 새 보고서(v3): 실시간(source=live)만 · 같은 6시간 창 무작위(baseline) 대비 · 심볼×시간 클러스터 ·
+    사전등록(system_settings.paper_prereg_at, 없으면 PREREG_AT_DEFAULT) 이후 표본만 채택 판정. 옛 build_report_from_db()/
+    PT.build_report() 는 그대로 둔다(고정 테스트가 있고 참고용 legacy 경로로 계속 노출) — app/services/paper_report_v3.py 담당."""
+    from app.services import paper_report_v3 as PR3
+
+    prereg_at = PR3.resolve_prereg_at(db)
+    rows = PR3.load_live_rows(db, days=days)
+    lots = PR3.load_add_lots(db, days=days)
+    context = PR3.sql_context(db, days=days)
+    return PR3.build_report_v3(rows, lots, context, prereg_at=prereg_at, now=datetime.now(timezone.utc))
+
+
 def status(db: Any) -> dict[str, Any]:
     from app.models.paper_trade import PaperTrade
     counts: dict[str, dict[str, int]] = {}
@@ -550,6 +578,7 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("report")
     r.add_argument("--days", type=int, default=60)
     r.add_argument("--json", action="store_true")
+    r.add_argument("--v3", action="store_true", help="Fix 370: 새 보고서(실시간만·사전등록 이후만 채택)")
     sub.add_parser("status")
     a = p.parse_args(argv)
     try:
@@ -564,8 +593,13 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(backfill_from_journal(db, limit_rows=a.limit), ensure_ascii=False))
     elif a.cmd == "report":
         with SessionLocal() as db:
-            rep = build_report_from_db(db, a.days)
-        print(json.dumps(rep, ensure_ascii=False) if a.json else PT.render_markdown(rep))
+            if a.v3:
+                rep = build_report_v3_from_db(db, a.days)
+                from app.services import paper_report_v3 as PR3
+                print(json.dumps(rep, ensure_ascii=False) if a.json else PR3.render_markdown_v3(rep))
+            else:
+                rep = build_report_from_db(db, a.days)
+                print(json.dumps(rep, ensure_ascii=False) if a.json else PT.render_markdown(rep))
     elif a.cmd == "status":
         with SessionLocal() as db:
             print(json.dumps(status(db), ensure_ascii=False, indent=1))

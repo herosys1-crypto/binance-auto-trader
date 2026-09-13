@@ -7,6 +7,11 @@
 PaperTrade / app.services.paper_trading 은 여기서 **핸들러 안에서만** import 한다 — 워커·엔진 모듈이
 아직 배포 순서상 먼저 로드되지 않았거나(마이그레이션 전) 서로 다른 담당자가 병렬로 고치는 동안
 API 모듈 임포트 시점에 깨지지 않게 하기 위함(house rule: 매매 판정과 화면/API 코드는 분리해 배치).
+
+🧪 Fix 370 (2026-09-14) — `/report`·`/report.md` 는 새 보고서(v3, app/services/paper_report_v3.py)로 바뀌었다:
+실시간(source=live)만 · 같은 6시간 창 무작위(baseline) 대비 · 심볼×시간 클러스터 · 사전등록 이후 표본만 채택.
+`backend/app/static` 에 이 두 경로의 JSON 을 소비하는 화면이 없어(grep 확인, 2026-09-14) 옛 보고서는
+`/report/legacy`·`/report/legacy.md` 로 옮겼을 뿐 지우지 않았다(참고·과거 링크 대조용).
 """
 from __future__ import annotations
 
@@ -26,6 +31,7 @@ router = APIRouter(prefix="/paper-trading", tags=["paper-trading"])
 _REPORT_CACHE_TTL = 600           # 10분 — 보고서는 15분 사이클마다 바뀌므로 짧게만 캐시
 _REPORT_MAX_DAYS = 3650
 _TRADES_MAX_LIMIT = 1000
+_REPORT_V3_MAX_DAYS = 60          # Fix 370: v3 는 실시간 스칼라 컬럼만 읽지만, 창이 너무 길면 클러스터 계산이 무거워진다
 
 
 def _jsonable(v: Any) -> Any:
@@ -103,6 +109,37 @@ def _build_report(db: Session, days: int) -> dict[str, Any]:
     return report
 
 
+def _build_report_v3(db: Session, days: int) -> dict[str, Any]:
+    """🧪 Fix 370 — 새 보고서(v3): 실시간(source=live)만 스칼라 컬럼으로 가볍게 읽어 같은 6시간 창 무작위 대비 ·
+    심볼×시간 클러스터로 채택 판단(사전등록 이후 표본만). 옛 `_build_report()`(source 혼합·전체 ORM 로딩)는
+    `/report/legacy` 로만 남긴다 — 상세 설계는 app/services/paper_report_v3.py."""
+    cache_key = f"paper_trading:report:v3:{days}"
+    try:
+        from app.core.redis_client import get_redis_client
+
+        r = get_redis_client()
+        cached = r.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        r = None  # Redis 불통이어도 보고서는 나가야 한다 — fail-open
+
+    from app.services import paper_report_v3 as PR3
+
+    prereg_at = PR3.resolve_prereg_at(db)
+    rows = PR3.load_live_rows(db, days=days)
+    lots = PR3.load_add_lots(db, days=days)
+    context = PR3.sql_context(db, days=days)
+    report = PR3.build_report_v3(rows, lots, context, prereg_at=prereg_at, now=datetime.now(timezone.utc))
+
+    if r is not None:
+        try:
+            r.setex(cache_key, _REPORT_CACHE_TTL, json.dumps(report, ensure_ascii=False))
+        except Exception:
+            pass
+    return report
+
+
 @router.get("/status")
 def paper_trading_status(db: Session = Depends(get_db), user_id: int = Depends(get_current_user_id)) -> dict:
     """열림/닫힘 건수(출처별) + 마지막 사이클(Redis) + 백필 커서 + 채택 문턱."""
@@ -151,15 +188,33 @@ def paper_trading_status(db: Session = Depends(get_db), user_id: int = Depends(g
 
 
 @router.get("/report")
-def paper_trading_report(days: int = 60, db: Session = Depends(get_db),
+def paper_trading_report(days: int = 30, db: Session = Depends(get_db),
                          user_id: int = Depends(get_current_user_id)) -> dict:
-    """규칙×방향×자리×엔진 + 추가 변형 + CV + 채택 제안 (JSON, 10분 캐시)."""
-    return _build_report(db, max(1, min(days, _REPORT_MAX_DAYS)))
+    """🧪 Fix 370 v3(기본) — 실시간(live)만 · 같은 6시간 창 무작위 대비 · 심볼×시간 클러스터 · 사전등록 이후만 채택
+    (JSON, 10분 캐시). 옛 보고서(source 혼합·전체 ORM 로딩)는 화면 등 아무 소비자도 없어 `/report/legacy` 로 옮겼다."""
+    return _build_report_v3(db, max(1, min(days, _REPORT_V3_MAX_DAYS)))
 
 
 @router.get("/report.md", response_class=PlainTextResponse)
-def paper_trading_report_md(days: int = 60, db: Session = Depends(get_db),
+def paper_trading_report_md(days: int = 30, db: Session = Depends(get_db),
                             user_id: int = Depends(get_current_user_id)) -> str:
+    from app.services import paper_report_v3 as PR3
+
+    report = _build_report_v3(db, max(1, min(days, _REPORT_V3_MAX_DAYS)))
+    return PR3.render_markdown_v3(report)
+
+
+@router.get("/report/legacy")
+def paper_trading_report_legacy(days: int = 60, db: Session = Depends(get_db),
+                                user_id: int = Depends(get_current_user_id)) -> dict:
+    """Fix 361 옛 보고서(참고용) — source 혼합(backfill+live) · 전체 ORM 로딩 · 전기간 무작위 기준선.
+    새 채택 판단은 `/report`(v3) 를 쓴다 — 여기 남기는 이유는 과거 링크·수동 대조용."""
+    return _build_report(db, max(1, min(days, _REPORT_MAX_DAYS)))
+
+
+@router.get("/report/legacy.md", response_class=PlainTextResponse)
+def paper_trading_report_legacy_md(days: int = 60, db: Session = Depends(get_db),
+                                   user_id: int = Depends(get_current_user_id)) -> str:
     from app.services import paper_trading as PT
 
     report = _build_report(db, max(1, min(days, _REPORT_MAX_DAYS)))

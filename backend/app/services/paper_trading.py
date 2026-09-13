@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 FIX = "Fix361"
 VERSION = 2                 # Fix 366: 엔진 v2 (live=TP1 15 고정 · live_adaptive · live_sl10/15 · 실코드 게이트 재현 · 국면 태그)
+                            # Fix 370: 엔진 세트는 바꿨지만 VERSION 은 2 유지 — 올리면 워커가 백필 전체(커서 0)·실시간 CLOSED 를 재계산해
+                            #   2코어 VPS 에 부담이고, 새 청산 변형은 새 건부터 재야 사전등록 표본이 된다. 옛 행은 LEGACY_ENGINES 값 그대로.
 
 # ── 숫자 (Claude 가 정함 — 설정키로 덮을 수 있다) ──────────────────────────────
 S_ENABLED = "paper_trading_enabled"            # 기본 ON
@@ -58,9 +60,21 @@ TP1_SURGE = 15.0
 TP1_CALM = 3.0
 TP1_FLAT = 15.0             # Fix 366: 실코드는 TP1 15 (strategy_service TP1_PCT_DEFAULT). 적응 TP(adaptive_tp) 는 배선돼 있지만 기본 OFF 이고
                             #   켜져도 사다리(stages_count>1, Fix 343) 는 제외라 지금 운영 경로는 전부 15. 이 가정이 깨지면 live 엔진 정의를 바꿔야 한다.
-SL_VARIANTS = (10.0, 15.0)  # Fix 366 ②: 손절 깊이 변형 (사장님 「손절 −10/−15 가 나은지 측정」) — Claude가 정함
-ENGINES = ("house", "live", "live_adaptive", "live_sl10", "live_sl15")
-LIVE_LIKE = ("live", "live_adaptive", "live_sl10", "live_sl15")     # Fix 366b: 엔진 간 비교는 이 넷이 **모두 끝난** 건(짝 표본)으로만
+SL_VARIANTS = (15.0,)       # Fix 366 ②: 손절 깊이 변형. Fix 370: −10 은 실시간·백필 모두 −15 보다 못해(9/14 분석) 계산에서 뺐다 (옛 행 값은 그대로)
+# 🧪 Fix 370 (2026-09-14 사장님 「개선안을 만들어서 수익이 더 높아 질수 있게 기획해서 개발해줘」): 청산 개선 변형.
+#   9/14 분석: 손절의 38~46% 가 +5% 앞섰다가 −25 · LONG 42% 가 TP1 없이 48h 만료(평균 −4.8). 값은 Claude가 정함.
+#   새 건·열린 건부터 계산된다(엔진 VERSION 은 올리지 않는다 — 아래 VERSION 주석) = 사전등록 표본. 적응 TP 는 두 표본 모두 평균을 낮춰 계산 중단.
+EXIT_VARIANTS: dict[str, dict[str, Any]] = {
+    "live_be10": {"protect_at": 10.0, "protect_stop_roi": 0.0},     # TP1 전 최고 ROI +10 도달 → 손절을 본전(ROI 0)으로
+    "live_lock5": {"protect_at": 5.0, "protect_stop_roi": -10.0},   # TP1 전 최고 ROI +5 도달 → 손절을 −10 으로
+    "live_stale24": {"stale_bars": 96},                              # 24h(96봉) 째 봉 마감에 TP1 없고 ROI ≤ 0 → 그 종가에 청산
+}
+EXIT_VARIANT_ENGINES = tuple(EXIT_VARIANTS)
+ENGINES = ("house", "live", "live_sl15") + EXIT_VARIANT_ENGINES
+REPORT_V2_ENGINES = ("house", "live", "live_sl15")   # Fix 370 (반박 검증 H1): 옛 보고서는 모든 행에 있는 엔진만 — 새 변형은 새 행에만 있어 나란히 놓으면
+                                                     #   다른 행 집합끼리 비교가 된다(부호 반전 재현). 변형은 보고서 v3 의 같은 건 짝 비교로만 본다.
+LEGACY_ENGINES = ("live_adaptive", "live_sl10")                     # Fix 370 이전 행에만 있다 (보고서는 있으면 읽는다)
+LIVE_LIKE = ("live", "live_adaptive", "live_sl10", "live_sl15") + EXIT_VARIANT_ENGINES   # Fix 366b: 짝 표본 = 행에 있는 live 계열이 **모두 끝난** 건
 ENGINE_TP1 = {"live": TP1_FLAT, "live_sl10": TP1_FLAT, "live_sl15": TP1_FLAT}   # 저장된 값이 이와 다르면(v1 적응 TP 3) 그 엔진 통계에서 뺀다
 RECOMMEND_ENGINES = ("house", "live")                                 # 채택 제안은 잣대 둘만 — 변형 엔진은 진단(variants)으로
 BREADTH_UP = 0.60           # Fix 366 ⑦: 상위 거래량 심볼 중 24h 상승 비율 ≥ 0.60 = MKT_UP (Claude가 정함, 설정 paper_breadth_up)
@@ -264,7 +278,8 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
                   hist: Sequence[float] | None = None, hist_off: int = 0,
                   body_fn: Callable[[int], bool | None] | None = None,
                   horizon: int = LIVE_HORIZON, variants: Sequence[str] = VARIANTS,
-                  sl_roi: float = LIVE_SL_ROI) -> dict[str, Any]:
+                  sl_roi: float = LIVE_SL_ROI, protect_at: float | None = None,
+                  protect_stop_roi: float | None = None, stale_bars: int | None = None) -> dict[str, Any]:
     """진입 뒤 완성봉 `bars` 로 실매매 청산 규칙을 근사한다. 판정 순서(한 봉 안): 손절 → TP1 → 트레일링(직전 봉까지의 최고 기준)
     → 시간 만료. 추가 lot 은 봉 **종가**에서 열고, 자기 손절(`sl_roi`, 기본 −25% ROI) 또는 본 포지션 청산과 함께 닫힌다.
     `hist[hist_off + i]` = i 번째 봉의 MACD hist. `body_fn(i)` = i 번째 봉까지의 몸통 성장 판정. 봉이 모자라면 done=False."""
@@ -283,6 +298,7 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
     exit_price: float | None = None
     vs = {name: _Variant(name, anchor=entry) for name in variants}
     n = 0
+    ambig_arm = False                # Fix 370: 보호 문턱 돌파와 보호선 이탈이 같은 봉 = 비관 가정으로 청산한 건
 
     def _close_lots(i: int, price: float, kind: str) -> None:
         for v in vs.values():
@@ -303,12 +319,31 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
                 if (long and l <= lsl) or (not long and h >= lsl):
                     lot.exit_bar, lot.exit_price, lot.exit_kind = i, lsl, "SL"
         # 본 포지션 손절 (SL 우선)
-        if (long and l <= sl_price) or (not long and h >= sl_price):
-            realized += remaining * roi_of(side, entry, sl_price)
-            exit_kind, exit_bar, exit_price = ("SL" if not tp1_hit else "SL_AFTER_TP1"), i, sl_price
+        stop_px, stop_kind = sl_price, ("SL" if not tp1_hit else "SL_AFTER_TP1")
+        # Fix 370: TP1 전 이익 보호 — **직전 봉까지의** 최고 ROI(max_roi)가 protect_at 이상이면 손절을 protect_stop_roi 로 올린다
+        #   (같은 봉의 신고점은 다음 봉부터 = 한 봉 안에서 고점·저점 순서를 모르므로 낙관 가정 금지)
+        if protect_at is not None and protect_stop_roi is not None and not tp1_hit and max_roi >= float(protect_at):
+            _pp = price_at_roi(side, entry, float(protect_stop_roi))
+            if (long and _pp > stop_px) or (not long and _pp < stop_px):
+                stop_px, stop_kind = _pp, "PROTECT"
+        if (long and l <= stop_px) or (not long and h >= stop_px):
+            realized += remaining * roi_of(side, entry, stop_px)
+            exit_kind, exit_bar, exit_price = stop_kind, i, stop_px
             remaining = 0.0
-            _close_lots(i, sl_price, "BASE_SL")
+            _close_lots(i, stop_px, "BASE_PROTECT" if stop_kind == "PROTECT" else "BASE_SL")
             break
+        # Fix 370 (반박 검증 M2): 이 봉 고가로 **처음** 보호 문턱을 넘었는데 같은 봉 저가가 보호 손절선도 깼다면 순서를 모른다
+        #   → 비관 가정(고점 먼저 → 보호 청산). 안 그러면 변형만 「다음 봉부터 하방이 막힌 채 계속 보유」하는 공짜 옵션을 얻는다.
+        if (protect_at is not None and protect_stop_roi is not None and not tp1_hit and max_roi < float(protect_at)
+                and roi_of(side, entry, fav_px) >= float(protect_at)):
+            _pp = price_at_roi(side, entry, float(protect_stop_roi))
+            if (long and l <= _pp) or (not long and h >= _pp):
+                realized += remaining * roi_of(side, entry, _pp)
+                exit_kind, exit_bar, exit_price = "PROTECT", i, _pp
+                remaining = 0.0
+                ambig_arm = True
+                _close_lots(i, _pp, "BASE_PROTECT")
+                break
         # TP1 부분익절
         if not tp1_hit and ((long and h >= tp1_price) or (not long and l <= tp1_price)):
             tp1_hit, tp1_bar = True, i
@@ -352,6 +387,13 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
                 v.last_add_bar = i
                 _w = BASE_USDT + LOT_USDT * len(v.lots)
                 v.anchor = (BASE_USDT * entry + LOT_USDT * sum(x.price for x in v.lots)) / _w
+        # Fix 370: 무진전 조기 청산 — stale_bars 째 봉 마감에 TP1 없고 ROI ≤ 0 이면 그 종가에 닫는다
+        if stale_bars is not None and i == int(stale_bars) - 1 and i != horizon - 1 and not tp1_hit and roi_c <= 0:
+            realized += remaining * roi_c
+            exit_kind, exit_bar, exit_price = "STALE", i, c
+            remaining = 0.0
+            _close_lots(i, c, "BASE_STALE")
+            break
         if i == horizon - 1:
             realized += remaining * roi_c
             exit_kind, exit_bar, exit_price = "TIME", i, c
@@ -368,6 +410,8 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
         "roi": round(realized + unreal, 4), "realized": round(realized, 4), "exit_bar": exit_bar,
         "exit_price": exit_price,
     }
+    if protect_at is not None:
+        out["ambig_arm"] = ambig_arm
     adds: dict[str, list[dict[str, Any]]] = {}
     for v in vs.values():
         rows = []
@@ -503,7 +547,6 @@ def manage_trade(trade: Mapping[str, Any], series: Series) -> dict[str, Any]:
     else:
         after = series.allk[j + 1:]
     house = run_house(side, entry, after)
-    tp1_adaptive = float(trade.get("tp1_pct") or tp1_for(trade.get("chg_24h")))
     body_fn = None
     if j is not None:
         from app.services import candle_battle as CB
@@ -515,14 +558,16 @@ def manage_trade(trade: Mapping[str, Any], series: Series) -> dict[str, Any]:
     # Fix 366: live = 실코드 그대로(TP1 15 고정 · 손절 −25) — 추가 변형은 이 엔진 위에서만 센다
     live = run_live_like(side, entry, after, tp1_pct=TP1_FLAT, hist=_hist, hist_off=_off, body_fn=body_fn)
     adds = live.pop("adds")
-    # 변형: 적응 TP(3/15) · 손절 −10 · 손절 −15 (추가 lot 없음 = 계산량 절약)
-    live_adaptive = run_live_like(side, entry, after, tp1_pct=tp1_adaptive, hist=_hist, hist_off=_off, variants=())
-    live_adaptive.pop("adds", None)
-    engines: dict[str, Any] = {"house": house, "live": live, "live_adaptive": live_adaptive}
+    # 변형: 손절 −15 · Fix 370 청산 개선 3종 (추가 lot 없음 = 계산량 절약). 적응 TP·손절 −10 은 Fix 370 에서 계산 중단 (9/14 분석)
+    engines: dict[str, Any] = {"house": house, "live": live}
     for _sl in SL_VARIANTS:
-        e = run_live_like(side, entry, after, tp1_pct=TP1_FLAT, hist=_hist, hist_off=_off, variants=(), sl_roi=_sl)
+        e = run_live_like(side, entry, after, tp1_pct=TP1_FLAT, variants=(), sl_roi=_sl)
         e.pop("adds", None)
         engines[f"live_sl{int(_sl)}"] = e
+    for _name, _kw in EXIT_VARIANTS.items():
+        e = run_live_like(side, entry, after, tp1_pct=TP1_FLAT, variants=(), **_kw)
+        e.pop("adds", None)
+        engines[_name] = e
     done = all(bool(e.get("done")) for e in engines.values())
     exit_bars = 0
     for name, e in engines.items():
@@ -652,20 +697,21 @@ def build_report(trades: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 for t in closed if pred(t) and _engine_ok(t, engine)]
     rep["censored_live"] = sum(1 for t in closed if t["engines"].get("live") and not t["engines"]["live"].get("done", True))
     rep["censored"] = {eng: sum(1 for t in closed if t["engines"].get(eng) is not None and not t["engines"][eng].get("done", True))
-                       for eng in ENGINES}
+                       for eng in REPORT_V2_ENGINES}
     rep["paired_n"] = sum(1 for t in closed
                           if all(bool((t["engines"].get(x) or {}).get("done", True)) for x in LIVE_LIKE if x in t["engines"]))
-    rep["versions"] = {"v2": sum(1 for t in closed if "live_adaptive" in (t.get("engines") or {})),
-                       "v1": sum(1 for t in closed if "live_adaptive" not in (t.get("engines") or {}))}
+    _v2 = {"live_adaptive", "live_sl15"}                                  # Fix 370: 새 행엔 live_adaptive 가 없다 — live_sl15 로도 v2 판정
+    rep["versions"] = {"v2": sum(1 for t in closed if set(t.get("engines") or {}) & _v2),
+                       "v1": sum(1 for t in closed if not set(t.get("engines") or {}) & _v2)}
     rep["recommend"]["variants"] = []
-    rep["recommend"]["hypotheses"] = (len(rule_side) - len(BASELINE_KEYS)) * len(GROUP_KEYS) * len(ENGINES)
+    rep["recommend"]["hypotheses"] = (len(rule_side) - len(BASELINE_KEYS)) * len(GROUP_KEYS) * len(REPORT_V2_ENGINES)
 
     for key in list(rule_side):
         side = rule_side[key]
         rep["rules"][key] = {"side": side, "groups": {}}
         for g in GROUP_KEYS:
             gg: dict[str, Any] = {}
-            for eng in ENGINES:
+            for eng in REPORT_V2_ENGINES:
                 it = _items(lambda t: t["rule"] == key and g in group_of(t.get("tags") or []), eng)
                 bs = _items(lambda t: t["rule"] == f"baseline_{side}" and g in group_of(t.get("tags") or []), eng)
                 st = _stat([r for _, _, r in it])
@@ -723,13 +769,14 @@ def render_markdown(rep: Mapping[str, Any], *, min_n: int = 15) -> str:
              f"(실시간 {rep.get('sources', {}).get('live', 0)} / 백필 {rep.get('sources', {}).get('backfill', 0)})")
     p = rep.get("period") or {}
     L.append(f"기간 {p.get('from')} ~ {p.get('to')}. 잣대: 레버 2 · house = SL −5%/TP +15%/12h · live = 실코드 그대로(SL −{LIVE_SL_ROI:g}% → "
-             f"TP1 {TP1_FLAT:g}% 25% → 트레일링 5%p → 48h) · live_adaptive = TP1 3/15%(|24h|) · live_sl10/sl15 = 손절 −10/−15. "
+             f"TP1 {TP1_FLAT:g}% 25% → 트레일링 5%p → 48h) · live_sl15 = 손절 −15 · live_be10/live_lock5/live_stale24 = 청산 개선(Fix 370) · "
+             f"(Fix 370 이전 행: live_adaptive = TP1 3/15%(|24h|), live_sl10 = 손절 −10). "
              f"추가 lot 300 USDT(live 위), 자기 손절 −{LIVE_SL_ROI:g}%. 자리: UP24/DOWN24/UP35_DOWN24 + MKT_UP/MKT_DOWN(시장 국면, 9/10 부터) + "
              f"LIVE_OK(실코드 게이트 통과). CV = 심볼 홀짝 × 시간 반쪽. 채택 = CV 4/4 · n≥{ADOPT_MIN_N} · Δ>0.")
     L.append("")
     if rep.get("censored"):
         _c = rep["censored"]
-        L.append(f"⚠️ 엔진 간 비교는 **짝 표본**(live 계열 넷이 모두 끝난 {rep.get('paired_n', 0)}건)으로만 센다 — 백필 창(144봉 < 48h)에서 "
+        L.append(f"⚠️ 엔진 간 비교는 **짝 표본**(행에 있는 live 계열 엔진이 모두 끝난 {rep.get('paired_n', 0)}건)으로만 센다 — 백필 창(144봉 < 48h)에서 "
                  f"엔진마다 검열이 달라 따로 세면 손절 깊이 비교가 왜곡된다. 검열 수: " + ", ".join(f"{k} {v}" for k, v in _c.items()) + ".")
         _v = rep.get("versions") or {}
         if _v.get("v1"):
@@ -751,7 +798,7 @@ def render_markdown(rep: Mapping[str, Any], *, min_n: int = 15) -> str:
     if rec.get("variants"):
         L.append("- 변형 엔진 진단(채택 아님): " + " · ".join(f"{e['rule']} {e['side']} {e['group']} {e['engine']} Δ{_f(e['delta'])}" for e in rec["variants"][:12]))
     L.append("")
-    for eng in ENGINES:
+    for eng in REPORT_V2_ENGINES:
         L.append(f"## 진입 규칙 — {eng} 엔진 (자리별 · n≥{min_n}만 표시)")
         L.append("| 규칙 | 방향 | 자리 | n | 평균 ROI | 승률 | 기준선 | Δ | CV(짝/홀/전/후) | 종료 |")
         L.append("|---|---|---|---:|---:|---:|---:|---:|---|---|")
