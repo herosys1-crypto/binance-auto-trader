@@ -53,15 +53,33 @@ def _code() -> str:
     )
 
 
+#: 🚨 테스트 stale fix (Fix 346/352, commits c7417a8 / 60c471e): 저점 게이트
+#: 예외가 SURGE_PULLBACK 하나에서 SURGE_START(정점 SHORT 워커가 넘긴 알람,
+#: Fix 346) · MULTIDAY_PULLBACK(다일 조정 반등, Fix 352)까지 3개로 늘었다.
+SURGE_SKIP = {"SURGE_PULLBACK", "SURGE_START", "MULTIDAY_PULLBACK"}
+
+
+def _skip_set(code: str) -> set[str]:
+    m = re.search(r"_skip_pk = \(pattern in \(([^)]*)\)\)", code)
+    assert m, "저점 게이트 예외 조건이 없다"
+    return set(re.findall(r'"([A-Z_]+)"', m.group(1)))
+
+
 def test_surge_pullback_skips_the_bottom_gate():
-    """🚨 이 예외가 없으면 급등중 조정 진입은 **수학적으로 0건**이다."""
+    """🚨 이 예외가 없으면 급등중 조정 진입은 **수학적으로 0건**이다.
+
+    🚨 테스트 stale fix (Fix 346/352): 옛 조건 `pattern == "SURGE_PULLBACK"`
+    (단일 값 비교)이 `pattern in (...)` (집합 소속 판정)으로 바뀌었다 —
+    SURGE_START/MULTIDAY_PULLBACK 도 같은 이유로 강세 종목이라 저점 반등
+    조건을 못 넘는다.
+    """
     code = _code()
-    assert '_skip_pk = (pattern == "SURGE_PULLBACK")' in code, (
-        "SURGE_PULLBACK 예외가 없다 — 강세 종목은 저점 반등 조건을 못 넘는다"
-    )
-    assert "if bc is not None and not _skip_pk:" in code, (
-        "예외가 confirm_peak 호출을 실제로 건너뛰지 않는다"
-    )
+    assert "SURGE_PULLBACK" in _skip_set(code)
+    assert code.count("_skip_pk = (") == 1
+    i_skip = code.index("_skip_pk = (")
+    i_gate = code.index("if bc is not None and not _skip_pk:")
+    i_cp = code.index('confirm_peak(bc, symbol, "LONG")')
+    assert i_skip < i_gate < i_cp
 
 
 def test_pattern_is_threaded_from_the_decision():
@@ -78,21 +96,35 @@ def test_alert_path_does_not_reference_undefined_result():
     """🚨 알람 루프에는 `result` 가 없다 — 참조하면 NameError 로 진입이 죽는다.
 
     (이 실수를 실제로 한 번 넣었다가 잡았다.)
+
+    🚨 테스트 stale fix (Fix 346, commit c7417a8, 2026-09-04): 알람 경로가
+    무조건 `pattern=None` 이던 것이, 정점 SHORT 워커가 넘긴 SURGE_START 류
+    알람은 패턴을 그대로 전달하도록 바뀌었다(`_alert_pattern` 변수 도입,
+    Fix 352 가 MOMENTUM_ALERT_PATTERNS 로 판정 범위를 확정). `result` 를
+    직접 참조하지 않는다는 불변식은 그대로 지켜야 한다.
     """
     src = _src()
-    # 호출은 정확히 두 곳 — 알람 경로(pattern=None) 와 스캔 경로(result 사용)
-    assert src.count("pattern=None") == 1, "알람 경로가 pattern 을 명시하지 않는다"
+    assert src.count("pattern=_alert_pattern") == 1, "알람 경로가 _alert_pattern 을 전달하지 않는다"
     assert src.count('pattern=result.get("pattern")') == 1, (
         "스캔 경로의 pattern 전달이 없거나 중복이다"
     )
-    # 알람 루프가 먼저 나오고, result 를 쓰는 스캔 루프가 뒤에 있어야 한다
-    i_alert_call = src.index("pattern=None")
-    i_scan_call = src.index('pattern=result.get("pattern")')
-    i_alert_tag = src.index("[Fix75/alert-long]")
-    i_scan_tag = src.index("# 9. 실 진입!")
-    assert i_alert_tag < i_alert_call < i_scan_tag < i_scan_call, (
+    a0 = src.index("[Fix75/alert-long]")
+    a_def = src.index("_alert_pattern = (")
+    a_call = src.index("pattern=_alert_pattern")
+    a1 = src.rindex("[Fix75/alert-long]")
+    s_tag = src.index("# 9. 실 진입!")
+    s_call = src.index('pattern=result.get("pattern")')
+    assert a0 < a_def < a_call < a1 < s_tag < s_call, (
         "알람/스캔 경로가 뒤바뀌었다 — 알람에서 result 를 참조하면 NameError 다"
     )
+    # 알람 루프 전체(a0~a1)에는 (주석을 뺀) 어디에도 bare `result` 참조가 없어야 한다
+    seg = chr(10).join(
+        ln for ln in src[a0:a1].splitlines() if not ln.lstrip().startswith("#")
+    )
+    assert not re.search(r"\bresult\b", seg), "알람 루프가 스캔 전용 변수 result 를 참조한다"
+    # _alert_pattern 정의 자체도 MOMENTUM_ALERT_PATTERNS 기준으로 안전하게 None 폴백해야 한다
+    line = src[a_def: src.index(chr(10), a_def)]
+    assert "alert.get(" in line and "MOMENTUM_ALERT_PATTERNS" in line and "else None" in line
 
 
 def test_exemption_is_logged():
@@ -106,14 +138,19 @@ def test_other_patterns_still_pass_the_bottom_gate():
     """🚨 급락 경로(패턴 B)는 저점 게이트를 그대로 받아야 한다.
 
     예외가 전체로 번지면 「하락 초입 매수」 방지가 사라진다.
+
+    🚨 테스트 stale fix (Fix 346/352): 예외 대상이 SURGE_PULLBACK 하나에서
+    SURGE_START/MULTIDAY_PULLBACK 까지 늘었지만(`SURGE_SKIP`), 여전히
+    **그 3개로 한정**돼야 한다 — 패턴 A/B(저점 반등) 나 빈 값은 절대 포함되면
+    안 된다. `MOMENTUM_ALERT_PATTERNS` 와도 동일해야 한다(두 상수가 따로
+    놀면 한쪽만 고치는 사고가 난다).
     """
-    code = _code()
-    m = re.search(r"_skip_pk = \(pattern == \"SURGE_PULLBACK\"\)", code)
-    assert m, "예외 조건이 없다"
-    # 조건이 SURGE_PULLBACK 하나로 한정돼야 한다
-    assert "pattern in (" not in code.split("_skip_pk")[1][:200], (
-        "예외 대상이 여러 패턴으로 번졌다"
-    )
+    from app.workers.auto_long_at_bottom_worker import MOMENTUM_ALERT_PATTERNS
+    s = _skip_set(_code())
+    assert s == SURGE_SKIP, f"예외 대상이 바뀌었다: {s}"
+    assert s == set(MOMENTUM_ALERT_PATTERNS)
+    for dip in ("A", "B", "", "NONE"):
+        assert dip not in s
 
 
 def test_round_trip_block_still_active():

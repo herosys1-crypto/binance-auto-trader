@@ -5,6 +5,12 @@ strategy.current_position_qty 가 무조건 0 으로 리셋되어 잔량 6,011 l
 모니터링에서 빠지고 거래소엔 SHORT 그대로 남는 stuck 버그 발생.
 fix (origin 0da0f55): cur_qty/exec_qty 의 abs 차이로 잔량 계산,
 remaining_abs ≤ 1e-8 이면 전체 청산, 아니면 sign 곱해 잔량 유지 + status 보존.
+
+🚨 테스트 stale fix (Fix 167, commit f600f8d): 전체청산 확정은 이제
+거래소가 확인한 실 잔량(`_fetch_actual_position_qty`)을 봐야 한다 —
+스트림 이벤트만으로 「전체 청산」을 단정하면 부분 체결 순서가 꼬였을 때
+남은 잔량을 놓칠 수 있다. `_build_service` 가 `exchange_remaining` 을
+받아 그 mock 을 주입한다 (전체청산 테스트는 Decimal("0") 을 준다).
 """
 from __future__ import annotations
 
@@ -48,7 +54,7 @@ def _make_payload(client_order_id: str, status: str, exec_qty: str, avg_price: s
     }
 
 
-def _build_service(strategy: SimpleNamespace, order: SimpleNamespace) -> StreamService:
+def _build_service(strategy: SimpleNamespace, order: SimpleNamespace, exchange_remaining: Decimal | None = None) -> StreamService:
     """db 의 select(Order) / get(StrategyInstance) / sa_update / commit 을 모두 mock 한 인스턴스."""
     db = MagicMock()
     order_result = MagicMock()
@@ -59,7 +65,20 @@ def _build_service(strategy: SimpleNamespace, order: SimpleNamespace) -> StreamS
     plan_result.scalars.return_value.first.return_value = None
     db.execute.side_effect = [order_result, update_result, plan_result]
     db.get.return_value = strategy
-    return StreamService(db)
+    service = StreamService(db)
+    # Fix 167: 전체청산 확정은 거래소 잔량 확인이 필요 — 테스트가 거래소 상태를 명시한다
+    service._fetch_actual_position_qty = MagicMock(return_value=exchange_remaining)
+    return service
+
+
+@pytest.fixture(autouse=True)
+def _no_external_side_effects(monkeypatch):
+    import sys, types
+    import app.services.stream_service as ss
+    monkeypatch.setattr(ss, "_trigger_realtime_reentry_async", lambda: None)
+    fake = types.ModuleType("app.workers.auto_bb_breakdown_worker")
+    fake._reset_reentry_count = lambda symbol, side: None
+    monkeypatch.setitem(sys.modules, "app.workers.auto_bb_breakdown_worker", fake)
 
 
 class TestExitFilledPartialClose:
@@ -127,7 +146,7 @@ class TestExitFilledPartialClose:
             strategy_instance_id=58,
         )
         # order.status 는 default "NEW" — handle_ 안의 mapped 가 FILLED 로 갱신
-        service = _build_service(strategy, order)
+        service = _build_service(strategy, order, exchange_remaining=Decimal("0"))
         service.handle_order_trade_update(_make_payload("exit-manual-58", "FILLED", "6011", "0.11684"))
 
         # then: 0 으로 리셋, REENTRY_READY 전환, unrealized_pnl 도 0, 누적 realized 약 +71.07
@@ -195,7 +214,7 @@ class TestExitFilledPartialClose:
             strategy_instance_id=42,
         )
         # order.status 는 default "NEW" — handle_ 안의 mapped 가 FILLED 로 갱신
-        service = _build_service(strategy, order)
+        service = _build_service(strategy, order, exchange_remaining=Decimal("0"))
         service.handle_order_trade_update(_make_payload("exit-completed-42", "FILLED", "10", "3100"))
 
         assert strategy.status == "COMPLETED"
@@ -229,7 +248,7 @@ class TestExitFilledPartialClose:
             strategy_instance_id=11,
         )
         # order.status 는 default "NEW" — handle_ 안의 mapped 가 FILLED 로 갱신
-        service = _build_service(strategy, order)
+        service = _build_service(strategy, order, exchange_remaining=Decimal("0"))
         service.handle_order_trade_update(_make_payload("exit-overexec-11", "FILLED", "100", "0.55"))
 
         # 70-100=-30 → ≤ 1e-8 → full close
@@ -304,7 +323,7 @@ class TestExitFilledPartialClose:
             strategy_instance_id=68,
         )
         # order.status 는 default "NEW" — handle_ 안의 mapped 가 FILLED 로 갱신
-        service = _build_service(strategy, order)
+        service = _build_service(strategy, order, exchange_remaining=Decimal("0"))
         service.handle_order_trade_update(_make_payload("exit-stop-68", "FILLED", "1814.8", "0.21"))
 
         # STOPPED 로 전환 (REENTRY_READY 가 아님), stopped_at 채워짐, qty 0

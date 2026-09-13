@@ -262,10 +262,17 @@ class TestRealtimeReentryConstants:
         from app.workers.realtime_reentry_worker import MIN_PASSED_STAGE3
         assert MIN_PASSED_STAGE3 == 3
 
-    def test_min_passed_stage_last_is_strict_3(self):
-        """MIN_PASSED_STAGE_LAST = 3 (라스트 챈스 = 매우 엄격!)."""
+    def test_min_passed_stage_last_is_4_of_8(self):
+        """MIN_PASSED_STAGE_LAST = 4 (Fix 102, commit 7284468, 2026-08-26).
+
+        🚨 테스트 stale fix: 옛 기대값 3(5중 기준)은 Fix 99 의 「STAGE_LAST 5/5」가
+        사실상 불가능(사장님 "한번더" 취지 무효)해서 나온 값이었다. Fix 102 가
+        지표를 5중 → 8중(5 core + 3 bonus)으로 늘리며 "8개 중 4" 로 완화 —
+        분모가 바뀌었으니 문턱값도 같이 바뀌는 것이 맞다. 코드가 맞고 옛
+        테스트가 Fix 99 시절 값에 멈춰 있었다.
+        """
         from app.workers.realtime_reentry_worker import MIN_PASSED_STAGE_LAST
-        assert MIN_PASSED_STAGE_LAST == 3
+        assert MIN_PASSED_STAGE_LAST == 4
 
     def test_stage_gate_progression_is_monotonic_strict(self):
         """계단식: stage2(loose) < stage3(strict) ≤ stage_last(strict)."""
@@ -350,10 +357,20 @@ class TestRealtimeReentryIndicatorGate:
 
 
 class TestPeakBreakStageCapital:
-    """`_get_stage_capital` = 사장님 마틴게일 (300 → 600 → 1800!)."""
+    """`_get_stage_capital` = 사장님 사다리 (Fix 159: 10 → 300 → 600, 4단계 = None!)."""
 
-    def test_stage_capital_progression_300_600_1800(self):
-        """given base=300 + max_stage=3 / when stage 1,2,3 / then 300, 600, 1800."""
+    def test_stage_capital_ladder_10_300_600_stage4_none(self):
+        """given 사다리 default(10/300/600) + max_stage=3 / when stage 1~4 / then 10, 300, 600, None.
+
+        🚨 테스트 stale fix (Fix 159, commit 0411e4e, "peak_break 1·2·3 = 10·300·600 /
+        4단계 = None"): 옛 기대값 300/600/1800(배수 base×[1,2,6])은 `_get_stage_capital`
+        이 자체 계산을 하던 시절 값이다. Fix 159 가 「같은 단계 자본에 읽는 경로가
+        둘이면 어긋난다」(헌법 101)며 `sajangnim_capital.get_stage_capital` 사다리
+        단일 진실로 통일했고, 사다리 default 는 Fix 133 의 10/300/600 이다.
+        `sajangnim_default_capital` / `sajangnim_max_stage` 설정은 이제 사다리
+        조회 경로(`sajangnim_capital_ladder`)에 안 쓰이므로 mock 이 이 두 키만
+        채워도 실제로는 DEFAULT_CAPITAL_LADDER 로 fallback 한다.
+        """
         from app.workers.peak_break_reversal_worker import _get_stage_capital
 
         db = MagicMock()
@@ -367,12 +384,17 @@ class TestPeakBreakStageCapital:
             return None
         db.get.side_effect = _get_side
 
-        assert _get_stage_capital(db, 1) == Decimal("300")
-        assert _get_stage_capital(db, 2) == Decimal("600")
-        assert _get_stage_capital(db, 3) == Decimal("1800")
+        assert _get_stage_capital(db, 1) == Decimal("10.00")
+        assert _get_stage_capital(db, 2) == Decimal("300.00")
+        assert _get_stage_capital(db, 3) == Decimal("600.00")
+        assert _get_stage_capital(db, 4) is None  # 사다리 3칸 초과 = 진입 보류!
 
     def test_stage_capital_max_stage_2_blocks_stage_3(self):
-        """given max_stage=2 (사장님 신 default!) / when stage=3 / then None."""
+        """given max_stage=2 (사장님 신 default!) / when stage=3 / then None.
+
+        🚨 테스트 stale fix (Fix 159): 사다리 default 10/300/600 이므로
+        1단계=10, 2단계=300 이고 max_stage=2 가 3단계를 차단한다.
+        """
         from app.workers.peak_break_reversal_worker import _get_stage_capital
 
         db = MagicMock()
@@ -385,8 +407,8 @@ class TestPeakBreakStageCapital:
             return None
         db.get.side_effect = _get_side
 
-        assert _get_stage_capital(db, 1) == Decimal("300")
-        assert _get_stage_capital(db, 2) == Decimal("600")
+        assert _get_stage_capital(db, 1) == Decimal("10.00")
+        assert _get_stage_capital(db, 2) == Decimal("300.00")
         assert _get_stage_capital(db, 3) is None  # max_stage=2 → 3단계 차단!
 
     def test_stage_capital_invalid_stage_zero_returns_none(self):
@@ -445,22 +467,42 @@ class TestPeakBreak24hFilter:
 
 
 class TestMartingaleCapitalV219:
-    """`compute_reentry_capital` = 사장님 v219 (2026-08-22 최종 확정!).
+    """`compute_reentry_capital` = 사장님 v219 (2026-08-22 최종 확정!) → Fix 133/298 사다리.
 
     verbatim: "3단계까지 갈수 있다야 가능하면 가지않는 관리가 필요하다는거야"
+
+    🚨 테스트 stale fix (Fix 133 commit 0a6eb29 + Fix 298 commit 5e36595):
+    v219 은 "이전 × 2 / 전체 × 2" 배수열이었지만, Fix 133 이 사장님 지시
+    ("10 300 600으로 마틴게일 설정")로 명시적 **사다리**로 바꿨다. Fix 298 은
+    거기서 한 걸음 더 나가 `compute_reentry_capital` 이 `previous_capitals`
+    (이전 진입 자본)를 완전히 **무시**하고 사다리의 그 단계 값을 그대로 쓰게
+    했다 — 볼밴 분할처럼 이미 물타기 중인 전략이 이 함수로 재진입 자본을
+    또 계산하면 이중 마틴게일이 되던 사고(#Fix 298 상세는 헌법 참조)를 막기
+    위해서다. 즉 인자 이름은 `previous_capitals` 지만 **값 자체는 결과에
+    반영되지 않는다** — 사다리 단일 진실만 본다.
+
+    격리: `compute_reentry_capital` 은 내부에서 `SessionLocal()` 을 직접 열어
+    사다리를 조회한다. 여기서는 `app.core.database.SessionLocal` 을 막아
+    실 DB 접속 없이 `except` 분기(=DEFAULT_CAPITAL_LADDER 10/300/600 fallback)만
+    검증한다 — 결과가 우연히 실 DB 설정값에 좌우되면 안 된다.
     """
 
-    def test_stage2_prev_x2(self):
-        """given stage=2 + [300] / when 호출 / then 600 (이전 × 2!)."""
-        from app.services.sajangnim_capital import compute_reentry_capital
-        result = compute_reentry_capital(2, [Decimal("300")])
-        assert result == Decimal("600.00")
+    def test_stage2_uses_ladder_2nd_rung_ignoring_previous(self):
+        """given stage=2 + previous=[300] / when 호출 / then 사다리 2번째 칸 300.
 
-    def test_stage3_total_x2(self):
-        """given stage=3 + [300, 600] / when 호출 / then 1800 (전체 × 2!) ⚠️매우 신중!"""
+        (previous_capitals=[300] 이 무엇이든 사다리 값만 쓴다 — Fix 298.)
+        """
         from app.services.sajangnim_capital import compute_reentry_capital
-        result = compute_reentry_capital(3, [Decimal("300"), Decimal("600")])
-        assert result == Decimal("1800.00")
+        with patch("app.core.database.SessionLocal", side_effect=RuntimeError):
+            result = compute_reentry_capital(2, [Decimal("300")])
+        assert result == Decimal("300.00")
+
+    def test_stage3_uses_ladder_3rd_rung_ignoring_previous(self):
+        """given stage=3 + previous=[300, 600] / when 호출 / then 사다리 3번째 칸 600."""
+        from app.services.sajangnim_capital import compute_reentry_capital
+        with patch("app.core.database.SessionLocal", side_effect=RuntimeError):
+            result = compute_reentry_capital(3, [Decimal("300"), Decimal("600")])
+        assert result == Decimal("600.00")
 
     def test_stage4_forbidden_returns_none(self):
         """given stage=4 or 5 / when 호출 / then None (사장님 상한 = 3단계까지!)."""
@@ -491,14 +533,20 @@ class TestMartingaleCapitalV219:
         from app.services.sajangnim_capital import MAX_REENTRY_STAGE
         assert MAX_REENTRY_STAGE == 3
 
-    def test_stage2_custom_base_capital(self):
-        """given base=500 / when stage=2 / then 1000 (사장님 설정 커스텀 확장!)."""
-        from app.services.sajangnim_capital import compute_reentry_capital
-        result = compute_reentry_capital(2, [Decimal("500")])
-        assert result == Decimal("1000.00")
+    def test_stage2_previous_capital_is_ignored(self):
+        """given stage=2 + previous=[500](커스텀 base 흉내) / when 호출 / then 사다리 300 그대로.
 
-    def test_stage3_custom_base_full_progression(self):
-        """given base=500 / when stage=3 with [500, 1000] / then (500+1000)*2 = 3000."""
+        🚨 옛 기대값 1000(=500×2)은 배수열 시절 값이다. Fix 298 이후
+        `previous_capitals` 은 로그용일 뿐 자본 계산에 반영되지 않는다.
+        """
         from app.services.sajangnim_capital import compute_reentry_capital
-        result = compute_reentry_capital(3, [Decimal("500"), Decimal("1000")])
-        assert result == Decimal("3000.00")
+        with patch("app.core.database.SessionLocal", side_effect=RuntimeError):
+            result = compute_reentry_capital(2, [Decimal("500")])
+        assert result == Decimal("300.00")
+
+    def test_stage3_previous_capital_is_ignored(self):
+        """given stage=3 + previous=[500, 1000] / when 호출 / then 사다리 600 그대로."""
+        from app.services.sajangnim_capital import compute_reentry_capital
+        with patch("app.core.database.SessionLocal", side_effect=RuntimeError):
+            result = compute_reentry_capital(3, [Decimal("500"), Decimal("1000")])
+        assert result == Decimal("600.00")

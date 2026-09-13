@@ -112,7 +112,9 @@ const PURPOSE_MAP = {
 //   해법: STOPPING 을 별도 「청산 진행」 그룹으로 분리. 종료 숨김 토글에서 제외.
 // 5-04 race-window 우려는 backend 의 신규 진입 가드 (cm-preview closedSet) 가 별도로
 // 막아주므로 frontend 가시성과 무관.
-const TERMINAL_STATUSES = ['STOPPED', 'COMPLETED', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'REENTRY_READY', 'KILL_SWITCH_TRIGGERED'];
+// 2026-09-13: backend 에 v131(2295e99)부터 있던 STOPPED_CAPITAL_EXHAUSTED(자본 소진 자동 종료)가 여기만 빠져 있었다 —
+//   화면이 그 전략을 「진행 중」으로 취급(종료 숨김에 안 가려짐 · 종료 정렬 · TP1/포지션 추가 버튼 활성). backend 와 일치시킨다.
+const TERMINAL_STATUSES = ['STOPPED', 'COMPLETED', 'CLOSED', 'CLOSED_BY_SL', 'CLOSED_BY_TP', 'REENTRY_READY', 'KILL_SWITCH_TRIGGERED', 'STOPPED_CAPITAL_EXHAUSTED'];
 
 // 「청산 진행 / 수동 청산 요청」 set — 종료 숨김 토글 대상 아님, 강조 표시 대상.
 // 2026-05-21 Phase 2 (#77/#78 사후 사장님 요구):

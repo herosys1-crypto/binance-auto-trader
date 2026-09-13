@@ -88,12 +88,19 @@ def test_both_timeframes_must_rise():
 
 
 def test_one_timeframe_failing_blocks():
-    for bad in ("4h", "15m"):
-        tfs = {"4h": UP, "15m": UP}
-        tfs[bad] = DOWN
-        ok, why, _d = check_pyramid_trend(_BC(tfs), "X", "LONG")
-        assert not ok, f"{bad} 가 하락인데 통과했다"
-        assert bad in why
+    """🚨 테스트 stale fix (Fix 345, commit c7417a8, 2026-09-04):
+    "15분이 기준이고 4시간을 참고" — 4H 는 더 이상 거부권이 아니다(veto 기본 OFF).
+    15m 이 하락이면 그대로 차단하지만, 4H 만 하락이고 15m 이 상승이면 **참고만**
+    하고 통과시킨다 (detail 에 4H 방향은 남긴다).
+    """
+    ok, why, _d = check_pyramid_trend(_BC({"4h": UP, "15m": DOWN}), "X", "LONG")
+    assert not ok and "15m" in why, "15m 가 하락인데 통과했다"
+    ok, why, _d = check_pyramid_trend(_BC({"4h": DOWN, "15m": UP}), "X", "SHORT")
+    assert not ok and "15m" in why, "SHORT 15m 가 불리한데 통과했다"
+    ok, why, d = check_pyramid_trend(_BC({"4h": DOWN, "15m": UP}), "X", "LONG")
+    assert ok, why
+    assert "참고" in why and d["4h_role"] == "reference"
+    assert d["4h"]["delta"] < 0, "4H 하락이 detail 에 남아야 한다"
 
 
 def test_short_is_mirrored():
@@ -108,13 +115,30 @@ def test_no_hist_sign_condition():
     """🚨 진입 게이트와 다르다 — 여기서 `hist>0` 을 요구하면 +22.54 -> +0.31 로 무너진다.
 
     판정은 **방향(delta)** 만 본다.
+
+    🚨 테스트 stale fix (Fix 348, commit 5265b22, 2026-09-05): `check_hist_rising`
+    이 한 봉 미분(`delta > 0`)에서 연속 N봉 「가속」 판정(`all(x > 0 for x in deltas)`,
+    기본 min_bars=3)으로 바뀌었다 — 2026-09-03 차트 학습에서 "이긴 건 「상승중」이
+    아니라 「가속」" 이었기 때문. 함수 경계도 다음 상수 정의(`SETTING_PYRAMID_4H_VETO`)
+    앞까지로 넓혀 잡는다 (구현이 함수 뒤 헬퍼로 옮겨졌다).
     """
     src = SVC.read_text(encoding="utf-8")
     i = src.index("def check_hist_rising")
-    body = src[i: i + 1200]
-    assert "return delta > 0" in body
+    body = src[i: src.index("\nSETTING_PYRAMID_4H_VETO", i)]
+    assert "return all(x > 0 for x in deltas), d" in body
     assert "hist_signed" in body, "기록은 남기되"
     assert "now_v <= 0" not in body, "부호 조건이 들어갔다"
+    # 가속(3봉 연속 증가) 표본 — 초반 8봉 가속 후 6봉 감속(부호는 여전히 음수)
+    c, s = [100.0] * 30, 0.0
+    for _ in range(8):
+        s += 0.002
+        c.append(c[-1] * (1 - s))
+    for _ in range(6):
+        s *= 0.7
+        c.append(c[-1] * (1 - s))
+    c.append(c[-1])
+    r, d = check_hist_rising(_BC({"15m": c}), "X", "LONG", "15m", use_completed=True, min_bars=3)
+    assert d["hist_signed"] < 0 and r is True, d
 
 
 def test_fail_open_on_api_error():
@@ -124,8 +148,15 @@ def test_fail_open_on_api_error():
 
 
 def test_short_data_is_fail_open():
-    ok, why, _d = check_pyramid_trend(_BC({"4h": [100.0] * 5, "15m": UP}), "X", "LONG")
-    assert ok and "fail-open" in why
+    """🚨 테스트 stale fix (Fix 345): 15m 은 이제 **기준**이라 15m 판정 불가는
+    fail-open 통과라도 사유가 "15m 판정 불가"로 바뀐다. 4H 판정 불가는
+    참고 항목일 뿐이라 "4H 판정 불가"로 통과한다 (기존 두 케이스 모두
+    통과지만 사유 문구가 4H/15m 역할 분리를 반영한다).
+    """
+    ok, why, _d = check_pyramid_trend(_BC({"4h": UP, "15m": [100.0] * 5}), "X", "LONG")
+    assert ok and "15m" in why and "fail-open" in why
+    ok, why, d = check_pyramid_trend(_BC({"4h": [100.0] * 5, "15m": UP}), "X", "LONG")
+    assert ok and "4H 판정 불가" in why and d["4h"].get("reason")
 
 
 def test_single_tf_helper_returns_none_when_unknown():

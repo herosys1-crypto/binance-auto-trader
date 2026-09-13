@@ -23,6 +23,23 @@ from app.models.strategy_instance import StrategyInstance
 from app.services.stream_service import StreamService
 
 
+@pytest.fixture(autouse=True)
+def _no_external_side_effects(monkeypatch):
+    """전체청산 「정상」 분기가 여는 background thread / worker import 를 막는다.
+
+    실 DB 세션을 쓰는 통합 테스트라도 스트림 실 배선(백그라운드 재진입 스레드,
+    auto_bb_breakdown_worker 카운터 리셋)까지 실행할 필요는 없다 — 그쪽은
+    별도 워커 테스트의 책임이고, 여기서는 stream_service 의 분기 로직만 본다.
+    """
+    import sys
+    import types
+    import app.services.stream_service as ss
+    monkeypatch.setattr(ss, "_trigger_realtime_reentry_async", lambda: None)
+    fake = types.ModuleType("app.workers.auto_bb_breakdown_worker")
+    fake._reset_reentry_count = lambda symbol, side: None
+    monkeypatch.setitem(sys.modules, "app.workers.auto_bb_breakdown_worker", fake)
+
+
 class TestExitFullCloseMismatchGuard:
     def _setup_strategy_and_order(self, db_session, make_template, make_strategy, qty: str, exec_qty: str):
         """진입 후 EXIT FILLED 직전 상태로 strategy + order 생성."""
@@ -106,7 +123,17 @@ class TestExitFullCloseMismatchGuard:
     def test_fetch_failure_falls_back_to_old_behavior(
         self, db_session, make_template, make_strategy,
     ):
-        """거래소 조회 실패 (None) → fail-soft, 기존 동작 (REENTRY_READY)."""
+        """거래소 조회 실패 (None) → **보류** (Fix 167), 옛 「REENTRY_READY 확정」 아님.
+
+        🚨 테스트 stale fix (Fix 167, commit f600f8d, 2026-08-26): 옛 조건
+        `if actual_remaining is not None and actual_remaining > 0:` 은 조회
+        실패(None)를 else 로 떨어뜨려 「잔량 0 확정 + REENTRY_READY」로 처리했다.
+        그날 실제로 418 IP ban 이 있었고, 그 방어가 API 장애 때 사라져
+        거래소엔 포지션이 남았는데 DB 는 종료 → orphan → 계정 Kill-Switch로
+        이어질 수 있었다. 신 동작 = **아무것도 확정하지 않는다** — status/qty
+        를 그대로 두고(STAGE1_OPEN, 원래 잔량) `EXIT_FULL_CLOSE_UNVERIFIED`
+        WARN RiskEvent 만 남긴다. 다음 reconcile(≤2분)이 재평가한다.
+        """
         s, order = self._setup_strategy_and_order(
             db_session, make_template, make_strategy, qty="245", exec_qty="245",
         )
@@ -122,6 +149,13 @@ class TestExitFullCloseMismatchGuard:
             StreamService(db_session).handle_order_trade_update(payload)
 
         db_session.refresh(s)
-        # fail-soft: 기존 동작 유지 (REENTRY_READY)
-        assert s.status == "REENTRY_READY"
-        assert s.current_position_qty == Decimal("0")
+        # 보류: status/qty 미변경 (REENTRY_READY 로 확정하지 않는다)
+        assert s.status == "STAGE1_OPEN"
+        assert s.current_position_qty == Decimal("-245.00000000")
+        assert s.reentry_ready is False
+
+        ev = db_session.execute(
+            select(RiskEvent).where(RiskEvent.event_type == "EXIT_FULL_CLOSE_UNVERIFIED")
+        ).scalars().first()
+        assert ev is not None
+        assert ev.severity == "WARN"

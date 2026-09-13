@@ -120,16 +120,25 @@ def test_15m_밴드_안이면_감지():
         assert ev.get("tf") == "15m", f"{pct}% 는 밴드 안이라 감지돼야 함"
 
 
-def test_5m은_신호를_내지_않음():
-    """🎯 v141b 사장님 결정: 급등락 진입은 **15m 20% 전후만**!
-
-    5m 은 아무리 크게 움직여도 진입 신호를 내지 않습니다 (측정만 함).
+def test_5m은_신호를_내지_않음(monkeypatch):
+    """🚨 테스트 stale fix (v148, commit 1e29f58, 2026-08-14 사장님 최종 결정):
+    "급등락 실시간 진입은 5분과 15분 차트의 20% 전후 상승과하락일때 할수 있게 해줘"
+    — v141b 의 ENABLE_5M_SIGNAL=False 는 v148 에서 **True** 로 뒤집혔고
+    BAND_5M 이 BAND_15M 과 동일(17.5~27.5%)하게 신설됐다. 이제 5m 도 밴드
+    안이면 신호를 낸다 — 스위치를 끌 때만 옛 동작(신호 없음)으로 돌아간다.
     """
-    assert P.ENABLE_5M_SIGNAL is False
-    for pct in (12.0, 20.0, 30.0, 50.0):
-        m5 = P.measure(_flat(30) + ramp(13, 100.0, pct), "5m")
-        ev = P.detect(m5, P.measure(_flat(40), "15m"))
-        assert ev == {}, f"5m {pct}% 는 신호를 내면 안 됨!"
+    assert P.ENABLE_5M_SIGNAL is True
+    assert P.BAND_5M == P.BAND_15M
+    m15 = P.measure(_flat(40), "15m")
+    for pct in (20.0, 22.0):
+        ev = P.detect(P.measure(_flat(30) + ramp(13, 100.0, pct), "5m"), m15)
+        assert ev.get("tf") == "5m", f"5m {pct}% 는 밴드 안이라 감지돼야 함"
+    for pct in (12.0, 30.0):
+        ev = P.detect(P.measure(_flat(30) + ramp(13, 100.0, pct), "5m"), m15)
+        assert ev == {}, f"5m {pct}% 는 밴드 밖이라 신호 X"
+    monkeypatch.setattr(P, "ENABLE_5M_SIGNAL", False)
+    ev = P.detect(P.measure(_flat(30) + ramp(13, 100.0, 20.0), "5m"), m15)
+    assert ev == {}, "스위치를 끄면 5m 신호는 나오지 않아야 한다"
 
 
 def test_5m_변동은_참고로_계속_측정():

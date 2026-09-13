@@ -4,7 +4,8 @@ audit 발견 (2026-05-04): 같은 의미의 set 이 5+ 곳에 inline 으로 반�
 일부는 항목 누락 / STOPPING 포함 여부가 달라 미묘한 버그 유발.
 
 이 테스트는:
-- TERMINAL_STATUSES 가 정확히 정의된 7개 status 만 포함
+- TERMINAL_STATUSES 가 정확히 정의된 8개 status 만 포함
+  (v131 2295e99 「청산 후 재진입」에서 STOPPED_CAPITAL_EXHAUSTED = 자본 소진 자동 종료 추가 → 7 → 8, 2026-09-13 테스트 갱신)
 - STOPPING 이 의도적으로 제외됨 (포지션 잔재 가능)
 - 사용자 (admin.py / strategies.py / strategy_service.py) 가 같은 값 참조
 """
@@ -14,14 +15,15 @@ from app.core.strategy_status import DELETABLE_STATUSES, TERMINAL_STATUSES
 
 
 class TestTerminalStatusesContent:
-    def test_exactly_seven_statuses(self) -> None:
-        assert len(TERMINAL_STATUSES) == 7
+    def test_exactly_eight_statuses(self) -> None:
+        assert len(TERMINAL_STATUSES) == 8
 
     def test_contains_canonical_terminals(self) -> None:
         expected = {
             "STOPPED", "COMPLETED", "CLOSED",
             "CLOSED_BY_TP", "CLOSED_BY_SL",
             "REENTRY_READY", "KILL_SWITCH_TRIGGERED",
+            "STOPPED_CAPITAL_EXHAUSTED",   # v131: 자본 소진으로 자동 종료
         }
         assert set(TERMINAL_STATUSES) == expected
 

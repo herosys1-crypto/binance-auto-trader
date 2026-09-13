@@ -104,8 +104,11 @@ class TestRiskConstantsCentralization:
         assert DEFAULT_TP_QTY_RATIO_PCT == Decimal("25"), "사용자 v6: TP1~9 균일 25%"
         assert TP_FINAL_QTY_RATIO_PCT == Decimal("100"), "TP10 default 100% (마지막 안전망)"
 
-        # Trailing v5
-        assert TRAILING_PEAK_THRESHOLD_PCT == Decimal("5")
+        # Trailing v5 → v173 (2026-08-30 사장님)
+        # 🚨 테스트 stale fix (commit 74da5b4, v173): 사장님 "20% 이상으로 익절후
+        #   -5%회귀하면 청산!" (#1003 REDUSDT 사례) — peak 임계값이 5 → 20 으로
+        #   상향됐다. 되돌림 폭(5%)은 그대로다.
+        assert TRAILING_PEAK_THRESHOLD_PCT == Decimal("20"), "v173: peak 20% 이상부터 트레일링 (REDUSDT #1003)"
         assert TRAILING_RETRACE_PCT == Decimal("5")
         assert TRAILING_MIN_TP_INDEX == 3, "사용자 v5: TP3+ 부터 trailing"
         # 🚨 테스트 stale fix (2026-08-14):
@@ -197,6 +200,13 @@ class TestRiskConstantsCentralization:
         """Decimal("-100") inline 이 risk_service / tp_sl_orchestrator 에 없어야.
 
         CRISIS_DISABLED_SENTINEL 사용 강제 (사용자 의도 명확화).
+
+        🚨 예외 (Fix 235, risk_service.py:493): `_roi_at_next <= Decimal("-100")`
+        는 CRISIS_DISABLED_SENTINEL 과 **다른 개념**이다 — 「다음 단계 도달 시
+        ROI 가 -100% 를 넘으면 그 단계는 산술적으로 도달 불가(거래소 청산이
+        먼저 온다)」는 도달-가능성 판정이지, 크라이시스 모드 on/off 스위치가
+        아니다. 같은 리터럴이라도 의미가 다르면 강제 통합하지 않는다 —
+        tests/unit/test_force_sl_unreachable_stage.py 가 이 리터럴을 직접 고정한다.
         """
         files = [
             "app/services/risk_service.py",
@@ -207,6 +217,9 @@ class TestRiskConstantsCentralization:
             text = _read(f)
             for lineno, line in enumerate(text.splitlines(), start=1):
                 stripped = line.split("#", 1)[0]
+                if "_roi_at_next" in stripped:
+                    # Fix 235: 크라이시스 센티널이 아니라 「다음 단계 도달 불가」 판정 — 위 docstring 참조.
+                    continue
                 if re.search(r'Decimal\(["\']-100["\']\)', stripped):
                     bad.append(f"{f}:{lineno}: {line.strip()}")
         assert not bad, (
