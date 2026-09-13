@@ -248,6 +248,9 @@ async function submitCreate(scheduled = false) {
       console.warn('[v131] retry-after-liq 옵션 수집 실패:', _e);
     }
 
+    // 🔀 Fix 369 (2026-09-13): 두 「+ 새 전략」 버튼이 어느 가족을 원하는지 명시적으로 보낸다 —
+    //   서버(crud.py)가 고른 템플릿의 trigger_mode 와 일치하는지 검증하고, 안 맞으면 400.
+    const _familyToSend369 = (cmState._triggerMode === 'OBV_REVERSE') ? 'obv_auto' : 'legacy_manual';
     const created = await api('/strategies', {
       method: 'POST',
       body: {
@@ -261,6 +264,7 @@ async function submitCreate(scheduled = false) {
         retry_trigger_pct: _retryTriggerPct,
         capital_management_mode: _capitalMgmtMode,
         retry_stage_trigger_pcts: _retryStagePcts,  // 하이브리드!
+        family: _familyToSend369,
       },
     });
     // 🌟 v130: trigger_mode 명시 표시 = 사장님 어떤 방식인지 즉시 확인!
@@ -269,7 +273,10 @@ async function submitCreate(scheduled = false) {
     const _fx367 = (created && created.force_sl_enabled_override === false)
       ? '강제손절 없음'
       : ((created && created.force_sl_roi_override != null) ? `강제손절 -${Number(created.force_sl_roi_override)}%` : '');
-    const _modeLabel = (cmState._triggerMode === 'OBV_REVERSE')
+    // 🔀 Fix 369: cmState._triggerMode(요청 의도) 대신 서버가 실제로 만든 가족(created.family)을
+    //   보여준다 — 감사 지적: "토스트는 OBV 라고 말하는데 실제론 기존 방식" 사고를 화면에서도 막는다.
+    const _actualFamily369 = created && created.family;
+    const _modeLabel = (_actualFamily369 === 'obv_auto' || (!_actualFamily369 && cmState._triggerMode === 'OBV_REVERSE'))
       ? '📊 OBV 자동 재진입'
       : `➕ 기존 방식 (처음 방식: ${[_tp367, _fx367].filter(Boolean).join(' · ') || '서버 기본'})`;
     // 🌟 v131: 청산 후 재진입 옵션 = 사장님 안내

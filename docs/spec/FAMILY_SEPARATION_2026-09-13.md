@@ -47,9 +47,25 @@
 - AUTO_ENTRY_MISSED: OBV 자동 제외(가격 트리거로 판정하면 오탐).
 - 손대지 않고 보고: Fix 363b 「이익 중이면 단계 대기」(사장님 지시 규칙) · managed_symbols 같은 심볼 반대/같은 방향 잠금(거래소 제약) · position_limit 범위(VPS = ladder).
 
-### S3 — 화면·생성 경로 (진행 중, 구현 에이전트)
-- 두 버튼이 family 를 명시, 모달 상태 분리, 템플릿·이전 전략·자동 채움·즐겨찾기 = 같은 가족만, 다시 시작 = 인스턴스 가족으로 라우팅(조회 실패면 중단),
-  서버 `POST /strategies` family↔템플릿 불일치 400, 배지·토스트 = 실제 생성 가족.
+### S3 — 화면·생성 경로 (구현 에이전트, 리드 검토)
+- API:
+  - `POST /strategies` 에 `family`(legacy_manual | obv_auto, 선택) — 템플릿 trigger_mode 와 다르면 400(한국어 메시지), 없으면 경고 로그만(옛 호출자 호환).
+  - 응답 `family` = `family_of()` (생성·목록·단건·blueprint). blueprint 에 `trigger_mode` 추가.
+  - `GET /admin/strategy-templates?family=` 필터(모르는 값 무시) + 응답에 `trigger_mode`(NOT NULL 컬럼).
+- 화면:
+  - 새 `cm-family.js` = 가족 판정·OBV 표시 단일 소스.
+  - 두 버튼이 family 를 보냄 · 템플릿 목록·이전 전략 불러오기·자동 채움 = 같은 가족만.
+  - ✏️ 수정·🔄 다시 시작 = 원 전략 가족을 먼저 조회해 확정(조회 실패면 모달을 열지 않음 — 옛 「조용히 가격 방식으로」 폴백 제거).
+  - 즐겨찾기 = 템플릿 trigger_mode 로 맞는 모달 · 토스트·배지 = 실제 생성 가족.
+- 테스트 `tests/test_fix369_ui_separation.py` + `test_fix367` UI 핀 갱신.
+- S3 반박 검증(9/13) → 수정 반영 · 재검증 통과 (node 실행 테스트 7건 · 수정 JS 9개 `node --check` · 템플릿 목록 필터도 `_triggerMode` 로 통일):
+  - 🔴 차단: ✏️/🔄 로 OBV 전략을 연 뒤 닫고 「➕ 기존 방식」을 누르면 OBV 플래그가 남아 OBV 전략이 만들어짐.
+    서버는 템플릿과 family 가 둘 다 OBV 라 통과 → TP1·강제손절 기본값이 OBV 값으로 들어감.
+    → 모달 가족은 이번 열기의 입력으로만 정하고, 플래그는 쓰고 나면 지운다(닫기 포함).
+  - 🟠 높음: 표식 없는 전략(other/ladder/split/single) 재시작 확인창의 「확인」이 OBV 로 전환.
+    → trigger_mode 로 판정(OBV_REVERSE 만 OBV, 나머지는 기존 방식, 확인창 없음 = Fix 367d 동작), 조회 실패면 열지 않음.
+  - 🟡 OBV 모달 자동 채움에서 관리 재진입 복제본 제외. 보고만: 'other' 전략의 「➕ 기존」 배지 사라짐 · perp-terminal 생성은 family 없이 경고 로그.
+  - 교훈: 문자열 핀 테스트는 「열기→닫기→다른 버튼」 같은 상태 순서 결함을 못 잡는다 → 판정을 순수 함수로 빼서 node 로 실행 테스트.
 
 ## 3. 검증
 - 테스트 `tests/test_fix369_family_separation.py`(S1·S2) + 검사기 ⑨.

@@ -52,9 +52,10 @@ async function openCreateChartObvModal() {
   // UI = direct 라디오 강제 선택 (있으면)
   const directRadio = document.querySelector('input[name="cm-mode"][value="direct"]');
   if (directRadio) directRadio.checked = true;
-  // template 선택 UI = 숨김 or 비활성 (있으면)
-  const tplSelectEl = document.getElementById('cm-template-select');
-  if (tplSelectEl) tplSelectEl.disabled = true;
+  // 🔀 Fix 369 (2026-09-13 감사 #1): 「📋 템플릿 선택」/「📂 이전 전략 불러오기」 탭을
+  //   비활성화한다 (cm-family.js). 옛 코드는 존재하지 않는 `cm-template-select` 를
+  //   비활성화해서 두 탭이 그대로 눌려 다른 가족 템플릿/전략을 고를 수 있었다.
+  _applyObvModalVisuals();
   // 모달 타이틀 변경 = 사장님 명확!
   const titleEl = document.getElementById('cm-title');
   if (titleEl) {
@@ -102,20 +103,8 @@ async function openCreateChartObvModal() {
       const el = document.getElementById(id);
       if (el && !el.value) el.value = val;
     }
-    // 🎯 Fix 173: OBV 모드 = 트리거 % 미사용 → 입력칸 비활성 + 이유 표시.
-    //   사장님이 임의로 정해야 했던 값이 바로 「신뢰가 없다」던 그 값이다.
-    //   ⚠️ 값을 **지우지는 않는다** — 미리보기 계산이 0% 로 degenerate 한 단계가를
-    //      만들지 않도록 그대로 두고 비활성화만 한다 (사용되지 않는 값).
-    const _trgTip = 'OBV 모드에서는 이 % 를 쓰지 않습니다 — 운영 진입 로직(15분 정점확인 등)이 판단합니다.';
-    const _disableTrg = (el) => {
-      if (!el) return;
-      el.disabled = true;
-      el.title = _trgTip;
-      el.style.opacity = '0.4';
-      el.style.cursor = 'not-allowed';
-    };
-    for (let i = 2; i <= 10; i++) _disableTrg(document.getElementById('cm-trg-' + i));
-    _disableTrg(document.getElementById('cm-last-stage-trigger-pct'));
+    // 🎯 Fix 173/369: 트리거 칸 비활성 + 안내 노트는 _applyObvModalVisuals() (cm-family.js) 가
+    //   이미 처리했다 (위에서 호출) — 여기서는 중복 정의하지 않는다.
     // 🚨 Fix 323 (2026-09-03): 「청산 후 재진입」 **자동 체크를 제거**한다.
     //
     //   Fix 177 은 이 토글을 켜서 v130 단계 게이트(「단계가 남으면 손절 보류」)를
@@ -129,20 +118,6 @@ async function openCreateChartObvModal() {
     //   「전량 청산 후 대기」 모델과 다르다.
     //
     //   사장님이 이 토글을 직접 켜시면 그대로 동작한다 — 기본값만 손대지 않는다.
-    // 자본 칸 옆에 한 줄 안내 (그리드 위)
-    try {
-      const grid = document.getElementById('cm-capitals-grid');
-      if (grid && !document.getElementById('cm-obv-trg-note')) {
-        const note = document.createElement('div');
-        note.id = 'cm-obv-trg-note';
-        note.style.cssText = 'margin:6px 0;padding:6px 8px;border-left:3px solid #34d399;'
-          + 'background:rgba(52,211,153,0.08);color:#a7f3d0;font-size:12px;line-height:1.5';
-        note.innerHTML = '🎯 <b>트리거 % 는 비활성입니다.</b> 다음 단계 진입은 '
-          + '<b>지금 운영 중인 진입 로직</b>이 판단합니다 (15분 정점·저점 확인 + OBV 게이트).<br>'
-          + '단계별 <b>금액만</b> 입력하시면 됩니다 — 그 금액 그대로 진입합니다.';
-        grid.parentNode.insertBefore(note, grid);
-      }
-    } catch (_e) { /* 안내 실패는 기능에 영향 없음 */ }
   }, 200);
 }
 
@@ -157,26 +132,46 @@ let cmState = {
 };
 
 async function openCreateModal(editStrategyId) {
-  // 🎯 Fix 173 (2026-08-27): OBV 모달이 비활성화한 트리거 칸을 **반드시 되돌린다**.
-  //   두 모달이 같은 DOM 을 공유하므로, 초기화하지 않으면
-  //   「OBV 모달 열었다가 → 기존 방식 열기」 시 트리거 칸이 비활성인 채로 남아
+  // 🚨 리뷰 BLOCKING #1 (2026-09-13 반박 검증): cmState._pendingObv 는 openCreateChartObvModal()
+  //   이 "이번 한 번의 open" 을 위해 세팅하는 일회용 신호다 — 함수 어디서든 이걸 다시 쓰기 전에
+  //   맨 먼저 캡처하고 즉시 지운다. 그래야 이 호출이 (예: 조회 실패로) 중간에 abort 하더라도
+  //   다음 번 아무 관련 없는 openCreateModal() 호출(예: ranking-page.js 의 「새 전략」)이
+  //   이 값을 이어받는 사고가 나지 않는다.
+  const _pendingObvForThisOpen369 = !!(cmState && cmState._pendingObv);
+  if (cmState) cmState._pendingObv = false;
+  // 🔀 Fix 369 (2026-09-13 감사 #5): 수정(✏️)/재시작(🔄)은 원본 전략의 가족(➕ 기존 방식 /
+  //   📊 OBV 자동)을 모달을 열기 **전에** 확정한다. 옛 코드는 이 조회가 실패하면 경고 로그만
+  //   찍고 조용히 「기존 방식」으로 계속 진행했다 — 이제는 조회 실패나 trigger_mode 자체가
+  //   없을 때(응답 손상)만 모달을 열지 않고 중단한다 (cm-family.js: familyFromStrategy).
+  //   🚨 리뷰 HIGH #2: 표식 없는 전략에 확인창(confirm)으로 되묻지 않는다 — trigger_mode 하나로 결정.
+  let _resolvedFamily369 = null;  // 'legacy_manual' | 'obv_auto' | null(신규 전략 — 해당 없음)
+  if (editStrategyId) {
+    let _orig369;
+    try {
+      _orig369 = await api(`/strategies/${editStrategyId}`);
+    } catch (_e369) {
+      toast(`⚠️ 전략 #${editStrategyId} 조회 실패 — 가족(기존 방식/OBV 자동)을 확인할 수 없어 수정/재시작을 중단합니다: ${_e369.message || _e369}`, 'error');
+      return;
+    }
+    _resolvedFamily369 = familyFromStrategy(_orig369);
+    if (!_resolvedFamily369) {
+      toast(`⚠️ 전략 #${editStrategyId} 의 진입 방식(trigger_mode) 을 확인할 수 없어 수정/재시작을 중단합니다.`, 'error');
+      return;
+    }
+  }
+  // 🚨 리뷰 BLOCKING #1(a): 이번 open 이 어느 가족인지 — editStrategyId 가 있으면 위에서 확정한
+  //   resolvedFamily 만 본다(과거 cmState 플래그 무시). 없으면(신규) 이번 호출 직전에
+  //   openCreateChartObvModal 이 세팅한 플래그만 본다.
+  const _modalFamily369 = computeModalFamily({
+    editStrategyId, resolvedFamily: _resolvedFamily369, pendingObvForThisOpen: _pendingObvForThisOpen369,
+  });
+  // 🎯 Fix 173/369 (2026-08-27 + 2026-09-13): OBV 모달이 비활성화한 트리거 칸/탭을
+  //   **반드시 되돌린다**. 두 모달이 같은 DOM 을 공유하므로, 초기화하지 않으면
+  //   「OBV 모달 열었다가 → 기존 방식 열기」 시 트리거 칸/탭이 비활성인 채로 남아
   //   사장님이 값을 못 넣는다 (헌법 110 = 화면과 실제가 어긋나는 함정).
   try {
-    const _enableTrg = (el) => {
-      if (!el) return;
-      el.disabled = false;
-      el.title = '';
-      el.style.opacity = '';
-      el.style.cursor = '';
-    };
-    for (let i = 2; i <= 10; i++) _enableTrg(document.getElementById('cm-trg-' + i));
-    _enableTrg(document.getElementById('cm-last-stage-trigger-pct'));
-    const _oldNote = document.getElementById('cm-obv-trg-note');
-    if (_oldNote) _oldNote.remove();
+    _resetObvModalVisuals();
   } catch (_e) { /* 초기화 실패해도 모달 자체는 열려야 한다 */ }
-  // 🌟 v130 (2026-08-06): _triggerMode 초기화 = default 'PRICE_DOWN_PCT' (구 시스템!)
-  //   openCreateChartObvModal()가 = 이후에 = 'OBV_REVERSE'로 덮어씀!
-  cmState._triggerMode = 'PRICE_DOWN_PCT';
   const _modalEl = document.getElementById('create-modal');
   _modalEl.classList.remove('hidden');
   /* 🚨 v92: 「⬆ 심볼로」 fixed 버튼 = 모달 열림 시 = 표시! */
@@ -230,11 +225,14 @@ async function openCreateModal(editStrategyId) {
       });
     });
   });
-  // Fix 367d: 이 재할당이 openCreateChartObvModal 이 찍은 _pendingObv 를 지워 OBV 모달에도 TP1 청산 25 가 들어갔다 (2차 반박 검증) → 승계
-  const _pendingObv367 = !!(cmState && cmState._pendingObv);
+  // Fix 367d/369: 이 재할당이 이전 cmState 를 통째로 갈아끼우므로, 이번 open 의 가족
+  // (_modalFamily369 — 위에서 이미 순수 함수로 확정)을 새 cmState 에 실어준다.
+  // _pendingObv 는 이 모달이 열려 있는 동안 loadCmTemplates()/loadPrevBlueprint() 등이
+  // 가족을 가르는 데 쓰고, 함수 끝에서 다시 false 로 지운다(BLOCKING #1(c) — 다음 호출로 안 샌다).
   cmState = { accountId: null, side: 'SHORT', templateId: null, mode: 'direct',
               capitals: ['', '', '', '', '', '', '', '', '', ''], preview: null,
-              editingStrategyId: editStrategyId || null, _pendingObv: _pendingObv367 };
+              editingStrategyId: editStrategyId || null, _pendingObv: _modalFamily369 === 'obv_auto',
+              _triggerMode: _modalFamily369 === 'obv_auto' ? 'OBV_REVERSE' : 'PRICE_DOWN_PCT' };
   buildCapitalsGrid();  // 트리거 % 는 기본값 (2~4=10, 5~9=20) pre-fill 된 상태로 생성됨
   // capital 만 초기화 (트리거 기본값은 유지)
   for (let i = 1; i <= 10; i++) {
@@ -279,19 +277,15 @@ async function openCreateModal(editStrategyId) {
     submit.textContent = '🔄 종료 후 새로 시작 (신 시작가)';
     if (inplaceBtn) inplaceBtn.classList.remove('hidden');  // in-place 버튼 노출
     await loadPrevBlueprint(editStrategyId, /*silent=*/true);
-    // 🎯 Fix 367d (2차 반박 검증): ✏️ 수정 → 「🔄 종료 후 새로 시작」·🔄 다시 시작 은 blueprint 에 trigger_mode 가 없어
-    //   OBV 자동 전략도 PRICE_DOWN_PCT(기존 방식 가족 = TP1 25·강제손절 없음)로 재생성됐다 → 원 전략의 trigger_mode 를 복원한다.
-    try {
-      const _orig = await api(`/strategies/${editStrategyId}`);
-      const _tm = _orig && _orig.trigger_mode ? String(_orig.trigger_mode).toUpperCase() : 'PRICE_DOWN_PCT';
-      cmState._triggerMode = _tm;
-      if (_tm === 'OBV_REVERSE') {
-        cmState.mode = 'direct';
-        cmState.templateId = null;
-        console.log(`[Fix367d] 전략 #${editStrategyId} = OBV 자동 → 재생성도 OBV_REVERSE 로`);
-      }
-    } catch (_tme) {
-      console.warn('[Fix367d] 원 전략 trigger_mode 조회 실패 → PRICE_DOWN_PCT 유지:', _tme);
+    // 🔀 Fix 369: 가족은 함수 시작 시점에 이미 확정했다(_modalFamily369) — 조회 실패나
+    //   trigger_mode 미확인 시엔 이미 위에서 return 했으므로 여기 도달했다는 것 자체가 확정을 뜻한다.
+    //   (구 Fix 367d 는 여기서 다시 조회했고, 실패하면 조용히 PRICE_DOWN_PCT 로 남았다.)
+    if (_modalFamily369 === 'obv_auto') {
+      cmState.mode = 'direct';
+      cmState.templateId = null;
+      _applyObvModalVisuals();
+      title.textContent += ' — 📊 OBV 자동';
+      console.log(`[Fix369] 전략 #${editStrategyId} = OBV 자동 → 재생성도 OBV_REVERSE 로`);
     }
   } else {
     banner.classList.add('hidden');
@@ -304,8 +298,23 @@ async function openCreateModal(editStrategyId) {
     //         + 그 후 = symbol + start_price = 비우기 (사장님 깨끗 입력!)
     try {
       const _prev = await api('/strategies?include_archived=false');
-      if (_prev && _prev.length > 0) {
-        const _last = _prev.sort((a, b) => b.id - a.id)[0];
+      // 🔀 Fix 369 (2026-09-13 감사 #3): 가족을 가리지 않고 "가장 최근 전략" 을 그대로
+      //   자동 채움에 썼다 (관리 재진입 _quick_m·auto_bb·다른 가족 포함) — 이제 지금 여는
+      //   모달과 같은 가족의 가장 최근 전략만 후보로 삼는다. 같은 가족이 없으면 자동 채움을
+      //   하지 않는다 (가족이 섞이는 것보다 빈 칸으로 시작하는 편이 안전하다).
+      //   이번 open 이 어느 가족인지는 이미 확정한 _modalFamily369 를 쓴다(가변 cmState 재조회 X).
+      const _wantObv369 = _modalFamily369 === 'obv_auto';
+      const _sameFamily369 = (_prev || []).filter((s) => {
+        if (_resolveFamilyLoose(s) !== (_wantObv369 ? 'obv_auto' : 'legacy_manual')) return false;
+        // 🚨 리뷰 HIGH #2 부수 항목: 관리 재진입 프로브가 복제한 템플릿(managed_symbols.py
+        //   template_for_side, 이름 `_quick_m<timestamp>_<SIDE>`)은 trigger_mode=OBV_REVERSE 를
+        //   그대로 물려받아 family_of() 만으로는 「OBV 모달이 직접 만든 전략」과 구분이 안 된다.
+        //   OBV 모달의 자동 채움은 모달이 만든 전략만 후보로 삼는다 — 이름으로 가려낸다.
+        if (_wantObv369 && String(s.template_name || '').startsWith('_quick_m')) return false;
+        return true;
+      });
+      if (_sameFamily369.length > 0) {
+        const _last = _sameFamily369.sort((a, b) => b.id - a.id)[0];
         // loadPrevBlueprint = stages_config + capitals + triggers + tp/sl + leverage + side 모두 자동!
         if (typeof loadPrevBlueprint === 'function' && _last.id) {
           await loadPrevBlueprint(_last.id, /*silent=*/true);
@@ -358,7 +367,7 @@ async function openCreateModal(editStrategyId) {
           if (_symEl) _symEl.value = '';
         }
       } else {
-        // 옛 strategy 없음 = 그냥 심볼만 비움
+        // 옛 strategy 없음 (또는 같은 가족의 이전 전략 없음, Fix 369) = 그냥 심볼만 비움
         const _symEl = document.getElementById('cm-symbol');
         if (_symEl) _symEl.value = '';
       }
@@ -375,6 +384,11 @@ async function openCreateModal(editStrategyId) {
   if (typeof loadRecentStrategiesQuick === 'function') {
     loadRecentStrategiesQuick();
   }
+  // 🚨 리뷰 BLOCKING #1(c): 이 호출이 쓴 pendingObv 신호를 여기서 소비·소거한다 — 이 값은
+  //   이번 open 동안만 유효하다(_triggerMode 는 모달이 열려 있는 동안 계속 남아 제출 시 쓰인다).
+  //   다음 openCreateModal() 호출(예: ranking-page.js 의 새 「기존 방식」 전략)이 이 값을
+  //   이어받지 않도록 항상 false 로 되돌린다.
+  if (cmState) cmState._pendingObv = false;
 }
 
 // 🌟 2026-06-19 사장님 요청: 저장된 전략 (= 사용자 정의 template) 6개 (= 2줄!)

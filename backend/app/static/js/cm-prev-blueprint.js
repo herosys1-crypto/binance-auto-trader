@@ -21,10 +21,15 @@
 
 async function loadCmPrevStrategies() {
   try {
-    const data = await api('/strategies');
+    const raw = await api('/strategies');
+    // 🔀 Fix 369 (2026-09-13 감사 #4): 이 탭은 「➕ 기존 방식」 모달에서만 쓴다
+    //   (「📊 OBV 자동」 모달은 이 탭 자체를 비활성화한다 — cm-family.js: _applyObvModalVisuals).
+    //   그래도 OBV 로 만들어진 전략을 골라 loadPrevBlueprint 로 불러오면 trigger_mode 를
+    //   조용히 잃고 기존 방식이 될 수 있었다 — OBV 가족은 목록에서 아예 뺀다.
+    const data = (raw || []).filter(s => _resolveFamilyLoose(s) !== 'obv_auto');
     const list = document.getElementById('cm-prev-list');
     if (!data.length) {
-      list.innerHTML = '<p class="text-slate-500 text-sm">이전 전략이 없습니다.</p>';
+      list.innerHTML = '<p class="text-slate-500 text-sm">이전 전략이 없습니다. (OBV 자동 전략은 이 목록에서 제외됩니다 — Fix 369)</p>';
       return;
     }
     list.innerHTML = data.map(s => {
@@ -46,6 +51,20 @@ async function loadCmPrevStrategies() {
 async function loadPrevBlueprint(strategyId, silent) {
   try {
     const bp = await api(`/strategies/${strategyId}/blueprint`);
+    // 🔀 Fix 369 (2026-09-13 감사 #4): blueprint 가 이제 trigger_mode/family 를 포함한다.
+    //   지금 열려 있는 모달이 OBV 가 아닌데 OBV 전략의 blueprint 를 불러오면(예: 다른
+    //   경로로 이 함수가 직접 호출된 경우) 조용히 기존 방식으로 섞이지 않게 막는다.
+    //   (반대 방향 — OBV 모달에서 기존 방식 blueprint 로드 — 은 그 모달이 이 탭 자체를
+    //   비활성화하므로 여기까지 오지 않는다.)
+    const _isObvBp = String(bp.trigger_mode || '').toUpperCase() === 'OBV_REVERSE' || bp.family === 'obv_auto';
+    // 🚨 리뷰 BLOCKING #1(d): cmState._pendingObv 는 openCreateModal() 호출 동안만 유효한 일회용
+    //   신호라 함수 밖(예: 이미 열린 모달의 「이전 전략 불러오기」 탭 클릭)에서는 항상 false 다.
+    //   "지금 열려 있는 모달이 OBV 인지" 는 모달이 열려 있는 내내 유지되는 _triggerMode 로 본다.
+    const _wantObvNow = !!(typeof cmState !== 'undefined' && cmState && cmState._triggerMode === 'OBV_REVERSE');
+    if (_isObvBp && !_wantObvNow) {
+      toast(`⚠️ 전략 #${strategyId} 은 📊 OBV 자동 전략입니다 — 「➕ 기존 방식」 모달에 불러올 수 없습니다.`, 'error');
+      return;
+    }
     // 1) 거래소 계정 자동 선택 (있으면)
     const accountRadio = document.querySelector(`input[name="cm-account"][value="${bp.exchange_account_id}"]`);
     if (accountRadio) { accountRadio.checked = true; cmState.accountId = bp.exchange_account_id; }

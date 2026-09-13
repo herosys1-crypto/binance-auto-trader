@@ -36,6 +36,34 @@ def create_strategy(
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> StrategyDetailResponse:
+    # 🔀 Fix 369 (2026-09-13 사장님 S3): 화면이 「기존 방식」/「OBV 자동」 중 어느 모달에서
+    # 왔는지 명시하면, 고른 템플릿의 trigger_mode 와 실제로 같은 가족인지 여기서 검증한다.
+    # 감사(9/13)가 잡은 사고 — OBV 모달에서 가격 템플릿을 골라도 토스트는 "OBV" 라고 말하고
+    # 실제로는 기존 방식 인스턴스가 만들어짐 — 를 서버 쪽에서 최종적으로 막는 관문.
+    # payload.family 가 없으면(구 프론트/외부 호출자) 막지 않는다 — 이건 주문 판정이 아니라
+    # 화면 표시용 표식이라 fail-open. 대신 로그로 남겨 놓친 창구를 찾을 수 있게 한다.
+    from app.models.strategy_template import StrategyTemplate as _StrategyTemplate
+    if payload.family is not None:
+        _tpl = db.get(_StrategyTemplate, payload.strategy_template_id)
+        if not _tpl:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="⚠️ 템플릿을 찾을 수 없습니다.")
+        _trig = str(getattr(_tpl, "trigger_mode", "") or "PRICE_DOWN_PCT").upper()
+        _expected_family = "obv_auto" if _trig == "OBV_REVERSE" else "legacy_manual"
+        if payload.family != _expected_family:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"⚠️ 선택한 모달({'📊 OBV 자동' if payload.family == 'obv_auto' else '➕ 기존 방식'})과 "
+                    f"템플릿 #{_tpl.id}의 진입 방식({'📊 OBV 자동' if _expected_family == 'obv_auto' else '➕ 기존 방식'})이 "
+                    "다릅니다. 다른 가족의 템플릿을 고르지 않았는지 확인하세요."
+                ),
+            )
+    else:
+        logger.warning(
+            "[Fix369] family 미지정 strategy 생성 — symbol=%s template_id=%s user_id=%s "
+            "(구 프론트/외부 호출자로 추정, 화면 배지·자동 채움 정확도에 영향 없음)",
+            payload.symbol, payload.strategy_template_id, user_id,
+        )
     try:
         instance = StrategyService(db).create_strategy_instance(
             user_id=user_id,
@@ -56,7 +84,11 @@ def create_strategy(
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
-    return StrategyDetailResponse.model_validate(instance)
+    resp = StrategyDetailResponse.model_validate(instance)
+    # Fix 369: 화면이 토스트에 "실제로 만들어진 가족"을 보여줄 수 있게 — 단일 진실(family_of) 로 계산.
+    from app.services.strategy_family import family_of
+    resp.family = family_of(instance)
+    return resp
 
 
 @router.get("", response_model=list[StrategyDetailResponse])
@@ -90,6 +122,7 @@ def list_strategies(
     tp_counts = _fetch_tp_counts_batch(db, strategy_ids)
     # 🧾 Fix 341: 사다리 계획 합계 batch (표기 분리용)
     from app.api.v1.strategies.helpers import _fetch_ladder_batch, apply_capital_split
+    from app.services.strategy_family import family_of
     ladders = _fetch_ladder_batch(db, strategy_ids)
     out = []
     for r in rows:
@@ -99,6 +132,10 @@ def list_strategies(
         resp.tp_triggered_count = cnt.get("tp_count", 0)
         resp.last_close_reason = _resolve_close_reason(r, cnt, resp.total_active_tps)
         apply_capital_split(resp, r, ladders.get(r.id), db)
+        # 🔀 Fix 369: 화면 배지·자동 채움이 entry_profile 단독 대신 이 단일 판정을 쓴다.
+        resp.family = family_of(r)
+        # 🔀 Fix 369 리뷰: 관리 재진입 복제 템플릿(_quick_m...)을 화면에서 가려내려면 이름이 필요.
+        resp.template_name = tpl.name if tpl else None
         out.append(resp)
     # 2026-05-20: 라이브 markPrice 로 unrealized_pnl 재계산 (Redis mget 1회).
     # 캐시 miss 인 심볼은 stored 값 유지 — backward-compat.
@@ -215,6 +252,10 @@ def get_strategy(
     # 🧾 Fix 341: 사다리 / 피라미딩 / 실제 증거금 분리 표기
     from app.api.v1.strategies.helpers import _fetch_ladder_batch, apply_capital_split
     apply_capital_split(resp, strategy, _fetch_ladder_batch(db, {strategy.id}).get(strategy.id), db)
+    # 🔀 Fix 369: 수정/재시작 모달이 「이 전략의 진짜 가족」을 물어볼 때 쓰는 단일 진실.
+    from app.services.strategy_family import family_of
+    resp.family = family_of(strategy)
+    resp.template_name = tpl.name if tpl else None
     # 2026-05-20: 라이브 markPrice 로 unrealized_pnl 재계산.
     apply_live_unrealized_pnl(resp)
     return resp
@@ -370,11 +411,18 @@ def get_strategy_blueprint(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="⚠️ 전략 템플릿이 삭제됐거나 손상됐습니다. 운영자에게 문의하세요.")
 
     sc = tpl.stages_config or {}
+    # 🔀 Fix 369 (2026-09-13 S3): blueprint 는 이전엔 trigger_mode 가 없어서 「이전 전략
+    # 불러오기」/「✏️ 수정」이 OBV 전략을 조용히 기존 방식(PRICE_DOWN_PCT)으로 만들 수 있었다
+    # (감사 #4). family 는 표시 판정 단일 진실(family_of)을 그대로 실어 화면이 다시 흩어져
+    # 계산하지 않게 한다.
+    from app.services.strategy_family import family_of
     return {
         "source_strategy_id": strategy.id,
         "symbol": strategy.symbol,
         "side": strategy.side,
         "leverage": tpl.leverage,
+        "trigger_mode": tpl.trigger_mode or "PRICE_DOWN_PCT",
+        "family": family_of(strategy),
         "exchange_account_id": strategy.exchange_account_id,
         "start_price": str(strategy.start_price) if strategy.start_price else None,
         # 🌟 2026-06-11 v41 사장님 critical fix: avg_entry_price 추가 (= 평단 보존 logic)

@@ -42,9 +42,14 @@ function _renderFavoriteCard(t) {
   const sl = t.stop_loss_percent_of_capital != null ? `-${Number(t.stop_loss_percent_of_capital)}%` : '-';
   const totalCap = Number(t.total_capital || 0).toLocaleString('en-US', {maximumFractionDigits: 0});
   const name = (t.name || '').replace(/_inplace_s\d+_\d+.*$/, '').substring(0, 24);
+  // 🔀 Fix 369 (2026-09-13 감사 #6): 클릭 시 어느 모달이 열리는지 미리 보여준다.
+  const _isObvTpl = String(t.trigger_mode || '').toUpperCase() === 'OBV_REVERSE';
+  const familyTag = _isObvTpl
+    ? '<span class="text-purple-300" title="클릭 시 📊 OBV 자동 모달이 열립니다">📊</span>'
+    : '<span class="text-slate-400" title="클릭 시 ➕ 기존 방식 모달이 열립니다">➕</span>';
   return `<div class="bg-slate-800 border border-slate-700 rounded p-3 hover:border-blue-500 transition cursor-pointer" onclick="startStrategyFromTemplate(${t.id})" title="클릭 = 1 클릭 신 전략 시작 (시작가 = 현재가 자동)">
     <div class="flex items-center justify-between mb-1">
-      <span class="font-semibold text-sm truncate" title="${t.name}">${name}</span>
+      <span class="font-semibold text-sm truncate" title="${t.name}">${familyTag} ${name}</span>
       <button onclick="event.stopPropagation(); toggleTemplateFavorite(${t.id})" class="text-yellow-400 text-base" title="즐겨찾기 해제">⭐</button>
     </div>
     <div class="text-xs ${sideColor} mb-1">${sideIcon} ${sideLabel} ${t.leverage}x</div>
@@ -78,7 +83,15 @@ async function startStrategyFromTemplate(templateId) {
     } catch (e) {
       console.warn('[startStrategy] template 사전 조회 실패:', e);
     }
-    openCreateModal(null);
+    // 🔀 Fix 369 (2026-09-13 감사 #6): 「⭐ 즐겨찾기」/「저장된 전략」 카드가 항상 기존 방식
+    //   모달을 열어서, OBV 로 저장한 템플릿을 눌러도 기존 방식 인스턴스가 만들어졌다.
+    //   템플릿의 trigger_mode 를 보고 맞는 모달을 연다.
+    const _isObvTpl = tplData && String(tplData.trigger_mode || '').toUpperCase() === 'OBV_REVERSE';
+    if (_isObvTpl && typeof openCreateChartObvModal === 'function') {
+      await openCreateChartObvModal();
+    } else {
+      openCreateModal(null);
+    }
     // 2️⃣ 모달 열림 대기 (= 1초 = 확실!)
     setTimeout(async () => {
       try {

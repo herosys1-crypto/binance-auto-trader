@@ -74,6 +74,10 @@ function closeCreateModal() {
   _cmMultiSymbols = [];
   const addInput = document.getElementById('cm-multi-add-input');
   if (addInput) addInput.value = '';
+  // 🚨 리뷰 BLOCKING #1(c) (2026-09-13 반박 검증): cmState._pendingObv 는 openCreateModal() 호출
+  //   동안만 유효한 일회용 신호다 — openCreateModal() 이 끝에서 이미 지우지만, 방어적으로 모달을
+  //   닫을 때도 지운다(2중 안전망 — 다음 open 이 이전 세션의 신호를 이어받지 않게).
+  if (typeof cmState !== 'undefined' && cmState) cmState._pendingObv = false;
 }
 
 // UX #18: 사용자가 직접 레버리지를 수정했는지 추적. true 면 사이드 변경 시 자동 갱신 안 함.

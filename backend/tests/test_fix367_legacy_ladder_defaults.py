@@ -182,8 +182,9 @@ def test_creation_wiring_pins():
     assert '_tpl_tp1_qty367 = getattr(template_model, "tp1_qty_ratio", None)' in src[i:j], "커밋 전에 캡처 (lazy-load 회피)"
     body = src[j:j + 2500]
     for pin in ("tp1_pct_override=_tp1_default", "force_sl_enabled_override=_fs_on_default", "force_sl_roi_override=_fs_roi_default",
-                "entry_profile=(LEGACY_MANUAL_PROFILE if _is_legacy367 else None)"):
+                "entry_profile=_entry_profile369"):
         assert pin in body, pin
+    assert "LEGACY_MANUAL_PROFILE if _is_legacy367" in src, "Fix 369: legacy_manual / obv_auto marker computed before the instance"
     assert "legacy_ladder_tp1_qty_ratio) — 모달 값 그대로 둔다" in src, "TP1 청산 비율은 경고만 (모달에서 고친 값은 사장님 뜻)"
     crud = (APP / "api" / "v1" / "strategies" / "crud.py").read_text(encoding="utf-8")
     assert "entry_origin=ENTRY_ORIGIN_MANUAL" in crud and "import ENTRY_ORIGIN_MANUAL" in crud
@@ -231,12 +232,29 @@ def test_checker_and_ui_pins():
     assert i_bp > 0 and "if (cmState && !cmState._pendingObv)" in om[i_bp:i_bp + 3000] and "_q1.value = '25'" in om[i_bp:i_bp + 3000]
     i_obv = om.find("async function openCreateChartObvModal()")
     assert "cmState._pendingObv = true;" in om[i_obv:i_obv + 600] and "cmState._pendingObv = false;" in om[i_obv:i_obv + 600]
-    # Fix 367d: openCreateModal 이 cmState 를 새 객체로 갈아끼우므로 플래그를 승계해야 OBV 모달이 25 를 받지 않는다 (2차 반박 검증)
+    # Fix 367d/369(리뷰 BLOCKING #1): openCreateModal 이 cmState 를 새 객체로 갈아끼우므로 이번 open 의
+    #   가족(_modalFamily369 — 순수 함수 computeModalFamily 로 계산)을 새 cmState 에 실어준다.
+    #   editStrategyId 가 있으면 이번 호출에서 확정한 resolvedFamily 만 보고(과거 cmState 플래그 무시),
+    #   없으면 openCreateChartObvModal 이 이번 호출 직전에 세팅한 플래그만 본다 — "OBV 수정 → 새
+    #   기존 방식" 이 OBV 로 새는 사고(반박 검증)를 막는다.
     i_re = om.find("cmState = { accountId: null, side: 'SHORT', templateId: null, mode: 'direct',")
-    assert i_re > 0 and "_pendingObv: _pendingObv367" in om[i_re:i_re + 400] and "const _pendingObv367 = !!(cmState && cmState._pendingObv);" in om[i_re - 400:i_re]
-    # Fix 367d: ✏️ 수정·🔄 다시 시작 은 원 전략의 trigger_mode 를 복원한다 (OBV 전략이 기존 방식으로 재생성되던 것)
+    assert i_re > 0 and "_pendingObv: _modalFamily369 === 'obv_auto'" in om[i_re:i_re + 400]
+    i_cmf = om.find("const _modalFamily369 = computeModalFamily({")
+    assert 0 < i_cmf < i_re
+    assert "pendingObvForThisOpen: _pendingObvForThisOpen369" in om[i_cmf:i_cmf + 200]
+    # 캡처-즉시-소거: pendingObv 는 이번 open 이전 값이 다음 open 으로 새면 안 된다.
+    i_cap = om.find("const _pendingObvForThisOpen369 = !!(cmState && cmState._pendingObv);")
+    assert 0 < i_cap < i_cmf
+    assert "if (cmState) cmState._pendingObv = false;" in om[i_cap:i_cap + 200]
+    # Fix 369 (2026-09-13, S3 감사 #5 + 리뷰 HIGH #2): ✏️ 수정·🔄 다시 시작 은 함수 시작 시점에
+    #   원 전략의 가족을 trigger_mode 로 확정한다(familyFromStrategy — confirm() 대화상자 없음).
+    #   조회 실패/trigger_mode 미확인 시 이미 위에서 return 해 모달을 열지 않는다
+    #   (Fix 367d 의 "조회 실패 시 조용히 PRICE_DOWN_PCT 로 남는" 폴백을 없앴다 — 침묵 폴백 금지).
+    i_res = om.find("let _resolvedFamily369 = null;")
+    assert i_res > 0 and "api(`/strategies/${editStrategyId}`)" in om[i_res:i_res + 600]
+    assert "familyFromStrategy(_orig369)" in om[i_res:i_res + 900]
     i_ed = om.find("await loadPrevBlueprint(editStrategyId, /*silent=*/true);")
-    assert i_ed > 0 and "cmState._triggerMode = _tm;" in om[i_ed:i_ed + 1200] and "api(`/strategies/${editStrategyId}`)" in om[i_ed:i_ed + 1200]
+    assert i_ed > 0 and "_modalFamily369 === 'obv_auto'" in om[i_ed:i_ed + 500] and "_applyObvModalVisuals()" in om[i_ed:i_ed + 500]
     # Fix 367d: 기존 방식 신규 모달은 「🔄 청산 후 재진입」 체크 기본 OFF (blueprint 복원에 안 덮임)
     assert "'cm-retry-after-liq-enabled', 'cm-retry-after-liq-enabled-top'" in om[i_bp:i_bp + 3500]
     # 다중 심볼도 trigger_mode 를 보낸다 (OBV 모달 + 다중심볼이 가격 사다리로 저장되던 누락, 반박 검증 C8) + 예약 전달 (367d)

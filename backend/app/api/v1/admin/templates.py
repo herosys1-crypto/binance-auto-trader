@@ -122,6 +122,10 @@ class StrategyTemplateResponse(BaseModel):
     stop_loss_percent_of_capital: Decimal | None = None
     is_active: bool
     is_favorite: bool = False
+    # 🔀 Fix 369 (2026-09-13 S3): 이전엔 응답에 없어서 template-save.js 의 「템플릿 선택
+    # 복제」 경로가 OBV 템플릿을 다시 저장하면 trigger_mode 를 몰라 PRICE_DOWN_PCT 로
+    # 떨어졌다. 화면(cm-loaders.js)도 이 필드로 가족별 목록을 가른다.
+    trigger_mode: str = "PRICE_DOWN_PCT"
 
 
 @router.post("/strategy-templates", response_model=StrategyTemplateResponse, status_code=status.HTTP_201_CREATED)
@@ -238,10 +242,21 @@ def create_strategy_template(
 
 @router.get("/strategy-templates", response_model=list[StrategyTemplateResponse])
 def list_strategy_templates(
+    family: str | None = None,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
 ) -> list[StrategyTemplateResponse]:
+    """전략 템플릿 목록.
+
+    🔀 Fix 369 (2026-09-13 S3): `?family=legacy_manual|obv_auto` 로 필터링 가능.
+    「➕ 새 전략 (기존 방식)」/「📊 새 전략 (OBV 자동)」 모달의 「📋 템플릿 선택」 탭이
+    상대 가족 템플릿을 고르지 못하게 하는 데 쓴다(감사 #2). 알 수 없는 값은 무시(fail-open —
+    목록 조회는 종목을 고르는 화면 필터일 뿐 주문 판정이 아니다).
+    """
     rows = db.query(StrategyTemplate).order_by(StrategyTemplate.id.desc()).all()
+    if family in ("legacy_manual", "obv_auto"):
+        want_obv = family == "obv_auto"
+        rows = [r for r in rows if (str(r.trigger_mode or "").upper() == "OBV_REVERSE") == want_obv]
     return [StrategyTemplateResponse.model_validate(r) for r in rows]
 
 

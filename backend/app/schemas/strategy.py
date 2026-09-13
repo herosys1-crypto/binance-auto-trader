@@ -50,6 +50,12 @@ class StrategyCreateRequest(BaseModel):
     # 예: {"3": 15, "4": 20} → 3단계 = 15% override, 4단계 = 20% override
     #     {} or null → 모든 단계 = retry_trigger_pct 기본값!
     retry_stage_trigger_pcts: dict[str, Decimal | None] | None = Field(default=None)
+    # 🔀 Fix 369 (2026-09-13 사장님 — "기존방식 과 OBV 자동 둘을 완전 다르게 분리"): S3(화면/API 분리).
+    # 화면(두 「+ 새 전략」 버튼)이 명시적으로 보낸다 — 어떤 모달에서 왔는지 서버가 검증할 수 있게.
+    # None = 구 프론트/외부 호출자 호환(서버가 경고 로그만 남기고 허용, fail-open — 종목 진입 자체를
+    # 막는 판정이 아니라 표시/검증용이라 여기서 막으면 기존 통합 흐름이 깨진다).
+    # 값이 있으면 반드시 템플릿의 trigger_mode 와 일치해야 함 (불일치 = 400).
+    family: Literal["legacy_manual", "obv_auto"] | None = Field(default=None)
 
 class StrategyStopRequest(BaseModel):
     mode: Literal["cancel_only", "close_position_market", "emergency_stop"]
@@ -107,6 +113,16 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     force_sl_roi_override: Decimal | None = None
     # 🎯 Fix 367c: 가족 표식 ('legacy_manual' = 기존 방식 처음 방식 / None)
     entry_profile: str | None = None
+    # 🔀 Fix 369 (2026-09-13): 단일 진실 판정 — app.services.strategy_family.family_of() 의 결과.
+    # 'legacy_manual' / 'obv_auto' / 'split' / 'single' / 'ladder' / 'other' / 'unknown'.
+    # entry_profile 은 창구(사람이 만든 두 모달)만 구분하고, family 는 SPLIT/사다리/단일진입까지
+    # 포함한 전체 판정이라 화면 배지·자동 채움은 이걸 우선 사용해야 한다 (crud.py 가 채움).
+    family: str | None = None
+    # 🔀 Fix 369 리뷰 (2026-09-13, HIGH #2 부수 항목): 관리 재진입 프로브가 복제한 템플릿
+    # (managed_symbols.py template_for_side, 이름 `_quick_m<timestamp>_<SIDE>`)은 trigger_mode=
+    # OBV_REVERSE 를 그대로 물려받아 family_of() 만으로는 「OBV 모달이 직접 만든 전략」과 구분이
+    # 안 된다. 화면의 "OBV 모달 새 전략 자동 채움"이 이 복제본을 후보에서 빼려면 이름이 필요하다.
+    template_name: str | None = None
     # ─── 진입 일시 (대시보드 표시용) ───
     created_at: datetime | None = None       # strategy 생성 시점
     # 2026-05-21 STOPPING 갇힘 감지용 — frontend 가 updated_at 기준 5분 초과 시

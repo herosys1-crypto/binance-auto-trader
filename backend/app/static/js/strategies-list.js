@@ -905,9 +905,14 @@ async function refreshStrategies() {
                     title="📊 ${s.symbol} 차트 + Order Book (내장 모달)"
                     style="background:#1e3a5f;color:#7dd3fc;border:0;border-radius:3px;padding:1px 5px;font-size:var(--font-badge);cursor:pointer;margin-left:3px;">📊</button>
             ${parseMartingaleBadge(s)
-            }${s.trigger_mode === 'OBV_REVERSE'
+            // 🔀 Fix 369 (2026-09-13 감사 #8): 배지가 template 값(trigger_mode/strategy_type)만 보면
+            //   가족 표식이 없는 관리 재진입·auto_bb·사다리·볼밴 분할 전략에도 "➕ 기존" 이 붙었다.
+            //   s.family(app.services.strategy_family.family_of, 서버 계산)를 우선 쓰고, 구 API 응답
+            //   (family 미포함)이면 옛 판정으로 fallback 한다.
+            }${(s.family ? s.family === 'obv_auto' : s.trigger_mode === 'OBV_REVERSE')
               ? '<span style="display:inline-block;background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;padding:2px 6px;border-radius:4px;font-size:var(--font-badge);font-weight:bold;margin-left:4px;box-shadow:0 0 6px rgba(124,58,237,0.6)" title="📊 신 OBV 자동 재진입 전략! (기존과 다른 자동 재진입 로직!)">📊 OBV</span>'
-              : (s.strategy_type !== 'auto_bb_break' ? '<span style="display:inline-block;background:#475569;color:#cbd5e1;padding:2px 6px;border-radius:4px;font-size:var(--font-badge);margin-left:4px" title="기존 방식 = 가격 도달 시 진입">➕ 기존</span>' : '')
+              : ((s.family ? s.family === 'legacy_manual' : (s.strategy_type !== 'auto_bb_break' && s.trigger_mode !== 'OBV_REVERSE'))
+                  ? '<span style="display:inline-block;background:#475569;color:#cbd5e1;padding:2px 6px;border-radius:4px;font-size:var(--font-badge);margin-left:4px" title="기존 방식 = 가격 도달 시 진입">➕ 기존</span>' : '')
             }${s.retry_after_liquidation_enabled
               ? `<span style="display:inline-block;background:linear-gradient(135deg,#f59e0b,#a855f7);color:#fff;padding:2px 6px;border-radius:4px;font-size:var(--font-badge);font-weight:bold;margin-left:4px;box-shadow:0 0 8px rgba(245,158,11,0.6)" title="🔄 청산 후 자동 재진입 활성! (트리거 ${s.retry_trigger_pct || 10}%) — 손절 후 = 다음 단계 자동 대기 + 트리거 도달 시 자동 진입!">🔄 재진입 ${s.retry_trigger_pct || 10}%</span>`
               : ''

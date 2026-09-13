@@ -44,11 +44,17 @@ async function loadCmAccounts() {
 
 async function loadCmTemplates() {
   try {
-    const data = await api('/admin/strategy-templates');
+    // 🔀 Fix 369 (2026-09-13 감사 #2): 가족 필터 없이 전체 템플릿을 보여주면 「➕ 기존 방식」
+    //   모달에서 OBV 템플릿을 고를 수 있었다(반대도 마찬가지) — 토스트는 고른 모달의
+    //   이름을 말하지만 실제로는 템플릿의 trigger_mode 대로 만들어져 사고가 났다.
+    //   현재 모달 맥락에 맞는 가족만 서버에 물어본다. 판정은 cmState._triggerMode(모달 세션 내내 유지)로 —
+    //   _pendingObv 는 openCreateModal 끝에서 지워지는 일회용 신호라, 나중에 목록을 다시 불러오면 틀어진다 (S3 재검증).
+    const _family = (typeof cmState !== 'undefined' && cmState && cmState._triggerMode === 'OBV_REVERSE') ? 'obv_auto' : 'legacy_manual';
+    const data = await api('/admin/strategy-templates?family=' + _family);
     const el = document.getElementById('cm-templates');
     const active = data.filter(t => t.is_active);
     if (!active.length) {
-      el.innerHTML = '<p class="text-red-400 text-sm">⚠️ 활성 템플릿이 없습니다.</p>';
+      el.innerHTML = '<p class="text-red-400 text-sm">⚠️ 이 가족의 활성 템플릿이 없습니다. (「📋 템플릿으로 저장」 으로 추가하거나 직접 입력을 사용하세요)</p>';
       return;
     }
     el.innerHTML = active.map(t => {

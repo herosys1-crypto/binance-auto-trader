@@ -153,7 +153,9 @@ async function submitCreateMulti(scheduled = false) {
     // direct 모드 → _quick_ 자동 생성 (단일 모드와 동일 패턴)
     try {
       const ts = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-      const inp = cmState._directInputs || _collectDirectInputs();
+      // 🔀 Fix 369 (2026-09-13 감사 #7): 캐시된 미리보기 입력을 우선하면 미리보기 이후
+      //   칸을 고친 값이 버려진다 (cm-submit.js Fix 367d 와 같은 문제) — 제출 시 항상 다시 읽는다.
+      const inp = (typeof _collectDirectInputs === 'function') ? _collectDirectInputs() : cmState._directInputs;
       const tpsl = (typeof _collectTpSl === 'function') ? _collectTpSl() : cmState._directTpsl;   // Fix 367d: 제출 시 재수집
       const _tpFields = {};
       for (let n = 1; n <= 10; n++) {
@@ -236,6 +238,8 @@ async function submitCreateMulti(scheduled = false) {
               symbol: sym, side: cmState.side, start_price: String(startPrice),
               leverage_override: leverageFromInput,
               capital_management_mode: scheduled ? 'scheduled' : 'fixed',   // Fix 367c/367d: 단일 경로(cm-submit.js)와 같게 — 예약이면 scheduled
+              // 🔀 Fix 369: 단일 경로(cm-submit.js)와 같게 — 서버가 템플릿 trigger_mode 와 대조 검증.
+              family: (cmState._triggerMode === 'OBV_REVERSE') ? 'obv_auto' : 'legacy_manual',
             },
           });
           console.log(`[batch] ${sym} created`, created);
