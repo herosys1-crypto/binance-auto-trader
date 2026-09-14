@@ -292,6 +292,16 @@ def start_scheduler() -> None:
         id="loss_cause",
         replace_existing=True, max_instances=1, coalesce=True,
     )
+    # 📐 Fix 372 (2026-09-15 사장님 「빠른 진입과 늦은 진입 그리고 잘못된 포지션」): 진입 4시간 뒤 5분봉으로 타이밍 채점 (가상·실거래). 주문 없음.
+    def _chart_timing():
+        from app.workers.chart_timing_worker import run_chart_timing_once
+        run_chart_timing_once(decrypt_text)
+    scheduler.add_job(
+        guarded_job("chart_timing", 900, _chart_timing),
+        trigger=IntervalTrigger(minutes=30),
+        id="chart_timing",
+        replace_existing=True, max_instances=1, coalesce=True,
+    )
     # 🎓 v135 (2026-08-13 사장님!): 예측 outcome 학습!
     # 예측된 카드 = 실제 시장 변동 학습 → 심볼별 성공률!
     def _prediction_outcome():

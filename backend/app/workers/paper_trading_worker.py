@@ -196,6 +196,12 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
         opened = managed = closed = processed = 0
         upgraded = upgrade_skipped = 0
         fails = 0
+        # 📐 Fix 372: 규칙이 발동한 심볼만 일봉·5분·1분 차트 상태를 조회해 진입 기록에 붙인다 (사이클당 심볼 1회)
+        from app.services import chart_state as CS
+        _cs_on = CS.setting_on(db, CS.S_ENABLED, True)
+        _cs_1m = CS.setting_on(db, CS.S_1M, True)
+        _cs_th = CS.thresholds(db)
+        _cs_cache: dict[str, dict[str, Any]] = {}
         for sym in process_symbols:
             try:
                 k15 = CL.compact(_klines(bc, symbol=sym, interval="15m", limit=262), now_ms=now_ms)
@@ -293,6 +299,9 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                     t = PT.open_trade(symbol=sym, side=side, rule=key, series=series, j=j, tags=tags,
                                       chg_24h=chg24, chg_3d=chg3, chg_5d=chg5, source="live", fired=fired)
                     t["snapshot"]["market_breadth"] = breadth
+                    _cs = _chart_state_for(bc, sym, side, series, now_ms, _cs_cache, on=_cs_on, include_1m=_cs_1m, th=_cs_th)
+                    if _cs is not None:
+                        t["snapshot"]["chart_state"] = _cs
                 except Exception as e:  # noqa: BLE001
                     logger.warning("[%s] %s/%s 가상 진입 기록 실패 → 건너뜀: %s", FIX, sym, key, e)
                     continue
@@ -341,6 +350,24 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
 # ══════════════════════════════════════════════════════════════════════
 # 2) 백필 — chart_learning_days 를 오래된 것부터 재구성 (API 호출 없음)
 # ══════════════════════════════════════════════════════════════════════
+
+def _chart_state_for(bc: Any, sym: str, side: str, series: "PT.Series", now_ms: int, cache: dict[str, dict[str, Any]], *,
+                     on: bool, include_1m: bool, th: dict[str, float]) -> dict[str, Any] | None:
+    """📐 Fix 372 (2026-09-15 사장님 「가상매매과 모든 거래에서 이제는 5분과 일일차트 그리고 필요하면 1분차트까지 학습」):
+    이미 받은 15분·4시간·(15분 합성)1시간 봉은 재사용하고 일봉·5분·1분만 조회한다. 같은 사이클 같은 심볼은 한 번만 조회.
+    실패해도 가상 진입은 그대로 기록된다 (chart_state 만 빠진다)."""
+    if not on:
+        return None
+    try:
+        if sym not in cache:
+            from app.services import chart_state as CS
+            have = {"15m": series.allk[-60:], "4h": series.k4h[-60:], "1h": series.k1h[-60:]}
+            cache[sym] = CS.capture(bc, sym, side, now_ms=now_ms, klines=have, include_1m=include_1m, th=th)
+        return {**cache[sym], "side": side}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Fix372] %s 차트 상태 기록 실패 (가상 진입은 계속): %s", sym, e)
+        return None
+
 
 def _bump_fetch_fail(sym: str) -> int:
     """감시 밖 심볼의 연속 조회 실패 횟수 (Redis, 1일 TTL). Redis 실패 = 1 (정리하지 않음)."""

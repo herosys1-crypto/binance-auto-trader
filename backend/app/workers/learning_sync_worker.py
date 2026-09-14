@@ -122,11 +122,30 @@ def _entry_context(client: BinanceClient | None, strategy: StrategyInstance) -> 
             "bb_4h": bb4h_context(
                 BB4HBandAnalyzer(client).analyze(symbol, side, klines_4h=klines["4h"])
             ),
+            "chart_state": _chart_state_block(client, strategy, klines),   # 📐 Fix 372: 일봉·4H·1H·15m·5m·1m 상태
         }
     except Exception as e:
         logger.warning(
             "[learning_sync] 셋업 스냅샷 실패 sid=%s: %s", strategy.id, e,
         )
+        return {}
+
+
+def _chart_state_block(client: BinanceClient | None, strategy: StrategyInstance, klines: dict) -> dict:
+    """📐 Fix 372 (2026-09-15 사장님 「모든 거래에서 이제는 5분과 일일차트 그리고 필요하면 1분차트까지 학습」):
+    위에서 받은 4h·1h·15m·5m 봉을 재사용하고 일봉·1분만 더 조회한다. 실패 = 빈 dict (학습 기록은 계속)."""
+    try:
+        from sqlalchemy.orm import object_session
+        from app.services import chart_state as CS
+        _db = object_session(strategy)
+        if _db is not None and not CS.setting_on(_db, CS.S_ENABLED, True):
+            return {}
+        have = {k: v for k, v in (klines or {}).items() if isinstance(v, list) and v}
+        return CS.capture(client, strategy.symbol, strategy.side, klines=have,
+                          include_1m=True if _db is None else CS.setting_on(_db, CS.S_1M, True),
+                          th=CS.thresholds(_db))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Fix372] 차트 상태 기록 실패 sid=%s: %s", getattr(strategy, "id", "?"), e)
         return {}
 
 

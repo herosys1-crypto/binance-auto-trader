@@ -240,3 +240,18 @@ def paper_trading_trades(limit: int = 100, status: str | None = None, rule: str 
     q = q.order_by(PaperTrade.opened_at.desc()).limit(max(1, min(limit, _TRADES_MAX_LIMIT)))
     rows = db.execute(q).scalars().all()
     return {"n": len(rows), "trades": [_row_to_dict(row) for row in rows]}
+
+# ── 📐 Fix 372 차트 상태 학습 보고서 (일봉·4H 볼밴 상태 · 5분 위치 · 진입 타이밍) ──
+@router.get("/chart-state")
+def paper_chart_state_report(days: int = 14, db: Session = Depends(get_db),
+                             user_id: int = Depends(get_current_user_id)) -> dict:
+    """가상매매(live)·실거래 진입의 일봉 볼밴 상태·5분 위치·진입 타이밍 라벨별 성과 (읽기 전용, JSONB 스칼라만)."""
+    from app.services import chart_state_report as CSR
+    return CSR.build(db, days=days)
+
+
+@router.get("/chart-state.md", response_class=PlainTextResponse)
+def paper_chart_state_report_md(days: int = 14, db: Session = Depends(get_db),
+                                user_id: int = Depends(get_current_user_id)) -> str:
+    from app.services import chart_state_report as CSR
+    return CSR.render_markdown(CSR.build(db, days=days))
