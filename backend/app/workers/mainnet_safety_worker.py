@@ -136,7 +136,7 @@ def _check_exchange_accounts(db):
     for a in accounts:
         result.append({
             "id": a.id,
-            "name": a.name,
+            "name": a.exchange_name,   # 🚨 Fix 373: 모델 컬럼은 exchange_name — a.name 은 AttributeError 로 7/24 이후 매시간 점검이 죽어 있었다
             "is_testnet": a.is_testnet,
         })
     return result

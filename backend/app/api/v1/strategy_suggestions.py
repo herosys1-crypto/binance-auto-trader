@@ -1332,13 +1332,15 @@ def get_v219_monitoring(
     active_longs: list[dict] = []
     try:
         from app.models.strategy_instance import StrategyInstance
+        from app.models.strategy_template import StrategyTemplate   # 🚨 Fix 373c: strategy_type 은 인스턴스가 아니라 템플릿 컬럼
         from app.core.strategy_status import ACTIVE_LIKE
         rows_long = db.execute(
             select(StrategyInstance)
+            .join(StrategyTemplate, StrategyTemplate.id == StrategyInstance.strategy_template_id)
             .where(StrategyInstance.user_id == user_id)
             .where(StrategyInstance.side == "LONG")
             .where(StrategyInstance.status.in_(tuple(ACTIVE_LIKE)))
-            .where(StrategyInstance.strategy_type.ilike("%sajangnim_bottom%"))
+            .where(StrategyTemplate.strategy_type.ilike("%sajangnim_bottom%"))
             .order_by(StrategyInstance.created_at.desc())
             .limit(30)
         ).scalars().all()
@@ -1394,14 +1396,16 @@ def get_v219_monitoring(
     reentry_watch_long: list[dict] = []
     try:
         from app.models.strategy_instance import StrategyInstance
+        from app.models.strategy_template import StrategyTemplate   # 🚨 Fix 373c
         from app.core.strategy_status import TERMINAL_STATUSES
         cutoff_l = _dt.now(timezone.utc) - _td(hours=24)
         rows_l = db.execute(
             select(StrategyInstance)
+            .join(StrategyTemplate, StrategyTemplate.id == StrategyInstance.strategy_template_id)
             .where(StrategyInstance.user_id == user_id)
             .where(StrategyInstance.side == "LONG")
             .where(StrategyInstance.status.in_(tuple(TERMINAL_STATUSES)))
-            .where(StrategyInstance.strategy_type.ilike("%sajangnim_bottom%"))
+            .where(StrategyTemplate.strategy_type.ilike("%sajangnim_bottom%"))
             .where(StrategyInstance.stopped_at.is_not(None))
             .where(StrategyInstance.stopped_at >= cutoff_l)
             .order_by(StrategyInstance.stopped_at.desc())

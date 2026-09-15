@@ -370,6 +370,18 @@ def _resolve_from_row(etype: str, payload: dict | None) -> str:
     return f"TP_{lvl}" if final else f"AFTER_{lvl}"
 
 
+def unrealized_pnl_pct_of(strategy) -> float:
+    """🚨 Fix 373b: StrategyInstance 에 `unrealized_pnl_pct` 컬럼이 **없다** — 이 값을 직접 읽던 API 3곳이 호출마다
+    AttributeError 였다(운영 로그: tp_sl_advisor 가 심볼마다 실패). 정의는 학습 기록과 같게 USDT / 자본 × 100."""
+    v = TradeLearningService._pnl_pct(strategy, realized=False)
+    return float(v) if v is not None else 0.0
+
+
+def current_price_of(strategy):
+    """🚨 Fix 373b: `current_price` 컬럼도 없다 → Redis 마크가 캐시 (헌법 v127)."""
+    return TradeLearningService._current_price(strategy)
+
+
 def resolve_close_reason(db, strategy) -> str:
     """StrategyInstance 에 close_reason 컬럼이 없으므로 RiskEvent 로 유도한다."""
     from sqlalchemy import select as _select

@@ -1409,10 +1409,14 @@ def get_main_account_readonly_view(
     for a in accs:
         result["accounts"].append({
             "id": a.id,
-            "name": a.name,
+            # 🚨 Fix 373: ExchangeAccount 에 name·exchange 컬럼이 없다 (exchange_name·market_type) → 이 API 는 호출마다 AttributeError 였다.
+            #   계정 이름 컬럼이 없으므로 MAIN/SUB 는 추측하지 않고 모른다고 표시한다 (헌법 118: 「확인 못 함」을 「이상 없음」으로 바꾸지 않는다).
+            "name": a.exchange_name,
             "is_testnet": a.is_testnet,
-            "exchange": a.exchange,
-            "type": "MAIN" if "main" in (a.name or "").lower() else "SUB",
+            "exchange": a.exchange_name,
+            "market_type": a.market_type,
+            "type": None,
+            "type_note": "계정 이름 컬럼이 없어 MAIN/SUB 구분 불가 (Fix 373)",
         })
     return result
 

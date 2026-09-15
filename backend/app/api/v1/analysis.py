@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db
+from app.services.trade_learning_service import current_price_of, unrealized_pnl_pct_of   # 🚨 Fix 373b
 from app.core.crypto import decrypt_text
 from app.models.exchange_account import ExchangeAccount
 from app.models.strategy_instance import StrategyInstance
@@ -576,8 +577,9 @@ def analyze_strategy(
         "status": strategy.status,
         "current_position_qty": str(strategy.current_position_qty or 0),
         "avg_entry_price": str(strategy.avg_entry_price or 0),
-        "current_price": str(strategy.current_price or 0),
-        "unrealized_pnl_pct": float(strategy.unrealized_pnl_pct or 0),
+        # 🚨 Fix 373b: 모델에 current_price·unrealized_pnl_pct 컬럼이 없다 → 학습 기록과 같은 계산(Redis 마크가 · USDT/자본)
+        "current_price": str(current_price_of(strategy) or 0),
+        "unrealized_pnl_pct": unrealized_pnl_pct_of(strategy),
         "max_profit_pct": float(strategy.max_profit_pct) if strategy.max_profit_pct is not None else None,
         "max_loss_pct": float(strategy.max_loss_pct) if strategy.max_loss_pct is not None else None,
     }
@@ -605,7 +607,7 @@ def _judge_position(strategy: StrategyInstance, analysis: dict) -> dict:
     action = "HOLD"  # 기본 보유!
     color = "#22c55e"
 
-    pnl = float(strategy.unrealized_pnl_pct or 0)
+    pnl = unrealized_pnl_pct_of(strategy)   # 🚨 Fix 373b
     max_profit = float(strategy.max_profit_pct or 0) if strategy.max_profit_pct is not None else 0
 
     # 손실 판단!
