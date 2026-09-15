@@ -131,7 +131,7 @@
 - `pump_split_capitals = 10,200,500`
 - `sajangnim_capital_ladder = 10,300,600`
 
-모두 10/100/200 으로 바꾸려면 아래 두 줄을 적용한다 (**DB 변경 = 사장님 승인 뒤**):
+✅ **2026-09-15 사장님 승인으로 적용 완료** — 두 값 모두 `10,100,200` (볼밴 분할 정합성 검산 통과 · 실효값 확인). 되돌리기는 옛 값(`10,200,500` · `10,300,600`)으로 같은 UPDATE. 적용한 명령:
 ```sql
 UPDATE system_settings SET value = '10,100,200' WHERE key = 'pump_split_capitals';
 UPDATE system_settings SET value = '10,100,200' WHERE key = 'sajangnim_capital_ladder';
