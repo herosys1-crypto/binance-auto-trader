@@ -4,18 +4,19 @@
 모드 bb_swing_mode:
   off    = 아무것도 안 함
   shadow = 신호만 Redis bbswing:shadow:{sym}:{side}:{봉시각} (7일) + 사이클 요약. **주문 없음** (기본)
-  on     = 실주문. 볼밴 분할(pump_split_entry_worker)과 **같은 실행 경로** —
+  on     = 실주문. 진입은 공용 분할 실행기 app/services/split_entry_executor.open_split_position (규칙 가족과 같은 코드) —
            capital_management_mode=split_entry 라서 손절(risk_service) · 2·3차 실체결가 재앵커(stage_trigger_worker) ·
            피라미딩 제외 · 단계 정리 제외 · 반전 워커 제외가 그대로 붙는다.
            진입 전 가드 = surge_ladder_entry._guards_ok (킬스위치 · ban · 잔액 · 같은 심볼·방향 · 전용 슬롯).
            strategy_type=bb_swing 은 재진입 워커 화이트리스트(pump_split% 등)에 걸리지 않는다 = 손절 뒤 자동 재진입 없음.
+           하루 최대 진입 = auto_family_registry (daily_max_bb_swing, 기본 1) — 생성·1차 주문 두 곳에서 막는다.
 
 반박 검증 (2026-09-14, 렌즈 3) 반영:
   · 전환 = **새 방향 1차 주문이 성공한 뒤에만** 반대 포지션을 닫는다 (먼저 닫으면 24h 순위 게이트·슬롯에 막혀 「닫고 안 엶」).
     청산 수량 0 = 거래소 실수량 전량 (DB 수량 지연·부분 잔량 방지). 상태는 청산 함수·체결 스트림이 쓴다 (워커가 덮어쓰지 않음).
-  · start_stage1 실패 = 그 인스턴스 보관 처리 + 6시간 재시도 금지 (WAITING 잔재가 모든 가족의 같은 심볼·방향을 막지 않게).
+  · 1차 주문 실패 = 그 인스턴스 보관 처리(실행기) + 6시간 재시도 금지.
   · 같은 봉에 SHORT·LONG 이 둘 다 참이면 둘 다 건너뛴다 (방금 연 포지션을 스스로 전환 청산하는 왕복 방지).
-  · 기준선 = 1차 **예상 체결가**(판정봉 종가) ÷ (1 ∓ 1차 심도) — 저장 트리거·주문 전 검산이 실제 체결가와 맞게.
+  · 기준선 = 1차 **예상 체결가**(판정봉 종가) ÷ (1 ∓ 1차 심도) — 저장 트리거·주문 전 검산이 실제 체결가와 맞게 (실행기).
   · 캔들 = 다른 워커와 캐시 키가 겹치지 않는 limit + 「방금 마감한 봉」인지 확인 (옛 스냅샷으로 판정 금지).
   · 감시 종목에서 비영문 심볼 제외 (백테스트와 같은 표본).
 """
@@ -41,6 +42,9 @@ K4H_LIMIT = 301                       # EMA50 수렴 (백테스트 4H 300봉과 
 SHADOW_TTL = 7 * 86400
 START_FAIL_COOLDOWN_S = 6 * 3600      # 1차 주문 실패 뒤 같은 심볼·방향 재시도 금지 (Claude가 정함)
 CYCLE_KEY = "bbswing:last_cycle"
+LABEL = "볼밴 스윙"
+_MISS_BY_CODE = {"create_blocked": "생성 게이트(중단·하루 최대 등)", "dead_stage": "죽은 단계 취소", "start_failed": "1차 주문 실패",
+                 "start_unconfirmed": "1차 주문 뒤 후처리 실패(보관 안 함)"}
 
 
 def _k_shadow(sym: str, side: str, ts: int) -> str:
@@ -73,29 +77,10 @@ def _resolve_same_bar(sigs: list) -> list:
     return [] if len({s[0] for s in sigs}) > 1 else sigs
 
 
-def _anchor_base(close: float, side: str, steps: list[Decimal]) -> Decimal:
-    """볼밴 분할 계산기는 1차 체결가를 기준선 × (1 ∓ 1차 심도) 로 본다 → 예상 체결가(종가)에서 거꾸로 푼다."""
-    s1 = Decimal(str(steps[0])) / Decimal("100")
-    px = Decimal(str(close))
-    return px / (Decimal("1") - s1) if side == "LONG" else px / (Decimal("1") + s1)
-
-
 def _load_split_config(db) -> tuple[list[Decimal], list[Decimal], Decimal, str]:
-    """자본·단계·손절 — 볼밴 분할 파서를 그대로 쓴다 (같은 검증 규칙). 손상 = 기본값."""
-    from app.workers import pump_split_entry_worker as PS
-    notes: list[str] = []
-
-    def _p(key, parser):
-        try:
-            return parser(R.setting(db, key))
-        except Exception as e:  # noqa: BLE001
-            notes.append(f"{key} 손상→기본 ({e})")
-            return parser(R.SETTINGS[key][0])
-
-    caps = _p("bb_swing_capitals", PS._parse_capitals)
-    steps = _p("bb_swing_steps", PS._parse_steps)
-    sl = _p("bb_swing_sl_roi", PS._parse_sl_roi)
-    return caps, steps, sl, " / ".join(notes) or "설정 OK"
+    """자본·단계·손절 — 공용 실행기 파서(볼밴 분할 검증 규칙). 손상·정합성 실패 = 기본값."""
+    from app.services.split_entry_executor import parse_config
+    return parse_config(R.setting(db, "bb_swing_capitals"), R.setting(db, "bb_swing_steps"), R.setting(db, "bb_swing_sl_roi"))
 
 
 def _active_family(db, symbol: str | None = None, side: str | None = None) -> list:
@@ -134,44 +119,6 @@ def _cycles_24h(db, symbol: str, side: str) -> int:
         return 10**6
 
 
-def _build_template(db, symbol: str, side: str, base: Decimal, caps: list[Decimal],
-                    steps: list[Decimal], tp1: float):
-    """볼밴 분할 _build_template 과 같은 모양 — strategy_type·이름·TP 만 이 가족 것."""
-    from app.models.strategy_template import StrategyTemplate
-    from app.workers.pump_split_entry_worker import compounded_trigger_pcts
-    now = datetime.now(timezone.utc)
-    pcts = compounded_trigger_pcts(side, steps)      # Fix 195: 계산기 복리 앵커 기준으로 환산
-    tps = R.tp_percents(tp1)
-    tpl = StrategyTemplate(
-        name=f"{R.TEMPLATE_PREFIX}{symbol}_{side}_{now.strftime('%Y%m%d_%H%M%S')}",
-        strategy_type=R.STRATEGY_TYPE,
-        side=side,
-        leverage=R.LEVERAGE,
-        total_capital=sum(caps),
-        stages_config={
-            "capitals": [float(c) for c in caps],
-            "trigger_percents": [None] + [float(p) for p in pcts[1:]],
-            "last_stage_trigger_mode": "PRICE_DOWN_PCT" if side == "LONG" else "PRICE_UP_PCT",
-            "last_stage_trigger_percent": float(pcts[-1]),
-            "stages_count": 3,
-            "base_price": float(base),
-            "split_entry": True,
-            "steps": [float(s) for s in steps],       # Fix 209 재앵커가 읽는다
-        },
-        stage1_capital=caps[0], stage2_capital=caps[1], stage3_capital=caps[2], stage4_capital=None,
-        stage2_trigger_percent=steps[1], stage3_trigger_percent=steps[2], stage4_trigger_percent=None,
-        tp1_percent=Decimal(str(tps[0])), tp2_percent=Decimal(str(tps[1])),
-        tp3_percent=Decimal(str(tps[2])), tp4_percent=Decimal(str(tps[3])),
-        tp1_qty_ratio=Decimal("25"), tp2_qty_ratio=Decimal("25"),
-        tp3_qty_ratio=Decimal("25"), tp4_qty_ratio=Decimal("25"),
-        stop_loss_percent_of_capital=Decimal("90"),
-        is_active=True,
-    )
-    db.add(tpl)
-    db.flush()
-    return tpl
-
-
 def _exec(db, account):
     from app.core.crypto import decrypt_text
     from app.services.execution_service import ExecutionService
@@ -203,11 +150,8 @@ def _flip_close(db, account, opp) -> str:
 
 def _enter(db, r, stat: dict, miss, account, *, sym: str, side: str, close: float, why: str, opp: list,
            caps, steps, sl_roi, tp1: float, trail: float, flip: bool, cap_n: int) -> None:
-    from app.core.strategy_status import SPLIT_ENTRY_MODE
-    from app.models.strategy_stage_plan import StrategyStagePlan
-    from app.services.strategy_service import StrategyService
+    from app.services.split_entry_executor import open_split_position
     from app.services.surge_ladder_entry import _guards_ok
-    from app.workers.pump_split_entry_worker import verify_stage_plans
 
     if cap_n <= 0:
         miss("전용 상한 0")
@@ -235,62 +179,28 @@ def _enter(db, r, stat: dict, miss, account, *, sym: str, side: str, close: floa
         miss("반대 포지션 보유 (전환 끔)")
         return
 
-    base = _anchor_base(close, side, steps)
-    tpl = _build_template(db, sym, side, base, caps, steps, tp1)
-    si = StrategyService(db).create_strategy_instance(
-        user_id=1,
-        exchange_account_id=account.id,
-        strategy_template_id=tpl.id,
-        symbol=sym,
-        side=side,
-        start_price=base,
-        leverage_override=R.LEVERAGE,
-        capital_management_mode=SPLIT_ENTRY_MODE,
-    )
-    si.force_sl_enabled_override = True        # 물타기 = 손절이 반드시 살아 있어야 한다
-    si.force_sl_roi_override = sl_roi
-    si.trailing_retrace_pct = Decimal(str(trail))
-    si.tp1_pct_override = Decimal(str(tp1))     # 생성 기본 TP1 override(15) 가 템플릿을 덮지 않게 (Fix 205)
-    db.commit()
-
-    s1 = db.execute(
-        select(StrategyStagePlan)
-        .where(StrategyStagePlan.strategy_instance_id == si.id)
-        .where(StrategyStagePlan.stage_no == 1)
-    ).scalar_one_or_none()
-    if s1 is not None:
-        s1.trigger_price = None                 # 1차 = 시장가 즉시
-        db.commit()
-
-    plans = db.execute(
-        select(StrategyStagePlan).where(StrategyStagePlan.strategy_instance_id == si.id)
-    ).scalars().all()
-    ok, vwhy = verify_stage_plans(plans, base, side, caps, steps, sl_roi, R.LEVERAGE)
-    if not ok:
-        _archive(db, si, "SPLIT_DEAD_STAGE", vwhy)
-        miss("죽은 단계 취소")
-        logger.error("[%s] ⛔ #%s %s %s 주문 전 취소 — %s", R.FIX, si.id, sym, side, vwhy)
+    from app.services.split_entry_executor import split_total_full
+    t_full, t_why = split_total_full(db)       # 분할 예약이 다른 가족 2단계를 막지 않게 (반박 검증 9/15 H1)
+    if t_full:
+        miss("분할 자동 전략 전체 상한")
+        logger.info("[%s] ⏸ %s %s 진입 보류 — %s", R.FIX, sym, side, t_why)
         return
 
-    try:
-        _exec(db, account).start_stage1(si.id)
-    except Exception as e:  # noqa: BLE001 — 24h 순위·지지선 게이트·레버리지 설정 실패 등
-        db.rollback()
-        _archive(db, si, "BB_SWING_START_FAILED", str(e))
-        try:
-            r.setex(_k_cool(sym, side), START_FAIL_COOLDOWN_S, "1")
-        except Exception:  # noqa: BLE001
-            pass
-        miss("1차 주문 실패")
-        logger.warning("[%s] ⛔ #%s %s %s 1차 주문 실패 → 보관·%dh 대기 (반대 포지션 그대로): %s",
-                       R.FIX, si.id, sym, side, START_FAIL_COOLDOWN_S // 3600, e)
+    si, code, reason = open_split_position(
+        db, account, symbol=sym, side=side, price=close, strategy_type=R.STRATEGY_TYPE, name_prefix=R.TEMPLATE_PREFIX,
+        label=LABEL, caps=caps, steps=steps, sl_roi=sl_roi, tp1=tp1, trail=trail,
+    )
+    if si is None:
+        miss(_MISS_BY_CODE.get(code, code))
+        if code in ("start_failed", "start_unconfirmed"):
+            try:
+                r.setex(_k_cool(sym, side), START_FAIL_COOLDOWN_S, "1")
+            except Exception:  # noqa: BLE001
+                pass
+        logger.warning("[%s] ⛔ %s %s 진입 안 됨 (%s, 반대 포지션 그대로): %s", R.FIX, sym, side, code, reason)
         return
     stat["entered"] += 1
-    logger.warning(
-        "[%s] ✅ 진입 #%s %s %s | %s | 기준선 %s (종가 %s) | 자본 %s 단계 %s%% | 손절 ROI -%s%% TP1 %g%% 25%%×4 트레일 %g%%",
-        R.FIX, si.id, sym, side, why, base, close, "/".join(str(c) for c in caps),
-        "/".join(str(s) for s in steps), sl_roi, tp1, trail,
-    )
+    logger.warning("[%s] ✅ 진입 #%s %s %s | %s", R.FIX, si.id, sym, side, why)
 
     for o in (opp if flip else []):            # 새 방향이 열린 **뒤에만** 반대 포지션을 닫는다
         try:
@@ -301,18 +211,6 @@ def _enter(db, r, stat: dict, miss, account, *, sym: str, side: str, close: floa
             miss("전환 청산 실패")
             logger.error("[%s] 🔄 #%s 전환 청산 실패 (새 방향 #%s 은 진입됨, 반대 포지션은 기존 손절·익절이 관리): %s",
                          R.FIX, o.id, si.id, e)
-
-
-def _archive(db, si, code: str, msg: str) -> None:
-    try:
-        si.status = "STOPPED"
-        si.is_archived = True
-        si.last_error_code = code
-        si.last_error_message = str(msg)[:500]
-        db.commit()
-    except Exception as e:  # noqa: BLE001
-        db.rollback()
-        logger.error("[%s] #%s 보관 처리 실패: %s", R.FIX, getattr(si, "id", "?"), e)
 
 
 def run_bb_swing_once() -> dict:
@@ -354,11 +252,9 @@ def run_bb_swing_once() -> dict:
             return stat
 
         caps, steps, sl_roi, cfg = _load_split_config(db)
-        from app.workers.pump_split_entry_worker import check_no_dead_stage
-        c_ok, c_why = check_no_dead_stage(caps, steps, sl_roi, R.LEVERAGE)
-        if not c_ok:
-            logger.error("[%s] ⛔ 자본·단계·손절 정합성 실패 → 스캔 중단: %s (%s)", R.FIX, c_why, cfg)
-            return {"note": f"정합성 실패: {c_why}", **stat}
+        if cfg != "설정 OK":                    # 사장님 설정과 다른 값(기본값)으로 거래하지 않는다 — 스캔 중단 (반박 검증 9/15 L2)
+            logger.error("[%s] ⛔ 자본·단계·손절 설정 손상/정합성 실패 → 스캔 중단: %s", R.FIX, cfg)
+            return {"note": f"설정 오류: {cfg}", **stat}
         try:
             if not r.set(_k_scan(bucket), "1", nx=True, ex=3600):   # 원자적 — 리더가 둘이어도 한 번만
                 return {"note": "같은 봉 = 다른 실행이 스캔 중", **stat}

@@ -41,6 +41,7 @@ def test_defaults_shadow_and_split_consistent():
     assert R.mode_of(_DB(bb_swing_mode="yes")) == "shadow"          # 모르는 값 = 기본(주문 없음)
     assert R.sides_of(_DB()) == {"SHORT", "LONG"}
     assert R.SETTINGS["bb_swing_support_tol_pct"][0] == "0"         # 백테스트와 같은 정의
+    assert R.SETTINGS["bb_swing_capitals"][0] == "10,100,200"       # 사장님 2026-09-15
     assert R.setting_float(_DB(bb_swing_sl_roi="abc"), "bb_swing_sl_roi", 1, 90) == 10.0
     assert R.setting_float(_DB(bb_swing_tp1_pct="999"), "bb_swing_tp1_pct", 1, 50) == 5.0
     assert R.tp_percents(5) == [5, 10, 15, 20]
@@ -157,9 +158,10 @@ def test_worker_completed_fresh_and_same_bar():
     assert W._is_fresh_15m([stale], bucket) is False                 # 캐시의 옛 스냅샷
     assert W._resolve_same_bar([("SHORT", 1, ""), ("LONG", 1, "")]) == []
     assert W._resolve_same_bar([("LONG", 1, "")]) == [("LONG", 1, "")]
+    from app.services.split_entry_executor import anchor_base
     steps = [Decimal("3"), Decimal("5"), Decimal("7")]
-    assert W._anchor_base(97.0, "LONG", steps) == pytest.approx(Decimal("100"))
-    assert W._anchor_base(103.0, "SHORT", steps) == pytest.approx(Decimal("100"))
+    assert anchor_base(97.0, "LONG", steps) == pytest.approx(Decimal("100"))
+    assert anchor_base(103.0, "SHORT", steps) == pytest.approx(Decimal("100"))
 
 
 # ── 워커 배선 ────────────────────────────────────────────────────────────
@@ -173,17 +175,22 @@ def test_worker_order_shadow_guard_open_then_flip():
     assert "nx=True" in run and "_is_fresh_15m(kl, bucket)" in run and ".isascii()" in run
     enter = _fn_src(wk, "_enter")
     i_guard = enter.find("_guards_ok(db, account")
-    i_create = enter.find("create_strategy_instance(")
-    i_verify = enter.find("verify_stage_plans(plans")
-    i_start = enter.find(".start_stage1(")
+    i_open = enter.find("open_split_position(")
     i_flip = enter.find("_flip_close(db, account")
-    assert 0 < i_guard < i_create < i_verify < i_start < i_flip       # 새 방향이 열린 뒤에만 반대 청산
-    assert "capital_management_mode=SPLIT_ENTRY_MODE" in enter
-    assert "si.force_sl_enabled_override = True" in enter
-    assert "BB_SWING_START_FAILED" in enter
+    assert 0 < i_guard < i_open < i_flip                              # 새 방향이 열린 뒤에만 반대 청산
+    ex = APP / "services" / "split_entry_executor.py"
+    op = _fn_src(ex, "open_split_position")
+    i_create = op.find("create_strategy_instance(")
+    i_verify = op.find("verify_stage_plans(plans")
+    i_start = op.find(".start_stage1(")
+    assert 0 < i_create < i_verify < i_start                          # 생성 → 죽은 단계 검산 → 1차 주문
+    assert "capital_management_mode=SPLIT_ENTRY_MODE" in op
+    assert "si.force_sl_enabled_override = True" in op
+    assert "SPLIT_START_FAILED" in op and "create_blocked" in op
     flip = _fn_src(wk, "_flip_close")
     assert 'quantity=Decimal("0")' in flip and ".status" not in flip  # 거래소 실수량 · 상태 덮어쓰기 없음
-    assert wk.read_text(encoding="utf-8").count(".start_stage1(") == 1
+    assert wk.read_text(encoding="utf-8").count(".start_stage1(") == 0
+    assert ex.read_text(encoding="utf-8").count(".start_stage1(") == 1
 
 
 def test_family_split_learning_bucket_and_no_reentry_martingale():

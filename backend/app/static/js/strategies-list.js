@@ -904,7 +904,10 @@ async function refreshStrategies() {
             <button onclick="event.stopPropagation(); if(window.openSymbolTradingModal) window.openSymbolTradingModal('${s.symbol}');"
                     title="📊 ${s.symbol} 차트 + Order Book (내장 모달)"
                     style="background:#1e3a5f;color:#7dd3fc;border:0;border-radius:3px;padding:1px 5px;font-size:var(--font-badge);cursor:pointer;margin-left:3px;">📊</button>
-            ${parseMartingaleBadge(s)
+            ${s.auto_label
+              // 🗓 2026-09-15 사장님 「포지션에 들어가면 구분할수있게 확실하게」: 자동 전략 가족 이름 + 몇 차까지 들어갔는지
+              ? `<span style="display:inline-block;background:linear-gradient(135deg,#0f766e,#0891b2);color:#fff;padding:2px 6px;border-radius:4px;font-size:var(--font-badge);font-weight:bold;margin-left:4px" title="🤖 자동 전략: ${escapeHtml(s.auto_label)} (가족 ${escapeHtml(s.auto_family || '')})">🤖 ${escapeHtml(s.auto_label)}${s.current_stage ? ' · ' + s.current_stage + '차' : ''}</span>`
+              : ''}${parseMartingaleBadge(s)
             // 🔀 Fix 369 (2026-09-13 감사 #8): 배지가 template 값(trigger_mode/strategy_type)만 보면
             //   가족 표식이 없는 관리 재진입·auto_bb·사다리·볼밴 분할 전략에도 "➕ 기존" 이 붙었다.
             //   s.family(app.services.strategy_family.family_of, 서버 계산)를 우선 쓰고, 구 API 응답

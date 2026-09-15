@@ -184,7 +184,8 @@ def run_auto_reentry_once(decrypt_text: Callable[[str], str]) -> None:
                            strategy.id, new_strategy.id, new_start_price)
             except Exception as e:
                 from app.services.auto_trading_halt import is_halt_error as _is_halt371
-                if _is_halt371(e):
+                from app.services.auto_family_registry import is_limit_error as _is_daily_limit   # 🗓 2026-09-15 가족별 하루 최대도 같게 (내일 재시도)
+                if _is_halt371(e) or _is_daily_limit(e):
                     # ⛔ Fix 371: 자동매매 중단 — ban 과 같게 REENTRY_FAILED 로 영구 마킹하지 않는다 (재개 뒤 재진입 기회 보존, 반박 검증 A)
                     db.rollback()
                     logger.info("auto_reentry: #%s 자동매매 중단(Fix 371) — 상태 유지, 재개 뒤 다시 판정", strategy.id)

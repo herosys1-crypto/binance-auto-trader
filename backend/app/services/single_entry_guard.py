@@ -57,6 +57,14 @@ SINGLE_ENTRY_STRATEGY_TYPES: frozenset[str] = frozenset({
 })
 SINGLE_ENTRY_TEMPLATE_PREFIXES: tuple[str, ...] = ("BB_MIDLINE", "SURGE_LADDER", "FUJIMOTO", "MACH7",
                                                    "RF_S2SHORT", "RF_BOTTOM", "RF_SURGESTART")   # 대기열 3
+# 🗓 2026-09-15: 규칙 가족은 레지스트리(app/services/rule_families.py)가 단일 진실 — 가족을 늘려도 여기서 빠지지 않게 합친다.
+#   (분할 진입 가족은 split_entry 모드라 어차피 피라미딩 제외지만, single 로 바꿔 켜도 빠지면 안 된다)
+try:
+    from app.services.rule_families import RF_STRATEGY_TYPES as _RF_TYPES, RF_TEMPLATE_PREFIXES as _RF_PREFIXES
+    SINGLE_ENTRY_STRATEGY_TYPES = SINGLE_ENTRY_STRATEGY_TYPES | frozenset(_RF_TYPES)
+    SINGLE_ENTRY_TEMPLATE_PREFIXES = tuple(dict.fromkeys(SINGLE_ENTRY_TEMPLATE_PREFIXES + tuple(_RF_PREFIXES)))
+except Exception as _e:  # noqa: BLE001 — 가져오기 실패해도 위 고정 목록은 살아 있다
+    logging.getLogger(__name__).warning("[single_entry] 규칙 가족 목록 합치기 실패: %s", _e)
 
 
 def _template_of(si: Any):

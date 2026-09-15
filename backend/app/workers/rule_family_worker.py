@@ -1,12 +1,16 @@
-"""🎯 대기열 3A·3B·3D 규칙 가족 러너 — 판정·설정·근거는 app/services/rule_families.py.
+"""🎯 대기열 3A·3B·3D 규칙 가족 러너 (2026-09-15 가상매매 규칙 12개로 확장) — 판정·설정·근거는 app/services/rule_families.py.
 
 60초마다 가상매매가 새로 연 실시간 진입 행(paper_trades, source=live)을 읽는다. 가족 모드(설정 {가족}_mode):
   off    = 무시
-  shadow = on 과 **같은 검사**(자리·신선도·쿨다운·전체 자동진입 OFF·반대 방향·가격 이동·가드)를 돌리고 결과만 Redis 에 기록
+  shadow = on 과 **같은 검사**(자리·신선도·쿨다운·전체 자동진입 OFF·반대 방향·가격 이동·하루 최대·가드)를 돌리고 결과만 Redis 에 기록
            (rf:shadow:{가족}:{심볼}:{행id}, 7일 — would_enter / blocks). **주문 없음** (기본). 쿨다운은 그림자 전용 키.
-  on     = 위 검사 통과 뒤 surge_ladder_entry.create_surge_position (1단계 템플릿 · MARKET · 손절 ROI · TP) — 가드 우회 없음
+  on     = 위 검사 통과 뒤 진입 — {가족}_entry:
+             split  (기본) 분할 10/100/200 = split_entry_executor.open_split_position (가드는 여기서 먼저 본다)
+             single        1회 진입 = surge_ladder_entry.create_surge_position (가드 내장)
+⛔ Fix 371 자동매매 중단 중이면 on 가족도 그림자로만 기록한다 (생성 게이트가 어차피 막는다 — 기록이라도 남긴다).
+🗓 하루 최대 = auto_family_registry (daily_max_<가족키>, 기본 1). 여기서 먼저 보고, 생성·1차 주문에서 한 번 더 막는다.
 처리한 행은 rf:seen:{행id}(2일, SET NX)로 한 번만 본다 — 막힌 주문을 다음 사이클에 다시 내지 않는다 (신호는 시간에 민감하다).
-세 가족 모두 피라미딩 워커 대상이 아니다 (single_entry_guard 등록). 재진입 워커는 strategy_type 화이트리스트,
+모든 가족이 피라미딩 워커 대상이 아니다 (분할 = split_entry 모드 · 단일 = single_entry_guard 등록). 재진입 워커는 strategy_type 화이트리스트,
 심볼 관리 명부(Fix 365)는 OBV_REVERSE 템플릿만 등록하므로 둘 다 집어가지 않는다.
 
 반박 검증(2026-09-13, 렌즈 1) 반영: 같은 심볼 반대 방향 차단(헤지 계정) · 전체 동시보유 상한 0(자동 진입 완전 OFF) 존중 ·
@@ -30,6 +34,7 @@ FIX = RF.FIX
 LOOKBACK_MIN = 90                 # DB 조회 창(분). 주문 여부는 rf_max_signal_age_min 이 정한다 (Claude가 정함)
 SEEN_TTL = 2 * 86400
 SHADOW_TTL = 7 * 86400
+START_FAIL_COOLDOWN_S = 6 * 3600  # 분할 1차 주문 실패 뒤 같은 가족·심볼 재시도 금지 (Claude가 정함)
 CYCLE_KEY = "rf:last_cycle"
 
 
@@ -89,6 +94,26 @@ def _global_auto_off(db) -> bool:
         return True
 
 
+def _halted(db) -> bool:
+    """Fix 371 자동매매 중단 중인가 (행 없음 = 중단, 조회 실패 = 중단)."""
+    try:
+        from app.services.auto_trading_halt import halt_enabled
+        return bool(halt_enabled(db))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] 자동매매 중단 여부 조회 실패 = 중단으로 간주: %s", FIX, e)
+        return True
+
+
+def _daily_full(db, fam: RF.Family) -> tuple[bool, str]:
+    """이 가족 오늘(KST) 하루 최대를 채웠는가. 조회 실패 = 찼다고 본다 (registry.count_today 가 fail-closed)."""
+    from app.services import auto_family_registry as AF
+    af = AF.family_for(strategy_type=fam.stype, template_name=None, entry_origin=None)
+    if af is None or not AF.enabled(db):
+        return False, "한도 끔"
+    cap, used = AF.daily_max(db, af.key), AF.count_today(db, af.key)
+    return used >= cap, f"오늘 {used}/{cap} (daily_max_{af.key})"
+
+
 def _opposite_active(db, sym: str, side: str) -> bool:
     """같은 심볼 반대 방향에 살아 있는 전략이 있는가 (종류 무관). 조회 실패 = 있다고 본다 (fail-closed)."""
     try:
@@ -138,9 +163,45 @@ def _stop_price_pct(db, acc, fam: RF.Family, sym: str, price: float, lev: int) -
     return base, "roi(swing8 불가)"
 
 
+def _enter_split(db, r, stat: dict, acc, fam: RF.Family, sym: str, px: float, cool_key: str, cool_s: int, row_id: int, det: dict) -> None:
+    """분할 10/100/200 진입 — 가드 먼저, 실행은 공용 실행기."""
+    ok, why = _guards(db, acc, fam, sym)
+    if not ok:
+        _bump(stat, fam.key, "guards")
+        logger.info("[%s] ⏸ %s %s %s 분할 진입 보류 — %s", FIX, fam.key, sym, fam.side, why)
+        return
+    from app.services.split_entry_executor import open_split_position, split_total_full
+    caps, steps, sl, tp1, trail, note = RF.split_config(db)
+    if note != "설정 OK":                                   # 사장님 설정과 다른 값(기본값)으로 거래하지 않는다 (반박 검증 9/15 L2)
+        _bump(stat, fam.key, "split_config_invalid")
+        logger.error("[%s] ⛔ %s 분할 설정 손상/정합성 실패 → 진입 안 함: %s", FIX, fam.key, note)
+        return
+    full, twhy = split_total_full(db)                       # 분할 예약이 다른 가족 2단계를 막지 않게 (반박 검증 9/15 H1)
+    if full:
+        _bump(stat, fam.key, "split_total_full")
+        logger.info("[%s] ⏸ %s %s %s 분할 진입 보류 — %s", FIX, fam.key, sym, fam.side, twhy)
+        return
+    si, code, reason = open_split_position(
+        db, acc, symbol=sym, side=fam.side, price=px, strategy_type=fam.stype, name_prefix=f"{fam.prefix}_",
+        label=fam.label, caps=caps, steps=steps, sl_roi=sl, tp1=tp1, trail=trail,
+    )
+    if si is None:
+        _bump(stat, fam.key, code)
+        if code in ("start_failed", "start_unconfirmed"):
+            r.setex(cool_key, START_FAIL_COOLDOWN_S, "1")
+        logger.warning("[%s] ⛔ %s %s %s 분할 진입 안 됨 (%s): %s", FIX, fam.label, sym, fam.side, code, reason)
+        return
+    if cool_s > 0:
+        r.setex(cool_key, cool_s, "1")
+    stat["entered"] += 1
+    _bump(stat, fam.key, "entered")
+    logger.warning("[%s] 🎯 %s 분할 진입 #%s %s %s 자본 %s · 가상행 #%s 자리 %s", FIX, fam.label, si.id, sym, fam.side,
+                   "/".join(str(c) for c in caps), row_id, det.get("groups"))
+
+
 def run_rule_families_once() -> dict:
     db = SessionLocal()
-    stat: dict = {"modes": {}, "rows": 0, "shadow": 0, "entered": 0, "err": 0, "fam": {}, "last_paper_open": None}
+    stat: dict = {"modes": {}, "rows": 0, "shadow": 0, "entered": 0, "err": 0, "fam": {}, "last_paper_open": None, "halted": None}
     try:
         modes = {f.key: RF.mode_of(db, f.key) for f in RF.FAMILIES}
         stat["modes"] = modes
@@ -154,6 +215,8 @@ def run_rule_families_once() -> dict:
         lev = int(RF.setting_float(db, "rf_leverage")) or 2
         allow_hedge = RF.setting(db, "rf_allow_hedge").lower() in ("1", "true", "on", "yes")
         max_drift = RF.setting_float(db, "rf_max_drift_pct")
+        halted = any(m == "on" for m in modes.values()) and _halted(db)
+        stat["halted"] = halted
         acc = None
         for row in _new_rows(db, sorted(active), since):
             fam = active.get(row.rule)
@@ -164,7 +227,7 @@ def run_rule_families_once() -> dict:
                 if not r.set(_k_seen(row.id), "1", nx=True, ex=SEEN_TTL):      # 원자적 — 한 행은 많아야 한 번
                     continue
                 stat["rows"] += 1
-                is_shadow = modes[fam.key] == "shadow"
+                is_shadow = modes[fam.key] == "shadow" or halted
                 dec, det = RF.decide(db, fam, {"side": row.side, "tags": row.tags, "opened_at": row.opened_at}, now=now)
                 if dec != "go":
                     _bump(stat, fam.key, dec)
@@ -179,6 +242,7 @@ def run_rule_families_once() -> dict:
                     continue
                 cool_s = int(RF.setting_float(db, f"{fam.key}_cooldown_hours") * 3600)
                 entry = float(row.entry_price)
+                entry_mode = RF.entry_of(db, fam.key)
 
                 # ── on 과 그림자가 같이 쓰는 검사 ──
                 blocks: list[str] = []
@@ -192,6 +256,9 @@ def run_rule_families_once() -> dict:
                     blocks.append("no_price")
                 elif mv > max_drift:
                     blocks.append("drift")
+                full, dwhy = _daily_full(db, fam)
+                if full:
+                    blocks.append("daily_max")
 
                 if is_shadow:
                     ok, why = _guards(db, acc, fam, sym)
@@ -199,9 +266,10 @@ def run_rule_families_once() -> dict:
                         blocks.append("guards")
                     would = not blocks
                     payload = {"at": now.isoformat(), "family": fam.key, "rule": fam.rule, "symbol": sym, "side": fam.side,
-                               "paper_trade_id": row.id, "entry": entry, "price_now": px,
+                               "paper_trade_id": row.id, "entry": entry, "price_now": px, "entry_mode": entry_mode,
                                "drift_pct": None if mv is None else round(mv, 3), "opened_at": row.opened_at.isoformat(),
-                               "tags": list(row.tags or []), **det, "would_enter": would, "blocks": blocks, "guards_why": why}
+                               "tags": list(row.tags or []), **det, "would_enter": would, "blocks": blocks, "guards_why": why,
+                               "daily": dwhy, "halted": halted}
                     r.setex(_k_shadow(fam.key, sym, row.id), SHADOW_TTL, json.dumps(payload, default=str))
                     if would and cool_s > 0:
                         r.setex(cool_key, cool_s, "1")
@@ -212,8 +280,11 @@ def run_rule_families_once() -> dict:
                 # ── on: 실주문 ──
                 if blocks:
                     _bump(stat, fam.key, blocks[0])
-                    logger.info("[%s] ⏸ %s %s %s 진입 안 함 — %s (진입 봉 종가 %s · 지금 %s)", FIX, fam.key, sym, fam.side,
-                                ",".join(blocks), entry, px)
+                    logger.info("[%s] ⏸ %s %s %s 진입 안 함 — %s (진입 봉 종가 %s · 지금 %s · %s)", FIX, fam.key, sym, fam.side,
+                                ",".join(blocks), entry, px, dwhy)
+                    continue
+                if entry_mode == "split":
+                    _enter_split(db, r, stat, acc, fam, sym, px, cool_key, cool_s, row.id, det)
                     continue
                 sp, stop_src = _stop_price_pct(db, acc, fam, sym, px, lev)
                 cap = RF.setting_float(db, f"{fam.key}_capital_usdt")
@@ -247,8 +318,8 @@ def run_rule_families_once() -> dict:
         except Exception:  # noqa: BLE001
             pass
         if stat["rows"] or stat["err"]:
-            logger.info("[%s] 규칙 가족: 모드=%s 새 가상행=%d 그림자=%d 진입=%d 오류=%d 가족별=%s 마지막 가상진입=%s", FIX, modes,
-                        stat["rows"], stat["shadow"], stat["entered"], stat["err"], stat["fam"], stat["last_paper_open"])
+            logger.info("[%s] 규칙 가족: 모드=%s 새 가상행=%d 그림자=%d 진입=%d 오류=%d 중단=%s 가족별=%s 마지막 가상진입=%s", FIX, modes,
+                        stat["rows"], stat["shadow"], stat["entered"], stat["err"], halted, stat["fam"], stat["last_paper_open"])
         return stat
     finally:
         db.close()

@@ -185,6 +185,14 @@ def run_managed_symbols_once() -> dict:
                     ms.last_reasons = reasons
                     _skip("slot_full")
                     continue
+                # 🗓 2026-09-15 가족별 하루 최대 (auto_family_registry · 관리 재진입 = managed_reentry):
+                #   막힐 시도라면 워커 자체 한도·쿨다운을 소비하지 않는다 (반박 검증 9/15 #4)
+                from app.services import auto_family_registry as _AF
+                if _AF.enabled(db) and _AF.count_today(db, _AF.MANAGED.key) >= _AF.daily_max(db, _AF.MANAGED.key):
+                    reasons["state"] = f"{side} 신호 — 가족별 하루 최대 소진 (daily_max_{_AF.MANAGED.key})"
+                    ms.last_reasons = reasons
+                    _skip("family_daily_max")
+                    continue
                 # 시도 = 한도·쿨다운 소비 (성공 여부와 무관 — 실패 시도가 60초마다 반복되지 않게, C5)
                 n = MS.bump_daily(now)
                 MS.set_entry_cooldown(ms.symbol, cooldown_sec)

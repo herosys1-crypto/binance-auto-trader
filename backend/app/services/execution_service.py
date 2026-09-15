@@ -193,6 +193,9 @@ class ExecutionService:
         if AccountKillSwitchService(self.db).is_enabled(strategy.exchange_account_id):
             raise ValueError("Account kill-switch is enabled; new orders are blocked")
         _halt371.check_order(self.db, strategy, action="stage1", manual_action=_halt371.is_manual_action(origin))   # ⛔ Fix 371
+        if not _halt371.is_manual_action(origin):   # 🗓 가족별 하루 최대 진입 (2026-09-15) — 실제 1차 주문 직전, 자기 자신 제외
+            from app.services.auto_family_registry import check_instance as _daily_check_si
+            _daily_check_si(self.db, strategy, where="1차 주문")
         stage_plan = next((p for p in strategy.stage_plans if p.stage_no == 1), None)
         if not stage_plan:
             raise ValueError("Stage 1 plan not found")

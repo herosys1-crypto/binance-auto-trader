@@ -868,14 +868,18 @@ def check_bb_swing() -> None:
         (ok if 'id="bb_swing"' in sr and "run_bb_swing_once" in sr else fail)("스케줄러 잡 bb_swing (60초, 15분 완성봉당 1회)")
         with open(os.path.join(_ROOT, "app/workers/bb_swing_worker.py"), encoding="utf-8") as f:
             wk = f.read()
-        for pin, label in (("capital_management_mode=SPLIT_ENTRY_MODE", "볼밴 분할 실행 경로(split_entry) — 손절·재앵커·제외 목록 상속"),
-                           ("_guards_ok(db, account", "진입 가드 (킬스위치·ban·잔액·중복·전용 슬롯)"),
-                           ("verify_stage_plans(plans", "주문 전 죽은 단계 검산"),
-                           ("_completed(bc.get_klines", "진행 중 봉 제외"),
-                           ("halt_enabled(db)", "Fix 371 자동매매 중단 중이면 on 이어도 그림자로만 기록")):
-            (ok if pin in wk else fail)(f"{label}: {pin}")
-        i_v, i_s = wk.find("verify_stage_plans(plans"), wk.find(".start_stage1(")
-        (ok if 0 < i_v < i_s and wk.count(".start_stage1(") == 1 else fail)("검산 → 1차 주문 순서 (주문 경로 1곳)")
+        with open(os.path.join(_ROOT, "app/services/split_entry_executor.py"), encoding="utf-8") as f:
+            sx = f.read()
+        for pin, label, src in (("open_split_position(", "진입 = 공용 분할 실행기 (규칙 가족과 같은 코드)", wk),
+                                ("_guards_ok(db, account", "진입 가드 (킬스위치·ban·잔액·중복·전용 슬롯)", wk),
+                                ("_completed(bc.get_klines", "진행 중 봉 제외", wk),
+                                ("halt_enabled(db)", "Fix 371 자동매매 중단 중이면 on 이어도 그림자로만 기록", wk),
+                                ("capital_management_mode=SPLIT_ENTRY_MODE", "실행기 = 볼밴 분할 경로(split_entry) — 손절·재앵커·제외 목록 상속", sx),
+                                ("verify_stage_plans(plans", "실행기 주문 전 죽은 단계 검산", sx)):
+            (ok if pin in src else fail)(f"{label}: {pin}")
+        i_v, i_s = sx.find("verify_stage_plans(plans"), sx.find(".start_stage1(")
+        (ok if 0 < i_v < i_s and sx.count(".start_stage1(") == 1 and wk.count(".start_stage1(") == 0 else fail)(
+            "검산 → 1차 주문 순서 (주문 경로 = 실행기 1곳)")
     except Exception as e:  # noqa: BLE001
         fail(f"코드 층 검사 실패: {e!r}")
         return
@@ -916,6 +920,59 @@ def check_bb_swing() -> None:
         fail(f"운영 층 조회 실패: {e!r}")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# 🗓 자동매매 준비 (2026-09-15 사장님) — 가족별 하루 최대 · 규칙 가족 12 · 분할 10/100/200 · 화면 라벨
+# ─────────────────────────────────────────────────────────────────────────
+def check_auto_entry_ready() -> None:
+    print("🗓 자동매매 준비 (가족별 하루 최대 · 규칙 가족 12 · 분할 10/100/200)")
+    try:
+        from app.services import auto_family_registry as AF
+        from app.services import rule_families as RF
+        from app.services import split_entry_executor as SX
+        (ok if AF.DEFAULT_DAILY_MAX == 1 else fail)("하루 최대 코드 기본 = 1 (사장님 「모두 일최대 1개」)")
+        (ok if len(RF.FAMILIES) == 12 and all(RF.SETTINGS[f"{f.key}_mode"][0] == "shadow" for f in RF.FAMILIES) else fail)(
+            f"규칙 가족 {len(RF.FAMILIES)}개 · 코드 기본 모드 전부 shadow")
+        caps, steps, sl, note = SX.parse_config(None, None, None)
+        (ok if [float(c) for c in caps] == [10, 100, 200] and note == "설정 OK" else fail)(f"분할 기본 {caps} · {steps} · 손절 ROI {sl} ({note})")
+        (ok if SX.SPLIT_TOTAL_DEFAULT == 3 else fail)(f"분할 자동 전략 전체 동시 상한 기본 {SX.SPLIT_TOTAL_DEFAULT} (130% 예약이 다른 가족 2단계를 막지 않게)")
+        with open(os.path.join(_ROOT, "app/services/strategy_service.py"), encoding="utf-8") as f:
+            ss = f.read()
+        with open(os.path.join(_ROOT, "app/services/execution_service.py"), encoding="utf-8") as f:
+            es = f.read()
+        (ok if 0 < ss.find("_halt_create371(self.db") < ss.find("_daily_check(self.db") else fail)("생성 게이트: 자동매매 중단 → 하루 최대")
+        (ok if 0 < es.find('action="stage1", manual_action') < es.find("_daily_check_si(self.db, strategy") else fail)("1차 주문 게이트: 자동매매 중단 → 하루 최대")
+        from app.services.single_entry_guard import SINGLE_ENTRY_STRATEGY_TYPES
+        (ok if RF.RF_STRATEGY_TYPES <= SINGLE_ENTRY_STRATEGY_TYPES else fail)("규칙 가족 전부 피라미딩 제외 목록 등록")
+    except Exception as e:  # noqa: BLE001
+        fail(f"코드 층 검사 실패: {e!r}")
+        return
+    if CODE_ONLY:
+        skip("--code-only: 운영 층 생략")
+        return
+    try:
+        from app.core.database import SessionLocal
+        from app.services import auto_family_registry as AF
+        from app.services import rule_families as RF
+        from app.services.auto_trading_halt import halt_enabled
+        db = SessionLocal()
+        try:
+            print(f"  ▸ 자동매매 중단(Fix 371) = {'중단 중 — 자동 주문 없음' if halt_enabled(db) else '재개됨'} · 하루 최대 한도 = {'켬' if AF.enabled(db) else '끔'}")
+            print("  ▸ 가족 | 하루 최대 | 오늘(KST) 진입")
+            for fam in AF.known_families():
+                print(f"     {fam.key:22} {fam.label:24} {AF.daily_max(db, fam.key):>3} | {AF.count_today(db, fam.key):>3}")
+            print("  ▸ 규칙 가족 모드 · 진입 방식")
+            for f in RF.FAMILIES:
+                print(f"     {f.key:18} {RF.mode_of(db, f.key):6} {RF.entry_of(db, f.key):6} 자리 {','.join(sorted(RF.places_of(db, f.key)))}  ({f.label})")
+            caps, steps, sl, tp1, trail, note = RF.split_config(db)
+            print(f"  ▸ 규칙 가족 분할 = {'/'.join(str(c) for c in caps)} · 심도 {'/'.join(str(s) for s in steps)}% · 손절 ROI {sl} · TP1 {tp1} · 트레일 {trail} ({note})")
+            from app.services.split_entry_executor import split_total_full
+            print(f"  ▸ {split_total_full(db)[1]}")
+        finally:
+            db.close()
+    except Exception as e:  # noqa: BLE001
+        fail(f"운영 층 조회 실패: {e!r}")
+
+
 if __name__ == "__main__":
     print(f"verify_fix364_deploy — {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z} (cwd {_ROOT})")
     check_code()
@@ -932,6 +989,7 @@ if __name__ == "__main__":
     check_family_separation()
     check_paper_improvement()
     check_bb_swing()
+    check_auto_entry_ready()
     print("─" * 70)
     if _fails:
         print(f"결과: FAIL {len(_fails)}건")

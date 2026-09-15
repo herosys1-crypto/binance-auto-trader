@@ -17,8 +17,8 @@
 | 상승중 | 완성된 4H 종가 EMA20 > EMA50 | `bb_swing_trend` (ema) |
 | SHORT 진입 | 15m 종가가 상단 밖 **2봉 이상 연속** + 그 구간 최고 종가에서 **꺾임** + **RSI 고점 신호** (직전 3봉 최고 ≥ 70, 지금 하락) | `bb_swing_short_persist` (2) · `bb_swing_short_indicator` (rsi) · `bb_swing_rsi_high` (70) |
 | LONG 진입 | 15m 저가가 **하단에 닿고 종가는 하단 위** = 하단 지지 | `bb_swing_support_tol_pct` (0) · `bb_swing_long_indicator` (none) · `bb_swing_rsi_low` (35) |
-| 분할 | 1차 100 시장가 → 2차 200 · 3차 300 (1차 체결가 기준 약 2%씩 불리한 방향) | `bb_swing_capitals` (100,200,300) · `bb_swing_steps` (3,5,7) |
-| 손절 | 평단 ROI **−10%** 전량. 계산상 **3차까지 다 들어간 뒤에만** 닿는다 (매 사이클 `check_no_dead_stage` 검산) | `bb_swing_sl_roi` (10) |
+| 분할 | 10 → 100 → 200 USDT (1차 체결가 기준 약 2%씩 불리한 방향 · 2026-09-15 사장님 「10 100 200」) | `bb_swing_capitals` (10,100,200) · `bb_swing_steps` (3,5,7) |
+| 손절 | 평단 ROI **−10%** 전량. 손절가는 가격상 2·3차 트리거보다 뒤다 (`check_no_dead_stage` 검산). ⚠️ 단 2·3차는 볼밴 분할 추가 게이트(정점-주춤·조정 신호)를 통과해야 들어가므로 **1차만 든 채 손절**될 수 있다 (2026-09-15 반박 검증) | `bb_swing_sl_roi` (10) |
 | 익절 | TP1 ROI **+5%** 부터 +10/+15/+20 에 **25%씩**, TP1 뒤 트레일링 3% | `bb_swing_tp1_pct` (5) · `bb_swing_trailing_pct` (3) |
 | 전환 | 반대 신호가 오면 같은 가족 반대 포지션 잔량을 시장가 청산하고 새 방향 진입 | `bb_swing_flip_close` (1) |
 | 한도 | 전용 동시 보유 2 · 심볼·방향당 24h 2회 · 감시 = 거래대금 상위 40 | `bb_swing_max_concurrent` (2) · `bb_swing_cycles_per_day` (2) · `bb_swing_top_n` (40) |

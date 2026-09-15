@@ -115,7 +115,7 @@ def _row(i, rule, side, tags, *, sym="AAAUSDT", age_min=5, entry="1.0"):
 
 
 def _run(monkeypatch, db, rows, *, red=None, guards=(True, "ok"), price=lambda s: 1.0,
-         opposite=lambda db, sym, side: False, global_off=False):
+         opposite=lambda db, sym, side: False, global_off=False, daily_full=False, halted=False, split_full=False):
     red = red if red is not None else _Redis()
     monkeypatch.setattr(W, "SessionLocal", lambda: db)
     monkeypatch.setattr(W, "get_redis_client", lambda: red)
@@ -126,6 +126,9 @@ def _run(monkeypatch, db, rows, *, red=None, guards=(True, "ok"), price=lambda s
     monkeypatch.setattr(W, "_price", price)
     monkeypatch.setattr(W, "_opposite_active", opposite)
     monkeypatch.setattr(W, "_global_auto_off", lambda _db: global_off)
+    monkeypatch.setattr(W, "_daily_full", lambda _db, fam: (daily_full, "오늘 테스트"))
+    monkeypatch.setattr(W, "_halted", lambda _db: halted)
+    monkeypatch.setattr("app.services.split_entry_executor.split_total_full", lambda _db: (split_full, "전체 테스트"))
     return red, W.run_rule_families_once()
 
 
@@ -179,7 +182,7 @@ def test_on_enters_through_create_surge_position_with_family_params(monkeypatch)
     rows = [_row(10, "s2_hist_turn_down", "SHORT", ["UP"], sym="XUSDT", entry="2.0"),
             _row(11, "s2_hist_turn_down", "SHORT", ["UP"], sym="YUSDT", entry="2.0")]
     prices = {"XUSDT": 2.01, "YUSDT": 2.1}                                     # Y = 5% 움직임 → 주문 안 함
-    red, st = _run(monkeypatch, _DB(rf_s2_short_mode="on"), rows, price=lambda s: prices[s])
+    red, st = _run(monkeypatch, _DB(rf_s2_short_mode="on", rf_s2_short_entry="single"), rows, price=lambda s: prices[s])
     assert st["entered"] == 1 and st["fam"]["rf_s2_short"] == {"entered": 1, "drift": 1}
     k = calls[0]
     assert (k["symbol"], k["side"], k["capital"], k["sl_price_pct"], k["leverage"], k["attempt_no"]) == ("XUSDT", "SHORT", 10.0, 12.5, 2, 1)
@@ -196,7 +199,7 @@ def test_on_blocks_opposite_side_and_global_off(monkeypatch):
     _, st2 = _run(monkeypatch, _DB(rf_bottom_long_mode="on"), [_row(31, "bottom_331", "LONG", ["LIVE_OK"], sym="QUSDT")],
                   global_off=True)
     assert calls == [] and st2["fam"]["rf_bottom_long"] == {"global_auto_off": 1}
-    _, st3 = _run(monkeypatch, _DB(rf_bottom_long_mode="on", rf_allow_hedge="1"), [_row(32, "bottom_331", "LONG", ["LIVE_OK"], sym="HEDGEUSDT")],
+    _, st3 = _run(monkeypatch, _DB(rf_bottom_long_mode="on", rf_bottom_long_entry="single", rf_allow_hedge="1"), [_row(32, "bottom_331", "LONG", ["LIVE_OK"], sym="HEDGEUSDT")],
                   opposite=lambda db, sym, side: True)
     assert len(calls) == 1 and st3["fam"]["rf_bottom_long"] == {"entry_blocked": 1}          # 허용하면 가드까지 간다
 
@@ -207,9 +210,9 @@ def test_on_blocked_entry_is_not_retried_and_shadow_cooldown_does_not_block_on(m
     red, st = _run(monkeypatch, _DB(), [_row(20, "bottom_331", "LONG", ["LIVE_OK"], sym="ZUSDT")])          # 그림자 → 그림자 쿨다운
     assert "rf:cooldown:shadow:rf_bottom_long:ZUSDT" in red.store
     rows = [_row(21, "bottom_331", "LONG", ["LIVE_OK"], sym="ZUSDT")]
-    _, st = _run(monkeypatch, _DB(rf_bottom_long_mode="on"), rows, red=red)                              # on 은 그림자 쿨다운에 안 막힘
+    _, st = _run(monkeypatch, _DB(rf_bottom_long_mode="on", rf_bottom_long_entry="single"), rows, red=red)   # on 은 그림자 쿨다운에 안 막힘
     assert len(calls) == 1 and st["fam"]["rf_bottom_long"] == {"entry_blocked": 1}
-    _, st2 = _run(monkeypatch, _DB(rf_bottom_long_mode="on"), rows, red=red)
+    _, st2 = _run(monkeypatch, _DB(rf_bottom_long_mode="on", rf_bottom_long_entry="single"), rows, red=red)
     assert len(calls) == 1 and st2["rows"] == 0
 
 
@@ -230,3 +233,62 @@ def test_registered_as_single_entry_and_scheduled_and_not_picked_by_reentry():
     assert "nx=True" in wk and "is_account_banned(acc.id)" in wk
     ptw = (ROOT / "workers" / "paper_trading_worker.py").read_text(encoding="utf-8")
     assert "rule_famil" not in ptw and "create_surge_position" not in ptw, "가상매매는 주문 경로를 모른다"
+
+
+# ── 2026-09-15 확장: 12 가족 · 분할 10/100/200 · 하루 최대 · 자동매매 중단 ──────────────
+def test_2026_09_15_families_defaults_split_and_registry():
+    db = _DB()
+    assert len(RF.FAMILIES) == 12 and len({f.key for f in RF.FAMILIES}) == 12 and len({f.stype for f in RF.FAMILIES}) == 12
+    assert all(RF.entry_of(db, f.key) == "split" for f in RF.FAMILIES)
+    assert RF.entry_of(_DB(rf_off8_entry="SINGLE"), "rf_off8") == "single" and RF.entry_of(_DB(rf_off8_entry="x"), "rf_off8") == "split"
+    assert all(RF.places_of(db, f.key) == {"ALL"} for f in RF.FAMILIES[3:])
+    caps, steps, sl, tp1, trail, note = RF.split_config(db)
+    assert [float(c) for c in caps] == [10, 100, 200] and [float(x) for x in steps] == [3, 5, 7] and float(sl) == 10
+    assert (tp1, trail, note) == (5.0, 3.0, "설정 OK")
+    caps2, *_rest, note2 = RF.split_config(_DB(rf_split_capitals="10,100", rf_split_tp1_pct="999"))
+    assert [float(c) for c in caps2] == [10, 100, 200] and "자본" in note2 and _rest[2] == 5.0
+    for i, a in enumerate(RF.RF_TEMPLATE_PREFIXES):            # 전용 슬롯은 ilike 접두사로 센다 — 서로 접두사가 되면 안 된다
+        assert not any(b != a and b.startswith(a) for b in RF.RF_TEMPLATE_PREFIXES), a
+    from app.services import auto_family_registry as AF
+    for f in RF.FAMILIES:
+        af = AF.family_for(strategy_type=f.stype, template_name=f"{f.prefix}_XUSDT", entry_origin=None)
+        assert af is not None and af.key == f.key and af.label == f.label
+
+
+def test_on_split_goes_through_shared_executor_with_10_100_200(monkeypatch):
+    calls = []
+
+    def _open(db, acc, **k):
+        calls.append(k)
+        return NS(id=900), "entered", ""
+    monkeypatch.setattr("app.services.split_entry_executor.open_split_position", _open)
+    single = _no_orders(monkeypatch)
+    rows = [_row(40, "off8_267", "SHORT", ["UP"], sym="OFFUSDT", entry="2.0")]
+    red, st = _run(monkeypatch, _DB(rf_off8_mode="on"), rows, price=lambda s: 2.01)
+    assert single == [] and st["entered"] == 1 and st["fam"]["rf_off8"] == {"entered": 1}
+    k = calls[0]
+    assert (k["symbol"], k["side"], k["price"], k["strategy_type"], k["name_prefix"]) == ("OFFUSDT", "SHORT", 2.01, "rf_off8_267", "RF_OFF8_")
+    assert [float(c) for c in k["caps"]] == [10, 100, 200] and float(k["sl_roi"]) == 10 and k["tp1"] == 5.0 and k["label"] == "정점 대비 −8% SHORT"
+    assert "rf:cooldown:rf_off8:OFFUSDT" in red.store
+
+
+def test_split_guard_and_start_failure_and_daily_max_and_halt(monkeypatch):
+    opened = []
+    monkeypatch.setattr("app.services.split_entry_executor.open_split_position",
+                        lambda db, acc, **k: (opened.append(k) or (None, "start_failed", "chg24 gate")))
+    rows = [_row(50, "pullback_331", "LONG", ["UP"], sym="PBUSDT")]
+    _, st = _run(monkeypatch, _DB(rf_pullback_long_mode="on"), rows, guards=(False, "킬스위치 ON"))
+    assert opened == [] and st["fam"]["rf_pullback_long"] == {"guards": 1}               # 가드가 먼저
+    red, st2 = _run(monkeypatch, _DB(rf_pullback_long_mode="on"), [_row(51, "pullback_331", "LONG", ["UP"], sym="PBUSDT")])
+    assert len(opened) == 1 and st2["fam"]["rf_pullback_long"] == {"start_failed": 1}
+    assert "rf:cooldown:rf_pullback_long:PBUSDT" in red.store                            # 실패 뒤 재시도 금지
+    _, st3 = _run(monkeypatch, _DB(rf_pullback_long_mode="on"), [_row(52, "pullback_331", "LONG", ["UP"], sym="P2USDT")], daily_full=True)
+    assert len(opened) == 1 and st3["fam"]["rf_pullback_long"] == {"daily_max": 1}       # 하루 최대 = 주문 없음
+    red4, st4 = _run(monkeypatch, _DB(rf_pullback_long_mode="on"), [_row(53, "pullback_331", "LONG", ["UP"], sym="P3USDT")], halted=True)
+    assert len(opened) == 1 and st4["shadow"] == 1 and st4["halted"] is True             # 중단 중 = 그림자 기록
+    p = json.loads(red4.store["rf:shadow:rf_pullback_long:P3USDT:53"])
+    assert p["halted"] is True and p["entry_mode"] == "split" and "rf:cooldown:shadow:rf_pullback_long:P3USDT" in red4.store
+    _, st5 = _run(monkeypatch, _DB(rf_pullback_long_mode="on"), [_row(54, "pullback_331", "LONG", ["UP"], sym="P4USDT")], split_full=True)
+    assert len(opened) == 1 and st5["fam"]["rf_pullback_long"] == {"split_total_full": 1}   # 전체 분할 상한 (H1)
+    _, st6 = _run(monkeypatch, _DB(rf_pullback_long_mode="on", rf_split_capitals="10,100"), [_row(55, "pullback_331", "LONG", ["UP"], sym="P5USDT")])
+    assert len(opened) == 1 and st6["fam"]["rf_pullback_long"] == {"split_config_invalid": 1}  # 설정 손상 = 기본값으로 거래 안 함 (L2)

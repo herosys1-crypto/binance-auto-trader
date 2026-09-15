@@ -2069,6 +2069,7 @@ function strategyBadge(type) {
   }
   if (t.indexOf('pump_split') === 0)        return { cls: 'auto', text: '🤖 볼밴분할' };
   if (t.indexOf('bb_swing') === 0)          return { cls: 'auto', text: '🤖 볼밴스윙' };
+  if (t.indexOf('rf_') === 0)               return { cls: 'auto', text: '🤖 규칙 ' + t.slice(3) };
   if (t.indexOf('bb_mid_line') === 0)       return { cls: 'auto', text: '🤖 중단선' };
   if (t.indexOf('surge_peak_ladder') === 0) return { cls: 'auto', text: '🤖 급등사다리' };
   if (t.indexOf('realtime_reentry') === 0)  return { cls: 'auto', text: '🤖 재진입' };

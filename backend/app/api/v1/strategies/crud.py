@@ -136,6 +136,11 @@ def list_strategies(
         resp.family = family_of(r)
         # 🔀 Fix 369 리뷰: 관리 재진입 복제 템플릿(_quick_m...)을 화면에서 가려내려면 이름이 필요.
         resp.template_name = tpl.name if tpl else None
+        # 🗓 2026-09-15: 자동 전략 가족 라벨 (화면 배지) — 사람이 만든 전략은 None
+        from app.services.auto_family_registry import family_for as _auto_family_for
+        _af = _auto_family_for(strategy_type=getattr(tpl, "strategy_type", None), template_name=getattr(tpl, "name", None),
+                               entry_origin=getattr(r, "entry_origin", None))
+        resp.auto_family, resp.auto_label = (_af.key, _af.label) if _af else (None, None)
         out.append(resp)
     # 2026-05-20: 라이브 markPrice 로 unrealized_pnl 재계산 (Redis mget 1회).
     # 캐시 miss 인 심볼은 stored 값 유지 — backward-compat.

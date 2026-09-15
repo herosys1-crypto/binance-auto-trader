@@ -630,6 +630,11 @@ class StrategyService:
         #   중단 중(auto_trading_halt, 행 없음 = 중단)에는 화면 모달 생성(entry_origin=manual_modal) + 가족 기존 방식·OBV 자동만 통과한다.
         from app.services.auto_trading_halt import check_create as _halt_create371
         _halt_create371(self.db, entry_origin=entry_origin, entry_profile=_entry_profile369)
+        # 🗓 가족별 하루 최대 진입 (2026-09-15 사장님 「모두 일최대 1개 · 각각 일 최대 제한수를 정할수 있게」):
+        #   자동 생성만 센다 (모달·빠른 진입 제외). 한도가 찼으면 인스턴스를 만들지 않는다. 판정 = auto_family_registry.
+        from app.services.auto_family_registry import check as _daily_check
+        _daily_check(self.db, strategy_type=getattr(template_model, "strategy_type", None),
+                     template_name=getattr(template_model, "name", None), entry_origin=entry_origin, where="전략 생성", lock=True)
         instance = StrategyInstance(
             user_id=user_id,
             exchange_account_id=exchange_account_id,

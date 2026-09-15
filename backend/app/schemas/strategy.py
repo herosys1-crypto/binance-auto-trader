@@ -118,6 +118,10 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     # entry_profile 은 창구(사람이 만든 두 모달)만 구분하고, family 는 SPLIT/사다리/단일진입까지
     # 포함한 전체 판정이라 화면 배지·자동 채움은 이걸 우선 사용해야 한다 (crud.py 가 채움).
     family: str | None = None
+    # 🗓 2026-09-15 사장님 「포지션에 들어가면 구분할수있게 확실하게」: 자동 전략 가족(app.services.auto_family_registry).
+    #   사람이 만든 전략 = None. auto_label = 화면 배지 이름 (예: "볼밴 스윙", "3A 반등 뒤 hist 꺾임 SHORT").
+    auto_family: str | None = None
+    auto_label: str | None = None
     # 🔀 Fix 369 리뷰 (2026-09-13, HIGH #2 부수 항목): 관리 재진입 프로브가 복제한 템플릿
     # (managed_symbols.py template_for_side, 이름 `_quick_m<timestamp>_<SIDE>`)은 trigger_mode=
     # OBV_REVERSE 를 그대로 물려받아 family_of() 만으로는 「OBV 모달이 직접 만든 전략」과 구분이
