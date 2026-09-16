@@ -135,6 +135,9 @@ def run_ladder_restart_once() -> dict:
         stat["skipped"][why] = stat["skipped"].get(why, 0) + 1
 
     try:
+        from app.services.worker_switch import is_on as _sw374, off_note as _swoff374   # 🎛 Fix 374 관제실 스위치
+        if not _sw374(db, "ladder_restart_enabled"):
+            return {**stat, **_swoff374("ladder_restart_enabled")}
         # 🧭 Fix 365: 프로브 모드(기본)면 OBV 재진입은 managed_symbol_worker 가 맡는다 (10 USDT × 10회, 양방향). 여기선 양보.
         try:
             from app.services.managed_symbols import probe_mode as _probe365

@@ -1320,6 +1320,9 @@ def run_auto_long_at_bottom_once() -> dict:
         "[Fix244] 급등중 조정 1순위 경로 = %s", "ON" if _sp_on else "OFF(설정)",
     )
     try:
+        from app.services.worker_switch import is_on as _sw374, off_note as _swoff374   # 🎛 Fix 374 관제실 스위치
+        if not _sw374(db, "sajangnim_bottom_long_enabled"):
+            return _swoff374("sajangnim_bottom_long_enabled")
         # 🌟 Fix 87 P0 (2026-08-25 사장님!): BTC 방향 필터 = 하락장 = LONG 전면 skip!
         # (auto_short_at_top BTC 필터 대칭 = SHORT 대칭 정합성!)
         _btc_blocked, _btc_reason = _matches_btc_direction_conflict_long()

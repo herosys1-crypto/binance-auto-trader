@@ -116,6 +116,9 @@ def run_auto_short_at_top() -> dict:
     results: list[dict] = []
     try:
         # 1. daily_limit 체크! (v219 통합 = auto_bb_break_daily_limit 공유!)
+        from app.services.worker_switch import is_on as _sw374, off_note as _swoff374   # 🎛 Fix 374 관제실 스위치
+        if not _sw374(db, "sajangnim_top_short_enabled"):
+            return _swoff374("sajangnim_top_short_enabled")
         # 🚨 Fix 109 (2026-08-26 헌법 80): 조기 return 무로그 금지!
         #   사장님 실측: 「[sajangnim_top_v219] 완료」 로그가 30초마다 나오다가
         #   갑자기 0건 = 워커가 죽은 건지 조기 종료인지 구별 불가!

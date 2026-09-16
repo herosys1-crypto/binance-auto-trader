@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🎛 자동매매 관제실</title>
+<!--
+  🎛 Fix 374 (2026-09-16 사장님) — 「자동매매 준비 가족 12종과 모든 자동매매를 한곳으로 모아서
+  사용과 관리가 편리하게 ui를 개선해줘」
+
+  이 화면 하나에서: 전면 중단/재개 · 규칙 가족 12 · 실매매 워커 15 · 외부 매매법 2 의
+  켜기/그림자/끄기 · 하루 최대 · 동시 보유 상한 · 자본·손절 값을 본다.
+  값은 전부 system_settings 행이라 저장 즉시 적용된다 (재시작 불필요).
+  API = /api/v1/auto-control/* (backend/app/api/v1/auto_control.py)
+-->
+<style>
+  :root {
+    --bg: #0f172a; --panel: rgba(30,41,59,.55); --line: #334155; --line2: #1e293b;
+    --fg: #e2e8f0; --dim: #94a3b8; --on: #22c55e; --shadow: #f59e0b; --off: #64748b;
+    --danger: #ef4444; --accent: #22d3ee; --purple: #7c3aed;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); margin: 0; padding: 10px 14px 90px;
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; }
+  a { color: var(--accent); }
+  h1 { font-size: 17px; margin: 0; color: var(--accent); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;
+          border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .btn { background: #1e293b; color: var(--fg); border: 1px solid var(--line); border-radius: 6px;
+         padding: 6px 11px; cursor: pointer; font-size: 12px; }
+  .btn:hover { background: #273549; }
+  .btn-primary { background: var(--purple); border-color: var(--purple); color: #fff; }
+  .btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+  .btn-go { background: var(--on); border-color: var(--on); color: #05230f; font-weight: 700; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* 전면 중단 배너 */
+  .banner { border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; border: 1px solid; }
+  .banner.halted { background: rgba(239,68,68,.12); border-color: var(--danger); }
+  .banner.running { background: rgba(34,197,94,.12); border-color: var(--on); }
+  .banner .big { font-size: 15px; font-weight: 700; }
+  .ks { background: rgba(245,158,11,.14); border: 1px solid var(--shadow); border-radius: 8px;
+        padding: 8px 12px; margin-bottom: 10px; font-size: 12px; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 6px; margin-bottom: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; text-align: center; }
+  .card .l { font-size: 10px; color: var(--dim); }
+  .card .v { font-size: 19px; font-weight: 700; }
+
+  .sec { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+         padding: 10px; margin-bottom: 10px; }
+  .sec > h2 { font-size: 13.5px; margin: 0 0 8px; display: flex; justify-content: space-between;
+              align-items: center; gap: 8px; flex-wrap: wrap; }
+  .muted { color: var(--dim); font-size: 11px; font-weight: 400; }
+
+  .fam { border: 1px solid var(--line2); border-radius: 7px; padding: 7px 9px; margin-bottom: 6px;
+         background: rgba(15,23,42,.45); }
+  .fam.is-on { border-left: 3px solid var(--on); }
+  .fam.is-shadow { border-left: 3px solid var(--shadow); }
+  .fam.is-off { border-left: 3px solid var(--off); }
+  .fam-top { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: start; }
+  .fam-name { font-weight: 600; }
+  .fam-meta { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  .fam-note { font-size: 11px; color: #cbd5e1; margin-top: 3px; }
+  .badge { display: inline-block; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 700; }
+  .b-on { background: rgba(34,197,94,.2); color: var(--on); }
+  .b-shadow { background: rgba(245,158,11,.2); color: var(--shadow); }
+  .b-off { background: rgba(100,116,139,.25); color: #cbd5e1; }
+  .stat { font-size: 11px; color: var(--dim); }
+  .stat b { color: var(--fg); }
+
+  label.f { display: inline-flex; flex-direction: column; gap: 2px; font-size: 10px; color: var(--dim); }
+  select, input[type=text], input[type=number] {
+    background: #0b1220; color: var(--fg); border: 1px solid var(--line); border-radius: 5px;
+    padding: 4px 6px; font-size: 12px; min-width: 74px; font-family: inherit;
+  }
+  input.wide { min-width: 132px; }
+  .dirty { outline: 2px solid var(--accent); }
+  .detail { margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--line2); }
+  .detail .row { gap: 10px; }
+  .keyref { font-size: 10px; color: #64748b; font-family: ui-monospace, monospace; }
+
+  .savebar { position: fixed; left: 0; right: 0; bottom: 0; background: #111c31; border-top: 1px solid var(--line);
+             padding: 8px 14px; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+  .savebar.hidden { display: none; }
+  #msg { font-size: 12px; }
+  .err { color: var(--danger); }
+  .ok { color: var(--on); }
+  table.det { width: 100%; border-collapse: collapse; font-size: 11px; }
+  table.det td { padding: 3px 6px; border-bottom: 1px solid var(--line2); }
+  @media (max-width: 560px) {
+    .fam-top { grid-template-columns: 1fr; }
+    body { padding: 8px 10px 96px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div>
+    <h1>🎛 자동매매 관제실</h1>
+    <div class="muted" id="subtitle">불러오는 중…</div>
+  </div>
+  <div class="row">
+    <input type="text" id="q" class="wide" placeholder="가족·설정 키 검색">
+    <label class="row muted" style="gap:4px"><input type="checkbox" id="only-on"> 켜진 것만</label>
+    <button class="btn" onclick="load()">↻ 새로고침</button>
+    <button class="btn" onclick="window.close()">✕ 닫기</button>
+  </div>
+</div>
+
+<div id="banner"></div>
+<div id="ks"></div>
+<div class="cards" id="summary"></div>
+<div id="globals"></div>
+<div id="groups"></div>
+<div id="extras"></div>
+
+<div class="savebar hidden" id="savebar">
+  <div id="msg"></div>
+  <div class="row">
+    <button class="btn" onclick="resetChanges()">되돌리기</button>
+    <button class="btn btn-primary" id="save-btn" onclick="save()">💾 저장</button>
+  </div>
+</div>
+
+<script src="/static/js/auto-control.js"></script>
+<script>load();</script>
+</body>
+</html>

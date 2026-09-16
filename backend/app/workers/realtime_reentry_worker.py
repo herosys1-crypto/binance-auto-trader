@@ -914,6 +914,9 @@ def run_realtime_reentry() -> dict:
 
     try:
         # 1. 🚨 Fix 103 C: 재진입 전용 daily_limit (신규 진입 슬롯 면제!)
+        from app.services.worker_switch import is_on as _sw374   # 🎛 Fix 374 관제실 스위치
+        if not _sw374(db, "realtime_reentry_enabled"):
+            return _finish("실시간 재진입 OFF: realtime_reentry_enabled=0 (관제실에서 켤 수 있음)")
         daily_limit, _limit_src = _get_reentry_daily_limit(db)
         if daily_limit <= 0:
             # 🚨 Fix 103 A: 옛 = 무로그 return (미호출과 구별 불가!) → 이제 반드시 로그!
