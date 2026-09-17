@@ -99,12 +99,12 @@ def _client_for(db: Any, exchange_account_id: int | None):
 
 
 def judge(db: Any, *, symbol: str, side: str, exchange_account_id: int | None = None,
-          client: Any = None, redis_client: Any = None) -> dict[str, Any]:
+          client: Any = None, redis_client: Any = None, family: str | None = None) -> dict[str, Any]:
     """{"verdict","why","features","source"} — 캐시 → 조회. 예외를 올리지 않는다(실패 = unknown)."""
     from app.services import chart_state as CS
     from app.services import entry_conditions as EC
     side = str(side or "").upper()
-    key = f"chart_gate:live:{symbol}:{side}"
+    key = f"chart_gate:live:{symbol}:{side}" + (f":{family}" if family and family in EC.FAMILY_RULES else "")
     r = redis_client
     if r is None:
         try:
@@ -136,7 +136,8 @@ def judge(db: Any, *, symbol: str, side: str, exchange_account_id: int | None = 
             now_ms = int(time.time() * 1000)
             cs = CS.capture(None, symbol, side, now_ms=now_ms, klines=raw, include_1m=False,
                             th=CS.thresholds(db), intervals=("1d", "1h", "5m"))
-            out = EC.evaluate(side, {"chart_state": cs}, chg_24h=_chg24_from_1h(raw.get("1h") or []), p=EC.params(db))
+            out = EC.evaluate(side, {"chart_state": cs}, chg_24h=_chg24_from_1h(raw.get("1h") or []), p=EC.params(db),
+                              family=family)
     except Exception as e:  # noqa: BLE001
         logger.warning("[%s] %s %s 차트 조회 실패 → unknown: %s", FIX, symbol, side, e)
         out = {"verdict": "unknown", "why": [f"fetch_error: {str(e)[:80]}"], "features": {}}
@@ -154,7 +155,7 @@ def precheck(db: Any, *, fam_key: str, symbol: str, side: str, exchange_account_
     mode = mode_for(db, fam_key)
     if mode == "off" or _is_rule_family(fam_key):
         return False, {"mode": mode}
-    res = judge(db, symbol=symbol, side=side, exchange_account_id=exchange_account_id)
+    res = judge(db, symbol=symbol, side=side, exchange_account_id=exchange_account_id, family=fam_key)
     from app.services.entry_conditions import blocks
     return blocks(mode, res), {"mode": mode, **res}
 
@@ -176,7 +177,7 @@ def check(db: Any, *, strategy_type: str | None, template_name: str | None, entr
     mode = mode_for(db, fam.key)
     if mode == "off":
         return {"mode": "off", "family": fam.key}
-    res = judge(db, symbol=symbol, side=side, exchange_account_id=exchange_account_id)
+    res = judge(db, symbol=symbol, side=side, exchange_account_id=exchange_account_id, family=fam.key)
     res = {"mode": mode, "family": fam.key, **res}
     if mode == "shadow":
         try:

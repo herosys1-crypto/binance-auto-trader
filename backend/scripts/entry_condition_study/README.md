@@ -11,3 +11,11 @@
 
 원칙: 조건은 사전등록 **이전** 표본에서 고르고 **이후** 표본으로만 검증한다. 규칙마다 고른 조건은 대부분 검증에서 뒤집혔다.
 결과: docs/learning/ENTRY_CONDITIONS_2026-09-17.md
+
+## 2026-09-18 추가 (Fix 377 상승 초입 LONG)
+- `fetch_update.py` — 캐시에 최신 봉만 덧붙인다 (없는 심볼은 전체 받음).
+- `long_surge.py` → `surge_final.py` → `surge_pick.py` 순으로 상승 초입 LONG 조건을 좁혔다.
+  (「급등 뒤 1시간 되돌림」 가설은 검증에서 뒤집혀 기각 — 과정이 그대로 남아 있다.)
+- `replay_surge.py` — 운영 모듈(entry_conditions, family='rf_surge_long')로 같은 데이터를 재생해 수치 일치 확인.
+
+결과: docs/learning/SURGE_START_LONG_2026-09-18.md

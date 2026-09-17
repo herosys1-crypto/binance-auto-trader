@@ -147,7 +147,7 @@ def test_worker_gate_on_blocks_bad_chart_and_records_verdict(monkeypatch):
 
 def test_worker_gate_shadow_only_records(monkeypatch):
     import tests.test_queue3_rule_families as Q
-    rows = [Q._row(1, "surge_start_346", "LONG", ["DOWN"], snapshot=snap(m5=-1.0), chg_24h=3.0)]
+    rows = [Q._row(1, "surge_start_346", "LONG", ["DOWN"], snapshot=snap(h1=-1.0, m5=-1.0), chg_24h=3.0)]
     red, st = _worker_run(monkeypatch, rows, gate_mode="shadow")
     p = json.loads(red.store["rf:shadow:rf_surge_long:AAAUSDT:1"])
     assert p["would_enter"] is True and p["chart_gate"]["mode"] == "shadow" and p["chart_gate"]["verdict"] == "fail"

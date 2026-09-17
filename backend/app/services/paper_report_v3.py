@@ -488,6 +488,19 @@ def _filters_section(side_rows: list[dict[str, Any]], side: str, base_fn) -> dic
         excluded = [r for r in universe if _EC.evaluate("SHORT", _gate_snapshot(r))["verdict"] != "pass"]
         out["P5_short_near_high_not_d1_up"] = _filter_result(universe, kept, excluded, base_fn)
     if side == "LONG":
+        # P7 (Fix 377, 사전등록 2026-09-18): 고점 바로 밑 추격 금지 · 24h 과열(≥20) 금지 · 24h 0~5% 미동 제외.
+        #   근거 = 가상 LONG 규칙 합산 발견 +0.25 vs 막힘 −0.90 · 검증 +0.90 vs +0.10 (t 4.0) · 상승 초입 LONG 은 검증 5/5일.
+        #   ⚠️ 무작위 LONG 에서는 발견 기간에 반대였다 → 규칙 진입에만 건다(가족 전용 조건은 entry_conditions.FAMILY_RULES).
+        universe = [r for r in live_valid if (r.get("gate") or {}).get("h1_from_hi") is not None
+                    and (r.get("gate") or {}).get("chg24") is not None]
+        def _p7(r):
+            g = r["gate"]
+            hi, chg = g["h1_from_hi"], g["chg24"]
+            return hi <= -1.5 and chg < 20.0 and not (0.0 <= chg < 5.0)
+        kept = [r for r in universe if _p7(r)]
+        excluded = [r for r in universe if not _p7(r)]
+        out["P7_long_no_high_chase"] = _filter_result(universe, kept, excluded, base_fn)
+
         universe = [r for r in live_valid if (r.get("gate") or {}).get("m5_from_hi") is not None]
         kept = [r for r in universe if _EC.evaluate("LONG", _gate_snapshot(r), chg_24h=r["gate"].get("chg24"))["verdict"] == "pass"]
         excluded = [r for r in universe if _EC.evaluate("LONG", _gate_snapshot(r), chg_24h=r["gate"].get("chg24"))["verdict"] != "pass"]

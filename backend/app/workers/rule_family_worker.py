@@ -266,7 +266,7 @@ def run_rule_families_once() -> dict:
                 gate = {"mode": gate_mode}
                 if gate_mode != "off":
                     gate.update(EC.evaluate(fam.side, getattr(row, "snapshot", None), chg_24h=getattr(row, "chg_24h", None),
-                                           p=gate_params))
+                                           p=gate_params, family=fam.key))   # 🎯 Fix 377 가족 전용 조건
                     if EC.blocks(gate_mode, gate):
                         blocks.append("chart_gate")
 

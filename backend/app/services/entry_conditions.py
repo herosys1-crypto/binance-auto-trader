@@ -40,7 +40,14 @@ DEFAULT_PARAMS: dict[str, Any] = {
     "long_min_drop_24h_pct": 5.0,           # LONG: 24h 변동 ≤ −5% 면 통과 (분석 L2)
     "long_min_pullback_5m_pct": 4.0,        # LONG: 5분봉 48개 고점 대비 −4% 이하면 통과 (분석 L4)
     "short_allow_no_daily_trend": False,    # SHORT: 일봉 30개 미만(상장 약 한 달 미만)이라 추세를 모를 때 — False = 막음 (분석과 같음)
+    # 🎯 Fix 377 (2026-09-18 사장님 「상승 초입 LONG 전략을 자세히 분석하고 가상매매로 완성」) — 이 가족만 쓰는 조건
+    "surge_min_pullback_1h_pct": 1.5,       # 1시간봉 16개 고점에서 이만큼은 내려와 있어야 한다 (고점 바로 밑 추격 금지)
+    "surge_max_chg24_pct": 20.0,            # 24h 변동이 이 이상이면 과열 — 진입 안 함
+    "surge_dead_zone_chg24": [0.0, 5.0],    # 24h 이 구간(미동)은 두 기간 모두 손실이라 제외
 }
+
+# 가족별 전용 조건 (없는 가족은 방향 공통 조건). 이름 = 이 모듈의 함수 접미사.
+FAMILY_RULES: dict[str, str] = {"rf_surge_long": "surge_pullback"}
 
 
 def params(db: Any = None) -> dict[str, Any]:
@@ -54,13 +61,23 @@ def params(db: Any = None) -> dict[str, Any]:
         if row is None or not str(row.value or "").strip():
             return out
         data = json.loads(row.value)
-        for k in ("short_max_below_high_pct", "long_min_drop_24h_pct", "long_min_pullback_5m_pct"):
+        for k in ("short_max_below_high_pct", "long_min_drop_24h_pct", "long_min_pullback_5m_pct",
+                  "surge_min_pullback_1h_pct", "surge_max_chg24_pct"):     # 🎯 Fix 377 상승 초입 LONG 전용 숫자
             if k in data:
                 v = float(data[k])
-                if 0 < v <= 50:
+                if 0 < v <= 500:
                     out[k] = v
                 else:
                     logger.warning("[%s] %s.%s=%r 범위 밖 → 기본 %s", FIX, PARAMS_KEY, k, data[k], DEFAULT_PARAMS[k])
+        if isinstance(data.get("surge_dead_zone_chg24"), list) and len(data["surge_dead_zone_chg24"]) == 2:
+            try:
+                lo, hi = (float(x) for x in data["surge_dead_zone_chg24"])
+                if lo <= hi:
+                    out["surge_dead_zone_chg24"] = [lo, hi]
+                else:
+                    logger.warning("[%s] surge_dead_zone_chg24 앞이 더 큼 %r → 기본", FIX, data["surge_dead_zone_chg24"])
+            except (TypeError, ValueError):
+                logger.warning("[%s] surge_dead_zone_chg24 숫자 아님 %r → 기본", FIX, data["surge_dead_zone_chg24"])
         if "short_allow_no_daily_trend" in data:
             out["short_allow_no_daily_trend"] = bool(data["short_allow_no_daily_trend"])
         if isinstance(data.get("short_block_d1_trend"), list):
@@ -94,12 +111,38 @@ def features(snapshot: Mapping[str, Any] | None, chg_24h: Any = None) -> dict[st
     }
 
 
+def _rule_surge_pullback(f: Mapping[str, Any], p: Mapping[str, Any]) -> dict[str, Any]:
+    """🎯 Fix 377 상승 초입 LONG(surge_start_346) 전용 — 가상 1,239건 분석 (발견 9/9~9/13 · 검증 9/14~9/18).
+    통과 31% · 검증 평균 ROI +3.08 (막힌 쪽 −0.24) · 무작위 대비 +2.19 (막힌 쪽 −1.07) · 검증 5일 모두 양수.
+    발견 기간에도 통과가 막힌 쪽보다 나았다(−0.87 vs −1.13). 세 조건 모두 「하지 말 것」이다:
+      ① 1시간 고점 바로 밑에서 추격하지 않는다  ② 24h 과열(≥20%)에 들어가지 않는다  ③ 24h 0~5% 미동 구간은 건너뛴다
+    ⚠️ 이 조건은 이 가족에서만 두 기간 일치했다 — 무작위 진입에는 발견 기간에서 반대였다(일반 규칙으로 쓰지 말 것)."""
+    hi, chg = f["h1_from_hi_pct"], f["chg_24h"]
+    if hi is None or chg is None:
+        return {"verdict": "unknown", "why": ["no_chart"], "features": f}
+    why: list[str] = []
+    need = float(p["surge_min_pullback_1h_pct"])
+    if hi > -need:
+        why.append(f"1시간 고점 바로 밑 추격 {hi:+.1f}% (−{need:g}% 이하여야)")
+    if chg >= float(p["surge_max_chg24_pct"]):
+        why.append(f"24h 과열 {chg:+.1f}%")
+    lo, hiz = (list(p["surge_dead_zone_chg24"]) + [0.0, 0.0])[:2]
+    if lo <= chg < hiz:
+        why.append(f"24h 미동 구간 {chg:+.1f}% ({lo:g}~{hiz:g}%)")
+    return {"verdict": "fail" if why else "pass", "why": why, "features": f}
+
+
 def evaluate(side: str, snapshot: Mapping[str, Any] | None, *, chg_24h: Any = None,
-             p: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """{"verdict": pass|fail|unknown, "why": [...], "features": {...}}"""
+             p: Mapping[str, Any] | None = None, family: str | None = None) -> dict[str, Any]:
+    """{"verdict": pass|fail|unknown, "why": [...], "features": {...}} — 가족 전용 조건이 있으면 그것을 쓴다."""
     p = {**DEFAULT_PARAMS, **(p or {})}
     f = features(snapshot, chg_24h)
     side = str(side or "").upper()
+    rule = FAMILY_RULES.get(str(family or ""))
+    if rule == "surge_pullback":
+        out = _rule_surge_pullback(f, p)
+        out["rule"] = rule
+        return out
     why: list[str] = []
     if side == "SHORT":
         hi, tr = f["h1_from_hi_pct"], f["d1_trend"]
