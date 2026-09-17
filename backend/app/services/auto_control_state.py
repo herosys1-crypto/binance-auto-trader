@@ -158,7 +158,9 @@ def build(db: Any) -> dict:
     for p in ps:
         gate = _ctl_dict(p.gate, vals) if p.gate is not None else None
         state = "no_gate"
-        if gate is not None:
+        if gate is not None and p.gate.kind == "gate3":
+            state = "gate_only"              # Fix 376: 켜기 스위치 없이 차트 게이트만 있는 줄 — 실주문 on/off 로 세지 않는다
+        elif gate is not None:
             v = str(gate["value"])
             state = "off" if _is_off(p.gate, v) else ("shadow" if v.lower() == "shadow" else "on")
         dm = f"daily_max_{p.fam}" if (p.fam and p.daily) else ""

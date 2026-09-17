@@ -39,6 +39,7 @@ DEFAULT_PARAMS: dict[str, Any] = {
     "short_block_d1_trend": ["UP"],         # SHORT: 일봉 볼밴 추세가 이 값이면 막음 (분석 S2)
     "long_min_drop_24h_pct": 5.0,           # LONG: 24h 변동 ≤ −5% 면 통과 (분석 L2)
     "long_min_pullback_5m_pct": 4.0,        # LONG: 5분봉 48개 고점 대비 −4% 이하면 통과 (분석 L4)
+    "short_allow_no_daily_trend": False,    # SHORT: 일봉 30개 미만(상장 약 한 달 미만)이라 추세를 모를 때 — False = 막음 (분석과 같음)
 }
 
 
@@ -60,6 +61,8 @@ def params(db: Any = None) -> dict[str, Any]:
                     out[k] = v
                 else:
                     logger.warning("[%s] %s.%s=%r 범위 밖 → 기본 %s", FIX, PARAMS_KEY, k, data[k], DEFAULT_PARAMS[k])
+        if "short_allow_no_daily_trend" in data:
+            out["short_allow_no_daily_trend"] = bool(data["short_allow_no_daily_trend"])
         if isinstance(data.get("short_block_d1_trend"), list):
             out["short_block_d1_trend"] = [str(x).upper() for x in data["short_block_d1_trend"]]
     except Exception as e:  # noqa: BLE001
@@ -100,11 +103,11 @@ def evaluate(side: str, snapshot: Mapping[str, Any] | None, *, chg_24h: Any = No
     why: list[str] = []
     if side == "SHORT":
         hi, tr = f["h1_from_hi_pct"], f["d1_trend"]
-        if hi is None or tr is None:
-            return {"verdict": "unknown", "why": ["no_chart"], "features": f}
+        if hi is None or (tr is None and not p.get("short_allow_no_daily_trend")):
+            return {"verdict": "unknown", "why": ["no_chart" if hi is None else "no_daily_trend (상장 한 달 미만?)"], "features": f}
         if hi < -float(p["short_max_below_high_pct"]):
             why.append(f"고점에서 너무 내려옴 {hi:+.1f}% (허용 −{p['short_max_below_high_pct']:g}%)")
-        if tr in p["short_block_d1_trend"]:
+        if tr is not None and tr in p["short_block_d1_trend"]:
             why.append(f"일봉 추세 {tr}")
         return {"verdict": "fail" if why else "pass", "why": why, "features": f}
     if side == "LONG":
@@ -116,7 +119,8 @@ def evaluate(side: str, snapshot: Mapping[str, Any] | None, *, chg_24h: Any = No
         if drop_ok or pull_ok:
             return {"verdict": "pass", "why": ["24h 급락 뒤" if drop_ok else "5분 조정 뒤"], "features": f}
         return {"verdict": "fail",
-                "why": [f"급락·조정 아님 (24h {chg if chg is not None else '?'}% · 5분 고점 대비 {pb if pb is not None else '?'}%)"],
+                "why": [f"급락·조정 아님 (24h {'?' if chg is None else format(chg, '+.1f')}% · "
+                        f"5분 고점 대비 {'?' if pb is None else format(pb, '+.1f')}%)"],
                 "features": f}
     return {"verdict": "unknown", "why": ["side"], "features": f}
 

@@ -85,7 +85,9 @@ def _app_sources() -> str:
 def _family_prefixes() -> list[str]:
     """가족별 키는 f"{fam.key}_mode" 처럼 조립된다 — 가족 접두사를 떼고 뒷부분으로 찾는다."""
     from app.services.rule_families import FAMILIES
-    return sorted({f.key for f in FAMILIES}, key=len, reverse=True)
+    from app.services.auto_family_registry import known_families
+    keys = {f.key for f in FAMILIES} | {f.key for f in known_families()}     # Fix 376: 실매매 가족 f"{fam_key}_chart_gate"
+    return sorted(keys, key=len, reverse=True)
 
 
 def _is_read(key: str, src: str, prefixes: list[str]) -> bool:

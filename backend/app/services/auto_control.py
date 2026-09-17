@@ -327,6 +327,9 @@ def global_ctls() -> tuple[Ctl, ...]:
             "행이 없거나 읽기 실패도 중단으로 본다 (fail-closed).",
             off_means="0", source="사장님 2026-09-14 「모든 자동매매는 중단해줘」",
             ref="services/auto_trading_halt.py:47 (halt_enabled)"),
+        Ctl("chart_gate_default", "차트 자리 게이트 기본값", "gate3", "on",
+            "가족 칸(<가족>_chart_gate)이 비어 있는 실매매 가족에 쓴다. 사람 전략·규칙 가족은 대상이 아니다.",
+            source="사장님 2026-09-17 「실매매 워커에도 차트 게이트 적용해줘」", ref="services/chart_gate_live.py (DEFAULT_KEY)"),
         Ctl("auto_daily_limit_enabled", "가족별 하루 최대 한도 사용", "switch", "1",
             "0 = 하루 최대 한도를 아예 보지 않는다 (위험).", off_means="0",
             source="사장님 2026-09-15 「모두 일최대 1개」", ref="services/auto_family_registry.py (enabled)"),
@@ -340,8 +343,50 @@ def global_ctls() -> tuple[Ctl, ...]:
     )
 
 
+# 🎯 Fix 376 반박 검증: 전략 생성 게이트·하루 최대는 적용되는데 화면 줄이 없던 가족 — 칸 두 개(차트 게이트·하루 최대)만 둔다.
+_GATE_ONLY_FAMILIES: tuple[tuple[str, str, str], ...] = (
+    ("human_template_auto", "사람 전략 자동 재시작·재진입", "청산 뒤 자동 재진입·사다리 재시작이 사람 템플릿을 다시 열 때"),
+    ("pending_hc", "HC 속행", "auto_bb_break …PENDING_HC_FAST"),
+    ("rt_lastchance", "라스트 찬스 재진입", "auto_bb_break …_lastchance"),
+    ("obv_hold", "OBV 보류 진입", "auto_bb_break …OBV_HOLD"),
+    ("bb_break", "BB 이탈 자동 (그 밖)", "auto_bb_break (꼬리 표식 없음)"),
+    ("sajangnim_top", "정점 SHORT v219 (옛 종류)", "strategy_type sajangnim_top…"),
+    ("chart_pattern", "차트 패턴", "strategy_type chart_pattern…"),
+    ("auto_other", "기타 자동", "분류 안 되는 자동 전략 — 종류별 칸은 chart_gate_default 를 따른다"),
+)
+
+
+def _gate_only_panels() -> list[Panel]:
+    out = []
+    for fam, label, note in _GATE_ONLY_FAMILIES:
+        gate = Ctl(f"{fam}_chart_gate", "차트 자리 게이트", "gate3", "on",
+                   "on = 차트 자리가 아니면 이 가족의 새 전략을 만들지 않는다. 행이 없으면 chart_gate_default → on.",
+                   source="사장님 2026-09-17 「실매매 워커에도 차트 게이트 적용해줘」",
+                   ref="services/chart_gate_live.py (mode_for)")
+        out.append(Panel(fam=fam, label=label, group=G_WORKER, gate=gate, job="(여러 워커)", every="—",
+                         note=f"켜기 스위치가 따로 없는 가족 — {note}"))
+    return out
+
+
+def _with_live_gate(p: Panel) -> Panel:
+    """🎯 Fix 376: 실매매 가족 줄에 「차트 자리 게이트」 칸 (판정 = services/chart_gate_live · 전략 생성 지점)."""
+    if not p.fam:
+        return p
+    from dataclasses import replace
+    gate = Ctl(f"{p.fam}_chart_gate", "차트 자리 게이트", "gate3", "on",
+               "on = 차트 자리(SHORT 16시간 고점 −3% 이내·일봉 UP 아님 / LONG 24h −5% 또는 5분 고점 −4% 조정)가 아니면 "
+               "전략을 만들지 않는다. 행이 없으면 chart_gate_default → on.",
+               source="사장님 2026-09-17 「실매매 워커에도 차트 게이트 적용해줘」 · 숫자 Claude가 정함",
+               ref="services/chart_gate_live.py (mode_for)")
+    if p.fam == "success_reentry":
+        gate = replace(gate, help="이 칸은 「익절 뒤 재진입」으로 **새 전략을 만들 때**만 본다. "
+                                  "기존 포지션에 붙는 피라미딩 추가 주문은 새 전략이 아니라 이 게이트를 지나지 않는다.")
+    return replace(p, ctls=(gate,) + tuple(p.ctls))
+
+
 def panels() -> list[Panel]:
-    return _rule_panels() + _worker_panels() + _external_panels()
+    return (_rule_panels() + [_with_live_gate(p) for p in _worker_panels() + _external_panels()]
+            + _gate_only_panels())
 
 
 def whitelist() -> dict[str, Ctl]:

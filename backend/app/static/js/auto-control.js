@@ -127,7 +127,8 @@ function sharedRuleBlock() {
 function famRow(p) {
   const stateCls = p.state === 'on' ? 'is-on' : (p.state === 'shadow' ? 'is-shadow' : 'is-off');
   // 전면 중단 중이면 on 이라도 지금은 주문이 나가지 않는다 — 그걸 배지에 적어 준다 (오해 방지).
-  const badge = p.state === 'on'
+  const badge = p.state === 'gate_only' ? '<span class="badge b-off">게이트·한도만</span>'
+    : p.state === 'on'
     ? `<span class="badge b-on">실주문 ON</span>${STATE.halted ? '<span class="badge b-off">중단 중이라 대기</span>' : ''}`
     : (p.state === 'shadow' ? '<span class="badge b-shadow">그림자</span>' : '<span class="badge b-off">끔</span>');
   const cnt = [];

@@ -188,10 +188,20 @@ def run_managed_symbols_once() -> dict:
                 # 🗓 2026-09-15 가족별 하루 최대 (auto_family_registry · 관리 재진입 = managed_reentry):
                 #   막힐 시도라면 워커 자체 한도·쿨다운을 소비하지 않는다 (반박 검증 9/15 #4)
                 from app.services import auto_family_registry as _AF
-                if _AF.enabled(db) and _AF.count_today(db, _AF.MANAGED.key) >= _AF.daily_max(db, _AF.MANAGED.key):
-                    reasons["state"] = f"{side} 신호 — 가족별 하루 최대 소진 (daily_max_{_AF.MANAGED.key})"
+                _fam_key = MS.entry_family_key(db, ms, side)     # Fix 376: 생성 때 붙을 가족 = 사전 확인 칸
+                if _AF.enabled(db) and _AF.count_today(db, _fam_key) >= _AF.daily_max(db, _fam_key):
+                    reasons["state"] = f"{side} 신호 — 가족별 하루 최대 소진 (daily_max_{_fam_key})"
                     ms.last_reasons = reasons
                     _skip("family_daily_max")
+                    continue
+                # 🎯 Fix 376: 차트 자리 게이트도 한도·쿨다운을 쓰기 전에 묻는다 (판정은 5분 캐시 — 60초 주기에도 봉 조회는 5분에 한 번)
+                from app.services import chart_gate_live as _CG
+                _cg_block, _cg = _CG.precheck(db, fam_key=_fam_key, symbol=ms.symbol, side=side,
+                                              exchange_account_id=getattr(account, "id", None))
+                if _cg_block:
+                    reasons["state"] = f"{side} 신호 — 차트 자리 아님 ({', '.join(_cg.get('why') or []) or _cg.get('verdict')})"
+                    ms.last_reasons = reasons
+                    _skip("chart_gate")
                     continue
                 # 시도 = 한도·쿨다운 소비 (성공 여부와 무관 — 실패 시도가 60초마다 반복되지 않게, C5)
                 n = MS.bump_daily(now)

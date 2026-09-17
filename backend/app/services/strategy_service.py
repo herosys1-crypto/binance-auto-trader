@@ -306,6 +306,14 @@ class StrategyService:
                 "💡 해결: 활성 전략 중 하나를 「⏸ 정지」 또는 「🛑 긴급 종료」 한 후 다시 시도하세요."
             )
 
+        # 🎯 Fix 376 (2026-09-17 사장님 「실매매 워커에도 차트 게이트 적용해줘」): 자동 전략은 차트 자리일 때만 만든다.
+        #   가족별 <가족>_chart_gate (기본 on) · 사람 전략·규칙 가족 제외 · 자동매매 중단 중이면 판정 생략(아래 Fix 371 이 막는다).
+        #   계좌 조회(get_account 무게 5)·미리보기 **앞** — 막힐 시도가 매 사이클 계좌를 조회하지 않게 (반박 검증 9/17 #4).
+        #   하루 최대(advisory lock) 보다도 앞 = 봉 조회 동안 DB 잠금을 쥐지 않는다.
+        from app.services.chart_gate_live import check as _chart_gate376
+        _chart_gate376(self.db, strategy_type=getattr(template_model, "strategy_type", None),
+                       template_name=getattr(template_model, "name", None), entry_origin=entry_origin,
+                       symbol=symbol, side=side, exchange_account_id=exchange_account_id)
         ex_account = self.db.get(_EA, exchange_account_id)
         if not ex_account:
             raise ValueError(

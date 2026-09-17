@@ -1175,6 +1175,10 @@ def _create_long_strategy(
         logger.warning(
             "[auto_long_bottom] _create_long_strategy %s 실패: %s", symbol, e,
         )
+        try:
+            db.rollback()   # 🎯 Fix 376 반박 검증: 막힌 생성의 임시 템플릿이 같은 사이클 다른 커밋에 딸려 저장되지 않게
+        except Exception:  # noqa: BLE001
+            pass
         return None
 
 

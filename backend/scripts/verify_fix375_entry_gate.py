@@ -1,4 +1,4 @@
-"""🎯 Fix 375 배포 검사 — 차트 자리 진입 게이트. **읽기 전용**.
+"""🎯 Fix 375·376 배포 검사 — 차트 자리 진입 게이트 (규칙 가족 + 실매매 워커). **읽기 전용**.
 
 VPS:  docker compose exec -T scheduler python scripts/verify_fix375_entry_gate.py
 로컬:  python scripts/verify_fix375_entry_gate.py --code-only
@@ -32,6 +32,7 @@ def _read(rel: str) -> str:
 
 
 WATCH = ("app/services/chart_state.py", "app/services/entry_conditions.py", "app/services/rule_families.py",
+         "app/services/chart_gate_live.py", "app/services/strategy_service.py", "app/workers/managed_symbol_worker.py",
          "app/workers/rule_family_worker.py", "app/workers/paper_trading_worker.py", "app/services/paper_report_v3.py")
 
 
@@ -41,6 +42,14 @@ def check_code() -> None:
     w = _read("app/workers/rule_family_worker.py")
     (ok if 'blocks.append("chart_gate")' in w and '"chart_gate": gate' in w else fail)("규칙 가족 워커: 게이트 판정·그림자 기록")
     (ok if "P5_short_near_high_not_d1_up" in _read("app/services/paper_report_v3.py") else fail)("보고서: P5·P6 사전등록 필터")
+    ss = _read("app/services/strategy_service.py")
+    (ok if ss.index("_chart_gate376(self.db") < ss.index("acct = client.get_account()") < ss.index("_daily_check(self.db") else fail)(
+        "Fix 376 실매매: 전략 생성 지점 게이트 (계좌 조회·하루 최대 앞)")
+    try:
+        from app.services import chart_gate_live as CG
+        (ok if CG.FORCE_MODE is None else fail)(f"Fix 376 테스트 훅 FORCE_MODE 비어 있음 (지금 {CG.FORCE_MODE!r})")
+    except Exception as e:  # noqa: BLE001
+        fail(f"chart_gate_live import 실패: {e!r}")
     try:
         from app.services import entry_conditions as EC
         from app.services import rule_families as RF
@@ -99,6 +108,23 @@ def check_ops() -> None:
             if gate:
                 cnt[(p.get("side"), gate.get("verdict", gate.get("mode")))] += 1
         print(f"  ▸ 규칙 가족 그림자 기록의 게이트 판정: {dict(cnt) or '아직 없음 (새 신호가 와야 쌓인다)'}")
+        live: Counter = Counter()
+        for i, k in enumerate(r.scan_iter(match="chart_gate:live:*", count=500)):
+            if i > 2000:
+                break
+            raw = r.get(k)
+            if raw:
+                live[json.loads(raw).get("verdict")] += 1
+        print(f"  ▸ 실매매 차트 게이트 최근 5분 판정 캐시: {dict(live) or '없음 (자동매매 중단 중이면 생성 시도 자체가 없다)'}")
+        from app.core.database import SessionLocal as _SL
+        from app.services import auto_control as _AC
+        from app.services.chart_gate_live import mode_for
+        _db = _SL()
+        try:
+            modes = {p.fam: mode_for(_db, p.fam) for p in _AC.panels() if p.fam and not p.fam.startswith("rf_")}
+        finally:
+            _db.close()
+        print(f"  ▸ 실매매 가족 게이트 모드: {modes}")
     except Exception as e:  # noqa: BLE001
         print(f"  ⏭ Redis 확인 생략: {e}")
 

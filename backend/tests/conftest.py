@@ -26,3 +26,14 @@ def _fix371_halt_off_for_tests():
     _h.FORCE_HALT = False
     yield
     _h.FORCE_HALT = _prev
+
+
+@pytest.fixture(autouse=True)
+def _fix376_chart_gate_off_for_tests():
+    """Fix 376: 자동 전략 생성 시 차트 게이트가 바이낸스 봉을 조회한다 — 단위·통합 DB 테스트에서는 끈다.
+    tests/test_fix376_* 는 FORCE_MODE 를 None 으로 되돌려 실제 판정을 본다."""
+    from app.services import chart_gate_live as _g
+    _prev = _g.FORCE_MODE
+    _g.FORCE_MODE = "off"
+    yield
+    _g.FORCE_MODE = _prev

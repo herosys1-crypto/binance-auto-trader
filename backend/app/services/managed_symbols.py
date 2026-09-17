@@ -202,6 +202,27 @@ def _fill_account(ms, si) -> None:
         ms.templates = tm
 
 
+def entry_family_key(db, ms, side: str) -> str:
+    """🎯 Fix 376 반박 검증: 재진입 전략이 **생성될 때** 붙을 가족 키 (읽기만 — 템플릿 복제는 하지 않는다).
+    같은 방향 원래 템플릿을 다시 쓰면 그 템플릿의 가족(사람 템플릿 = human_template_auto 등),
+    반대 방향 복제(_quick_m…)면 managed_reentry. 워커의 사전 확인(하루 최대·차트 게이트)이 생성 판정과 같은 칸을 보게 한다."""
+    from app.models.strategy_template import StrategyTemplate
+    from app.services import auto_family_registry as AF
+    side = str(side).upper()
+    tpl = None
+    tid = dict(ms.templates or {}).get(side)
+    if tid:
+        tpl = db.get(StrategyTemplate, int(tid))
+    if tpl is None and ms.strategy_template_id:
+        base = db.get(StrategyTemplate, int(ms.strategy_template_id))
+        if base is not None and str(base.side).upper() == side:
+            tpl = base
+    if tpl is None:
+        return AF.MANAGED.key
+    fam = AF.family_of_template(tpl)
+    return fam.key if fam is not None else AF.MANAGED.key
+
+
 def close_outcome(db, si) -> tuple[str, str]:
     """(outcome, reason) — 종료 사유는 RiskEvent 로 유도(trade_learning_service.resolve_close_reason) + 프로브 마커."""
     reason = "UNKNOWN"

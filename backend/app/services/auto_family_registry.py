@@ -143,6 +143,12 @@ def family_for(*, strategy_type: str | None, template_name: str | None, entry_or
     return OTHER
 
 
+def family_of_template(tpl: Any) -> AutoFamily | None:
+    """워커가 **자동으로** 이 템플릿으로 전략을 만들 때 붙을 가족 (Fix 376 — 워커의 사전 확인용, 생성 출처 없음)."""
+    return family_for(strategy_type=getattr(tpl, "strategy_type", None), template_name=getattr(tpl, "name", None),
+                      entry_origin=None)
+
+
 def _template_of(si: Any):
     tpl = getattr(si, "strategy_template", None)
     return tpl if tpl is not None else getattr(si, "template", None)
@@ -263,7 +269,9 @@ def check_instance(db, si: Any, *, where: str = "1차 주문") -> AutoFamily | N
 
 
 def is_limit_error(exc: BaseException | str) -> bool:
-    return BLOCK_TAG in str(exc)
+    """하루 최대 또는 🎯 Fix 376 차트 자리 게이트 — 둘 다 「영구 실패」가 아니라 「다음에 다시」다."""
+    s = str(exc)
+    return BLOCK_TAG in s or "차트 자리 게이트" in s
 
 
 def known_families() -> list[AutoFamily]:
