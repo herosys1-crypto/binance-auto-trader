@@ -70,3 +70,62 @@
   - 오래된 백필 행(`source=backfill`)을 정리한다.
   - `chart_state` 스냅샷을 가볍게 한다.
   - 둘 다 **DB 삭제 작업이라 사장님 승인 후에만** 한다.
+
+## 6. CPU 를 늘려야 할 때 (사장님 질문 「2코어에서 더 추가해야 하면 어떻게」)
+
+### 현재 사양 (droplet 메타데이터 · lscpu 확인)
+- DigitalOcean 싱가포르(sgp1) · droplet `570311447`
+- vCPU 2개 (Intel Xeon Platinum 8168) · 메모리 8GB · 디스크 50GB
+- 공인 IP `159.65.137.250` 은 droplet 기본 IP 다 (예약 IP 아님).
+  사양 변경(resize)으로는 IP 가 바뀌지 **않으므로** 바이낸스 API 키의 IP 허용 목록은 그대로 둬도 된다.
+- CPU steal 0 (다른 손님 영향 없음).
+
+### 지금은 늘릴 필요가 없다
+- 평소 유휴 약 90%, 부하 평균 0.6~2.5 (코어 2개 기준).
+- 늘릴 신호 (하나라도 **며칠 계속**되면):
+  - `uptime` 부하 평균(15분)이 계속 2 이상
+  - scheduler 로그에 `skipped: maximum number of running instances` / `was missed` 가 반복
+  - `/health` 응답이 계속 100ms 이상
+  - `vmstat 1 5` 의 `st`(steal) 가 계속 5 이상 → 공유 CPU 문제, 전용 CPU 요금제 검토
+
+### 🚨 코어만 늘리면 빨라지지 않는 부분
+- 이 앱은 파이썬 프로세스 4개다: api(uvicorn 1개) · scheduler(1개) · user-stream · mark-price-stream.
+- 파이썬은 한 프로세스가 사실상 **코어 1개**만 쓴다 (GIL).
+  - scheduler 가 순간 120% 까지 오르는 것은 스레드 대기·C 라이브러리 몫이다.
+  - **scheduler·api 하나하나를 더 빠르게 하지는 못한다.**
+- 코어를 늘리면 좋아지는 것:
+  - 네 프로세스 + Redis·Grafana 가 서로 덜 기다린다.
+  - 대시보드 새로고침 때 api 순간 100% 가 scheduler 를 밀어내지 않는다.
+- 코어를 **제대로** 쓰려면 코드 쪽 작업이 같이 필요하다 (Claude 작업, 사장님 요청 시):
+  1. **api 여러 프로세스**: `uvicorn --workers 2`.
+     - 단, 시작할 때 도는 작업(`_poll_health_metrics`)이 프로세스 수만큼 겹치므로, 한 프로세스만 돌게 정리한 뒤에 켠다.
+  2. **scheduler 나누기**: 무거운 분석 작업을 두 번째 scheduler 컨테이너로 옮긴다.
+     - 대상: 가상매매(`paper_trading`) · 차트 학습 · 차트 타이밍 · 손실 원인.
+     - 매매 워커는 지금 컨테이너에 둔다. 작업마다 Redis 잠금(`guarded_job`)이 있어 중복 실행은 막힌다.
+
+### 사양 변경 방법 (DigitalOcean 화면 · 사장님)
+1. **먼저 확인:** 자동매매 중단 상태인지, 그리고 **열린 포지션이 있는지**.
+   - 🚨 손절·익절은 거래소에 걸어 둔 주문이 아니라 **서버 워커(tp_sl, 15초 주기)가 감시**한다.
+   - 서버가 꺼져 있는 동안에는 열린 포지션에 손절이 **작동하지 않는다**.
+   - 가능하면 포지션이 없을 때, 아니면 바이낸스 앱에서 손절 주문을 직접 걸어 두고 진행한다.
+2. **스냅샷:** Droplet → Backups/Snapshots → Take snapshot.
+   - 운영 DB 는 Neon 이라 스냅샷에 없다 → §1 백업을 먼저 고쳐 두는 것이 좋다.
+3. **전원 끄기:** Power → Turn off (서버 안에서 `poweroff` 도 가능).
+4. **Resize:** Droplet → Resize.
+   - **「CPU and RAM only」 를 고른다.** 디스크를 안 늘리면 나중에 다시 작은 사양으로 **되돌릴 수 있다**.
+   - 「Disk, CPU and RAM」 은 디스크가 커져 **되돌릴 수 없다** — 디스크는 지금 66% 라 급하지 않다.
+   - 추천 순서: 같은 계열에서 **4 vCPU / 8GB 이상**.
+     공유 CPU(Basic)로 충분하다 — steal 0. 전용 CPU(General Purpose·CPU-Optimized)는 steal 이 문제일 때만.
+   - 가격은 DigitalOcean 화면의 현재 요금을 확인한다 (여기 적지 않는다 — 수시로 바뀜).
+5. **전원 켜기:** Power On.
+   - docker 는 부팅 시 자동 시작(`enabled`)이고, 컨테이너도 `restart: unless-stopped` 라 스스로 올라온다.
+   - 예외: prometheus 는 `restart=no` 라(compose 에 restart 줄이 없음) 직접 `docker compose up -d prometheus`.
+6. **확인** (서버에서):
+   ```bash
+   nproc && cd ~/binance-auto-trader/backend && docker compose ps && docker compose exec -T scheduler python scripts/verify_fix364_deploy.py
+   ```
+   `nproc` 가 새 코어 수, 컨테이너 전부 Up, 검사 PASS 면 끝.
+   Kill-Switch·자동매매 중단 상태는 DB 설정이라 재시작해도 그대로다.
+
+- 걸리는 시간: 끄고 켜는 시간 포함 보통 수 분 (CPU·RAM 만 바꿀 때).
+- 되돌리기: 같은 화면에서 원래 사양으로 다시 Resize (「CPU and RAM only」 로 바꿨을 때만 가능).
