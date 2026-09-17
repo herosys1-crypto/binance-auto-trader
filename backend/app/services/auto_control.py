@@ -41,7 +41,7 @@ GROUPS = (G_GLOBAL, G_RULE, G_WORKER, G_EXTERNAL)
 # ───────────────────────── 컨트롤 정의 ─────────────────────────
 @dataclass(frozen=True)
 class Ctl:
-    """설정 한 칸. kind = mode3 | switch | int | num | text."""
+    """설정 한 칸. kind = mode3 | gate3 | switch | int | num | text | json."""
     key: str
     label: str
     kind: str
@@ -56,7 +56,7 @@ class Ctl:
     def clean(self, raw: Any) -> str:
         """입력값 → 저장 문자열. 못 쓰는 값이면 ValueError."""
         v = str(raw).strip()
-        if self.kind == "mode3":
+        if self.kind in ("mode3", "gate3"):
             if v.lower() not in MODE3:
                 raise ValueError(f"{self.key}: off | shadow | on 중 하나여야 합니다 (받은 값 {v!r})")
             return v.lower()
@@ -78,6 +78,15 @@ class Ctl:
             if self.hi is not None and n > self.hi:
                 raise ValueError(f"{self.key}: {self.hi} 이하여야 합니다")
             return str(int(n)) if self.kind == "int" else str(n)
+        if self.kind == "json":
+            import json as _json
+            try:
+                parsed = _json.loads(v or "{}")
+            except ValueError:
+                raise ValueError(f"{self.key}: JSON 형식이 아닙니다") from None
+            if not isinstance(parsed, dict):
+                raise ValueError(f"{self.key}: {{...}} 객체여야 합니다")
+            return _json.dumps(parsed, ensure_ascii=False)
         if not v:
             raise ValueError(f"{self.key}: 빈 값은 저장하지 않습니다")
         if len(v) > 200:
@@ -134,6 +143,7 @@ def _rule_panels() -> list[Panel]:
     for f in FAMILIES:
         gate = _ctl_from(S, f"{f.key}_mode", "모드", "mode3", ref=f"{ref} (mode_of)")
         ctls = [c for c in (
+            _ctl_from(S, f"{f.key}_chart_gate", "차트 자리 게이트", "gate3", ref="services/entry_conditions.py (Fix 375)"),
             _ctl_from(S, f"{f.key}_entry", "진입 방식", "text", ref=f"{ref} (entry_of)"),
             _ctl_from(S, f"{f.key}_places", "자리", "text", ref=f"{ref} (places_of)"),
             _ctl_from(S, f"{f.key}_max_concurrent", "동시 보유 상한", "int", lo=0, hi=50, off_means="0", ref=ref),
@@ -162,6 +172,7 @@ def _shared_rule_ctls() -> tuple[Ctl, ...]:
         _ctl_from(S, "rf_max_signal_age_min", "신호 유효 시간(분)", "num", lo=1, hi=240, ref=ref),
         _ctl_from(S, "rf_max_drift_pct", "가격 이동 상한 %", "num", lo=0.1, hi=20, ref=ref),
         _ctl_from(S, "rf_tp_percents", "단일 진입 TP1~4 ROI%", "text", ref=ref),
+        _ctl_from(S, "entry_chart_gate_params", "차트 게이트 숫자 (JSON)", "json", ref="services/entry_conditions.py (params)"),
     )
     return tuple(c for c in got if c is not None)
 

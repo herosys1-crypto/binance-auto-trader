@@ -122,6 +122,12 @@ def load_live_rows(db: Any, *, days: int = 30) -> list[dict[str, Any]]:
             # 리드 지시: 같은 봉 안에서 고·저 순서를 모른 채(비관적 가정) PROTECT 를 무장했는지 — be10/lock5 만 갖는 값
             cols.append(base["ambig_arm"].astext.label(f"eng_{name}_ambig_arm"))
     cols.append(cast(PaperTrade.snapshot["dist_high5d_pct"].astext, Float).label("dist_high5d_pct"))
+    # 🎯 Fix 375: 차트 자리 게이트(P5·P6) 판정값 — chart_state 의 from_hi_pct 는 Fix 375 배포 뒤 행에만 있다 = 새 표본만 판정
+    _cs = PaperTrade.snapshot["chart_state"]
+    cols.append(cast(_cs["h1"]["from_hi_pct"].astext, Float).label("g_h1_from_hi"))
+    cols.append(cast(_cs["m5"]["from_hi_pct"].astext, Float).label("g_m5_from_hi"))
+    cols.append(_cs["d1"]["bb"]["trend"].astext.label("g_d1_trend"))
+    cols.append(cast(PaperTrade.chg_24h, Float).label("g_chg24"))
 
     stmt = (
         select(*cols)
@@ -145,10 +151,13 @@ def load_live_rows(db: Any, *, days: int = 30) -> list[dict[str, Any]]:
                 "ambig_arm": None if ambig_raw is None else (str(ambig_raw).lower() == "true"),
             }
         dh5 = m["dist_high5d_pct"]
+        gate = {"h1_from_hi": m["g_h1_from_hi"], "m5_from_hi": m["g_m5_from_hi"],
+                "d1_trend": m["g_d1_trend"], "chg24": m["g_chg24"]}
         out.append({
             "id": m["id"], "symbol": m["symbol"], "side": m["side"], "rule": m["rule"],
             "opened_at": m["opened_at"], "status": m["status"], "tags": list(m["tags"] or []),
             "dist_high5d_pct": float(dh5) if dh5 is not None else None,
+            "gate": gate,
             "engines": engines,
         })
     return out
@@ -438,6 +447,13 @@ def _filter_result(universe: list[dict[str, Any]], kept: list[dict[str, Any]], e
             "adopt": bool(adopt)}
 
 
+def _gate_snapshot(r: Mapping[str, Any]) -> dict[str, Any]:
+    """보고서 행의 게이트 값 → entry_conditions 가 읽는 snapshot 모양."""
+    g = r.get("gate") or {}
+    return {"chart_state": {"h1": {"from_hi_pct": g.get("h1_from_hi")}, "m5": {"from_hi_pct": g.get("m5_from_hi")},
+                            "d1": {"bb": {"trend": g.get("d1_trend")}}}}
+
+
 def _filters_section(side_rows: list[dict[str, Any]], side: str, base_fn) -> dict[str, Any]:
     live_valid = [r for r in side_rows if is_engine_valid((r.get("engines") or {}).get("live"), "live")]
     out: dict[str, Any] = {}
@@ -461,6 +477,21 @@ def _filters_section(side_rows: list[dict[str, Any]], side: str, base_fn) -> dic
         kept = [r for r in universe if r["dist_high5d_pct"] <= -10.0]
         excluded = [r for r in universe if r["dist_high5d_pct"] > -10.0]
         out["P3_long_deep_pullback"] = _filter_result(universe, kept, excluded, base_fn)
+
+    # P5·P6 (Fix 375, 사전등록 2026-09-17): 차트 자리 게이트. from_hi_pct 가 기록된 행(= 배포 뒤 새 행)만 universe.
+    #   조건은 9/9~9/16 재계산 분석에서 골랐다 — 그 행들에는 이 값이 없으므로 여기 판정은 전부 새 표본이다.
+    from app.services import entry_conditions as _EC
+    if side == "SHORT":
+        universe = [r for r in live_valid if (r.get("gate") or {}).get("h1_from_hi") is not None
+                    and (r.get("gate") or {}).get("d1_trend")]
+        kept = [r for r in universe if _EC.evaluate("SHORT", _gate_snapshot(r))["verdict"] == "pass"]
+        excluded = [r for r in universe if _EC.evaluate("SHORT", _gate_snapshot(r))["verdict"] != "pass"]
+        out["P5_short_near_high_not_d1_up"] = _filter_result(universe, kept, excluded, base_fn)
+    if side == "LONG":
+        universe = [r for r in live_valid if (r.get("gate") or {}).get("m5_from_hi") is not None]
+        kept = [r for r in universe if _EC.evaluate("LONG", _gate_snapshot(r), chg_24h=r["gate"].get("chg24"))["verdict"] == "pass"]
+        excluded = [r for r in universe if _EC.evaluate("LONG", _gate_snapshot(r), chg_24h=r["gate"].get("chg24"))["verdict"] != "pass"]
+        out["P6_long_after_drop_or_pullback"] = _filter_result(universe, kept, excluded, base_fn)
 
     # P4: 같은 (심볼, 방향, 시간) 에 규칙이 여러 개 겹치면 (진입시각, id) 순으로 첫 건만 유지
     ordered = sorted(live_valid, key=lambda r: (r["opened_at"], r["id"]))

@@ -173,7 +173,12 @@ function ctlField(c) {
                  '설정 키: ' + c.key + (c.is_default ? ' (행 없음 = 기본 ' + c.default + ')' : '')]
                 .filter(Boolean).join('\n');
   let input;
-  if (c.kind === 'mode3') {
+  if (c.kind === 'gate3') {
+    // 🎯 Fix 375 차트 자리 게이트 — on = 차트 자리가 아니면 진입 안 함 (실주문을 켜는 칸이 아니다)
+    input = `<select class="${dirty.trim()}" onchange="onEdit('${c.key}', this.value, this)">
+        ${[['off', '끔'], ['shadow', '기록만'], ['on', '적용']].map(([m, t]) =>
+          `<option value="${m}"${m === v ? ' selected' : ''}>${t}</option>`).join('')}</select>`;
+  } else if (c.kind === 'mode3') {
     input = `<select class="${dirty.trim()}" onchange="onEdit('${c.key}', this.value, this)">
         ${['off', 'shadow', 'on'].map(m => `<option value="${m}"${m === v ? ' selected' : ''}>${
           m === 'off' ? '끔' : (m === 'shadow' ? '그림자' : '실주문 ON')}</option>`).join('')}</select>`;
@@ -221,7 +226,7 @@ function syncSaveBar() {
   document.getElementById('save-btn').textContent = `💾 ${n}칸 저장`;
   if (n) {
     const turningOn = Object.entries(CHANGES).filter(([k, v]) => isTurnOn(k, v)).map(([k]) => k);
-    msg(turningOn.length ? `⚠ 실주문을 켜는 칸이 있습니다: ${turningOn.join(', ')}` : `${n}칸 변경됨`,
+    msg(turningOn.length ? `⚠ 실주문을 켜거나 차트 게이트를 푸는 칸이 있습니다: ${turningOn.join(', ')}` : `${n}칸 변경됨`,
         turningOn.length ? 'err' : '');
   }
 }
@@ -233,6 +238,8 @@ function isTurnOn(key, value) {
   const v = String(value).toLowerCase();
   if (key === 'auto_trading_halt') return ['0', 'off', 'false', 'no'].includes(v);
   if (c.kind === 'mode3') return v === 'on' && String(c.value).toLowerCase() !== 'on';
+  // 차트 게이트를 끄거나 기록만으로 바꾸면 차트 자리가 아닌 곳에서도 진입한다 → 확인창 대상
+  if (c.kind === 'gate3') return v !== 'on' && String(c.value).toLowerCase() === 'on';
   if (c.kind === 'switch') return v === '1' && ['0', 'off', 'false', 'no'].includes(String(c.value).toLowerCase());
   return false;
 }
@@ -248,7 +255,7 @@ async function save() {
   if (!keys.length) return;
   const on = keys.filter(k => isTurnOn(k, CHANGES[k]));
   if (on.length && !confirm(
-      `실주문을 켜는 설정이 ${on.length}개 있습니다:\n\n${on.join('\n')}\n\n` +
+      `실주문을 켜거나 차트 게이트를 푸는 설정이 ${on.length}개 있습니다:\n\n${on.join('\n')}\n\n` +
       `이 값을 저장하면 조건이 맞는 순간 실자금 주문이 나갑니다. 저장할까요?`)) return;
   const btn = document.getElementById('save-btn');
   btn.disabled = true;

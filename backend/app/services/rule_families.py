@@ -122,6 +122,11 @@ for _f in FAMILIES[3:]:
 for _f in FAMILIES:
     SETTINGS[f"{_f.key}_entry"] = ("split", "split(분할 10/100/200, rf_split_*) | single(1회 진입)",
                                    "사장님 2026-09-15 「10 100 200」 · 실측 분할 TP1 5·손절 10")
+    # 🎯 Fix 375 (2026-09-17 사장님 「차트를 분석하고 진입할수 있어야지」): 차트 자리 게이트 — app/services/entry_conditions
+    SETTINGS[f"{_f.key}_chart_gate"] = ("on", "off | shadow(판정만 기록) | on(차트 자리가 아니면 진입 안 함)",
+                                        "Claude가 정함 — 가상 22,652건 재계산 · 사전등록 이후 검증 통과 (진입을 줄이기만 한다)")
+SETTINGS["entry_chart_gate_params"] = ("", "차트 게이트 숫자 JSON (비우면 기본: SHORT 16시간 고점 −3% 이내·일봉 UP 아님 / "
+                                           "LONG 24h −5% 이하 또는 5분 고점 대비 −4% 이하)", "Claude가 정함 — 분석 값 그대로")
 
 
 def setting(db: Any, key: str) -> str:
@@ -149,6 +154,11 @@ def setting_float(db: Any, key: str) -> float:
 def mode_of(db: Any, fam_key: str) -> str:
     m = setting(db, f"{fam_key}_mode").lower()
     return m if m in MODES else SETTINGS[f"{fam_key}_mode"][0]
+
+
+def chart_gate_of(db: Any, fam_key: str) -> str:
+    m = setting(db, f"{fam_key}_chart_gate").lower()
+    return m if m in ("off", "shadow", "on") else SETTINGS[f"{fam_key}_chart_gate"][0]
 
 
 def entry_of(db: Any, fam_key: str) -> str:

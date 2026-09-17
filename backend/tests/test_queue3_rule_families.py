@@ -109,9 +109,13 @@ def test_stop_helpers():
 
 
 # ── 러너 사이클 ──────────────────────────────────────────────────────────
-def _row(i, rule, side, tags, *, sym="AAAUSDT", age_min=5, entry="1.0"):
+# Fix 375: 기본 행은 차트 자리 게이트를 통과한다 (SHORT = 16시간 고점 −1%·일봉 FLAT / LONG = 24h −6%).
+_PASS_SNAP = {"chart_state": {"h1": {"from_hi_pct": -1.0}, "m5": {"from_hi_pct": -1.0}, "d1": {"bb": {"trend": "FLAT"}}}}
+
+
+def _row(i, rule, side, tags, *, sym="AAAUSDT", age_min=5, entry="1.0", snapshot=_PASS_SNAP, chg_24h=-6.0):
     return NS(id=i, rule=rule, side=side, tags=tags, symbol=sym, entry_price=Decimal(entry),
-              opened_at=datetime.now(timezone.utc) - timedelta(minutes=age_min))
+              opened_at=datetime.now(timezone.utc) - timedelta(minutes=age_min), snapshot=snapshot, chg_24h=chg_24h)
 
 
 def _run(monkeypatch, db, rows, *, red=None, guards=(True, "ok"), price=lambda s: 1.0,
