@@ -129,3 +129,21 @@
 
 - 걸리는 시간: 끄고 켜는 시간 포함 보통 수 분 (CPU·RAM 만 바꿀 때).
 - 되돌리기: 같은 화면에서 원래 사양으로 다시 Resize (「CPU and RAM only」 로 바꿨을 때만 가능).
+
+## 7. 조치 결과 (2026-09-17 06:10 UTC)
+
+- ✅ **로그 크기 제한 적용됨** (`docker compose up -d` · api 컨테이너 설정 `max-size 50m · max-file 5` 확인).
+  - 옛 거대 로그가 지워져 디스크가 **66% → 54%** (여유 23GB)가 됐다.
+- ✅ **운영 DB 백업 정상화**
+  - `.env` 에 `BACKUP_PG_*` 를 넣었다. `DATABASE_URL` 에서 자동으로 뽑았고, 화면에 값을 띄우지 않았다.
+  - 첫 백업 `db_backups/last/neondb-latest.sql.gz` = **98MB**, 테이블 23개, dump 마감 표시 정상.
+- 📛 **파일 이름이 바뀌었다:** 앞으로 백업 파일은 `neondb-*.sql.gz` 다 (DB 이름이 neondb).
+  - 옛 `binance_auto_trader-*` 파일은 빈 파일(수백 바이트)이라 지워도 된다. 보관 정리는 새 이름에만 적용된다.
+  - 확인 명령: `ls -laL ~/binance-auto-trader/backend/db_backups/last/neondb-latest.sql.gz`
+- 💽 **예상 용량:** 보관 규칙이 일 7 · 주 4 · 월 6이다.
+  - 같은 날 파일은 하드링크로 공유된다.
+  - 서로 다른 파일은 최대 약 17개 × 약 100MB(점점 커짐) = **약 2GB 안팎** (추정). 여유 23GB 로 충분하다.
+- 🔐 **보안:** 백업에는 `exchange_accounts`(암호화된 API 키)가 들어 있다.
+  - 복호화 키(`ENCRYPTION_KEY`)가 같은 서버 `.env` 에 있으므로, **백업 파일을 서버 밖으로 옮길 때는 `.env` 와 같은 곳에 두지 말 것.**
+- 복원 (새 DB 에): `gunzip -c neondb-YYYYMMDD.sql.gz | psql "<복원할 DB 주소>"`
+  - 운영 DB 에 바로 덮어쓰지 말 것.
