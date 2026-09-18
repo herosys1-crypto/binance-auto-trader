@@ -28,3 +28,9 @@
 결과: docs/learning/TUNING_CANDIDATES_2026-09-18.md
 - `tune_p9.py` — P9 의 `h4_bb_bars_since_below_lower` 가 **없음(None)** 인 행(38%)을 어떻게 볼지 6가지로 갈라 재본다.
   결론: 「이탈 없음」은 취지상 통과처럼 보이지만 발견 +2.79 / 검증 −0.62 로 뒤집혀 **universe 에서 뺀다**.
+
+## 2026-09-19 추가 — 기회 지도 (규칙 신호와 무관하게 모든 자리를 채점)
+- `opportunity_scan.py` — 모든 종목 · 모든 1시간 마감에 LONG/SHORT 둘 다 진입했다고 치고 실매매 청산 규칙(손절 −25 · TP1 15 · 트레일링)으로 24시간 채점. 24시간이 다 지난 자리만 쓴다(검열 편향 없음). → `opportunity.parquet`
+- `zones.py` (지표 1개) → `zones_flip.py` (무엇이 뒤집혔나) → `zones2.py l|s` (지표 2개 · 두 기간+날짜별) → `zones_final.py` (주제를 단순 규칙으로 고정해 지금 게이트와 비교)
+
+결과: docs/learning/OPPORTUNITY_ZONES_2026-09-19.md
