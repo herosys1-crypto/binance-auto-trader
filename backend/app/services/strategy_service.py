@@ -314,6 +314,12 @@ class StrategyService:
         _chart_gate376(self.db, strategy_type=getattr(template_model, "strategy_type", None),
                        template_name=getattr(template_model, "name", None), entry_origin=entry_origin,
                        symbol=symbol, side=side, exchange_account_id=exchange_account_id)
+        # 📊 Fix 380 (2026-09-19 사장님 「볼밴전략도 적극적으로 적용해줘」): 볼밴 계열 5 가족만 세력 CCI 방향 게이트
+        #   (기본 shadow = 판정만 기록 · on 이면 방향 반대일 때 만들지 않음 · 사람 전략·다른 계열은 보지 않는다)
+        from app.services.force_cci_gate import check as _force_cci380
+        _force_cci380(self.db, strategy_type=getattr(template_model, "strategy_type", None),
+                      template_name=getattr(template_model, "name", None), entry_origin=entry_origin,
+                      symbol=symbol, side=side, exchange_account_id=exchange_account_id)
         ex_account = self.db.get(_EA, exchange_account_id)
         if not ex_account:
             raise ValueError(

@@ -330,6 +330,11 @@ def global_ctls() -> tuple[Ctl, ...]:
         Ctl("chart_gate_default", "차트 자리 게이트 기본값", "gate3", "on",
             "가족 칸(<가족>_chart_gate)이 비어 있는 실매매 가족에 쓴다. 사람 전략·규칙 가족은 대상이 아니다.",
             source="사장님 2026-09-17 「실매매 워커에도 차트 게이트 적용해줘」", ref="services/chart_gate_live.py (DEFAULT_KEY)"),
+        Ctl("force_cci_gate_default", "세력 CCI 게이트 기본값 (볼밴 계열)", "gate3", "shadow",
+            "볼밴 계열 5 가족(볼밴 분할·스윙·중단선·BB 이탈·BB 손절 뒤 재진입)의 칸이 비어 있을 때 쓴다. "
+            "shadow = 판정만 기록 · on = LONG 은 1시간 세력 CCI>0, SHORT 은 <0 일 때만 새 전략을 만든다.",
+            source="사장님 2026-09-19 「볼밴전략도 적극적으로 적용해줘」 · 기본 shadow 는 Claude가 정함 (효과 작음)",
+            ref="services/force_cci_gate.py (DEFAULT_KEY)"),
         Ctl("auto_daily_limit_enabled", "가족별 하루 최대 한도 사용", "switch", "1",
             "0 = 하루 최대 한도를 아예 보지 않는다 (위험).", off_means="0",
             source="사장님 2026-09-15 「모두 일최대 1개」", ref="services/auto_family_registry.py (enabled)"),
@@ -384,9 +389,24 @@ def _with_live_gate(p: Panel) -> Panel:
     return replace(p, ctls=(gate,) + tuple(p.ctls))
 
 
+def _with_force_cci(p: Panel) -> Panel:
+    """📊 Fix 380: 볼밴 계열 줄에 「세력 CCI 게이트」 칸 (판정 = services/force_cci_gate · 전략 생성 지점)."""
+    from app.services.force_cci_gate import BB_FAMILIES
+    if p.fam not in BB_FAMILIES:
+        return p
+    from dataclasses import replace
+    gate = Ctl(f"{p.fam}_force_cci_gate", "세력 CCI 게이트", "gate3", "shadow",
+               "on = LONG 은 1시간 세력 CCI>0, SHORT 은 <0 일 때만 이 가족의 새 전략을 만든다. "
+               "행이 없으면 force_cci_gate_default → shadow(기록만). 근거 docs/learning/BB_FORCE_CCI_2026-09-19.md",
+               source="사장님 2026-09-19 「볼밴전략도 적극적으로 적용해줘」 · 기본 shadow 는 Claude가 정함",
+               ref="services/force_cci_gate.py (mode_for)")
+    return replace(p, ctls=tuple(p.ctls) + (gate,))
+
+
 def panels() -> list[Panel]:
-    return (_rule_panels() + [_with_live_gate(p) for p in _worker_panels() + _external_panels()]
-            + _gate_only_panels())
+    return [_with_force_cci(p) for p in
+            (_rule_panels() + [_with_live_gate(p) for p in _worker_panels() + _external_panels()]
+             + _gate_only_panels())]
 
 
 def whitelist() -> dict[str, Ctl]:
