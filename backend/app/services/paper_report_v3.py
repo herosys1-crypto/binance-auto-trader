@@ -126,6 +126,10 @@ def load_live_rows(db: Any, *, days: int = 30) -> list[dict[str, Any]]:
     _cs = PaperTrade.snapshot["chart_state"]
     cols.append(cast(_cs["h1"]["from_hi_pct"].astext, Float).label("g_h1_from_hi"))
     cols.append(cast(_cs["m5"]["from_hi_pct"].astext, Float).label("g_m5_from_hi"))
+    # 🎚 Fix 378 (사전등록 2026-09-18): 미세조정 후보 P8·P9·P10 이 보는 값
+    cols.append(cast(_cs["h1"]["atr14_pct"].astext, Float).label("g_h1_atr"))
+    cols.append(cast(_cs["h4"]["bb"]["bars_since_below_lower"].astext, Float).label("g_h4_since_lower"))
+    cols.append(cast(_cs["d1"]["pctb"].astext, Float).label("g_d1_pctb"))
     cols.append(_cs["d1"]["bb"]["trend"].astext.label("g_d1_trend"))
     cols.append(cast(PaperTrade.chg_24h, Float).label("g_chg24"))
 
@@ -152,7 +156,8 @@ def load_live_rows(db: Any, *, days: int = 30) -> list[dict[str, Any]]:
             }
         dh5 = m["dist_high5d_pct"]
         gate = {"h1_from_hi": m["g_h1_from_hi"], "m5_from_hi": m["g_m5_from_hi"],
-                "d1_trend": m["g_d1_trend"], "chg24": m["g_chg24"]}
+                "d1_trend": m["g_d1_trend"], "chg24": m["g_chg24"],
+                "h1_atr": m["g_h1_atr"], "h4_since_lower": m["g_h4_since_lower"], "d1_pctb": m["g_d1_pctb"]}
         out.append({
             "id": m["id"], "symbol": m["symbol"], "side": m["side"], "rule": m["rule"],
             "opened_at": m["opened_at"], "status": m["status"], "tags": list(m["tags"] or []),
@@ -434,8 +439,27 @@ def _day_edge(kept_rows: list[dict[str, Any]], excluded_rows: list[dict[str, Any
     return {"days_with_both": days_with_both, "positive_days": positive_days}
 
 
+# 필터마다 사전등록 시각이 다르다 — 그 조건을 고를 때 본 행은 판정에서 뺀다 (자기확인 금지).
+#   P5·P6 = Fix 375(9/17) · P7 = Fix 377(9/18) · P8·P9·P10 = Fix 378(9/18) 에 골랐다.
+#   차트 값이 기록되기 시작한 시점과 무관하게, **고른 날 자정 이후에 열린 행만** 센다.
+FILTER_PREREG: dict[str, str] = {
+    "P5_short_near_high_not_d1_up": "2026-09-17T00:00:00+00:00",
+    "P6_long_after_drop_or_pullback": "2026-09-17T00:00:00+00:00",
+    "P7_long_no_high_chase": "2026-09-19T00:00:00+00:00",
+    "P8_short_calm_hour": "2026-09-19T00:00:00+00:00",
+    "P9_short_not_after_breakdown": "2026-09-19T00:00:00+00:00",
+    "P10_long_gate_or_low_band": "2026-09-19T00:00:00+00:00",
+}
+
+
 def _filter_result(universe: list[dict[str, Any]], kept: list[dict[str, Any]], excluded: list[dict[str, Any]],
-                   base_fn) -> dict[str, Any]:
+                   base_fn, *, name: str | None = None) -> dict[str, Any]:
+    since = FILTER_PREREG.get(name or "")
+    if since:
+        cut = parse_prereg_at(since)
+        universe = [r for r in universe if r["opened_at"] >= cut]
+        kept = [r for r in kept if r["opened_at"] >= cut]
+        excluded = [r for r in excluded if r["opened_at"] >= cut]
     kept_rows, excl_rows, univ_rows = _to_stat_rows(kept), _to_stat_rows(excluded), _to_stat_rows(universe)
     kept_stats, excl_stats, univ_stats = _stats(kept_rows, base_fn), _stats(excl_rows, base_fn), _stats(univ_rows, base_fn)
     day_edge = _day_edge(kept_rows, excl_rows)
@@ -444,7 +468,15 @@ def _filter_result(universe: list[dict[str, Any]], kept: list[dict[str, Any]], e
              and share >= GATE_MIN_DAY_SHARE and kept_stats["mean"] is not None and excl_stats["mean"] is not None
              and kept_stats["mean"] > excl_stats["mean"])
     return {"universe": univ_stats, "kept": kept_stats, "excluded": excl_stats, "day_edge": day_edge,
-            "adopt": bool(adopt)}
+            "adopt": bool(adopt), "since": FILTER_PREREG.get(name or "")}
+
+
+# 🎚 Fix 378 미세조정 후보의 숫자 (모두 「Claude가 정함」 — 가상 분석에서 고른 값, 판정은 7일 표본으로)
+TUNE: dict[str, float] = {
+    "short_max_atr_1h_pct": 1.5,            # P8: 1시간 ATR 이 이 이하일 때만
+    "short_min_bars_since_h4_lower": 14.0,  # P9: 4시간 하단 밖 종가 이후 이 봉 수 이상 지났을 때만
+    "long_max_d1_pctb": 0.5,                # P10: 일봉 %B 가 이 이하(하단권)일 때만 P7 가지를 쓴다
+}
 
 
 def _gate_snapshot(r: Mapping[str, Any]) -> dict[str, Any]:
@@ -486,9 +518,23 @@ def _filters_section(side_rows: list[dict[str, Any]], side: str, base_fn) -> dic
                     and (r.get("gate") or {}).get("d1_trend")]
         kept = [r for r in universe if _EC.evaluate("SHORT", _gate_snapshot(r))["verdict"] == "pass"]
         excluded = [r for r in universe if _EC.evaluate("SHORT", _gate_snapshot(r))["verdict"] != "pass"]
-        out["P5_short_near_high_not_d1_up"] = _filter_result(universe, kept, excluded, base_fn)
+        out["P5_short_near_high_not_d1_up"] = _filter_result(universe, kept, excluded, base_fn, name="P5_short_near_high_not_d1_up")
+
+        # 🎚 Fix 378 미세조정 후보 (사전등록 2026-09-18 · 가상 SHORT 11,257건에서 두 기간 모두 통과 쪽이 나았다)
+        #   P8 = P5 + 1시간 변동성 낮음 (발견 ex +1.67 vs −0.71 · 검증 +0.75 vs −1.41)
+        #   P9 = P5 + 4시간 하단이탈 뒤 14봉 지남 = 급락 직후 추격 금지 (발견 +2.35 vs −0.48 · 검증 +2.24 vs −1.50)
+        pass_ids = {r["id"] for r in universe if _EC.evaluate("SHORT", _gate_snapshot(r))["verdict"] == "pass"}
+        for name, field, ok in (("P8_short_calm_hour", "h1_atr",
+                                 lambda v: v <= TUNE["short_max_atr_1h_pct"]),
+                                ("P9_short_not_after_breakdown", "h4_since_lower",
+                                 lambda v: v >= TUNE["short_min_bars_since_h4_lower"])):
+            uu = [r for r in universe if (r.get("gate") or {}).get(field) is not None]
+            kk = [r for r in uu if r["id"] in pass_ids and ok(r["gate"][field])]
+            kept_ids = {r["id"] for r in kk}
+            out[name] = _filter_result(uu, kk, [r for r in uu if r["id"] not in kept_ids], base_fn, name=name)
     if side == "LONG":
         # P7 (Fix 377, 사전등록 2026-09-18): 고점 바로 밑 추격 금지 · 24h 과열(≥20) 금지 · 24h 0~5% 미동 제외.
+        # (아래 _p7 은 P10 도 쓴다)
         #   근거 = 가상 LONG 규칙 합산 발견 +0.25 vs 막힘 −0.90 · 검증 +0.90 vs +0.10 (t 4.0) · 상승 초입 LONG 은 검증 5/5일.
         #   ⚠️ 무작위 LONG 에서는 발견 기간에 반대였다 → 규칙 진입에만 건다(가족 전용 조건은 entry_conditions.FAMILY_RULES).
         universe = [r for r in live_valid if (r.get("gate") or {}).get("h1_from_hi") is not None
@@ -499,12 +545,25 @@ def _filters_section(side_rows: list[dict[str, Any]], side: str, base_fn) -> dic
             return hi <= -1.5 and chg < 20.0 and not (0.0 <= chg < 5.0)
         kept = [r for r in universe if _p7(r)]
         excluded = [r for r in universe if not _p7(r)]
-        out["P7_long_no_high_chase"] = _filter_result(universe, kept, excluded, base_fn)
+        out["P7_long_no_high_chase"] = _filter_result(universe, kept, excluded, base_fn, name="P7_long_no_high_chase")
+
+        # 🎚 Fix 378 미세조정 후보 P10 = 지금 LONG 게이트 **또는** (고점추격 아님 + 일봉 하단권)
+        #   가상 LONG 11,088건: 발견 ex +0.34 vs 막힘 −0.86 · 검증 +1.25 vs −0.21 (통과 비중 48~53%)
+        u10 = [r for r in universe if (r.get("gate") or {}).get("d1_pctb") is not None
+               and (r.get("gate") or {}).get("m5_from_hi") is not None]
+        def _p10(r):
+            g = r["gate"]
+            gate_ok = _EC.evaluate("LONG", _gate_snapshot(r), chg_24h=g.get("chg24"))["verdict"] == "pass"
+            return gate_ok or (_p7(r) and g["d1_pctb"] <= TUNE["long_max_d1_pctb"])
+        k10 = [r for r in u10 if _p10(r)]
+        out["P10_long_gate_or_low_band"] = _filter_result(u10, k10, [r for r in u10 if not _p10(r)], base_fn,
+                                                          name="P10_long_gate_or_low_band")
 
         universe = [r for r in live_valid if (r.get("gate") or {}).get("m5_from_hi") is not None]
         kept = [r for r in universe if _EC.evaluate("LONG", _gate_snapshot(r), chg_24h=r["gate"].get("chg24"))["verdict"] == "pass"]
         excluded = [r for r in universe if _EC.evaluate("LONG", _gate_snapshot(r), chg_24h=r["gate"].get("chg24"))["verdict"] != "pass"]
-        out["P6_long_after_drop_or_pullback"] = _filter_result(universe, kept, excluded, base_fn)
+        out["P6_long_after_drop_or_pullback"] = _filter_result(universe, kept, excluded, base_fn,
+                                                               name="P6_long_after_drop_or_pullback")
 
     # P4: 같은 (심볼, 방향, 시간) 에 규칙이 여러 개 겹치면 (진입시각, id) 순으로 첫 건만 유지
     ordered = sorted(live_valid, key=lambda r: (r["opened_at"], r["id"]))
@@ -679,7 +738,7 @@ def render_markdown_v3(rep: Mapping[str, Any]) -> str:
                          f"{_half_str(st['half'])} | {_f(st.get('win'), 1)}% | {ambig} |{mark} |")
     L.append("")
 
-    L.append("## 2. 진입 필터 (사전등록 4종 — kept/excluded/universe)")
+    L.append("## 2. 진입 필터 (사전등록 — kept/excluded/universe · 필터별 사전등록 시각 이후 행만)")
     L.append("| 구간 | 방향 | 필터 | 구분 | n | 클러스터 | 날짜 | 평균 | 승률 | 긍정일/함께있는날 | 채택 |")
     L.append("|---|---|---|---|---:|---:|---:|---:|---:|---|---|")
     for block in ("all", "prereg"):
@@ -688,11 +747,12 @@ def render_markdown_v3(rep: Mapping[str, Any]) -> str:
             for fname, st in (b.get("filters") or {}).get(side, {}).items():
                 de = st.get("day_edge") or {}
                 mark = " ✅" if st.get("adopt") else ""
+                reg = f" (등록 {str(st['since'])[:10]}~)" if st.get("since") else ""
                 for part in ("kept", "excluded", "universe"):
                     ps = st.get(part) or {}
                     if not ps.get("n"):
                         continue
-                    L.append(f"| {block} | {side} | {fname} | {part} | {ps['n']} | {ps['clusters']} | {ps['days']} | "
+                    L.append(f"| {block} | {side} | {fname}{reg} | {part} | {ps['n']} | {ps['clusters']} | {ps['days']} | "
                              f"{_f(ps['mean'])} | {_f(ps.get('win'), 1)}% | "
                              f"{de.get('positive_days', 0)}/{de.get('days_with_both', 0)} |"
                              f"{mark if part == 'kept' else ''} |")

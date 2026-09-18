@@ -19,3 +19,10 @@
 - `replay_surge.py` — 운영 모듈(entry_conditions, family='rf_surge_long')로 같은 데이터를 재생해 수치 일치 확인.
 
 결과: docs/learning/SURGE_START_LONG_2026-09-18.md
+
+## 2026-09-18 추가 (Fix 378 미세조정 후보)
+- `regime.py` — 시장 국면(상승/보합/하락)별로 게이트 P5·P6·P7 을 다시 재서, 하루치 역전이 표본 문제였음을 확인한다.
+- `tune.py` — 미세조정 후보를 발견·검증 두 기간에서 동시에 재고, **둘 다 통과 쪽이 나은 것만** ✅ 로 표시한다.
+  채택(사전등록)된 것은 P8(SHORT·1H ATR ≤1.5) · P9(SHORT·4H 하단이탈 14봉+) · P10(LONG 게이트 or (P7 & 일봉 %B ≤0.5)).
+
+결과: docs/learning/TUNING_CANDIDATES_2026-09-18.md
