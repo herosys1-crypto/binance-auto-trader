@@ -1,12 +1,13 @@
 /**
  * 🎛 Fix 374 (2026-09-16 사장님) — 자동매매 관제실 화면 로직.
+ * 🗂 Fix 381 (2026-09-19 사장님) — "자동매매 전략 모두 한눈에 관리할수 있게 정리해서 한줄로 순서를 정해서 나열하고
+ *    선택하면 풀다운 메뉴로 볼수있게 정리해줘 자동매매 전략이 너무 많이 복잡해"
+ *    → 전략 한 줄씩(번호 = 서버 auto_control.LINE_ORDER) · 줄을 누르면 그 아래로 설정이 펼쳐진다 · 펼친 줄은 기억한다.
  *
- * 사장님: "자동매매 준비 가족 12종과 모든 자동매매를 한곳으로 모아서 사용과 관리가 편리하게 ui를 개선해줘"
- *
- * 규칙:
+ * 규칙 (Fix 374 그대로):
  *  · 이 화면은 설정만 바꾼다. 주문·청산은 없다.
  *  · 바꾼 칸은 파랗게 표시하고, 아래 띠의 「💾 저장」을 누를 때 **한 번에** 보낸다 (한 칸이라도 틀리면 전부 저장 안 함).
- *  · 자동매매 재개와 「on 으로 켜기」는 실자금이 나가는 조작이라 **확인창**을 띄운다 (끄는 쪽은 바로 적용).
+ *  · 자동매매 재개와 「on 으로 켜기」·게이트 풀기는 실자금이 나가는 조작이라 **확인창**을 띄운다.
  *  · 일괄 버튼은 끄기·그림자만 있다 (켜기 일괄은 서버가 거부한다).
  *
  * API: GET /auto-control/overview · PATCH /auto-control/settings · POST /auto-control/halt · POST /auto-control/bulk
@@ -14,6 +15,15 @@
 const API = '/api/v1';
 let STATE = null;              // 마지막 overview 응답
 const CHANGES = {};            // 키 -> 저장할 값 (사장님이 만진 것만)
+const OPEN_KEY = 'autoControlOpen';
+const OPEN = new Set(readOpen());
+
+function readOpen() {
+  try { return JSON.parse(localStorage.getItem(OPEN_KEY) || '[]'); } catch (e) { return []; }
+}
+function saveOpen() {
+  try { localStorage.setItem(OPEN_KEY, JSON.stringify([...OPEN])); } catch (e) { /* 저장 못 해도 화면은 동작 */ }
+}
 
 function token() {
   return localStorage.getItem('access_token') || sessionStorage.getItem('access_token')
@@ -48,9 +58,9 @@ async function load() {
     Object.keys(CHANGES).forEach(k => delete CHANGES[k]);
     render();
   } catch (e) {
-    document.getElementById('banner').innerHTML =
-      `<div class="banner halted"><div class="big">❌ 불러오기 실패</div><div>${esc(e.message)}</div>
-       <div class="muted">운영 화면에서 한 번 로그인한 뒤 열어야 합니다 (토큰 공유).</div></div>`;
+    document.getElementById('status').innerHTML =
+      `<div class="status halted"><div><div class="big">❌ 불러오기 실패</div><div>${esc(e.message)}</div>
+       <div class="muted">운영 화면에서 한 번 로그인한 뒤 열어야 합니다 (토큰 공유).</div></div></div>`;
   }
 }
 
@@ -58,147 +68,205 @@ async function load() {
 function render() {
   const s = STATE;
   document.getElementById('subtitle').textContent =
-    `가족 ${s.summary.total}종 · 갱신 ${new Date(s.generated_at).toLocaleTimeString('ko-KR')}` +
-    (s.count_error ? ' · ⚠ 건수 집계 실패' : '');
+    `전략 ${s.summary.total}개 · 한 줄씩 순서대로 · 줄을 누르면 설정이 펼쳐집니다 · 갱신 ${
+      new Date(s.generated_at).toLocaleTimeString('ko-KR')}` + (s.count_error ? ' · ⚠ 건수 집계 실패' : '');
 
-  document.getElementById('banner').innerHTML = s.halted
-    ? `<div class="banner halted">
-         <div class="big">⛔ 자동매매 전면 중단 중 (Fix 371)</div>
-         <div class="muted">사람이 만든 전략과 사람이 누른 버튼만 주문합니다${s.halt_reason ? ' · ' + esc(s.halt_reason) : ''}.
-           재개해도 아래에서 <b>on</b> 인 가족만 실제로 주문합니다.</div>
-         <div class="row" style="margin-top:6px"><button class="btn btn-go" onclick="setHalt(false)">▶ 자동매매 재개</button></div>
+  document.getElementById('status').innerHTML = s.halted
+    ? `<div class="status halted">
+         <div><div class="big">⛔ 자동매매 전면 중단 중</div>
+           <div class="muted">사람이 만든 전략만 주문합니다${s.halt_reason ? ' · ' + esc(s.halt_reason) : ''}.
+             재개해도 아래에서 <b>실주문 ON</b> 인 전략만 주문합니다.</div></div>
+         <button class="btn btn-go" onclick="setHalt(false)">▶ 자동매매 재개</button>
        </div>`
-    : `<div class="banner running">
-         <div class="big">▶ 자동매매 허용 중 — on 인 가족 ${s.summary.on}종이 실주문합니다</div>
-         <div class="row" style="margin-top:6px"><button class="btn btn-danger" onclick="setHalt(true)">⛔ 전면 중단</button></div>
+    : `<div class="status running">
+         <div class="big">▶ 자동매매 허용 중 — 실주문 ON ${s.summary.on}개가 주문합니다</div>
+         <button class="btn btn-danger" onclick="setHalt(true)">⛔ 전면 중단</button>
        </div>`;
 
   document.getElementById('ks').innerHTML = (s.kill_switches || []).length
     ? `<div class="ks">🛑 <b>Kill-Switch 작동 중</b> (계정 ${s.kill_switches.map(k => '#' + k.account_id).join(', ')}) —
-        자동·수동을 가리지 않고 <b>모든</b> 주문이 막혀 있습니다. 운영 화면 상단 배너에서 해제하세요.
-        <div class="muted">${s.kill_switches.map(k => esc(k.reason || '') + ' ' + esc(k.message || '')).join(' / ')}</div></div>`
+        자동·수동을 가리지 않고 <b>모든</b> 주문이 막혀 있습니다. 운영 화면 상단 배너에서 해제하세요.</div>`
     : '';
 
   const c = s.summary;
   document.getElementById('summary').innerHTML = [
-    ['실주문 on', c.on, 'var(--on)'], ['그림자', c.shadow, 'var(--shadow)'], ['끔', c.off, 'var(--off)'],
-    ['오늘 진입(KST)', c.entered_today, ''], ['지금 보유', c.live_now, ''],
-  ].map(([l, v, col]) => `<div class="card"><div class="l">${l}</div>
-      <div class="v" style="${col ? 'color:' + col : ''}">${v}</div></div>`).join('');
-
-  document.getElementById('globals').innerHTML =
-    `<div class="sec"><h2>🌐 전체 <span class="muted">모든 자동매매에 함께 걸리는 값</span></h2>
-       <div class="row" style="gap:14px">${s.globals.map(ctlField).join('')}</div></div>`;
+    ['실주문 ON', c.on, 'var(--on)'], ['그림자', c.shadow, 'var(--shadow)'], ['끔', c.off, 'var(--off)'],
+    ['오늘 진입', c.entered_today, ''], ['지금 보유', c.live_now, ''],
+  ].map(([l, v, col]) => `<span class="chip">${l} <b style="${col ? 'color:' + col : ''}">${v}</b></span>`).join('');
 
   const q = (document.getElementById('q').value || '').trim().toLowerCase();
   const onlyOn = document.getElementById('only-on').checked;
-  document.getElementById('groups').innerHTML = s.groups.map((g, gi) => {
-    if (g === '전체') return '';
-    const list = s.panels.filter(p => p.group === g)
-      .filter(p => !onlyOn || p.state === 'on')
-      .filter(p => !q || (p.label + ' ' + p.fam + ' ' + (p.gate ? p.gate.key : '')).toLowerCase().includes(q));
-    if (!list.length) return '';
-    return `<div class="sec">
-        <h2>${esc(g)} <span class="row">
-          <span class="muted">${list.length}종</span>
-          <button class="btn" onclick="bulk('shadow', ${gi})">전부 그림자로</button>
-          <button class="btn" onclick="bulk('off', ${gi})">전부 끄기</button>
-        </span></h2>
-        ${list.map(famRow).join('')}
-        ${g === '규칙 가족 12 (가상매매 채택 규칙)' ? sharedRuleBlock() : ''}
-      </div>`;
-  }).join('');
+  const match = p => (!onlyOn || p.state === 'on') &&
+    (!q || [p.label, p.fam, p.id, p.gate && p.gate.key, ...(p.ctls || []).map(x => x.key + ' ' + x.label)]
+      .join(' ').toLowerCase().includes(q));
 
-  document.getElementById('extras').innerHTML =
-    `<div class="sec"><h2>🔎 감지 전용 <span class="muted">주문을 만들지 않아 켜기 칸이 없습니다</span></h2>
-       <table class="det">${(s.detectors || []).map(d =>
-         `<tr><td class="keyref">${esc(d.job)}</td><td>${esc(d.note)}</td></tr>`).join('')}</table></div>`;
-
+  let html = globalItem();
+  (s.sections || []).forEach(sec => {
+    const list = s.panels.filter(p => p.section === sec).filter(match);
+    const shared = sec.startsWith('⑤') && !onlyOn && (!q || '공용 규칙 가족'.includes(q) ||
+      (s.shared_rule || []).some(x => (x.key + x.label).toLowerCase().includes(q)));
+    if (!list.length && !shared) return;
+    html += `<div class="sec-title">${esc(sec)} <span class="muted">${list.length}개</span></div>`;
+    html += list.map(item).join('');
+    if (shared) html += sharedRuleItem();
+  });
+  if (!onlyOn && !q) html += detectorItem();
+  document.getElementById('list').innerHTML = html ||
+    '<div class="muted" style="padding:12px">조건에 맞는 전략이 없습니다.</div>';
   syncSaveBar();
 }
 
-function sharedRuleBlock() {
-  return `<div class="fam" style="border-left:3px solid var(--accent)">
-      <div class="fam-name">⚙ 규칙 가족 12종 공용 값 <span class="muted">한 칸을 고치면 12종에 함께 적용됩니다</span></div>
-      <div class="detail"><div class="row">${STATE.shared_rule.map(ctlField).join('')}</div></div>
-    </div>`;
+function stateBadge(p) {
+  if (p.state === 'gate_only') return '<span class="badge b-off">게이트만</span>';
+  if (p.state === 'on') {
+    return STATE.halted ? '<span class="badge b-wait" title="실주문 ON 이지만 전면 중단 중이라 대기">ON·중단 대기</span>'
+                        : '<span class="badge b-on">실주문 ON</span>';
+  }
+  return p.state === 'shadow' ? '<span class="badge b-shadow">그림자</span>' : '<span class="badge b-off">끔</span>';
 }
 
-function famRow(p) {
-  const stateCls = p.state === 'on' ? 'is-on' : (p.state === 'shadow' ? 'is-shadow' : 'is-off');
-  // 전면 중단 중이면 on 이라도 지금은 주문이 나가지 않는다 — 그걸 배지에 적어 준다 (오해 방지).
-  const badge = p.state === 'gate_only' ? '<span class="badge b-off">게이트·한도만</span>'
-    : p.state === 'on'
-    ? `<span class="badge b-on">실주문 ON</span>${STATE.halted ? '<span class="badge b-off">중단 중이라 대기</span>' : ''}`
-    : (p.state === 'shadow' ? '<span class="badge b-shadow">그림자</span>' : '<span class="badge b-off">끔</span>');
+function counts(p) {
   const cnt = [];
   if (p.today != null) {
     const cap = p.daily_max ? valOf(p.daily_max) : null;
-    cnt.push(`오늘 <b>${p.today}</b>${cap != null ? '/' + cap : ''}건`);
+    cnt.push(`오늘 <b>${p.today}</b>${cap != null ? '/' + esc(cap) : ''}`);
   }
   if (p.live != null) cnt.push(`보유 <b>${p.live}</b>`);
   if (p.shadow != null) cnt.push(`그림자 <b>${p.shadow}</b>`);
-  const id = 'd_' + (p.gate ? p.gate.key : p.fam || Math.random().toString(36).slice(2));
-  return `<div class="fam ${stateCls}">
-      <div class="fam-top">
-        <div>
-          <div class="fam-name">${badge} ${esc(p.label)}</div>
-          <div class="fam-meta">${esc(p.job || '')}${p.every ? ' · ' + esc(p.every) : ''}
-            ${p.fam ? ' · <span class="keyref">' + esc(p.fam) + '</span>' : ''}</div>
-          ${cnt.length ? `<div class="stat">${cnt.join(' · ')}</div>` : ''}
-          ${p.note ? `<div class="fam-note">${esc(p.note)}</div>` : ''}
-        </div>
-        <div class="row">
-          ${p.gate ? ctlField(p.gate) : ''}
-          ${p.daily_max ? ctlField(p.daily_max) : ''}
-          ${(p.ctls && p.ctls.length) ? `<button class="btn" onclick="toggleDetail('${id}')">⚙ 자세히</button>` : ''}
-        </div>
+  return cnt.join(' · ');
+}
+
+/** 전략 한 줄 + 펼침 칸. */
+function item(p) {
+  const id = 'L_' + p.id;
+  const open = OPEN.has(id) ? ' open' : '';
+  const gates = (p.ctls || []).filter(c => c.kind === 'gate3');
+  const rest = (p.ctls || []).filter(c => c.kind !== 'gate3');
+  const main = [p.gate ? ctlField(p.gate, true) : '', p.daily_max ? ctlField(p.daily_max) : ''].join('');
+  const cnt = counts(p);
+  return `<div class="item is-${esc(p.state)}${open}" id="${esc(id)}">
+      <div class="line" onclick="toggleItem('${esc(id)}')" role="button" aria-expanded="${open ? 'true' : 'false'}">
+        <span class="no">${p.order < 999 ? p.order : '·'}</span>
+        ${stateBadge(p)}
+        <span class="name" title="${esc(p.label)}">${esc(p.label)}</span>
+        <span class="mini">${cnt}</span>
+        <span class="arrow">▼</span>
       </div>
-      ${(p.ctls && p.ctls.length) ? `<div class="detail" id="${id}" style="display:none">
-          <div class="row">${p.ctls.map(c => ctlField(c)).join('')}</div></div>` : ''}
+      <div class="drop">
+        ${cnt ? `<div class="mini-m">${cnt}</div>` : ''}
+        <div class="desc">${[p.job ? '워커 ' + esc(p.job) : '', (p.every && p.every !== '—') ? esc(p.every) + '마다' : '',
+          p.fam ? '<span class="keyref">' + esc(p.fam) + '</span>' : ''].filter(Boolean).join(' · ')}
+          ${p.note ? '<br>' + esc(p.note) : ''}</div>
+        ${main ? `<div class="fields">${main}</div>` : ''}
+        ${gates.length ? `<div class="sub">진입 전 확인 (게이트)</div><div class="fields">${gates.map(x => ctlField(x)).join('')}</div>` : ''}
+        ${rest.length ? `<div class="sub">세부 값</div><div class="fields">${rest.map(x => ctlField(x)).join('')}</div>` : ''}
+      </div>
     </div>`;
 }
 
-function toggleDetail(id) {
+function globalItem() {
+  const id = 'L__globals';
+  const open = OPEN.has(id) ? ' open' : '';
+  const groups = (STATE.groups || []).filter(g => g !== '전체');
+  return `<div class="item${open}" id="${id}" style="border-left:3px solid var(--accent)">
+      <div class="line" onclick="toggleItem('${id}')" role="button">
+        <span class="no">⚙</span><span class="badge b-off">전체</span>
+        <span class="name">전체 설정 · 한꺼번에 끄기</span><span class="mini">모든 자동매매에 함께 걸리는 값</span>
+        <span class="arrow">▼</span>
+      </div>
+      <div class="drop">
+        <div class="fields">${STATE.globals.map(x => ctlField(x)).join('')}</div>
+        <div class="sub">한꺼번에 (켜기 일괄은 없습니다)</div>
+        <div class="row">${groups.map(g => `<span class="muted">${esc(g)}</span>
+          <button class="btn" onclick="bulk('shadow', '${esc(g)}')">전부 그림자</button>
+          <button class="btn" onclick="bulk('off', '${esc(g)}')">전부 끄기</button>`).join('<span style="width:10px"></span>')}</div>
+      </div>
+    </div>`;
+}
+
+function sharedRuleItem() {
+  const id = 'L__shared_rule';
+  const open = OPEN.has(id) ? ' open' : '';
+  return `<div class="item${open}" id="${id}" style="border-left:3px solid var(--accent)">
+      <div class="line" onclick="toggleItem('${id}')" role="button">
+        <span class="no">⚙</span><span class="badge b-off">공용</span>
+        <span class="name">규칙 가족 12종 공용 값</span><span class="mini">한 칸을 고치면 12종에 함께 적용</span>
+        <span class="arrow">▼</span>
+      </div>
+      <div class="drop"><div class="fields">${STATE.shared_rule.map(x => ctlField(x)).join('')}</div></div>
+    </div>`;
+}
+
+function detectorItem() {
+  const id = 'L__detectors';
+  const open = OPEN.has(id) ? ' open' : '';
+  const d = STATE.detectors || [];
+  return `<div class="sec-title">🔎 감지 전용 <span class="muted">주문을 만들지 않아 켜기 칸이 없습니다</span></div>
+    <div class="item${open}" id="${id}">
+      <div class="line" onclick="toggleItem('${id}')" role="button">
+        <span class="no">·</span><span class="badge b-off">감지</span>
+        <span class="name">감지 전용 워커 ${d.length}개</span><span class="mini"></span><span class="arrow">▼</span>
+      </div>
+      <div class="drop"><table class="det">${d.map(x =>
+        `<tr><td class="keyref">${esc(x.job)}</td><td>${esc(x.note)}</td></tr>`).join('')}</table></div>
+    </div>`;
+}
+
+function toggleItem(id) {
   const el = document.getElementById(id);
-  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  if (!el) return;
+  const open = !el.classList.contains('open');
+  el.classList.toggle('open', open);
+  const line = el.querySelector('.line');
+  if (line) line.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (open) OPEN.add(id); else OPEN.delete(id);
+  saveOpen();
+}
+
+function openAll(open) {
+  document.querySelectorAll('#list .item').forEach(el => {
+    el.classList.toggle('open', open);
+    if (open) OPEN.add(el.id); else OPEN.delete(el.id);
+  });
+  saveOpen();
 }
 
 function valOf(c) { return CHANGES[c.key] !== undefined ? CHANGES[c.key] : c.value; }
 
-/** 설정 한 칸. Array.map 으로도 부르므로 두 번째 인자(index)는 쓰지 않는다. */
-function ctlField(c) {
+/** 설정 한 칸. main = 그 전략의 켜기 스위치(굵게). */
+function ctlField(c, main) {
   const v = valOf(c);
   const dirty = CHANGES[c.key] !== undefined ? ' dirty' : '';
   const title = [c.help, c.source ? '출처: ' + c.source : '', c.ref ? '코드: ' + c.ref : '',
                  '설정 키: ' + c.key + (c.is_default ? ' (행 없음 = 기본 ' + c.default + ')' : '')]
                 .filter(Boolean).join('\n');
+  const stop = 'onclick="event.stopPropagation()"';
   let input;
   if (c.kind === 'gate3') {
-    // 🎯 Fix 375 차트 자리 게이트 — on = 차트 자리가 아니면 진입 안 함 (실주문을 켜는 칸이 아니다)
-    input = `<select class="${dirty.trim()}" onchange="onEdit('${c.key}', this.value, this)">
+    // 게이트 — on = 조건이 아니면 진입 안 함 (실주문을 켜는 칸이 아니다)
+    input = `<select class="${dirty.trim()}" ${stop} onchange="onEdit('${c.key}', this.value, this)">
         ${[['off', '끔'], ['shadow', '기록만'], ['on', '적용']].map(([m, t]) =>
           `<option value="${m}"${m === v ? ' selected' : ''}>${t}</option>`).join('')}</select>`;
   } else if (c.kind === 'mode3') {
-    input = `<select class="${dirty.trim()}" onchange="onEdit('${c.key}', this.value, this)">
+    input = `<select class="${dirty.trim()}" ${stop} onchange="onEdit('${c.key}', this.value, this)">
         ${['off', 'shadow', 'on'].map(m => `<option value="${m}"${m === v ? ' selected' : ''}>${
           m === 'off' ? '끔' : (m === 'shadow' ? '그림자' : '실주문 ON')}</option>`).join('')}</select>`;
   } else if (c.kind === 'switch') {
     const on = !['0', 'off', 'false', 'no'].includes(String(v).toLowerCase());
     // 🚨 전면 중단 키는 뜻이 거꾸로다 (1 = 중단) — 「켬/끔」으로 적으면 반대로 읽힌다.
     const [yes, no] = c.key === 'auto_trading_halt' ? ['중단', '허용'] : ['켬', '끔'];
-    input = `<select class="${dirty.trim()}" onchange="onEdit('${c.key}', this.value, this)">
+    input = `<select class="${dirty.trim()}" ${stop} onchange="onEdit('${c.key}', this.value, this)">
         <option value="1"${on ? ' selected' : ''}>${yes}</option>
         <option value="0"${on ? '' : ' selected'}>${no}</option></select>`;
   } else if (c.kind === 'int' || c.kind === 'num') {
-    input = `<input type="number" class="${dirty.trim()}" value="${esc(v)}"
+    input = `<input type="number" class="${dirty.trim()}" value="${esc(v)}" ${stop}
         ${c.lo != null ? 'min="' + c.lo + '"' : ''} ${c.hi != null ? 'max="' + c.hi + '"' : ''}
         step="${c.kind === 'int' ? 1 : 'any'}" onchange="onEdit('${c.key}', this.value, this)">`;
   } else {
-    input = `<input type="text" class="wide ${dirty.trim()}" value="${esc(v)}"
+    input = `<input type="text" class="txt ${dirty.trim()}" value="${esc(v)}" ${stop}
         onchange="onEdit('${c.key}', this.value, this)">`;
   }
-  return `<label class="f" title="${esc(title)}">
+  return `<label class="f${main ? ' main' : ''}" title="${esc(title)}">
       <span>${esc(c.label)}${c.is_default ? ' <span class="keyref">기본</span>' : ''}</span>${input}</label>`;
 }
 
@@ -227,7 +295,7 @@ function syncSaveBar() {
   document.getElementById('save-btn').textContent = `💾 ${n}칸 저장`;
   if (n) {
     const turningOn = Object.entries(CHANGES).filter(([k, v]) => isTurnOn(k, v)).map(([k]) => k);
-    msg(turningOn.length ? `⚠ 실주문을 켜거나 차트 게이트를 푸는 칸이 있습니다: ${turningOn.join(', ')}` : `${n}칸 변경됨`,
+    msg(turningOn.length ? `⚠ 실주문을 켜거나 게이트를 푸는 칸이 있습니다: ${turningOn.join(', ')}` : `${n}칸 변경됨`,
         turningOn.length ? 'err' : '');
   }
 }
@@ -239,7 +307,7 @@ function isTurnOn(key, value) {
   const v = String(value).toLowerCase();
   if (key === 'auto_trading_halt') return ['0', 'off', 'false', 'no'].includes(v);
   if (c.kind === 'mode3') return v === 'on' && String(c.value).toLowerCase() !== 'on';
-  // 차트 게이트를 끄거나 기록만으로 바꾸면 차트 자리가 아닌 곳에서도 진입한다 → 확인창 대상
+  // 게이트를 끄거나 기록만으로 바꾸면 조건이 아닌 곳에서도 진입한다 → 확인창 대상
   if (c.kind === 'gate3') return v !== 'on' && String(c.value).toLowerCase() === 'on';
   if (c.kind === 'switch') return v === '1' && ['0', 'off', 'false', 'no'].includes(String(c.value).toLowerCase());
   return false;
@@ -256,7 +324,7 @@ async function save() {
   if (!keys.length) return;
   const on = keys.filter(k => isTurnOn(k, CHANGES[k]));
   if (on.length && !confirm(
-      `실주문을 켜거나 차트 게이트를 푸는 설정이 ${on.length}개 있습니다:\n\n${on.join('\n')}\n\n` +
+      `실주문을 켜거나 게이트를 푸는 설정이 ${on.length}개 있습니다:\n\n${on.join('\n')}\n\n` +
       `이 값을 저장하면 조건이 맞는 순간 실자금 주문이 나갑니다. 저장할까요?`)) return;
   const btn = document.getElementById('save-btn');
   btn.disabled = true;
@@ -273,8 +341,8 @@ async function save() {
 
 async function setHalt(halt) {
   if (!halt) {
-    const on = STATE.panels.filter(p => p.state === 'on').map(p => p.label);
-    if (!confirm(`자동매매를 재개합니다.\n\n지금 실주문 ON 인 가족 ${on.length}종:\n${on.join('\n') || '(없음 — 재개해도 주문은 없습니다)'}\n\n계속할까요?`)) return;
+    const on = STATE.panels.filter(p => p.state === 'on').map(p => p.order + '. ' + p.label);
+    if (!confirm(`자동매매를 재개합니다.\n\n지금 실주문 ON 인 전략 ${on.length}개:\n${on.join('\n') || '(없음 — 재개해도 주문은 없습니다)'}\n\n계속할까요?`)) return;
   }
   try {
     await api('/auto-control/halt', { method: 'POST', body: JSON.stringify({ halt: !!halt }) });
@@ -285,10 +353,9 @@ async function setHalt(halt) {
   }
 }
 
-async function bulk(target, groupIndex) {
-  const group = STATE.groups[groupIndex];
-  if (!group) return;
-  if (!confirm(`${group} 의 모든 가족을 ${target === 'off' ? '끄기' : '그림자'} 로 맞춥니다. 계속할까요?`)) return;
+async function bulk(target, group) {
+  if (!group || !(STATE.groups || []).includes(group)) return;
+  if (!confirm(`${group} 의 모든 전략을 ${target === 'off' ? '끄기' : '그림자'} 로 맞춥니다. 계속할까요?`)) return;
   try {
     const out = await api('/auto-control/bulk', { method: 'POST', body: JSON.stringify({ target, group }) });
     msg(`✅ ${out.changed}칸 적용${(out.skipped || []).length ? ' · 건너뜀: ' + out.skipped.join(', ') : ''}`, 'ok');

@@ -5,13 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>🎛 자동매매 관제실</title>
 <!--
-  🎛 Fix 374 (2026-09-16 사장님) — 「자동매매 준비 가족 12종과 모든 자동매매를 한곳으로 모아서
-  사용과 관리가 편리하게 ui를 개선해줘」
-
-  이 화면 하나에서: 전면 중단/재개 · 규칙 가족 12 · 실매매 워커 15 · 외부 매매법 2 의
-  켜기/그림자/끄기 · 하루 최대 · 동시 보유 상한 · 자본·손절 값을 본다.
-  값은 전부 system_settings 행이라 저장 즉시 적용된다 (재시작 불필요).
-  API = /api/v1/auto-control/* (backend/app/api/v1/auto_control.py)
+  🎛 Fix 374 (2026-09-16 사장님) — 「자동매매 준비 가족 12종과 모든 자동매매를 한곳으로 모아서 사용과 관리가 편리하게 ui를 개선해줘」
+  🗂 Fix 381 (2026-09-19 사장님) — 「자동매매 전략 모두 한눈에 관리할수 있게 정리해서 한줄로 순서를 정해서 나열하고
+      선택하면 풀다운 메뉴로 볼수있게 정리해줘 자동매매 전략이 너무 많이 복잡해」
+      → 전략 한 줄씩 · 번호 순서(서버 auto_control.LINE_ORDER) · 줄을 누르면 그 아래로 설정이 펼쳐진다.
+  값은 전부 system_settings 행이라 저장 즉시 적용된다 (재시작 불필요). API = /api/v1/auto-control/*
 -->
 <style>
   :root {
@@ -22,11 +20,11 @@
   * { box-sizing: border-box; }
   body { background: var(--bg); color: var(--fg); margin: 0; padding: 10px 14px 90px;
          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 13px; }
-  a { color: var(--accent); }
   h1 { font-size: 17px; margin: 0; color: var(--accent); }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;
-          border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .head { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+          border-bottom: 1px solid var(--line); padding-bottom: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .muted { color: var(--dim); font-size: 11px; font-weight: 400; }
   .btn { background: #1e293b; color: var(--fg); border: 1px solid var(--line); border-radius: 6px;
          padding: 6px 11px; cursor: pointer; font-size: 12px; }
   .btn:hover { background: #273549; }
@@ -34,52 +32,58 @@
   .btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
   .btn-go { background: var(--on); border-color: var(--on); color: #05230f; font-weight: 700; }
   .btn:disabled { opacity: .45; cursor: not-allowed; }
+  input[type=text].q { background: #0b1220; color: var(--fg); border: 1px solid var(--line); border-radius: 5px;
+                       padding: 5px 8px; font-size: 12px; min-width: 150px; }
 
-  /* 전면 중단 배너 */
-  .banner { border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; border: 1px solid; }
-  .banner.halted { background: rgba(239,68,68,.12); border-color: var(--danger); }
-  .banner.running { background: rgba(34,197,94,.12); border-color: var(--on); }
-  .banner .big { font-size: 15px; font-weight: 700; }
+  /* 맨 위 한 줄 상태 */
+  .status { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+            border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; border: 1px solid; }
+  .status.halted { background: rgba(239,68,68,.12); border-color: var(--danger); }
+  .status.running { background: rgba(34,197,94,.12); border-color: var(--on); }
+  .status .big { font-size: 14px; font-weight: 700; }
   .ks { background: rgba(245,158,11,.14); border: 1px solid var(--shadow); border-radius: 8px;
-        padding: 8px 12px; margin-bottom: 10px; font-size: 12px; }
+        padding: 7px 12px; margin-bottom: 8px; font-size: 12px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+  .chip b { font-size: 13px; }
 
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 6px; margin-bottom: 12px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; text-align: center; }
-  .card .l { font-size: 10px; color: var(--dim); }
-  .card .v { font-size: 19px; font-weight: 700; }
-
-  .sec { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-         padding: 10px; margin-bottom: 10px; }
-  .sec > h2 { font-size: 13.5px; margin: 0 0 8px; display: flex; justify-content: space-between;
-              align-items: center; gap: 8px; flex-wrap: wrap; }
-  .muted { color: var(--dim); font-size: 11px; font-weight: 400; }
-
-  .fam { border: 1px solid var(--line2); border-radius: 7px; padding: 7px 9px; margin-bottom: 6px;
-         background: rgba(15,23,42,.45); }
-  .fam.is-on { border-left: 3px solid var(--on); }
-  .fam.is-shadow { border-left: 3px solid var(--shadow); }
-  .fam.is-off { border-left: 3px solid var(--off); }
-  .fam-top { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: start; }
-  .fam-name { font-weight: 600; }
-  .fam-meta { font-size: 11px; color: var(--dim); margin-top: 2px; }
-  .fam-note { font-size: 11px; color: #cbd5e1; margin-top: 3px; }
-  .badge { display: inline-block; border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 700; }
+  /* 목록 — 전략 한 줄씩 */
+  .sec-title { font-size: 12px; color: var(--accent); font-weight: 700; margin: 12px 2px 4px; }
+  .item { border: 1px solid var(--line2); border-radius: 7px; margin-bottom: 4px; background: rgba(15,23,42,.45); }
+  .item.is-on { border-left: 3px solid var(--on); }
+  .item.is-shadow { border-left: 3px solid var(--shadow); }
+  .item.is-off, .item.is-gate_only { border-left: 3px solid var(--off); }
+  .item.open { border-color: var(--accent); }
+  .line { display: grid; grid-template-columns: 30px auto 1fr auto 16px; gap: 8px; align-items: center;
+          padding: 8px 10px; cursor: pointer; user-select: none; min-height: 40px; }
+  .line:hover { background: rgba(34,211,238,.06); }
+  .no { color: var(--dim); font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
+  .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .mini { font-size: 11px; color: var(--dim); white-space: nowrap; }
+  .mini b { color: var(--fg); }
+  .arrow { color: var(--dim); transition: transform .15s; font-size: 11px; }
+  .item.open .arrow { transform: rotate(180deg); color: var(--accent); }
+  .badge { display: inline-block; border-radius: 4px; padding: 2px 7px; font-size: 10.5px; font-weight: 700; white-space: nowrap; }
   .b-on { background: rgba(34,197,94,.2); color: var(--on); }
   .b-shadow { background: rgba(245,158,11,.2); color: var(--shadow); }
   .b-off { background: rgba(100,116,139,.25); color: #cbd5e1; }
-  .stat { font-size: 11px; color: var(--dim); }
-  .stat b { color: var(--fg); }
+  .b-wait { background: rgba(239,68,68,.15); color: #fca5a5; }
 
-  label.f { display: inline-flex; flex-direction: column; gap: 2px; font-size: 10px; color: var(--dim); }
-  select, input[type=text], input[type=number] {
+  /* 펼친 칸 */
+  .drop { display: none; padding: 4px 12px 12px 48px; border-top: 1px dashed var(--line2); }
+  .item.open .drop { display: block; }
+  .desc { font-size: 11.5px; color: #cbd5e1; margin: 6px 0 8px; line-height: 1.5; }
+  .fields { display: flex; gap: 12px; flex-wrap: wrap; }
+  label.f { display: inline-flex; flex-direction: column; gap: 3px; font-size: 10.5px; color: var(--dim); }
+  label.f.main span:first-child { color: var(--fg); font-weight: 700; }
+  select, input[type=number], input.txt {
     background: #0b1220; color: var(--fg); border: 1px solid var(--line); border-radius: 5px;
-    padding: 4px 6px; font-size: 12px; min-width: 74px; font-family: inherit;
+    padding: 5px 7px; font-size: 12px; min-width: 84px; font-family: inherit; min-height: 30px;
   }
-  input.wide { min-width: 132px; }
+  input.txt { min-width: 150px; }
   .dirty { outline: 2px solid var(--accent); }
-  .detail { margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--line2); }
-  .detail .row { gap: 10px; }
   .keyref { font-size: 10px; color: #64748b; font-family: ui-monospace, monospace; }
+  .sub { font-size: 10.5px; color: var(--dim); margin: 10px 0 4px; }
 
   .savebar { position: fixed; left: 0; right: 0; bottom: 0; background: #111c31; border-top: 1px solid var(--line);
              padding: 8px 14px; display: flex; gap: 10px; align-items: center; justify-content: space-between; }
@@ -90,9 +94,13 @@
   table.det { width: 100%; border-collapse: collapse; font-size: 11px; }
   table.det td { padding: 3px 6px; border-bottom: 1px solid var(--line2); }
   @media (max-width: 560px) {
-    .fam-top { grid-template-columns: 1fr; }
-    body { padding: 8px 10px 96px; }
+    body { padding: 8px 8px 96px; }
+    .line { grid-template-columns: 22px auto 1fr 14px; }
+    .line .mini { display: none; }
+    .drop { padding-left: 12px; }
+    .mini-m { display: block !important; }
   }
+  .mini-m { display: none; font-size: 11px; color: var(--dim); margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -103,19 +111,18 @@
     <div class="muted" id="subtitle">불러오는 중…</div>
   </div>
   <div class="row">
-    <input type="text" id="q" class="wide" placeholder="가족·설정 키 검색">
+    <input type="text" id="q" class="q" placeholder="전략·설정 키 검색">
     <label class="row muted" style="gap:4px"><input type="checkbox" id="only-on"> 켜진 것만</label>
-    <button class="btn" onclick="load()">↻ 새로고침</button>
-    <button class="btn" onclick="window.close()">✕ 닫기</button>
+    <button class="btn" onclick="openAll(true)">모두 펼치기</button>
+    <button class="btn" onclick="openAll(false)">모두 접기</button>
+    <button class="btn" onclick="load()">↻</button>
   </div>
 </div>
 
-<div id="banner"></div>
+<div id="status"></div>
 <div id="ks"></div>
-<div class="cards" id="summary"></div>
-<div id="globals"></div>
-<div id="groups"></div>
-<div id="extras"></div>
+<div class="chips" id="summary"></div>
+<div id="list"></div>
 
 <div class="savebar hidden" id="savebar">
   <div id="msg"></div>

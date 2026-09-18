@@ -21,8 +21,12 @@ from app.services.auto_control import (
     GROUPS,
     OFF_WORDS,
     Ctl,
+    LINE_ORDER,
+    SECTION_REST,
     _shared_rule_ctls,
     global_ctls,
+    line_id,
+    line_order,
     panels,
     whitelist,
 )
@@ -155,6 +159,7 @@ def build(db: Any) -> dict:
     halted = halt_val is None or str(halt_val).strip().lower() not in OFF_WORDS
 
     out_panels = []
+    order = line_order()                    # 🗂 Fix 381: 한 줄씩 순서대로
     for p in ps:
         gate = _ctl_dict(p.gate, vals) if p.gate is not None else None
         state = "no_gate"
@@ -172,7 +177,11 @@ def build(db: Any) -> dict:
             "today": today.get(p.fam, 0) if p.fam else None,
             "live": live.get(p.fam, 0) if p.fam else None,
             "shadow": shadow.get(p.fam) if p.fam else None,
+            "id": line_id(p),
+            "order": order.get(line_id(p), (999, SECTION_REST))[0],
+            "section": order.get(line_id(p), (999, SECTION_REST))[1],
         })
+    out_panels.sort(key=lambda x: (x["order"], x["label"]))
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -184,6 +193,7 @@ def build(db: Any) -> dict:
         "panels": out_panels,
         "detectors": [{"job": j, "note": n} for j, n in DETECTORS],
         "groups": list(GROUPS),
+        "sections": [s for s, _ids in LINE_ORDER] + [SECTION_REST],
         "count_error": count_err,
         "summary": {
             "on": sum(1 for p in out_panels if p["state"] == "on"),

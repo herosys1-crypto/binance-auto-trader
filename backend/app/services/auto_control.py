@@ -409,6 +409,44 @@ def panels() -> list[Panel]:
              + _gate_only_panels())]
 
 
+# ══════════════════════════════════════════════════════════════════════
+# 🗂 Fix 381 (2026-09-19 사장님) — 한 줄씩 순서대로
+#   사장님: "자동매매 전략 모두 한눈에 관리할수 있게 정리해서 한줄로 순서를 정해서 나열하고
+#           선택하면 풀다운 메뉴로 볼수있게 정리해줘 자동매매 전략이 너무 많이 복잡해"
+#   순서 = 사장님 사상(① 급등 정점 SHORT ② 저점 LONG ③ 급등 사다리) → 볼밴 → 재진입·추가 → 반전·기타 → 규칙 가족 → 외부.
+#   줄 식별자 = 가족키, 가족키가 없는 줄은 켜기 스위치 키. 여기 없는 줄은 맨 끝 「기타」로 간다 (테스트가 빠짐을 잡는다).
+# ══════════════════════════════════════════════════════════════════════
+LINE_ORDER: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("① 사장님 핵심", ("top_short", "bottom_long", "surge_ladder")),
+    ("② 볼밴 계열", ("pump_split", "bb_swing", "bb_mid_line", "bb_break")),
+    ("③ 재진입 · 추가", ("bb_reentry", "success_reentry", "managed_reentry", "ladder_restart_enabled",
+                      "rt_lastchance", "human_template_auto")),
+    ("④ 반전 · 기타 실매매", ("unified_15m", "resistance_reversal_enabled", "peak_break_reversal_enabled",
+                          "auto_obv_enabled", "obv_hold", "pending_hc", "scheduled_entry_enabled",
+                          "chart_pattern", "sajangnim_top", "auto_other")),
+    ("⑤ 규칙 가족 12 (가상매매 채택 규칙)", ("rf_s2_short", "rf_bottom_long", "rf_surge_long", "rf_confirm_peak",
+                                      "rf_toprev", "rf_off8", "rf_s1_breakdown", "rf_wick_short", "rf_pullback_long",
+                                      "rf_multiday_long", "rf_l1_hist_long", "rf_wick_long")),
+    ("⑥ 외부 매매법", ("fujimoto", "mach7")),
+)
+SECTION_REST = "⑦ 기타"
+
+
+def line_id(p: Panel) -> str:
+    return p.fam or (p.gate.key if p.gate is not None else p.label)
+
+
+def line_order() -> dict[str, tuple[int, str]]:
+    """줄 식별자 → (순번 1부터, 묶음 이름)."""
+    out: dict[str, tuple[int, str]] = {}
+    n = 0
+    for sec, ids in LINE_ORDER:
+        for i in ids:
+            n += 1
+            out[i] = (n, sec)
+    return out
+
+
 def whitelist() -> dict[str, Ctl]:
     """쓸 수 있는 키 전체. daily_max_* 는 가족키에서 만든다."""
     out: dict[str, Ctl] = {c.key: c for c in global_ctls()}
