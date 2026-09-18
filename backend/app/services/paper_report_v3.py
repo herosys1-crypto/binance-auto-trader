@@ -522,7 +522,10 @@ def _filters_section(side_rows: list[dict[str, Any]], side: str, base_fn) -> dic
 
         # 🎚 Fix 378 미세조정 후보 (사전등록 2026-09-18 · 가상 SHORT 11,257건에서 두 기간 모두 통과 쪽이 나았다)
         #   P8 = P5 + 1시간 변동성 낮음 (발견 ex +1.67 vs −0.71 · 검증 +0.75 vs −1.41)
-        #   P9 = P5 + 4시간 하단이탈 뒤 14봉 지남 = 급락 직후 추격 금지 (발견 +2.35 vs −0.48 · 검증 +2.24 vs −1.50)
+        #   P9 = P5 + 4시간 하단이탈 뒤 14봉 지남 = 급락 직후 추격 금지
+        #        (값이 있는 행만 universe: 발견 통과 15% ex +2.35 vs +0.12 · 검증 20% +2.24 vs −2.25 · 검증 5/5일)
+        #   ⚠️ h4_since_lower 가 None = 「최근 60봉 안에 하단 이탈이 아예 없었다」(SHORT 행의 38%).
+        #      취지상 통과처럼 보이지만 실측은 발견 +2.79 / 검증 −0.62 로 뒤집혔다 → universe 에서 뺀다(통과도 제외도 아님).
         pass_ids = {r["id"] for r in universe if _EC.evaluate("SHORT", _gate_snapshot(r))["verdict"] == "pass"}
         for name, field, ok in (("P8_short_calm_hour", "h1_atr",
                                  lambda v: v <= TUNE["short_max_atr_1h_pct"]),

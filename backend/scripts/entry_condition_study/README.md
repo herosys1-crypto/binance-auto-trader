@@ -26,3 +26,5 @@
   채택(사전등록)된 것은 P8(SHORT·1H ATR ≤1.5) · P9(SHORT·4H 하단이탈 14봉+) · P10(LONG 게이트 or (P7 & 일봉 %B ≤0.5)).
 
 결과: docs/learning/TUNING_CANDIDATES_2026-09-18.md
+- `tune_p9.py` — P9 의 `h4_bb_bars_since_below_lower` 가 **없음(None)** 인 행(38%)을 어떻게 볼지 6가지로 갈라 재본다.
+  결론: 「이탈 없음」은 취지상 통과처럼 보이지만 발견 +2.79 / 검증 −0.62 로 뒤집혀 **universe 에서 뺀다**.
