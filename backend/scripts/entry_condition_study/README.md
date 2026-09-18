@@ -34,3 +34,4 @@
 - `zones.py` (지표 1개) → `zones_flip.py` (무엇이 뒤집혔나) → `zones2.py l|s` (지표 2개 · 두 기간+날짜별) → `zones_final.py` (주제를 단순 규칙으로 고정해 지금 게이트와 비교)
 
 결과: docs/learning/OPPORTUNITY_ZONES_2026-09-19.md
+- `parity_oz.py` — 운영 모듈 `opportunity_zones`(Fix 379 가상 규칙)가 분석과 같은 자리를 고르는지 워커와 같은 재료로 대조 (L1 100% · S4 99.85%).
