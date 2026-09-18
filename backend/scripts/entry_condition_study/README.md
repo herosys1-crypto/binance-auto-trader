@@ -35,3 +35,8 @@
 
 결과: docs/learning/OPPORTUNITY_ZONES_2026-09-19.md
 - `parity_oz.py` — 운영 모듈 `opportunity_zones`(Fix 379 가상 규칙)가 분석과 같은 자리를 고르는지 워커와 같은 재료로 대조 (L1 100% · S4 99.85%).
+
+## 2026-09-19 추가 — 사장님 첨부 전략서 「볼린저 밴드 & 세력 CCI」
+- `bbcci_backtest.py` (전략서 신호 A/A+/B × 15m·1h · 전략서 청산과 우리 청산 둘 다) → `bbcci_eval.py` (무작위 대비) → `bbcci_filter.py` (필터로 쓰면?)
+
+결과: docs/learning/BB_FORCE_CCI_2026-09-19.md
