@@ -39,7 +39,10 @@ def _fix376_chart_gate_off_for_tests():
     _g.FORCE_MODE = "off"
     _f.FORCE_MODE = "off"
     _b.FORCE_OFF = True
+    from app.services import strategy_list_cache as _lc   # ⚡ Fix 386: 테스트끼리 목록 캐시가 섞이지 않게
+    _lc.invalidate()
     yield
+    _lc.invalidate()
     _g.FORCE_MODE = _prev
     _f.FORCE_MODE = _prev_f
     _b.FORCE_OFF = _prev_b

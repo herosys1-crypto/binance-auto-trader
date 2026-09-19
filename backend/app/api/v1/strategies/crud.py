@@ -92,12 +92,29 @@ def create_strategy(
 
 
 @router.get("", response_model=list[StrategyDetailResponse])
-def list_strategies(
+def list_strategies_endpoint(
     status_filter: str | None = None,
     symbol: str | None = None,
     include_archived: bool = False,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
+) -> list[StrategyDetailResponse]:
+    """⚡ Fix 386: 같은 (사용자, 필터) 목록은 4초 동안 한 번만 계산 · 동시 요청은 하나만 계산.
+    (대시보드 탭마다 5초 폴링 × 1,760건 계산 1~1.5초 = CPU 1코어 → 새 전략 모달 조회가 줄을 섰다)"""
+    from app.services import strategy_list_cache as _LC
+    return _LC.get_or_build(
+        ("list", user_id, status_filter, symbol, bool(include_archived)),
+        lambda: list_strategies(status_filter=status_filter, symbol=symbol,
+                                include_archived=include_archived, db=db, user_id=user_id),
+    )
+
+
+def list_strategies(
+    status_filter: str | None = None,
+    symbol: str | None = None,
+    include_archived: bool = False,
+    db: Session = None,
+    user_id: int = None,
 ) -> list[StrategyDetailResponse]:
     """전략 인스턴스 목록 — 대시보드 표시를 위해 detail 필드까지 포함.
 

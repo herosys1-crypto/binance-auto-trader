@@ -71,7 +71,21 @@ app.add_middleware(IdempotencyMiddleware)
 #   어차피 캐시하면 안 되는 값들이고, 지금도 사실상 캐시되지 않아야 정상이다.
 @app.middleware("http")
 async def _no_store_api(request, call_next):
+    # ⚡ Fix 386: 전략을 바꾸는 요청이면 목록 캐시를 앞뒤로 비운다 (정지·생성 직후 옛 목록이 보이지 않게)
+    _inv386 = False
+    try:
+        from app.services import strategy_list_cache as _LC386
+        _inv386 = _LC386.should_invalidate(request.method, request.url.path)
+        if _inv386:
+            _LC386.invalidate()
+    except Exception:      # 캐시 문제로 요청이 막히면 안 된다
+        _inv386 = False
     response = await call_next(request)
+    if _inv386:
+        try:
+            _LC386.invalidate()
+        except Exception:
+            pass
     try:
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
