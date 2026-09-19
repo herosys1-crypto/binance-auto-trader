@@ -59,3 +59,21 @@ def test_screen_is_one_line_with_dropdown():
     # Fix 374 안전장치는 그대로
     for token in ("function isTurnOn(", "confirm(", "['on', '적용']", "['중단', '허용']"):
         assert token in js, token
+
+
+# ── 🔘 Fix 383 (2026-09-19 사장님) — "전체 켜고 끄기도 좋은데 각각 자동매매에서도 켜고 끄는 기능을 만들어줘" ──
+def test_fix383_line_and_section_switches():
+    js = (APP / "static" / "js" / "auto-control.js").read_text(encoding="utf-8")
+    # 줄마다 바로 켜기/끄기 — 켜기 스위치(switch·mode3)가 있는 줄만, 게이트만 있는 줄은 없음
+    assert "function isSwitchable(p)" in js
+    body = js.split("function isSwitchable(p)")[1][:260]
+    assert "'switch'" in body and "'mode3'" in body and "gate3" not in body
+    assert "inputFor(p.gate, 'quick')" in js and 'onclick="event.stopPropagation()"' in js
+    # 묶음 — 끄기·그림자만 (켜기 일괄 없음) · 저장은 한 번에
+    sec = js.split("function sectionSet(sec, target)")[1].split("\nfunction ")[0]
+    assert "'on'" not in sec and "api(" not in sec, "묶음 버튼은 켜지 않고, 바로 저장하지 않는다 (💾 저장으로)"
+    assert "sectionSet('" in js
+    # 같은 키가 줄·펼친 칸 두 곳에 있어도 함께 맞춘다
+    assert "data-key=" in js and "querySelectorAll(`[data-key=" in js
+    # 켜기·게이트 풀기 확인창은 그대로
+    assert "차트 게이트를 푸는" in js and "confirm(" in js

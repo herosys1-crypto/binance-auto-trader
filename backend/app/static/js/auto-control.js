@@ -3,6 +3,8 @@
  * 🗂 Fix 381 (2026-09-19 사장님) — "자동매매 전략 모두 한눈에 관리할수 있게 정리해서 한줄로 순서를 정해서 나열하고
  *    선택하면 풀다운 메뉴로 볼수있게 정리해줘 자동매매 전략이 너무 많이 복잡해"
  *    → 전략 한 줄씩(번호 = 서버 auto_control.LINE_ORDER) · 줄을 누르면 그 아래로 설정이 펼쳐진다 · 펼친 줄은 기억한다.
+ * 🔘 Fix 383 (2026-09-19 사장님) — "전체 켜고 끄기도 좋은데 각각 자동매매에서도 켜고 끄는 기능을 만들어줘"
+ *    → 각 줄 오른쪽에 바로 켜기/끄기 칸 · 각 묶음 제목에 「이 묶음 끄기」「그림자로」 (켜기 일괄 없음 · 게이트는 건드리지 않음).
  *
  * 규칙 (Fix 374 그대로):
  *  · 이 화면은 설정만 바꾼다. 주문·청산은 없다.
@@ -106,7 +108,13 @@ function render() {
     const shared = sec.startsWith('⑤') && !onlyOn && (!q || '공용 규칙 가족'.includes(q) ||
       (s.shared_rule || []).some(x => (x.key + x.label).toLowerCase().includes(q)));
     if (!list.length && !shared) return;
-    html += `<div class="sec-title">${esc(sec)} <span class="muted">${list.length}개</span></div>`;
+    const sw = list.filter(isSwitchable);
+    const hasMode3 = sw.some(p => p.gate.kind === 'mode3');
+    html += `<div class="sec-title"><span>${esc(sec)} <span class="muted">${list.length}개</span></span>${sw.length ? `
+      <span class="sec-btns">
+        ${hasMode3 ? `<button class="btn mini-btn" onclick="sectionSet('${esc(sec)}', 'shadow')">그림자로</button>` : ''}
+        <button class="btn mini-btn" onclick="sectionSet('${esc(sec)}', 'off')">이 묶음 끄기</button>
+      </span>` : ''}</div>`;
     html += list.map(item).join('');
     if (shared) html += sharedRuleItem();
   });
@@ -150,6 +158,7 @@ function item(p) {
         ${stateBadge(p)}
         <span class="name" title="${esc(p.label)}">${esc(p.label)}</span>
         <span class="mini">${cnt}</span>
+        <span class="quick" onclick="event.stopPropagation()">${isSwitchable(p) ? inputFor(p.gate, 'quick') : ''}</span>
         <span class="arrow">▼</span>
       </div>
       <div class="drop">
@@ -172,7 +181,7 @@ function globalItem() {
       <div class="line" onclick="toggleItem('${id}')" role="button">
         <span class="no">⚙</span><span class="badge b-off">전체</span>
         <span class="name">전체 설정 · 한꺼번에 끄기</span><span class="mini">모든 자동매매에 함께 걸리는 값</span>
-        <span class="arrow">▼</span>
+        <span class="quick"></span><span class="arrow">▼</span>
       </div>
       <div class="drop">
         <div class="fields">${STATE.globals.map(x => ctlField(x)).join('')}</div>
@@ -191,7 +200,7 @@ function sharedRuleItem() {
       <div class="line" onclick="toggleItem('${id}')" role="button">
         <span class="no">⚙</span><span class="badge b-off">공용</span>
         <span class="name">규칙 가족 12종 공용 값</span><span class="mini">한 칸을 고치면 12종에 함께 적용</span>
-        <span class="arrow">▼</span>
+        <span class="quick"></span><span class="arrow">▼</span>
       </div>
       <div class="drop"><div class="fields">${STATE.shared_rule.map(x => ctlField(x)).join('')}</div></div>
     </div>`;
@@ -205,7 +214,7 @@ function detectorItem() {
     <div class="item${open}" id="${id}">
       <div class="line" onclick="toggleItem('${id}')" role="button">
         <span class="no">·</span><span class="badge b-off">감지</span>
-        <span class="name">감지 전용 워커 ${d.length}개</span><span class="mini"></span><span class="arrow">▼</span>
+        <span class="name">감지 전용 워커 ${d.length}개</span><span class="mini"></span><span class="quick"></span><span class="arrow">▼</span>
       </div>
       <div class="drop"><table class="det">${d.map(x =>
         `<tr><td class="keyref">${esc(x.job)}</td><td>${esc(x.note)}</td></tr>`).join('')}</table></div>
@@ -233,6 +242,54 @@ function openAll(open) {
 
 function valOf(c) { return CHANGES[c.key] !== undefined ? CHANGES[c.key] : c.value; }
 
+/** 켜기/끄기 칸이 있는 줄인가 (게이트만 있는 줄 = 아니다 — 게이트를 끄면 막아 주던 것이 풀린다). */
+function isSwitchable(p) {
+  return !!(p && p.gate && (p.gate.kind === 'switch' || p.gate.kind === 'mode3'));
+}
+
+/** 묶음 한꺼번에 — 끄기(off) 또는 그림자(shadow)만. 저장은 아래 「💾 저장」으로 (켜기 일괄 없음). */
+function sectionSet(sec, target) {
+  const list = STATE.panels.filter(p => p.section === sec && isSwitchable(p));
+  let n = 0;
+  list.forEach(p => {
+    const c = p.gate;
+    let v = null;
+    if (target === 'off') v = c.kind === 'switch' ? '0' : 'off';
+    else if (target === 'shadow' && c.kind === 'mode3') v = 'shadow';
+    if (v !== null && String(valOf(c)) !== v) { onEdit(c.key, v, null); n += 1; }
+  });
+  render();
+  msg(n ? `${sec}: ${n}칸을 ${target === 'off' ? '끄기' : '그림자'}로 바꿨습니다 — 아래 「💾 저장」을 눌러야 적용됩니다`
+        : `${sec}: 바꿀 칸이 없습니다 (이미 그 상태)`, n ? '' : 'ok');
+}
+
+/** 입력 칸만. cls = 'quick' 이면 줄 위 작은 칸. */
+function inputFor(c, cls) {
+  const v = valOf(c);
+  const dirty = CHANGES[c.key] !== undefined ? ' dirty' : '';
+  const k = `data-key="${esc(c.key)}"`;
+  const klass = `class="${[cls || '', dirty.trim()].filter(Boolean).join(' ')}"`;
+  const stop = 'onclick="event.stopPropagation()"';
+  if (c.kind === 'gate3') {
+    return `<select ${k} ${klass} ${stop} onchange="onEdit('${c.key}', this.value, this)">
+        ${[['off', '끔'], ['shadow', '기록만'], ['on', '적용']].map(([m, t]) =>
+          `<option value="${m}"${m === v ? ' selected' : ''}>${t}</option>`).join('')}</select>`;
+  }
+  if (c.kind === 'mode3') {
+    return `<select ${k} ${klass} ${stop} onchange="onEdit('${c.key}', this.value, this)">
+        ${['off', 'shadow', 'on'].map(m => `<option value="${m}"${m === v ? ' selected' : ''}>${
+          m === 'off' ? '끔' : (m === 'shadow' ? '그림자' : '실주문 ON')}</option>`).join('')}</select>`;
+  }
+  if (c.kind === 'switch') {
+    const on = !['0', 'off', 'false', 'no'].includes(String(v).toLowerCase());
+    const [yes, no] = c.key === 'auto_trading_halt' ? ['중단', '허용'] : ['켬', '끔'];
+    return `<select ${k} ${klass} ${stop} onchange="onEdit('${c.key}', this.value, this)">
+        <option value="1"${on ? ' selected' : ''}>${yes}</option>
+        <option value="0"${on ? '' : ' selected'}>${no}</option></select>`;
+  }
+  return null;
+}
+
 /** 설정 한 칸. main = 그 전략의 켜기 스위치(굵게). */
 function ctlField(c, main) {
   const v = valOf(c);
@@ -241,29 +298,16 @@ function ctlField(c, main) {
                  '설정 키: ' + c.key + (c.is_default ? ' (행 없음 = 기본 ' + c.default + ')' : '')]
                 .filter(Boolean).join('\n');
   const stop = 'onclick="event.stopPropagation()"';
-  let input;
-  if (c.kind === 'gate3') {
-    // 게이트 — on = 조건이 아니면 진입 안 함 (실주문을 켜는 칸이 아니다)
-    input = `<select class="${dirty.trim()}" ${stop} onchange="onEdit('${c.key}', this.value, this)">
-        ${[['off', '끔'], ['shadow', '기록만'], ['on', '적용']].map(([m, t]) =>
-          `<option value="${m}"${m === v ? ' selected' : ''}>${t}</option>`).join('')}</select>`;
-  } else if (c.kind === 'mode3') {
-    input = `<select class="${dirty.trim()}" ${stop} onchange="onEdit('${c.key}', this.value, this)">
-        ${['off', 'shadow', 'on'].map(m => `<option value="${m}"${m === v ? ' selected' : ''}>${
-          m === 'off' ? '끔' : (m === 'shadow' ? '그림자' : '실주문 ON')}</option>`).join('')}</select>`;
-  } else if (c.kind === 'switch') {
-    const on = !['0', 'off', 'false', 'no'].includes(String(v).toLowerCase());
-    // 🚨 전면 중단 키는 뜻이 거꾸로다 (1 = 중단) — 「켬/끔」으로 적으면 반대로 읽힌다.
-    const [yes, no] = c.key === 'auto_trading_halt' ? ['중단', '허용'] : ['켬', '끔'];
-    input = `<select class="${dirty.trim()}" ${stop} onchange="onEdit('${c.key}', this.value, this)">
-        <option value="1"${on ? ' selected' : ''}>${yes}</option>
-        <option value="0"${on ? '' : ' selected'}>${no}</option></select>`;
+  // 선택형(끔·기록만·적용 / 끔·그림자·실주문 ON / 켬·끔 — 🚨 전면 중단 키는 중단·허용)은 inputFor 가 만든다
+  let input = inputFor(c, '');
+  if (input !== null) {
+    /* 위에서 끝 */
   } else if (c.kind === 'int' || c.kind === 'num') {
-    input = `<input type="number" class="${dirty.trim()}" value="${esc(v)}" ${stop}
+    input = `<input type="number" data-key="${esc(c.key)}" class="${dirty.trim()}" value="${esc(v)}" ${stop}
         ${c.lo != null ? 'min="' + c.lo + '"' : ''} ${c.hi != null ? 'max="' + c.hi + '"' : ''}
         step="${c.kind === 'int' ? 1 : 'any'}" onchange="onEdit('${c.key}', this.value, this)">`;
   } else {
-    input = `<input type="text" class="txt ${dirty.trim()}" value="${esc(v)}" ${stop}
+    input = `<input type="text" data-key="${esc(c.key)}" class="txt ${dirty.trim()}" value="${esc(v)}" ${stop}
         onchange="onEdit('${c.key}', this.value, this)">`;
   }
   return `<label class="f${main ? ' main' : ''}" title="${esc(title)}">
@@ -275,7 +319,10 @@ function onEdit(key, value, el) {
   const orig = findCtl(key);
   if (orig && String(orig.value) === String(value)) delete CHANGES[key];
   else CHANGES[key] = String(value);
-  if (el) el.classList.toggle('dirty', CHANGES[key] !== undefined);
+  document.querySelectorAll(`[data-key="${key}"]`).forEach(x => {
+    if (x !== el && x.value !== String(value)) x.value = String(value);
+    x.classList.toggle('dirty', CHANGES[key] !== undefined);
+  });
   syncSaveBar();
 }
 
@@ -295,7 +342,7 @@ function syncSaveBar() {
   document.getElementById('save-btn').textContent = `💾 ${n}칸 저장`;
   if (n) {
     const turningOn = Object.entries(CHANGES).filter(([k, v]) => isTurnOn(k, v)).map(([k]) => k);
-    msg(turningOn.length ? `⚠ 실주문을 켜거나 게이트를 푸는 칸이 있습니다: ${turningOn.join(', ')}` : `${n}칸 변경됨`,
+    msg(turningOn.length ? `⚠ 실주문을 켜거나 차트 게이트를 푸는(세력 CCI 포함) 칸이 있습니다: ${turningOn.join(', ')}` : `${n}칸 변경됨`,
         turningOn.length ? 'err' : '');
   }
 }
@@ -324,7 +371,7 @@ async function save() {
   if (!keys.length) return;
   const on = keys.filter(k => isTurnOn(k, CHANGES[k]));
   if (on.length && !confirm(
-      `실주문을 켜거나 게이트를 푸는 설정이 ${on.length}개 있습니다:\n\n${on.join('\n')}\n\n` +
+      `실주문을 켜거나 차트 게이트를 푸는(세력 CCI 포함) 설정이 ${on.length}개 있습니다:\n\n${on.join('\n')}\n\n` +
       `이 값을 저장하면 조건이 맞는 순간 실자금 주문이 나갑니다. 저장할까요?`)) return;
   const btn = document.getElementById('save-btn');
   btn.disabled = true;
