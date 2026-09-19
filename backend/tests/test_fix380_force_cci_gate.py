@@ -218,7 +218,7 @@ def test_realtime_reentry_classifies_force_cci_block():
     msg = "⛔ [세력 CCI 게이트] BB 손절 뒤 재진입 AAAUSDT LONG 세력 CCI 방향 반대 — 세력 CCI -30 (>0 이어야)"
     assert _classify_entry_error(msg) == "force_cci_gate"
     w = (APP / "workers" / "realtime_reentry_worker.py").read_text(encoding="utf-8")
-    assert '("chart_gate", "force_cci_gate", "family_daily_max")' in w          # 스택트레이스 대신 info
+    assert '"force_cci_gate"' in w.split('if _err_kind in (')[1].split(')')[0]   # 스택트레이스 대신 info
 
 
 def test_auto_bb_breakdown_returns_none_on_gate_block():

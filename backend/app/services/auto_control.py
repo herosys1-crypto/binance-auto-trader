@@ -335,6 +335,15 @@ def global_ctls() -> tuple[Ctl, ...]:
             "shadow = 판정만 기록 · on = LONG 은 1시간 세력 CCI>0, SHORT 은 <0 일 때만 새 전략을 만든다.",
             source="사장님 2026-09-19 「볼밴전략도 적극적으로 적용해줘」 · 기본 shadow 는 Claude가 정함 (효과 작음)",
             ref="services/force_cci_gate.py (DEFAULT_KEY)"),
+        Ctl("family_loss_breaker_enabled", "가족별 손실 차단기", "switch", "1",
+            "켬 = 자동매매 가족의 최근 N일 실현 합이 −기준 밑이면 그 가족의 새 전략을 막고, 관제실에서 풀 때까지 유지 + 알림.",
+            off_means="0", source="사장님 2026-09-19 「자동은 적게벌어도 벌어야」 → 「차단기만 개발」",
+            ref="services/family_loss_breaker.py (Fix 384)"),
+        Ctl("family_loss_breaker_days", "손실 차단기 — 최근 며칠", "int", "7", "이 기간 안에 끝난 전략의 실현 손익을 더한다.",
+            lo=1, hi=30, source="Claude가 정함 (45일 모의 = 7일·−30·풀 때까지 유지가 가장 적게 잃음)",
+            ref="services/family_loss_breaker.py (S_DAYS)"),
+        Ctl("family_loss_breaker_usdt", "손실 차단기 — 기준 USDT", "num", "30", "실현 합이 −이 값 밑이면 막는다.",
+            lo=1, hi=100000, source="Claude가 정함", ref="services/family_loss_breaker.py (S_USDT)"),
         Ctl("auto_daily_limit_enabled", "가족별 하루 최대 한도 사용", "switch", "1",
             "0 = 하루 최대 한도를 아예 보지 않는다 (위험).", off_means="0",
             source="사장님 2026-09-15 「모두 일최대 1개」", ref="services/auto_family_registry.py (enabled)"),
@@ -403,8 +412,19 @@ def _with_force_cci(p: Panel) -> Panel:
     return replace(p, ctls=tuple(p.ctls) + (gate,))
 
 
+def _with_loss_breaker(p: Panel) -> Panel:
+    """⛔ Fix 384: 자동매매 가족 줄마다 「손실 차단」 칸 (1 = 막는 중 · 0 = 허용 — 풀면 그 뒤 손익만 다시 센다)."""
+    if not p.fam:
+        return p
+    from dataclasses import replace
+    c = Ctl(f"{p.fam}_loss_breaker", "손실 차단", "switch", "0",
+            "막는 중 = 최근 손실로 차단기가 이 가족의 새 전략을 막고 있다. 「허용」으로 저장하면 풀리고, 그 시각 뒤 손익만 다시 센다.",
+            source="Fix 384 가족별 손실 차단기 (자동으로 막는 중이 된다)", ref="services/family_loss_breaker.py (key_for)")
+    return replace(p, ctls=tuple(p.ctls) + (c,))
+
+
 def panels() -> list[Panel]:
-    return [_with_force_cci(p) for p in
+    return [_with_loss_breaker(_with_force_cci(p)) for p in
             (_rule_panels() + [_with_live_gate(p) for p in _worker_panels() + _external_panels()]
              + _gate_only_panels())]
 

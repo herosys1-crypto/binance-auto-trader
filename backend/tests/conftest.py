@@ -34,9 +34,12 @@ def _fix376_chart_gate_off_for_tests():
     tests/test_fix376_* 는 FORCE_MODE 를 None 으로 되돌려 실제 판정을 본다."""
     from app.services import chart_gate_live as _g
     from app.services import force_cci_gate as _f          # 📊 Fix 380 도 같은 자리에서 봉을 조회한다
-    _prev, _prev_f = _g.FORCE_MODE, _f.FORCE_MODE
+    from app.services import family_loss_breaker as _b     # ⛔ Fix 384 도 같은 자리에서 DB 손익을 조회한다
+    _prev, _prev_f, _prev_b = _g.FORCE_MODE, _f.FORCE_MODE, _b.FORCE_OFF
     _g.FORCE_MODE = "off"
     _f.FORCE_MODE = "off"
+    _b.FORCE_OFF = True
     yield
     _g.FORCE_MODE = _prev
     _f.FORCE_MODE = _prev_f
+    _b.FORCE_OFF = _prev_b

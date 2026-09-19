@@ -160,6 +160,12 @@ def build(db: Any) -> dict:
 
     out_panels = []
     order = line_order()                    # 🗂 Fix 381: 한 줄씩 순서대로
+    try:                                    # ⛔ Fix 384: 가족별 손실 차단 상태 (쿼리 한 번)
+        from app.services.family_loss_breaker import all_states
+        breakers = all_states(db, [p.fam for p in ps if p.fam])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] 손실 차단 상태 조회 실패 (화면은 계속): %s", FIX, e)
+        breakers = {}
     for p in ps:
         gate = _ctl_dict(p.gate, vals) if p.gate is not None else None
         state = "no_gate"
@@ -177,6 +183,7 @@ def build(db: Any) -> dict:
             "today": today.get(p.fam, 0) if p.fam else None,
             "live": live.get(p.fam, 0) if p.fam else None,
             "shadow": shadow.get(p.fam) if p.fam else None,
+            "breaker": breakers.get(p.fam) if p.fam else None,
             "id": line_id(p),
             "order": order.get(line_id(p), (999, SECTION_REST))[0],
             "section": order.get(line_id(p), (999, SECTION_REST))[1],

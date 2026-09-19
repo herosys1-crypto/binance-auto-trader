@@ -271,7 +271,7 @@ def check_instance(db, si: Any, *, where: str = "1차 주문") -> AutoFamily | N
 def is_limit_error(exc: BaseException | str) -> bool:
     """하루 최대 · 🎯 Fix 376 차트 자리 게이트 · 📊 Fix 380 세력 CCI 게이트 — 모두 「영구 실패」가 아니라 「다음에 다시」다."""
     s = str(exc)
-    return BLOCK_TAG in s or "차트 자리 게이트" in s or "세력 CCI 게이트" in s
+    return BLOCK_TAG in s or "차트 자리 게이트" in s or "세력 CCI 게이트" in s or "손실 차단기" in s   # ⛔ Fix 384
 
 
 def known_families() -> list[AutoFamily]:

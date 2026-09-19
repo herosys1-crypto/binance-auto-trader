@@ -722,6 +722,8 @@ def _classify_entry_error(msg: str) -> str:
         return "chart_gate"
     if "세력 CCI 게이트" in m:           # 📊 Fix 380
         return "force_cci_gate"
+    if "손실 차단기" in m:               # ⛔ Fix 384
+        return "loss_breaker"
     if "가족별 일 최대 진입" in m:
         return "family_daily_max"
     # 🚨 Fix 169 (2026-08-26): kill-switch 분기가 없어 전부 "other" 로 뭉뚱그려졌다.
@@ -1791,7 +1793,7 @@ def run_realtime_reentry() -> dict:
                     f"{symbol} {side} stage={_dbg_stage} "
                     f"[{_err_kind}] {type(e).__name__}: {e}"
                 )
-                if _err_kind in ("chart_gate", "force_cci_gate", "family_daily_max"):
+                if _err_kind in ("chart_gate", "force_cci_gate", "loss_breaker", "family_daily_max"):
                     # 🎯 Fix 376: 예정된 차단 — 30초마다 스택트레이스를 쌓지 않는다 (사유는 아래 집계·응답에 남는다)
                     logger.info("[RT_REENTRY] ⏸ %s %s stage=%s 진입 보류 [%s] %s", symbol, side, _dbg_stage, _err_kind, e)
                 else:

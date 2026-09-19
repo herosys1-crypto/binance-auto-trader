@@ -155,7 +155,7 @@ function item(p) {
   return `<div class="item is-${esc(p.state)}${open}" id="${esc(id)}">
       <div class="line" onclick="toggleItem('${esc(id)}')" role="button" aria-expanded="${open ? 'true' : 'false'}">
         <span class="no">${p.order < 999 ? p.order : '·'}</span>
-        ${stateBadge(p)}
+        ${stateBadge(p)}${p.breaker && p.breaker.tripped ? '<span class="badge b-wait" title="최근 손실로 새 전략을 막는 중">⛔ 손실 차단</span>' : ''}
         <span class="name" title="${esc(p.label)}">${esc(p.label)}</span>
         <span class="mini">${cnt}</span>
         <span class="quick" onclick="event.stopPropagation()">${isSwitchable(p) ? inputFor(p.gate, 'quick') : ''}</span>
@@ -165,7 +165,8 @@ function item(p) {
         ${cnt ? `<div class="mini-m">${cnt}</div>` : ''}
         <div class="desc">${[p.job ? '워커 ' + esc(p.job) : '', (p.every && p.every !== '—') ? esc(p.every) + '마다' : '',
           p.fam ? '<span class="keyref">' + esc(p.fam) + '</span>' : ''].filter(Boolean).join(' · ')}
-          ${p.note ? '<br>' + esc(p.note) : ''}</div>
+          ${p.note ? '<br>' + esc(p.note) : ''}
+          ${p.breaker ? `<br>손실 차단기: 최근 ${p.breaker.days}일 실현 <b>${Number(p.breaker.pnl).toFixed(1)}</b> USDT (${p.breaker.n}건) · 기준 −${p.breaker.limit}${p.breaker.tripped ? ' · <b style="color:#fca5a5">막는 중</b>' : ''}` : ''}</div>
         ${main ? `<div class="fields">${main}</div>` : ''}
         ${gates.length ? `<div class="sub">진입 전 확인 (게이트)</div><div class="fields">${gates.map(x => ctlField(x)).join('')}</div>` : ''}
         ${rest.length ? `<div class="sub">세부 값</div><div class="fields">${rest.map(x => ctlField(x)).join('')}</div>` : ''}
@@ -282,7 +283,9 @@ function inputFor(c, cls) {
   }
   if (c.kind === 'switch') {
     const on = !['0', 'off', 'false', 'no'].includes(String(v).toLowerCase());
-    const [yes, no] = c.key === 'auto_trading_halt' ? ['중단', '허용'] : ['켬', '끔'];
+    // 🚨 뜻이 거꾸로인 키 — 전면 중단(1 = 중단) · ⛔ Fix 384 손실 차단(1 = 막는 중)
+    const [yes, no] = c.key === 'auto_trading_halt' ? ['중단', '허용']
+      : (c.key.endsWith('_loss_breaker') ? ['막는 중', '허용'] : ['켬', '끔']);
     return `<select ${k} ${klass} ${stop} onchange="onEdit('${c.key}', this.value, this)">
         <option value="1"${on ? ' selected' : ''}>${yes}</option>
         <option value="0"${on ? '' : ' selected'}>${no}</option></select>`;
@@ -353,6 +356,9 @@ function isTurnOn(key, value) {
   if (!c) return false;
   const v = String(value).toLowerCase();
   if (key === 'auto_trading_halt') return ['0', 'off', 'false', 'no'].includes(v);
+  // ⛔ Fix 384: 손실 차단을 푸는 쪽(막는 중 → 허용)이 위험한 방향이다
+  if (key.endsWith('_loss_breaker')) return v === '0' && String(c.value) === '1';
+  if (key === 'family_loss_breaker_enabled') return v === '0' && String(c.value) !== '0';
   if (c.kind === 'mode3') return v === 'on' && String(c.value).toLowerCase() !== 'on';
   // 게이트를 끄거나 기록만으로 바꾸면 조건이 아닌 곳에서도 진입한다 → 확인창 대상
   if (c.kind === 'gate3') return v !== 'on' && String(c.value).toLowerCase() === 'on';

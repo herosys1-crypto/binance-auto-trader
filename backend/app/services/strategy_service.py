@@ -320,6 +320,12 @@ class StrategyService:
         _force_cci380(self.db, strategy_type=getattr(template_model, "strategy_type", None),
                       template_name=getattr(template_model, "name", None), entry_origin=entry_origin,
                       symbol=symbol, side=side, exchange_account_id=exchange_account_id)
+        # ⛔ Fix 384 (2026-09-19 사장님 「자동은 적게벌어도 벌어야」): 가족별 손실 차단기 — 최근 7일 실현 합 < −30 이면
+        #   그 가족의 새 전략을 막고 사장님이 관제실에서 풀 때까지 유지 (사람 전략·중단 중 = 보지 않음)
+        from app.services.family_loss_breaker import check as _loss_breaker384
+        _loss_breaker384(self.db, strategy_type=getattr(template_model, "strategy_type", None),
+                         template_name=getattr(template_model, "name", None), entry_origin=entry_origin,
+                         symbol=symbol, side=side)
         ex_account = self.db.get(_EA, exchange_account_id)
         if not ex_account:
             raise ValueError(
