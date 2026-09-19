@@ -132,6 +132,7 @@ def load_live_rows(db: Any, *, days: int = 30) -> list[dict[str, Any]]:
     cols.append(cast(_cs["d1"]["pctb"].astext, Float).label("g_d1_pctb"))
     cols.append(_cs["d1"]["bb"]["trend"].astext.label("g_d1_trend"))
     cols.append(cast(PaperTrade.chg_24h, Float).label("g_chg24"))
+    cols.append(cast(PaperTrade.snapshot["market_breadth"].astext, Float).label("g_breadth"))   # 🧭 Fix 385
 
     stmt = (
         select(*cols)
@@ -157,7 +158,8 @@ def load_live_rows(db: Any, *, days: int = 30) -> list[dict[str, Any]]:
         dh5 = m["dist_high5d_pct"]
         gate = {"h1_from_hi": m["g_h1_from_hi"], "m5_from_hi": m["g_m5_from_hi"],
                 "d1_trend": m["g_d1_trend"], "chg24": m["g_chg24"],
-                "h1_atr": m["g_h1_atr"], "h4_since_lower": m["g_h4_since_lower"], "d1_pctb": m["g_d1_pctb"]}
+                "h1_atr": m["g_h1_atr"], "h4_since_lower": m["g_h4_since_lower"], "d1_pctb": m["g_d1_pctb"],
+                "breadth": m["g_breadth"]}
         out.append({
             "id": m["id"], "symbol": m["symbol"], "side": m["side"], "rule": m["rule"],
             "opened_at": m["opened_at"], "status": m["status"], "tags": list(m["tags"] or []),
@@ -454,6 +456,8 @@ FILTER_PREREG: dict[str, str] = {
     "P8_short_calm_hour": "2026-09-19T00:00:00+00:00",
     "P9_short_not_after_breakdown": "2026-09-19T00:00:00+00:00",
     "P10_long_gate_or_low_band": "2026-09-19T00:00:00+00:00",
+    "R1_l1_rising_market": "2026-09-20T00:00:00+00:00",       # 🧭 Fix 385
+    "R2_s4_falling_market": "2026-09-20T00:00:00+00:00",
 }
 
 
@@ -474,6 +478,11 @@ def _filter_result(universe: list[dict[str, Any]], kept: list[dict[str, Any]], e
              and kept_stats["mean"] > excl_stats["mean"])
     return {"universe": univ_stats, "kept": kept_stats, "excluded": excl_stats, "day_edge": day_edge,
             "adopt": bool(adopt), "since": FILTER_PREREG.get(name or "")}
+
+
+# 🧭 Fix 385 장세 전환 문턱 (Claude가 정함 — 조건부 피라미딩 A1·A2 와 같은 값)
+REGIME_UP = 0.55
+REGIME_DOWN = 0.45
 
 
 # 🎚 Fix 378 미세조정 후보의 숫자 (모두 「Claude가 정함」 — 가상 분석에서 고른 값, 판정은 7일 표본으로)
@@ -572,6 +581,19 @@ def _filters_section(side_rows: list[dict[str, Any]], side: str, base_fn) -> dic
         excluded = [r for r in universe if _EC.evaluate("LONG", _gate_snapshot(r), chg_24h=r["gate"].get("chg24"))["verdict"] != "pass"]
         out["P6_long_after_drop_or_pullback"] = _filter_result(universe, kept, excluded, base_fn,
                                                                name="P6_long_after_drop_or_pullback")
+
+    # 🧭 Fix 385 (2026-09-19 사장님 「최소한 90%이상은 성공할수있는 단순한 흐름 … 성공하는 모든 로직으로 만들어줘」)
+    #   장세 전환 = 오르는 장(시장폭 ≥0.55)엔 L1 반등 LONG 만 · 내리는 장(≤0.45)엔 S4 급반등 꼭대기 SHORT 만 · 사이는 쉼.
+    #   83,927 자리(9/8~9/17) 재측정: LONG L1+시장폭 승률 55%(하락장)/86%(상승장) · SHORT S4+시장폭 74%/76% (8일 중 7일).
+    #   → 90% 는 한 장세에서만 나왔다. 규칙 행(Fix 379) 을 진입 시점 시장폭으로 갈라 9/20 이후 새 표본으로 판정한다.
+    for name, rule, want in (("R1_l1_rising_market", "zone_l1_rebound_long", "LONG"),
+                             ("R2_s4_falling_market", "zone_s4_spike_top_short", "SHORT")):
+        if side != want:
+            continue
+        uu = [r for r in live_valid if r["rule"] == rule and (r.get("gate") or {}).get("breadth") is not None]
+        ok = (lambda b: b >= REGIME_UP) if want == "LONG" else (lambda b: b <= REGIME_DOWN)
+        kk = [r for r in uu if ok(r["gate"]["breadth"])]
+        out[name] = _filter_result(uu, kk, [r for r in uu if not ok(r["gate"]["breadth"])], base_fn, name=name)
 
     # P4: 같은 (심볼, 방향, 시간) 에 규칙이 여러 개 겹치면 (진입시각, id) 순으로 첫 건만 유지
     ordered = sorted(live_valid, key=lambda r: (r["opened_at"], r["id"]))

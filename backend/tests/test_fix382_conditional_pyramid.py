@@ -58,3 +58,27 @@ def test_render_has_section():
 def test_loader_reads_breadth():
     src = (PR3.__file__ and open(PR3.__file__, encoding="utf-8").read())
     assert 'PaperTrade.snapshot["market_breadth"].astext' in src
+
+
+# ── 🧭 Fix 385 (2026-09-19 사장님 「최소한 90%이상은 성공할수있는 단순한 흐름 … 성공하는 모든 로직으로 만들어줘」) ──
+#   장세 전환 = 오르는 장엔 L1 반등 LONG 만 · 내리는 장엔 S4 급반등 꼭대기 SHORT 만 (사전등록 9/20~)
+def _rule_row(sym, side, rule, roi, breadth, day=D):
+    r = _mk(sym, side, rule, roi, dt(day, 2, 0))
+    r["gate"] = {"breadth": breadth}
+    return r
+
+
+def test_fix385_regime_switch_filters():
+    assert (PR3.REGIME_UP, PR3.REGIME_DOWN) == (0.55, 0.45)
+    assert PR3.FILTER_PREREG["R1_l1_rising_market"].startswith("2026-09-20")
+    rows = [_rule_row(f"U{i}USDT", "LONG", "zone_l1_rebound_long", 8.0, 0.7) for i in range(4)]
+    rows += [_rule_row(f"D{i}USDT", "LONG", "zone_l1_rebound_long", -6.0, 0.3) for i in range(3)]
+    rows += [_rule_row(f"X{i}USDT", "LONG", "surge_start_346", 5.0, 0.7) for i in range(2)]          # 다른 규칙 = 밖
+    rows += [_rule_row(f"S{i}USDT", "SHORT", "zone_s4_spike_top_short", 6.0, 0.35) for i in range(3)]
+    rows += [_rule_row(f"T{i}USDT", "SHORT", "zone_s4_spike_top_short", -9.0, 0.8) for i in range(2)]
+    rows += [_rule_row("BUSDT", "LONG", "zone_l1_rebound_long", 1.0, 0.6, day=date(2026, 9, 19))]  # 등록 전
+    f = _report(rows, now=dt(D, 12, 0))["blocks"]["all"]["filters"]
+    r1, r2 = f["LONG"]["R1_l1_rising_market"], f["SHORT"]["R2_s4_falling_market"]
+    assert (r1["universe"]["n"], r1["kept"]["n"], r1["excluded"]["n"]) == (7, 4, 3)
+    assert (r2["universe"]["n"], r2["kept"]["n"], r2["excluded"]["n"]) == (5, 3, 2)
+    assert 'PaperTrade.snapshot["market_breadth"].astext, Float).label("g_breadth")' in open(PR3.__file__, encoding="utf-8").read()
