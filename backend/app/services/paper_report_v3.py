@@ -172,19 +172,24 @@ def load_add_lots(db: Any, *, days: int = 30) -> list[tuple[str, str, datetime, 
     """추가(피라미딩) lot — `adds` 컬럼만 읽어 (side, rule, opened_at, variant, roi, pnl_usdt) 로 펼친다."""
     cutoff = _cutoff(days)
     stmt = (
-        select(PaperTrade.id, PaperTrade.side, PaperTrade.rule, PaperTrade.opened_at, PaperTrade.adds)
+        select(PaperTrade.id, PaperTrade.side, PaperTrade.rule, PaperTrade.opened_at, PaperTrade.adds,
+               PaperTrade.snapshot["market_breadth"].astext)
         .where(PaperTrade.source == "live", PaperTrade.status == "CLOSED", PaperTrade.opened_at >= cutoff)
         .execution_options(yield_per=1000)
     )
     out: list[tuple[str, str, datetime, str, float, float]] = []
-    for _id, side, rule, opened_at, adds in db.execute(stmt):
+    for _id, side, rule, opened_at, adds, _br in db.execute(stmt):
+        try:                                    # 🔼 Fix 382: 진입 시점 시장폭 (조건부 피라미딩 사전등록용)
+            breadth = float(_br) if _br not in (None, "", "null") else None
+        except (TypeError, ValueError):
+            breadth = None
         for variant, lots in (adds or {}).items():
             for lot in (lots or []):
                 roi = lot.get("roi")
                 if roi is None:
                     continue
                 pnl = lot.get("pnl_usdt")
-                out.append((side, rule, opened_at, variant, float(roi), float(pnl) if pnl is not None else 0.0))
+                out.append((side, rule, opened_at, variant, float(roi), float(pnl) if pnl is not None else 0.0, breadth))
     return out
 
 
@@ -589,7 +594,7 @@ def _filters_section(side_rows: list[dict[str, Any]], side: str, base_fn) -> dic
 
 def _adds_section(lots: list[tuple[str, str, datetime, str, float, float]]) -> dict[str, Any]:
     idx: dict[tuple[str, str], list[tuple[datetime, float, float]]] = defaultdict(list)
-    for side, _rule, opened_at, variant, roi, pnl in lots:
+    for side, _rule, opened_at, variant, roi, pnl, *_rest in lots:
         idx[(variant, side)].append((opened_at, roi, pnl))
     out: dict[str, Any] = {}
     for variant in PT.VARIANTS:
@@ -610,6 +615,49 @@ def _adds_section(lots: list[tuple[str, str, datetime, str, float, float]]) -> d
     return out
 
 
+# 🔼 Fix 382 (2026-09-19 사장님 「조건 붙인 피라미딩 가상매매로 검증해줘」) — 사전등록.
+#   가상 추가 lot(live_both = 운영 추가 조건 · 양방향) 22,965건 재측정 (9/9~9/14 하락장 · 9/15~ 상승장):
+#     A1 LONG 추가는 진입 시점 시장폭 ≥ 0.55 일 때만 : 하락장 통과 +0.94 vs 제외 −4.10 · 상승장 +15.91 vs +9.69 (6일 중 4일)
+#     A2 SHORT 추가는 시장폭 ≤ 0.45 일 때만        : 하락장 −1.92 vs +6.63 · 상승장 −9.18 vs −0.80 (6일 중 1일) = 대조군(기대: 실패)
+#   숫자는 모두 「Claude가 정함」. 9/20 00:00 UTC 이후 진입분만 센다 (고를 때 본 표본 제외).
+ADD_COND_SINCE = "2026-09-20T00:00:00+00:00"
+ADD_COND: tuple[tuple[str, str, float, str], ...] = (
+    ("A1_long_add_breadth_up", "LONG", 0.55, ">="),
+    ("A2_short_add_breadth_down", "SHORT", 0.45, "<="),
+)
+
+
+def _adds_conditional(lots: list[tuple]) -> dict[str, Any]:
+    cut = parse_prereg_at(ADD_COND_SINCE)
+    out: dict[str, Any] = {}
+    for name, side, thr, op in ADD_COND:
+        kept: list[tuple[datetime, float]] = []
+        excl: list[tuple[datetime, float]] = []
+        for lot in lots:
+            if len(lot) < 7 or lot[0] != side or lot[3] != "live_both" or lot[2] < cut or lot[6] is None:
+                continue
+            ok = lot[6] >= thr if op == ">=" else lot[6] <= thr
+            (kept if ok else excl).append((lot[2], lot[5]))
+
+        def _st(xs: list[tuple[datetime, float]]) -> dict[str, Any]:
+            if not xs:
+                return {"n": 0, "pnl_sum": 0.0, "mean": None, "win": None}
+            ps = [p for _, p in xs]
+            return {"n": len(ps), "pnl_sum": round(sum(ps), 2), "mean": round(statistics.fmean(ps), 3),
+                    "win": round(100.0 * sum(1 for p in ps if p > 0) / len(ps), 1)}
+        kd: dict[Any, list[float]] = defaultdict(list)
+        ed: dict[Any, list[float]] = defaultdict(list)
+        for t, p in kept:
+            kd[t.date()].append(p)
+        for t, p in excl:
+            ed[t.date()].append(p)
+        both = [d for d in set(kd) & set(ed) if len(kd[d]) >= 20 and len(ed[d]) >= 20]
+        better = sum(1 for d in both if statistics.fmean(kd[d]) > statistics.fmean(ed[d]))
+        out[name] = {"side": side, "rule": f"시장폭 {op} {thr}", "since": ADD_COND_SINCE,
+                     "kept": _st(kept), "excluded": _st(excl), "days_better": better, "days_both": len(both)}
+    return out
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 블록(all/prereg) 조립 + 채택 목록
 # ══════════════════════════════════════════════════════════════════════
@@ -626,6 +674,7 @@ def _build_block(rows: list[dict[str, Any]], lots: list[tuple[str, str, datetime
         exits[side] = _exits_section(side_rows)
         filters[side] = _filters_section(side_rows, side, base_fn)
     return {"rules": rules, "exits": exits, "filters": filters, "adds": _adds_section(lots),
+            "adds_cond": _adds_conditional(lots),
             "n": len(rows), "days": len({r["opened_at"].date() for r in rows})}
 
 
@@ -786,6 +835,15 @@ def render_markdown_v3(rep: Mapping[str, Any]) -> str:
                     continue
                 L.append(f"| {block} | {variant} | {side} | {st['n']} | {_f(st['mean'])} | "
                          f"{_f(st.get('win'), 1)}% | {_f(st.get('pnl_sum'))} | {_half_str(st['half'])} |")
+    L.append("")
+
+    L.append("## 4-1. 조건부 피라미딩 (사전등록 Fix 382 · 9/20 이후 진입분 · 1건 = 300 USDT 추가)")
+    L.append("| 조건 | 방향 | 통과 n | 통과 합 USDT | 통과 평균 | 제외 n | 제외 합 USDT | 제외 평균 | 통과가 나은 날 |")
+    L.append("|---|---|---:|---:|---:|---:|---:|---:|---|")
+    for name, st in (((rep.get("blocks") or {}).get("all") or {}).get("adds_cond") or {}).items():
+        k, e = st["kept"], st["excluded"]
+        L.append(f"| {name} ({st['rule']}) | {st['side']} | {k['n']} | {_f(k['pnl_sum'])} | {_f(k['mean'])} | "
+                 f"{e['n']} | {_f(e['pnl_sum'])} | {_f(e['mean'])} | {st['days_better']}/{st['days_both']} |")
     L.append("")
 
     ctx = rep.get("context") or {}

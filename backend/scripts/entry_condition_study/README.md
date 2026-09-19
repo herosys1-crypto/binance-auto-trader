@@ -40,3 +40,8 @@
 - `bbcci_backtest.py` (전략서 신호 A/A+/B × 15m·1h · 전략서 청산과 우리 청산 둘 다) → `bbcci_eval.py` (무작위 대비) → `bbcci_filter.py` (필터로 쓰면?)
 
 결과: docs/learning/BB_FORCE_CCI_2026-09-19.md
+
+## 2026-09-19 추가 — 조건부 피라미딩 (Fix 382)
+- `pyramid_regime.py` · `pyramid_regime_daily.py` — 운영 DB 읽기 전용(`docker compose exec -T api python -`). 가상 추가 lot 을 진입 시점 시장폭으로 갈라 두 장세에서 잰다.
+
+결과: docs/learning/CONDITIONAL_PYRAMID_2026-09-19.md
