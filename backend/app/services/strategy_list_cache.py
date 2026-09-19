@@ -50,6 +50,21 @@ def get_or_build(key: Hashable, build: Callable[[], Any]) -> Any:
         return value
 
 
+def encode(items: Any) -> tuple[bytes, bytes]:
+    """목록 → (JSON 바이트, gzip 바이트). FastAPI response_model 직렬화와 같은 규칙(mode=json · by_alias)."""
+    import gzip
+    from pydantic import TypeAdapter
+    from app.schemas.strategy import StrategyDetailResponse
+    global _TA
+    if _TA is None:
+        _TA = TypeAdapter(list[StrategyDetailResponse])
+    raw = _TA.dump_json(items, by_alias=True)
+    return raw, gzip.compress(raw, compresslevel=6)
+
+
+_TA = None
+
+
 def invalidate() -> None:
     global _GEN
     _GEN += 1
