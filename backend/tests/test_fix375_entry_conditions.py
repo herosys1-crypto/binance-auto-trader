@@ -114,10 +114,12 @@ def test_block_carries_window_per_interval():
 # ── ④ 규칙 가족 · 워커 ────────────────────────────────────────────────
 def test_all_twelve_families_have_gate_default_on():
     for f in RF.FAMILIES:
-        assert RF.SETTINGS[f"{f.key}_chart_gate"][0] == "on"
-        assert RF.chart_gate_of(_DB(), f.key) == "on"
+        # 🗺 Fix 387: S4 만 기본 shadow — 이 게이트가 S4 신호의 84% 를 막는데 성적 차이는 작았다(+5.02 vs +4.20)
+        want = "shadow" if f.key == "rf_zone_s4" else "on"
+        assert RF.SETTINGS[f"{f.key}_chart_gate"][0] == want
+        assert RF.chart_gate_of(_DB(), f.key) == want
         assert RF.chart_gate_of(_DB(**{f"{f.key}_chart_gate": "shadow"}), f.key) == "shadow"
-        assert RF.chart_gate_of(_DB(**{f"{f.key}_chart_gate": "maybe"}), f.key) == "on"   # 손상 → 기본
+        assert RF.chart_gate_of(_DB(**{f"{f.key}_chart_gate": "maybe"}), f.key) == want   # 손상 → 기본
 
 
 def _worker_run(monkeypatch, rows, gate_mode="on"):

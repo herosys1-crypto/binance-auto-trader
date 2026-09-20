@@ -32,7 +32,7 @@ MODE3 = ("off", "shadow", "on")
 OFF_WORDS = ("0", "off", "false", "no")
 
 G_GLOBAL = "전체"
-G_RULE = "규칙 가족 12 (가상매매 채택 규칙)"
+G_RULE = "규칙 가족 (가상매매 채택 규칙)"          # 🗺 Fix 387: 12 → 13 (S4 추가) — 숫자는 라벨에서 뺀다
 G_WORKER = "실매매 워커"
 G_EXTERNAL = "외부 매매법"
 GROUPS = (G_GLOBAL, G_RULE, G_WORKER, G_EXTERNAL)
@@ -444,9 +444,9 @@ LINE_ORDER: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("④ 반전 · 기타 실매매", ("unified_15m", "resistance_reversal_enabled", "peak_break_reversal_enabled",
                           "auto_obv_enabled", "obv_hold", "pending_hc", "scheduled_entry_enabled",
                           "chart_pattern", "sajangnim_top", "auto_other")),
-    ("⑤ 규칙 가족 12 (가상매매 채택 규칙)", ("rf_s2_short", "rf_bottom_long", "rf_surge_long", "rf_confirm_peak",
+    ("⑤ 규칙 가족 (가상매매 채택 규칙)", ("rf_s2_short", "rf_bottom_long", "rf_surge_long", "rf_confirm_peak",
                                       "rf_toprev", "rf_off8", "rf_s1_breakdown", "rf_wick_short", "rf_pullback_long",
-                                      "rf_multiday_long", "rf_l1_hist_long", "rf_wick_long")),
+                                      "rf_multiday_long", "rf_l1_hist_long", "rf_wick_long", "rf_zone_s4")),
     ("⑥ 외부 매매법", ("fujimoto", "mach7")),
 )
 SECTION_REST = "⑦ 기타"

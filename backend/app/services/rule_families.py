@@ -69,6 +69,10 @@ FAMILIES: tuple[Family, ...] = (
     Family("rf_multiday_long", "multiday_rebound_352", "LONG", "RF_MULTIDAY", "rf_multiday_rebound_352", "다일 반등 LONG", "다일반등L"),
     Family("rf_l1_hist_long", "l1_hist_turn_up", "LONG", "RF_L1HIST", "rf_l1_hist_turn_up", "hist 상승 전환 LONG", "hist전환L"),
     Family("rf_wick_long", "wick_rev_long_v220", "LONG", "RF_WICKLONG", "rf_wick_rev_long_v220", "아래꼬리 반전 LONG", "아래꼬리L"),
+    # 🗺 Fix 387 (2026-09-20 사장님 「S4만 실매매로 켤 수 있는지 검토해줘」 → 「등록하고 지금 켜기까지」)
+    #   기회 지도(모든 자리 83,927 채점)에서 두 장세 모두 이긴 SHORT 자리 = 하락 추세 속 짧은 급반등의 꼭대기.
+    #   판정은 가상 규칙 zone_s4_spike_top_short (app/services/opportunity_zones.py) 그대로 쓴다.
+    Family("rf_zone_s4", "zone_s4_spike_top_short", "SHORT", "RF_ZONES4", "rf_zone_s4", "기회지도 S4 급반등 꼭대기 SHORT", "S4꼭대기"),
 )
 FAMILY_BY_KEY = {f.key: f for f in FAMILIES}
 RF_STRATEGY_TYPES = frozenset(f.stype for f in FAMILIES)
@@ -125,6 +129,14 @@ for _f in FAMILIES:
     # 🎯 Fix 375 (2026-09-17 사장님 「차트를 분석하고 진입할수 있어야지」): 차트 자리 게이트 — app/services/entry_conditions
     SETTINGS[f"{_f.key}_chart_gate"] = ("on", "off | shadow(판정만 기록) | on(차트 자리가 아니면 진입 안 함)",
                                         "Claude가 정함 — 가상 22,652건 재계산 · 사전등록 이후 검증 통과 (진입을 줄이기만 한다)")
+# 🗺 Fix 387: S4 는 **검증한 청산 그대로** 둔다 — 분할(TP1 5·손절 10)이 아니라 단일 10 USDT · TP 15/20/25/30 · 손절 −25.
+#   차트 게이트(P5)는 기록만 — S4 신호의 84% 를 막는데 성적 차이는 작았다(통과 ROI +5.02 vs 막힘 +4.20, 9일 1,055자리).
+#   mode 기본값은 **shadow 그대로** 둔다 (실주문은 사장님이 관제실에서 켠다 — 코드가 자동으로 켜지 않는다).
+SETTINGS["rf_zone_s4_entry"] = ("single", "split | single(1회 진입) — S4 는 단일 (검증한 청산과 같게)",
+                                "Fix 387 근거: 가상 검증은 단일 진입·TP1 15·손절 −25 로 쟀다")
+SETTINGS["rf_zone_s4_chart_gate"] = ("shadow", "off | shadow(판정만 기록) | on",
+                                     "Fix 387 근거: S4 신호의 84% 를 막고 성적 차이는 +5.02 vs +4.20 (Claude가 정함)")
+SETTINGS["rf_zone_s4_max_concurrent"] = ("2", "전용 동시 보유 상한", "Fix 387 — 하루 최대 1 과 함께 상한 (Claude가 정함)")
 SETTINGS["entry_chart_gate_params"] = ("", "차트 게이트 숫자 JSON (비우면 기본: SHORT 16시간 고점 −3% 이내·일봉 UP 아님 / "
                                            "LONG 24h −5% 이하 또는 5분 고점 대비 −4% 이하)", "Claude가 정함 — 분석 값 그대로")
 

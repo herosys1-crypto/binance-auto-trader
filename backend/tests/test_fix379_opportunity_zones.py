@@ -169,8 +169,12 @@ def test_report_counts_new_rules():
     assert "zone_s4_spike_top_short" in rep["blocks"]["all"]["rules"]["SHORT"]
 
 
-def test_not_wired_to_any_live_family():
-    """가상만 — 규칙 가족(rf_*, 실주문 후보)에 연결되지 않는다. 연결은 7일 판정 뒤 사장님 결정."""
+def test_l1_is_still_paper_only_and_s4_is_wired_safely():
+    """L1 은 아직 가상만. S4 는 사장님 결정(2026-09-20 「등록하고 지금 켜기까지」)으로 가족 등록 —
+    다만 **코드 기본값은 shadow** 다 (실주문은 사장님이 관제실에서 켠다)."""
     from app.services import rule_families as RF
     fam_rules = {f.rule for f in RF.FAMILIES}
-    assert not fam_rules & {"zone_l1_rebound_long", "zone_s4_spike_top_short"}
+    assert "zone_l1_rebound_long" not in fam_rules
+    fam = RF.FAMILY_BY_KEY["rf_zone_s4"]
+    assert fam.rule == "zone_s4_spike_top_short" and fam.side == "SHORT"
+    assert RF.SETTINGS["rf_zone_s4_mode"][0] == "shadow", "코드가 스스로 실주문을 켜지 않는다"

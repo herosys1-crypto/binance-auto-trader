@@ -243,8 +243,9 @@ def test_registered_as_single_entry_and_scheduled_and_not_picked_by_reentry():
 # ── 2026-09-15 확장: 12 가족 · 분할 10/100/200 · 하루 최대 · 자동매매 중단 ──────────────
 def test_2026_09_15_families_defaults_split_and_registry():
     db = _DB()
-    assert len(RF.FAMILIES) == 12 and len({f.key for f in RF.FAMILIES}) == 12 and len({f.stype for f in RF.FAMILIES}) == 12
-    assert all(RF.entry_of(db, f.key) == "split" for f in RF.FAMILIES)
+    assert len(RF.FAMILIES) == 13 and len({f.key for f in RF.FAMILIES}) == 13 and len({f.stype for f in RF.FAMILIES}) == 13
+    # 🗺 Fix 387: S4 만 단일 진입 — 가상 검증을 단일·TP1 15·손절 −25 로 쟀기 때문(나머지는 분할 10/100/200)
+    assert all(RF.entry_of(db, f.key) == ("single" if f.key == "rf_zone_s4" else "split") for f in RF.FAMILIES)
     assert RF.entry_of(_DB(rf_off8_entry="SINGLE"), "rf_off8") == "single" and RF.entry_of(_DB(rf_off8_entry="x"), "rf_off8") == "split"
     assert all(RF.places_of(db, f.key) == {"ALL"} for f in RF.FAMILIES[3:])
     caps, steps, sl, tp1, trail, note = RF.split_config(db)
