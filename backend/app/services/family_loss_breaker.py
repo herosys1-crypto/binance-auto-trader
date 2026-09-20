@@ -71,17 +71,26 @@ def _aware(dt: datetime | None) -> datetime | None:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
-def family_realized(db: Any, fam_key: str, since: datetime) -> tuple[float, int]:
-    """그 가족의 since 이후 **끝난**(stopped_at) 전략 실현 손익 합 · 건수. 사람 전략 제외."""
-    from sqlalchemy import select
+def _closed_rows(db: Any, since: datetime) -> list:
+    """since 이후 **끝난** 전략 행. 🚨 종료 판정은 status(TERMINAL) 로 한다 —
+    `stopped_at` 만 보면 **COMPLETED(익절 완료) 101건이 그 값이 비어 있어**(2026-09-20 운영 실측, 실현 +3,097)
+    이긴 거래가 통째로 빠지고 손실만 세어 차단기가 잘못 발동한다. 시각은 stopped_at 없으면 updated_at."""
+    from sqlalchemy import func, select
+    from app.core.strategy_status import TERMINAL_STATUSES
     from app.models.strategy_instance import StrategyInstance as SI
     from app.models.strategy_template import StrategyTemplate as ST
-    from app.services import auto_family_registry as AF
-    rows = db.execute(select(SI.realized_pnl, SI.created_at, SI.entry_origin, ST.strategy_type, ST.name)
+    closed_at = func.coalesce(SI.stopped_at, SI.updated_at)
+    return db.execute(select(SI.realized_pnl, SI.created_at, closed_at.label("closed_at"), SI.entry_origin,
+                             ST.strategy_type, ST.name)
                       .join(ST, ST.id == SI.strategy_template_id)
-                      .where(SI.stopped_at.is_not(None), SI.stopped_at >= since)).all()
+                      .where(SI.status.in_(tuple(TERMINAL_STATUSES)), closed_at >= since)).all()
+
+
+def family_realized(db: Any, fam_key: str, since: datetime) -> tuple[float, int]:
+    """그 가족의 since 이후 끝난 전략 실현 손익 합 · 건수. 사람 전략 제외."""
+    from app.services import auto_family_registry as AF
     total, n = 0.0, 0
-    for rp, ca, origin, stype, name in rows:
+    for rp, ca, _sa, origin, stype, name in _closed_rows(db, since):
         fam = AF.family_for(strategy_type=stype, template_name=name, entry_origin=origin, created_at=ca)
         if fam is not None and fam.key == fam_key:
             total += float(rp or 0)
@@ -106,9 +115,6 @@ def state(db: Any, fam_key: str, *, now: datetime | None = None) -> dict[str, An
 
 def all_states(db: Any, fam_keys: list[str], *, now: datetime | None = None) -> dict[str, dict[str, Any]]:
     """관제실 화면용 — 모든 가족을 **쿼리 한 번**으로. 가족마다 해제 시각이 다르므로 최대 창으로 읽고 가족별로 자른다."""
-    from sqlalchemy import select
-    from app.models.strategy_instance import StrategyInstance as SI
-    from app.models.strategy_template import StrategyTemplate as ST
     from app.services import auto_family_registry as AF
     now = now or datetime.now(timezone.utc)
     days = int(_num(db, S_DAYS, DEFAULT_DAYS, 1, 30))
@@ -121,9 +127,7 @@ def all_states(db: Any, fam_keys: list[str], *, now: datetime | None = None) -> 
         reset_at = _aware(getattr(row, "updated_at", None)) if row is not None and not tripped else None
         since = reset_at if reset_at is not None and reset_at > base else base
         out[k] = {"tripped": tripped, "pnl": 0.0, "n": 0, "since": since, "limit": limit, "days": days}
-    rows = db.execute(select(SI.realized_pnl, SI.created_at, SI.stopped_at, SI.entry_origin, ST.strategy_type, ST.name)
-                      .join(ST, ST.id == SI.strategy_template_id)
-                      .where(SI.stopped_at.is_not(None), SI.stopped_at >= base)).all()
+    rows = _closed_rows(db, base)
     for rp, ca, sa, origin, stype, name in rows:
         fam = AF.family_for(strategy_type=stype, template_name=name, entry_origin=origin, created_at=ca)
         if fam is None or fam.key not in out or _aware(sa) < out[fam.key]["since"]:

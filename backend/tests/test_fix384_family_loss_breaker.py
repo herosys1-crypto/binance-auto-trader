@@ -41,7 +41,7 @@ class _DB:
         return NS(value=v, updated_at=NOW - timedelta(days=30))
 
     def execute(self, stmt):
-        cols = [c.name for c in stmt.selected_columns]
+        cols = [getattr(c, "name", "closed_at") for c in stmt.selected_columns]
         since = None
         for crit in stmt.whereclause.clauses if hasattr(stmt.whereclause, "clauses") else []:
             r = getattr(crit, "right", None)
@@ -49,17 +49,20 @@ class _DB:
                 since = r.value
         out = []
         for s in self.strats:
-            if s["stopped_at"] is None or (since and s["stopped_at"] < since):
+            if s["closed_at"] is None or (since and s["closed_at"] < since):
                 continue
             m = {"realized_pnl": s["pnl"], "created_at": s["created_at"], "stopped_at": s["stopped_at"],
+                 "closed_at": s["closed_at"], "coalesce_1": s["closed_at"], "coalesce": s["closed_at"],
                  "entry_origin": s.get("origin"), "strategy_type": s["stype"], "name": s.get("name", "auto")}
             out.append(tuple(m[c] for c in cols))
         return NS(all=lambda: out)
 
 
-def strat(pnl, days_ago, stype="auto_bb_break_SAJANGNIM_BOTTOM", origin=None, name="auto"):
+def strat(pnl, days_ago, stype="auto_bb_break_SAJANGNIM_BOTTOM", origin=None, name="auto", status="STOPPED",
+          stopped=True):
     t = NOW - timedelta(days=days_ago)
-    return {"pnl": pnl, "created_at": t - timedelta(hours=2), "stopped_at": t, "stype": stype, "origin": origin, "name": name}
+    return {"pnl": pnl, "created_at": t - timedelta(hours=2), "stopped_at": t if stopped else None,
+            "closed_at": t, "status": status, "stype": stype, "origin": origin, "name": name}
 
 
 def run(db, stype="auto_bb_break_SAJANGNIM_BOTTOM", origin=None, monkeypatch=None, trips=None):
@@ -177,3 +180,13 @@ def test_control_room():
     js = (APP / "static" / "js" / "auto-control.js").read_text(encoding="utf-8")
     assert "['막는 중', '허용']" in js and "⛔ 손실 차단" in js
     assert "key.endsWith('_loss_breaker')) return v === '0'" in js, "푸는 쪽이 확인창 대상"
+
+
+# ── 🚨 2026-09-20 실측 버그: COMPLETED(익절 완료)는 stopped_at 이 비어 있다 (101건 · 실현 +3,097) ──
+def test_completed_without_stopped_at_still_counts(trips):
+    """끝난 판정을 stopped_at 으로 하면 이긴 거래가 빠지고 손실만 세어 차단기가 잘못 발동한다."""
+    db = _DB(strategies=[strat(+80, 1, status="COMPLETED", stopped=False), strat(-40, 2)])
+    res = run(db)                                                    # 합 +40 → 막지 않는다
+    assert res["pnl"] == 40.0 and res["tripped"] is False and trips == []
+    src = (APP / "services" / "family_loss_breaker.py").read_text(encoding="utf-8")
+    assert "TERMINAL_STATUSES" in src and "coalesce(SI.stopped_at, SI.updated_at)" in src
