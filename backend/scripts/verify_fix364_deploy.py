@@ -930,7 +930,9 @@ def check_auto_entry_ready() -> None:
         from app.services import rule_families as RF
         from app.services import split_entry_executor as SX
         (ok if AF.DEFAULT_DAILY_MAX == 1 else fail)("하루 최대 코드 기본 = 1 (사장님 「모두 일최대 1개」)")
-        (ok if len(RF.FAMILIES) == 12 and all(RF.SETTINGS[f"{f.key}_mode"][0] == "shadow" for f in RF.FAMILIES) else fail)(
+        # 🗺 Fix 387: 가족은 늘어난다(12 → 13 S4) — 개수는 «최소»만 보고, **코드 기본 모드가 전부 shadow** 인지를 본다
+        #   (실주문은 사장님이 관제실에서 켠다 — 코드가 스스로 켜면 안 된다)
+        (ok if len(RF.FAMILIES) >= 12 and all(RF.SETTINGS[f"{f.key}_mode"][0] == "shadow" for f in RF.FAMILIES) else fail)(
             f"규칙 가족 {len(RF.FAMILIES)}개 · 코드 기본 모드 전부 shadow")
         caps, steps, sl, note = SX.parse_config(None, None, None)
         (ok if [float(c) for c in caps] == [10, 100, 200] and note == "설정 OK" else fail)(f"분할 기본 {caps} · {steps} · 손절 ROI {sl} ({note})")
