@@ -18,6 +18,8 @@
 
 // 2026-05-04 (사용자 요청): 「💉 포지션 추가」 — ad-hoc 자유 금액 시장가/지정가 진입.
 // 증거금 추가와 다름: qty 늘림 + 평단 갱신. 모달로 amount + order_type + (지정가) 입력.
+// 🩹 Fix 389 (2026-09-21): 바이낸스 USDT-M 선물 최소 주문 명목 (대부분 심볼 5 USDT).
+const AP_MIN_NOTIONAL_USDT = 5;
 function openAddPositionModal(id, symbol, side, leverage, exchangeAccountId) {
   // mark price 가져오기 (api 호출) — 미리보기용
   document.getElementById('ap-strategy-id').value = id;
@@ -99,6 +101,10 @@ async function loadAddPositionMarkPrice(symbol) {
     const data = await api(`/market/ticker?symbol=${encodeURIComponent(symbol)}`);
     el.textContent = data.price ? Number(data.price).toString() : '?';
     el.dataset.price = data.price || '';
+    // 🩹 Fix 389 (2026-09-21): 지정가 칸이 비어 있으면 현재가로 채운다.
+    //   사장님 사례 — FFUSDT(0.164) 에 지정가 1200 + 금액 0.01 → 수량 0 → 400.
+    const _lp = document.getElementById('ap-limit-price');
+    if (_lp && !_lp.value && data.price) _lp.value = data.price;
     updateAddPositionPreview();
   } catch (e) {
     el.textContent = '조회 실패';
@@ -118,9 +124,29 @@ function updateAddPositionPreview() {
     return;
   }
   const qty = (amount * lev) / refPrice;
-  previewEl.innerHTML = `예상 수량: <span class="text-cyan-300 font-semibold">${qty.toFixed(4)}</span> ` +
-    `@ ${refPrice} = <span class="text-yellow-300">${(qty * refPrice).toFixed(2)} USDT</span> 명목 ` +
+  const notional = qty * refPrice;
+  let html = `예상 수량: <span class="text-cyan-300 font-semibold">${qty.toFixed(4)}</span> ` +
+    `@ ${refPrice} = <span class="text-yellow-300">${notional.toFixed(2)} USDT</span> 명목 ` +
     `(마진 ${amount} USDT × ${lev}x)`;
+  // 🩹 Fix 389: 거래소가 거부할 입력을 보내기 전에 막는다.
+  //   바이낸스 USDT 선물 최소 명목 = 5 USDT → 필요한 최소 증거금 = 5 / 레버리지.
+  const minAmount = AP_MIN_NOTIONAL_USDT / lev;
+  let block = '';
+  if (notional < AP_MIN_NOTIONAL_USDT) {
+    block = `명목 ${notional.toFixed(2)} USDT 는 거래소 최소 ${AP_MIN_NOTIONAL_USDT} USDT 미만 — ` +
+      `추가 금액을 최소 <strong>${minAmount.toFixed(2)} USDT</strong> 이상 넣으세요 (지금 ${amount}).`;
+  }
+  if (markPrice > 0 && refPrice > 0) {
+    const gap = (refPrice / markPrice - 1) * 100;
+    if (Math.abs(gap) >= 20) {
+      html += `<br><span class="text-orange-300">⚠ 지정가 ${refPrice} 는 현재가 ${markPrice} 와 ` +
+        `${gap.toFixed(0)}% 차이 — 숫자를 확인하세요.</span>`;
+    }
+  }
+  if (block) html += `<br><span class="text-red-400">⛔ ${block}</span>`;
+  previewEl.innerHTML = html;
+  const _btn = document.getElementById('ap-submit');
+  if (_btn) { _btn.disabled = !!block; _btn.title = block ? block.replace(/<[^>]+>/g, '') : ''; }
 }
 
 async function submitAddPosition() {
@@ -134,6 +160,13 @@ async function submitAddPosition() {
   }
   if (isLimit && (!limitPrice || limitPrice <= 0)) {
     toast('지정가 가격을 입력하세요 (양수)', 'warning');
+    return;
+  }
+  // 🩹 Fix 389: 수량이 0 이 되는 입력은 보내지 않는다 (서버 400 대신 무엇을 고치면 되는지 알려준다).
+  const _lev = parseFloat(document.getElementById('ap-leverage-display').textContent) || 1;
+  if (amount * _lev < AP_MIN_NOTIONAL_USDT) {
+    toast(`명목 ${(amount * _lev).toFixed(2)} USDT — 최소 ${AP_MIN_NOTIONAL_USDT} USDT. ` +
+          `추가 금액을 ${(AP_MIN_NOTIONAL_USDT / _lev).toFixed(2)} USDT 이상 넣으세요.`, 'warning');
     return;
   }
   // 🌟 2026-07-01 사장님 헌법 51 (옵션 A!): mode 라디오 선택 읽기!
