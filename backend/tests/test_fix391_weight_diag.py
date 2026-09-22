@@ -107,3 +107,41 @@ class TestFix392OpenOrdersCache:
         """옛 15초 리터럴이 이 캐시에 남아 있지 않다 (두 곳에 저장되던 사고 방지)."""
         src = ACCOUNTS.read_text(encoding="utf-8")
         assert "redis.setex(cache_key, 15" not in src
+
+
+class TestFix393CallerBreakdown:
+    """🔍 Fix 393 — 「klines 가 분당 885」 까지는 봤는데 **누가** 쓰는지 몰랐다 (2026-09-23).
+
+    사장님 화면 실측(09-22 21:42~21:59): 바이낸스 실측 366~1189/분(한도의 15~49%),
+    그중 klines 가 246~885 = 매 분 1위. 줄일 곳을 고르려면 잡별 분해가 필요하다.
+    같이 고친 것 = 「우리추정 0 · 차이 +1189」로 보였던 진단표 결함
+    (추정 키 TTL 180초 < 진단 보관 2시간 → 만료된 분이 0 으로 찍혔다. 누락 경로가 아니었다).
+    """
+
+    def test_caller_contextvar_and_key(self) -> None:
+        src = SRC.read_text(encoding="utf-8")
+        assert "_WEIGHT_BY_CALLER_KEY" in src
+        assert "def set_caller(" in src and "def reset_caller(" in src
+        fn = src[src.index("def _add_weight("):src.index("def note_used_weight(")]
+        assert "_caller_var.get() or \"other\"" in fn
+
+    def test_est_key_retention_matches_diag(self) -> None:
+        """추정 키도 2시간 보관 — 거버너는 이번 분만 읽으므로 판정 영향 없음."""
+        src = SRC.read_text(encoding="utf-8")
+        fn = src[src.index("def _add_weight("):src.index("def note_used_weight(")]
+        assert "r.expire(key, _DIAG_TTL_SEC)" in fn
+        assert "r.expire(key, _WEIGHT_TTL_SEC)" not in fn
+
+    def test_guarded_job_tags_caller(self) -> None:
+        """스케줄러의 모든 잡이 자기 이름을 남긴다 (한 곳에서 처리)."""
+        runner = SRC.parent.parent.parent / "workers" / "scheduler_runner.py"
+        src = runner.read_text(encoding="utf-8")
+        blk = src[src.index("def guarded_job("):src.index("scheduler.add_job(guarded_job(\"listenkey_keepalive\"")]
+        assert "set_caller(job_name)" in blk
+        assert "reset_caller(_tok)" in blk
+        assert blk.index("set_caller(job_name)") < blk.index("fn()")
+
+    def test_report_shows_callers(self) -> None:
+        rpt = (SRC.parent.parent.parent.parent / "scripts" / "weight_report.py").read_text(encoding="utf-8")
+        assert "by_caller" in rpt
+        assert "잡(호출자)별" in rpt

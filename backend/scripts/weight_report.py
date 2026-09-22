@@ -39,6 +39,9 @@ def main(minutes: int = 120) -> None:
         pct = (used * 100 // LIMIT) if used else 0
         top = sorted(row["by_endpoint"].items(), key=lambda kv: -kv[1])[:4]
         top_s = " · ".join(f"{k.rsplit('/', 1)[-1]} {v}" for k, v in top)
+        callers = sorted((row.get("by_caller") or {}).items(), key=lambda kv: -kv[1])[:2]
+        if callers:
+            top_s += "  |  " + " · ".join(f"{k} {v}" for k, v in callers)
         m = row["minute"]
         print(f"{m[4:6]}-{m[6:8]} {m[8:10]}:{m[10:12]} {est:8d} {used:8d} {gap:+7d} {pct:5d}%  {top_s}")
         if used and (worst is None or used > worst["used"]):
@@ -46,11 +49,19 @@ def main(minutes: int = 120) -> None:
 
     if worst:
         print("\n■ 가장 높았던 분 —", worst["minute"])
+        used = worst["used"] or 1
+        print("  엔드포인트별")
         for k, v in sorted(worst["by_endpoint"].items(), key=lambda kv: -kv[1]):
-            print(f"   {k:34s} {v:6d}  ({v * 100 // max(1, worst['est'])}% of 우리추정)")
-        print(f"   우리추정 {worst['est']} · 바이낸스 실측 {worst['used']} "
-              f"({worst['used'] * 100 // LIMIT}% of 한도) · 차이 {worst['used'] - worst['est']:+d}")
-        print("   차이가 크면 = 아직 계측 밖인 경로가 있다 (또는 같은 IP 의 다른 프로세스).")
+            print(f"   {k:34s} {v:6d}  ({v * 100 // used}%)")
+        if worst.get("by_caller"):
+            print("  잡(호출자)별 — Fix 393")
+            for k, v in sorted(worst["by_caller"].items(), key=lambda kv: -kv[1]):
+                print(f"   {k:34s} {v:6d}  ({v * 100 // used}%)")
+        gap = worst["used"] - worst["est"]
+        print(f"   합계: 우리추정 {worst['est']} · 바이낸스 실측 {worst['used']} "
+              f"({worst['used'] * 100 // LIMIT}% of 한도) · 차이 {gap:+d}")
+        if abs(gap) > max(20, worst["used"] // 10):
+            print("   ⚠ 차이가 크다 = 아직 계측 밖인 경로가 있다 (또는 같은 IP 의 다른 프로세스).")
 
 
 if __name__ == "__main__":
