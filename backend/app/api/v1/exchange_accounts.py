@@ -62,9 +62,16 @@ def _guard_ip_ban(where: str) -> None:
         )
 
 
-def _note_ip_ban(resp) -> None:
+def _note_ip_ban(resp, *, path: str = "?", params: dict | None = None) -> None:
     """418/429 응답을 전역 ban 플래그에 반영 — 이 경로가 ban 을 처음 맞아도
     모든 컨테이너가 즉시 멈추도록 (`BinanceClient._request` 와 같은 동작)."""
+    try:
+        # 🔍 Fix 391 (2026-09-23): 이 파일의 생짜 호출(positionRisk 2곳 + openOrders 1곳)도 계측한다.
+        #   openOrders 는 symbol 없이 부르므로 **한 번에 weight 40** 이다 — 안 세면 진단이 틀어진다.
+        from app.integrations.binance.client import record_external_call
+        record_external_call(path, params, resp)
+    except Exception:
+        pass
     try:
         if getattr(resp, "status_code", 0) in (418, 429):
             from app.integrations.binance.client import _mark_ip_ban_from_response
@@ -522,7 +529,7 @@ def get_balance(
                 headers={"X-MBX-APIKEY": _ak},
                 timeout=10,
             )
-            _note_ip_ban(_resp)                     # 🚨 418/429 를 전역 차단기에 알린다
+            _note_ip_ban(_resp, path="/fapi/v2/positionRisk")   # 🚨 차단기 + 🔍 Fix 391 계수(weight 5)
             _resp.raise_for_status()
             _pr_data = _resp.json()
             if _redis is not None:
@@ -815,7 +822,7 @@ def get_binance_positions(
             headers={"X-MBX-APIKEY": ak},
             timeout=10,
         )
-        _note_ip_ban(r)                         # 🚨 418/429 를 전역 차단기에 알린다
+        _note_ip_ban(r, path="/fapi/v2/positionRisk")   # 🚨 차단기 + 🔍 Fix 391 계수(weight 5)
         r.raise_for_status()
         raw = r.json()
     except Exception as e:
@@ -980,7 +987,7 @@ def get_binance_open_orders_summary(
             headers={"X-MBX-APIKEY": ak},
             timeout=10,
         )
-        _note_ip_ban(r)                         # 🚨 418/429 를 전역 차단기에 알린다
+        _note_ip_ban(r, path="/fapi/v1/openOrders")     # 🚨 차단기 + 🔍 Fix 391 계수(symbol 없으니 weight 40)
         r.raise_for_status()
         raw_orders = r.json() or []
     except Exception as e:
