@@ -115,6 +115,17 @@ async function loadCmSymbols() {
     };
     symEl.addEventListener('input', trigger);
     symEl.addEventListener('change', trigger);
+    // 🩹 Fix 390 (2026-09-23): 모바일 자동완성은 고를 때 input/change 가 안 튀는 경우가 있다
+    //   (iOS datalist — v92 에서 이미 겪었다). 그래서 값이 바뀌었는데 이벤트가 안 온 경우를
+    //   0.8초마다 스스로 따라잡는다. 모달이 닫혀 있으면 아무 것도 하지 않는다.
+    symEl.addEventListener('blur', trigger);
+    let _lastSeen = symEl.value.toUpperCase().trim();
+    setInterval(() => {
+      const modal = document.getElementById('create-modal');
+      if (!modal || modal.classList.contains('hidden')) return;
+      const v = symEl.value.toUpperCase().trim();
+      if (v !== _lastSeen) { _lastSeen = v; trigger(); }
+    }, 800);
     symEl.dataset.bound = '1';
   }
   // 거래소 계정 변경 시 testnet 여부 변경 → 시세 다시
