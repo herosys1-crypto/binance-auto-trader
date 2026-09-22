@@ -88,3 +88,22 @@ def test_crlf_preserved(path: Path) -> None:
     raw = path.read_bytes()
     assert b"\r\n" in raw
     assert raw.count(b"\n") == raw.count(b"\r\n")
+
+
+class TestFix392OpenOrdersCache:
+    """🚨 Fix 392 — 사장님 「openOrders 캐시 30초로 늘려줘」 (2026-09-23).
+
+    근거(Fix 391 실측 21:43): 화면 1개가 열려 있을 때 분당 openOrders **160** = 한도의 7%
+    (symbol 없는 전체 조회 = 회당 weight 40 × 15초 캐시 = 분당 4회).
+    30초면 분당 2회 = 80 → 절반. 대가는 미체결 요약이 최대 30초 늦는 것.
+    """
+
+    def test_ttl_is_30_and_used_in_setex(self) -> None:
+        src = ACCOUNTS.read_text(encoding="utf-8")
+        assert "OPEN_ORDERS_CACHE_TTL_SEC = 30" in src
+        assert "redis.setex(cache_key, OPEN_ORDERS_CACHE_TTL_SEC" in src
+
+    def test_no_hardcoded_15_left(self) -> None:
+        """옛 15초 리터럴이 이 캐시에 남아 있지 않다 (두 곳에 저장되던 사고 방지)."""
+        src = ACCOUNTS.read_text(encoding="utf-8")
+        assert "redis.setex(cache_key, 15" not in src

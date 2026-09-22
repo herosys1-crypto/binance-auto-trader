@@ -959,7 +959,12 @@ def get_binance_open_orders_summary(
     if not account or account.user_id != user_id:
         raise HTTPException(404, "Exchange account not found")
 
-    # Redis 캐시 15초
+    # Redis 캐시 — 🚨 Fix 392 (2026-09-23) 사장님 지시 「openOrders 캐시 30초로 늘려줘」:
+    #   이 호출은 symbol 없이 전체를 받으므로 **한 번에 weight 40** 이다 (Binance USD-M).
+    #   Fix 391 실측(21:43): 화면 1개가 열려 있을 때 분당 openOrders 160 = 한도 2400 의 7%
+    #   (= 15초 캐시로 분당 4회). 30초로 늘리면 분당 2회 = 80 으로 절반이 된다.
+    #   대가 = 미체결 주문 요약이 최대 30초 늦게 갱신된다 (주문 자체는 실시간 경로가 따로 있다).
+    OPEN_ORDERS_CACHE_TTL_SEC = 30      # 사장님이 정한 값 (verbatim)
     redis = None
     cache_key = f"binance:open_orders_summary:{account_id}"
     try:
@@ -1059,7 +1064,7 @@ def get_binance_open_orders_summary(
 
     if redis:
         try:
-            redis.setex(cache_key, 15, _json.dumps(resp))
+            redis.setex(cache_key, OPEN_ORDERS_CACHE_TTL_SEC, _json.dumps(resp))
         except Exception:
             pass
     return resp
