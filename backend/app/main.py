@@ -70,6 +70,34 @@ app.add_middleware(IdempotencyMiddleware)
 # → 모든 API 응답에 no-store 를 명시한다. 성능 영향은 없다 —
 #   어차피 캐시하면 안 되는 값들이고, 지금도 사실상 캐시되지 않아야 정상이다.
 @app.middleware("http")
+async def _tag_binance_caller(request, call_next):
+    """🔍 Fix 394 (2026-09-23): 화면 요청이 쓴 바이낸스 가중치를 **경로 이름으로** 분해한다.
+
+    Fix 393 실측(22:16): klines 672 중 잡별로는 `paper_trading 278` 뿐이고 `other 408` 이었다.
+    스케줄러에 스레드풀이 없으니 그 other 는 **이 컨테이너(화면 API)** 다. 어느 화면 API 가
+    캔들을 쓰는지 모르면 줄일 곳을 고를 수 없다 → 경로를 그대로 호출자 이름으로 쓴다.
+    진단 전용 — 실패는 전부 삼키고 요청 흐름은 건드리지 않는다.
+    """
+    tok = None
+    try:
+        from app.integrations.binance.client import set_caller
+        path = request.url.path
+        if path.startswith("/api/v1/"):
+            tok = set_caller("api:" + path[len("/api/v1/"):][:60])
+    except Exception:
+        tok = None
+    try:
+        return await call_next(request)
+    finally:
+        if tok is not None:
+            try:
+                from app.integrations.binance.client import reset_caller
+                reset_caller(tok)
+            except Exception:
+                pass
+
+
+@app.middleware("http")
 async def _no_store_api(request, call_next):
     # ⚡ Fix 386: 전략을 바꾸는 요청이면 목록 캐시를 앞뒤로 비운다 (정지·생성 직후 옛 목록이 보이지 않게)
     _inv386 = False

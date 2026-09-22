@@ -145,3 +145,28 @@ class TestFix393CallerBreakdown:
         rpt = (SRC.parent.parent.parent.parent / "scripts" / "weight_report.py").read_text(encoding="utf-8")
         assert "by_caller" in rpt
         assert "잡(호출자)별" in rpt
+
+
+class TestFix394ApiCallerTag:
+    """🔍 Fix 394 — 화면 API 가 쓴 가중치를 경로 이름으로 분해 (2026-09-23).
+
+    Fix 393 실측(22:16): klines 672 중 `paper_trading 278` · **`other 408`**.
+    스케줄러에 스레드풀이 없어 ContextVar 는 잡마다 붙는다 → 그 other 는 api 컨테이너다.
+    어느 화면 API 가 캔들을 쓰는지(예: strategy-suggestions 계열) 알아야 줄일 곳을 고른다.
+    """
+
+    def test_middleware_sets_and_resets_caller(self) -> None:
+        main = SRC.parent.parent.parent / "main.py"
+        src = main.read_text(encoding="utf-8")
+        blk = src[src.index("async def _tag_binance_caller"):src.index("async def _no_store_api")]
+        assert 'set_caller("api:"' in blk
+        assert "reset_caller(tok)" in blk
+        assert blk.index("set_caller(") < blk.index("await call_next("), "요청 처리 전에 태깅해야 잡힌다"
+        assert "finally:" in blk, "예외가 나도 되돌려야 문맥이 새지 않는다"
+
+    def test_only_api_paths_tagged(self) -> None:
+        """정적 파일·헬스체크까지 태깅해 해시를 더럽히지 않는다."""
+        main = SRC.parent.parent.parent / "main.py"
+        src = main.read_text(encoding="utf-8")
+        blk = src[src.index("async def _tag_binance_caller"):src.index("async def _no_store_api")]
+        assert 'path.startswith("/api/v1/")' in blk
