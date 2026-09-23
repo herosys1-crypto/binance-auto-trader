@@ -96,7 +96,8 @@ class NotificationService:
     # ------------------------------------------------------------------
     # Core send (DB 기록 + Telegram 발송)
     # ------------------------------------------------------------------
-    def _is_recent_duplicate(self, *, strategy_instance_id: int | None, title: str) -> bool:
+    def _is_recent_duplicate(self, *, strategy_instance_id: int | None, title: str,
+                             body: str | None = None) -> bool:
         """최근 NOTIFICATION_DEDUP_WINDOW_SECONDS 초 내에 동일한
         (strategy_instance_id, title) 로 SENT 또는 PENDING 인 알림이 있으면 True.
 
@@ -117,27 +118,36 @@ class NotificationService:
             .where(Notification.title == title)
             .where(Notification.send_status.in_(["SENT", "PENDING"]))
             .where(Notification.created_at >= cutoff)
-            .limit(1)
         )
-        return self.db.execute(stmt).first() is not None
+        # 🩹 Fix 398 (2026-09-23): 돈이 움직인 기록은 **내용까지 같을 때만** 중복으로 본다.
+        #   사장님 AGTUSDT: 02:13:53 과 02:14:29 두 번의 「포지션 추가」가 36초 차이라
+        #   제목이 같다는 이유로 **두 번째가 기록되지 않았다** (주문 #9800 은 체결됐는데 알림 0건).
+        #   진입 근거 기록은 필수이므로, body 를 받은 호출은 body 까지 비교한다.
+        if body is not None:
+            stmt = stmt.where(Notification.body == body)
+        return self.db.execute(stmt.limit(1)).first() is not None
 
-    def send(self, *, strategy_instance_id: int | None, channel: str, title: str, body: str) -> Notification:
+    def send(self, *, strategy_instance_id: int | None, channel: str, title: str, body: str,
+             dedup_by_body: bool = False) -> Notification:
         # Bug fix (2026-04-30): 1단계 진입 알림 등이 2회 발송되는 문제 방어.
         # atomic UPDATE WHERE (stage_plan.is_triggered) 만으로는 다중 user-stream
         # 컨테이너 / Binance 이벤트 재전송 시 완전 차단 안 되는 경우 관측됨.
         # 최근 60초 내 동일 (strategy + title) SENT 알림이 있으면 skip 하고
         # 기존 row 를 그대로 반환한다 (Telegram 재발송 차단).
+        # 🩹 Fix 398: dedup_by_body=True 인 호출(돈이 움직인 기록)은 내용까지 같을 때만 중복 처리.
         if channel == "TELEGRAM" and self._is_recent_duplicate(
-            strategy_instance_id=strategy_instance_id, title=title
+            strategy_instance_id=strategy_instance_id, title=title,
+            body=body if dedup_by_body else None,
         ):
-            existing = self.db.execute(
+            _dup = (
                 select(Notification)
                 .where(Notification.strategy_instance_id == strategy_instance_id)
                 .where(Notification.title == title)
                 .where(Notification.send_status.in_(["SENT", "PENDING"]))
-                .order_by(Notification.id.desc())
-                .limit(1)
-            ).scalars().first()
+            )
+            if dedup_by_body:
+                _dup = _dup.where(Notification.body == body)
+            existing = self.db.execute(_dup.order_by(Notification.id.desc()).limit(1)).scalars().first()
             if existing is not None:
                 return existing  # 중복 발송 차단
 
@@ -207,7 +217,7 @@ class NotificationService:
         body = "\n".join(lines)
         return self.send(
             strategy_instance_id=strategy_instance_id,
-            channel="TELEGRAM", title=title, body=body,
+            channel="TELEGRAM", title=title, body=body, dedup_by_body=True,   # 🩹 Fix 398
         )
 
     # ------------------------------------------------------------------
@@ -242,7 +252,7 @@ class NotificationService:
         body = "\n".join(lines)
         return self.send(
             strategy_instance_id=strategy_instance_id,
-            channel="TELEGRAM", title=title, body=body,
+            channel="TELEGRAM", title=title, body=body, dedup_by_body=True,   # 🩹 Fix 398
         )
 
     # ------------------------------------------------------------------

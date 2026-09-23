@@ -128,3 +128,36 @@ def test_capital_increment_sites_are_exactly_three() -> None:
             hits.setdefault(path.name, []).append(m.group(0))
     assert set(hits) == {"lifecycle.py", "execution_service.py", "stream_service.py"}, hits
     assert sum(len(v) for v in hits.values()) == 3, hits
+
+
+class TestFix398NotificationDedup:
+    """🩹 Fix 398 — 36초 차이의 두 번째 「포지션 추가」가 기록되지 않았다 (2026-09-23).
+
+    사장님 AGTUSDT 내역: 02:13:53 · 02:14:29 두 번 추가했는데 알림은 5건뿐.
+    dedup 이 (전략, 제목) 만 보고 60초 창으로 막았고, 제목은 두 추가가 완전히 같다
+    (`💉 [포지션 추가] AGTUSDT LONG MARKET`). 주문 #9800 은 체결됐는데 기록이 없었다.
+    → 돈이 움직인 알림은 **내용(body)까지** 같을 때만 중복으로 본다 (수량·금액이 다르면 남긴다).
+    헌법: 진입 근거 기록은 필수.
+    """
+
+    def test_send_accepts_body_scoped_dedup(self) -> None:
+        import inspect
+
+        from app.services.notification_service import NotificationService
+
+        sig = inspect.signature(NotificationService.send)
+        assert "dedup_by_body" in sig.parameters
+        assert sig.parameters["dedup_by_body"].default is False, "기본은 옛 동작 유지"
+
+    def test_money_alerts_opt_in(self) -> None:
+        src = (APP / "services" / "notification_service.py").read_text(encoding="utf-8")
+        for fn in ("send_position_added_alert", "send_margin_added_alert"):
+            i = src.index(f"def {fn}(")
+            blk = src[i:src.index("    def ", i + 10)]
+            assert "dedup_by_body=True" in blk, fn
+
+    def test_duplicate_check_uses_body_when_given(self) -> None:
+        src = (APP / "services" / "notification_service.py").read_text(encoding="utf-8")
+        blk = src[src.index("def _is_recent_duplicate"):src.index("    def send(")]
+        assert "if body is not None:" in blk
+        assert "Notification.body == body" in blk
