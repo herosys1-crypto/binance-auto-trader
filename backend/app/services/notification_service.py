@@ -35,6 +35,42 @@ def _fmt_num(value: Any, *, decimals: int = 2) -> str:
     return f"{d.quantize(quantizer):,}"
 
 
+def _fmt_price(value: Any) -> str:
+    """🩹 Fix 396 (2026-09-23) — **가격**은 크기에 맞는 소수점으로 (돈 금액은 _fmt_num 그대로).
+
+    사장님 AGTUSDT 알림이 전부 「0.02」로 나왔다: 시작가 0.018222 · 진입가 0.0182192 ·
+    지정가 0.01577 이 모두 소수점 2자리로 깎여 같은 값처럼 보였다 → 내역을 읽을 수 없다.
+    화면(js `_decimalsForPrice`)이 쓰는 것과 같은 자릿수 사다리를 쓴다.
+    """
+    if value is None:
+        return "-"
+    try:
+        d = Decimal(str(value))
+    except Exception:
+        return str(value)
+    a = abs(d)
+    if a >= 1000:
+        dec = 2
+    elif a >= 100:
+        dec = 3
+    elif a >= 1:
+        dec = 4
+    elif a >= Decimal("0.01"):
+        dec = 6
+    elif a >= Decimal("0.0001"):
+        dec = 7
+    else:
+        dec = 8
+    q = d.quantize(Decimal(10) ** -dec)
+    s = f"{q:,}"
+    if "." in s:                      # 끝의 0 은 떼되 최소 2자리는 남긴다 (0.02 → 0.018219)
+        head, _, tail = s.partition(".")
+        tail = tail.rstrip("0")
+        tail = tail.ljust(2, "0")
+        s = f"{head}.{tail}"
+    return s
+
+
 def _fmt_qty(value: Any) -> str:
     """수량 포맷 (소수점 8자리, 끝의 0 제거)."""
     if value is None:
@@ -199,7 +235,7 @@ class NotificationService:
             f"📋 주문 타입  : {order_type_u}",
         ]
         if order_type_u == "LIMIT" and limit_price is not None:
-            lines.append(f"💰 지정가     : {_fmt_num(limit_price)}")
+            lines.append(f"💰 지정가     : {_fmt_price(limit_price)}")
         else:
             lines.append("⚡ 시장가     : 즉시 체결 (current price)")
         lines.append("ℹ️  체결되면 평단/qty 자동 갱신됨")
@@ -271,7 +307,7 @@ class NotificationService:
         lines = [
             f"📌 종목       : {symbol}",
             f"🎯 방향       : {side}",
-            f"💵 시작가     : {_fmt_num(start_price)}",
+            f"💵 시작가     : {_fmt_price(start_price)}",
             f"⚖️  레버리지   : {leverage}x",
             f"💰 총 자본    : {_fmt_num(total_capital)} USDT",
             f"📋 1단계 LIMIT 주문 거래소에 발송됨",
@@ -301,12 +337,12 @@ class NotificationService:
             f"📌 종목       : {symbol}",
             f"🎯 방향       : {side}",
             f"🔢 단계       : {stage_no}",
-            f"💵 진입가     : {_fmt_num(entry_price)}",
+            f"💵 진입가     : {_fmt_price(entry_price)}",
             f"📊 수량       : {_fmt_qty(qty)}",
             f"💰 투입 자본  : {_fmt_num(invested_capital)} USDT",
         ]
         if avg_entry_price is not None:
-            lines.append(f"📐 평균 단가  : {_fmt_num(avg_entry_price)}")
+            lines.append(f"📐 평균 단가  : {_fmt_price(avg_entry_price)}")
         body = "\n".join(lines)
         return self.send(strategy_instance_id=strategy_instance_id, channel="TELEGRAM", title=title, body=body)
 
@@ -334,7 +370,7 @@ class NotificationService:
             f"🪜 레벨      : {level}",
         ]
         if avg_exit_price is not None:
-            lines.append(f"💵 청산 단가 : {_fmt_num(avg_exit_price)}")
+            lines.append(f"💵 청산 단가 : {_fmt_price(avg_exit_price)}")
         if closed_qty is not None:
             lines.append(f"📤 청산 수량 : {_fmt_num(closed_qty)}")
         if remaining_qty is not None:
@@ -456,8 +492,8 @@ class NotificationService:
         body = "\n".join(
             [
                 f"📌 종목         : {symbol}",
-                f"💵 현재가       : {_fmt_num(current_price)}",
-                f"💀 청산가       : {_fmt_num(liquidation_price)}",
+                f"💵 현재가       : {_fmt_price(current_price)}",
+                f"💀 청산가       : {_fmt_price(liquidation_price)}",
                 f"📏 버퍼          : {_fmt_num(buffer_percent)}%",
                 "",
                 "⚠️ 마지막 단계 트리거가 곧 발동될 수 있습니다.",

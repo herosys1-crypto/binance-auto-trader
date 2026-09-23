@@ -320,7 +320,10 @@ async function submitAddUntriggeredStages(id) {
   }
   // Binance positions cache fallback
   if (!currentPrice && window._binancePositionsCache && strategy) {
-    const bp = (window._binancePositionsCache[strategy.exchange_account_id]?.positions || {})[strategy.symbol];
+    // 🚨 Fix 397: 헤지 모드에서 반대 다리를 집지 않도록 방향까지 맞춘 조회를 쓴다.
+    const bp = (typeof _bnPosFor === 'function')
+      ? _bnPosFor(strategy)
+      : (window._binancePositionsCache[strategy.exchange_account_id]?.positions || {})[strategy.symbol];
     if (bp && bp.mark_price) currentPrice = Number(bp.mark_price);
   }
 

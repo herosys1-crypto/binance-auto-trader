@@ -152,12 +152,17 @@ def add_position_to_strategy(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Exchange error: {e}") from e
-    # 2026-06-03 (사장님 사상 정확 구현 — 위 add_margin 와 동일 패턴):
-    # 「💉 포지션 추가」 = 청산 회피 + 이익 둘 다 잡기 위한 사장님 노력.
-    # → strategy.total_capital 도 자동 증가 → SL 임계 / reserved / 모든 안전망 자동 갱신.
-    # payload.amount_usdt = margin 금액 (qty × price / leverage 환산 전 자본).
-    prev_capital = Decimal(str(strategy.total_capital or 0))
-    strategy.total_capital = prev_capital + payload.amount_usdt
+    # 🚨 Fix 396 (2026-09-23): **여기서 total_capital 을 올리지 않는다** (이중 가산 제거).
+    #
+    # 사장님 AGTUSDT #4564 실측: 시작 600 + MARKET 추가 5회 + 미체결 LIMIT 추가 1회인데
+    #   total_capital = 1,700 (= 600 + 5×200 + 1×100). 실제 투입 증거금은 600.75 였다.
+    # 원인: 이 줄(2026-06-03)과 `execution_service` Fix 157 이 **같은 금액을 각각** 더했다.
+    #   Fix 157 은 「포지션 추가는 total_capital 을 올리지 않는다」는 전제로 쓰였는데,
+    #   실제로는 여기서 이미 올리고 있었다 → MARKET 추가마다 2배.
+    # 영향: SL 한도 = total_capital / lev × sl_pct → 실제 자본보다 큰 손실을 허용한다
+    #   (#4564 = 한도 850 USDT vs 실제 증거금 600). 노출 계산·화면 자본도 과대.
+    # 이제 자본 반영은 한 곳: MARKET = `execution_service`(주문 성공 직후),
+    #   LIMIT = `stream_service`(**체결된 만큼만**). 「증거금 추가」(add_margin)는 그대로 둔다.
     db.commit()
     db.refresh(strategy)
     order_type_label = payload.order_type.upper()

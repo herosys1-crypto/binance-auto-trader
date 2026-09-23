@@ -34,7 +34,25 @@ async function refreshExchangeAccounts() {
 // 2026-06-01 (사장님 요구): 전략 인스턴스 행 아래 Binance 실데이터 인라인 비교 표시.
 // account_id 별 snapshot 캐시 — refreshStrategies() 가 동시 fetch 후 _binanceCompareRow 가 읽음.
 // Backend 30초 캐시 + Frontend in-memory cache → API 부담 최소화.
-let _binancePositionsCache = {};  // { [accountId]: { fetched_at, positions: {symbol: {...}} } }
+let _binancePositionsCache = {};  // { [accountId]: { fetched_at, positions, positions_by_side } }
+
+// 🚨 Fix 397 (2026-09-23): 헤지 모드에서 **방향까지** 맞춰 거래소 포지션을 찾는다.
+//   사장님 화면(#4564 AGTUSDT LONG, 실제 증거금 610)이 「10/1700 · ROI +148%」로 나왔다.
+//   같은 종목 S4 SHORT(#4549, 증거금 10.23)가 종목 키를 덮어써 분모가 10 이 된 것.
+//   백엔드가 주는 positions_by_side("SYM|SIDE")를 먼저 보고, 옛 종목 키는 방향이 같을 때만 쓴다.
+function _bnPosFor(s) {
+  const acct = _binancePositionsCache[s.exchange_account_id];
+  if (!acct) return null;
+  const sym = (s.symbol || '').toUpperCase();
+  const side = (s.side || '').toUpperCase();
+  const bySide = acct.positions_by_side || {};
+  if (bySide[sym + '|' + side]) return bySide[sym + '|' + side];
+  const legacy = (acct.positions || {})[sym];
+  if (!legacy) return null;
+  const legacySide = (legacy.position_side || legacy.side || '').toUpperCase();
+  if (side && legacySide && legacySide !== side) return null;   // 반대 다리 = 없는 것으로 본다
+  return legacy;
+}
 
 async function _fetchBinancePositionsForAccounts(accountIds) {
   if (!accountIds || accountIds.length === 0) return;
@@ -63,7 +81,7 @@ function _binanceCompareRow(s) {
     // 2026-06-05 사장님 진단: cache 비어 있는 이유 명확 표시 (단순 "로딩 중..." 보다 진단 도움)
     return `<tr class="bg-yellow-900/30 border-l-4 border-yellow-500"><td colspan="9" class="text-xs text-yellow-300 py-0 px-3">📊 Binance 비교: ⏳ 데이터 로딩 중 또는 API 호출 실패 (account=${s.exchange_account_id}) — F12 Console 확인</td></tr>`;
   }
-  const bp = (acctData.positions || {})[s.symbol];
+  const bp = _bnPosFor(s);          // 🚨 Fix 397 방향까지 일치
   const ts = acctData.fetched_at
     ? new Date(acctData.fetched_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
     : '-';
@@ -148,7 +166,7 @@ function _binanceCompareRow(s) {
 function _binanceHealthChip(s) {
   const acctData = _binancePositionsCache[s.exchange_account_id];
   if (!acctData) return '';
-  const bp = (acctData.positions || {})[s.symbol];
+  const bp = _bnPosFor(s);          // 🚨 Fix 397 방향까지 일치
   if (!bp) {
     // 우리 DB만 있음 = 큰 차이 = 빨강 ⚠
     return ` <span title="⚠ Binance 거래소에 포지션 없음 — 큰 차이! (아래 빨강 상세 행 확인)" style="display:inline-block;background:#7f1d1d;color:#fecaca;padding:0 4px;border-radius:3px;font-size:9px;margin-left:3px;vertical-align:middle">⚠</span>`;
@@ -393,7 +411,7 @@ async function refreshStrategies() {
     // 옛 silent bug: 계산 (qty × avg / lev) = initial margin = 「증거금 추가」 반영 X!
     // 신 v96: Binance API isolatedMargin 우선 = 사장님 「증거금 추가」 자동 반영!
     const _positionMargin = (s) => {
-      const _bnPos = (_binancePositionsCache[s.exchange_account_id]?.positions || {})[s.symbol];
+      const _bnPos = _bnPosFor(s);     // 🚨 Fix 397 방향까지 일치
       const _bnMargin = _bnPos ? Number(_bnPos.margin || 0) : 0;
       if (_bnMargin > 0) return _bnMargin;  // Binance 실 = 우선!
       // fallback = initial margin (Binance 데이터 없을 때!)
@@ -546,10 +564,12 @@ async function refreshStrategies() {
       //   fix: _binancePositionsCache 의 실시간 mark_price 우선, fallback = 계산!
       let sMark = 0;
       if (hasPosition) {
-        // v127: Binance 실시간 우선 (bp.markPrice)
-        const _bpKey = (s.exchange_account_id || '?') + ':' + (s.symbol || '').toUpperCase();
-        const _bp = (window._binancePositionsCache || {})[_bpKey];
-        const _bpMark = _bp && Number(_bp.markPrice || 0) > 0 ? Number(_bp.markPrice) : 0;
+        // v127: Binance 실시간 우선.
+        // 🩹 Fix 397: 옛 코드는 캐시 키를 'acctId:SYMBOL' 로 찾았는데 캐시는 accountId 로만
+        //   묶여 있어 **항상 못 찾았다**(=마크가격이 늘 역산 폴백이었다). 방향까지 맞는 조회로 바꾼다.
+        const _bp = _bnPosFor(s);
+        const _bpMark = _bp && Number(_bp.mark_price || _bp.markPrice || 0) > 0
+          ? Number(_bp.mark_price || _bp.markPrice) : 0;
         if (_bpMark > 0) {
           sMark = _bpMark;
         } else {
@@ -576,7 +596,7 @@ async function refreshStrategies() {
       // 원인: 옛 positionMargin = notional / leverage = initial margin!
       //       사장님 「증거금 추가」 5500 USDT = 반영 X!
       // fix: bp.margin (Binance API isolatedMargin) 우선 = 사장님 「증거금 추가」 자동 반영!
-      const _bnPos = (_binancePositionsCache[s.exchange_account_id]?.positions || {})[s.symbol];
+      const _bnPos = _bnPosFor(s);     // 🚨 Fix 397 방향까지 일치
       const _bnMargin = _bnPos ? Number(_bnPos.margin || 0) : 0;
       const positionNotional = hasPosition ? sQtyAbs * sAvg : 0;
       const _initialMargin = positionNotional > 0 && sLev > 0 ? positionNotional / sLev : 0;

@@ -70,6 +70,36 @@ class StreamService:
             return
 
         strategy = self.db.get(StrategyInstance, order.strategy_instance_id)
+
+        # 🚨 Fix 396 (2026-09-23): 「💉 포지션 추가」의 **LIMIT** 은 체결된 만큼만 자본에 넣는다.
+        #
+        #   MARKET 추가는 주문 직후 `execution_service`(Fix 157)가 올린다. LIMIT 은 미체결·취소가
+        #   가능하므로 그때 올리면 과대 기록이다 (사장님 #4564: 0.01577 지정가 추가가 체결 0 인데
+        #   total_capital 은 +100 되어 있었다).
+        #   단계 진입(stage_no 있음)은 계획 자본이 이미 반영돼 있으므로 건드리지 않는다.
+        if (
+            strategy is not None
+            and order.purpose == "ENTRY"
+            and order.stage_no is None
+            and (order.order_type or "").upper() == "LIMIT"
+        ):
+            try:
+                _px = Decimal(str(order.avg_price or order.price or 0))
+                _lev = Decimal(str(strategy.leverage or 1)) or Decimal("1")
+                _added = (delta_executed * _px) / _lev      # 명목 ÷ 레버리지 = 사장님 자본(margin)
+                if _added > 0:
+                    _prev = Decimal(str(strategy.total_capital or 0))
+                    strategy.total_capital = _prev + _added
+                    logger.info(
+                        "[Fix396] #%s %s LIMIT 추가 체결분 반영: total_capital %.2f → %.2f "
+                        "(+%.2f = 체결 %s × %s ÷ %s)",
+                        strategy.id, strategy.symbol, float(_prev), float(strategy.total_capital),
+                        float(_added), delta_executed, _px, _lev,
+                    )
+            except Exception as _ce:      # 진단·기록 실패가 체결 처리를 막으면 안 된다
+                logger.warning("[Fix396] #%s LIMIT 추가 자본 반영 실패 (체결 처리는 계속): %s",
+                               order.strategy_instance_id, _ce)
+
         if strategy and order.purpose == "ENTRY" and order.status == "FILLED":
             # 2026-05-04 fix: 옵션 C 1~10단계 동적 지원. 이전엔 1~4단계 dict lookup 이라
             # 5+ 단계 진입 시 status 가 STAGE4_OPEN 에 stuck → UI 잘못 + reconcile 자가

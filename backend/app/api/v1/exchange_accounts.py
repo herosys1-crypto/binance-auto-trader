@@ -834,6 +834,7 @@ def get_binance_positions(
         ) from e
 
     positions: dict = {}
+    positions_by_side: dict = {}      # 🚨 Fix 397: "{종목}|{LONG|SHORT}" → 헤지 모드에서 다리를 구분한다
     for p in raw:
         try:
             amt = Decimal(str(p.get("positionAmt", "0")))
@@ -895,9 +896,17 @@ def get_binance_positions(
             roi = (upnl / cross_margin * 100) if cross_margin > 0 else Decimal("0")
             margin_display = cross_margin
 
-        positions[p["symbol"]] = {
+        # 🚨 Fix 397 (2026-09-23): 헤지 모드 = 같은 종목에 LONG·SHORT 두 다리가 동시에 있다.
+        #   종목 이름만 키로 쓰면 **뒤에 온 다리가 앞 다리를 덮는다.**
+        #   사장님 실측 화면(#4564 AGTUSDT LONG): 증거금 610 인데 「10/1700 · ROI +148%」로 나왔다.
+        #   같은 종목 S4 SHORT(#4549)의 증거금 10.23 이 LONG 자리를 덮어써서 분모가 10 이 된 것.
+        #   → (종목, 방향) 키를 추가한다. 옛 키(종목)는 한 방향만 있을 때만 남겨 호환을 지킨다
+        #     (두 다리가 있으면 옛 키는 지운다 — 덮어쓴 값을 쓰는 것보다 없는 게 안전하다).
+        _side = "LONG" if amt > 0 else "SHORT"
+        _entry = {
             "symbol": p["symbol"],
-            "side": "LONG" if amt > 0 else "SHORT",
+            "side": _side,
+            "position_side": _side,
             "size": str(amt),
             "entry_price": str(entry),
             # Break Even Price 정확 값은 fapi/v2 응답에 없음 — Binance UI 는 commission 합산 표시.
@@ -911,12 +920,17 @@ def get_binance_positions(
             "unrealized_pnl": str(upnl.quantize(Decimal("0.0001"))),
             "roi_pct": str(roi.quantize(Decimal("0.01"))),
         }
+        # 옛 키(종목)는 그대로 둔다 — 이 맵을 세거나 훑는 화면들이 있다.
+        # 방향까지 필요한 곳은 아래 `positions_by_side` 를 본다 (헤지 모드에서 유일한 정답).
+        positions[p["symbol"]] = _entry
+        positions_by_side[f"{p['symbol']}|{_side}"] = _entry
 
     response = {
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "account_id": account_id,
         "is_testnet": account.is_testnet,
         "positions": positions,
+        "positions_by_side": positions_by_side,      # 🚨 Fix 397
     }
     if redis:
         try:
