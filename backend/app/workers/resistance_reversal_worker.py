@@ -400,6 +400,9 @@ def run_resistance_reversal_once():
               "errors": 0, "spec": SPEC_VERSION}
     db = SessionLocal()
     try:
+        from app.services.worker_switch import is_on as _sw374, off_note as _swoff374   # 🎛 Fix 374 관제실 스위치
+        if not _sw374(db, "resistance_reversal_enabled"):
+            return {**result, **_swoff374("resistance_reversal_enabled")}
         acc = db.query(ExchangeAccount).filter(ExchangeAccount.is_testnet == False).first()
         if acc is None:
             logger.warning("[Fix29] no mainnet"); return result

@@ -717,6 +717,15 @@ def _classify_entry_error(msg: str) -> str:
     → 메시지 패턴으로 분류해 완료 로그/응답에 사유를 명시!
     """
     m = str(msg or "")
+    # 🎯 Fix 376: 차트 자리 게이트 · 가족별 하루 최대 = 정상 차단 (숫자 "130" 등이 섞여 마진 초과로 오인되기 전에 먼저)
+    if "차트 자리 게이트" in m:
+        return "chart_gate"
+    if "세력 CCI 게이트" in m:           # 📊 Fix 380
+        return "force_cci_gate"
+    if "손실 차단기" in m:               # ⛔ Fix 384
+        return "loss_breaker"
+    if "가족별 일 최대 진입" in m:
+        return "family_daily_max"
     # 🚨 Fix 169 (2026-08-26): kill-switch 분기가 없어 전부 "other" 로 뭉뚱그려졌다.
     # 2026-08-26 KS 사건 때 진입이 전부 막혔는데 진단 로그는 "other" 만 찍어서
     # 원인 파악이 늦어졌다. KS 메시지는 두 가지 형태로 온다:
@@ -914,6 +923,9 @@ def run_realtime_reentry() -> dict:
 
     try:
         # 1. 🚨 Fix 103 C: 재진입 전용 daily_limit (신규 진입 슬롯 면제!)
+        from app.services.worker_switch import is_on as _sw374   # 🎛 Fix 374 관제실 스위치
+        if not _sw374(db, "realtime_reentry_enabled"):
+            return _finish("실시간 재진입 OFF: realtime_reentry_enabled=0 (관제실에서 켤 수 있음)")
         daily_limit, _limit_src = _get_reentry_daily_limit(db)
         if daily_limit <= 0:
             # 🚨 Fix 103 A: 옛 = 무로그 return (미호출과 구별 불가!) → 이제 반드시 로그!
@@ -1781,11 +1793,15 @@ def run_realtime_reentry() -> dict:
                     f"{symbol} {side} stage={_dbg_stage} "
                     f"[{_err_kind}] {type(e).__name__}: {e}"
                 )
-                logger.exception(
-                    "[RT_REENTRY] 🚨 진입 예외: %s %s stage=%s capital=%s suffix=%s "
-                    "kind=%s → %s",
-                    symbol, side, _dbg_stage, _entry_capital, _suffix, _err_kind, e,
-                )
+                if _err_kind in ("chart_gate", "force_cci_gate", "loss_breaker", "family_daily_max"):
+                    # 🎯 Fix 376: 예정된 차단 — 30초마다 스택트레이스를 쌓지 않는다 (사유는 아래 집계·응답에 남는다)
+                    logger.info("[RT_REENTRY] ⏸ %s %s stage=%s 진입 보류 [%s] %s", symbol, side, _dbg_stage, _err_kind, e)
+                else:
+                    logger.exception(
+                        "[RT_REENTRY] 🚨 진입 예외: %s %s stage=%s capital=%s suffix=%s "
+                        "kind=%s → %s",
+                        symbol, side, _dbg_stage, _entry_capital, _suffix, _err_kind, e,
+                    )
                 skipped += 1
                 _bump("entry_exception")
                 entry_error_kinds[_err_kind] = entry_error_kinds.get(_err_kind, 0) + 1

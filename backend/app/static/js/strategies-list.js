@@ -193,6 +193,23 @@ function _binanceHealthChip(s) {
 // 2026-05-06 (C-full Step 3): archived 보기 토글. localStorage 저장.
 let _showArchivedStrategies = localStorage.getItem('show_archived_strategies') === 'true';
 
+// 🩹 Fix 395 (2026-09-23): 「종료 숨김」을 끄면 화면이 멈추던 것.
+//   사장님 화면: 전체 1,816건. 끄면 그 전부를 `tbody.innerHTML` 한 번에 그려서
+//   (행마다 배지·셀렉트·버튼 여러 개) 브라우저가 「페이지가 응답하지 않음」으로 갔다.
+//   해법 = 한 번에 그리는 행 수를 끊고 「더 보기」로 늘린다. 진행 중(49건)은 그대로 다 보인다.
+const STRATEGY_ROW_LIMIT = 200;        // 한 번에 그릴 최대 행 (Claude가 정함)
+let _strategyRowLimit = STRATEGY_ROW_LIMIT;
+
+function showMoreStrategies(step) {
+  _strategyRowLimit = step ? _strategyRowLimit + step : Number.MAX_SAFE_INTEGER;
+  refreshStrategies();
+}
+
+function onHideTerminatedChange() {
+  _strategyRowLimit = STRATEGY_ROW_LIMIT;   // 토글할 때마다 상한을 되돌린다 (다시 멈추지 않게)
+  refreshStrategies();
+}
+
 function toggleShowArchivedStrategies() {
   // 체크박스 직접 클릭 (DOM 이벤트) 시 호출 — 체크박스 state 가 source of truth.
   const cb = document.getElementById('show-archived');
@@ -466,7 +483,11 @@ async function refreshStrategies() {
       .filter(Boolean);
     await _fetchBinancePositionsForAccounts(activeAccountIds);
 
-    tbody.innerHTML = sorted.map(s => {
+    // 🩹 Fix 395: 상한까지만 그린다 (나머지는 「더 보기」).
+    const _totalRows = sorted.length;
+    const _rows = _totalRows > _strategyRowLimit ? sorted.slice(0, _strategyRowLimit) : sorted;
+    const _hiddenByCap = _totalRows - _rows.length;
+    tbody.innerHTML = _rows.map(s => {
       const info = statusInfo(s.status);
       // 단계 진행도 + TP 진행도 두 줄 stack — 분모는 template 의 활성 단계/TP 수 (동적).
       // backend 응답의 total_active_stages / total_active_tps 사용. 옛 backend 호환: fallback 4.
@@ -952,6 +973,17 @@ async function refreshStrategies() {
         <td>${stopBtn}</td>
       </tr>${showBinanceCompare ? _binanceCompareRow(s) : ''}`;
     }).join('');
+    // 🩹 Fix 395: 상한에 걸린 나머지는 버튼으로 (한 번에 다 그리면 브라우저가 멈춘다).
+    if (_hiddenByCap > 0) {
+      tbody.insertAdjacentHTML('beforeend',
+        `<tr><td colspan="9" class="text-center text-xs py-2 bg-slate-900/60">
+          <span class="text-slate-400">${_totalRows}건 중 ${_rows.length}건 표시 · 나머지 ${_hiddenByCap}건 숨김</span>
+          <button onclick="showMoreStrategies(${STRATEGY_ROW_LIMIT})" class="btn-ghost btn ml-2" style="padding:2px 8px">
+            +${STRATEGY_ROW_LIMIT} 더 보기</button>
+          <button onclick="showMoreStrategies(0)" class="btn-ghost btn ml-1" style="padding:2px 8px"
+            title="⚠ 수천 건이면 브라우저가 몇 초 멈출 수 있습니다">전부 표시</button>
+        </td></tr>`);
+    }
   } catch (err) { toast('전략 조회 실패: ' + err.message, 'error'); }
 }
 

@@ -26,12 +26,42 @@
 let _cmCurrentPrice = null;
 let _cmTickSize = null;  // Bug #13 fix: 심볼별 tick_size 캐시 (시작가 정밀도용)
 
+// 🩹 Fix 390 (2026-09-23): 모바일에서 현재가가 안 나오던 것.
+//   사장님: "모바일에서 심볼을 선택했는데 현재가가 나오지 않아 데스크탑에서는 문제없는데"
+//   로그 실측(3시간): testnet=false 요청 중 200 126 / 503 70 / 502 42.
+//     · 502 = 타이핑 중간의 **부분 심볼**(symbol=M, MINA, BROCCOL, NIL …)로 나간 요청.
+//       모바일은 자동완성에서 고를 때 input/change 가 안 튀는 경우가 있어(iOS datalist,
+//       이미 v92 에서 겪음) 마지막 화면이 그 **실패 상태로 굳는다**. 데스크탑은 고르는 순간
+//       change 가 떠서 전체 심볼로 다시 받아온다 → 그래서 데스크탑만 정상으로 보였다.
+//     · 503 = Binance IP 차단(418) 구간(Fix 116) — 이때는 두 기기 모두 안 나온다.
+//   그래서 ① 완성되지 않은 심볼은 아예 보내지 않고 ② 값이 바뀌었는데 이벤트가 안 온 경우를
+//   스스로 따라잡고(watcher) ③ 503 은 남은 시간을 적고 자동 재시도한다.
+let _cmLastPriceSymbol = null;      // 마지막으로 시세를 받아온 심볼
+let _cmBanRetryTimer = null;
+
+function _cmSymbolLooksComplete(sym) {
+  if (!sym || sym.length < 5) return false;
+  const list = document.getElementById('cm-symbol-list');
+  if (list && list.options && list.options.length) {
+    for (let i = 0; i < list.options.length; i++) {
+      if (list.options[i].value.toUpperCase() === sym) return true;
+    }
+    return false;                    // 목록이 있으면 목록에 있는 것만 보낸다
+  }
+  return /(USDT|USDC|FDUSD|BTC|ETH)$/.test(sym);   // 목록 로딩 전 대비
+}
+
 async function loadCmMarketInfo() {
   const symbol = document.getElementById('cm-symbol').value.toUpperCase().trim();
   if (!symbol) return;
-  // 선택된 거래소 계정의 testnet 여부
+  const priceEl = document.getElementById('cm-mkt-price');
+  if (!_cmSymbolLooksComplete(symbol)) {
+    if (priceEl && symbol !== _cmLastPriceSymbol) priceEl.textContent = '심볼 입력 중…';
+    return;                          // 부분 심볼은 보내지 않는다 (502 + 실패 표시 방지)
+  }
+  // 선택된 거래소 계정의 testnet 여부 — 못 읽으면 **mainnet**(운영 환경) 으로 본다.
   const checked = document.querySelector('input[name="cm-account"]:checked');
-  const isTestnet = checked ? !!checked.closest('label').querySelector('.badge-yellow') : true;
+  const isTestnet = checked ? !!checked.closest('label').querySelector('.badge-yellow') : false;
   // 심볼 정보 (tick_size) 도 함께 가져옴 — 시작가 +/- N% 버튼이 정확한 정밀도로 반올림되도록.
   api(`/symbols/${symbol}`).then(s => {
     if (s && s.tick_size) _cmTickSize = Number(s.tick_size);
@@ -42,6 +72,8 @@ async function loadCmMarketInfo() {
       fetch(`${window.location.origin}/api/v1/market/klines?symbol=${symbol}&interval=1h&limit=24&testnet=${isTestnet}`).then(r => r.json()),
     ]);
     if (tk && tk.lastPrice) {
+      _cmLastPriceSymbol = symbol;
+      if (_cmBanRetryTimer) { clearTimeout(_cmBanRetryTimer); _cmBanRetryTimer = null; }
       _cmCurrentPrice = Number(tk.lastPrice);
       const changePct = Number(tk.priceChangePercent || 0);
       const changeColor = changePct >= 0 ? 'text-green-400' : 'text-red-400';
@@ -60,6 +92,13 @@ async function loadCmMarketInfo() {
       if (startInp && (!startInp.value || Number(startInp.value) <= 0)) {
         fillStartPrice('current');
       }
+    } else if (tk && typeof tk.detail === 'string' && tk.detail.indexOf('차단') >= 0) {
+      // 🩹 Fix 390: Binance IP 차단(503) — 남은 시간을 적고 자동 재시도 (사람이 새로고침 안 해도 됨).
+      const m = tk.detail.match(/(\d+)\s*초/);
+      const left = m ? Math.min(Number(m[1]), 600) : 30;
+      document.getElementById('cm-mkt-price').textContent = `조회 잠시 불가 (${left}초 후 자동 재시도)`;
+      if (_cmBanRetryTimer) clearTimeout(_cmBanRetryTimer);
+      _cmBanRetryTimer = setTimeout(() => loadCmMarketInfo(), (left + 2) * 1000);
     } else {
       document.getElementById('cm-mkt-price').textContent = '-';
     }

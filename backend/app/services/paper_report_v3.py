@@ -122,6 +122,17 @@ def load_live_rows(db: Any, *, days: int = 30) -> list[dict[str, Any]]:
             # 리드 지시: 같은 봉 안에서 고·저 순서를 모른 채(비관적 가정) PROTECT 를 무장했는지 — be10/lock5 만 갖는 값
             cols.append(base["ambig_arm"].astext.label(f"eng_{name}_ambig_arm"))
     cols.append(cast(PaperTrade.snapshot["dist_high5d_pct"].astext, Float).label("dist_high5d_pct"))
+    # 🎯 Fix 375: 차트 자리 게이트(P5·P6) 판정값 — chart_state 의 from_hi_pct 는 Fix 375 배포 뒤 행에만 있다 = 새 표본만 판정
+    _cs = PaperTrade.snapshot["chart_state"]
+    cols.append(cast(_cs["h1"]["from_hi_pct"].astext, Float).label("g_h1_from_hi"))
+    cols.append(cast(_cs["m5"]["from_hi_pct"].astext, Float).label("g_m5_from_hi"))
+    # 🎚 Fix 378 (사전등록 2026-09-18): 미세조정 후보 P8·P9·P10 이 보는 값
+    cols.append(cast(_cs["h1"]["atr14_pct"].astext, Float).label("g_h1_atr"))
+    cols.append(cast(_cs["h4"]["bb"]["bars_since_below_lower"].astext, Float).label("g_h4_since_lower"))
+    cols.append(cast(_cs["d1"]["pctb"].astext, Float).label("g_d1_pctb"))
+    cols.append(_cs["d1"]["bb"]["trend"].astext.label("g_d1_trend"))
+    cols.append(cast(PaperTrade.chg_24h, Float).label("g_chg24"))
+    cols.append(cast(PaperTrade.snapshot["market_breadth"].astext, Float).label("g_breadth"))   # 🧭 Fix 385
 
     stmt = (
         select(*cols)
@@ -145,10 +156,15 @@ def load_live_rows(db: Any, *, days: int = 30) -> list[dict[str, Any]]:
                 "ambig_arm": None if ambig_raw is None else (str(ambig_raw).lower() == "true"),
             }
         dh5 = m["dist_high5d_pct"]
+        gate = {"h1_from_hi": m["g_h1_from_hi"], "m5_from_hi": m["g_m5_from_hi"],
+                "d1_trend": m["g_d1_trend"], "chg24": m["g_chg24"],
+                "h1_atr": m["g_h1_atr"], "h4_since_lower": m["g_h4_since_lower"], "d1_pctb": m["g_d1_pctb"],
+                "breadth": m["g_breadth"]}
         out.append({
             "id": m["id"], "symbol": m["symbol"], "side": m["side"], "rule": m["rule"],
             "opened_at": m["opened_at"], "status": m["status"], "tags": list(m["tags"] or []),
             "dist_high5d_pct": float(dh5) if dh5 is not None else None,
+            "gate": gate,
             "engines": engines,
         })
     return out
@@ -158,19 +174,24 @@ def load_add_lots(db: Any, *, days: int = 30) -> list[tuple[str, str, datetime, 
     """추가(피라미딩) lot — `adds` 컬럼만 읽어 (side, rule, opened_at, variant, roi, pnl_usdt) 로 펼친다."""
     cutoff = _cutoff(days)
     stmt = (
-        select(PaperTrade.id, PaperTrade.side, PaperTrade.rule, PaperTrade.opened_at, PaperTrade.adds)
+        select(PaperTrade.id, PaperTrade.side, PaperTrade.rule, PaperTrade.opened_at, PaperTrade.adds,
+               PaperTrade.snapshot["market_breadth"].astext)
         .where(PaperTrade.source == "live", PaperTrade.status == "CLOSED", PaperTrade.opened_at >= cutoff)
         .execution_options(yield_per=1000)
     )
     out: list[tuple[str, str, datetime, str, float, float]] = []
-    for _id, side, rule, opened_at, adds in db.execute(stmt):
+    for _id, side, rule, opened_at, adds, _br in db.execute(stmt):
+        try:                                    # 🔼 Fix 382: 진입 시점 시장폭 (조건부 피라미딩 사전등록용)
+            breadth = float(_br) if _br not in (None, "", "null") else None
+        except (TypeError, ValueError):
+            breadth = None
         for variant, lots in (adds or {}).items():
             for lot in (lots or []):
                 roi = lot.get("roi")
                 if roi is None:
                     continue
                 pnl = lot.get("pnl_usdt")
-                out.append((side, rule, opened_at, variant, float(roi), float(pnl) if pnl is not None else 0.0))
+                out.append((side, rule, opened_at, variant, float(roi), float(pnl) if pnl is not None else 0.0, breadth))
     return out
 
 
@@ -425,8 +446,29 @@ def _day_edge(kept_rows: list[dict[str, Any]], excluded_rows: list[dict[str, Any
     return {"days_with_both": days_with_both, "positive_days": positive_days}
 
 
+# 필터마다 사전등록 시각이 다르다 — 그 조건을 고를 때 본 행은 판정에서 뺀다 (자기확인 금지).
+#   P5·P6 = Fix 375(9/17) · P7 = Fix 377(9/18) · P8·P9·P10 = Fix 378(9/18) 에 골랐다.
+#   차트 값이 기록되기 시작한 시점과 무관하게, **고른 날 자정 이후에 열린 행만** 센다.
+FILTER_PREREG: dict[str, str] = {
+    "P5_short_near_high_not_d1_up": "2026-09-17T00:00:00+00:00",
+    "P6_long_after_drop_or_pullback": "2026-09-17T00:00:00+00:00",
+    "P7_long_no_high_chase": "2026-09-19T00:00:00+00:00",
+    "P8_short_calm_hour": "2026-09-19T00:00:00+00:00",
+    "P9_short_not_after_breakdown": "2026-09-19T00:00:00+00:00",
+    "P10_long_gate_or_low_band": "2026-09-19T00:00:00+00:00",
+    "R1_l1_rising_market": "2026-09-20T00:00:00+00:00",       # 🧭 Fix 385
+    "R2_s4_falling_market": "2026-09-20T00:00:00+00:00",
+}
+
+
 def _filter_result(universe: list[dict[str, Any]], kept: list[dict[str, Any]], excluded: list[dict[str, Any]],
-                   base_fn) -> dict[str, Any]:
+                   base_fn, *, name: str | None = None) -> dict[str, Any]:
+    since = FILTER_PREREG.get(name or "")
+    if since:
+        cut = parse_prereg_at(since)
+        universe = [r for r in universe if r["opened_at"] >= cut]
+        kept = [r for r in kept if r["opened_at"] >= cut]
+        excluded = [r for r in excluded if r["opened_at"] >= cut]
     kept_rows, excl_rows, univ_rows = _to_stat_rows(kept), _to_stat_rows(excluded), _to_stat_rows(universe)
     kept_stats, excl_stats, univ_stats = _stats(kept_rows, base_fn), _stats(excl_rows, base_fn), _stats(univ_rows, base_fn)
     day_edge = _day_edge(kept_rows, excl_rows)
@@ -435,7 +477,27 @@ def _filter_result(universe: list[dict[str, Any]], kept: list[dict[str, Any]], e
              and share >= GATE_MIN_DAY_SHARE and kept_stats["mean"] is not None and excl_stats["mean"] is not None
              and kept_stats["mean"] > excl_stats["mean"])
     return {"universe": univ_stats, "kept": kept_stats, "excluded": excl_stats, "day_edge": day_edge,
-            "adopt": bool(adopt)}
+            "adopt": bool(adopt), "since": FILTER_PREREG.get(name or "")}
+
+
+# 🧭 Fix 385 장세 전환 문턱 (Claude가 정함 — 조건부 피라미딩 A1·A2 와 같은 값)
+REGIME_UP = 0.55
+REGIME_DOWN = 0.45
+
+
+# 🎚 Fix 378 미세조정 후보의 숫자 (모두 「Claude가 정함」 — 가상 분석에서 고른 값, 판정은 7일 표본으로)
+TUNE: dict[str, float] = {
+    "short_max_atr_1h_pct": 1.5,            # P8: 1시간 ATR 이 이 이하일 때만
+    "short_min_bars_since_h4_lower": 14.0,  # P9: 4시간 하단 밖 종가 이후 이 봉 수 이상 지났을 때만
+    "long_max_d1_pctb": 0.5,                # P10: 일봉 %B 가 이 이하(하단권)일 때만 P7 가지를 쓴다
+}
+
+
+def _gate_snapshot(r: Mapping[str, Any]) -> dict[str, Any]:
+    """보고서 행의 게이트 값 → entry_conditions 가 읽는 snapshot 모양."""
+    g = r.get("gate") or {}
+    return {"chart_state": {"h1": {"from_hi_pct": g.get("h1_from_hi")}, "m5": {"from_hi_pct": g.get("m5_from_hi")},
+                            "d1": {"bb": {"trend": g.get("d1_trend")}}}}
 
 
 def _filters_section(side_rows: list[dict[str, Any]], side: str, base_fn) -> dict[str, Any]:
@@ -462,6 +524,77 @@ def _filters_section(side_rows: list[dict[str, Any]], side: str, base_fn) -> dic
         excluded = [r for r in universe if r["dist_high5d_pct"] > -10.0]
         out["P3_long_deep_pullback"] = _filter_result(universe, kept, excluded, base_fn)
 
+    # P5·P6 (Fix 375, 사전등록 2026-09-17): 차트 자리 게이트. from_hi_pct 가 기록된 행(= 배포 뒤 새 행)만 universe.
+    #   조건은 9/9~9/16 재계산 분석에서 골랐다 — 그 행들에는 이 값이 없으므로 여기 판정은 전부 새 표본이다.
+    from app.services import entry_conditions as _EC
+    if side == "SHORT":
+        universe = [r for r in live_valid if (r.get("gate") or {}).get("h1_from_hi") is not None
+                    and (r.get("gate") or {}).get("d1_trend")]
+        kept = [r for r in universe if _EC.evaluate("SHORT", _gate_snapshot(r))["verdict"] == "pass"]
+        excluded = [r for r in universe if _EC.evaluate("SHORT", _gate_snapshot(r))["verdict"] != "pass"]
+        out["P5_short_near_high_not_d1_up"] = _filter_result(universe, kept, excluded, base_fn, name="P5_short_near_high_not_d1_up")
+
+        # 🎚 Fix 378 미세조정 후보 (사전등록 2026-09-18 · 가상 SHORT 11,257건에서 두 기간 모두 통과 쪽이 나았다)
+        #   P8 = P5 + 1시간 변동성 낮음 (발견 ex +1.67 vs −0.71 · 검증 +0.75 vs −1.41)
+        #   P9 = P5 + 4시간 하단이탈 뒤 14봉 지남 = 급락 직후 추격 금지
+        #        (값이 있는 행만 universe: 발견 통과 15% ex +2.35 vs +0.12 · 검증 20% +2.24 vs −2.25 · 검증 5/5일)
+        #   ⚠️ h4_since_lower 가 None = 「최근 60봉 안에 하단 이탈이 아예 없었다」(SHORT 행의 38%).
+        #      취지상 통과처럼 보이지만 실측은 발견 +2.79 / 검증 −0.62 로 뒤집혔다 → universe 에서 뺀다(통과도 제외도 아님).
+        pass_ids = {r["id"] for r in universe if _EC.evaluate("SHORT", _gate_snapshot(r))["verdict"] == "pass"}
+        for name, field, ok in (("P8_short_calm_hour", "h1_atr",
+                                 lambda v: v <= TUNE["short_max_atr_1h_pct"]),
+                                ("P9_short_not_after_breakdown", "h4_since_lower",
+                                 lambda v: v >= TUNE["short_min_bars_since_h4_lower"])):
+            uu = [r for r in universe if (r.get("gate") or {}).get(field) is not None]
+            kk = [r for r in uu if r["id"] in pass_ids and ok(r["gate"][field])]
+            kept_ids = {r["id"] for r in kk}
+            out[name] = _filter_result(uu, kk, [r for r in uu if r["id"] not in kept_ids], base_fn, name=name)
+    if side == "LONG":
+        # P7 (Fix 377, 사전등록 2026-09-18): 고점 바로 밑 추격 금지 · 24h 과열(≥20) 금지 · 24h 0~5% 미동 제외.
+        # (아래 _p7 은 P10 도 쓴다)
+        #   근거 = 가상 LONG 규칙 합산 발견 +0.25 vs 막힘 −0.90 · 검증 +0.90 vs +0.10 (t 4.0) · 상승 초입 LONG 은 검증 5/5일.
+        #   ⚠️ 무작위 LONG 에서는 발견 기간에 반대였다 → 규칙 진입에만 건다(가족 전용 조건은 entry_conditions.FAMILY_RULES).
+        universe = [r for r in live_valid if (r.get("gate") or {}).get("h1_from_hi") is not None
+                    and (r.get("gate") or {}).get("chg24") is not None]
+        def _p7(r):
+            g = r["gate"]
+            hi, chg = g["h1_from_hi"], g["chg24"]
+            return hi <= -1.5 and chg < 20.0 and not (0.0 <= chg < 5.0)
+        kept = [r for r in universe if _p7(r)]
+        excluded = [r for r in universe if not _p7(r)]
+        out["P7_long_no_high_chase"] = _filter_result(universe, kept, excluded, base_fn, name="P7_long_no_high_chase")
+
+        # 🎚 Fix 378 미세조정 후보 P10 = 지금 LONG 게이트 **또는** (고점추격 아님 + 일봉 하단권)
+        #   가상 LONG 11,088건: 발견 ex +0.34 vs 막힘 −0.86 · 검증 +1.25 vs −0.21 (통과 비중 48~53%)
+        u10 = [r for r in universe if (r.get("gate") or {}).get("d1_pctb") is not None
+               and (r.get("gate") or {}).get("m5_from_hi") is not None]
+        def _p10(r):
+            g = r["gate"]
+            gate_ok = _EC.evaluate("LONG", _gate_snapshot(r), chg_24h=g.get("chg24"))["verdict"] == "pass"
+            return gate_ok or (_p7(r) and g["d1_pctb"] <= TUNE["long_max_d1_pctb"])
+        k10 = [r for r in u10 if _p10(r)]
+        out["P10_long_gate_or_low_band"] = _filter_result(u10, k10, [r for r in u10 if not _p10(r)], base_fn,
+                                                          name="P10_long_gate_or_low_band")
+
+        universe = [r for r in live_valid if (r.get("gate") or {}).get("m5_from_hi") is not None]
+        kept = [r for r in universe if _EC.evaluate("LONG", _gate_snapshot(r), chg_24h=r["gate"].get("chg24"))["verdict"] == "pass"]
+        excluded = [r for r in universe if _EC.evaluate("LONG", _gate_snapshot(r), chg_24h=r["gate"].get("chg24"))["verdict"] != "pass"]
+        out["P6_long_after_drop_or_pullback"] = _filter_result(universe, kept, excluded, base_fn,
+                                                               name="P6_long_after_drop_or_pullback")
+
+    # 🧭 Fix 385 (2026-09-19 사장님 「최소한 90%이상은 성공할수있는 단순한 흐름 … 성공하는 모든 로직으로 만들어줘」)
+    #   장세 전환 = 오르는 장(시장폭 ≥0.55)엔 L1 반등 LONG 만 · 내리는 장(≤0.45)엔 S4 급반등 꼭대기 SHORT 만 · 사이는 쉼.
+    #   83,927 자리(9/8~9/17) 재측정: LONG L1+시장폭 승률 55%(하락장)/86%(상승장) · SHORT S4+시장폭 74%/76% (8일 중 7일).
+    #   → 90% 는 한 장세에서만 나왔다. 규칙 행(Fix 379) 을 진입 시점 시장폭으로 갈라 9/20 이후 새 표본으로 판정한다.
+    for name, rule, want in (("R1_l1_rising_market", "zone_l1_rebound_long", "LONG"),
+                             ("R2_s4_falling_market", "zone_s4_spike_top_short", "SHORT")):
+        if side != want:
+            continue
+        uu = [r for r in live_valid if r["rule"] == rule and (r.get("gate") or {}).get("breadth") is not None]
+        ok = (lambda b: b >= REGIME_UP) if want == "LONG" else (lambda b: b <= REGIME_DOWN)
+        kk = [r for r in uu if ok(r["gate"]["breadth"])]
+        out[name] = _filter_result(uu, kk, [r for r in uu if not ok(r["gate"]["breadth"])], base_fn, name=name)
+
     # P4: 같은 (심볼, 방향, 시간) 에 규칙이 여러 개 겹치면 (진입시각, id) 순으로 첫 건만 유지
     ordered = sorted(live_valid, key=lambda r: (r["opened_at"], r["id"]))
     seen: set[tuple] = set()
@@ -483,7 +616,7 @@ def _filters_section(side_rows: list[dict[str, Any]], side: str, base_fn) -> dic
 
 def _adds_section(lots: list[tuple[str, str, datetime, str, float, float]]) -> dict[str, Any]:
     idx: dict[tuple[str, str], list[tuple[datetime, float, float]]] = defaultdict(list)
-    for side, _rule, opened_at, variant, roi, pnl in lots:
+    for side, _rule, opened_at, variant, roi, pnl, *_rest in lots:
         idx[(variant, side)].append((opened_at, roi, pnl))
     out: dict[str, Any] = {}
     for variant in PT.VARIANTS:
@@ -504,6 +637,49 @@ def _adds_section(lots: list[tuple[str, str, datetime, str, float, float]]) -> d
     return out
 
 
+# 🔼 Fix 382 (2026-09-19 사장님 「조건 붙인 피라미딩 가상매매로 검증해줘」) — 사전등록.
+#   가상 추가 lot(live_both = 운영 추가 조건 · 양방향) 22,965건 재측정 (9/9~9/14 하락장 · 9/15~ 상승장):
+#     A1 LONG 추가는 진입 시점 시장폭 ≥ 0.55 일 때만 : 하락장 통과 +0.94 vs 제외 −4.10 · 상승장 +15.91 vs +9.69 (6일 중 4일)
+#     A2 SHORT 추가는 시장폭 ≤ 0.45 일 때만        : 하락장 −1.92 vs +6.63 · 상승장 −9.18 vs −0.80 (6일 중 1일) = 대조군(기대: 실패)
+#   숫자는 모두 「Claude가 정함」. 9/20 00:00 UTC 이후 진입분만 센다 (고를 때 본 표본 제외).
+ADD_COND_SINCE = "2026-09-20T00:00:00+00:00"
+ADD_COND: tuple[tuple[str, str, float, str], ...] = (
+    ("A1_long_add_breadth_up", "LONG", 0.55, ">="),
+    ("A2_short_add_breadth_down", "SHORT", 0.45, "<="),
+)
+
+
+def _adds_conditional(lots: list[tuple]) -> dict[str, Any]:
+    cut = parse_prereg_at(ADD_COND_SINCE)
+    out: dict[str, Any] = {}
+    for name, side, thr, op in ADD_COND:
+        kept: list[tuple[datetime, float]] = []
+        excl: list[tuple[datetime, float]] = []
+        for lot in lots:
+            if len(lot) < 7 or lot[0] != side or lot[3] != "live_both" or lot[2] < cut or lot[6] is None:
+                continue
+            ok = lot[6] >= thr if op == ">=" else lot[6] <= thr
+            (kept if ok else excl).append((lot[2], lot[5]))
+
+        def _st(xs: list[tuple[datetime, float]]) -> dict[str, Any]:
+            if not xs:
+                return {"n": 0, "pnl_sum": 0.0, "mean": None, "win": None}
+            ps = [p for _, p in xs]
+            return {"n": len(ps), "pnl_sum": round(sum(ps), 2), "mean": round(statistics.fmean(ps), 3),
+                    "win": round(100.0 * sum(1 for p in ps if p > 0) / len(ps), 1)}
+        kd: dict[Any, list[float]] = defaultdict(list)
+        ed: dict[Any, list[float]] = defaultdict(list)
+        for t, p in kept:
+            kd[t.date()].append(p)
+        for t, p in excl:
+            ed[t.date()].append(p)
+        both = [d for d in set(kd) & set(ed) if len(kd[d]) >= 20 and len(ed[d]) >= 20]
+        better = sum(1 for d in both if statistics.fmean(kd[d]) > statistics.fmean(ed[d]))
+        out[name] = {"side": side, "rule": f"시장폭 {op} {thr}", "since": ADD_COND_SINCE,
+                     "kept": _st(kept), "excluded": _st(excl), "days_better": better, "days_both": len(both)}
+    return out
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 블록(all/prereg) 조립 + 채택 목록
 # ══════════════════════════════════════════════════════════════════════
@@ -520,6 +696,7 @@ def _build_block(rows: list[dict[str, Any]], lots: list[tuple[str, str, datetime
         exits[side] = _exits_section(side_rows)
         filters[side] = _filters_section(side_rows, side, base_fn)
     return {"rules": rules, "exits": exits, "filters": filters, "adds": _adds_section(lots),
+            "adds_cond": _adds_conditional(lots),
             "n": len(rows), "days": len({r["opened_at"].date() for r in rows})}
 
 
@@ -635,7 +812,7 @@ def render_markdown_v3(rep: Mapping[str, Any]) -> str:
                          f"{_half_str(st['half'])} | {_f(st.get('win'), 1)}% | {ambig} |{mark} |")
     L.append("")
 
-    L.append("## 2. 진입 필터 (사전등록 4종 — kept/excluded/universe)")
+    L.append("## 2. 진입 필터 (사전등록 — kept/excluded/universe · 필터별 사전등록 시각 이후 행만)")
     L.append("| 구간 | 방향 | 필터 | 구분 | n | 클러스터 | 날짜 | 평균 | 승률 | 긍정일/함께있는날 | 채택 |")
     L.append("|---|---|---|---|---:|---:|---:|---:|---:|---|---|")
     for block in ("all", "prereg"):
@@ -644,11 +821,12 @@ def render_markdown_v3(rep: Mapping[str, Any]) -> str:
             for fname, st in (b.get("filters") or {}).get(side, {}).items():
                 de = st.get("day_edge") or {}
                 mark = " ✅" if st.get("adopt") else ""
+                reg = f" (등록 {str(st['since'])[:10]}~)" if st.get("since") else ""
                 for part in ("kept", "excluded", "universe"):
                     ps = st.get(part) or {}
                     if not ps.get("n"):
                         continue
-                    L.append(f"| {block} | {side} | {fname} | {part} | {ps['n']} | {ps['clusters']} | {ps['days']} | "
+                    L.append(f"| {block} | {side} | {fname}{reg} | {part} | {ps['n']} | {ps['clusters']} | {ps['days']} | "
                              f"{_f(ps['mean'])} | {_f(ps.get('win'), 1)}% | "
                              f"{de.get('positive_days', 0)}/{de.get('days_with_both', 0)} |"
                              f"{mark if part == 'kept' else ''} |")
@@ -679,6 +857,15 @@ def render_markdown_v3(rep: Mapping[str, Any]) -> str:
                     continue
                 L.append(f"| {block} | {variant} | {side} | {st['n']} | {_f(st['mean'])} | "
                          f"{_f(st.get('win'), 1)}% | {_f(st.get('pnl_sum'))} | {_half_str(st['half'])} |")
+    L.append("")
+
+    L.append("## 4-1. 조건부 피라미딩 (사전등록 Fix 382 · 9/20 이후 진입분 · 1건 = 300 USDT 추가)")
+    L.append("| 조건 | 방향 | 통과 n | 통과 합 USDT | 통과 평균 | 제외 n | 제외 합 USDT | 제외 평균 | 통과가 나은 날 |")
+    L.append("|---|---|---:|---:|---:|---:|---:|---:|---|")
+    for name, st in (((rep.get("blocks") or {}).get("all") or {}).get("adds_cond") or {}).items():
+        k, e = st["kept"], st["excluded"]
+        L.append(f"| {name} ({st['rule']}) | {st['side']} | {k['n']} | {_f(k['pnl_sum'])} | {_f(k['mean'])} | "
+                 f"{e['n']} | {_f(e['pnl_sum'])} | {_f(e['mean'])} | {st['days_better']}/{st['days_both']} |")
     L.append("")
 
     ctx = rep.get("context") or {}

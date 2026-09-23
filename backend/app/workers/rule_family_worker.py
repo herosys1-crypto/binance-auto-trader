@@ -27,6 +27,7 @@ from sqlalchemy import func, select
 from app.core.database import SessionLocal
 from app.core.redis_client import get_redis_client
 from app.services import rule_families as RF
+from app.services import entry_conditions as EC
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +216,7 @@ def run_rule_families_once() -> dict:
         lev = int(RF.setting_float(db, "rf_leverage")) or 2
         allow_hedge = RF.setting(db, "rf_allow_hedge").lower() in ("1", "true", "on", "yes")
         max_drift = RF.setting_float(db, "rf_max_drift_pct")
+        gate_params = EC.params(db)
         halted = any(m == "on" for m in modes.values()) and _halted(db)
         stat["halted"] = halted
         acc = None
@@ -259,6 +261,14 @@ def run_rule_families_once() -> dict:
                 full, dwhy = _daily_full(db, fam)
                 if full:
                     blocks.append("daily_max")
+                # 🎯 Fix 375: 차트 자리 게이트 — 가상행 snapshot(chart_state)만 본다 (봉을 새로 받지 않는다)
+                gate_mode = RF.chart_gate_of(db, fam.key)
+                gate = {"mode": gate_mode}
+                if gate_mode != "off":
+                    gate.update(EC.evaluate(fam.side, getattr(row, "snapshot", None), chg_24h=getattr(row, "chg_24h", None),
+                                           p=gate_params, family=fam.key))   # 🎯 Fix 377 가족 전용 조건
+                    if EC.blocks(gate_mode, gate):
+                        blocks.append("chart_gate")
 
                 if is_shadow:
                     ok, why = _guards(db, acc, fam, sym)
@@ -269,7 +279,7 @@ def run_rule_families_once() -> dict:
                                "paper_trade_id": row.id, "entry": entry, "price_now": px, "entry_mode": entry_mode,
                                "drift_pct": None if mv is None else round(mv, 3), "opened_at": row.opened_at.isoformat(),
                                "tags": list(row.tags or []), **det, "would_enter": would, "blocks": blocks, "guards_why": why,
-                               "daily": dwhy, "halted": halted}
+                               "daily": dwhy, "halted": halted, "chart_gate": gate}
                     r.setex(_k_shadow(fam.key, sym, row.id), SHADOW_TTL, json.dumps(payload, default=str))
                     if would and cool_s > 0:
                         r.setex(cool_key, cool_s, "1")
@@ -280,8 +290,8 @@ def run_rule_families_once() -> dict:
                 # ── on: 실주문 ──
                 if blocks:
                     _bump(stat, fam.key, blocks[0])
-                    logger.info("[%s] ⏸ %s %s %s 진입 안 함 — %s (진입 봉 종가 %s · 지금 %s · %s)", FIX, fam.key, sym, fam.side,
-                                ",".join(blocks), entry, px, dwhy)
+                    logger.info("[%s] ⏸ %s %s %s 진입 안 함 — %s (진입 봉 종가 %s · 지금 %s · %s · 차트 %s)", FIX, fam.key, sym,
+                                fam.side, ",".join(blocks), entry, px, dwhy, gate.get("why"))
                     continue
                 if entry_mode == "split":
                     _enter_split(db, r, stat, acc, fam, sym, px, cool_key, cool_s, row.id, det)

@@ -65,7 +65,7 @@ def _guard_ip_ban() -> None:
         )
 
 
-def _note_ip_ban(resp: "requests.Response") -> None:
+def _note_ip_ban(resp: "requests.Response", *, path: str = "?", params: dict | None = None) -> None:
     """418/429 응답을 **전역 ban 플래그에 반영**한다.
 
     🚨 이게 없으면 이 라우터가 ban 을 유발해도 아무도 모른다.
@@ -74,6 +74,14 @@ def _note_ip_ban(resp: "requests.Response") -> None:
     그 경로를 안 타므로, ban 을 처음 맞는 곳이 여기라면 워커들은 계속 두드리게 된다.
     → ban 판정을 「읽기만」 하지 말고 「쓰기」도 같이 해야 회로 차단기가 완성된다.
     """
+    try:
+        # 🔍 Fix 391 (2026-09-23): 이 라우터의 호출도 가중치 계측에 넣는다.
+        #   IP 차단 추적 때 거버너는 335~717/분만 보고 있었는데, 이렇게 「세지 않는 경로」가
+        #   있으면 실제 사용량을 알 수 없다. 막지는 않는다 — 세기만 한다.
+        from app.integrations.binance.client import record_external_call
+        record_external_call(path, params, resp)
+    except Exception:
+        pass
     try:
         if resp.status_code in (418, 429):
             from app.integrations.binance.client import _mark_ip_ban_from_response
@@ -96,7 +104,7 @@ def ticker_price(
             params={"symbol": symbol.upper()},
             timeout=5,
         )
-        _note_ip_ban(r)          # 🚨 418/429 를 전역 회로 차단기에 알린다
+        _note_ip_ban(r, path="/fapi/v1/ticker/price", params={"symbol": symbol.upper()})   # 🚨 418/429 전역 회로 차단기 + 🔍 Fix 391 계수
         r.raise_for_status()
         return r.json()  # {"symbol": "...", "price": "...", "time": ...}
     except requests.RequestException as e:  # pragma: no cover
@@ -119,7 +127,7 @@ def ticker_24hr(
             params={"symbol": symbol.upper()},
             timeout=5,
         )
-        _note_ip_ban(r)          # 🚨 418/429 를 전역 회로 차단기에 알린다
+        _note_ip_ban(r, path="/fapi/v1/ticker/24hr", params={"symbol": symbol.upper()})   # 🚨 418/429 전역 회로 차단기 + 🔍 Fix 391 계수
         r.raise_for_status()
         return r.json()
     except requests.RequestException as e:  # pragma: no cover
@@ -148,7 +156,7 @@ def klines(
             params={"symbol": symbol.upper(), "interval": interval, "limit": limit},
             timeout=5,
         )
-        _note_ip_ban(r)          # 🚨 418/429 를 전역 회로 차단기에 알린다
+        _note_ip_ban(r, path="/fapi/v1/klines", params={"symbol": symbol.upper(), "interval": interval, "limit": limit})   # 🚨 418/429 전역 회로 차단기 + 🔍 Fix 391 계수
         r.raise_for_status()
         return r.json()
     except requests.RequestException as e:  # pragma: no cover
@@ -180,7 +188,7 @@ def depth(
             params={"symbol": symbol.upper(), "limit": limit},
             timeout=5,
         )
-        _note_ip_ban(r)          # 🚨 418/429 를 전역 회로 차단기에 알린다
+        _note_ip_ban(r, path="/fapi/v1/depth", params={"symbol": symbol.upper(), "limit": limit})   # 🚨 418/429 전역 회로 차단기 + 🔍 Fix 391 계수
         r.raise_for_status()
         return r.json()
     except requests.RequestException as e:  # pragma: no cover

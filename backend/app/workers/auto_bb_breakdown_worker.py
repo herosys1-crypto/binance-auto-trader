@@ -1988,6 +1988,16 @@ def _create_auto_bb_strategy(
             ),
         )
     except ValueError as _bal_e:
+        # 📊 Fix 380: 생성 게이트(가족별 하루 최대 · 차트 자리 · 세력 CCI)에 막힘 = 정상 건너뜀.
+        #   호출자는 None 을 「진입 실패 = skip (slot 보존)」으로 처리한다 — 재진입 카운터도 올리지 않는다.
+        from app.services.auto_family_registry import is_limit_error as _is_gate
+        if _is_gate(_bal_e):
+            logger.info("[auto_bb_breakdown] ⛔ %s %s 생성 게이트 막힘 = skip: %s", symbol, side, str(_bal_e)[:160])
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            return None
         from app.services.balance_guard import (
             is_insufficient_balance_error as _is_bal,
             mark_insufficient_balance as _mark_bal,

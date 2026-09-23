@@ -25,6 +25,7 @@ from app.models.strategy_instance import StrategyInstance
 from app.models.strategy_template import StrategyTemplate
 from app.core.risk_constants import ACTION_PNL_PCT_DEFAULT
 from app.models.trade_learning_record import TradeLearningRecord
+from app.services.trade_learning_service import unrealized_pnl_pct_of   # 🚨 Fix 373b
 
 logger = logging.getLogger(__name__)
 
@@ -510,7 +511,7 @@ def tp_sl_advisor(
                     change_5m = round(((c - o) / o) * 100, 2)
 
             # 5분 = 이번 트레이드 방향과 반대? = 조정 고려!
-            pnl = float(s.unrealized_pnl_pct or 0)
+            pnl = unrealized_pnl_pct_of(s)   # 🚨 Fix 373b (이 스캔이 심볼마다 AttributeError 로 실패했다)
             max_profit = float(s.max_profit_pct or 0) if s.max_profit_pct is not None else 0
 
             proposals = []

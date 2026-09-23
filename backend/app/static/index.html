@@ -960,6 +960,8 @@
         <button id="nav-dashboard" onclick="navigateTo('dashboard')" class="btn-primary btn text-xs" style="padding:4px 10px">📊 운영</button>
         <button id="nav-ranking" onclick="navigateTo('ranking')" class="btn-ghost btn text-xs" style="padding:4px 10px" title="24h/주/월 변동률 순위 — 진입 후보 검색 (별도 페이지)">📈 시장 순위</button>
         <button id="nav-health" onclick="navigateTo('health')" class="btn-ghost btn text-xs" style="padding:4px 10px" title="거래중 이벤트/오류/권장 조치 — 정기 점검">🩺 점검</button>
+        <!-- 🎛 Fix 374 (2026-09-16 사장님): 자동매매 스위치를 한 화면에 모았다 (규칙 가족 12 + 실매매 워커 + 외부 매매법) -->
+        <button onclick="openAutoControl()" class="btn-ghost btn text-xs" style="padding:4px 10px" title="자동매매 관제실 — 전면 중단/재개 · 가족별 켜기/그림자/끄기 · 하루 최대 · 동시 보유 상한 (별도 창)">🎛 자동매매</button>
       </nav>
       <p id="last-updated" class="text-xs text-slate-400 ml-2">마지막 갱신: -</p>
     </div>
@@ -1734,7 +1736,7 @@
             </select>
           </label>
           <label class="text-xs font-normal flex items-center gap-1 cursor-pointer">
-            <input type="checkbox" id="hide-terminated" onchange="refreshStrategies()" checked />
+            <input type="checkbox" id="hide-terminated" onchange="onHideTerminatedChange()" checked />
             <span class="text-slate-300">종료 숨김</span>
           </label>
           <!-- 2026-05-06 (C-full Step 3): archive 보기 토글 — 「↻ 복원」 버튼 노출 -->
@@ -2904,6 +2906,15 @@ function openRealtimeMonitor() {
     `/static/realtime-monitor.html`,
     'realtimeMonitor',
     'width=1300,height=1000,left=400,top=20'
+  );
+}
+
+/* 🎛 Fix 374 (2026-09-16 사장님): 자동매매 관제실 — 「모든 자동매매를 한곳으로」 */
+function openAutoControl() {
+  window.open(
+    `/static/auto-control.html`,
+    'autoControl',
+    'width=1280,height=1000,left=300,top=20'
   );
 }
 

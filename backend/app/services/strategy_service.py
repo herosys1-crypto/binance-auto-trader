@@ -306,6 +306,26 @@ class StrategyService:
                 "💡 해결: 활성 전략 중 하나를 「⏸ 정지」 또는 「🛑 긴급 종료」 한 후 다시 시도하세요."
             )
 
+        # 🎯 Fix 376 (2026-09-17 사장님 「실매매 워커에도 차트 게이트 적용해줘」): 자동 전략은 차트 자리일 때만 만든다.
+        #   가족별 <가족>_chart_gate (기본 on) · 사람 전략·규칙 가족 제외 · 자동매매 중단 중이면 판정 생략(아래 Fix 371 이 막는다).
+        #   계좌 조회(get_account 무게 5)·미리보기 **앞** — 막힐 시도가 매 사이클 계좌를 조회하지 않게 (반박 검증 9/17 #4).
+        #   하루 최대(advisory lock) 보다도 앞 = 봉 조회 동안 DB 잠금을 쥐지 않는다.
+        from app.services.chart_gate_live import check as _chart_gate376
+        _chart_gate376(self.db, strategy_type=getattr(template_model, "strategy_type", None),
+                       template_name=getattr(template_model, "name", None), entry_origin=entry_origin,
+                       symbol=symbol, side=side, exchange_account_id=exchange_account_id)
+        # 📊 Fix 380 (2026-09-19 사장님 「볼밴전략도 적극적으로 적용해줘」): 볼밴 계열 5 가족만 세력 CCI 방향 게이트
+        #   (기본 shadow = 판정만 기록 · on 이면 방향 반대일 때 만들지 않음 · 사람 전략·다른 계열은 보지 않는다)
+        from app.services.force_cci_gate import check as _force_cci380
+        _force_cci380(self.db, strategy_type=getattr(template_model, "strategy_type", None),
+                      template_name=getattr(template_model, "name", None), entry_origin=entry_origin,
+                      symbol=symbol, side=side, exchange_account_id=exchange_account_id)
+        # ⛔ Fix 384 (2026-09-19 사장님 「자동은 적게벌어도 벌어야」): 가족별 손실 차단기 — 최근 7일 실현 합 < −30 이면
+        #   그 가족의 새 전략을 막고 사장님이 관제실에서 풀 때까지 유지 (사람 전략·중단 중 = 보지 않음)
+        from app.services.family_loss_breaker import check as _loss_breaker384
+        _loss_breaker384(self.db, strategy_type=getattr(template_model, "strategy_type", None),
+                         template_name=getattr(template_model, "name", None), entry_origin=entry_origin,
+                         symbol=symbol, side=side)
         ex_account = self.db.get(_EA, exchange_account_id)
         if not ex_account:
             raise ValueError(

@@ -1,7 +1,17 @@
+# 🧹 2026-09-17 서버 점검: 컨테이너 로그에 크기 제한이 없어 api 2.5GB · scheduler 2.8GB · 시세 스트림 406MB 가
+#    끝없이 쌓이고 있었다(scheduler 약 75KB/분). 서비스마다 50MB × 5개(최대 250MB)로 돌려 쓴다 (Claude가 정함).
+#    적용 = 컨테이너 재생성 필요: docker compose up -d (restart 만으로는 로그 설정이 바뀌지 않는다).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:16
     container_name: binance-auto-trader-db
+    logging: *default-logging
     restart: unless-stopped
     environment:
       POSTGRES_DB: binance_auto_trader
@@ -18,6 +28,7 @@ services:
   redis:
     image: redis:7
     container_name: binance-auto-trader-redis
+    logging: *default-logging
     restart: unless-stopped
     ports:
       # 호스트 6380 → 컨테이너 6379 (호스트 충돌 방지용). 컨테이너끼리는 항상 6379 사용.
@@ -26,6 +37,7 @@ services:
   api:
     build: .
     container_name: binance-auto-trader-api
+    logging: *default-logging
     restart: unless-stopped
     env_file:
       - .env
@@ -40,6 +52,7 @@ services:
   scheduler:
     build: .
     container_name: binance-auto-trader-scheduler
+    logging: *default-logging
     restart: unless-stopped
     env_file:
       - .env
@@ -53,6 +66,7 @@ services:
   user-stream:
     build: .
     container_name: binance-auto-trader-user-stream
+    logging: *default-logging
     restart: unless-stopped
     env_file:
       - .env
@@ -69,6 +83,7 @@ services:
   mark-price-stream:
     build: .
     container_name: binance-auto-trader-mark-price-stream
+    logging: *default-logging
     restart: unless-stopped
     env_file:
       - .env
@@ -82,6 +97,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     container_name: binance-auto-trader-prometheus
+    logging: *default-logging
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./deploy/prometheus/alerts-binance-auto-trader.yml:/etc/prometheus/alerts-binance-auto-trader.yml
@@ -93,6 +109,7 @@ services:
   grafana:
     image: grafana/grafana:latest
     container_name: binance-auto-trader-grafana
+    logging: *default-logging
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_USER: admin
@@ -114,13 +131,18 @@ services:
   db-backup:
     image: prodrigestivill/postgres-backup-local:16
     container_name: binance-auto-trader-db-backup
+    logging: *default-logging
     restart: unless-stopped
     environment:
-      POSTGRES_HOST: db
-      POSTGRES_DB: binance_auto_trader
-      POSTGRES_USER: postgres
-      # db 와 동일한 비번 변수 사용
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # 🚨 2026-09-17 서버 점검: 운영 DB 는 외부(Neon)인데 여기는 로컬 db(거의 빈 DB)를 백업하고 있었다 — 매일 504바이트.
+      #    운영 DB 를 백업하려면 .env 에 BACKUP_PG_HOST / BACKUP_PG_USER / BACKUP_PG_PASSWORD / BACKUP_PG_DB 를 넣는다
+      #    (Neon 은 풀러(-pooler)가 아닌 직접 호스트 · SSL 필수). 넣지 않으면 지금처럼 로컬 db 를 백업한다.
+      POSTGRES_HOST: ${BACKUP_PG_HOST:-db}
+      POSTGRES_DB: ${BACKUP_PG_DB:-binance_auto_trader}
+      POSTGRES_USER: ${BACKUP_PG_USER:-postgres}
+      # 기본 = db 와 동일한 비번 변수
+      POSTGRES_PASSWORD: ${BACKUP_PG_PASSWORD:-${POSTGRES_PASSWORD:-postgres}}
+      PGSSLMODE: ${BACKUP_PG_SSLMODE:-prefer}
       POSTGRES_EXTRA_OPTS: "-Z6 --schema=public --blobs"
       SCHEDULE: "@daily"
       BACKUP_KEEP_DAYS: 7

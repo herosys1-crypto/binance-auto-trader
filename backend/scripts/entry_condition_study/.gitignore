@@ -1,0 +1,9 @@
+dumpall.csv
+*.parquet
+klines/
+conditions.json
+side_conditions.json
+gate_replay.csv
+*.log
+*.pkl
+z2*.txt

@@ -83,8 +83,8 @@ def run_daily_summary_once() -> None:
         # 어제 RiskEvent 분류 (SL/CRISIS/MISMATCH 등)
         risk_events_yday = db.execute(
             select(RiskEvent)
-            .where(RiskEvent.ts >= start_utc)
-            .where(RiskEvent.ts < end_utc)
+            .where(RiskEvent.created_at >= start_utc)     # 🚨 Fix 373: 컬럼은 created_at (ts 는 없다 — 6/3 이후 일일 요약이 매일 실패)
+            .where(RiskEvent.created_at < end_utc)
         ).scalars().all()
         sl_triggered = sum(1 for r in risk_events_yday if r.event_type == "STOP_LOSS_TRIGGERED")
         crisis_entered = sum(1 for r in risk_events_yday if r.event_type == "CRISIS_MODE_ENTERED")
@@ -93,8 +93,8 @@ def run_daily_summary_once() -> None:
         # 어제 발송 알림 수
         notif_yday_count = db.execute(
             select(Notification.id)
-            .where(Notification.ts >= start_utc)
-            .where(Notification.ts < end_utc)
+            .where(Notification.created_at >= start_utc)   # 🚨 Fix 373
+            .where(Notification.created_at < end_utc)
         ).all()
 
         # 현재 활성 strategy + 미실현 합

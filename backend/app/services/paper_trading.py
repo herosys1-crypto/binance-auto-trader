@@ -445,6 +445,7 @@ class Series:
     k1h: list[list[float]]
     close1h: list[int]
     close4h: list[int]
+    k1d: list[list[float]] | None = None     # 🗺 Fix 379: 워커가 필요할 때만 채우는 닫힌 일봉 (기회지도 S4)
 
     @classmethod
     def build(cls, allk: Sequence[Sequence[float]], k4h: Sequence[Sequence[float]]) -> "Series":
@@ -462,7 +463,7 @@ class Series:
         n4 = bisect.bisect_right(self.close4h, close_ms)
         return RuleCtx(j=j, c=self.c, h=self.h, l=self.l, v=self.v, hist=self.hist, rsi14=self.rsi14, obv=self.obv,
                        kl15=self.allk[max(0, j - 259):j + 1], kl1h=self.k1h[max(0, n1 - 60):n1],
-                       kl4h=self.k4h[max(0, n4 - 60):n4])
+                       kl4h=self.k4h[max(0, n4 - 60):n4], kl1d=self.k1d)
 
 
 def evaluate_rules(series: Series, j: int, *, rules: Sequence[Rule] = RULES) -> dict[str, bool]:

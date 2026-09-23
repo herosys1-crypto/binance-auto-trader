@@ -148,7 +148,23 @@ def start_scheduler() -> None:
                 _note_skip(job_name, f"락 점유 중 (ttl={ttl_seconds}s)")
                 return
             _skip_streak.pop(job_name, None)      # 정상 실행 = 연속 카운터 리셋
-            fn()
+            # 🔍 Fix 393 (2026-09-23): 이 잡이 쓴 바이낸스 가중치를 잡 이름으로 분해한다.
+            #   klines 가 분당 885 까지 갔는데 「누가」인지 몰라 줄일 곳을 못 고르고 있었다.
+            _tok = None
+            try:
+                from app.integrations.binance.client import reset_caller, set_caller
+                _tok = set_caller(job_name)
+            except Exception:      # 진단이 잡 실행을 막으면 안 된다
+                _tok = None
+            try:
+                fn()
+            finally:
+                if _tok is not None:
+                    try:
+                        from app.integrations.binance.client import reset_caller
+                        reset_caller(_tok)
+                    except Exception:
+                        pass
         return _wrapped
 
     scheduler.add_job(guarded_job("listenkey_keepalive", 120, lambda: run_keepalive_once(decrypt_text)), trigger=IntervalTrigger(minutes=30), id="listenkey_keepalive", replace_existing=True, max_instances=1, coalesce=True)

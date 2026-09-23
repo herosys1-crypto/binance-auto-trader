@@ -6,6 +6,7 @@ metrics on every request.
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import hmac
 import logging
@@ -98,6 +99,34 @@ _REQ_COUNT_TTL_SEC = 900
 BINANCE_WEIGHT_LIMIT_PER_MIN = 2400
 SCAN_WEIGHT_BUDGET_PER_MIN = 1500      # 스캔용 상한 (한도의 62.5%)
 _WEIGHT_KEY = "binance:weight:{minute}"
+# 🔍 Fix 393 (2026-09-23): 「klines 가 분당 885」 까지는 봤는데 **누가** 쓰는지 몰랐다.
+#   스케줄러의 guarded_job 이 잡 이름을 여기에 넣어 주면, 가중치를 잡별로 분해할 수 있다.
+#   설정하지 않으면 "other" — 판정에는 아무 영향이 없다 (진단 전용).
+_caller_var: contextvars.ContextVar[str] = contextvars.ContextVar("binance_caller", default="")
+
+
+def set_caller(name: str):
+    """호출자(잡 이름)를 이 문맥에 표시한다. 반환값을 `reset_caller` 에 넘겨 되돌린다."""
+    return _caller_var.set(name or "")
+
+
+def reset_caller(token) -> None:
+    try:
+        _caller_var.reset(token)
+    except Exception:
+        pass
+
+
+# 🔍 Fix 391 (2026-09-23): IP 차단 원인 추적용 계측.
+#   9/21 20:40 · 9/22 08:40 (429) · 9/22 18:49 (418 ban 334s) 가 났는데,
+#   거버너 카운터는 335~717/분(한도 2400의 15~30%)만 보고 있었다 = 세지 않는 경로가 있다.
+#   그래서 ① 엔드포인트별 분해 ② **바이낸스가 응답 헤더로 알려주는 실제 사용량**
+#   (X-MBX-USED-WEIGHT-1M) ③ 차단을 맞은 요청의 경로 를 남긴다. 판정은 바꾸지 않는다.
+_WEIGHT_BY_ENDPOINT_KEY = "binance:weight:by_endpoint:{minute}"   # hash endpoint→weight
+_WEIGHT_BY_CALLER_KEY = "binance:weight:by_caller:{minute}"       # hash 잡이름→weight (Fix 393)
+_USED_WEIGHT_KEY = "binance:used_weight:{minute}"                 # 바이낸스 헤더 실측 (최대값)
+_DIAG_TTL_SEC = 7200          # 2시간 보관 = 다음 차단 때 되짚을 수 있게
+_USED_WEIGHT_WARN = 1680      # 한도 2400 의 70% 를 넘으면 경고 (Claude가 정함)
 _WEIGHT_TTL_SEC = 180
 
 # 엔드포인트별 weight (Binance USD-M). 미등록은 1로 간주.
@@ -157,12 +186,100 @@ def _add_weight(endpoint: str, params: dict | None = None, sign: int = 1) -> int
     try:
         from app.core.redis_client import get_redis_client
         r = get_redis_client()
-        key = _WEIGHT_KEY.format(minute=time.strftime("%Y%m%d%H%M", time.gmtime()))
-        total = int(r.incrby(key, sign * estimate_weight(endpoint, params)))
-        r.expire(key, _WEIGHT_TTL_SEC)
+        minute = time.strftime("%Y%m%d%H%M", time.gmtime())
+        key = _WEIGHT_KEY.format(minute=minute)
+        w = sign * estimate_weight(endpoint, params)
+        total = int(r.incrby(key, w))
+        # 🔍 Fix 393: 보관을 진단과 같게(2시간). 거버너는 「이번 분」만 읽으므로 판정 영향 없고,
+        #   3분 뒤 만료되던 옛 TTL 때문에 진단표의 「우리추정」이 0 으로 보여 오해를 줬다.
+        r.expire(key, _DIAG_TTL_SEC)
+        try:                       # 🔍 Fix 391: 엔드포인트별 분해 (진단 전용 — 실패해도 판정 무영향)
+            bkey = _WEIGHT_BY_ENDPOINT_KEY.format(minute=minute)
+            r.hincrby(bkey, endpoint, w)
+            r.expire(bkey, _DIAG_TTL_SEC)
+            ckey = _WEIGHT_BY_CALLER_KEY.format(minute=minute)
+            r.hincrby(ckey, _caller_var.get() or "other", w)
+            r.expire(ckey, _DIAG_TTL_SEC)
+        except Exception:
+            pass
         return total
     except Exception:
         return 0
+
+
+def note_used_weight(response: Any, *, path: str = "?") -> int:
+    """🔍 Fix 391 — 바이낸스가 준 `X-MBX-USED-WEIGHT-1M` 을 그 분의 최대값으로 기록한다.
+
+    우리 카운터(추정)와 달리 이것은 **바이낸스가 센 값**이다. 둘이 벌어지면
+    「세지 않는 경로」가 있다는 뜻이고, 차단 직전 분의 값이 곧 원인 규모다.
+    반환 = 기록된 값(없으면 0). 진단 전용이라 어떤 실패도 삼킨다.
+    """
+    try:
+        hdrs = getattr(response, "headers", None) or {}
+        raw = hdrs.get("X-MBX-USED-WEIGHT-1M") or hdrs.get("x-mbx-used-weight-1m")
+        if not raw:
+            return 0
+        used = int(raw)
+    except Exception:
+        return 0
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+        minute = time.strftime("%Y%m%d%H%M", time.gmtime())
+        key = _USED_WEIGHT_KEY.format(minute=minute)
+        prev = r.get(key)
+        prev_i = int(prev.decode() if isinstance(prev, bytes) else prev) if prev else 0
+        if used > prev_i:
+            r.setex(key, _DIAG_TTL_SEC, str(used))
+            if used >= _USED_WEIGHT_WARN:
+                logger.warning(
+                    "[Fix391] 바이낸스 실측 사용량 %d/2400 (%d%%) — 이 분 최고, 마지막 경로 %s",
+                    used, used * 100 // 2400, path,
+                )
+    except Exception:
+        pass
+    return used
+
+
+def record_external_call(path: str, params: dict | None = None, response: Any = None) -> None:
+    """🔍 Fix 391 — `BinanceClient` 을 안 타는 생짜 호출(화면용 라우터 등)을 계측에 포함한다.
+
+    막지는 않는다(기존 동작 보존). 다만 거버너·분해·실측이 진실을 보게 한다.
+    """
+    _add_weight(path, params)
+    if response is not None:
+        note_used_weight(response, path=path)
+
+
+def get_weight_breakdown(minutes: int = 30) -> list[dict[str, Any]]:
+    """🔍 Fix 391 — 최근 N분의 (분, 우리추정, 바이낸스실측, 엔드포인트별) 진단표."""
+    out: list[dict[str, Any]] = []
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+    except Exception:
+        return out
+    now = time.time()
+    for i in range(minutes):
+        minute = time.strftime("%Y%m%d%H%M", time.gmtime(now - i * 60))
+        def _i(v):
+            try:
+                return int(v.decode() if isinstance(v, bytes) else v)
+            except Exception:
+                return 0
+        try:
+            est = _i(r.get(_WEIGHT_KEY.format(minute=minute)))
+            used = _i(r.get(_USED_WEIGHT_KEY.format(minute=minute)))
+            raw = r.hgetall(_WEIGHT_BY_ENDPOINT_KEY.format(minute=minute)) or {}
+            by = {(k.decode() if isinstance(k, bytes) else k): _i(v) for k, v in raw.items()}
+            rawc = r.hgetall(_WEIGHT_BY_CALLER_KEY.format(minute=minute)) or {}
+            byc = {(k.decode() if isinstance(k, bytes) else k): _i(v) for k, v in rawc.items()}
+        except Exception:
+            continue
+        if est or used or by:
+            out.append({"minute": minute, "est": est, "used": used,
+                        "by_endpoint": by, "by_caller": byc})
+    return out
 
 
 def get_current_weight() -> int:
@@ -700,9 +817,15 @@ class BinanceClient:
                 timeout=self.timeout_seconds,
             )
             status_label = str(response.status_code)
+            note_used_weight(response, path=path)      # 🔍 Fix 391 실측 기록
             if response.status_code >= 400:
                 # Fix 116: 418/429 = IP ban → 전역 마킹 (다음 요청부터 네트워크 X)
                 if response.status_code in (418, 429):
+                    logger.error(
+                        "[Fix391] 🚨 %d 를 맞은 요청 = %s %s params=%s (이 경로가 한도를 넘겼다)",
+                        response.status_code, method, path,
+                        {k: v for k, v in (params or {}).items() if k not in ("signature", "timestamp")},
+                    )
                     _mark_ip_ban_from_response(response)
                 self._raise_for_error(response)
             if not response.content:

@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user_id, get_db
@@ -92,12 +93,37 @@ def create_strategy(
 
 
 @router.get("", response_model=list[StrategyDetailResponse])
-def list_strategies(
+def list_strategies_endpoint(
+    request: Request,
     status_filter: str | None = None,
     symbol: str | None = None,
     include_archived: bool = False,
     db: Session = Depends(get_db),
     user_id: int = Depends(get_current_user_id),
+):
+    """⚡ Fix 386: 같은 (사용자, 필터) 목록은 4초 동안 한 번만 계산 · 동시 요청은 하나만 계산.
+    (대시보드 탭마다 5초 폴링 × 1,760건 계산 1~1.5초 = CPU 1코어 → 새 전략 모달 조회가 줄을 섰다)
+    ⚡ Fix 386b: 캐시에 **JSON·gzip 바이트**를 넣는다 — 배포 뒤에도 응답마다 2.3MB 직렬화 + gzip(레벨 9)이
+    반복돼 api CPU 100% 였다. 내용은 response_model 직렬화와 같다(mode=json · by_alias). GZip 미들웨어는
+    Content-Encoding 이 붙은 응답을 다시 압축하지 않는다(starlette 0.52)."""
+    from app.services import strategy_list_cache as _LC
+    raw, gz = _LC.get_or_build(
+        ("list", user_id, status_filter, symbol, bool(include_archived)),
+        lambda: _LC.encode(list_strategies(status_filter=status_filter, symbol=symbol,
+                                           include_archived=include_archived, db=db, user_id=user_id)),
+    )
+    if "gzip" in (request.headers.get("accept-encoding") or "").lower():
+        return Response(content=gz, media_type="application/json",
+                        headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+    return Response(content=raw, media_type="application/json")
+
+
+def list_strategies(
+    status_filter: str | None = None,
+    symbol: str | None = None,
+    include_archived: bool = False,
+    db: Session = None,
+    user_id: int = None,
 ) -> list[StrategyDetailResponse]:
     """전략 인스턴스 목록 — 대시보드 표시를 위해 detail 필드까지 포함.
 

@@ -421,8 +421,28 @@ def timing_label(side: str, entry_price: float, entry_ms: int, bars5m: Sequence[
 
 
 # ── 캡처 (읽기 전용 조회) ─────────────────────────────────────────────────
+# 🎯 Fix 375 (2026-09-17): 「최근 고점·저점 대비 위치」 창 — 가상매매 22,652건 재계산으로 진입 조건에 쓰인다
+#   (SHORT = 1시간봉 16개 고점 −3% 이내 · LONG = 5분봉 48개 고점 대비 −4% 이하). 창 길이는 분석과 같게 둔다 (Claude가 정함).
+HILO_BARS = {"1d": 12, "4h": 24, "1h": 16, "15m": 16, "5m": 48, "1m": 60}
+
+
+def hilo_position(bars: Sequence[Sequence[float]], n: int) -> dict[str, Any]:
+    """마지막 종가가 최근 n봉(마지막 봉 포함) 최고가·최저가에서 몇 % 떨어져 있나. 봉이 모자라면 빈 dict."""
+    if n <= 0 or len(bars) < n:
+        return {}
+    win = bars[-n:]
+    hi = max(b[2] for b in win)
+    lo = min(b[3] for b in win)
+    c = bars[-1][4]
+    if not hi or not lo:
+        return {}
+    return {"from_hi_pct": _r((c / hi - 1) * 100, 3), "from_lo_pct": _r((c / lo - 1) * 100, 3), "hilo_bars": n}
+
+
 def _block(interval: str, bars: Sequence[Sequence[float]], th: Mapping[str, float]) -> dict[str, Any]:
     blk = tf_indicators(bars, th)
+    if "error" not in blk:
+        blk.update(hilo_position(bars, HILO_BARS.get(interval, 0)))
     if interval == "1d":
         blk["bb"] = bb_state(bars, tol_pct=th["tol_pct_1d"], lookback=th["lookback_1d"], slope_pct=th["trend_slope_1d"], th=th)
     elif interval == "4h":
