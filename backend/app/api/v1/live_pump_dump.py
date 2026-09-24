@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/live-pump-dump", tags=["live-pump-dump"])
 
+# ⚡ Fix 399 (2026-09-24): 화면 공유 캐시 TTL. 폴링 60초보다 짧게 둬서 한 화면의 신선도는
+#   그대로 두고, 화면이 여러 개일 때만 거래소 호출을 하나로 묶는다. 「Claude가 정함」.
+LIVE_SCAN_CACHE_TTL_SEC = 45
+
 
 @router.get("/scan")
 def scan_live_pump_dump(
@@ -64,6 +68,27 @@ def scan_live_pump_dump(
       side / tp_pct / sl_pct / expected_value_pct / tp_first_rate / sample_n
     급락은 side=None + 「진입 비권장」 사유가 담깁니다.
     """
+    # ⚡ Fix 399 (2026-09-24): 화면 여러 개가 같은 스캔을 각각 돌리지 않게 **공유 캐시**를 둔다.
+    #
+    #   실측(Fix 393/394 계측): 이 경로가 분당 weight 111~163 (한도 2400 의 5~7%) 를 쓴다.
+    #   한 번 스캔 = 60종목 × (15m + 5m) = **호출 120건**, 화면 폴링은 60초.
+    #   즉 데스크탑+모바일을 같이 열면 그대로 2배가 된다 (사장님이 그렇게 쓰신다).
+    #   TTL 45초 = 폴링 주기(60초)보다 짧아 **한 화면의 신선도는 그대로**이고,
+    #   화면이 여러 개여도 거래소 호출은 한 번으로 묶인다. (45 = 「Claude가 정함」)
+    _cache_key = f"live_pump_dump:scan:{max_symbols}:{int(include_dump)}:{min_confidence}"
+    _redis = None
+    try:
+        from app.core.redis_client import get_redis_client
+        _redis = get_redis_client()
+        _hit = _redis.get(_cache_key)
+        if _hit:
+            import json as _json
+            _data = _json.loads(_hit.decode() if isinstance(_hit, bytes) else _hit)
+            _data["cached"] = True
+            return _data
+    except Exception:          # 캐시 문제로 화면이 죽으면 안 된다
+        _redis = None
+
     account = db.execute(
         select(ExchangeAccount).where(ExchangeAccount.is_testnet.is_(False))
     ).scalar_one_or_none()
@@ -237,7 +262,7 @@ def scan_live_pump_dump(
     # 진입 가능(급등) 먼저, 그 다음 신뢰도 순
     alerts.sort(key=lambda a: (a["side"] is None, -(a.get("confidence") or 0)))
 
-    return {
+    result = {
         "alerts": alerts,
         "total": len(alerts),
         "excluded_low_confidence": len(excluded_alerts),
@@ -251,3 +276,11 @@ def scan_live_pump_dump(
             f"급등(추격 LONG) = 「추천」, 🐻 급등 후 하락 전환 = SHORT!"
         ),
     }
+    # ⚡ Fix 399: 45초 공유 캐시에 담는다 (여러 화면이 같은 스캔을 중복으로 돌리지 않게).
+    if _redis is not None:
+        try:
+            import json as _json
+            _redis.setex(_cache_key, LIVE_SCAN_CACHE_TTL_SEC, _json.dumps(result, default=str))
+        except Exception:
+            pass
+    return result
