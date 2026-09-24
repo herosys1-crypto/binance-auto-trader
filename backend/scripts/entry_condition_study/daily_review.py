@@ -73,23 +73,30 @@ def main() -> None:
         # ── ② 실거래 ────────────────────────────────────────────────
         line("\n② 실거래 (가족별 실현 손익 USDT · 사람 전략 제외)")
         rows = FB._closed_rows(db, now - timedelta(days=30))   # 🚨 끝난 판정 = TERMINAL status (stopped_at 만 보면 COMPLETED 가 빠진다)
-        agg = defaultdict(lambda: [0.0, 0, 0.0, 0])          # 30일 합·건, 7일 합·건
-        for rp, ca, sa, origin, stype, name in rows:
+        # 🚨 Fix 400: 사람이 「포지션 추가」로 키운 몫은 따로 센다 (가족 판정 성과를 흐리지 않게).
+        agg = defaultdict(lambda: [0.0, 0, 0.0, 0, 0.0, 0])   # 30일 합·건, 7일 합·건, 사람몫30·건
+        for row in rows:
+            rp, ca, sa, origin, stype, name = row[0], row[1], row[2], row[3], row[4], row[5]
             fam = AF.family_for(strategy_type=stype, template_name=name, entry_origin=origin, created_at=ca)
             if fam is None:
                 continue
             p = float(rp or 0)
+            share = FB.family_share(*FB._cap_pair(row))
             a = agg[fam.label]
-            a[0] += p
+            a[0] += p * share
             a[1] += 1
+            if share < 1.0:
+                a[4] += p - p * share
+                a[5] += 1
             if sa >= now - timedelta(days=7):
-                a[2] += p
+                a[2] += p * share
                 a[3] += 1
         if not agg:
             line("  최근 30일에 끝난 자동 전략이 없다 (전면 중단 중이면 정상)")
-        for lab, (s30, n30, s7, n7) in sorted(agg.items(), key=lambda kv: kv[1][0]):
+        for lab, (s30, n30, s7, n7, hp, hn) in sorted(agg.items(), key=lambda kv: kv[1][0]):
             warn = " ⚠ 차단기 기준 초과" if s7 < -WARN_USDT else ""
-            line(f"  {lab:28s} 30일 {s30:+8.1f} ({n30:3d}건) · 7일 {s7:+7.1f} ({n7:2d}건){warn}")
+            human = f" · 사람이 키운 몫 {hp:+.1f} ({hn}건 개입)" if hn else ""
+            line(f"  {lab:28s} 30일 {s30:+8.1f} ({n30:3d}건) · 7일 {s7:+7.1f} ({n7:2d}건){warn}{human}")
         line(f"  자동 합계: 30일 {sum(v[0] for v in agg.values()):+.1f} · 7일 {sum(v[2] for v in agg.values()):+.1f}")
 
         # ── ③ 가상매매 ──────────────────────────────────────────────

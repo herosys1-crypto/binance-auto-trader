@@ -80,22 +80,74 @@ def _closed_rows(db: Any, since: datetime) -> list:
     from app.models.strategy_instance import StrategyInstance as SI
     from app.models.strategy_template import StrategyTemplate as ST
     closed_at = func.coalesce(SI.stopped_at, SI.updated_at)
+    # 🚨 Fix 400: 자본 두 개를 같이 읽는다 — 사람이 키운 몫을 가려내기 위해서다 (아래 family_share 참조).
     return db.execute(select(SI.realized_pnl, SI.created_at, closed_at.label("closed_at"), SI.entry_origin,
-                             ST.strategy_type, ST.name)
+                             ST.strategy_type, ST.name,
+                             SI.total_capital.label("actual_capital"),
+                             ST.total_capital.label("designed_capital"),
+                             SI.id.label("sid"), SI.symbol.label("symbol"))
                       .join(ST, ST.id == SI.strategy_template_id)
                       .where(SI.status.in_(tuple(TERMINAL_STATUSES)), closed_at >= since)).all()
 
 
+def _cap_pair(row: Any) -> tuple[Any, Any]:
+    """(설계 자본, 실제 자본) — 칸이 없는 행(옛 호출·테스트 가짜)이면 (None, None)."""
+    try:
+        return row.designed_capital, row.actual_capital
+    except (AttributeError, IndexError, KeyError, TypeError):
+        return None, None
+
+
+def family_share(designed: Any, actual: Any) -> float:
+    """🚨 Fix 400 (2026-09-25): 그 거래에서 **자동 가족이 설계한 자본의 비중**.
+
+    사장님 실측 #4548 PLAYUSDT (S4, 설계 10 USDT):
+      09-21 S4 자동 진입 692개(증거금 10) → 09-23 **사장님이 「💉 포지션 추가」로 6,357개(증거금 100)**
+      → 09-24 손절. ROI −26% 로 **정상 작동**했는데 절대 손실은 −28.74 였다 (11배 커진 물량).
+    그 −28.74 가 S4 가족의 손실 차단기(최근 7일 −30)를 90% 소진시켰다 — 즉 **사람의 결정이**
+    **자동 가족을 멈추게 한다.** 차단기의 목적은 「그 가족의 자동 판정이 지고 있는지」이므로,
+    사람이 키운 몫은 비율로 덜어내고 센다 (원시 합계는 따로 보고한다 — 감추지 않는다).
+
+    share = min(1, 설계 자본 / 실제 자본). 값이 없거나 이상하면 1 (덜어내지 않는다 = 보수적).
+    """
+    try:
+        d = float(designed or 0)
+        a = float(actual or 0)
+    except (TypeError, ValueError):
+        return 1.0
+    if d <= 0 or a <= 0 or a <= d:
+        return 1.0
+    return d / a
+
+
 def family_realized(db: Any, fam_key: str, since: datetime) -> tuple[float, int]:
-    """그 가족의 since 이후 끝난 전략 실현 손익 합 · 건수. 사람 전략 제외."""
+    """그 가족의 since 이후 끝난 전략 실현 손익 합 · 건수. 사람 전략 제외.
+
+    🚨 Fix 400: 합계는 **가족 몫**(사람이 키운 비율만큼 덜어낸 값)이다. 원시 합계가 필요하면
+    `family_realized_detail` 을 쓴다 (화면·보고는 둘 다 보여 준다).
+    """
+    d = family_realized_detail(db, fam_key, since)
+    return d["pnl"], d["n"]
+
+
+def family_realized_detail(db: Any, fam_key: str, since: datetime) -> dict[str, Any]:
+    """{"pnl"(가족 몫), "pnl_raw"(원시), "n", "human_pnl"(사람이 키운 몫), "human_n"(개입 건수)}."""
     from app.services import auto_family_registry as AF
-    total, n = 0.0, 0
-    for rp, ca, _sa, origin, stype, name in _closed_rows(db, since):
+    counted, raw, n, human_n = 0.0, 0.0, 0, 0
+    for row in _closed_rows(db, since):
+        rp, ca, _sa, origin, stype, name = row[0], row[1], row[2], row[3], row[4], row[5]
         fam = AF.family_for(strategy_type=stype, template_name=name, entry_origin=origin, created_at=ca)
-        if fam is not None and fam.key == fam_key:
-            total += float(rp or 0)
-            n += 1
-    return total, n
+        if fam is None or fam.key != fam_key:
+            continue
+        pnl = float(rp or 0)
+        share = family_share(*_cap_pair(row))
+        counted += pnl * share
+        raw += pnl
+        n += 1
+        if share < 1.0:
+            human_n += 1
+    return {"pnl": round(counted, 2), "pnl_raw": round(raw, 2), "n": n,
+            "human_pnl": round(raw - counted, 2), "human_n": human_n}
 
 
 def state(db: Any, fam_key: str, *, now: datetime | None = None) -> dict[str, Any]:
@@ -109,8 +161,11 @@ def state(db: Any, fam_key: str, *, now: datetime | None = None) -> dict[str, An
     reset_at = _aware(getattr(row, "updated_at", None)) if row is not None and not tripped else None
     if reset_at is not None and reset_at > since:
         since = reset_at                      # 사장님이 푼 뒤의 손익만 센다
-    pnl, n = family_realized(db, fam_key, since)
-    return {"tripped": tripped, "pnl": round(pnl, 2), "n": n, "since": since.isoformat(), "limit": limit, "days": days}
+    d = family_realized_detail(db, fam_key, since)
+    # 🚨 Fix 400: 판정은 「가족 몫」(pnl), 보고는 원시(pnl_raw)·사람 몫(human_pnl)까지 같이 준다.
+    return {"tripped": tripped, "pnl": d["pnl"], "n": d["n"], "since": since.isoformat(),
+            "limit": limit, "days": days,
+            "pnl_raw": d["pnl_raw"], "human_pnl": d["human_pnl"], "human_n": d["human_n"]}
 
 
 def all_states(db: Any, fam_keys: list[str], *, now: datetime | None = None) -> dict[str, dict[str, Any]]:
@@ -126,16 +181,26 @@ def all_states(db: Any, fam_keys: list[str], *, now: datetime | None = None) -> 
         tripped = row is not None and str(row.value).strip() == "1"
         reset_at = _aware(getattr(row, "updated_at", None)) if row is not None and not tripped else None
         since = reset_at if reset_at is not None and reset_at > base else base
-        out[k] = {"tripped": tripped, "pnl": 0.0, "n": 0, "since": since, "limit": limit, "days": days}
+        out[k] = {"tripped": tripped, "pnl": 0.0, "n": 0, "since": since, "limit": limit, "days": days,
+                  "pnl_raw": 0.0, "human_pnl": 0.0, "human_n": 0}
     rows = _closed_rows(db, base)
-    for rp, ca, sa, origin, stype, name in rows:
+    for row in rows:
+        rp, ca, sa, origin, stype, name = row[0], row[1], row[2], row[3], row[4], row[5]
         fam = AF.family_for(strategy_type=stype, template_name=name, entry_origin=origin, created_at=ca)
         if fam is None or fam.key not in out or _aware(sa) < out[fam.key]["since"]:
             continue
-        out[fam.key]["pnl"] += float(rp or 0)
+        pnl = float(rp or 0)
+        share = family_share(*_cap_pair(row))            # 🚨 Fix 400
+        out[fam.key]["pnl"] += pnl * share
+        out[fam.key]["pnl_raw"] += pnl
+        out[fam.key]["human_pnl"] += pnl - pnl * share
         out[fam.key]["n"] += 1
+        if share < 1.0:
+            out[fam.key]["human_n"] += 1
     for v in out.values():
         v["pnl"] = round(v["pnl"], 2)
+        v["pnl_raw"] = round(v["pnl_raw"], 2)
+        v["human_pnl"] = round(v["human_pnl"], 2)
         v["since"] = v["since"].isoformat()
     return out
 
@@ -156,7 +221,12 @@ def _trip(fam_key: str, label: str, st: dict[str, Any]) -> None:
             NotificationService(s).send_system_alert(
                 title=f"⛔ 자동매매 손실 차단 — {label}",
                 body=(f"{label} 가족의 최근 {st['days']}일 실현 손익 {st['pnl']:+.1f} USDT ({st['n']}건)가 "
-                      f"−{st['limit']:g} 밑이라 새 전략을 막았습니다. 다시 허용하려면 관제실에서 「손실 차단」을 「허용」으로."))
+                      f"−{st['limit']:g} 밑이라 새 전략을 막았습니다. 다시 허용하려면 관제실에서 「손실 차단」을 「허용」으로."
+                      # 🚨 Fix 400: 사람이 키운 몫은 판정에서 뺐다는 사실을 숨기지 않는다.
+                      + (f"\n\n(원시 합 {st.get('pnl_raw', st['pnl']):+.1f} 중 "
+                         f"사람이 「포지션 추가」로 키운 몫 {st.get('human_pnl', 0):+.1f} "
+                         f"{st.get('human_n', 0)}건은 가족 판정에서 제외했습니다)"
+                         if st.get("human_n") else "")))
             s.commit()
         except Exception as e:  # noqa: BLE001
             s.rollback()

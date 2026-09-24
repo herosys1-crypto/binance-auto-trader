@@ -26,6 +26,20 @@ def _on(monkeypatch):
     monkeypatch.setattr(H, "FORCE_HALT", False)
 
 
+class _Row(tuple):
+    """SQLAlchemy Row 흉내 — 위치로도 풀리고 이름으로도 읽힌다 (Fix 400 이 이름으로 읽는다)."""
+    def __new__(cls, cols, vals):
+        obj = super().__new__(cls, vals)
+        obj._cols = list(cols)
+        return obj
+
+    def __getattr__(self, name):
+        try:
+            return self[self._cols.index(name)]
+        except ValueError as e:
+            raise AttributeError(name) from e
+
+
 class _DB:
     """system_settings 행 + 끝난 전략 행(실현, created_at, stopped_at, entry_origin, strategy_type, name)."""
     def __init__(self, settings=None, strategies=()):
@@ -53,16 +67,21 @@ class _DB:
                 continue
             m = {"realized_pnl": s["pnl"], "created_at": s["created_at"], "stopped_at": s["stopped_at"],
                  "closed_at": s["closed_at"], "coalesce_1": s["closed_at"], "coalesce": s["closed_at"],
-                 "entry_origin": s.get("origin"), "strategy_type": s["stype"], "name": s.get("name", "auto")}
-            out.append(tuple(m[c] for c in cols))
+                 "entry_origin": s.get("origin"), "strategy_type": s["stype"], "name": s.get("name", "auto"),
+                 # 🚨 Fix 400: 설계 자본 / 실제 자본 (사람이 키운 몫을 가려내는 두 칸)
+                 "designed_capital": s.get("designed"), "actual_capital": s.get("actual"),
+                 "sid": s.get("sid", 1), "symbol": "AAAUSDT"}
+            vals = tuple(m.get(c) for c in cols)
+            out.append(NS(**{c: v for c, v in zip(cols, vals)}, __iter__=None) if False else _Row(cols, vals))
         return NS(all=lambda: out)
 
 
 def strat(pnl, days_ago, stype="auto_bb_break_SAJANGNIM_BOTTOM", origin=None, name="auto", status="STOPPED",
-          stopped=True):
+          stopped=True, designed=None, actual=None):
     t = NOW - timedelta(days=days_ago)
     return {"pnl": pnl, "created_at": t - timedelta(hours=2), "stopped_at": t if stopped else None,
-            "closed_at": t, "status": status, "stype": stype, "origin": origin, "name": name}
+            "closed_at": t, "status": status, "stype": stype, "origin": origin, "name": name,
+            "designed": designed, "actual": actual}
 
 
 def run(db, stype="auto_bb_break_SAJANGNIM_BOTTOM", origin=None, monkeypatch=None, trips=None):
@@ -190,3 +209,49 @@ def test_completed_without_stopped_at_still_counts(trips):
     assert res["pnl"] == 40.0 and res["tripped"] is False and trips == []
     src = (APP / "services" / "family_loss_breaker.py").read_text(encoding="utf-8")
     assert "TERMINAL_STATUSES" in src and "coalesce(SI.stopped_at, SI.updated_at)" in src
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 🚨 Fix 400 (2026-09-25) — 사람이 키운 몫이 자동 가족의 차단기를 소진시키던 것
+#
+# 사장님 실측 #4548 PLAYUSDT (S4 가족, 설계 자본 10 USDT):
+#   09-21 S4 자동 진입 692개(증거금 10)
+#   09-23 **사장님이 「💉 포지션 추가」로 6,357개(증거금 100)** — 11배
+#   09-24 손절 발동 (ROI −26% = 설계대로 정상) → 실현 **−28.74**
+# 그 한 건이 S4 의 최근 7일 합을 −27.16 으로 만들어 차단기(−30)의 **90%** 를 먹었다.
+# 차단기는 「그 가족의 자동 판정이 지고 있는지」를 보는 장치이므로, 사람이 키운 몫은
+# 자본 비율로 덜어내고 센다. 원시 합계·사람 몫은 보고에 그대로 남긴다 (감추지 않는다).
+# ══════════════════════════════════════════════════════════════════════════════
+class TestFix400HumanShare:
+    def test_share_math(self):
+        assert FB.family_share(10, 110) == pytest.approx(10 / 110)
+        assert FB.family_share(10, 10) == 1.0          # 안 키웠으면 전액
+        assert FB.family_share(10, 5) == 1.0           # 줄어든 경우도 전액 (부분 익절 등)
+        assert FB.family_share(0, 110) == 1.0          # 알 수 없으면 보수적으로 전액
+        assert FB.family_share(None, None) == 1.0
+
+    def test_manual_add_does_not_trip_family(self, trips):
+        """#4548 재현: 설계 10 · 실제 110 · 실현 −28.74 → 가족 몫 −2.61 → 차단 없음."""
+        db = _DB(strategies=[strat(-28.74, 1, designed=10, actual=110)])
+        res = run(db)
+        assert res is None or res is not None       # check() 는 막지 않으면 None 을 돌려준다
+        st = FB.state(db, "bottom_long")
+        assert st["pnl"] == pytest.approx(-2.61, abs=0.02), st
+        assert st["pnl_raw"] == pytest.approx(-28.74, abs=0.01)
+        assert st["human_pnl"] == pytest.approx(-26.13, abs=0.02)
+        assert st["human_n"] == 1
+        assert trips == [], "사람이 키운 손실로 자동 가족을 멈추지 않는다"
+
+    def test_pure_auto_loss_still_trips(self, trips):
+        """자동 판정만으로 한도를 넘으면 **그대로 막는다** (안전장치 약화 아님)."""
+        db = _DB(strategies=[strat(-31, 1, designed=10, actual=10)])
+        with pytest.raises(ValueError):
+            run(db)
+        assert trips and trips[0][1] == pytest.approx(-31)
+
+    def test_all_states_reports_both(self):
+        db = _DB(strategies=[strat(-28.74, 1, designed=10, actual=110)])
+        st = FB.all_states(db, ["bottom_long"])["bottom_long"]
+        assert st["pnl"] == pytest.approx(-2.61, abs=0.02)
+        assert st["pnl_raw"] == pytest.approx(-28.74, abs=0.01)
+        assert st["human_n"] == 1
