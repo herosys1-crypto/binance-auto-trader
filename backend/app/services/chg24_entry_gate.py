@@ -172,6 +172,60 @@ def _is_manual(template_name: object) -> bool:
     return str(template_name or "").startswith("_quick_")
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# 🚨 Fix 401 (2026-09-25): **LONG 반전 규칙에는 이 순위 게이트가 해롭다** (실측).
+#
+#   사장님 「100종목 안/밖 갈라서 재봐줘」 → 가상 마감 12,297건을 100종목(상승50 ∪ 하락50)
+#   안/밖으로 갈라 비교했다. 같은 규칙·같은 청산인데 방향에 따라 부호가 반대다:
+#
+#     규칙                    안쪽 ROI(손절률)      밖 ROI(손절률)   안쪽이 나은 날
+#     bottom_331            +1.35 (14%)        **+4.23 (4%)**      5/16
+#     wick_rev_long_v220    +0.59 (11%)        **+3.56 (3%)**      4/16
+#     multiday_rebound_352  +0.67 (16%)        **+3.57 (4%)**      4/16
+#     fujimoto_l1_rsi       +2.40 (13%)        **+5.07 (3%)**      0/13
+#     ──────────────────────────────────────────────────────────────────
+#     zone_s4(SHORT)      **+3.56 (27%)**       −5.36 (50%)        4/6
+#     off8_267(SHORT)     **+0.00 (31%)**       −5.81 (30%)       14/16
+#
+#   해석: 상승·하락 50위 = 그날 가장 크게 움직인 종목 = 변동성 극단.
+#     · SHORT(급등 꼭대기 되돌림)는 그 극단에서만 먹힌다 → 게이트가 맞다.
+#     · LONG(저점·아래꼬리 반전)은 극단이 아닌 조용한 종목에서 훨씬 안전하다
+#       (손절률 4% vs 14% = 3배 차이). 게이트가 **좋은 자리를 자른다.**
+#   실제로 LONG 2종을 켠 첫날(9/24~25) 시도 8건 중 **6건이 이 게이트에 막혔고**,
+#   막힌 쪽이 성적이 더 좋은 쪽이었다.
+#
+#   그래서 **실측으로 확인된 LONG 규칙 가족만** 면제한다 (기본값·되돌리기 한 줄).
+#   되돌리려면 `entry_rank_gate_exempt_prefixes` 를 빈 문자열로 두면 된다.
+# ═══════════════════════════════════════════════════════════════════════════
+SETTING_EXEMPT = "entry_rank_gate_exempt_prefixes"
+EXEMPT_DEFAULT = "RF_BOTTOM,RF_WICKLONG,RF_MULTIDAY"     # 「Claude가 정함」 — 위 실측 3종
+
+
+def exempt_prefixes(db) -> tuple[str, ...]:
+    """면제 접두사 목록. 끄려면 설정값을 `none`(또는 `off`)으로 둔다.
+
+    ⚠️ `_setting` 은 빈 문자열을 None 으로 바꿔 주므로(=미설정과 구분 불가),
+       「면제 없음」은 빈 값이 아니라 **명시 토큰**으로 표현한다.
+    """
+    raw = _setting(db, SETTING_EXEMPT)
+    if raw is None:
+        raw = EXEMPT_DEFAULT
+    if str(raw).strip().lower() in ("none", "off", "0", "-"):
+        return ()
+    return tuple(p.strip().upper() for p in str(raw).split(",") if p.strip())
+
+
+def _is_rank_exempt(db, template_name: object) -> tuple[bool, str]:
+    """이 전략이 순위 게이트 면제 대상인가 (LONG 반전 규칙 가족)."""
+    name = str(template_name or "").upper()
+    if not name:
+        return False, ""
+    for p in exempt_prefixes(db):
+        if name.startswith(p):
+            return True, f"순위 게이트 면제 — {p} (Fix 401 실측: 100종목 밖이 ROI +2.7~+3.0 더 좋다)"
+    return False, ""
+
+
 def passes(db, bc, symbol: str, *, template_name: object = None) -> tuple[bool, str]:
     """이 심볼이 신규 진입 대상인가.
 
@@ -185,6 +239,9 @@ def passes(db, bc, symbol: str, *, template_name: object = None) -> tuple[bool, 
         return True, ""
     if _is_manual(template_name):
         return True, "수동 진입 (게이트 미적용)"
+    _ex, _why_ex = _is_rank_exempt(db, template_name)      # 🚨 Fix 401
+    if _ex:
+        return True, _why_ex
 
     # ═══════════════════════════════════════════════════════════════════
     # 🌟 Fix 325 (2026-09-03 사장님): **순위 기준**으로 바꾼다.
