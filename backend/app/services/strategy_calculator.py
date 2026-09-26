@@ -225,6 +225,10 @@ class StrategyCalculator:
 
         if leverage is None or total_capital is None:
             raise ValueError("leverage and total_capital are required")
+        # 🩹 Fix 402 (2026-09-27): 시작가가 0/빈칸이면 모든 단계 가격이 0 이 되어
+        #   `decimal.DivisionByZero` → 500 으로 터졌다. 입력 문제는 400 + 한국어 사유로 돌려준다.
+        if start_price is None or Decimal(str(start_price)) <= 0:
+            raise ValueError("시작가가 0 입니다 — 「💲 현재가」 버튼으로 채우거나 직접 입력하세요.")
         if any(v is None for v in (tp1_percent, tp2_percent, tp3_percent, stop_loss_percent_of_capital)):
             raise ValueError("tp1/tp2/tp3 percent and stop_loss_percent_of_capital are required")
 
@@ -303,6 +307,12 @@ class StrategyCalculator:
                 else:
                     multiplier = self._multiplier(side, pct)
                     price = self._quantize_price(prev_anchor_price * multiplier)
+                    # 🩹 Fix 402: 트리거 −100% 이하면 배수가 0(이하)이 되어 가격이 0 이 된다 → 사유를 말한다.
+                    if price <= 0:
+                        raise ValueError(
+                            f"{stage_no}단계 가격이 0 이 됩니다 (트리거 {pct}%) — "
+                            f"−100% 이하 대신 −99% 까지로 넣으세요."
+                        )
                     qty = self.compute_qty_from_capital(capital=capital, price=price, leverage=leverage)
                     stages.append(
                         StagePlan(
@@ -405,6 +415,16 @@ class StrategyCalculator:
         _lev = Decimal(str(leverage)) if leverage is not None else Decimal("1")
         if _lev <= 0:
             _lev = Decimal("1")
+        # 🩹 Fix 402 (2026-09-27): 가격 0 이면 **이유를 말하고** 멈춘다.
+        #   사장님 미리보기가 데스크탑 500 / 모바일 400 으로 달랐다. 실제 원인은
+        #   `decimal.DivisionByZero` (price=0) 였고, 그건 ValueError 가 아니라서
+        #   `preview_inline` 의 except 를 지나 **500** 으로 나갔다 (모바일은 다른 입력이라 400).
+        #   가격이 0 이 되는 경우: 시작가 0/빈칸 · 단계 트리거 −100% 이하(배수 0) · 잘못된 심볼 시세.
+        if price is None or Decimal(str(price)) <= 0:
+            raise ValueError(
+                f"가격이 0 입니다 (capital={capital}, leverage={_lev}) — "
+                f"시작가가 비어 있거나 단계 트리거가 −100% 이하인지 확인하세요."
+            )
         notional = capital * _lev
         qty = self._quantize_qty(notional / price)
         if qty < self.symbol_rule.min_qty:

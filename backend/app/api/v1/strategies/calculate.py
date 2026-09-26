@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 from typing import Literal
 
@@ -21,6 +22,8 @@ from app.schemas.strategy import (
 )
 from app.services.strategy_calculator import StrategyCalculator, SymbolRule
 from app.services.strategy_service import StrategyService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
@@ -111,6 +114,17 @@ def preview_inline(
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except ArithmeticError as e:
+        # 🩹 Fix 402 (2026-09-27): 사장님 미리보기가 데스크탑 **500** / 모바일 400 으로 달랐다.
+        #   실제 원인은 `decimal.DivisionByZero`(가격 0) — ValueError 가 아니라서 위 except 를
+        #   지나쳐 500 으로 나갔고, 화면에는 「미리보기 실패: 500」만 보여 무엇을 고쳐야 할지 알 수 없었다.
+        #   계산 예외는 전부 **입력 문제**이므로 400 + 사유로 돌려준다 (500 은 다시 나지 않는다).
+        logger.warning("[Fix402] 미리보기 계산 예외 (입력 문제로 처리): %s: %s", type(e).__name__, e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="미리보기 계산 불가 — 시작가·단계 트리거·자본 값을 확인하세요 "
+                   f"(계산 오류: {type(e).__name__}).",
+        ) from e
 
     return StrategyCalculateResponse(
         symbol=preview.symbol,
