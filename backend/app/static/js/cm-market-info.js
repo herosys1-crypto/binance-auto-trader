@@ -37,6 +37,11 @@ let _cmTickSize = null;  // Bug #13 fix: 심볼별 tick_size 캐시 (시작가 �
 //   그래서 ① 완성되지 않은 심볼은 아예 보내지 않고 ② 값이 바뀌었는데 이벤트가 안 온 경우를
 //   스스로 따라잡고(watcher) ③ 503 은 남은 시간을 적고 자동 재시도한다.
 let _cmLastPriceSymbol = null;      // 마지막으로 시세를 받아온 심볼
+// 🩹 Fix 403 (2026-09-27): 시작가를 **어느 심볼 기준으로** 채웠는지 기억한다.
+//   사장님 화면 실측(9/27): 차트 현재가 123.61(다른 심볼)인데 시작가·단계가는 0.0307 대로 남아
+//   미리보기가 깨졌다 — 심볼을 바꿔도 시작가가 옛 심볼 값으로 남기 때문이다.
+//   (그 값으로 「전략 시작」을 누르면 엉뚱한 가격에 예약 주문이 들어간다.)
+let _cmStartPriceSymbol = null;
 let _cmBanRetryTimer = null;
 
 function _cmSymbolLooksComplete(sym) {
@@ -91,6 +96,29 @@ async function loadCmMarketInfo() {
       const startInp = document.getElementById('cm-start-price');
       if (startInp && (!startInp.value || Number(startInp.value) <= 0)) {
         fillStartPrice('current');
+      } else if (startInp) {
+        // 🩹 Fix 403: 남아 있는 시작가가 **이 심볼 것이 아니면** 새 현재가로 갈아준다.
+        //   판정 두 가지 —
+        //     ① 시작가를 채운 심볼이 기록돼 있고 지금 심볼과 다르다.
+        //     ② 기록이 없어도(직접 타이핑) 현재가와 **20배 이상** 벌어져 있다
+        //        (사장님 사례: 차트 123.61 vs 시작가 0.0307 = 4,000배 = 옛 심볼 값).
+        //   「수정 모드」는 건드리지 않는다 (사장님 사상 v39: 1단계 = 옛 평단 보존).
+        const editing = !!(typeof cmState !== 'undefined' && cmState && cmState.editingStrategyId);
+        const cur = Number(_cmCurrentPrice) || 0;
+        const have = Number(startInp.value) || 0;
+        const ratio = (cur > 0 && have > 0) ? Math.max(cur / have, have / cur) : 0;
+        const symbolChanged = !!_cmStartPriceSymbol && _cmStartPriceSymbol !== symbol;
+        const wayOff = !_cmStartPriceSymbol && ratio >= 20;
+        if (!editing && (symbolChanged || wayOff)) {
+          const _old = startInp.value;
+          const _why = symbolChanged ? `${_cmStartPriceSymbol} 기준이던 값` : `현재가와 ${ratio.toFixed(0)}배 차이`;
+          fillStartPrice('current');
+          if (typeof toast === 'function') {
+            toast(`시작가를 ${symbol} 현재가로 갱신했습니다 (옛 값 ${_old} — ${_why})`, 'info');
+          }
+        } else if (!_cmStartPriceSymbol && have > 0) {
+          _cmStartPriceSymbol = symbol;      // 직접 입력한 값 = 이 심볼 것으로 본다 (다음 심볼 변경 때 갱신)
+        }
       }
     } else if (tk && typeof tk.detail === 'string' && tk.detail.indexOf('차단') >= 0) {
       // 🩹 Fix 390: Binance IP 차단(503) — 남은 시간을 적고 자동 재시도 (사람이 새로고침 안 해도 됨).
@@ -198,6 +226,7 @@ function fillStartPrice(mode) {
   const inp = document.getElementById('cm-start-price');
   inp.step = stepAttr;
   inp.value = formatted;
+  _cmStartPriceSymbol = (document.getElementById('cm-symbol').value || '').toUpperCase().trim();  // 🩹 Fix 403
   // 🌟 2026-06-11 v39 사장님 critical 사상 (= BEATUSDT 사례!):
   // 사장님 명시: "두번째는 현재가 기준으로 새롭게 세팅으로 하면
   //              2단계부터 진행할 수 있는 세팅이 되어야해"
