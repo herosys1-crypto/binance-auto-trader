@@ -162,9 +162,14 @@ def main() -> None:
         todo = []
         if tripped:
             todo.append(f"손실 차단기 발동 {', '.join(tripped)} — 원인을 보고 풀지 결정 (관제실 「손실 차단」 → 허용)")
-        for lab, (s30, n30, s7, n7) in agg.items():
+        # 🩹 Fix 404 (2026-09-30): agg 는 Fix 400 에서 6칸(사람몫 2칸 추가)이 됐다 —
+        #   여기만 4칸으로 풀어 ⑤ 결론부가 `too many values to unpack` 로 죽어 있었다.
+        for lab, vals in agg.items():
+            s7, hp, hn = vals[2], vals[4], vals[5]
             if s7 < -WARN_USDT:
                 todo.append(f"실거래 {lab} 최근 7일 {s7:+.1f} — 차단기가 막았는지 확인")
+            if hn and hp < -WARN_USDT:
+                todo.append(f"{lab}: 사람이 키운 몫 {hp:+.1f} ({hn}건) — 자동 설계값보다 큰 물량이 얹혔다")
         if items:
             todo.append(f"채택 후보 {len(items)}건 — 켤지 사장님 결정")
         if not halt_enabled(db) and on_rules:
