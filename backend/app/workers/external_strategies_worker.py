@@ -22,6 +22,7 @@ from app.core.redis_client import get_redis_client
 from app.services import bar_gate as BG
 from app.services import external_strategies as ES
 from app.services.kline_incremental import INTERVAL_MS, IncrementalKlines
+from app.services.universe_cache import cached_universe
 
 logger = logging.getLogger(__name__)
 
@@ -272,19 +273,25 @@ def run_external_strategies_once() -> dict:
         m7_cap = ES.setting_float(db, "mach7_capital_usdt")
         m7_slope = ES.setting_float(db, "mach7_min_slope_pct")
         fj_cool, m7_cool = ES.setting_float(db, "fujimoto_cooldown_hours"), ES.setting_float(db, "mach7_cooldown_hours")
-        universe = _universe(bc, db, int(ES.setting_float(db, "ext_universe_top_n")), ES.setting_float(db, "ext_min_quote_volume"))
+        settle_ms = BG.parse_settle_ms(ES.setting(db, "ext_bar_settle_ms"))
+        cycle_now = _now_ms()        # Fix 408: 감시 종목 스냅샷과 봉 판정이 같은 시각을 본다 (정착 경계에서 어긋나지 않게)
+        top_n, min_qv = int(ES.setting_float(db, "ext_universe_top_n")), ES.setting_float(db, "ext_min_quote_volume")
+        universe, stat["universe"] = cached_universe(
+            r, interval=interval, interval_ms=INTERVAL_MS.get(interval), settle_ms=settle_ms, top_n=top_n, min_qv=min_qv,
+            enabled=ES.setting(db, "ext_universe_per_bar"), now_ms=cycle_now,
+            compute=lambda: _universe(bc, db, top_n, min_qv))   # 24h 티커(무게 40) — 새 완성봉에서만
         stat["symbols"] = len(universe)
         act_fj = _active_by_prefix(db, ES.FUJIMOTO_PREFIX) if fm != "off" else {}
         act_m7 = _active_by_prefix(db, ES.MACH7_PREFIX) if mm != "off" else {}
         equity = _equity(bc) if (fm == "on" or mm == "on") else None
-        settle_ms = BG.parse_settle_ms(ES.setting(db, "ext_bar_settle_ms"))
         incremental = BG.parse_flag(ES.setting(db, "ext_kline_incremental"), default=True)
         last_ttl = max(LAST_TTL, 2 * INTERVAL_MS.get(interval, 0) // 1000)   # 4h·1d 간격에서도 같은 봉 재판정 없게
         stat["gate_skip"] = stat["kl_weight"] = 0
 
         for sym in universe:
             try:
-                bars, seen = _closed_bars(bc, r, sym, interval, settle_ms=settle_ms, incremental=incremental, stat=stat)
+                bars, seen = _closed_bars(bc, r, sym, interval, settle_ms=settle_ms, incremental=incremental, stat=stat,
+                                          now_ms=cycle_now)
                 if bars is None:
                     continue                                     # 새 완성봉 없음 · 아직 확정 아님 (Fix 406)
                 if len(bars) < MIN_BARS:
