@@ -3,7 +3,7 @@
 60초마다 돌지만 **15분 완성봉당 1회**만 스캔한다 (Redis SET NX bbswing:scan:{봉} — 리더가 둘이어도 한 번).
 모드 bb_swing_mode:
   off    = 아무것도 안 함
-  shadow = 신호만 Redis bbswing:shadow:{sym}:{side}:{봉시각} (7일) + 사이클 요약. **주문 없음** (기본)
+  shadow = 신호만 Redis bbswing:shadow:{sym}:{side}:{봉시각} (30일, Fix 412) + 사이클 요약. **주문 없음** (기본)
   on     = 실주문. 진입은 공용 분할 실행기 app/services/split_entry_executor.open_split_position (규칙 가족과 같은 코드) —
            capital_management_mode=split_entry 라서 손절(risk_service) · 2·3차 실체결가 재앵커(stage_trigger_worker) ·
            피라미딩 제외 · 단계 정리 제외 · 반전 워커 제외가 그대로 붙는다.
@@ -39,7 +39,7 @@ BAR_MS = 900_000
 SETTLE_MS = 5_000                     # 봉 마감 직후 5초는 거래소 확정 대기 (Claude가 정함)
 K15_LIMIT = 121                       # 121 = bb_mid_line(120) 등과 kline 캐시 키가 겹치지 않게
 K4H_LIMIT = 301                       # EMA50 수렴 (백테스트 4H 300봉과 같은 창)
-SHADOW_TTL = 7 * 86400
+SHADOW_TTL = 30 * 86400          # Fix 412: 7일이면 주 1회 수동 덤프가 필요했다 → 30일 (한 달치 판정 가능, 신호 ≈7,000건 수준)
 START_FAIL_COOLDOWN_S = 6 * 3600      # 1차 주문 실패 뒤 같은 심볼·방향 재시도 금지 (Claude가 정함)
 CYCLE_KEY = "bbswing:last_cycle"
 LABEL = "볼밴 스윙"

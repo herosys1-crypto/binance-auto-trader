@@ -177,7 +177,7 @@ def run_failure_pattern_analyzer() -> dict:
         analysis = _analyze_failures(db)
         saved = _save_to_redis(analysis)
 
-        logger.warning(
+        (logger.warning if analysis["danger_patterns"] else logger.info)(   # Fix 411: 위험 패턴 0 = 정상(INFO)
             "[Fix64/analyzer] 완료: total=%d succ=%d fail=%d win_rate=%.1f%% danger=%d worst=%d spec=%s",
             analysis["total_closed"],
             analysis["succ"],

@@ -345,7 +345,7 @@ def run_pump_dump_early_detector() -> dict:
                 logger.warning("[Fix62] %s error: %s", symbol, e)
                 continue
 
-        logger.warning(
+        (logger.warning if detected else logger.info)(          # Fix 411: 감지 0건 = 정상(INFO)
             "[Fix62] 완료: scanned=%d detected=%d skipped_mixed=%d spec=%s",
             len(candidates), detected, skipped_mixed, SPEC_VERSION,
         )

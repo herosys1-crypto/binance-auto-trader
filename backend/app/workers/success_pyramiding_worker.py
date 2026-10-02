@@ -715,7 +715,7 @@ def run_success_pyramiding() -> dict:
         if _pyr_row is not None and str(_pyr_row.value).strip() not in ("", None):
             try:
                 if int(str(_pyr_row.value).strip()) <= 0:
-                    logger.warning(
+                    logger.info(          # Fix 411: 사장님이 끈 상태 = 정상 — 매 15초 WARNING(하루 2,875줄) 소음 → INFO
                         "[success_pyramiding+Fix138] SKIP: sajangnim_pyramid_enabled=0 "
                         "= 사장님 명시 OFF"
                     )

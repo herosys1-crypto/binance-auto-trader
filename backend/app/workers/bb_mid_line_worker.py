@@ -439,6 +439,6 @@ def run_bb_mid_line_once() -> dict:
         return out
     finally:
         try:
-            logger.warning("[bb_mid] DONE: %s", out)
+            (logger.info if out.get("mode") == "off" else logger.warning)("[bb_mid] DONE: %s", out)   # Fix 411: 꺼짐 = INFO
         finally:
             db.close()

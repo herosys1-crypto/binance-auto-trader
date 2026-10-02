@@ -913,7 +913,7 @@ def check_bb_swing() -> None:
                 skip(f"스캔 기록 없음 (Redis {CYCLE_KEY}) — 아직 15분봉 마감을 한 번도 안 지났거나 mode=off")
             n_s = sum(1 for _ in r.scan_iter("bbswing:shadow:*:SHORT:*", count=500))
             n_l = sum(1 for _ in r.scan_iter("bbswing:shadow:*:LONG:*", count=500))
-            print(f"  ▸ 그림자 신호(7일 보관): SHORT {n_s} · LONG {n_l}")
+            print(f"  ▸ 그림자 신호(30일 보관, Fix 412): SHORT {n_s} · LONG {n_l}")
         except Exception as e:  # noqa: BLE001
             skip(f"Redis 조회 실패: {e!r}")
     except Exception as e:  # noqa: BLE001
