@@ -71,6 +71,8 @@ SETTINGS: dict[str, tuple[str, str, str]] = {
     "ext_stop_pct_min": ("0.3", "손절폭(가격 %) 하한 — 너무 좁은 손절은 스프레드에 죽는다", "Claude가 정함"),
     "ext_stop_pct_max": ("15", "손절폭(가격 %) 상한", "Claude가 정함"),
     "ext_leverage": ("2", "레버리지", "사장님 기본 2x"),
+    "ext_bar_settle_ms": ("5000", "봉 정착 지연(ms) — 완성봉 판정 시각 = 지금 − 이 값 (0~60000, Fix 406)", "Claude가 정함 (시계 오차 여유)"),
+    "ext_kline_incremental": ("1", "캔들 증분 캐시 (1=켬, 0=매번 전체 조회). 봉 마감 게이트는 항상 켬 (Fix 406)", "Claude가 정함"),
 }
 FUJIMOTO_PREFIX, FUJIMOTO_TYPE = "FUJIMOTO", "fujimoto_3stage"
 MACH7_PREFIX, MACH7_TYPE = "MACH7", "mach7_ma_trap"

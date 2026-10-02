@@ -19,7 +19,9 @@ from sqlalchemy import select
 
 from app.core.database import SessionLocal
 from app.core.redis_client import get_redis_client
+from app.services import bar_gate as BG
 from app.services import external_strategies as ES
+from app.services.kline_incremental import INTERVAL_MS, IncrementalKlines
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +40,73 @@ def _k_shadow(fam: str, sym: str, ts: int) -> str: return f"ext:shadow:{fam}:{sy
 def _k_cool(fam: str, sym: str) -> str: return f"ext:cooldown:{fam}:{sym}"
 def _k_stage(sid: int) -> str: return f"ext:fujimoto:stage:{sid}"
 def _k_stop(sid: int) -> str: return f"ext:fujimoto:stop:{sid}"
+
+
+# ⚖️ Fix 406 (2026-10-02, Duel ext-bar-gate): 60초마다 60종목 × 300봉(무게 2)을 받던 것(실측 147 weight/분 = 전체 1위) →
+#   판정할 새 완성봉이 있을 때만 받고(봉 마감 게이트), 받을 때도 완료봉 증분 캐시(Fix 405 모듈). 판정 코드는 그대로.
+class _CycleFetch:
+    """IncrementalKlines 의 fetch — 사이클마다 그 사이클의 bc·판정 시각으로 바꿔 낀다. 응답은 check_rows 통과분만 캐시로."""
+
+    def __init__(self) -> None:
+        self.bc = None
+        self.judge_ms: int | None = None
+        self.stat: dict | None = None
+
+    def __call__(self, symbol: str, interval: str, limit: int) -> list:
+        if self.bc is None or self.judge_ms is None:
+            raise RuntimeError("사이클 밖 kline fetch")
+        if self.stat is not None:
+            self.stat["kl_weight"] = self.stat.get("kl_weight", 0) + BG.kline_weight(limit)
+        rows = self.bc.get_klines(symbol=symbol, interval=interval, limit=limit) or []
+        return BG.check_rows(rows, INTERVAL_MS[interval], self.judge_ms)
+
+
+_KFETCH = _CycleFetch()
+_KC = IncrementalKlines(_KFETCH)          # 프로세스 전역 하나 — 재시작하면 첫 사이클만 전체 조회
+
+
+def _now_ms() -> int:
+    return int(datetime.now(timezone.utc).timestamp() * 1000)
+
+
+def _closed_bars(bc, r, sym: str, interval: str, *, settle_ms: int, incremental: bool, stat: dict,
+                 now_ms: int | None = None) -> tuple[list | None, str | None]:
+    """판정할 완성봉 목록과 직전 기록값. 받을 필요가 없거나 아직 확정이 아니면 (None, None).
+
+    ① 게이트: 기록된 마지막 판정 봉 ≥ 정착 지연 뒤 마지막 완성봉 → fetch 없음
+    ② 조회: 증분 캐시 get_closed(판정 시각) 또는 기존 kl[:-1] — 둘 다 응답 마지막 행이 이미 닫혔으면(다음 봉 미개시) 보류
+    ③ 기존 경로는 정착 지연 안쪽 봉을 판정하지 않는다(시간 안전). 모르는 interval 은 게이트·캐시 없이 기존 그대로.
+    """
+    iv = INTERVAL_MS.get(interval)
+    now_ms = _now_ms() if now_ms is None else now_ms
+    seen = _rget(r, _k_last(sym))                       # Redis 실패 = None → 게이트 열림(기존처럼 진행)
+    if iv is None:
+        stat["kl_weight"] = stat.get("kl_weight", 0) + BG.kline_weight(KLINE_LIMIT)
+        kl = bc.get_klines(symbol=sym, interval=interval, limit=KLINE_LIMIT) or []
+        return kl[:-1], seen
+    if not BG.should_fetch(seen, now_ms, iv, settle_ms):
+        stat["gate_skip"] = stat.get("gate_skip", 0) + 1
+        return None, None
+    judge = now_ms - settle_ms
+    try:
+        if incremental:
+            _KFETCH.bc, _KFETCH.judge_ms, _KFETCH.stat = bc, judge, stat
+            # 한 행 더 받아 마지막 완성봉 299개로 자른다 — 우리 시계가 거래소보다 늦어 최신 완성봉이 아직 「미완」으로 보일 때도
+            #   판정 입력이 기존 kl[:-1] 과 같은 개수(EMA200 시작점 불변). 무게는 그대로(limit ≤ 500 = 2).
+            bars = _KC.get_closed(sym, interval, KLINE_LIMIT + 1, judge)[-(KLINE_LIMIT - 1):]
+        else:
+            stat["kl_weight"] = stat.get("kl_weight", 0) + BG.kline_weight(KLINE_LIMIT)
+            kl = BG.check_rows(bc.get_klines(symbol=sym, interval=interval, limit=KLINE_LIMIT) or [], iv, judge)
+            bars = kl[:-1]                               # 마지막 = 진행 중 봉 → 버린다 (기존과 같음)
+            if bars and int(bars[-1][0]) > BG.last_closed_open(now_ms, iv, settle_ms):
+                stat["miss"]["봉 정착 대기"] = stat["miss"].get("봉 정착 대기", 0) + 1
+                return None, None                        # 정착 지연 안쪽 봉 = 다음 사이클에 판정
+    except BG.BarNotSettled:
+        stat["miss"]["봉 미정착"] = stat["miss"].get("봉 미정착", 0) + 1
+        return None, None
+    finally:
+        _KFETCH.bc = _KFETCH.judge_ms = _KFETCH.stat = None
+    return bars, seen
 
 
 def _rget(r, key: str) -> str | None:
@@ -208,19 +277,24 @@ def run_external_strategies_once() -> dict:
         act_fj = _active_by_prefix(db, ES.FUJIMOTO_PREFIX) if fm != "off" else {}
         act_m7 = _active_by_prefix(db, ES.MACH7_PREFIX) if mm != "off" else {}
         equity = _equity(bc) if (fm == "on" or mm == "on") else None
+        settle_ms = BG.parse_settle_ms(ES.setting(db, "ext_bar_settle_ms"))
+        incremental = BG.parse_flag(ES.setting(db, "ext_kline_incremental"), default=True)
+        last_ttl = max(LAST_TTL, 2 * INTERVAL_MS.get(interval, 0) // 1000)   # 4h·1d 간격에서도 같은 봉 재판정 없게
+        stat["gate_skip"] = stat["kl_weight"] = 0
 
         for sym in universe:
             try:
-                kl = bc.get_klines(symbol=sym, interval=interval, limit=KLINE_LIMIT) or []
-                bars = kl[:-1]                                   # 마지막 = 진행 중 봉 → 버린다
+                bars, seen = _closed_bars(bc, r, sym, interval, settle_ms=settle_ms, incremental=incremental, stat=stat)
+                if bars is None:
+                    continue                                     # 새 완성봉 없음 · 아직 확정 아님 (Fix 406)
                 if len(bars) < MIN_BARS:
                     stat["miss"]["봉 부족"] = stat["miss"].get("봉 부족", 0) + 1
                     continue
                 j = len(bars) - 1
                 ts = int(bars[j][0])
-                if _rget(r, _k_last(sym)) == str(ts):
-                    continue                                     # 이 봉은 이미 판정했다
-                r.setex(_k_last(sym), LAST_TTL, str(ts))
+                if BG.already_judged(seen, ts):
+                    continue                                     # 이 봉(또는 더 새 봉)은 이미 판정했다 — 단조 비교
+                r.setex(_k_last(sym), last_ttl, str(ts))
                 c = [float(b[4]) for b in bars]
                 h = [float(b[2]) for b in bars]
                 lo = [float(b[3]) for b in bars]

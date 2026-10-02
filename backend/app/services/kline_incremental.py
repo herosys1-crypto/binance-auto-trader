@@ -182,7 +182,14 @@ class IncrementalKlines:
                         and self._full_reason(e, limit, now_ms / 1000.0) is None):
                     self._add("closed_hit")
                     return _copy_tail(e.rows[:-1], limit - 1) if limit > 1 else []
-        rows = self.get(symbol, interval, limit)
+        # 🚨 Fix 406 (Duel ext-bar-gate 테스트로 발견): get() 의 짧은 재사용 경로를 타면 「받을 때 진행 중이던 행」이
+        #   지금 시각 기준으로는 완료봉으로 분류돼 미확정 봉이 섞인다 → 완료봉 경로는 재사용 없이 받는다.
+        if iv is None:
+            rows = self.get(symbol, interval, limit)
+        else:
+            slot = self._slot((symbol, interval))
+            with slot.lock:
+                rows = self._get_locked(slot, symbol, interval, iv, limit, allow_reuse=False)
         if not isinstance(rows, list) or iv is None:
             return rows
         out = []
@@ -245,12 +252,13 @@ class IncrementalKlines:
             return "refresh_due"
         return None
 
-    def _get_locked(self, slot: _Slot, symbol: str, interval: str, iv: int, limit: int) -> list[list]:
+    def _get_locked(self, slot: _Slot, symbol: str, interval: str, iv: int, limit: int,
+                    allow_reuse: bool = True) -> list[list]:
         now = self._clock()
         e = slot.entry
         # 규칙 4: 직전 실제 fetch 뒤 아주 짧은 시간이면 fetch 없이 응답
         window = min(iv / 1000.0, self._reuse_window_s, 60.0)   # 명세 상한 60초 (GPT 감사 수용)
-        if e is not None and limit <= e.cap and window > 0 and 0 <= now - e.fetched_at <= window:
+        if allow_reuse and e is not None and limit <= e.cap and window > 0 and 0 <= now - e.fetched_at <= window:
             self._add("reused")
             return _copy_tail(e.rows, limit)
 
