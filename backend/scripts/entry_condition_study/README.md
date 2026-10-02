@@ -50,3 +50,4 @@
 - `bbswing_shadow_dump.py` — 운영 Redis `bbswing:shadow:*`(7일 TTL)를 덤프 (VPS 읽기만). 주 1회 `bbswing/shadow_YYYYMMDD.jsonl` 로 쌓는다.
 - `bbswing_shadow_eval.py` — 쌓인 덤프 전부를 공개 15m 봉으로 사후 채점 (9/14 백테스트와 같은 실행 근사).
 - 결과: docs/spec/BB_SWING_STRATEGY_2026-09-14.md 5절 (LONG 미채택 · SHORT 보류).
+- `ext_rules_report.py` — 후지모토·마하세븐 가상 규칙 + 기준선 행만으로 운영 보고서 함수를 돌린다 (VPS 읽기만, 행 상한 있음). 결과: EXTERNAL_STRATEGIES_FUJIMOTO_MACH7 7절.

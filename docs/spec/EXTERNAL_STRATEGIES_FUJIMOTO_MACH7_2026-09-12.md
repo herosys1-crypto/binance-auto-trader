@@ -62,3 +62,30 @@ mach7_mode    = on       (또는 off)
 - `tests/test_fix368_external_strategies.py` 11건: 지표(SMA/MACD/RSI/일목 26봉 시프트) · 다이버전스 · 후지모토 1/2/3차 LONG·SHORT 각 조건 ·
   마하세븐 함정/추세/기울기/손절 · 2% 룰 산식 · 설정 가드(NaN·오타 모드) · 가상 규칙 등록·캐시 · 배선 핀(스케줄러·단일진입·검사기).
 - 배포 후 검사기 ⑥절: 규칙 8/8 · LABEL_VERSION 4 · 스케줄러 잡 · 기본 shadow · 마지막 사이클 · 그림자 신호 수.
+
+---
+
+## 7. 실주문 판정 (2026-10-02, Claude — 대기열 4, 운영 가상매매 읽기 전용)
+
+표본: 가상매매 실시간(source=live) CLOSED, 9/12 00:45 ~ 10/02 04:45 UTC, 규칙 8종 19,107건 + 기준선 14,448건.
+운영 보고서 함수 `paper_trading.build_report` 그대로 (재현: `backend/scripts/entry_condition_study/ext_rules_report.py`).
+채택 문턱 = 대기열 4 그대로 **n ≥ 100 · Δ > 0 · CV 4/4** (잣대 house·live).
+
+| 규칙 | 실주문에서의 역할 | ALL house Δ | ALL live Δ | 문턱 통과 자리 |
+|---|---|---:|---:|---|
+| `fujimoto_l1_rsi` | **LONG 1차 진입** | −0.18 | −0.36 | MKT_DOWN 만 (house +0.76 · live +1.18) |
+| `fujimoto_l2_div_gc` | LONG 2차 추가 | −0.40 | −0.19 | MKT_DOWN live 만 (+1.80) |
+| `fujimoto_l3_ichimoku` | LONG 3차 추가(70%) | **+0.39 ✅** | +0.15 (뒷절반 −0.36) | house 6/7 자리 · live MKT_DOWN |
+| `fujimoto_s1_rsi` | **SHORT 1차 진입** | −0.12 | −0.36 | 평균 ROI 자체가 음수 (기준선보다 덜 지는 자리만) |
+| `fujimoto_s2/s3` | SHORT 추가 | +0.12 / −0.11 | +0.19 / +0.09 | s3 MKT_UP live Δ+1.99 이지만 평균 −0.23 (절대 손실) |
+| `mach7_trap_long` | LONG 진입 | −0.09 | **−1.05** | 없음 |
+| `mach7_trap_short` | SHORT 진입 | −0.36 | **−1.67** | 없음 · MKT_DOWN live 평균 **−7.37** (승률 26%) |
+
+### 판정
+- **마하세븐 = on 금지.** 8개 자리 × 2잣대 어디서도 문턱 미달, SHORT 는 하락 국면에서 크게 진다.
+- **후지모토 = on 금지 (현행 설계 그대로는).** 실주문은 1차(`l1_rsi`/`s1_rsi`)로 들어가는데 1차가 ALL 에서 기준선보다 나쁘다.
+  통과는 LONG 1·2차의 **MKT_DOWN 자리뿐** = 국면 의존(9/19 기회 지도 「최고 구간은 장세 따라 뒤집힘」과 같은 패턴).
+- **후보 (사장님 결정 · 새 설계라 지금 코드 없음)**: `fujimoto_l3_ichimoku` LONG 을 **단독 진입 신호**로 쓰는 가족.
+  house 는 ALL·UP24·DOWN24·MKT_UP·MKT_DOWN·LIVE_OK 모두 통과지만, 실코드 청산(live)은 ALL Δ+0.15 · 시간 뒷절반 −0.36 으로 약하다.
+  판정 가설 수 8규칙 × 7자리 × 2잣대 = 112 → 우연 통과를 배제하려면 **10/02 이후 표본만으로** 같은 문턱을 다시 넘는지 본다 (사전등록, 10/16경 재측정).
+- 그림자 워커는 그대로 둔다 (신호 기록 비용만 있음). 끄려면 `fujimoto_mode=off` / `mach7_mode=off`.
