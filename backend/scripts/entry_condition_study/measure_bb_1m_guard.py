@@ -29,6 +29,7 @@ import re
 import sys
 import time
 from collections import Counter
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -167,13 +168,15 @@ def fetch_symbols(client: Client) -> list[str]:
 def load_15m(sym: str, ctx: "Ctx") -> tuple[list[tuple], int]:
     path = ctx.args.cache_dir / "15m" / f"{sym}.json"
     cached = read_json(path)
-    if isinstance(cached, dict) and isinstance(cached.get("bars"), list) and isinstance(cached.get("end_ms"), int):
+    want_end = ctx.args.end_ms                       # None = 지금까지
+    if (isinstance(cached, dict) and isinstance(cached.get("bars"), list) and isinstance(cached.get("end_ms"), int)
+            and (want_end is None or cached["end_ms"] == want_end)):   # 다른 기간 캐시는 재사용하지 않는다
         bars, bad = parse_klines(cached["bars"])
         ctx.st["bad_bars_15m"] += bad
         return bars, cached["end_ms"]
     if ctx.args.no_fetch:
-        raise FetchError("15분봉 캐시 없음/손상(--no-fetch)")
-    end = int(time.time() * 1000) // M15 * M15  # open < end 인 봉만 = 완료봉
+        raise FetchError("15분봉 캐시 없음/손상/다른 기간(--no-fetch)")
+    end = want_end if want_end is not None else int(time.time() * 1000) // M15 * M15  # open < end 인 봉만 = 완료봉
     cur = end - ctx.args.days * DAY_MS - WARMUP_BARS * M15
     rows: list = []
     while cur < end:
@@ -323,9 +326,17 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap.add_argument("--max-symbols", type=int, default=None)
     ap.add_argument("--symbols", default="", help="A,B,...")
     ap.add_argument("--windows", default="15,30,60", help="조기 손절 감시 분(15의 배수)")
+    ap.add_argument("--end", default="", help="측정 끝 UTC 날짜 YYYY-MM-DD (그날 00:00 직전까지). 비우면 지금 — 기간마다 --cache-dir·--out-dir 을 따로")
     a = ap.parse_args(argv)
     if a.days < 1:
         ap.error("--days 는 1 이상")
+    try:
+        a.end_ms = (int(datetime.strptime(a.end, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() * 1000)
+                    if a.end else None)
+    except ValueError:
+        ap.error("--end 는 YYYY-MM-DD")
+    if a.end_ms is not None and a.end_ms > time.time() * 1000:
+        ap.error("--end 는 오늘 이전")
     try:
         a.windows = sorted({int(x) for x in a.windows.split(",") if x.strip()})
     except ValueError:

@@ -8,5 +8,5 @@ gate_replay.csv
 *.pkl
 z2*.txt
 bbswing/
-cache_bb_1m/
-out_bb_1m/
+cache_bb_1m*/
+out_bb_1m*/

@@ -52,4 +52,4 @@
 - 결과: docs/spec/BB_SWING_STRATEGY_2026-09-14.md 5절 (LONG 미채택 · SHORT 보류).
 - `ext_rules_report.py` — 후지모토·마하세븐 가상 규칙 + 기준선 행만으로 운영 보고서 함수를 돌린다 (VPS 읽기만, 행 상한 있음). 결과: EXTERNAL_STRATEGIES_FUJIMOTO_MACH7 7절.
 - `measure_bb_1m_guard.py` — 볼밴 분할 1차 진입 뒤 1분봉 조기 손절 0단계 측정 (공개 시세, 로컬 IP). 캐시 `cache_bb_1m/` · 결과 `out_bb_1m/` (gitignore).
-  🚨 조기 손절 Δ 는 같은 W 의 `CTRL_W*` 대비로 본다 (1분 재생 해상도 이득 분리). 순수 함수는 `bb1m_guard_lib.py`. 결과: docs/spec/BB_1M_PLAN_2026-09-14.md 8절 (SHORT 1.0%·30분 통과·경계선).
+  🚨 조기 손절 Δ 는 같은 W 의 `CTRL_W*` 대비로 본다 (1분 재생 해상도 이득 분리). 순수 함수는 `bb1m_guard_lib.py`. 결과: docs/spec/BB_1M_PLAN_2026-09-14.md 8절 (3구간 재측정: 7월 +4.23 · 8월 −1.12 · 9월 +3.21 → 장세 의존, 보류). 다른 기간 = `--end YYYY-MM-DD --cache-dir cache_bb_1m_<날짜> --out-dir out_bb_1m_<날짜>`.
