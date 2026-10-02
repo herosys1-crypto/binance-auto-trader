@@ -367,7 +367,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
         if backfill_res is not None:
             res["backfill"] = backfill_res
         _kc1 = _KC.stats()
-        res["klines"] = {"incremental": _incr, **{k: _kc1[k] - _kc0.get(k, 0) for k in
+        res["klines"] = {"enabled": _incr, **{k: _kc1[k] - _kc0.get(k, 0) for k in
                          ("weight", "fetch_calls", "full", "incremental", "closed_hit", "fallback", "fetch_errors")}}
         _store_cycle_summary(res)
         # 🚨 할 일이 0건이어도 한 줄 남긴다 — 침묵을 고장으로 착각하지 않게 (Fix 353 교훈).

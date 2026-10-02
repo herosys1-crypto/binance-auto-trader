@@ -975,6 +975,42 @@ def check_auto_entry_ready() -> None:
         fail(f"운영 층 조회 실패: {e!r}")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# ⚖️ Fix 405·406 IP 무게 절감 — 별도 모듈 scripts/verify_ip_weight.py (Duel verify-ip-weight)
+# ─────────────────────────────────────────────────────────────────────────
+def check_ip_weight_section() -> None:
+    if _HERE not in sys.path:
+        sys.path.insert(0, _HERE)
+    try:
+        from verify_ip_weight import check_ip_weight
+    except Exception as e:  # noqa: BLE001
+        fail(f"verify_ip_weight 모듈 없음: {e!r}")
+        return
+    db = get_setting = redis = None
+    if not CODE_ONLY:
+        try:
+            from app.core.database import SessionLocal
+            from app.models.system_setting import SystemSetting
+            db = SessionLocal()
+
+            def get_setting(key: str):
+                row = db.get(SystemSetting, key)
+                return None if row is None else row.value
+        except Exception as e:  # noqa: BLE001
+            skip(f"DB 연결 실패 → 설정은 기본값 가정: {e!r}")
+        try:
+            from app.core.redis_client import get_redis_client
+            redis = get_redis_client()
+        except Exception as e:  # noqa: BLE001
+            skip(f"Redis 연결 실패: {e!r}")
+    try:
+        check_ip_weight(ok, fail, skip, root=_ROOT, code_only=CODE_ONLY, process_start_epoch=_pid1_start_epoch(),
+                        get_setting=get_setting, redis=redis)
+    finally:
+        if db is not None:
+            db.close()
+
+
 if __name__ == "__main__":
     print(f"verify_fix364_deploy — {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z} (cwd {_ROOT})")
     check_code()
@@ -992,6 +1028,7 @@ if __name__ == "__main__":
     check_paper_improvement()
     check_bb_swing()
     check_auto_entry_ready()
+    check_ip_weight_section()
     print("─" * 70)
     if _fails:
         print(f"결과: FAIL {len(_fails)}건")
