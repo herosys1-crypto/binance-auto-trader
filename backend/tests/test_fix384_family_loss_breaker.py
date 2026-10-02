@@ -251,7 +251,7 @@ class TestFix400HumanShare:
 
     def test_all_states_reports_both(self):
         db = _DB(strategies=[strat(-28.74, 1, designed=10, actual=110)])
-        st = FB.all_states(db, ["bottom_long"])["bottom_long"]
+        st = FB.all_states(db, ["bottom_long"], now=NOW)["bottom_long"]  # now 고정 — 없으면 실제 시계라 9/25+7일 뒤 깨졌다
         assert st["pnl"] == pytest.approx(-2.61, abs=0.02)
         assert st["pnl_raw"] == pytest.approx(-28.74, abs=0.01)
         assert st["human_n"] == 1
