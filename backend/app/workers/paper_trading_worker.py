@@ -43,6 +43,7 @@ from app.models.chart_learning_day import ChartLearningDay
 from app.services import chart_learning as CL
 from app.services import paper_trading as PT
 from app.services.market_movers import MIN_QUOTE_VOLUME, change_pct, quote_volume
+from app.services.kline_incremental import IncrementalKlines
 from app.workers.chart_learning_worker import MAX_CONSEC_FAIL, SLEEP, _klines, _now_ms, _open
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,13 @@ CURSOR_KEY = "paper_backfill_last_id"     # system_settings — 백필 진행 �
 DONE_KEY = "paper_backfill_done"          # system_settings — "1" 이면 부트스트랩 완료
 REDIS_KEY = "paper_trading:last_cycle"
 REDIS_TTL = 172800           # 2일
+
+# ⚖️ 2026-10-02 IP 무게 절감 (Duel kline-incremental): 515종목 × (15m 262 + 4h 82) 를 매 사이클 통째로 받던 것(≈1,545/사이클)을
+#   완료봉 증분 캐시로 ≈580 으로. 결과는 전체 조회 + compact 와 같다(시뮬 2,000스텝·3일 동등성 테스트). 프로세스 메모리 캐시라
+#   재시작하면 첫 사이클만 예전 무게. 끄기 = system_settings `paper_kline_incremental` = 0 (재시작 불필요, 다음 사이클부터).
+KLINE_INCR_KEY = "paper_kline_incremental"
+_KC_BC: list = [None]                                   # 이번 사이클의 BinanceClient (fetch 가 매번 읽는다)
+_KC = IncrementalKlines(lambda s, i, n: _klines(_KC_BC[0], symbol=s, interval=i, limit=n))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -202,10 +210,20 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
         _cs_1m = CS.setting_on(db, CS.S_1M, True)
         _cs_th = CS.thresholds(db)
         _cs_cache: dict[str, dict[str, Any]] = {}
+        _KC_BC[0] = bc
+        _incr = _float_setting(db, KLINE_INCR_KEY, 1.0, 0.0, 1.0) >= 0.5
+        _kc0 = _KC.stats()
+
+        def _kl(sym_: str, interval: str, limit: int) -> list:
+            """완료봉만 쓰는 가상매매용 — 증분 캐시(켜짐) 또는 예전처럼 전체 조회. 둘 다 아래 compact 로 진행 중 봉을 뺀다."""
+            if _incr:
+                return _KC.get_closed(sym_, interval, limit, now_ms)
+            return _klines(bc, symbol=sym_, interval=interval, limit=limit)
+
         for sym in process_symbols:
             try:
-                k15 = CL.compact(_klines(bc, symbol=sym, interval="15m", limit=262), now_ms=now_ms)
-                k4 = CL.compact(_klines(bc, symbol=sym, interval="4h", limit=82), now_ms=now_ms, interval_ms=CL.MS_4H)   # Fix 366b: 게이트 재현 80봉
+                k15 = CL.compact(_kl(sym, interval="15m", limit=262), now_ms=now_ms)
+                k4 = CL.compact(_kl(sym, interval="4h", limit=82), now_ms=now_ms, interval_ms=CL.MS_4H)   # Fix 366b: 게이트 재현 80봉
                 fails = 0
             except Exception as e:  # noqa: BLE001
                 if sym not in uni:
@@ -285,7 +303,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                 from app.services import opportunity_zones as OZ
                 _cx = series.ctx(j)
                 if OZ.needs_daily(_cx.kl15, _cx.kl1h):
-                    series.k1d = CL.compact(_klines(bc, symbol=sym, interval="1d", limit=61), now_ms=now_ms,
+                    series.k1d = CL.compact(_kl(sym, interval="1d", limit=61), now_ms=now_ms,
                                             interval_ms=CL.MS_DAY)
             except Exception as e:  # noqa: BLE001
                 logger.warning("[Fix379] %s 일봉 조회 실패 → 기회지도 S4 이번 판정 생략: %s", sym, e)
@@ -348,10 +366,14 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                                "upgraded": upgraded, "upgrade_skipped": upgrade_skipped}
         if backfill_res is not None:
             res["backfill"] = backfill_res
+        _kc1 = _KC.stats()
+        res["klines"] = {"incremental": _incr, **{k: _kc1[k] - _kc0.get(k, 0) for k in
+                         ("weight", "fetch_calls", "full", "incremental", "closed_hit", "fallback", "fetch_errors")}}
         _store_cycle_summary(res)
         # 🚨 할 일이 0건이어도 한 줄 남긴다 — 침묵을 고장으로 착각하지 않게 (Fix 353 교훈).
-        logger.info("[%s] 가상매매: 감시 %d · 열림 %d · 관리 %d · 마감 %d · 옛행갱신 %d(창밖 %d) · 국면 %s(%s) · %.0fs",
-                    FIX, res["symbols"], opened, managed, closed, upgraded, upgrade_skipped, mtag, breadth, res["seconds"])
+        logger.info("[%s] 가상매매: 감시 %d · 열림 %d · 관리 %d · 마감 %d · 옛행갱신 %d(창밖 %d) · 국면 %s(%s) · %.0fs · 봉 무게 %d(%s)",
+                    FIX, res["symbols"], opened, managed, closed, upgraded, upgrade_skipped, mtag, breadth, res["seconds"],
+                    res["klines"]["weight"], "증분" if _incr else "전체")
         return res
     finally:
         db.close()
