@@ -62,7 +62,102 @@ def _mark_dedup(redis, sid, t):
         pass
 
 
-def _check_auto_entry_silent_bug(db, strategy, mark_price):
+# 🚦 Fix 410 (2026-10-03, Duel auto-entry-missed): 「트리거 도달 = 즉시 CRITICAL」 오탐 (사람 수동 포지션 3건, 이틀 13건 + 알림).
+#   ① 2분 이상 계속 닿아 있을 때만 (위 AUTO_ENTRY_GRACE_MINUTES 가 정의만 있고 안 쓰였다)
+#   ② 단계 워커가 의도적으로 막은 사유(Redis)가 있으면 INFO AUTO_ENTRY_BLOCKED (알림 없음)
+#   ③ Redis 로 확인할 수 없으면 WARN AUTO_ENTRY_UNVERIFIED — CRITICAL 과 유형을 나눠 dedup 이 진짜 CRITICAL 을 막지 않게
+_REACHED_KEY = "setting_preserve:reached:{sid}:{stage}"
+_REACHED_TTL = 6 * 3600
+_REACHED_GAP_SEC = 7 * 60          # Claude가 정함 — 3분 주기 2회 + 여유. 이보다 오래 관측이 끊기면 처음부터 다시 센다
+_BLOCK_KEY = "stage_trigger_block:strategy:{sid}"     # stage_trigger_worker._BLOCK_REASON_KEY 와 같은 키
+_BLOCK_FRESH_SEC = 600             # 사유 TTL 10분과 같다
+_BLOCK_FUTURE_TOL_SEC = 60         # 다른 프로세스가 방금 덮어쓴 시각(약간 미래) 허용 — 버리면 오탐이 되살아난다 (Claude 감사)
+
+
+def _aware_utc(dt):
+    if dt is None:
+        return datetime.now(timezone.utc)
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _as_text(v):
+    if v is None:
+        return None
+    if isinstance(v, bytes):
+        try:
+            return v.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    return v if isinstance(v, str) else None
+
+
+def _small_int(v):
+    """bool·소수·4,300자리 넘는 문자열 등은 None (int 변환 예외 차단)."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str) and v.strip().lstrip("-").isdigit() and len(v.strip()) <= 9:
+        return int(v.strip())
+    return None
+
+
+def _parse_block(raw, next_stage: int, now) -> dict | None:
+    """유효한(같은 단계 또는 0 · 10분 이내 · 약간의 미래 허용) 차단 기록이면 {"reason": str}, 아니면 None. 예외를 내지 않는다."""
+    import json
+    try:
+        d = json.loads(_as_text(raw) or "")
+        if not isinstance(d, dict):
+            return None
+        st = _small_int(d.get("stage_no"))
+        if st is None or st not in (0, next_stage):
+            return None
+        at = d.get("blocked_at")
+        if not isinstance(at, str) or len(at) > 64:
+            return None
+        t = datetime.fromisoformat(at.replace("Z", "+00:00"))
+        if t.tzinfo is None:
+            return None
+        age = (now - t).total_seconds()
+        if not (-_BLOCK_FUTURE_TOL_SEC <= age <= _BLOCK_FRESH_SEC):
+            return None
+        reason = d.get("reason")
+        reason = reason.strip() if isinstance(reason, str) and reason.strip() else "(사유 미기재)"
+        return {"reason": reason[:200]}
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _reached_elapsed(redis, sid: int, stage: int, now) -> float:
+    """처음 닿은 뒤 경과 초 (첫·마지막 관측 함께 저장 — 지우기 실패로 남은 옛 표식이 「지속」 증거가 되지 않게). Redis 예외는 그대로 올린다."""
+    import json
+    key = _REACHED_KEY.format(sid=sid, stage=stage)
+    ts = now.timestamp()
+    first = ts
+    d = None
+    try:
+        d = json.loads(_as_text(redis.get(key)) or "null")
+    except (ValueError, TypeError):
+        d = None
+    if isinstance(d, dict):
+        f, last = d.get("first"), d.get("last")
+        if (isinstance(f, (int, float)) and isinstance(last, (int, float)) and not isinstance(f, bool)
+                and f <= last <= ts + 1 and ts - last <= _REACHED_GAP_SEC):
+            first = float(f)
+    redis.setex(key, _REACHED_TTL, json.dumps({"first": first, "last": ts}))
+    return max(0.0, ts - first)
+
+
+def _forget_reached(redis, sid: int, stage: int) -> None:
+    if redis is None:
+        return
+    try:
+        redis.delete(_REACHED_KEY.format(sid=sid, stage=stage))
+    except Exception as e:  # noqa: BLE001 — 지우지 못해도 다음 관측에서 7분 간격 규칙으로 다시 센다
+        logger.debug("[setting-preserve] 도달 표식 삭제 실패(무시): %s", e)
+
+
+def _check_auto_entry_silent_bug(db, strategy, mark_price, redis=None, now=None):
     """검증 1: trigger 도달 후 N분 = 자동 진입 안 됨 silent bug!"""
     bugs = []
     if not mark_price or strategy.status not in ("STAGE1_OPEN", "STAGE2_OPEN", "STAGE3_OPEN", "STAGE4_OPEN", "STAGE5_OPEN"):
@@ -99,27 +194,40 @@ def _check_auto_entry_silent_bug(db, strategy, mark_price):
     elif strategy.side == "LONG" and mark <= trigger:
         reached = True
 
+    stage = int(next_plan.stage_no)
     if not reached:
+        _forget_reached(redis, strategy.id, stage)
         return bugs
 
-    # 도달 후 N분 경과 = silent bug!
+    now = _aware_utc(now)
+    head = f"#{strategy.id} {strategy.symbol} 단계 {stage} = trigger {trigger} 도달 (현재가 {mark})"
+    if redis is None:
+        bugs.append({"type": "AUTO_ENTRY_UNVERIFIED", "severity": "WARN",
+                     "msg": f"{head} — Redis 없음: 지속 시간·차단 사유 확인 불가 (자동 진입 여부 직접 확인)"})
+        return bugs
     try:
-        now = datetime.now(timezone.utc)
-        ref_time = strategy.updated_at or strategy.created_at
-        if ref_time and ref_time.tzinfo is None:
-            ref_time = ref_time.replace(tzinfo=timezone.utc)
-        # 단순화: 가격 도달 + 자동 진입 안 됨 = silent bug 의심!
-        bugs.append({
-            "type": "AUTO_ENTRY_MISSED",
-            "severity": "CRITICAL",
-            "msg": (
-                f"#{strategy.id} {strategy.symbol} 단계 {next_plan.stage_no} = "
-                f"trigger {trigger} 도달 (현재가 {mark}) BUT 자동 진입 X! "
-                f"사장님 즉시 확인!"
-            ),
-        })
-    except Exception:
-        pass
+        elapsed = _reached_elapsed(redis, strategy.id, stage, now)
+    except Exception as e:  # noqa: BLE001
+        bugs.append({"type": "AUTO_ENTRY_UNVERIFIED", "severity": "WARN",
+                     "msg": f"{head} — Redis 오류로 지속 시간 확인 불가: {str(e)[:120]}"})
+        return bugs
+    if elapsed < AUTO_ENTRY_GRACE_MINUTES * 60:
+        return bugs                                     # 아직 유예 — 단계 워커(15초 주기)가 들어갈 시간
+    try:
+        block = _parse_block(redis.get(_BLOCK_KEY.format(sid=strategy.id)), stage, now)
+    except Exception as e:  # noqa: BLE001
+        bugs.append({"type": "AUTO_ENTRY_UNVERIFIED", "severity": "WARN",
+                     "msg": f"{head} {elapsed / 60:.0f}분째 — 차단 사유 조회 실패: {str(e)[:120]}"})
+        return bugs
+    if block is not None:
+        bugs.append({"type": "AUTO_ENTRY_BLOCKED", "severity": "INFO",
+                     "msg": f"{head} {elapsed / 60:.0f}분째 — 진입 워커가 의도적으로 보류: {block['reason']}"})
+        return bugs
+    bugs.append({
+        "type": "AUTO_ENTRY_MISSED",
+        "severity": "CRITICAL",
+        "msg": f"{head} {elapsed / 60:.0f}분째 BUT 자동 진입 X · 차단 사유 기록도 없음! 사장님 즉시 확인!",
+    })
     return bugs
 
 
@@ -224,7 +332,7 @@ def run_setting_preservation_once() -> dict:
                 mark = p.mark_price if p else None
 
             all_bugs = []
-            all_bugs.extend(_check_auto_entry_silent_bug(db, s, mark))
+            all_bugs.extend(_check_auto_entry_silent_bug(db, s, mark, redis=redis))   # Fix 410: 지속·차단 사유 확인
             all_bugs.extend(_check_trigger_cumulative_logic(db, s))
 
             for bug in all_bugs:
@@ -257,6 +365,10 @@ def run_setting_preservation_once() -> dict:
                         result["alerts_sent"] += 1
                 except Exception as e:
                     logger.error("[setting-preserve] 기록/알림 실패: %s", e)
+                    try:  # Fix 410 (Gemini 심판): 롤백 안 하면 세션이 PendingRollback 으로 오염돼 이후 전략 검사가 전부 실패
+                        db.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
 
         if result["bugs_found"] == 0:
             logger.info("[setting-preserve] %d strategy = 모든 세팅 영구 유지!", result["total_checked"])

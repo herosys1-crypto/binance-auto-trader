@@ -233,6 +233,10 @@ def run_silent_bug_detector_once() -> dict:
                         result["alerts_sent"] += 1
                 except Exception as e:
                     logger.error("[silent-bug] 기록/알림 실패: %s", e)
+                    try:  # Fix 410 (Gemini 심판): 롤백 안 하면 세션이 PendingRollback 으로 오염돼 이후 전략 검사가 전부 실패
+                        db.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
 
         # 🎼 v206 Phase 2: 시스템 전체 sanity check!
         _v206_system_sanity_check(db, result, redis)
