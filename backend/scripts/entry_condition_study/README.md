@@ -45,3 +45,8 @@
 - `pyramid_regime.py` · `pyramid_regime_daily.py` — 운영 DB 읽기 전용(`docker compose exec -T api python -`). 가상 추가 lot 을 진입 시점 시장폭으로 갈라 두 장세에서 잰다.
 
 결과: docs/learning/CONDITIONAL_PYRAMID_2026-09-19.md
+
+## 2026-10-02 추가 (볼밴 스윙 그림자 판정)
+- `bbswing_shadow_dump.py` — 운영 Redis `bbswing:shadow:*`(7일 TTL)를 덤프 (VPS 읽기만). 주 1회 `bbswing/shadow_YYYYMMDD.jsonl` 로 쌓는다.
+- `bbswing_shadow_eval.py` — 쌓인 덤프 전부를 공개 15m 봉으로 사후 채점 (9/14 백테스트와 같은 실행 근사).
+- 결과: docs/spec/BB_SWING_STRATEGY_2026-09-14.md 5절 (LONG 미채택 · SHORT 보류).

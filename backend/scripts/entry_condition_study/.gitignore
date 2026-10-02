@@ -7,3 +7,4 @@ gate_replay.csv
 *.log
 *.pkl
 z2*.txt
+bbswing/
