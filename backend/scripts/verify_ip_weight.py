@@ -38,8 +38,11 @@ DEFAULTS = {
     "ext_kline_incremental": "1",
     "ext_bar_settle_ms": "5000",
 }
-# Claude가 정함: 호출자별 분당 평균 무게의 배포 판정 문턱.
-LIMITS = {"paper_trading": 60, "external_strategies": 30}
+# Claude가 정함: 호출자별 분당 평균 무게의 배포 판정 문턱 — 2026-10-02 배포 뒤 실측으로 재설정.
+#   가상매매 따뜻한 사이클 = 봉 568 + 규칙 발동 종목 차트 상태 조회(가변) → 750~1,100/15분 = 50~73/분 (회귀 = 전체 조회 128+/분)
+#   외부 전략 = 봉은 경계마다만(≈4/분) + 감시 종목 선정 24h 티커 40/분 (회귀 = 160/분)
+LIMITS = {"paper_trading": 100, "external_strategies": 60}
+COLD_MIN = 20   # Claude가 정함: 재시작 직후 냉캐시 첫 사이클(전체 조회, 가상매매 ≈1,900·6분)을 측정에서 뺀다
 BASELINES = {"paper_trading": 128, "external_strategies": 147}
 
 
@@ -221,7 +224,7 @@ def _integer(value):
     return number
 
 
-def _measure(redis, start, now, window, settings, external_off, ok, fail, skip):
+def _measure(redis, start, now, window, settings, external_off, ok, fail, skip, cold_min=COLD_MIN):
     if start is None:
         skip("실측 무게: 프로세스 시작 시각 없음 — 측정 구간 확정 불가")
         return
@@ -233,11 +236,11 @@ def _measure(redis, start, now, window, settings, external_off, ok, fail, skip):
     # 현재 분과 시작 분을 제외한다. window개의 과거 분 중 적격 분만 읽는다.
     minutes = [
         minute for minute in range(current_minute - window, current_minute)
-        if minute > start_minute
+        if minute > start_minute + cold_min
     ]
     count = len(minutes)
     if count < 20:
-        skip(f"실측 무게: 재시작 뒤 측정 부족 {count}분 — 20분 뒤 다시")
+        skip(f"실측 무게: 재시작 {cold_min}분 뒤부터 측정 — 지금 {count}분 (20분 필요, 재시작 뒤 약 {cold_min + 21}분부터 판정)")
         return
 
     callers = {name: [] for name in LIMITS}
@@ -314,7 +317,7 @@ def _measure(redis, start, now, window, settings, external_off, ok, fail, skip):
 def check_ip_weight(ok, fail, skip, *, root: str, code_only: bool,
                     process_start_epoch: float | None,
                     get_setting=None, redis=None, now_epoch: float | None = None,
-                    window_min: int = 30) -> None:
+                    window_min: int = 30, cold_min: int = COLD_MIN) -> None:
     """절 제목을 출력하고 코드·프로세스·운영 층을 읽기 전용으로 검사한다."""
     try:
         print(TITLE)
@@ -338,7 +341,7 @@ def check_ip_weight(ok, fail, skip, *, root: str, code_only: bool,
         _measure(
             redis, process_start_epoch,
             time.time() if now_epoch is None else now_epoch,
-            window_min, settings, external_off, ok, fail, skip,
+            window_min, settings, external_off, ok, fail, skip, cold_min,
         )
     except Exception as exc:
         try:

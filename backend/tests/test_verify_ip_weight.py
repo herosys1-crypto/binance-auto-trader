@@ -85,6 +85,7 @@ def deployment(tmp_path):
         "get_setting": lambda key: None,
         "redis": FakeRedis(),
         "now_epoch": NOW,
+        "cold_min": 0,          # 냉시작 제외는 test_cold_start_minutes_excluded 에서 따로
     }
 
 
@@ -183,7 +184,7 @@ def test_no_process_start(deployment):
 def test_insufficient_complete_minutes(deployment, elapsed, expected_minutes):
     deployment["process_start_epoch"] = MINUTE - elapsed * 60 + 10
     result = run(deployment)
-    assert contains(result, "skip", f"측정 부족 {expected_minutes}분")
+    assert contains(result, "skip", f"지금 {expected_minutes}분")
     assert not contains(result, "ok", "무게 판정")
 
 
@@ -196,8 +197,8 @@ def test_25_minutes_low_weight_passes(deployment):
 
 
 def test_high_paper_weight_fails(deployment):
-    deployment["redis"].paper = 90
-    assert contains(run(deployment), "fail", "paper_trading: 평균=90.00")
+    deployment["redis"].paper = 130
+    assert contains(run(deployment), "fail", "paper_trading: 평균=130.00")
 
 
 def test_minute_boundaries_are_excluded(deployment, capsys):
@@ -328,7 +329,7 @@ def test_no_records_at_all_is_not_a_pass(deployment):
 
 def test_setting_not_injected_still_judges_with_default(deployment, capsys):
     deployment["get_setting"] = None
-    deployment["redis"].paper = 90
+    deployment["redis"].paper = 130
     result = run(deployment)
     assert contains(result, "fail", "무게 판정 paper_trading")       # 회귀를 놓치지 않는다
     assert "기본 가정 — 설정 미확인" in capsys.readouterr().out
@@ -374,7 +375,7 @@ def test_off_rules_match_server(deployment, key, raw, judged):
 def test_missing_minutes_do_not_dilute_average(deployment):
     """Gemini 심판: 기록 없는 분을 0 으로 넣고 전체 분으로 나누면 80/분이 53/분으로 보여 PASS 였다."""
     redis = deployment["redis"]
-    redis.paper = 80
+    redis.paper = 130
     real = redis.hgetall
     keys = []
 
@@ -383,13 +384,21 @@ def test_missing_minutes_do_not_dilute_average(deployment):
         return {} if len(keys) % 3 == 0 else real(key)          # 3분에 1분은 기록 없음
     redis.hgetall = sparse
     result = run(deployment)
-    assert contains(result, "fail", "무게 판정 paper_trading: 평균=80.00/분")
+    assert contains(result, "fail", "무게 판정 paper_trading: 평균=130.00/분")
 
 
 def test_setting_read_error_still_judges(deployment):
     def boom(key):
         raise RuntimeError("db glitch")
     deployment["get_setting"] = boom
-    deployment["redis"].paper = 90
+    deployment["redis"].paper = 130
     result = run(deployment)
     assert contains(result, "fail", "무게 판정 paper_trading")
+
+
+def test_cold_start_minutes_excluded(deployment):
+    """재시작 직후 냉캐시 첫 사이클(전체 조회)은 측정에서 뺀다 — 운영 첫 시험에서 12:01 냉사이클 ≈1,900 이 평균을 끌어올려 허위 FAIL."""
+    deployment["cold_min"] = 20                     # 시작 35분 전 → 냉시작 20분 빼면 14분 < 20 → 보류
+    result = run(deployment)
+    assert contains(result, "skip", "재시작 20분 뒤부터 측정")
+    assert not contains(result, "ok", "무게 판정") and not contains(result, "fail", "무게 판정")
