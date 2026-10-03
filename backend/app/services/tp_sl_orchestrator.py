@@ -131,6 +131,8 @@ class TPSLOrchestratorService:
         from app.models.symbol import Symbol
         from sqlalchemy import select
 
+        _qty_adjust_reason: str | None = None   # Fix 414: 최소 주문 규칙으로 수량을 의도적으로 바꿨으면 그 사유 (감사 등급에 씀)
+        _qty_adjust_close: Decimal | None = None  # 그 조정이 의도한 청산 수량 — 실제가 이것과 같을 때만 INFO (교차 감사)
         # SHORT 면 음수로 저장되어 있으므로 abs() 로 양수 quantity 확보.
         current_qty = abs(Decimal(str(strategy.current_position_qty)))
         tpl = self.db.get(StrategyTemplate, strategy.strategy_template_id)
@@ -344,6 +346,9 @@ class TPSLOrchestratorService:
                     _close_nom = close_qty * Decimal(str(_px))
                     _rest_nom = (current_qty - close_qty) * Decimal(str(_px))
                     if _close_nom < MIN_CLOSE_NOTIONAL or _rest_nom < MIN_CLOSE_NOTIONAL:
+                        _qty_adjust_reason = (f"최소 주문 명목가 {MIN_CLOSE_NOTIONAL}U 미만(청산 {float(_close_nom):.2f}U · "
+                                              f"잔여 {float(_rest_nom):.2f}U) → 전량 청산 (Fix 187)")
+                        _qty_adjust_close = current_qty
                         logger.info(
                             "[tp_sl Fix187] %s %s: 잔량이 최소 주문 명목가 미만 "
                             "(청산 %.2fU / 잔여 %.2fU < %s) → 전량 청산",
@@ -355,6 +360,8 @@ class TPSLOrchestratorService:
                 logger.debug("[tp_sl Fix187] 최소 명목가 검사 skip: %s", _mn_e)
             if close_qty <= 0 and current_qty >= step:
                 close_qty = step  # 최소 1 lot 보장
+                _qty_adjust_reason = f"계산 수량이 step({step}) 미만 → 1 step 보장"
+                _qty_adjust_close = step
                 # WARN 기록 — fee 손실 인지 + 사용자 알림
                 self.db.add(RiskEvent(
                     strategy_instance_id=strategy.id,
@@ -387,9 +394,16 @@ class TPSLOrchestratorService:
         try:
             expected_close_pct = float(close_ratio * 100)
             actual_close_pct = float((close_qty / current_qty) * 100) if current_qty > 0 else 0
+            # Fix 414: 최소 주문 규칙으로 의도적으로 바꾼 수량이 실제와 같으면 그 의도가 기준이다 (다르면 기존 기준 그대로)
+            if _qty_adjust_reason and _qty_adjust_close is not None and close_qty != _qty_adjust_close:
+                _qty_adjust_reason = None
             pct_diff = abs(expected_close_pct - actual_close_pct)
             # severity 결정 (= 사장님 안전 임계)
-            if pct_diff > 20:
+            # 🧾 Fix 414: 거래소 최소 주문 규칙 때문에 「의도적으로」 수량을 바꾼 경우는 결함이 아니다 — 10 USDT 단일 진입(20U 명목)은
+            #   TP1 25% = 5U 라 항상 전량 청산된다. 그걸 CRITICAL 로 알리면 진짜 CRITICAL 이 묻힌다.
+            if _qty_adjust_reason:
+                _severity = "INFO"
+            elif pct_diff > 20:
                 _severity = "CRITICAL"  # 의도 vs 실제 = 큰 차이 (= silent bug 가능성)
             elif pct_diff > 5:
                 _severity = "WARN"
@@ -412,7 +426,7 @@ class TPSLOrchestratorService:
                     f"  • current_stage: {strategy.current_stage}\n"
                     f"  • avg_entry: {strategy.avg_entry_price}\n"
                     f"  • total_capital: {strategy.total_capital}\n\n"
-                    f"{'🚨 silent bug 가능성 = 사장님 즉시 확인!' if _severity == 'CRITICAL' else ('⚠️ 차이 발생 = 검토 권장' if _severity == 'WARN' else '✅ 정상')}"
+                    f"{('ℹ️ 의도된 조정: ' + _qty_adjust_reason) if _qty_adjust_reason else ('🚨 silent bug 가능성 = 사장님 즉시 확인!' if _severity == 'CRITICAL' else ('⚠️ 차이 발생 = 검토 권장' if _severity == 'WARN' else '✅ 정상'))}"
                 ),
                 event_payload={
                     "level": level,

@@ -1646,6 +1646,14 @@ def run_stage_trigger_once(decrypt_text) -> None:
                             strategy.id, next_stage_no, strategy.symbol, strategy.side,
                             _rev_detail.get("passed"), _rev_detail.get("required"), _chg or 0,
                         )
+                        # 🧾 Fix 414: 마틴게일 게이트 검사기(Fix 58)가 보는 통과 표식 — 「companion change」가 빠져 있어
+                        #   검사기가 모든 진입을 CRITICAL 로 알렸다. 기록 실패는 진입과 무관(자기 try — 바깥 except 의 skip 진입으로 번지지 않게).
+                        try:                     # 참조까지 이 try 안 (교차 감사) — 어떤 실패도 진입과 무관
+                            if _redis is not None:
+                                _redis.setex(f"stage_trigger:fix55_gate_passed:sid:{strategy.id}:stage:{next_stage_no}",
+                                             6 * 3600, "1")
+                        except Exception as _mk55:  # noqa: BLE001
+                            logger.warning("[Fix414] 통과 표식 기록 실패(진입 무관, 검사기 오탐 가능): %s", _mk55)
                     except Exception as _e55:
                         # 예외 = fail-safe = skip (자본 보호 우선!)
                         logger.warning(

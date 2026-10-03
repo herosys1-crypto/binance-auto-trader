@@ -112,6 +112,40 @@ def _check_indicator_log_exists(redis_client, sid: int, stage_no: int) -> bool:
         return True
 
 
+def _gate_not_applicable(db, sid) -> str | None:
+    """Fix 55 게이트가 적용되지 않는 전략이면 이유 문자열, 적용 대상(또는 판단 불가)이면 None.
+
+    stage_trigger_worker 의 Fix 55 분기 조건과 같다: 단계 ≥2 · not split_entry · not 가격 모드 · not OBV_REVERSE.
+    템플릿을 못 읽으면 단계 워커와 같은 기본값 PRICE_DOWN_PCT(= 가격 모드 = 게이트 미적용)로 본다.
+    """
+    try:
+        strategy = db.get(StrategyInstance, sid) if sid else None
+        if strategy is None:
+            return None
+        if str(getattr(strategy, "capital_management_mode", "") or "").lower() == "split_entry":
+            return "split_entry(볼밴 분할 — 조정 신호로 판정)"
+        mode = "PRICE_DOWN_PCT"
+        tid = getattr(strategy, "strategy_template_id", None)
+        if tid:
+            from app.models.strategy_template import StrategyTemplate
+            tpl = db.get(StrategyTemplate, tid)
+            if tpl is not None and getattr(tpl, "trigger_mode", None):
+                mode = tpl.trigger_mode          # 단계 워커와 같은 원값 비교 (String(32) 컬럼)
+        if mode in ("PRICE_DOWN_PCT", "PRICE_UP_PCT"):
+            return f"{mode}(가격 모드 — Fix 232 가격만 본다)"
+        if mode == "OBV_REVERSE":
+            return "OBV_REVERSE(stage_entry_signal 로 판정)"
+        return None
+    except Exception as e:  # noqa: BLE001 — 판단 불가 = 기존처럼 표식 검사
+        # 교차 감사: 롤백 안 하면 세션이 깨져 이후 모든 항목이 판단 불가 → 표식 검사 → 가격 모드 오탐이 되살아난다
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning("[Fix414/validator] #%s 모드 판정 실패 → 표식 검사: %s", sid, e)
+        return None
+
+
 def _is_alert_dedup(redis_client, sid: int, stage_no: int) -> bool:
     if redis_client is None:
         return False
@@ -229,6 +263,7 @@ def run_martingale_gate_validator() -> dict[str, Any]:
         "spec_version": SPEC_VERSION,
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "total_checked": 0,
+        "gate_not_applicable": 0,    # Fix 414 (조기 종료해도 키가 있게)
         "gate_ok": 0,
         "gate_missing": 0,
         "alerts_sent": 0,
@@ -248,7 +283,14 @@ def run_martingale_gate_validator() -> dict[str, Any]:
         for plan in entries:
             sid = plan.strategy_instance_id
             stage_no = plan.stage_no
-
+            # 🧾 Fix 414: 단계 워커는 가격 모드(Fix 232 「기본방식은 가격만 본다」)·OBV 모드·볼밴 분할에는 Fix 55 게이트를
+            #   적용하지 않는다 → 그 진입에 표식이 없는 것은 정상. 같은 조건(stage_trigger_worker 의 Fix 55 분기)으로 거른다.
+            _why_na = _gate_not_applicable(db, sid)
+            if _why_na:
+                result["gate_not_applicable"] += 1
+                result["details"].append({"strategy_id": sid, "stage_no": stage_no, "status": "GATE_NOT_APPLICABLE",
+                                           "why": _why_na})
+                continue
             has_marker = _check_indicator_log_exists(redis_client, sid, stage_no)
             if has_marker:
                 result["gate_ok"] += 1
