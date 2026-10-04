@@ -103,6 +103,7 @@ _WEIGHT_KEY = "binance:weight:{minute}"
 #   스케줄러의 guarded_job 이 잡 이름을 여기에 넣어 주면, 가중치를 잡별로 분해할 수 있다.
 #   설정하지 않으면 "other" — 판정에는 아무 영향이 없다 (진단 전용).
 _caller_var: contextvars.ContextVar[str] = contextvars.ContextVar("binance_caller", default="")
+from app.integrations.binance.weight_priority import scan_throttled as _scan_throttled  # noqa: E402 — Fix 416
 
 
 def set_caller(name: str):
@@ -782,8 +783,16 @@ class BinanceClient:
             )
 
         # 🚨 Fix 124: weight 거버너 — 스캔 호출만 차단, 주문/포지션은 항상 통과
+        # ⚖️ Fix 416: 학습·관측 잡은 더 낮은 선(1,100)에서 먼저 물러선다 — 15분봉 직후 겹칠 때 실매매 스캐너 몫 400 을 남긴다
         _wtotal = _add_weight(path, params)
-        if path in _SCAN_ENDPOINTS and _wtotal > SCAN_WEIGHT_BUDGET_PER_MIN:
+        try:
+            _wcaller = _caller_var.get()
+        except Exception:  # noqa: BLE001
+            _wcaller = ""
+        _wlimit = _scan_throttled(path, _wtotal, _wcaller, scan_endpoints=_SCAN_ENDPOINTS,
+                                  budget=SCAN_WEIGHT_BUDGET_PER_MIN)
+        if _wlimit is not None:
+            _wlow = _wlimit != SCAN_WEIGHT_BUDGET_PER_MIN
             # 🚨 Fix 127 (2026-08-26): 차단한 요청의 weight 는 되돌린다!
             #   옛: _add_weight 를 판정보다 먼저 불러 「차단된 요청」까지 누적 →
             #       카운터가 부풀고 → 더 많이 차단하고 → 더 부푸는 악순환.
@@ -792,14 +801,15 @@ class BinanceClient:
             #       = 안전장치가 오히려 매매 판정용 지표를 결손시키고 있었다.
             #   신: 거래소로 「실제 나간」 요청만 센다.
             _add_weight(path, params, sign=-1)
+            _wstatus = "weight_throttled_low" if _wlow else "weight_throttled"
             binance_api_requests_total.labels(
-                endpoint=path, method=method, status="weight_throttled",
+                endpoint=path, method=method, status=_wstatus,
             ).inc()
-            _count_request(path, "weight_throttled")
+            _count_request(path, _wstatus)
             raise BinanceAPIError(
                 f"Binance API error: status=429, code=-1003, "
                 f"msg=weight budget exceeded — scan suppressed locally "
-                f"({_wtotal}/{SCAN_WEIGHT_BUDGET_PER_MIN} this minute). Fix124 governor.",
+                f"({_wtotal}/{_wlimit} this minute{' · low-priority ' + _wcaller if _wlow else ''}). Fix124 governor.",
                 status_code=429,
                 code=-1003,
                 locally_suppressed=True,     # Fix 119: ban 재기록 되먹임 차단
