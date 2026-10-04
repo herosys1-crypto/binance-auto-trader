@@ -50,7 +50,11 @@ class TestFullCapitalReservation:
         self, db_session, make_user, make_exchange_account, make_symbol,
         make_template, make_strategy, monkeypatch,
     ) -> None:
-        """기존 2전략 예약(각 100/10=10) + 신규 10 = 30 > 지갑 25 → 차단."""
+        """기존 2전략 예약(각 100/10=10) + 신규 10 = 30 > 지갑 20 × 1.30 = 26 → 차단.
+
+        Fix 417: 9d8bffe #163 마진 예약 130% 정책 이후 사양 (옛 한도 = 지갑 100%, 25).
+        130% 검사(strategy_service :495)는 일 최대 가드(:656)보다 앞이라 먼저 걸린다.
+        """
         u = make_user()
         ea = make_exchange_account(user=u)
         tpl = make_template()  # total_capital=100, leverage=10
@@ -61,9 +65,9 @@ class TestFullCapitalReservation:
                       user=u, exchange_account=ea, template=tpl, leverage=10)
         make_symbol("CCCUSDT")
         # availableBalance 는 넉넉(=이전 가드 통과), 지갑은 부족(=예약 가드 발동)
-        _patch_binance(monkeypatch, available="10000", total_wallet="25")
+        _patch_binance(monkeypatch, available="10000", total_wallet="20")
 
-        with pytest.raises(ValueError, match="전체 계획자본 초과"):
+        with pytest.raises(ValueError, match="마진 예약 130% 초과"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=u.id, exchange_account_id=ea.id,
                 strategy_template_id=tpl.id, symbol="CCCUSDT", side="SHORT",
@@ -92,7 +96,7 @@ class TestFullCapitalReservation:
                 start_price=Decimal("100"),
             )
         except ValueError as e:
-            assert "전체 계획자본 초과" not in str(e), (
+            assert "마진 예약 130% 초과" not in str(e), (
                 f"지갑 충분한데 예약 가드가 잘못 발동: {e}"
             )
 
@@ -105,10 +109,10 @@ class TestFullCapitalReservation:
         ea = make_exchange_account(user=u)
         tpl = make_template()  # 100/10 = 10 USDT 필요
         make_symbol("CCCUSDT")
-        # 지갑 5 < 신규 필요 10 → 예약 가드가 신규만으로도 차단
+        # Fix 417: 9d8bffe #163 130% 정책 — 지갑 5 × 1.30 = 6.5 < 신규 필요 10 → 신규만으로도 차단
         _patch_binance(monkeypatch, available="10000", total_wallet="5")
 
-        with pytest.raises(ValueError, match="전체 계획자본 초과"):
+        with pytest.raises(ValueError, match="마진 예약 130% 초과"):
             StrategyService(db_session).create_strategy_instance(
                 user_id=u.id, exchange_account_id=ea.id,
                 strategy_template_id=tpl.id, symbol="CCCUSDT", side="SHORT",

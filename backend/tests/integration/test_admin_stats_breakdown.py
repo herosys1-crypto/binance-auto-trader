@@ -47,10 +47,29 @@ class TestStatsBreakdown:
         assert r["profit_count"] == 1
         assert r["loss_count"] == 1
         # classifications
+        # Fix 417: 98e9d27 #29 STOPPED 3-way 분류 이후 사양 —
+        #   STOPPED 는 realized>0 「✋수동익절」 / <0 「✋수동손절」 / 0 「✋수동정지」.
         clss = sorted([it["classification"] for it in r["items"]])
-        assert "수익" in clss
-        assert "손실" in clss
+        assert "✋수동익절" in clss
+        assert "✋수동손절" in clss
+        assert "✋수동정지" in clss
         assert "진행중" in clss
+
+    def test_non_stopped_profit_loss_classification(self, db_session, make_strategy, make_template):
+        """Fix 417: 98e9d27 — STOPPED 가 아닌 진행 중 + realized 부호는 「✅수익」/「📉손실」 fallback."""
+        tpl = make_template()
+        make_strategy(
+            symbol_str="ETHUSDT", side="LONG", status="STAGE2_OPEN",
+            current_position_qty=Decimal("1"), template=tpl, realized_pnl=Decimal("7"),
+        )
+        make_strategy(
+            symbol_str="BTCUSDT", side="LONG", status="STAGE2_OPEN",
+            current_position_qty=Decimal("1"), template=tpl, realized_pnl=Decimal("-3"),
+        )
+        r = _call_breakdown(db_session, "strategies")
+        clss = sorted([it["classification"] for it in r["items"]])
+        assert "✅수익" in clss
+        assert "📉손실" in clss
 
     def test_realized_view_excludes_zero(self, db_session, make_strategy, make_template):
         tpl = make_template()
@@ -135,5 +154,6 @@ class TestStatsBreakdown:
         assert r["count"] == 1
         assert r["archived_count"] == 1
         assert r["items"][0]["is_archived"] is True
-        assert r["items"][0]["classification"] == "수익"
+        # Fix 417: 98e9d27 #29 — STOPPED + realized>0 은 「✋수동익절」
+        assert r["items"][0]["classification"] == "✋수동익절"
         assert Decimal(r["realized_pnl_sum"]) == Decimal("867.65")

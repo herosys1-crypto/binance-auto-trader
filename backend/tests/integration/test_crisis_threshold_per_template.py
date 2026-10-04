@@ -13,12 +13,19 @@
 """
 from __future__ import annotations
 
+import pytest
+
+# Fix 417: 2026-06-10 v30 사장님 결정(c24c492) 「크라이시스 기능 취소, 세팅된 율로 적용」 → _should_trigger_crisis_mode 는 항상 False.
+#   「발동한다」를 기대하던 옛 사양 테스트는 건너뛴다. 항상 꺼짐은 test_crisis_threshold_per_template::test_v30_crisis_permanently_off 가 지킨다.
+_V30_CRISIS_OFF = "v30 사장님 결정(c24c492): Crisis 모드 영구 비활성 — 옛 발동 사양"
+
 from decimal import Decimal
 
 
 class TestTemplateCrisisThresholdNull:
     """template.crisis_max_loss_threshold = NULL → global -50% 사용 (기존 동작)."""
 
+    @pytest.mark.skip(reason=_V30_CRISIS_OFF)
     def test_null_uses_global_minus_50(
         self, db_session, make_user, make_exchange_account, make_symbol, make_template, make_strategy
     ):
@@ -57,6 +64,7 @@ class TestTemplateCrisisThresholdNull:
 class TestTemplateCrisisThresholdConservative:
     """더 보수적 임계 (-60, -70, -80) — 그 임계 이하만 진입."""
 
+    @pytest.mark.skip(reason=_V30_CRISIS_OFF)
     def test_minus_60_threshold(
         self, db_session, make_user, make_exchange_account, make_symbol, make_template, make_strategy
     ):
@@ -86,6 +94,7 @@ class TestTemplateCrisisThresholdConservative:
             "임계 -60, max_loss -60 면 정확 도달 → 발동"
         )
 
+    @pytest.mark.skip(reason=_V30_CRISIS_OFF)
     def test_minus_80_very_conservative(
         self, db_session, make_user, make_exchange_account, make_symbol, make_template, make_strategy
     ):
@@ -180,3 +189,13 @@ class TestStageRequirementStillApplies:
         assert rs._should_trigger_crisis_mode(s, Decimal("0")) is False, (
             "current_stage=3 < total_stages=5 면 임계 도달해도 미발동"
         )
+
+
+def test_v30_crisis_permanently_off(db_session, make_user, make_exchange_account, make_symbol, make_template, make_strategy):
+    """v30: 모든 단계 진입 + 최대 손실 -90% 여도 크라이시스 자동 진입 없음 (다시 켜려면 사장님 결정 필요)."""
+    from app.services.risk_service import RiskService
+    tpl = make_template(stages_config={"capitals": ["100"] * 3})
+    s = make_strategy(template=tpl, current_stage=3, max_loss_pct=Decimal("-90"))
+    rs = RiskService(db_session)
+    for pnl in (Decimal("0"), Decimal("-50"), Decimal("-99")):
+        assert rs._should_trigger_crisis_mode(s, pnl) is False

@@ -56,7 +56,11 @@ class TestTriggerNextStageManually:
     def test_all_stages_done_rejected(
         self, db_session, make_strategy, make_template
     ) -> None:
-        """모든 단계 진입 완료 → 400."""
+        """템플릿 단계 수를 넘겨도 상한은 20 — plan 도 fallback plan 도 없으면 400.
+
+        Fix 417: dbe5cc4 v130 「강제 진입 20단계까지」 이후 사양. 옛 「모든 단계」 문구·템플릿
+        단계 수 상한은 없어졌고, 거절은 (a) 21단계째 (b) plan 없음 + fallback plan 없음.
+        """
         tpl = make_template(
             stages_config={"capitals": [50, 50], "trigger_percents": [None, 10]},
         )
@@ -69,7 +73,25 @@ class TestTriggerNextStageManually:
         with pytest.raises(HTTPException) as ei:
             trigger_next_stage_manually(strategy_id=s.id, db=db_session, user_id=s.user_id)
         assert ei.value.status_code == 400
-        assert "모든 단계" in ei.value.detail
+        assert "fallback plan" in ei.value.detail
+
+    def test_hard_limit_20_stages_rejected(
+        self, db_session, make_strategy, make_template
+    ) -> None:
+        """Fix 417: dbe5cc4 v130 — 20단계 완료 후 21단계 강제 진입은 400 (상한 20)."""
+        tpl = make_template(
+            stages_config={"capitals": [50, 50], "trigger_percents": [None, 10]},
+        )
+        s = make_strategy(
+            symbol_str="BTCUSDT", side="SHORT", status="STAGE2_OPEN",
+            current_position_qty=Decimal("-0.5"),
+            current_stage=20,
+            template=tpl,
+        )
+        with pytest.raises(HTTPException) as ei:
+            trigger_next_stage_manually(strategy_id=s.id, db=db_session, user_id=s.user_id)
+        assert ei.value.status_code == 400
+        assert "최대 20단계" in ei.value.detail
 
     def test_stage_plan_missing_rejected(
         self, db_session, make_strategy, make_template
@@ -180,7 +202,8 @@ class TestTriggerNextStageManually:
         from app.api.v1.strategies import control as _strategies_control
         monkeypatch.setattr(_strategies_control, "decrypt_text", lambda s: "fake")
         # ExecutionService.enter_stage_at_market 가 거래소 통신 실패 raise 라고 시뮬
-        def _boom(self, strategy_id, stage_no):  # noqa: ANN001, ARG001
+        # Fix 417: 419b587 Fix 371 — control.py 가 origin="manual" 을 넘기므로 **kw 로 받아야 롤백 검증이 돈다
+        def _boom(self, strategy_id, stage_no, **kw):  # noqa: ANN001, ARG001
             raise RuntimeError("Binance API timeout")
         monkeypatch.setattr(ExecutionService, "enter_stage_at_market", _boom)
 

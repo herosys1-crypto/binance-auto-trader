@@ -17,6 +17,12 @@ ad-hoc ENTRY (stage_no=NULL, purpose=ENTRY, status=FILLED) 가 있으면 stage �
 """
 from __future__ import annotations
 
+import pytest
+
+# Fix 417: 2026-06-10 v30 사장님 결정(c24c492) 「크라이시스 기능 취소, 세팅된 율로 적용」 → _should_trigger_crisis_mode 는 항상 False.
+#   「발동한다」를 기대하던 옛 사양 테스트는 건너뛴다. 항상 꺼짐은 test_crisis_threshold_per_template::test_v30_crisis_permanently_off 가 지킨다.
+_V30_CRISIS_OFF = "v30 사장님 결정(c24c492): Crisis 모드 영구 비활성 — 옛 발동 사양"
+
 from decimal import Decimal
 
 from app.models.order import Order
@@ -61,6 +67,7 @@ class TestAdhocSafetyNet:
             "ad-hoc 없고 stage 2/5 → Crisis 미발동"
         )
 
+    @pytest.mark.skip(reason=_V30_CRISIS_OFF)
     def test_adhoc_partial_stage_max_loss_reached_triggers_crisis(
         self, db_session, make_user, make_exchange_account, make_symbol, make_template, make_strategy
     ):
@@ -120,6 +127,7 @@ class TestAdhocSafetyNet:
             "ad-hoc 미체결이면 안전망 X — stage 미완료라 Crisis 미발동"
         )
 
+    @pytest.mark.skip(reason=_V30_CRISIS_OFF)
     def test_all_stages_entered_works_without_adhoc(
         self, db_session, make_user, make_exchange_account, make_symbol, make_template, make_strategy
     ):
@@ -137,6 +145,7 @@ class TestAdhocSafetyNet:
         rs = RiskService(db_session)
         assert rs._should_trigger_crisis_mode(s, Decimal("0")) is True
 
+    @pytest.mark.skip(reason=_V30_CRISIS_OFF)
     def test_adhoc_with_custom_threshold(
         self, db_session, make_user, make_exchange_account, make_symbol, make_template, make_strategy
     ):

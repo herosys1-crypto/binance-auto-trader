@@ -11,9 +11,14 @@
 """
 from __future__ import annotations
 
+import pytest
+
+# Fix 417: 2026-06-10 v30 사장님 결정(c24c492) 「크라이시스 기능 취소, 세팅된 율로 적용」 → _should_trigger_crisis_mode 는 항상 False.
+#   「발동한다」를 기대하던 옛 사양 테스트는 건너뛴다. 항상 꺼짐은 test_crisis_threshold_per_template::test_v30_crisis_permanently_off 가 지킨다.
+_V30_CRISIS_OFF = "v30 사장님 결정(c24c492): Crisis 모드 영구 비활성 — 옛 발동 사양"
+
 from decimal import Decimal
 
-import pytest
 
 from app.services.risk_service import (
     CRISIS_MAX_LOSS_THRESHOLD,
@@ -83,6 +88,7 @@ class TestCrisisAllStagesEntered:
         rs = RiskService(db_session)
         assert rs._should_trigger_crisis_mode(strategy, Decimal("-30")) is False
 
+    @pytest.mark.skip(reason=_V30_CRISIS_OFF)
     def test_all_stages_entered_below_minus_50_triggers_crisis(
         self, db_session, make_user, make_exchange_account, make_symbol, make_template, make_strategy
     ):

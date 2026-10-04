@@ -73,8 +73,12 @@ class TestEnsureIsolatedMargin:
         # raise 안 됨 — silent 무시
         svc.ensure_isolated_margin(s)
 
-    def test_other_error_does_not_block_flow(self, db_session, make_strategy, monkeypatch, fake_trade_client):
-        """다른 에러 (포지션 보유 -4048 등) 도 silent — 본 진입 흐름은 진행."""
+    def test_4048_blocks_flow(self, db_session, make_strategy, monkeypatch, fake_trade_client):
+        """-4048 (포지션 보유 중 마진타입 변경 불가) 은 ValueError 로 흐름 차단.
+
+        Fix 417: d75963a v53 「ISOLATED 강력 보장」(#237 SLXUSDT 1539 USDT 손실) 이후 사양.
+        옛 silent 통과는 CROSS 포지션이 그대로 진입되는 사고였다.
+        """
         class FakeClient:
             def __init__(self, *a, **kw): pass
             def change_margin_type(self, **kw):
@@ -85,8 +89,8 @@ class TestEnsureIsolatedMargin:
         s = make_strategy(symbol_str="BTCUSDT", side="SHORT", status="STAGE1_OPEN",
                           current_position_qty=Decimal("-0.5"))
         svc = ExecutionService(db_session, api_key="k", api_secret="s", is_testnet=True)
-        # raise 안 됨 — warning 만 + 정상 진행
-        svc.ensure_isolated_margin(s)
+        with pytest.raises(ValueError, match="ISOLATED 변경 불가"):
+            svc.ensure_isolated_margin(s)
 
 
 class TestExecutionServiceCallsEnsureIsolatedMargin:

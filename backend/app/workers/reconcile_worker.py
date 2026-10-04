@@ -136,6 +136,8 @@ def _do_reconcile(decrypt_func) -> None:
         except Exception:
             _redis = None
         notif_svc = NotificationService(db)
+        # 🛡 Fix 417: 이 사이클이 행을 고치기 **전** STOPPING 행의 updated_at 을 잡아 둔다 (아래 동기화가 updated_at 을 지금으로 바꾼다)
+        _stopping_snapshot = _snapshot_stopping(rows, _redis)
 
         def _get_bulk_for_account(acc: ExchangeAccount) -> list[dict] | None:
             if acc.id in bulk_positions_cache:
@@ -537,7 +539,20 @@ def _do_reconcile(decrypt_func) -> None:
                     # user-stream 놓친 경우 = plan.is_triggered = False!
                     # 거래소 = 실 포지션 있으면 = 자동 True 갱신!
                     # = TP/SL 감시 = 자동 회복!
+                    # 🛡 Fix 417 (2026-10-04 운영 실측): 2단계 이상은 거래소 포지션이 「이전 단계 합」이라 != 0 이 당연하다
+                    #   (위 #96 주석과 같은 함정). v133 이 그걸 「놓친 체결」로 보고 미체결 LIMIT 단계를 승격시켰다:
+                    #   2단계+ 자동 회복 22건 중 그 단계 주문 체결 0 인데 승격 3건(龙虾 8/29·8/30) · 체결 전 승격 3건
+                    #   (CHIP 5분 · MAGMA 23분 · POWER #4527 4단계 4분). → 그 단계 ENTRY 주문의 체결 증거를 본다.
+                    _fill_ev = "stage1"
                     if plan is not None and not plan.is_triggered and exchange_position_amt != 0:
+                        _fill_ev = _stage_fill_evidence(
+                            db, strategy, pending_stage_no, bulk_client_cache.get(strategy.exchange_account_id),
+                        )
+                        if _fill_ev not in _FILL_EVIDENCE_PROMOTE:
+                            (logger.debug if _fill_ev == "not_filled" else logger.info)("[Fix417] #%s %s %d단계 체결 증거 없음(%s) — PENDING 유지",
+                                        strategy.id, strategy.symbol, pending_stage_no, _fill_ev)
+                    if (plan is not None and not plan.is_triggered and exchange_position_amt != 0
+                            and _fill_ev in _FILL_EVIDENCE_PROMOTE):
                         from datetime import datetime as _dt
                         plan.is_triggered = True
                         plan.triggered_at = _dt.now(timezone.utc)
@@ -554,6 +569,7 @@ def _do_reconcile(decrypt_func) -> None:
                                 "strategy_id": strategy.id,
                                 "stage_no": pending_stage_no,
                                 "position_amt": str(exchange_position_amt),
+                                "fill_evidence": _fill_ev,
                             },
                         ))
                         db.flush()  # is_triggered = True 반영!
@@ -712,7 +728,7 @@ def _do_reconcile(decrypt_func) -> None:
         #   - 텔레그램 CRITICAL: 「긴급 종료 재시도 또는 거래소 UI 직접 청산 필요」
         #   - RiskEvent CRITICAL 기록 — UI 알림 + 감사 추적
         try:
-            _detect_stopping_stuck(db, notif_svc=notif_svc, redis=_redis)
+            _detect_stopping_stuck(db, notif_svc=notif_svc, redis=_redis, snapshot=_stopping_snapshot)
             db.commit()
         except Exception as e:
             logger.error("STOPPING stuck detection 실패: %s", e)
@@ -726,6 +742,60 @@ def _do_reconcile(decrypt_func) -> None:
         db.close()
 
 
+# ===== Fix 417: 단계 체결 증거 =====
+# 「승격해도 된다」 = 1단계(기존 v133 그대로) · 그 단계 주문이 체결됨. 그 밖(미체결·주문 기록 없음·확인 실패)은 PENDING 유지 —
+#   운영 DB 실측: 단계 진입 주문은 전부 purpose=ENTRY + stage_no 로 기록된다(2단계+ 자동 회복 22건 모두 기록 있음).
+#   PENDING 이어도 TP/SL 감시는 돈다(run_workers._NOT_FOR_TP_SL 은 종료·STOPPING·WAITING 만 제외).
+_FILL_EVIDENCE_PROMOTE = frozenset({"stage1", "filled"})
+_FILLED_STATUSES = frozenset({"FILLED", "PARTIALLY_FILLED"})
+
+
+_FILL_EVIDENCE_EXCHANGE_CHECKS = 3   # Claude가 정함 — DB 증거 없을 때 거래소에 물어볼 최근 주문 수 (운영: 단계당 주문 1건)
+
+
+def _stage_fill_evidence(db, strategy, stage_no: int, client) -> str:
+    """그 단계 ENTRY 주문이 실제로 체결됐는지. 반환: stage1 / filled / not_filled / no_order / unknown.
+
+    DB 주문 기록(체결 수량·상태)을 먼저 보고, 없으면 거래소 주문 조회(weight 1, 최근 몇 건)로 확인한다 — user-stream 이
+    체결을 놓친 경우(v133 의 원래 목적)는 DB 가 NEW 로 남아 있으므로 거래소 조회가 그 경우를 살린다.
+    어떤 예외도 밖으로 내지 않는다(reconcile 루프 보호). 확인 실패(unknown)는 승격하지 않고 다음 주기(2분)에 다시 본다.
+    """
+    if stage_no <= 1:
+        return "stage1"
+    try:
+        from app.models.order import Order
+        with db.no_autoflush:      # 감사: 조회가 이 사이클의 다른 변경을 flush 하다 세션을 깨지 않게
+            orders = db.execute(
+                select(Order)
+                .where(Order.strategy_instance_id == strategy.id)
+                .where(Order.stage_no == stage_no)
+                .where(Order.purpose == "ENTRY")
+                .order_by(Order.created_at.desc())
+            ).scalars().all()
+        if not orders:
+            return "no_order"
+        for o in orders:
+            if (o.executed_qty or 0) > 0 or str(o.status or "").upper() in _FILLED_STATUSES:
+                return "filled"
+        candidates = [o for o in orders if o.exchange_order_id][:_FILL_EVIDENCE_EXCHANGE_CHECKS]
+        if client is None or not candidates:
+            return "unknown"
+        result = "not_filled"
+        for o in candidates:       # 재주문이 있어도 앞선 주문의 놓친 체결을 찾는다 (개별 실패가 나머지 확인을 막지 않게)
+            try:
+                resp = client.get_order(symbol=strategy.symbol, order_id=int(o.exchange_order_id))
+                if Decimal(str((resp or {}).get("executedQty") or "0")) > 0:
+                    return "filled"
+            except Exception as e:  # noqa: BLE001
+                logger.info("[Fix417] #%s 단계 %s 주문 %s 거래소 조회 실패(다음 주기 재확인): %s",
+                            strategy.id, stage_no, o.exchange_order_id, e)
+                result = "unknown"
+        return result
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Fix417] #%s 단계 %s 체결 증거 확인 실패: %s", strategy.id, stage_no, e)
+        return "unknown"
+
+
 # ===== STOPPING 갇힘 감지 =====
 # 5분 이상 STOPPING 상태인 strategy 를 reconcile 마지막에 스캔.
 # 임계는 frontend `STOPPING_STUCK_THRESHOLD_MS` 와 동일 (= 5분).
@@ -735,9 +805,68 @@ STOPPING_STUCK_THRESHOLD_SECONDS = 5 * 60
 # 너무 짧으면 텔레그램 spam, 너무 길면 사장님이 잊을 가능성 → 30분 절충.
 STOPPING_STUCK_ALERT_COOLDOWN_SECONDS = 30 * 60
 STOPPING_STUCK_ALERT_REDIS_PREFIX = "stopping_stuck_alert:"
+# 🛡 Fix 417: 「STOPPING 을 처음 본 시각」 — updated_at 은 같은 reconcile 이 unrealized_pnl·투입자본(Fix 333)·started_at(Fix 198)
+#   을 쓸 때마다 갱신돼, **포지션이 남은 갇힘(가장 위험한 경우)이 영영 5분을 못 넘었다** (8/26 이후 감지 0건).
+STOPPING_FIRST_SEEN_REDIS_PREFIX = "stopping_first_seen:"
+STOPPING_FIRST_SEEN_TTL_SECONDS = 6 * 3600   # Claude가 정함 — 감지(5분) 뒤엔 MANUAL_CLEANUP 으로 빠지므로 넉넉히
 
 
-def _detect_stopping_stuck(db, *, notif_svc, redis) -> None:
+def _as_utc(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _snapshot_stopping(rows, redis) -> dict[int, datetime]:
+    """사이클 시작 시 STOPPING 행의 updated_at (수정 전). Redis 에도 「처음 본 시각」으로 심는다(nx — 이미 있으면 그대로)."""
+    snap: dict[int, datetime] = {}
+    others: list[int] = []
+    try:
+        for row in rows:
+            st = row[0]
+            if getattr(st, "status", None) == "STOPPING" and getattr(st, "updated_at", None) is not None:
+                snap[st.id] = _as_utc(st.updated_at)
+            else:
+                others.append(st.id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("STOPPING 스냅샷 실패: %s", e)
+        return snap
+    if redis is not None and others:
+        # 감사: STOPPING 에서 빠진 전략의 옛 「처음 본 시각」이 남으면, 다시 STOPPING 에 들어올 때 즉시 5분 초과로 오판한다
+        try:
+            redis.delete(*[f"{STOPPING_FIRST_SEEN_REDIS_PREFIX}{i}" for i in others])
+        except Exception as e:  # noqa: BLE001
+            logger.debug("STOPPING 처음 본 시각 정리 실패: %s", e)
+    if redis is not None:
+        for sid, ts in snap.items():
+            try:
+                redis.set(f"{STOPPING_FIRST_SEEN_REDIS_PREFIX}{sid}", str(ts.timestamp()),
+                          nx=True, ex=STOPPING_FIRST_SEEN_TTL_SECONDS)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("STOPPING 처음 본 시각 저장 실패: %s", e)
+                break
+    return snap
+
+
+def _stopping_since(redis, sid: int, updated_at: datetime, snapshot=None) -> datetime:
+    """STOPPING 기준 시각 = min(updated_at, 사이클 시작 스냅샷, Redis 처음 본 시각). Redis 실패면 앞의 둘 (기존보다 나쁘지 않다)."""
+    since = updated_at
+    if snapshot and sid in snapshot:
+        since = min(since, snapshot[sid])
+    if redis is None:
+        return since
+    key = f"{STOPPING_FIRST_SEEN_REDIS_PREFIX}{sid}"
+    try:
+        redis.set(key, str(since.timestamp()), nx=True, ex=STOPPING_FIRST_SEEN_TTL_SECONDS)
+        raw = redis.get(key)
+        if raw is None:
+            return since
+        first = datetime.fromtimestamp(float(raw.decode() if isinstance(raw, bytes) else raw), tz=timezone.utc)
+        return min(since, first)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("STOPPING 처음 본 시각 조회 실패 (updated_at 사용): %s", e)
+        return since
+
+
+def _detect_stopping_stuck(db, *, notif_svc, redis, snapshot=None) -> None:
     """STOPPING 5분 초과 strategy → MANUAL_CLEANUP_REQUIRED 전환 + 텔레그램 CRITICAL.
 
     2026-05-21 Phase 2 (사장님 요구):
@@ -768,6 +897,7 @@ def _detect_stopping_stuck(db, *, notif_svc, redis) -> None:
         updated_at = s.updated_at
         if updated_at.tzinfo is None:
             updated_at = updated_at.replace(tzinfo=timezone.utc)
+        updated_at = _stopping_since(redis, s.id, updated_at, snapshot)   # Fix 417: 기준 시각(STOPPING 시작 추정)
         if updated_at.timestamp() > threshold:
             continue  # 아직 5분 안 지남
         age_seconds = int(now.timestamp() - updated_at.timestamp())
@@ -812,6 +942,11 @@ def _detect_stopping_stuck(db, *, notif_svc, redis) -> None:
         )
         # 🚨 v103: MANUAL_CLEANUP_REQUIRED 전환 = 항상! (cooldown 무관!)
         s.status = MANUAL_CLEANUP_REQUIRED
+        if redis is not None:      # Fix 417: 사장님이 「긴급 종료 재시도」로 STOPPING 에 되돌려도 새로 5분을 센다
+            try:
+                redis.delete(f"{STOPPING_FIRST_SEEN_REDIS_PREFIX}{s.id}")
+            except Exception as e:  # noqa: BLE001
+                logger.debug("STOPPING 처음 본 시각 삭제 실패: %s", e)
         logger.critical(
             "v103 STOPPING stuck → MANUAL_CLEANUP_REQUIRED: strategy_id=%s symbol=%s side=%s age=%dmin",
             s.id, s.symbol, s.side, age_min,
