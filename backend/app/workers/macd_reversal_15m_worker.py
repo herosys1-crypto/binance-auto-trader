@@ -660,7 +660,7 @@ def run_macd_reversal_15m() -> dict:
                 h_prev = snap_15m.get("macd_15m_hist_prev")
                 h_now = snap_15m.get("macd_15m_hist_now")
                 dir_4h_str = snap_4h.get("macd_4h_direction")
-                logger.warning(
+                logger.info(          # Fix 415: 감지 기록(하루 ≈700줄) = INFO
                     "[Fix74/detected] %s: side=%s hist_prev=%.5f→now=%.5f 4h=%s conf=%.2f vol=%s key=%s",
                     symbol,
                     side_upper,
@@ -699,7 +699,7 @@ def run_macd_reversal_15m() -> dict:
                 continue
 
         detected_total = detected_short + detected_long
-        logger.warning(
+        logger.info(              # Fix 415: 사이클 요약 = INFO
             "[Fix74] 완료: scanned=%d detected=%d (SHORT=%d, LONG=%d) "
             "skip_extreme=%d skip_4h=%d skip_vol=%d skip_obv=%d skip_regime=%d spec=%s",
             scanned, detected_total, detected_short, detected_long,

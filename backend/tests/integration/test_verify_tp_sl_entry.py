@@ -247,13 +247,14 @@ class TestTPPartialCloseVerify:
 # ============================================================================
 # B. ENTRY MARKET 검증 (자동 재시도 X — 중복 진입 risk)
 # ============================================================================
+# Fix 415: ETHUSDT 는 Fix 303 이후 자동매매 제외 심볼(MIN_NOTIONAL 50)이라 진입 경로가 막힌다 → 제외 목록 밖 심볼로
 class TestEntryMarketVerify:
     def test_entry_verify_success_no_riskevent(
         self, db_session, make_strategy, fake_binance, fake_trade_client, fake_redis, monkeypatch,
     ):
         """ENTRY MARKET 후 거래소 qty 증가 정상 → RiskEvent 없음."""
         s = make_strategy(
-            symbol_str="ETHUSDT", side="LONG", status="WAITING",
+            symbol_str="ADAUSDT", side="LONG", status="WAITING",
             current_position_qty=Decimal("0"),
             avg_entry_price=None,
         )
@@ -265,13 +266,13 @@ class TestEntryMarketVerify:
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return [{
-                    "symbol": "ETHUSDT", "positionSide": "LONG", "positionAmt": "0",
+                    "symbol": "ADAUSDT", "positionSide": "LONG", "positionAmt": "0",
                     "entryPrice": "0", "markPrice": "3000", "unRealizedProfit": "0",
                     "liquidationPrice": "0", "marginType": "cross", "isolatedMargin": "0",
                     "leverage": "10", "breakEvenPrice": "0",
                 }]
             return [{
-                "symbol": "ETHUSDT", "positionSide": "LONG", "positionAmt": "0.5",
+                "symbol": "ADAUSDT", "positionSide": "LONG", "positionAmt": "0.5",
                 "entryPrice": "3000", "markPrice": "3000", "unRealizedProfit": "0",
                 "liquidationPrice": "0", "marginType": "cross", "isolatedMargin": "0",
                 "leverage": "10", "breakEvenPrice": "0",
@@ -302,7 +303,7 @@ class TestEntryMarketVerify:
         자동 재시도 안 함 (중복 진입 risk) — placed_orders 가 1건이어야.
         """
         s = make_strategy(
-            symbol_str="ETHUSDT", side="LONG", status="WAITING",
+            symbol_str="ADAUSDT", side="LONG", status="WAITING",
             current_position_qty=Decimal("0"),
             avg_entry_price=None,
         )
@@ -312,7 +313,7 @@ class TestEntryMarketVerify:
         def _staged(symbol=None):
             call_count["n"] += 1
             return [{
-                "symbol": "ETHUSDT", "positionSide": "LONG", "positionAmt": "0",
+                "symbol": "ADAUSDT", "positionSide": "LONG", "positionAmt": "0",
                 "entryPrice": "0", "markPrice": "3000", "unRealizedProfit": "0",
                 "liquidationPrice": "0", "marginType": "cross", "isolatedMargin": "0",
                 "leverage": "10", "breakEvenPrice": "0",
@@ -345,7 +346,7 @@ class TestEntryMarketVerify:
     ):
         """_fetch_current_position_qty 가 None (네트워크 실패) → 검증 skip, RiskEvent 없음."""
         s = make_strategy(
-            symbol_str="BTCUSDT", side="LONG", status="WAITING",
+            symbol_str="ADAUSDT", side="LONG", status="WAITING",
             current_position_qty=Decimal("0"),
         )
         svc, entry_calls = _make_service(db_session, monkeypatch)

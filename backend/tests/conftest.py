@@ -1,4 +1,19 @@
-import pytest
+import os
+from pathlib import Path
+
+# Fix 415: 설정(pydantic env_file=".env")은 **현재 폴더 기준**이라, 저장소 루트에서 pytest 를 돌리면 backend/.env 를 못 읽어
+#   app.main 을 import 하는 테스트 3개가 「ENCRYPTION_KEY 기본값」으로 깨졌다. 운영(docker compose env_file)은 무관하므로
+#   설정 코드는 그대로 두고, 테스트에서만 backend/.env 의 **빠진 키만** 채운다(이미 있는 환경변수는 덮지 않음).
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+if Path.cwd().resolve() != _BACKEND_DIR and (_BACKEND_DIR / ".env").is_file():
+    for _line in (_BACKEND_DIR / ".env").read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if not _line or _line.startswith("#") or "=" not in _line:
+            continue
+        _k, _v = _line.split("=", 1)
+        os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
+
+import pytest  # noqa: E402
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from app.db.base import Base

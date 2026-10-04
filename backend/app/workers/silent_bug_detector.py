@@ -244,9 +244,13 @@ def run_silent_bug_detector_once() -> dict:
         if result["bugs_found"] == 0:
             logger.info("[silent-bug] %d strategy = 모든 silent bug 0건!", result["total_checked"])
         else:
+            # Fix 415: 「N bugs」만 찍혀 무엇인지 알 수 없었다(시스템 sanity check 는 위험 이벤트도 안 남긴다) → 유형별 개수 + 첫 메시지
+            from collections import Counter as _Ctr
+            _types = _Ctr(d.get("type", "?") for d in result["details"])
+            _first = next((str(d.get("msg", ""))[:160] for d in result["details"]), "")
             logger.warning(
-                "[silent-bug] %d bugs in %d strategy. alerts=%d",
-                result["bugs_found"], result["total_checked"], result["alerts_sent"],
+                "[silent-bug] %d bugs in %d strategy. alerts=%d types=%s first=%s",
+                result["bugs_found"], result["total_checked"], result["alerts_sent"], dict(_types), _first,
             )
 
     finally:

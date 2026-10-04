@@ -196,7 +196,7 @@ def check_obv_gate(bc, symbol: str, side: str) -> tuple:
                     f"[Fix257 실측: XPL LONG 진입시 -0.127 -> -17.19 / "
                     f"이긴 LONG 중앙값 +0.168]"
                 )
-                logger.warning("[Fix65/gate] %s %s: %s", symbol, side, reason)
+                logger.info("[Fix65/gate] %s %s: %s", symbol, side, reason)   # Fix 415: 의도된 게이트 판정(하루 ≈2,000줄) = INFO, 오류만 WARNING
                 return (False, reason)
             # 🚨 Fix 141: 「방향만으로 무조건 차단」 제거!
             #   사장님 LONG 시나리오 1 = "급락 후 반등" → 급락 종목은 OBV 가 하락 상태다.
@@ -220,7 +220,7 @@ def check_obv_gate(bc, symbol: str, side: str) -> tuple:
                     f"(ratio={ratio:+.3f} >= {OBV_SHORT_EXTREME_RATIO} obv={obv_now:.0f}) "
                     f"[Fix245 실측: 진 SHORT 중앙값 0.39~0.53]"
                 )
-                logger.warning("[Fix65/gate] %s %s: %s", symbol, side, reason)
+                logger.info("[Fix65/gate] %s %s: %s", symbol, side, reason)   # Fix 415: 의도된 게이트 판정(하루 ≈2,000줄) = INFO, 오류만 WARNING
                 return (False, reason)
             # 🚨 Fix 141: 헌법 72 = "급등해서 볼밴 상단돌파 했을때 마틴게일 진입"
             #   급등 종목은 OBV 가 상승 상태다. 방향만으로 막으면 헌법 72 가 영구 봉쇄된다.
