@@ -22,5 +22,14 @@ class DistributedSchedulerGuard:
         self.redis.expire("sched:leader", self.leader_ttl_seconds)
         return True
 
+    # ⏱ Fix 420: 정상 종료 때 내 리더 잠금만 원자적으로 지운다 (남의 잠금은 절대 X). 잡 잠금은 건드리지 않는다.
+    _RELEASE_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end return 0"
+
+    def release_leader(self) -> bool:
+        try:
+            return bool(self.redis.eval(self._RELEASE_LUA, 1, "sched:leader", self.node_id))
+        except Exception:
+            return False
+
     def acquire_job_lock(self, job_name: str, ttl_seconds: int) -> bool:
         return bool(self.redis.set(f"sched:job:{job_name}", self.node_id, nx=True, ex=ttl_seconds))

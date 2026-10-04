@@ -57,15 +57,100 @@ def _set_scheduler_health(is_leader: bool, redis_client=None) -> None:
         pass
 
 
-def _scheduler_heartbeat_loop(redis_client) -> None:
-    """30초마다 Redis 에 scheduler heartbeat 갱신 — 별도 thread."""
+def _scheduler_heartbeat_loop(redis_client, stop=None) -> None:
+    """30초마다 Redis 에 scheduler heartbeat 갱신 — 별도 thread. Fix 420: 종료 신호(stop) 뒤엔 health 키를 되살리지 않는다."""
     import time
-    while True:
+    while not (stop is not None and stop.is_set()):
         try:
             redis_client.setex(HEALTH_KEY_SCHEDULER_LEADER, HEALTH_TTL_SECONDS, "1")
         except Exception as e:
             logger.warning("scheduler heartbeat thread 실패: %s", e)
-        time.sleep(30)
+        if stop is not None:
+            stop.wait(30)
+        else:
+            time.sleep(30)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ⏱ Fix 420 (2026-10-04 운영 docker events 실측): 배포 재시작마다 스케줄러 ~15초 공백.
+#   PID 1 파이썬은 SIGTERM 처리기가 없어 신호를 무시 → 10초 뒤 SIGKILL(137) → 리더 잠금(TTL 30초)이 남음
+#   → 새 프로세스가 「another node is leader」로 종료·재시작 5회 → 그 사이 `compose exec` 검사기도 죽음.
+#   ① SIGTERM 에 내 리더 잠금만 풀고 블로킹 해제 ② 시작 때 잠금이 남아 있으면 바로 죽지 말고 잠시 기다린다.
+#   잡 잠금(sched:job:*)은 그대로 둔다 — 진행 중인 실주문 잡과 새 프로세스의 이중 실행을 막는 안전장치다.
+# ═══════════════════════════════════════════════════════════════════════
+LEADER_WAIT_SECONDS = 45    # Claude가 정함 — 리더 잠금 TTL 30초 + 여유 (진짜 다른 리더면 계속 연장되므로 45초 뒤 기존처럼 종료)
+LEADER_RETRY_SECONDS = 2    # Claude가 정함
+
+
+def wait_for_leader(guard, *, monotonic=None, sleep=None) -> bool:
+    import time
+    monotonic = monotonic or time.monotonic
+    sleep = sleep or time.sleep
+    deadline = monotonic() + LEADER_WAIT_SECONDS
+    while True:
+        try:
+            if guard.try_become_leader():
+                return True
+        except Exception as e:  # noqa: BLE001 — Redis 일시 오류는 재시도
+            logger.warning("[scheduler] 리더 획득 시도 실패: %s", e)
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            return False
+        sleep(min(LEADER_RETRY_SECONDS, remaining))
+
+
+def make_shutdown_handler(guard, redis_client, scheduler, set_health, *, spawn=None):
+    """신호 처리기 + 정리 함수. 처리기는 메인 스레드 바이트코드 사이에 끼어드므로 잠금이 필요한 일(Redis 풀·
+    executor 종료)을 직접 하지 않고 정리 스레드로 넘긴다 (교차 감사: 자기 교착 방지). 중복·재진입 신호는 무시."""
+    import threading
+    stopping = threading.Event()
+    once = threading.Lock()
+    done = threading.Event()
+
+    def cleanup():
+        try:
+            _cleanup_steps()
+        finally:
+            done.set()
+
+    def _cleanup_steps():
+        try:
+            guard.release_leader()                   # ① 새 프로세스가 곧바로 리더가 되게
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            set_health(False, redis_client)          # ②
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            scheduler.shutdown(wait=False)           # ③ 블로킹 해제 (진행 중 잡은 마저 끝나거나 SIGKILL)
+        except Exception:  # noqa: BLE001
+            pass
+
+    cleanup.done = done     # Gemini: 메인이 끝나기 전에 정리 완료를 기다릴 수 있게 (데몬 스레드 동반 소멸 방지)
+
+    def _spawn(fn):
+        threading.Thread(target=fn, daemon=True, name="scheduler-shutdown").start()
+
+    def handle_signal(signum=None, frame=None):
+        try:
+            if not once.acquire(blocking=False):
+                return
+            stopping.set()
+            (spawn or _spawn)(cleanup)
+        except Exception:  # noqa: BLE001 — 처리기는 예외를 내지 않는다
+            pass
+
+    try:   # 신호가 등록 끝~start() 진입 사이에 오면 블로킹에 들어가 버린다 → 시작 직후 한 번 더 확인 (GPT 초안)
+        from apscheduler.events import EVENT_SCHEDULER_STARTED
+
+        def _on_started(_event):
+            if stopping.is_set():
+                (spawn or _spawn)(lambda: scheduler.shutdown(wait=False))
+        scheduler.add_listener(_on_started, EVENT_SCHEDULER_STARTED)
+    except Exception:  # noqa: BLE001
+        pass
+    return handle_signal, stopping, cleanup
 
 
 def start_scheduler() -> None:
@@ -95,7 +180,7 @@ def start_scheduler() -> None:
     )
     redis_client = get_redis_client()
     guard = DistributedSchedulerGuard(redis_client)
-    if not guard.try_become_leader():
+    if not wait_for_leader(guard):     # Fix 420: 옛 프로세스 잠금이 남은 재시작 직후엔 잠시 기다린다
         print("[scheduler] another node is leader; exiting")
         scheduler_leader_status.set(0)
         _set_scheduler_health(False, redis_client)
@@ -105,7 +190,12 @@ def start_scheduler() -> None:
     _set_scheduler_health(True, redis_client)
 
     # heartbeat thread (job 주기와 별개로 30초 보장)
-    hb_thread = threading.Thread(target=_scheduler_heartbeat_loop, args=(redis_client,), daemon=True, name="scheduler-heartbeat")
+    import signal
+    _on_signal, _stopping, _cleanup = make_shutdown_handler(guard, redis_client, scheduler, _set_scheduler_health)
+    signal.signal(signal.SIGTERM, _on_signal)      # Fix 420: PID 1 은 기본 처리기가 없다
+    signal.signal(signal.SIGINT, _on_signal)
+
+    hb_thread = threading.Thread(target=_scheduler_heartbeat_loop, args=(redis_client, _stopping), daemon=True, name="scheduler-heartbeat")
     hb_thread.start()
     print("[scheduler] heartbeat thread started")
 
@@ -911,7 +1001,15 @@ def start_scheduler() -> None:
     # Fix 47 LONG 시스템 (long_bottom_detector + auto_long_at_bottom) =
     # 위쪽 (line ~382-399) 에서 이미 등록됨. 중복 등록 방지 = 여기서는 재등록 안 함.
 
-    scheduler.start()
+    if not _stopping.is_set():
+        try:
+            scheduler.start()
+        finally:
+            if not _stopping.is_set():      # 신호 없이 끝난 경우(예외 등)에도 내 리더 잠금을 남기지 않는다
+                _stopping.set()
+                _cleanup()
+    _cleanup.done.wait(5)               # 정리 스레드(데몬)가 잠금 해제를 마칠 때까지 (SIGKILL 10초 안)
+    print("[scheduler] stopped (leader released)")
 
 if __name__ == "__main__":
     start_scheduler()

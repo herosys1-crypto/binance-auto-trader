@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-TITLE = "🧾 Fix 414~418 (CRITICAL 오탐 · 로그 · IP 우선순위 · reconcile 결함 · 화면 폴링)"
+TITLE = "🧾 Fix 414~420 (CRITICAL 오탐 · 로그 · IP 우선순위 · reconcile 결함 · 화면 폴링 · 스케줄러 정상 종료)"
 
 CODE_MARKERS = {
     "app/workers/martingale_gate_validator_worker.py": ("def _gate_not_applicable(",),                     # 414
@@ -30,6 +30,8 @@ CODE_MARKERS = {
     ),
     "app/static/js/live-pump-dump-alerts.js": ("if (!document.hidden) scanLivePumpDump();",),                  # 418
     "app/static/js/tp-sl-advisor.js": ("if (!document.hidden) scanTpSlAdvisor();",),                           # 418
+    "app/workers/scheduler_runner.py": ("wait_for_leader(guard)", "signal.signal(signal.SIGTERM, _on_signal)"),  # 420
+    "app/workers/distributed_scheduler_guard.py": ("def release_leader(",),                                      # 420
 }
 STOPPING_STALE_SEC = 10 * 60      # Claude가 정함 — 감지 5분 + reconcile 2분 주기 두 번 여유
 REQ_COUNT_KEY = "binance:reqcount:{minute}"   # client._REQ_COUNT_KEY 와 같은 값 (보관 15분)
