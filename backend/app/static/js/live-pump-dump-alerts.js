@@ -306,7 +306,8 @@
     window.proceedLiveEntry = proceedLiveEntry;
     document.addEventListener('DOMContentLoaded', () => {
       setTimeout(scanLivePumpDump, 2000);  // 초기 로드 = 2초 후!
-      setInterval(scanLivePumpDump, 60000);  // 60초 폴링 (API 부담!)
+      // ⚡ Fix 418: 백그라운드 탭이면 건너뜀 (한 번 스캔 = 바이낸스 호출 120건) — 대시보드 5초 폴링과 같은 방식
+      setInterval(() => { if (!document.hidden) scanLivePumpDump(); }, 60000);  // 60초 폴링 (API 부담!)
     });
   }
 })();

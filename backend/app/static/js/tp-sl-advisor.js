@@ -138,7 +138,7 @@
     window.loadLearningSummary = loadLearningSummary;
     document.addEventListener('DOMContentLoaded', () => {
       setTimeout(scanTpSlAdvisor, 3000);
-      setInterval(scanTpSlAdvisor, 120000);  // 2분마다!
+      setInterval(() => { if (!document.hidden) scanTpSlAdvisor(); }, 120000);  // 2분마다! (⚡ Fix 418: 백그라운드 탭이면 건너뜀)
     });
   }
 })();
