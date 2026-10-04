@@ -1011,6 +1011,42 @@ def check_ip_weight_section() -> None:
             db.close()
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# 🧾 Fix 414~418 — 별도 모듈 scripts/verify_fix414_418.py
+# ─────────────────────────────────────────────────────────────────────────
+def check_fix414_418_section() -> None:
+    if _HERE not in sys.path:
+        sys.path.insert(0, _HERE)
+    try:
+        from verify_fix414_418 import check_fix414_418
+    except Exception as e:  # noqa: BLE001
+        fail(f"verify_fix414_418 모듈 없음: {e!r}")
+        return
+    db = redis = None
+    if not CODE_ONLY:
+        try:
+            from app.core.database import SessionLocal
+            db = SessionLocal()
+        except Exception as e:  # noqa: BLE001
+            skip(f"DB 연결 실패: {e!r}")
+        try:
+            from app.core.redis_client import get_redis_client
+            redis = get_redis_client()
+        except Exception as e:  # noqa: BLE001
+            skip(f"Redis 연결 실패: {e!r}")
+    try:
+        check_fix414_418(ok, fail, skip, root=_ROOT, code_only=CODE_ONLY,
+                         process_start_epoch=_pid1_start_epoch(), db=db, redis=redis)
+    except Exception as e:  # noqa: BLE001 — 이 절이 검사기 전체(결과 요약·종료 코드)를 죽이지 않게
+        fail(f"Fix 414~418 절 실행 실패: {e!r}")
+    finally:
+        if db is not None:
+            try:
+                db.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
 if __name__ == "__main__":
     print(f"verify_fix364_deploy — {datetime.now().astimezone():%Y-%m-%d %H:%M:%S %Z} (cwd {_ROOT})")
     check_code()
@@ -1029,6 +1065,7 @@ if __name__ == "__main__":
     check_bb_swing()
     check_auto_entry_ready()
     check_ip_weight_section()
+    check_fix414_418_section()
     print("─" * 70)
     if _fails:
         print(f"결과: FAIL {len(_fails)}건")
