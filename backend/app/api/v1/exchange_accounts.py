@@ -978,7 +978,9 @@ def get_binance_open_orders_summary(
     #   Fix 391 실측(21:43): 화면 1개가 열려 있을 때 분당 openOrders 160 = 한도 2400 의 7%
     #   (= 15초 캐시로 분당 4회). 30초로 늘리면 분당 2회 = 80 으로 절반이 된다.
     #   대가 = 미체결 주문 요약이 최대 30초 늦게 갱신된다 (주문 자체는 실시간 경로가 따로 있다).
-    OPEN_ORDERS_CACHE_TTL_SEC = 30      # 사장님이 정한 값 (verbatim)
+    #   ⚖️ Fix 421 (2026-10-04) 사장님 결정 「3번 진행」 = 캐시 30초 → 60초 (분당 openOrders 약 70 → 35 weight).
+    #   대가 = 미체결 주문 요약이 최대 60초 늦게 갱신 (주문·체결 자체는 실시간 경로 그대로).
+    OPEN_ORDERS_CACHE_TTL_SEC = 60      # 사장님이 정한 값 (verbatim, 10/04)
     redis = None
     cache_key = f"binance:open_orders_summary:{account_id}"
     try:

@@ -98,9 +98,9 @@ class TestFix392OpenOrdersCache:
     30초면 분당 2회 = 80 → 절반. 대가는 미체결 요약이 최대 30초 늦는 것.
     """
 
-    def test_ttl_is_30_and_used_in_setex(self) -> None:
+    def test_ttl_is_60_and_used_in_setex(self) -> None:
         src = ACCOUNTS.read_text(encoding="utf-8")
-        assert "OPEN_ORDERS_CACHE_TTL_SEC = 30" in src
+        assert "OPEN_ORDERS_CACHE_TTL_SEC = 60" in src      # Fix 421: 사장님 결정 30 → 60 (10/04)
         assert "redis.setex(cache_key, OPEN_ORDERS_CACHE_TTL_SEC" in src
 
     def test_no_hardcoded_15_left(self) -> None:

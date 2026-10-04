@@ -49,7 +49,7 @@ LIVE_SCAN_CACHE_TTL_SEC = 45
 
 @router.get("/scan")
 def scan_live_pump_dump(
-    max_symbols: int = Query(default=60, ge=10, le=150),
+    max_symbols: int = Query(default=30, ge=10, le=150),   # ⚖️ Fix 421 사장님 결정(10/04): 60 → 30 (24h 변동 큰 순 상위)
     include_dump: bool = Query(
         default=False,  # 🌟 v153 사장님 (2026-08-16): 기본 False! 85%+ 만 표시!
         description="급락도 목록에 표시할지",

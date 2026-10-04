@@ -21,7 +21,7 @@
 
   async function scanLivePumpDump() {
     try {
-      const data = await api('/live-pump-dump/scan?max_symbols=60&include_dump=true');
+      const data = await api('/live-pump-dump/scan?max_symbols=30&include_dump=true');
       renderLivePumpDump(data);
     } catch (e) {
       console.warn('[live-pd] scan 실패:', e);
