@@ -45,6 +45,9 @@ router = APIRouter(prefix="/live-pump-dump", tags=["live-pump-dump"])
 # ⚡ Fix 399 (2026-09-24): 화면 공유 캐시 TTL. 폴링 60초보다 짧게 둬서 한 화면의 신선도는
 #   그대로 두고, 화면이 여러 개일 때만 거래소 호출을 하나로 묶는다. 「Claude가 정함」.
 LIVE_SCAN_CACHE_TTL_SEC = 45
+# ⚖️ Fix 422 (2026-10-05) 사장님 「서버에서 30으로 강제」: 새로고침 안 한 옛 화면 탭이 max_symbols=60 을 계속 보내
+#   분당 ~125 weight 를 썼다(nginx 로그: Windows PC Chrome 한 대). 요청 값과 무관하게 상한을 서버에서 건다.
+LIVE_SCAN_MAX_SYMBOLS = 30        # 사장님이 정한 값 (verbatim, 10/04 「3번 진행」 · 10/05 「서버에서 30으로 강제」)
 
 
 @router.get("/scan")
@@ -75,6 +78,7 @@ def scan_live_pump_dump(
     #   즉 데스크탑+모바일을 같이 열면 그대로 2배가 된다 (사장님이 그렇게 쓰신다).
     #   TTL 45초 = 폴링 주기(60초)보다 짧아 **한 화면의 신선도는 그대로**이고,
     #   화면이 여러 개여도 거래소 호출은 한 번으로 묶인다. (45 = 「Claude가 정함」)
+    max_symbols = min(int(max_symbols), LIVE_SCAN_MAX_SYMBOLS)   # Fix 422: 캐시 키도 30 으로 모여 화면끼리 공유
     _cache_key = f"live_pump_dump:scan:{max_symbols}:{int(include_dump)}:{min_confidence}"
     _redis = None
     try:
