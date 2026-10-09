@@ -150,6 +150,37 @@ def _store_cycle_summary(summary: dict[str, Any]) -> None:
         logger.debug("[%s] redis 저장 실패 (무시): %s", FIX, e)
 
 
+def _k_daily_done(sym: str, dc: int) -> str:
+    return f"paper:daily_done:{sym}:{dc}"
+
+
+def _paper_daily_done(sym: str, dc: int) -> bool:
+    """Fix 427: 이 심볼의 이 일봉을 이미 판정했나. Redis 실패 = 아니라고 본다(판정 누락보다 창 안 재판정이 낫다)."""
+    try:
+        from app.core.redis_client import get_redis_client
+        return bool(get_redis_client().get(_k_daily_done(sym, dc)))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _mark_paper_daily_done(sym: str, dc: int) -> None:
+    try:
+        from app.core.redis_client import get_redis_client
+        get_redis_client().setex(_k_daily_done(sym, dc), 2 * 86400, "1")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _ext_paper_interval(db) -> str:
+    """운영 판정 봉을 가상 규칙에 알려 주고, 규칙이 실제로 쓰는 값을 돌려준다(교차 감사: 실패해도 둘이 어긋나지 않게 — 직전 값 유지)."""
+    from app.services import external_strategies as ES
+    try:
+        ES.set_paper_interval(ES.setting(db, "ext_interval"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Fix427] 외부 전략 판정 봉 조회 실패 → 직전 값 유지(%s): %s", ES.PAPER_INTERVAL, e)
+    return ES.PAPER_INTERVAL
+
+
 def _emapb_coins(db, symbols) -> set[str] | None:
     try:
         from app.services import ema_pullback as EP
@@ -218,6 +249,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
         open_syms = set(db.execute(select(PaperTrade.symbol).where(PaperTrade.status == "OPEN")).scalars())
         process_symbols = sorted(set(uni) | open_syms)
         _ep_coins = _emapb_coins(db, process_symbols)       # Fix 425: EMA 눌림은 코인 무기한만 (None = 거르지 않음)
+        _ext_daily = _ext_paper_interval(db) == "1d"         # Fix 427: 후지모토·마하세븐 가상 규칙도 운영 판정 봉(ext_interval)을 따른다
         if limit_symbols:
             process_symbols = process_symbols[:limit_symbols]
 
@@ -328,12 +360,17 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                 _EPF.set_paper_symbol_ok(_ep_ok)
             except Exception:  # noqa: BLE001
                 pass
+            _need_ep, _dc, _cx = False, None, None                 # Fix 427: 앞 심볼 값이 새지 않게 먼저 초기화
             #   🗓 Fix 424: EMA 추세 눌림(일봉)은 하루 마지막 15분봉에서 일봉 300개를 받는다 (하루 한 번 · 무게 2). 둘 다면 큰 쪽 하나로.
             try:
                 from app.services import ema_pullback as EP
                 from app.services import opportunity_zones as OZ
                 _cx = series.ctx(j)
-                _need_ep = _ep_ok and EP.needs_daily(_cx.kl15)
+                # Fix 427: 일봉 마감 뒤 1시간 창 · 심볼별 하루 한 번 (사이클이 밀려 23:45 봉을 놓쳐도 판정, 두 번 판정은 안 함)
+                _dc = EP.day_close_of(_cx.kl15) if (_ep_ok or _ext_daily) else None
+                _daily_done = _dc is not None and _paper_daily_done(sym, _dc)
+                EP.set_paper_daily_done(_daily_done)
+                _need_ep = _dc is not None and not _daily_done   # 후지모토·마하세븐(일봉)·EMA 눌림이 같은 일봉을 쓴다
                 if _need_ep or OZ.needs_daily(_cx.kl15, _cx.kl1h):
                     series.k1d = CL.compact(_kl(sym, interval="1d", limit=300 if _need_ep else 61), now_ms=now_ms,
                                             interval_ms=CL.MS_DAY)
@@ -346,6 +383,9 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                 fired = {}
             try:                                                    # Fix 425: 평가 끝 → 플래그 기본값으로 (회차 밖으로 새지 않게)
                 _EPF.set_paper_symbol_ok(True)
+                _EPF.set_paper_daily_done(False)
+                if _need_ep and _cx is not None and _EPF.daily_is_fresh(series.k1d, _cx.kl15):   # Fix 427: 그날 일봉으로 판정했다 → 오늘은 끝 (실패·묵음이면 다음 사이클 재시도)
+                    _mark_paper_daily_done(sym, _dc)
             except Exception:  # noqa: BLE001
                 pass
             tags = sorted(set(uni.get(sym, {}).get("tags") or []) | set(daily.get(sym, {}).get("tags") or [])

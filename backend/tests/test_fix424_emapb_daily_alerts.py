@@ -60,15 +60,16 @@ def test_paper_fires_only_on_day_close_with_fresh_daily():
     kl1d = [[float(x) for x in r] for r in rows_of(c, h, lo, v)]
     last_close_15 = int(kl1d[-1][0]) + DAY - M15
     assert EP.needs_daily([[last_close_15]]) and not EP.needs_daily([[last_close_15 - M15]])
+    assert EP.needs_daily([[last_close_15 + 3 * M15]]) and not EP.needs_daily([[last_close_15 + 4 * M15]])   # Fix 427: 마감 뒤 1시간 창
     assert EP._r_long(_ctx(last_close_15, kl1d)) is True
-    assert EP._r_long(_ctx(last_close_15 - M15, kl1d)) is False      # 하루 중간 봉에서는 판정 안 함
+    assert EP._r_long(_ctx(last_close_15 - M15, kl1d)) is False      # 마감 전 봉에서는 판정 안 함
     assert EP._r_long(_ctx(last_close_15 + DAY, kl1d)) is False      # 일봉이 하루 묵음(조회 누락) → 판정 안 함
     assert EP._r_long(_ctx(last_close_15, None)) is False
 
 
 def test_paper_worker_fetches_300_daily_only_when_needed():
     w = (APP / "workers" / "paper_trading_worker.py").read_text(encoding="utf-8")
-    assert "_need_ep = _ep_ok and EP.needs_daily(_cx.kl15)" in w and 'limit=300 if _need_ep else 61' in w   # Fix 425: 코인만
+    assert "_need_ep = _dc is not None and not _daily_done" in w and 'limit=300 if _need_ep else 61' in w   # Fix 425: 코인만
 
 
 # ── 진입 준비 ────────────────────────────────────────────────────────────

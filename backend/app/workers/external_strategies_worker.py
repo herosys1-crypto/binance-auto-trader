@@ -42,6 +42,11 @@ def _k_shadow(fam: str, sym: str, ts: int) -> str: return f"ext:shadow:{fam}:{sy
 def _k_cool(fam: str, sym: str) -> str: return f"ext:cooldown:{fam}:{sym}"
 def _k_stage(sid: int) -> str: return f"ext:fujimoto:stage:{sid}"
 def _k_stop(sid: int) -> str: return f"ext:fujimoto:stop:{sid}"
+def _k_last_iv(sym: str, interval: str) -> str:
+    """후지모토·마하세븐 판정 봉 기록 — 15m 은 옛 키 그대로, 다른 봉은 봉별 키 (Fix 427: 15m 기록이 일봉 첫 판정을 막지 않게)."""
+    return _k_last(sym) if interval == "15m" else f"ext:last:{interval}:{sym}"
+
+
 def _k_last_ep(sym: str, interval: str) -> str: return f"ext:last:emapb:{interval}:{sym}"   # 🗓 Fix 424: EMA 눌림 전용 판정 봉 기록
 
 
@@ -298,7 +303,7 @@ def run_external_strategies_once() -> dict:
         for sym in (universe if (fm != "off" or mm != "off") else []):   # Fix 424: 15분 가족이 모두 꺼졌으면 15분봉을 받지 않는다
             try:
                 bars, seen = _closed_bars(bc, r, sym, interval, settle_ms=settle_ms, incremental=incremental, stat=stat,
-                                          now_ms=cycle_now)
+                                          now_ms=cycle_now, last_key=_k_last_iv(sym, interval))
                 if bars is None:
                     continue                                     # 새 완성봉 없음 · 아직 확정 아님 (Fix 406)
                 if len(bars) < MIN_BARS:
@@ -308,7 +313,7 @@ def run_external_strategies_once() -> dict:
                 ts = int(bars[j][0])
                 if BG.already_judged(seen, ts):
                     continue                                     # 이 봉(또는 더 새 봉)은 이미 판정했다 — 단조 비교
-                r.setex(_k_last(sym), last_ttl, str(ts))
+                r.setex(_k_last_iv(sym, interval), last_ttl, str(ts))
                 c = [float(b[4]) for b in bars]
                 h = [float(b[2]) for b in bars]
                 lo = [float(b[3]) for b in bars]

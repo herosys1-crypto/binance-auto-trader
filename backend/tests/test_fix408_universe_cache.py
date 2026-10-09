@@ -372,6 +372,6 @@ def test_worker_wiring_pins():
     from app.workers import external_strategies_worker as W
     assert ES.SETTINGS["ext_universe_per_bar"][0] == "1"                 # 미등록이면 ES.setting 이 KeyError → 사이클 정지
     src = pathlib.Path(W.__file__).read_text(encoding="utf-8")
-    assert "cycle_now = _now_ms()" in src and "now_ms=cycle_now)" in src and "now_ms=cycle_now," in src
+    assert "cycle_now = _now_ms()" in src and "now_ms=cycle_now, last_key=_k_last_iv(sym, interval))" in src and "now_ms=cycle_now," in src   # Fix 427
     assert "universe = _universe(" not in src                              # 매분 직접 계산이 남아 있지 않다
     assert "compute=lambda: _universe(bc, db, top_n, min_qv)" in src

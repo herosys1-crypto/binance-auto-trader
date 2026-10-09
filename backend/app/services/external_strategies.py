@@ -57,15 +57,15 @@ SETTINGS: dict[str, tuple[str, str, str]] = {
     "fujimoto_max_concurrent": ("2", "전용 동시 보유 상한", "Claude가 정함"),
     "fujimoto_swing_lookback": ("20", "1차 손절 = 최근 N봉 스윙 저점/고점", "Claude가 정함 (출처 「최근 지지/저항」)"),
     "fujimoto_div_lookback": ("30", "다이버전스 비교 창(봉)", "Claude가 정함"),
-    "fujimoto_cooldown_hours": ("4", "심볼당 진입 뒤 재신호 무시 시간", "Claude가 정함"),
+    "fujimoto_cooldown_hours": ("20", "심볼당 진입 뒤 재신호 무시 시간 (일봉: 다음 날 신호 허용, Fix 427)", "Claude가 정함"),
     "mach7_mode": ("shadow", "off | shadow | on", "Claude가 정함 — 실자금은 사장님이 켠다"),
     "mach7_sides": ("LONG,SHORT", "허용 방향", "출처(양방향)"),
     "mach7_capital_usdt": ("50", "1회 진입 증거금(USDT)", "Claude가 정함"),
     "mach7_risk_pct": ("2", "2% 룰 상한(출처는 손절가만 정함 → 같은 룰을 상한으로)", "Claude가 정함"),
     "mach7_max_concurrent": ("2", "전용 동시 보유 상한", "Claude가 정함"),
     "mach7_min_slope_pct": ("0.5", "LONG 만: 30선 5봉 기울기 % 하한 (출처 「각도 30도」 대체)", "Claude가 정함 — 가상매매로 보정"),
-    "mach7_cooldown_hours": ("4", "심볼당 진입 뒤 재신호 무시 시간", "Claude가 정함"),
-    "ext_interval": ("15m", "판정 봉", "Claude가 정함 (사장님 사상: 15분 = 타이밍)"),
+    "mach7_cooldown_hours": ("20", "심볼당 진입 뒤 재신호 무시 시간 (일봉: 다음 날 신호 허용, Fix 427)", "Claude가 정함"),
+    "ext_interval": ("1d", "후지모토·마하세븐 판정 봉 (1d 일봉 · 4h · 15m) — 가상매매 규칙은 1d·15m 만 (4h 면 가상 판정 안 함)", "사장님 10/10 「일봉기준으로」 (Fix 427, 전엔 15m)"),
     "ext_universe_top_n": ("60", "거래대금 상위 N 심볼만 감시", "Claude가 정함"),
     "ext_min_quote_volume": ("5000000", "24h 거래대금 하한(USDT)", "Claude가 정함"),
     "ext_stop_pct_min": ("0.3", "손절폭(가격 %) 하한 — 너무 좁은 손절은 스프레드에 죽는다", "Claude가 정함"),
@@ -356,8 +356,58 @@ def _ind_of(ctx: Any) -> Ind:
     return ind
 
 
+# ───────── 🗓 Fix 427 (사장님 10/10 「일봉기준으로」): 가상매매도 일봉으로 판정 ─────────
+#   가상매매 엔진은 15분 시리즈를 돈다 → ext_interval == 1d 이면 **하루 마지막 15분봉**에서 그날 닫힌 일봉(ctx.kl1d)으로 하루 한 번 판정.
+#   가상매매 워커가 사이클마다 set_paper_interval(운영 설정) 으로 알려 준다 (RuleCtx 에는 설정이 없다).
+PAPER_INTERVAL: str = SETTINGS["ext_interval"][0]
+_D_CACHE: dict[tuple[int, int], tuple[Any, Ind]] = {}
+
+
+def set_paper_interval(iv: str) -> None:
+    """교차 감사: 가상매매가 지원하지 않는 봉(4h 등)을 일봉으로 바꿔치기하면 운영과 다른 전략을 재게 된다 → 「off」(판정 안 함) + 경고."""
+    global PAPER_INTERVAL
+    if iv in ("15m", "1d"):
+        PAPER_INTERVAL = iv
+    else:
+        if PAPER_INTERVAL != "off":
+            logger.warning("[Fix427] 외부 전략 판정 봉 %r 은 가상매매가 지원하지 않음 → 가상 판정 끔 (15m·1d 만)", iv)
+        PAPER_INTERVAL = "off"
+
+
+def _daily_view(ctx: Any) -> tuple[Ind, int] | None:
+    """하루 마지막 15분봉이고 그날 닫힌 일봉이 있으면 (일봉 지표, 마지막 인덱스). 아니면 None (= 판정 안 함)."""
+    from app.services.ema_pullback import daily_is_fresh
+    k1 = getattr(ctx, "kl1d", None)
+    if not daily_is_fresh(k1, getattr(ctx, "kl15", None)):
+        return None                                        # 창 밖 · 그날 일봉 아님 · 오늘 이미 판정 → 판정 안 함
+    try:
+        key = (id(k1), len(k1))
+        hit = _D_CACHE.get(key)
+        if hit is not None and hit[0] is k1:
+            ind = hit[1]
+        else:
+            ind = compute([float(b[4]) for b in k1], [float(b[2]) for b in k1], [float(b[3]) for b in k1])
+            if len(_D_CACHE) >= _IND_CACHE_MAX:
+                _D_CACHE.pop(next(iter(_D_CACHE)))
+            _D_CACHE[key] = (k1, ind)
+        return ind, len(k1) - 1
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _view(ctx: Any) -> tuple[Ind, int] | None:
+    if PAPER_INTERVAL == "1d":
+        return _daily_view(ctx)
+    if PAPER_INTERVAL == "off":
+        return None
+    return _ind_of(ctx), ctx.j
+
+
 def _fj(ctx: Any, side: str, stage: int) -> bool:
-    return bool(fujimoto_stages(_ind_of(ctx), ctx.j, side, div_lookback=int(SETTINGS["fujimoto_div_lookback"][0]))[stage])
+    vw = _view(ctx)
+    if vw is None:
+        return False
+    return bool(fujimoto_stages(vw[0], vw[1], side, div_lookback=int(SETTINGS["fujimoto_div_lookback"][0]))[stage])
 
 
 def _r_fujimoto_l1(ctx: Any) -> bool: return _fj(ctx, "LONG", 1)
@@ -367,9 +417,11 @@ def _r_fujimoto_s1(ctx: Any) -> bool: return _fj(ctx, "SHORT", 1)
 def _r_fujimoto_s2(ctx: Any) -> bool: return _fj(ctx, "SHORT", 2)
 def _r_fujimoto_s3(ctx: Any) -> bool: return _fj(ctx, "SHORT", 3)
 def _r_mach7_long(ctx: Any) -> bool:
-    return mach7_signal(_ind_of(ctx), ctx.j, "LONG", min_slope_pct=float(SETTINGS["mach7_min_slope_pct"][0]))[0]
+    vw = _view(ctx)
+    return bool(vw) and bool(mach7_signal(vw[0], vw[1], "LONG", min_slope_pct=float(SETTINGS["mach7_min_slope_pct"][0]))[0])
 def _r_mach7_short(ctx: Any) -> bool:
-    return mach7_signal(_ind_of(ctx), ctx.j, "SHORT")[0]
+    vw = _view(ctx)
+    return bool(vw) and bool(mach7_signal(vw[0], vw[1], "SHORT")[0])
 
 
 # (key, side, label, fn) — chart_learning.RULES 가 Rule 로 감싼다

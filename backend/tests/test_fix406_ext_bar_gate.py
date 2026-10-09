@@ -247,7 +247,8 @@ def test_worker_loop_pins():
     _h = src.index("for sym in (universe if (fm != \"off\" or mm != \"off\") else []):")   # Fix 424: 15분 가족 꺼지면 15분봉 안 받음
     loop = src[_h:src.index("c = [float(b[4]) for b in bars]", _h)]
     order = ["_closed_bars(bc, r, sym, interval", "if bars is None:", "len(bars) < MIN_BARS", "BG.already_judged(seen, ts)",
-             "r.setex(_k_last(sym), last_ttl, str(ts))"]
+             "r.setex(_k_last_iv(sym, interval), last_ttl, str(ts))"]     # Fix 427: 봉별 기록 키 (15m = 옛 키 그대로)
     pos = [loop.index(p) for p in order]
     assert pos == sorted(pos)
+    assert W._k_last_iv("BTCUSDT", "15m") == W._k_last("BTCUSDT") and W._k_last_iv("BTCUSDT", "1d") == "ext:last:1d:BTCUSDT"
     assert "bc.get_klines(symbol=sym, interval=interval, limit=KLINE_LIMIT)" not in loop   # 루프에서 직접 받지 않는다

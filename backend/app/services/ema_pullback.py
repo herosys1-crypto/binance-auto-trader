@@ -271,10 +271,39 @@ def _emas_of(ctx: Any) -> dict[int, list[float]]:
 MS_15M, MS_DAY = 900_000, 86_400_000
 
 
-def needs_daily(kl15: Sequence[Sequence[float]] | None) -> bool:
-    """가상매매 워커가 일봉을 받아야 하나 = 이 15분봉이 UTC 하루의 마지막 봉(일봉 마감 직후 판정). (Fix 424)"""
+DAILY_WINDOW_MS = 60 * 60_000      # Claude가 정함 — 일봉 마감 뒤 이 시간 안의 15분봉이면 그날 일봉 판정 (Fix 427)
+# Fix 427 (Gemini 지적 확인): 가상매매는 사이클마다 「마지막 닫힌 15분봉 하나」만 본다 → 23:45 봉 사이클이 밀리거나 빠지면 그날 판정이 통째로 사라졌다.
+#   → 마감 뒤 1시간 창 안이면 판정하고, 하루 한 번만 판정하도록 워커가 심볼별 「오늘 판정 끝」을 알려 준다(PAPER_DAILY_DONE).
+PAPER_DAILY_DONE: bool = False
+
+
+def set_paper_daily_done(done: bool) -> None:
+    global PAPER_DAILY_DONE
+    PAPER_DAILY_DONE = bool(done)
+
+
+def day_close_of(kl15: Sequence[Sequence[float]] | None) -> int | None:
+    """이 15분봉의 마감이 일봉 마감(UTC 00:00) 뒤 DAILY_WINDOW_MS 안이면 그 일봉 마감 시각(ms), 아니면 None."""
     try:
-        return bool(kl15) and int(kl15[-1][0]) % MS_DAY == MS_DAY - MS_15M
+        if not kl15:
+            return None
+        close = int(kl15[-1][0]) + MS_15M
+        dc = close // MS_DAY * MS_DAY
+        return dc if close - dc < DAILY_WINDOW_MS else None
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def needs_daily(kl15: Sequence[Sequence[float]] | None) -> bool:
+    """가상매매 워커가 일봉을 받아야 하나 = 일봉 마감 뒤 1시간 창 안의 15분봉 (Fix 424 · 427)."""
+    return day_close_of(kl15) is not None
+
+
+def daily_is_fresh(k1, kl15) -> bool:
+    """k1 의 마지막 일봉이 이 창의 일봉(방금 닫힌 그날 것)인가. 하루 이미 판정했으면 False (Fix 427)."""
+    dc = day_close_of(kl15)
+    try:
+        return (not PAPER_DAILY_DONE) and dc is not None and bool(k1) and int(k1[-1][0]) + MS_DAY == dc
     except (TypeError, ValueError, IndexError):
         return False
 
@@ -291,11 +320,9 @@ def set_paper_symbol_ok(ok: bool) -> None:
 def _paper(ctx: Any, side: str) -> bool:
     """🗓 Fix 424: 일봉 규칙 — 하루 마지막 15분봉에서만, 방금 닫힌 일봉까지로 판정 (하루 한 번)."""
     k1 = getattr(ctx, "kl1d", None)
-    if not PAPER_SYMBOL_OK or not needs_daily(getattr(ctx, "kl15", None)) or not k1:
-        return False
+    if not PAPER_SYMBOL_OK or not daily_is_fresh(k1, getattr(ctx, "kl15", None)):
+        return False                                   # 창 밖 · 그날 일봉 아님(조회 지연·누락) · 오늘 이미 판정 → 판정 안 함
     try:
-        if int(k1[-1][0]) + MS_DAY != int(ctx.kl15[-1][0]) + MS_15M:
-            return False                               # 일봉이 방금 닫힌 그날 것이 아니다 (조회 지연·누락) → 판정 안 함
         c = [float(b[4]) for b in k1]
         h = [float(b[2]) for b in k1]
         lo = [float(b[3]) for b in k1]
