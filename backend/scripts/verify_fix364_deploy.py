@@ -493,12 +493,13 @@ def check_external_strategies() -> None:
         from app.services import chart_learning as CL
         keys = {r.key for r in CL.RULES}
         from app.services import ema_pullback as EP          # 📈 Fix 423
-        want = {k for k, _s, _l, _f in ES.PAPER_RULES} | {k for k, _s, _l, _f in EP.PAPER_RULES}
+        from app.services import bb_ema as BE                # 📊 Fix 429
+        want = {k for k, _s, _l, _f in ES.PAPER_RULES} | {k for k, _s, _l, _f in EP.PAPER_RULES} | {k for k, _s, _l, _f in BE.PAPER_RULES}
         (ok if want <= keys else fail)(f"가상 규칙 등록 {len(want & keys)}/{len(want)} (chart_learning.RULES)")
         (ok if CL.LABEL_VERSION >= 4 else fail)(f"LABEL_VERSION = {CL.LABEL_VERSION} (4 이상 = 옛 행 재라벨)")
         from app.services.single_entry_guard import SINGLE_ENTRY_STRATEGY_TYPES as _SET, SINGLE_ENTRY_TEMPLATE_PREFIXES as _SEP
-        (ok if {ES.FUJIMOTO_TYPE, ES.MACH7_TYPE, EP.STYPE} <= set(_SET) and {ES.FUJIMOTO_PREFIX, ES.MACH7_PREFIX, EP.PREFIX} <= set(_SEP) else fail)(
-            "피라미딩 워커 제외 목록(single_entry_guard)에 세 가족 등록")
+        (ok if {ES.FUJIMOTO_TYPE, ES.MACH7_TYPE, EP.STYPE, BE.STYPE} <= set(_SET) and {ES.FUJIMOTO_PREFIX, ES.MACH7_PREFIX, EP.PREFIX, BE.PREFIX} <= set(_SEP) else fail)(
+            "피라미딩 워커 제외 목록(single_entry_guard)에 네 가족 등록")
         with open(os.path.join(_ROOT, "app/workers/scheduler_runner.py"), encoding="utf-8") as f:
             sr = f.read()
         (ok if 'id="external_strategies"' in sr and "run_external_strategies_once" in sr else fail)("스케줄러 잡 external_strategies (60초)")
@@ -508,9 +509,11 @@ def check_external_strategies() -> None:
                            ('mode="preserve"', "후지모토 2·3차 = preserve 추가"),
                            ("bars = kl[:-1]", "진행 중 봉 제외(완성봉만 판정)"),
                            ("EP.signal(c, h, lo, v, j, side, ep_p, e_)", "EMA 추세 눌림 판정 (Fix 423)"),
-                           ("prefix=EP.PREFIX, stype=EP.STYPE", "EMA 눌림 실주문 = create_surge_position 경로")):
+                           ("prefix=EP.PREFIX, stype=EP.STYPE", "EMA 눌림 실주문 = create_surge_position 경로"),
+                           ("BE.signal(c, h, lo, j, side, bb_p, ind_bb)", "볼린저 EMA 판정 (Fix 429)"),
+                           ("prefix=BE.PREFIX, stype=BE.STYPE", "볼린저 EMA 실주문 = create_surge_position 경로")):
             (ok if pin in wk else fail)(f"{label}: {pin}")
-        (ok if all(ES.SETTINGS[k][0] == "shadow" for k in ("fujimoto_mode", "mach7_mode", "emapb_mode")) else fail)("코드 기본 모드 = shadow (주문 없음)")
+        (ok if all(ES.SETTINGS[k][0] == "shadow" for k in ("fujimoto_mode", "mach7_mode", "emapb_mode", "bbema_mode")) else fail)("코드 기본 모드 = shadow (주문 없음)")
     except Exception as e:  # noqa: BLE001
         fail(f"코드 층 검사 실패: {e!r}")
         return
@@ -527,7 +530,7 @@ def check_external_strategies() -> None:
                 v = ES.setting(db, key)
                 print(f"     {key:28} = {v:<12} [{'DB' if v != default else '기본'}]  {label} ({origin})")
             from app.workers.external_strategies_worker import _active_by_prefix
-            for fam, prefix in (("후지모토", ES.FUJIMOTO_PREFIX), ("마하세븐", ES.MACH7_PREFIX), ("EMA 눌림", "EMAPB")):
+            for fam, prefix in (("후지모토", ES.FUJIMOTO_PREFIX), ("마하세븐", ES.MACH7_PREFIX), ("EMA 눌림", "EMAPB"), ("볼린저 EMA", "BBEMA")):
                 act = _active_by_prefix(db, prefix)
                 print(f"  ▸ {fam} 활성 인스턴스 {len(act)}건: " + ", ".join(f"#{si.id} {s} {si.side}" for s, si in act.items()))
         finally:
@@ -546,7 +549,8 @@ def check_external_strategies() -> None:
             n_fj = sum(1 for _ in r.scan_iter("ext:shadow:fujimoto:*", count=500))
             n_m7 = sum(1 for _ in r.scan_iter("ext:shadow:mach7:*", count=500))
             n_ep = sum(1 for _ in r.scan_iter("ext:shadow:emapb:*", count=500))
-            print(f"  ▸ 그림자 신호(7일 보관): 후지모토 {n_fj} · 마하세븐 {n_m7} · EMA 눌림 {n_ep}")
+            n_bb = sum(1 for _ in r.scan_iter("ext:shadow:bbema:*", count=500))
+            print(f"  ▸ 그림자 신호(7일 보관): 후지모토 {n_fj} · 마하세븐 {n_m7} · EMA 눌림 {n_ep} · 볼린저 EMA {n_bb}")
         except Exception as e:  # noqa: BLE001
             skip(f"Redis 조회 실패: {e!r}")
     except Exception as e:  # noqa: BLE001

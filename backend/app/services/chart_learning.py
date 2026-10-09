@@ -286,6 +286,7 @@ class Rule:
 
 from app.services.external_strategies import PAPER_RULES as _EXT_RULES   # Fix 368 (가벼운 모듈, 순환 없음)
 from app.services.ema_pullback import PAPER_RULES as _EMAPB_RULES          # 📈 Fix 423 EMA 추세 눌림 2종
+from app.services.bb_ema import PAPER_RULES as _BBEMA_RULES                 # 📊 Fix 429 볼린저 EMA 4종
 from app.services.opportunity_zones import PAPER_RULES as _OZ_RULES        # 🗺 Fix 379 기회 지도 2종 (가상만)
 
 _CFG = None
@@ -430,6 +431,7 @@ RULES: tuple[Rule, ...] = (
     # 🎯 Fix 368 (2026-09-12): 외부 전략 2종 — 판정은 app/services/external_strategies.py (시리즈당 지표 1회 캐시)
     *tuple(Rule(_k, _s, _lbl, "candidate", _fn) for _k, _s, _lbl, _fn in _EXT_RULES),
     *tuple(Rule(_k, _s, _lbl, "candidate", _fn) for _k, _s, _lbl, _fn in _EMAPB_RULES),   # 📈 Fix 423
+    *tuple(Rule(_k, _s, _lbl, "candidate", _fn) for _k, _s, _lbl, _fn in _BBEMA_RULES),   # 📊 Fix 429
     # 🗺 Fix 379 (2026-09-19): 기회 지도 — 모든 자리 채점에서 두 장세 모두 이긴 구간 (app/services/opportunity_zones.py)
     *tuple(Rule(_k, _s, _lbl, "candidate", _fn) for _k, _s, _lbl, _fn in _OZ_RULES),
 )

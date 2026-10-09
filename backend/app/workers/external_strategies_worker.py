@@ -22,6 +22,7 @@ from app.core.redis_client import get_redis_client
 from app.services import bar_gate as BG
 from app.services import external_strategies as ES
 from app.services import ema_pullback as EP          # 📈 Fix 423
+from app.services import bb_ema as BE                 # 📊 Fix 429
 from app.services.kline_incremental import INTERVAL_MS, IncrementalKlines
 from app.services.universe_cache import cached_universe
 
@@ -45,6 +46,9 @@ def _k_stop(sid: int) -> str: return f"ext:fujimoto:stop:{sid}"
 def _k_last_iv(sym: str, interval: str) -> str:
     """후지모토·마하세븐 판정 봉 기록 — 15m 은 옛 키 그대로, 다른 봉은 봉별 키 (Fix 427: 15m 기록이 일봉 첫 판정을 막지 않게)."""
     return _k_last(sym) if interval == "15m" else f"ext:last:{interval}:{sym}"
+
+
+def _k_last_bb(sym: str, interval: str) -> str: return f"ext:last:bbema:{interval}:{sym}"   # 📊 Fix 429
 
 
 def _k_last_ep(sym: str, interval: str) -> str: return f"ext:last:emapb:{interval}:{sym}"   # 🗓 Fix 424: EMA 눌림 전용 판정 봉 기록
@@ -252,14 +256,19 @@ def _add_stage(db, r, stat: dict, si, *, nxt: int, margin: float, stop_price: fl
 
 def run_external_strategies_once() -> dict:
     db = SessionLocal()
-    stat: dict = {"fujimoto": "off", "mach7": "off", "emapb": "off", "symbols": 0, "eval": 0, "shadow": 0, "entered": 0, "added": 0,
-                  "err": 0, "sig": {"fj_L1": 0, "fj_L2": 0, "fj_L3": 0, "fj_S1": 0, "fj_S2": 0, "fj_S3": 0, "m7_L": 0, "m7_S": 0, "ep_L": 0, "ep_S": 0},
+    stat: dict = {"fujimoto": "off", "mach7": "off", "emapb": "off", "bbema": "off", "symbols": 0, "eval": 0, "shadow": 0, "entered": 0, "added": 0,
+                  "err": 0, "sig": {"fj_L1": 0, "fj_L2": 0, "fj_L3": 0, "fj_S1": 0, "fj_S2": 0, "fj_S3": 0, "m7_L": 0, "m7_S": 0, "ep_L": 0, "ep_S": 0, "bb_TL": 0, "bb_TS": 0, "bb_RL": 0, "bb_RS": 0},
                   "miss": {}}
     try:
         fm, mm = ES.mode_of(db, "fujimoto_mode"), ES.mode_of(db, "mach7_mode")
         em = ES.mode_of(db, "emapb_mode")                     # 📈 Fix 423 EMA 추세 눌림
-        stat["fujimoto"], stat["mach7"], stat["emapb"] = fm, mm, em
-        if fm == "off" and mm == "off" and em == "off":
+        bm = ES.mode_of(db, "bbema_mode")                     # 📊 Fix 429 볼린저 EMA
+        if bm == "on":
+            # 교차 감사: 검증된 성과는 「중단·EMA 배열 이탈까지 보유」 청산에서 나왔는데 실주문 경로엔 그 청산이 없다 → 만들 때까지 shadow
+            logger.warning("[%s] bbema_mode=on 이지만 전용 추세 보유 청산 미구현 → shadow 로 동작", FIX)
+            bm = "shadow"
+        stat["fujimoto"], stat["mach7"], stat["emapb"], stat["bbema"] = fm, mm, em, bm
+        if fm == "off" and mm == "off" and em == "off" and bm == "off":
             return stat
         from app.core.crypto import decrypt_text
         from app.integrations.binance.client import BinanceClient
@@ -295,7 +304,8 @@ def run_external_strategies_once() -> dict:
         ep_sides = ES.sides_of(db, "emapb_sides")
         ep_p = EP.params_from(lambda k: ES.setting(db, k))
         ep_cap, ep_cool = ES.setting_float(db, "emapb_capital_usdt"), ES.setting_float(db, "emapb_cooldown_hours")
-        equity = _equity(bc) if (fm == "on" or mm == "on" or em == "on") else None
+        act_bb = _active_by_prefix(db, BE.PREFIX) if bm != "off" else {}
+        equity = _equity(bc) if "on" in (fm, mm, em, bm) else None
         incremental = BG.parse_flag(ES.setting(db, "ext_kline_incremental"), default=True)
         last_ttl = max(LAST_TTL, 2 * INTERVAL_MS.get(interval, 0) // 1000)   # 4h·1d 간격에서도 같은 봉 재판정 없게
         stat["gate_skip"] = stat["kl_weight"] = 0
@@ -460,12 +470,76 @@ def run_external_strategies_once() -> dict:
                         db.rollback()
                     except Exception:  # noqa: BLE001
                         pass
+
+        # ── 📊 볼린저 EMA (Fix 429, 사장님 첨부 전략) — 자기 봉(bbema_interval, 기본 일봉)으로 판정 · 1회 진입 ──
+        #   추세(전략 1) 우선, 없으면 반전(전략 2). 봉 마감 게이트·증분 캐시 공용, 판정 기록 키는 가족 전용.
+        if bm != "off":
+            bb_iv = ES.setting(db, "bbema_interval")
+            if bb_iv != "1d":                                     # 교차 감사: 출처 숫자(30일·분기)는 일 단위 → 일봉 고정
+                logger.warning("[%s] bbema_interval=%r 는 지원 안 함 → 일봉", FIX, bb_iv)
+                bb_iv = "1d"
+            bb_ttl = max(LAST_TTL, 2 * INTERVAL_MS[bb_iv] // 1000)
+            bb_p = BE.params_from(lambda k: ES.setting(db, k))
+            bb_sides = ES.sides_of(db, "bbema_sides")
+            bb_cap, bb_cool = ES.setting_float(db, "bbema_capital_usdt"), ES.setting_float(db, "bbema_cooldown_hours")
+            stat["bb_interval"] = bb_iv
+            for sym in universe:
+                if sym in act_bb:
+                    continue
+                try:
+                    lk = _k_last_bb(sym, bb_iv)
+                    bars, seen = _closed_bars(bc, r, sym, bb_iv, settle_ms=settle_ms, incremental=incremental, stat=stat,
+                                              now_ms=cycle_now, last_key=lk)
+                    if bars is None:
+                        continue
+                    if len(bars) < BE.min_bars(bb_p):
+                        stat["miss"]["볼린저EMA 봉 부족"] = stat["miss"].get("볼린저EMA 봉 부족", 0) + 1
+                        continue
+                    j = len(bars) - 1
+                    ts = int(bars[j][0])
+                    if BG.already_judged(seen, ts):
+                        continue
+                    c = [float(b[4]) for b in bars]
+                    h = [float(b[2]) for b in bars]
+                    lo = [float(b[3]) for b in bars]
+                    ind_bb = BE.indicators(c)
+                    price = c[j]
+                    stat["bb_eval"] = stat.get("bb_eval", 0) + 1
+                    for side in sorted(bb_sides):
+                        ok, d = BE.signal(c, h, lo, j, side, bb_p, ind_bb)
+                        if not ok:
+                            continue
+                        stat["sig"][f"bb_{'T' if d['kind'] == 'trend' else 'R'}{'L' if side == 'LONG' else 'S'}"] += 1
+                        if _rget(r, _k_cool("bbema", sym)):
+                            continue
+                        stop_price = float(d["stop"])
+                        sp = ES.clamp_stop_pct(ES.stop_pct(price, stop_price, side), sp_lo, sp_hi)
+                        margin, capped = _size(db, equity, risk_key="bbema_risk_pct", wanted=bb_cap, sp=sp, lev=lev)
+                        payload = {"at": now.isoformat(), "family": "bbema", "kind": d["kind"], "interval": bb_iv,
+                                   "symbol": sym, "side": side, "price": price, "stop": stop_price, "stop_pct": sp,
+                                   "target": d.get("target"), "margin": margin, "capped": capped, "bbw": d.get("bbw")}
+                        if bm == "shadow":
+                            _shadow(r, stat, "bbema", sym, ts, payload)
+                            r.setex(_k_cool("bbema", sym), int(bb_cool * 3600), "1")
+                        else:
+                            _enter(db, r, stat, fam="bbema", sym=sym, side=side, margin=margin, sp=sp, lev=lev,
+                                   prefix=BE.PREFIX, stype=BE.STYPE, cap_key="bbema_max_concurrent",
+                                   stop_price=stop_price, cooldown_h=bb_cool, stage=None)
+                        break
+                    r.setex(lk, bb_ttl, str(ts))         # 처리를 마친 뒤 기록 (일시 오류면 다음 주기 재판정)
+                except Exception as e:  # noqa: BLE001
+                    stat["err"] += 1
+                    logger.warning("[%s] 볼린저EMA %s 판정 실패: %s", FIX, sym, e)
+                    try:
+                        db.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
         try:
             r.setex(CYCLE_KEY, 3600, json.dumps({"at": now.isoformat(), **stat}, default=str))
         except Exception:  # noqa: BLE001
             pass
-        logger.info("[%s] 완료: fujimoto=%s mach7=%s emapb=%s 심볼=%d 평가=%d 신호=%s 그림자=%d 진입=%d 추가=%d 오류=%d 미충족=%s",
-                    FIX, fm, mm, em, stat["symbols"], stat["eval"], stat["sig"], stat["shadow"], stat["entered"], stat["added"],
+        logger.info("[%s] 완료: fujimoto=%s mach7=%s emapb=%s bbema=%s 심볼=%d 평가=%d 신호=%s 그림자=%d 진입=%d 추가=%d 오류=%d 미충족=%s",
+                    FIX, fm, mm, em, bm, stat["symbols"], stat["eval"], stat["sig"], stat["shadow"], stat["entered"], stat["added"],
                     stat["err"], stat["miss"])
         return stat
     finally:

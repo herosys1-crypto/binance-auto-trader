@@ -439,3 +439,6 @@ PAPER_RULES: tuple[tuple[str, str, str, Any], ...] = (
 # 📈 Fix 423: EMA 추세 눌림 — 설정 키를 이 표에 합쳐 관제실·검사기가 한 곳에서 읽게 한다 (판정은 app/services/ema_pullback.py)
 from app.services.ema_pullback import SETTINGS as _EMAPB_SETTINGS  # noqa: E402
 SETTINGS.update(_EMAPB_SETTINGS)
+# 📊 Fix 429: 볼린저 EMA — 설정 키를 같은 표에 (판정은 app/services/bb_ema.py)
+from app.services.bb_ema import SETTINGS as _BBEMA_SETTINGS  # noqa: E402
+SETTINGS.update(_BBEMA_SETTINGS)

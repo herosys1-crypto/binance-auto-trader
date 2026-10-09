@@ -198,6 +198,8 @@ def _emapb_params(db) -> None:
         from app.services import ema_pullback as EP
         from app.services import external_strategies as ES
         EP.set_paper_params(lambda k: ES.setting(db, k))
+        from app.services import bb_ema as BE                  # 📊 Fix 429: 볼린저 EMA 가상 판정도 운영 설정 숫자로
+        BE.set_paper_params(lambda k: ES.setting(db, k))
     except Exception as e:  # noqa: BLE001 — 실패하면 기본값/직전 값으로 판정
         logger.debug("[Fix423] EMA 눌림 가상 인자 갱신 실패: %s", e)
 

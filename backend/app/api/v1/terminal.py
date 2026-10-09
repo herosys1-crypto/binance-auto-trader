@@ -690,7 +690,7 @@ def _badge_for(strategy_type: str | None) -> tuple[str, str]:
     for prefix, badge in _TYPE_BADGES:
         if st.startswith(prefix):
             return badge, detail
-    if st.startswith(("rf_", "fujimoto", "mach7", "ema_pullback", "surge_peak_ladder")):   # 🗓 2026-09-15: 자동 가족 레지스트리 이름
+    if st.startswith(("rf_", "fujimoto", "mach7", "ema_pullback", "bb_ema", "surge_peak_ladder")):   # 🗓 2026-09-15: 자동 가족 레지스트리 이름
         from app.services.auto_family_registry import family_for
         fam = family_for(strategy_type=st, template_name=None, entry_origin=None)
         if fam is not None:
