@@ -68,7 +68,7 @@ def test_paper_fires_only_on_day_close_with_fresh_daily():
 
 def test_paper_worker_fetches_300_daily_only_when_needed():
     w = (APP / "workers" / "paper_trading_worker.py").read_text(encoding="utf-8")
-    assert "_need_ep = EP.needs_daily(_cx.kl15)" in w and 'limit=300 if _need_ep else 61' in w
+    assert "_need_ep = _ep_ok and EP.needs_daily(_cx.kl15)" in w and 'limit=300 if _need_ep else 61' in w   # Fix 425: 코인만
 
 
 # ── 진입 준비 ────────────────────────────────────────────────────────────

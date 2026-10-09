@@ -31,7 +31,8 @@ def get(path):
 
 
 def run():
-    tick = [t for t in get("/fapi/v1/ticker/24hr") if t["symbol"].endswith("USDT")]
+    coins = {x["symbol"] for x in get("/fapi/v1/exchangeInfo")["symbols"] if x.get("underlyingType") == "COIN"}   # Fix 425: 코인만
+    tick = [t for t in get("/fapi/v1/ticker/24hr") if t["symbol"].endswith("USDT") and t["symbol"] in coins]
     tick.sort(key=lambda t: float(t["quoteVolume"]), reverse=True)
     syms = [t["symbol"] for t in tick[:TOP]]
     res = {"LONG": [], "SHORT": []}

@@ -33,6 +33,8 @@ SETTINGS: dict[str, tuple[str, str, str]] = {
     "emapb_cooldown_hours": ("20", "심볼당 진입(또는 그림자 신호) 뒤 재신호 무시 시간 (일봉: 다음 날 신호는 허용 — 판정 시각 흔들림 여유)", "Claude가 정함"),
     "emapb_interval": ("1d", "판정 봉 (1d 일봉 · 4h · 15m)", "사장님 10/09 「전부 일봉」"),
     "emapb_ready_near_pct": ("2", "진입 준비 = 현재가가 EMA20 의 이 % 안 (LONG 은 위쪽, SHORT 는 아래쪽)", "Claude가 정함"),
+    "emapb_max_ext_pct": ("10", "진입 신호 = 확정봉 종가가 EMA20 에서 이 % 안 (멀리 달아난 날 추격 금지, Fix 425)", "사장님 10/09 「1번 진행」 (예 10%)"),
+    "emapb_coin_only": ("1", "코인 무기한만 감시·판정 (1=주식·금·원유 등 TradFi 제외, Fix 425)", "사장님 10/09 「2번 진행」"),
     "emapb_alert_enabled": ("1", "진입 준비·진입 신호 텔레그램 알림 (1=켬 0=끔, 화면 카드는 항상)", "사장님 10/09 「텔레그램 + 화면」"),
     "emapb_slope_bars": ("3", "EMA20 기울기 = 지금 vs N봉 전", "Claude가 정함 (출처 「slope UP」)"),
     "emapb_touch_bars": ("5", "최근 N봉 안에 EMA20/50 에 닿았으면 눌림", "Claude가 정함 (출처 「Wait for pullback」)"),
@@ -47,6 +49,7 @@ VOL_N = 20                                   # 평균 거래량 창 (Claude가 �
 _BOUNDS: dict[str, tuple[float, float]] = {
     "emapb_slope_bars": (1, 50), "emapb_touch_bars": (1, 50), "emapb_touch_tol_pct": (0.0, 5.0),
     "emapb_vol_mult": (0.5, 10.0), "emapb_box_bars": (2, 90), "emapb_fib_bars": (5, 90),
+    "emapb_max_ext_pct": (0.5, 100.0),
 }
 
 
@@ -68,6 +71,7 @@ def params_from(settings_get=None) -> dict[str, float]:
         "slope_bars": int(_f(g, "emapb_slope_bars")), "touch_bars": int(_f(g, "emapb_touch_bars")),
         "touch_tol_pct": _f(g, "emapb_touch_tol_pct"), "vol_mult": _f(g, "emapb_vol_mult"),
         "box_bars": int(_f(g, "emapb_box_bars")), "fib_bars": int(_f(g, "emapb_fib_bars")),
+        "max_ext_pct": _f(g, "emapb_max_ext_pct"),
     }
 
 
@@ -99,7 +103,8 @@ def signal(c: Sequence[float], h: Sequence[float], lo: Sequence[float], v: Seque
     """j 봉(완성봉)에서 성립? (bool, 상세). 상세: trend·align·pullback·volume·stop·fib_ok·confluence·macro."""
     p = p or params_from()
     d: dict[str, Any] = {"trend": False, "align": False, "pullback": False, "volume": False, "stop": None,
-                         "fib": None, "fib_ok": False, "confluence": False, "macro": None, "vol_ratio": None}
+                         "fib": None, "fib_ok": False, "confluence": False, "macro": None, "vol_ratio": None,
+                         "ext_pct": None, "near": False}
     if side not in ("LONG", "SHORT") or j < min_bars(p) - 5 or j >= len(c) or j < 1:
         return False, d
     e = e or emas(c)
@@ -156,8 +161,64 @@ def signal(c: Sequence[float], h: Sequence[float], lo: Sequence[float], v: Seque
         d["fib_ok"] = FIB_LO <= depth <= FIB_HI
     d["confluence"] = bool(d["fib_ok"] and d["volume"] and d["align"])
 
-    ok = bool(d["trend"] and d["align"] and d["pullback"] and d["volume"])
+    # ⑤ Fix 425 (사장님 10/09): 확정봉 종가가 EMA20 에서 너무 멀면(추격) 신호 아님 — OGN 종가가 EMA20 의 2배였던 신호 차단
+    ext = ((c[j] - e20[j]) if long_ else (e20[j] - c[j])) / e20[j] * 100.0 if e20[j] else None
+    d["ext_pct"] = ext
+    d["near"] = ext is not None and ext <= float(p.get("max_ext_pct", 10.0))
+
+    ok = bool(d["trend"] and d["align"] and d["pullback"] and d["volume"] and d["near"])
     return ok, d
+
+
+# ───────── Fix 425 (사장님 10/09 「2번」): 코인 무기한만 ─────────
+def is_coin_row(raw: Any, contract_type: Any) -> bool:
+    """거래소 정보 underlyingType == COIN (없으면 contract_type == PERPETUAL). 주식·금·원유 = TRADIFI_PERPETUAL."""
+    ut = (raw or {}).get("underlyingType") if isinstance(raw, dict) else None
+    if ut:
+        return str(ut).upper() == "COIN"
+    return str(contract_type or "").upper() == "PERPETUAL"
+
+
+def coin_symbols(db, symbols) -> list[str]:
+    """symbols 중 코인 무기한만 (순서 유지).
+
+    교차 감사: 호출한 워커의 세션을 건드리지 않게 **조회 전용 세션**을 따로 연다(db=None 이면). 실패해도 워커 세션은 rollback 하지 않는다.
+    조회 실패·0행(종목 표 비었음·표기 불일치) = 거르지 않고 그대로 — 알림·판정이 통째로 멈추지 않게, 경고만 남긴다.
+    db 를 넘기면(테스트) 그 객체로 조회만 한다.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    syms = list(symbols)
+    if not syms:
+        return syms
+    own = db is None
+    s_ = None
+    try:
+        from sqlalchemy import select
+        from app.models.symbol import Symbol
+        if own:
+            from app.core.database import SessionLocal
+            s_ = SessionLocal()
+        rows = (s_ if own else db).execute(select(Symbol.symbol, Symbol.raw_exchange_info, Symbol.contract_type)
+                                           .where(Symbol.symbol.in_(syms))).all()
+    except Exception as e:  # noqa: BLE001
+        log.warning("[Fix425] 코인 여부 조회 실패 → 거르지 않음: %s", e)
+        return syms
+    finally:
+        if s_ is not None:
+            try:
+                s_.close()
+            except Exception:  # noqa: BLE001
+                pass
+    if not rows:
+        log.warning("[Fix425] 종목 표에서 %d개 중 0개 찾음 → 거르지 않음 (종목 동기화 확인)", len(syms))
+        return syms
+    ok = {r[0] for r in rows if is_coin_row(r[1], r[2])}
+    return [s for s in syms if s in ok]
+
+
+def coin_only_on(settings_get) -> bool:
+    return str(settings_get("emapb_coin_only") or "1").strip().lower() not in ("0", "false", "off", "no")
 
 
 # ───────── 🗓 Fix 424 진입 준비 (사장님 수동 매매용 알림) ─────────
@@ -218,10 +279,19 @@ def needs_daily(kl15: Sequence[Sequence[float]] | None) -> bool:
         return False
 
 
+# Fix 425: 가상매매 워커가 심볼마다 「이 심볼은 EMA 눌림 판정 대상인가(코인)」를 알려 준다 (RuleCtx 에는 심볼이 없다)
+PAPER_SYMBOL_OK: bool = True
+
+
+def set_paper_symbol_ok(ok: bool) -> None:
+    global PAPER_SYMBOL_OK
+    PAPER_SYMBOL_OK = bool(ok)
+
+
 def _paper(ctx: Any, side: str) -> bool:
     """🗓 Fix 424: 일봉 규칙 — 하루 마지막 15분봉에서만, 방금 닫힌 일봉까지로 판정 (하루 한 번)."""
     k1 = getattr(ctx, "kl1d", None)
-    if not needs_daily(getattr(ctx, "kl15", None)) or not k1:
+    if not PAPER_SYMBOL_OK or not needs_daily(getattr(ctx, "kl15", None)) or not k1:
         return False
     try:
         if int(k1[-1][0]) + MS_DAY != int(ctx.kl15[-1][0]) + MS_15M:

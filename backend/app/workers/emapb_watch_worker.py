@@ -62,7 +62,8 @@ def scan_symbol(rows: list, side: str, *, p: dict, near_pct: float, now_ms: int,
     sig, sd = EP.signal(c, h, lo, v, j, side, p, e)
     if sig:
         out.append({"kind": "signal", "side": side, "price": c[j], "bar": int(closed[j][0]), "stop": sd["stop"],
-                    "ema20": e[EP.EMA_MID][j], "vol_ratio": sd.get("vol_ratio"), "confluence": sd.get("confluence")})
+                    "ema20": e[EP.EMA_MID][j], "vol_ratio": sd.get("vol_ratio"), "confluence": sd.get("confluence"),
+                    "ext_pct": sd.get("ext_pct")})
     if live_row is not None:
         live = float(live_row[4])
         ready, rd = EP.ready_state(c, h, lo, v, live, side, p, e, near_pct=near_pct)
@@ -76,6 +77,7 @@ def _line(it: dict) -> str:
     arrow = "🟢 LONG" if it["side"] == "LONG" else "🔴 SHORT"
     if it["kind"] == "signal":
         return (f"{arrow} {it['symbol']} ✅ 진입 신호(일봉 마감 확정) 종가 {_fmt(it['price'])} · EMA20 {_fmt(it['ema20'])} "
+                f"({(it.get('ext_pct') or 0):+.1f}%) "
                 f"· 손절 {_fmt(it['stop'])} · 거래량 ×{(it.get('vol_ratio') or 0):.2f}{' · 지표 겹침' if it.get('confluence') else ''}")
     return (f"{arrow} {it['symbol']} ⏳ 진입 준비 현재가 {_fmt(it['price'])} · EMA20 {_fmt(it['ema20'])} "
             f"({(it.get('dist_pct') or 0):+.2f}%) · 손절 후보 {_fmt(it['stop'])}")
@@ -159,6 +161,8 @@ def run_emapb_watch_once() -> dict:
             r, interval=ext_iv, interval_ms=INTERVAL_MS.get(ext_iv), settle_ms=BG.parse_settle_ms(ES.setting(db, "ext_bar_settle_ms")),
             top_n=top_n, min_qv=min_qv, enabled=ES.setting(db, "ext_universe_per_bar"), now_ms=now_ms,
             compute=lambda: _universe(bc, db, top_n, min_qv))
+        if EP.coin_only_on(lambda k: ES.setting(db, k)):
+            universe = EP.coin_symbols(None, universe)     # Fix 425 (사장님 10/09): 코인 무기한만 (조회 전용 세션)
         stat["symbols"] = len(universe)
         day = now.strftime("%Y%m%d")
         board: list[dict] = []

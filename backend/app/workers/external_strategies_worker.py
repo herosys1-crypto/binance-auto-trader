@@ -400,7 +400,9 @@ def run_external_strategies_once() -> dict:
             ep_iv = ep_iv if ep_iv in INTERVAL_MS else "1d"
             ep_ttl = max(LAST_TTL, 2 * INTERVAL_MS[ep_iv] // 1000)
             stat["ep_interval"] = ep_iv
-            for sym in universe:
+            ep_universe = EP.coin_symbols(None, universe) if EP.coin_only_on(lambda k: ES.setting(db, k)) else list(universe)
+            stat["ep_symbols"] = len(ep_universe)          # Fix 425: 코인 무기한만 (주식·금·원유 제외)
+            for sym in ep_universe:
                 if sym in act_ep:
                     continue
                 try:

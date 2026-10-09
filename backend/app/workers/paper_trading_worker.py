@@ -150,6 +150,18 @@ def _store_cycle_summary(summary: dict[str, Any]) -> None:
         logger.debug("[%s] redis 저장 실패 (무시): %s", FIX, e)
 
 
+def _emapb_coins(db, symbols) -> set[str] | None:
+    try:
+        from app.services import ema_pullback as EP
+        from app.services import external_strategies as ES
+        if not EP.coin_only_on(lambda k: ES.setting(db, k)):
+            return None
+        return set(EP.coin_symbols(None, symbols))       # 조회 전용 세션 (가상매매 세션은 건드리지 않는다)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[Fix425] 코인 목록 실패 → 거르지 않음: %s", e)
+        return None
+
+
 def _emapb_params(db) -> None:
     try:
         from app.services import ema_pullback as EP
@@ -205,6 +217,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
 
         open_syms = set(db.execute(select(PaperTrade.symbol).where(PaperTrade.status == "OPEN")).scalars())
         process_symbols = sorted(set(uni) | open_syms)
+        _ep_coins = _emapb_coins(db, process_symbols)       # Fix 425: EMA 눌림은 코인 무기한만 (None = 거르지 않음)
         if limit_symbols:
             process_symbols = process_symbols[:limit_symbols]
 
@@ -309,12 +322,18 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
 
             # 🗺 Fix 379: 기회지도 S4 는 일봉 하단권 조건이 있다 — 봉 조건(급반등+변동성)이 맞은 1시간 마감에서만 일봉을 받는다.
             #   실패해도 사이클은 계속 (S4 만 이번에 불발). 읽기 전용 조회.
+            _ep_ok = _ep_coins is None or sym in _ep_coins          # Fix 425: 심볼마다 먼저 정한다 (앞 심볼 값이 새지 않게)
+            try:
+                from app.services import ema_pullback as _EPF
+                _EPF.set_paper_symbol_ok(_ep_ok)
+            except Exception:  # noqa: BLE001
+                pass
             #   🗓 Fix 424: EMA 추세 눌림(일봉)은 하루 마지막 15분봉에서 일봉 300개를 받는다 (하루 한 번 · 무게 2). 둘 다면 큰 쪽 하나로.
             try:
                 from app.services import ema_pullback as EP
                 from app.services import opportunity_zones as OZ
                 _cx = series.ctx(j)
-                _need_ep = EP.needs_daily(_cx.kl15)
+                _need_ep = _ep_ok and EP.needs_daily(_cx.kl15)
                 if _need_ep or OZ.needs_daily(_cx.kl15, _cx.kl1h):
                     series.k1d = CL.compact(_kl(sym, interval="1d", limit=300 if _need_ep else 61), now_ms=now_ms,
                                             interval_ms=CL.MS_DAY)
@@ -325,6 +344,10 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
             except Exception as e:  # noqa: BLE001
                 logger.warning("[%s] %s 규칙 평가 실패 → 신규 진입 없음: %s", FIX, sym, e)
                 fired = {}
+            try:                                                    # Fix 425: 평가 끝 → 플래그 기본값으로 (회차 밖으로 새지 않게)
+                _EPF.set_paper_symbol_ok(True)
+            except Exception:  # noqa: BLE001
+                pass
             tags = sorted(set(uni.get(sym, {}).get("tags") or []) | set(daily.get(sym, {}).get("tags") or [])
                           | ({mtag} if mtag else set()))
             chg24 = chg.get(sym)
