@@ -903,6 +903,17 @@ def start_scheduler() -> None:
         id="external_strategies", replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🗄 Fix 428 (2026-10-10 사장님 「5번 진행」): 진입 60일 지난 가상매매 마감 행의 snapshot·adds 비우기 (결과는 남김).
+    #   하루 한 번 KST 12:40 — 일봉 마감(09:00)·15분 몰림과 겹치지 않게. 묶음 2,000행 × 최대 50.
+    def _paper_retention():
+        from app.workers.paper_retention_worker import run_paper_retention_once
+        run_paper_retention_once()
+    scheduler.add_job(
+        guarded_job("paper_retention", 1800, _paper_retention),
+        trigger=CronTrigger(hour=12, minute=40),
+        id="paper_retention", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     # 🗓 Fix 424 (2026-10-09 사장님): EMA 추세 눌림 「진입 준비」·「진입 신호」 알림 — 텔레그램 + 화면. 주문 없음.
     #   일봉 기준이라 15분마다면 충분 (감시 상위 60종목 × 일봉 300개 = 무게 120/회 ≈ 8/분).
     def _emapb_watch():
