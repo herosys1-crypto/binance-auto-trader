@@ -30,7 +30,7 @@ CODE_MARKERS = {
     ),
 }
 EXTERNAL_FILE = "app/workers/external_strategies_worker.py"
-LOOP_START = "for sym in universe:"
+LOOP_START = "for sym in (universe if (fm != \"off\" or mm != \"off\") else []):"   # Fix 424 에서 15분 루프 머리가 바뀜 (Fix 426)
 LOOP_END = "c = [float(b[4]) for b in bars]"
 OLD_CALL = "bc.get_klines(symbol=sym, interval=interval, limit=KLINE_LIMIT)"
 DEFAULTS = {
