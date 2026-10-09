@@ -58,7 +58,8 @@ def test_control_room_line_and_order():
               "rf_zone_s4_sl_roi", "daily_max_rf_zone_s4", "rf_zone_s4_loss_breaker"):
         assert k in wl, k
     n, sec = AC.line_order()["rf_zone_s4"]
-    assert sec.startswith("⑤") and n == max(x for x, _ in AC.line_order().values()) - 2   # 규칙 가족 묶음 끝
+    n_ext = len(dict(AC.LINE_ORDER)["⑥ 외부 매매법"])          # Fix 423: 외부 매매법 줄 수가 늘어도 깨지지 않게
+    assert sec.startswith("⑤") and n == max(x for x, _ in AC.line_order().values()) - n_ext   # 규칙 가족 묶음 끝
     assert any(p.fam == "rf_zone_s4" for p in AC.panels())
 
 

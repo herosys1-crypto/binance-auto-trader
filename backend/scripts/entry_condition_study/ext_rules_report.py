@@ -14,7 +14,8 @@ from app.models.paper_trade import PaperTrade as P
 from app.services import paper_trading as PT
 
 MAX_ROWS = 60000
-EXT = or_(P.rule.like("fujimoto%"), P.rule.like("mach7%"))
+EXT_PREFIXES = ("fujimoto", "mach7", "emapb")             # 📈 Fix 423: EMA 추세 눌림 포함
+EXT = or_(*[P.rule.like(f"{p}%") for p in EXT_PREFIXES])
 
 db = SessionLocal()
 try:
@@ -23,7 +24,7 @@ try:
                      .group_by(P.rule, P.status)).all()
     for r in cnt:
         print("count", r[0], r[1], r[2], r[3], r[4])
-    since = min((r[3] for r in cnt if r[0].startswith(("fujimoto", "mach7"))), default=None)
+    since = min((r[3] for r in cnt if r[0].startswith(EXT_PREFIXES)), default=None)
     if since is None:
         raise SystemExit("후지모토·마하세븐 가상 행 없음")
     base_n = sum(r[2] for r in cnt if r[0].startswith("baseline_") and r[1] == "CLOSED")
@@ -43,7 +44,7 @@ try:
             raise SystemExit(f"행이 너무 많음 {len(rows)} — 창을 줄일 것")
     print("window_since", since.isoformat(), "cut_days", days, "rows", len(rows))
     known = {r.key for r in PT.RULES}
-    ext_keys = sorted({r["rule"] for r in rows if r["rule"].startswith(("fujimoto", "mach7"))})
+    ext_keys = sorted({r["rule"] for r in rows if r["rule"].startswith(EXT_PREFIXES)})
     print("ext_rules", ext_keys, "in_RULES", [k for k in ext_keys if k in known])
     rep = PT.build_report(rows)
     out = {"period": rep.get("period"), "n": rep.get("n"), "rules": {}}
@@ -56,7 +57,7 @@ try:
                                  for eng, st in gg.items()}
                            for grp, gg in g.items()}
     out["recommend"] = [e for e in rep["recommend"]["entries"] + rep["recommend"]["variants"]
-                        if e["rule"].startswith(("fujimoto", "mach7"))]
+                        if e["rule"].startswith(EXT_PREFIXES)]
     print("REPORT " + json.dumps(out, default=str, ensure_ascii=False))
 finally:
     db.close()

@@ -21,6 +21,7 @@ from app.core.database import SessionLocal
 from app.core.redis_client import get_redis_client
 from app.services import bar_gate as BG
 from app.services import external_strategies as ES
+from app.services import ema_pullback as EP          # 📈 Fix 423
 from app.services.kline_incremental import INTERVAL_MS, IncrementalKlines
 from app.services.universe_cache import cached_universe
 
@@ -245,13 +246,14 @@ def _add_stage(db, r, stat: dict, si, *, nxt: int, margin: float, stop_price: fl
 
 def run_external_strategies_once() -> dict:
     db = SessionLocal()
-    stat: dict = {"fujimoto": "off", "mach7": "off", "symbols": 0, "eval": 0, "shadow": 0, "entered": 0, "added": 0,
-                  "err": 0, "sig": {"fj_L1": 0, "fj_L2": 0, "fj_L3": 0, "fj_S1": 0, "fj_S2": 0, "fj_S3": 0, "m7_L": 0, "m7_S": 0},
+    stat: dict = {"fujimoto": "off", "mach7": "off", "emapb": "off", "symbols": 0, "eval": 0, "shadow": 0, "entered": 0, "added": 0,
+                  "err": 0, "sig": {"fj_L1": 0, "fj_L2": 0, "fj_L3": 0, "fj_S1": 0, "fj_S2": 0, "fj_S3": 0, "m7_L": 0, "m7_S": 0, "ep_L": 0, "ep_S": 0},
                   "miss": {}}
     try:
         fm, mm = ES.mode_of(db, "fujimoto_mode"), ES.mode_of(db, "mach7_mode")
-        stat["fujimoto"], stat["mach7"] = fm, mm
-        if fm == "off" and mm == "off":
+        em = ES.mode_of(db, "emapb_mode")                     # 📈 Fix 423 EMA 추세 눌림
+        stat["fujimoto"], stat["mach7"], stat["emapb"] = fm, mm, em
+        if fm == "off" and mm == "off" and em == "off":
             return stat
         from app.core.crypto import decrypt_text
         from app.integrations.binance.client import BinanceClient
@@ -283,7 +285,11 @@ def run_external_strategies_once() -> dict:
         stat["symbols"] = len(universe)
         act_fj = _active_by_prefix(db, ES.FUJIMOTO_PREFIX) if fm != "off" else {}
         act_m7 = _active_by_prefix(db, ES.MACH7_PREFIX) if mm != "off" else {}
-        equity = _equity(bc) if (fm == "on" or mm == "on") else None
+        act_ep = _active_by_prefix(db, EP.PREFIX) if em != "off" else {}
+        ep_sides = ES.sides_of(db, "emapb_sides")
+        ep_p = EP.params_from(lambda k: ES.setting(db, k))
+        ep_cap, ep_cool = ES.setting_float(db, "emapb_capital_usdt"), ES.setting_float(db, "emapb_cooldown_hours")
+        equity = _equity(bc) if (fm == "on" or mm == "on" or em == "on") else None
         incremental = BG.parse_flag(ES.setting(db, "ext_kline_incremental"), default=True)
         last_ttl = max(LAST_TTL, 2 * INTERVAL_MS.get(interval, 0) // 1000)   # 4h·1d 간격에서도 같은 봉 재판정 없게
         stat["gate_skip"] = stat["kl_weight"] = 0
@@ -378,6 +384,33 @@ def run_external_strategies_once() -> dict:
                                    prefix=ES.MACH7_PREFIX, stype=ES.MACH7_TYPE, cap_key="mach7_max_concurrent",
                                    stop_price=stop_price, cooldown_h=m7_cool, stage=None)
                         break
+
+                # ── 📈 EMA 추세 눌림 (Fix 423) ── 1회 진입 · 이미 보유 중인 심볼은 건너뜀
+                if em != "off" and sym not in act_ep and len(bars) >= EP.min_bars(ep_p):
+                    v = [float(b[5]) for b in bars]
+                    e_ = EP.emas(c)
+                    for side in sorted(ep_sides):
+                        ok, d = EP.signal(c, h, lo, v, j, side, ep_p, e_)
+                        if not ok:
+                            continue
+                        stat["sig"][f"ep_{'L' if side == 'LONG' else 'S'}"] += 1
+                        if _rget(r, _k_cool("emapb", sym)):
+                            continue
+                        stop_price = float(d["stop"])
+                        sp = ES.clamp_stop_pct(ES.stop_pct(price, stop_price, side), sp_lo, sp_hi)
+                        margin, capped = _size(db, equity, risk_key="emapb_risk_pct", wanted=ep_cap, sp=sp, lev=lev)
+                        payload = {"at": now.isoformat(), "family": "emapb", "symbol": sym, "side": side, "price": price,
+                                   "stop": stop_price, "stop_pct": sp, "margin": margin, "capped": capped,
+                                   "vol_ratio": d.get("vol_ratio"), "fib": d.get("fib"), "confluence": d.get("confluence"),
+                                   "macro": d.get("macro"), "ema200": d.get("ema200")}
+                        if em == "shadow":
+                            _shadow(r, stat, "emapb", sym, ts, payload)
+                            r.setex(_k_cool("emapb", sym), int(ep_cool * 3600), "1")
+                        else:
+                            _enter(db, r, stat, fam="emapb", sym=sym, side=side, margin=margin, sp=sp, lev=lev,
+                                   prefix=EP.PREFIX, stype=EP.STYPE, cap_key="emapb_max_concurrent",
+                                   stop_price=stop_price, cooldown_h=ep_cool, stage=None)
+                        break
             except Exception as e:  # noqa: BLE001
                 stat["err"] += 1
                 logger.warning("[%s] %s 판정 실패: %s", FIX, sym, e)
@@ -389,8 +422,8 @@ def run_external_strategies_once() -> dict:
             r.setex(CYCLE_KEY, 3600, json.dumps({"at": now.isoformat(), **stat}, default=str))
         except Exception:  # noqa: BLE001
             pass
-        logger.info("[%s] 완료: fujimoto=%s mach7=%s 심볼=%d 평가=%d 신호=%s 그림자=%d 진입=%d 추가=%d 오류=%d 미충족=%s",
-                    FIX, fm, mm, stat["symbols"], stat["eval"], stat["sig"], stat["shadow"], stat["entered"], stat["added"],
+        logger.info("[%s] 완료: fujimoto=%s mach7=%s emapb=%s 심볼=%d 평가=%d 신호=%s 그림자=%d 진입=%d 추가=%d 오류=%d 미충족=%s",
+                    FIX, fm, mm, em, stat["symbols"], stat["eval"], stat["sig"], stat["shadow"], stat["entered"], stat["added"],
                     stat["err"], stat["miss"])
         return stat
     finally:

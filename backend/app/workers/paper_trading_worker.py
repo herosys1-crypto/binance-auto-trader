@@ -150,6 +150,15 @@ def _store_cycle_summary(summary: dict[str, Any]) -> None:
         logger.debug("[%s] redis 저장 실패 (무시): %s", FIX, e)
 
 
+def _emapb_params(db) -> None:
+    try:
+        from app.services import ema_pullback as EP
+        from app.services import external_strategies as ES
+        EP.set_paper_params(lambda k: ES.setting(db, k))
+    except Exception as e:  # noqa: BLE001 — 실패하면 기본값/직전 값으로 판정
+        logger.debug("[Fix423] EMA 눌림 가상 인자 갱신 실패: %s", e)
+
+
 def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) -> dict[str, Any]:
     db, bc = _open(decrypt_text)
     if db is None:
@@ -175,6 +184,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
             db.rollback()
             logger.warning("[Fix370] 사전등록 시각 기록 실패 (무시 · 다음 사이클 재시도): %s", _e370)
         t0 = time.time()
+        _emapb_params(db)                                   # 📈 Fix 423: EMA 눌림 가상 판정도 운영 설정 숫자로
         n = _int_setting(db, PT.S_TOP_N, 50, 5, 200)
 
         tickers = bc.get_24hr_ticker()
@@ -506,6 +516,7 @@ def backfill_from_journal(db: Any, *, limit_rows: int = 300) -> dict[str, Any]:
         return {"done": True, "last_id": last_id}
 
     t0 = time.time()
+    _emapb_params(db)                                   # 📈 Fix 423
     inserted = skipped_short = skipped_dup = failed = 0
     max_id = last_id
     for i, row in enumerate(rows, start=1):

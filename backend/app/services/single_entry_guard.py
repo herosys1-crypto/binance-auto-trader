@@ -51,11 +51,12 @@ SINGLE_ENTRY_STRATEGY_TYPES: frozenset[str] = frozenset({
     "surge_peak_ladder",  # Fix 267 급등 정점 사다리 (자기 추가 로직 보유)
     "fujimoto_3stage",    # Fix 368 후지모토 3역 호전 (자기 2·3차 추가 보유)
     "mach7_ma_trap",      # Fix 368 마하세븐 속임수 돌파 (1회 진입)
+    "ema_pullback",       # 📈 Fix 423 EMA 추세 눌림 (1회 진입, 증액은 기록만)
     "rf_s2_hist_turn_down",   # 대기열 3A 규칙 가족 (1회 진입, app/services/rule_families.py)
     "rf_bottom_331",          # 대기열 3B
     "rf_surge_start_346",     # 대기열 3D
 })
-SINGLE_ENTRY_TEMPLATE_PREFIXES: tuple[str, ...] = ("BB_MIDLINE", "SURGE_LADDER", "FUJIMOTO", "MACH7",
+SINGLE_ENTRY_TEMPLATE_PREFIXES: tuple[str, ...] = ("BB_MIDLINE", "SURGE_LADDER", "FUJIMOTO", "MACH7", "EMAPB",
                                                    "RF_S2SHORT", "RF_BOTTOM", "RF_SURGESTART")   # 대기열 3
 # 🗓 2026-09-15: 규칙 가족은 레지스트리(app/services/rule_families.py)가 단일 진실 — 가족을 늘려도 여기서 빠지지 않게 합친다.
 #   (분할 진입 가족은 split_entry 모드라 어차피 피라미딩 제외지만, single 로 바꿔 켜도 빠지면 안 된다)

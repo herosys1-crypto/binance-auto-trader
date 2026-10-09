@@ -383,3 +383,7 @@ PAPER_RULES: tuple[tuple[str, str, str, Any], ...] = (
     ("mach7_trap_long", "LONG", "마하세븐 숏트랩: 200선↑ + 30선 이탈 뒤 2봉 복귀 + 기울기", _r_mach7_long),
     ("mach7_trap_short", "SHORT", "마하세븐 롱트랩: 200선↓ + 30선 돌파 뒤 2봉 복귀", _r_mach7_short),
 )
+
+# 📈 Fix 423: EMA 추세 눌림 — 설정 키를 이 표에 합쳐 관제실·검사기가 한 곳에서 읽게 한다 (판정은 app/services/ema_pullback.py)
+from app.services.ema_pullback import SETTINGS as _EMAPB_SETTINGS  # noqa: E402
+SETTINGS.update(_EMAPB_SETTINGS)

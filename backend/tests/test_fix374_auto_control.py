@@ -43,7 +43,7 @@ def test_groups_and_counts():
         by[p.group] = by.get(p.group, 0) + 1
     assert by[AC.G_RULE] == 13          # 🗺 Fix 387: 기회지도 S4 추가
     assert by[AC.G_WORKER] >= 12
-    assert by[AC.G_EXTERNAL] == 2
+    assert by[AC.G_EXTERNAL] == 3      # 후지모토 · 마하세븐 · EMA 눌림(Fix 423)
     assert all(p.group in AC.GROUPS for p in ps)
 
 
