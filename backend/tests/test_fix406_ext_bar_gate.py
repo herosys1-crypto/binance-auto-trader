@@ -244,7 +244,8 @@ def test_4h_interval_ttl_longer_than_bar(monkeypatch):
 def test_worker_loop_pins():
     """루프 머리가 이 테스트의 재생(Sim.cycle)과 같은 순서인지 고정."""
     src = pathlib.Path(W.__file__).read_text(encoding="utf-8")
-    loop = src[src.index("for sym in universe:"):src.index("c = [float(b[4]) for b in bars]")]
+    _h = src.index("for sym in (universe if (fm != \"off\" or mm != \"off\") else []):")   # Fix 424: 15분 가족 꺼지면 15분봉 안 받음
+    loop = src[_h:src.index("c = [float(b[4]) for b in bars]", _h)]
     order = ["_closed_bars(bc, r, sym, interval", "if bars is None:", "len(bars) < MIN_BARS", "BG.already_judged(seen, ts)",
              "r.setex(_k_last(sym), last_ttl, str(ts))"]
     pos = [loop.index(p) for p in order]

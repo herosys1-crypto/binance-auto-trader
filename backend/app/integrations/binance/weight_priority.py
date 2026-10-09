@@ -13,6 +13,7 @@ LOW_PRIORITY_CALLERS = frozenset({         # Claude가 정함 — 주문을 절�
     "paper_trading", "chart_timing", "market_obs_update", "market_obs_snapshot",
     "chart_learning_snapshot", "chart_learning_outcome", "learning_sync", "learning_team_cycle",
     "pattern_learning", "prediction_outcome", "loss_cause",
+    "emapb_watch",                          # 🗓 Fix 424: 알림 전용(주문 없음) — 15분봉 직후 몰릴 때 실매매 스캐너에 양보
 })
 
 

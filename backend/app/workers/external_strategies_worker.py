@@ -42,6 +42,7 @@ def _k_shadow(fam: str, sym: str, ts: int) -> str: return f"ext:shadow:{fam}:{sy
 def _k_cool(fam: str, sym: str) -> str: return f"ext:cooldown:{fam}:{sym}"
 def _k_stage(sid: int) -> str: return f"ext:fujimoto:stage:{sid}"
 def _k_stop(sid: int) -> str: return f"ext:fujimoto:stop:{sid}"
+def _k_last_ep(sym: str, interval: str) -> str: return f"ext:last:emapb:{interval}:{sym}"   # 🗓 Fix 424: EMA 눌림 전용 판정 봉 기록
 
 
 # ⚖️ Fix 406 (2026-10-02, Duel ext-bar-gate): 60초마다 60종목 × 300봉(무게 2)을 받던 것(실측 147 weight/분 = 전체 1위) →
@@ -72,7 +73,7 @@ def _now_ms() -> int:
 
 
 def _closed_bars(bc, r, sym: str, interval: str, *, settle_ms: int, incremental: bool, stat: dict,
-                 now_ms: int | None = None) -> tuple[list | None, str | None]:
+                 now_ms: int | None = None, last_key: str | None = None) -> tuple[list | None, str | None]:
     """판정할 완성봉 목록과 직전 기록값. 받을 필요가 없거나 아직 확정이 아니면 (None, None).
 
     ① 게이트: 기록된 마지막 판정 봉 ≥ 정착 지연 뒤 마지막 완성봉 → fetch 없음
@@ -81,7 +82,7 @@ def _closed_bars(bc, r, sym: str, interval: str, *, settle_ms: int, incremental:
     """
     iv = INTERVAL_MS.get(interval)
     now_ms = _now_ms() if now_ms is None else now_ms
-    seen = _rget(r, _k_last(sym))                       # Redis 실패 = None → 게이트 열림(기존처럼 진행)
+    seen = _rget(r, last_key or _k_last(sym))           # Redis 실패 = None → 게이트 열림(기존처럼 진행) · Fix 424: 가족별 봉 키
     if iv is None:
         stat["kl_weight"] = stat.get("kl_weight", 0) + BG.kline_weight(KLINE_LIMIT)
         kl = bc.get_klines(symbol=sym, interval=interval, limit=KLINE_LIMIT) or []
@@ -294,7 +295,7 @@ def run_external_strategies_once() -> dict:
         last_ttl = max(LAST_TTL, 2 * INTERVAL_MS.get(interval, 0) // 1000)   # 4h·1d 간격에서도 같은 봉 재판정 없게
         stat["gate_skip"] = stat["kl_weight"] = 0
 
-        for sym in universe:
+        for sym in (universe if (fm != "off" or mm != "off") else []):   # Fix 424: 15분 가족이 모두 꺼졌으면 15분봉을 받지 않는다
             try:
                 bars, seen = _closed_bars(bc, r, sym, interval, settle_ms=settle_ms, incremental=incremental, stat=stat,
                                           now_ms=cycle_now)
@@ -385,10 +386,43 @@ def run_external_strategies_once() -> dict:
                                    stop_price=stop_price, cooldown_h=m7_cool, stage=None)
                         break
 
-                # ── 📈 EMA 추세 눌림 (Fix 423) ── 1회 진입 · 이미 보유 중인 심볼은 건너뜀
-                if em != "off" and sym not in act_ep and len(bars) >= EP.min_bars(ep_p):
+            except Exception as e:  # noqa: BLE001
+                stat["err"] += 1
+                logger.warning("[%s] %s 판정 실패: %s", FIX, sym, e)
+                try:
+                    db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+        # ── 📈 EMA 추세 눌림 (Fix 423) · 🗓 Fix 424 사장님 「전부 일봉」: 자기 봉(emapb_interval)으로 따로 판정 ──
+        #   봉 마감 게이트·증분 캐시는 같은 것을 쓰고, 판정 기록 키만 가족 전용(15분 가족과 섞이지 않게). 1회 진입.
+        if em != "off":
+            ep_iv = ES.setting(db, "emapb_interval")
+            ep_iv = ep_iv if ep_iv in INTERVAL_MS else "1d"
+            ep_ttl = max(LAST_TTL, 2 * INTERVAL_MS[ep_iv] // 1000)
+            stat["ep_interval"] = ep_iv
+            for sym in universe:
+                if sym in act_ep:
+                    continue
+                try:
+                    lk = _k_last_ep(sym, ep_iv)
+                    bars, seen = _closed_bars(bc, r, sym, ep_iv, settle_ms=settle_ms, incremental=incremental, stat=stat,
+                                              now_ms=cycle_now, last_key=lk)
+                    if bars is None:
+                        continue
+                    if len(bars) < EP.min_bars(ep_p):
+                        stat["miss"]["EMA눌림 봉 부족"] = stat["miss"].get("EMA눌림 봉 부족", 0) + 1
+                        continue
+                    j = len(bars) - 1
+                    ts = int(bars[j][0])
+                    if BG.already_judged(seen, ts):
+                        continue
+                    c = [float(b[4]) for b in bars]
+                    h = [float(b[2]) for b in bars]
+                    lo = [float(b[3]) for b in bars]
                     v = [float(b[5]) for b in bars]
                     e_ = EP.emas(c)
+                    price = c[j]
+                    stat["ep_eval"] = stat.get("ep_eval", 0) + 1
                     for side in sorted(ep_sides):
                         ok, d = EP.signal(c, h, lo, v, j, side, ep_p, e_)
                         if not ok:
@@ -399,8 +433,8 @@ def run_external_strategies_once() -> dict:
                         stop_price = float(d["stop"])
                         sp = ES.clamp_stop_pct(ES.stop_pct(price, stop_price, side), sp_lo, sp_hi)
                         margin, capped = _size(db, equity, risk_key="emapb_risk_pct", wanted=ep_cap, sp=sp, lev=lev)
-                        payload = {"at": now.isoformat(), "family": "emapb", "symbol": sym, "side": side, "price": price,
-                                   "stop": stop_price, "stop_pct": sp, "margin": margin, "capped": capped,
+                        payload = {"at": now.isoformat(), "family": "emapb", "interval": ep_iv, "symbol": sym, "side": side,
+                                   "price": price, "stop": stop_price, "stop_pct": sp, "margin": margin, "capped": capped,
                                    "vol_ratio": d.get("vol_ratio"), "fib": d.get("fib"), "confluence": d.get("confluence"),
                                    "macro": d.get("macro"), "ema200": d.get("ema200")}
                         if em == "shadow":
@@ -411,13 +445,14 @@ def run_external_strategies_once() -> dict:
                                    prefix=EP.PREFIX, stype=EP.STYPE, cap_key="emapb_max_concurrent",
                                    stop_price=stop_price, cooldown_h=ep_cool, stage=None)
                         break
-            except Exception as e:  # noqa: BLE001
-                stat["err"] += 1
-                logger.warning("[%s] %s 판정 실패: %s", FIX, sym, e)
-                try:
-                    db.rollback()
-                except Exception:  # noqa: BLE001
-                    pass
+                    r.setex(lk, ep_ttl, str(ts))         # 교차 감사: 처리를 마친 뒤 기록 — 일시 오류면 다음 주기(1분)에 다시 판정
+                except Exception as e:  # noqa: BLE001
+                    stat["err"] += 1
+                    logger.warning("[%s] EMA눌림 %s 판정 실패: %s", FIX, sym, e)
+                    try:
+                        db.rollback()
+                    except Exception:  # noqa: BLE001
+                        pass
         try:
             r.setex(CYCLE_KEY, 3600, json.dumps({"at": now.isoformat(), **stat}, default=str))
         except Exception:  # noqa: BLE001

@@ -309,14 +309,17 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
 
             # 🗺 Fix 379: 기회지도 S4 는 일봉 하단권 조건이 있다 — 봉 조건(급반등+변동성)이 맞은 1시간 마감에서만 일봉을 받는다.
             #   실패해도 사이클은 계속 (S4 만 이번에 불발). 읽기 전용 조회.
+            #   🗓 Fix 424: EMA 추세 눌림(일봉)은 하루 마지막 15분봉에서 일봉 300개를 받는다 (하루 한 번 · 무게 2). 둘 다면 큰 쪽 하나로.
             try:
+                from app.services import ema_pullback as EP
                 from app.services import opportunity_zones as OZ
                 _cx = series.ctx(j)
-                if OZ.needs_daily(_cx.kl15, _cx.kl1h):
-                    series.k1d = CL.compact(_kl(sym, interval="1d", limit=61), now_ms=now_ms,
+                _need_ep = EP.needs_daily(_cx.kl15)
+                if _need_ep or OZ.needs_daily(_cx.kl15, _cx.kl1h):
+                    series.k1d = CL.compact(_kl(sym, interval="1d", limit=300 if _need_ep else 61), now_ms=now_ms,
                                             interval_ms=CL.MS_DAY)
             except Exception as e:  # noqa: BLE001
-                logger.warning("[Fix379] %s 일봉 조회 실패 → 기회지도 S4 이번 판정 생략: %s", sym, e)
+                logger.warning("[Fix379] %s 일봉 조회 실패 → 기회지도 S4·EMA 눌림 이번 판정 생략: %s", sym, e)
             try:
                 fired = PT.evaluate_rules(series, j)
             except Exception as e:  # noqa: BLE001

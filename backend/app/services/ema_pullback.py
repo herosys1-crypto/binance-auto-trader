@@ -5,7 +5,9 @@
   Entry_Triggers : EMA 정배열(10 > 20 > 50) · EMA20/EMA50 까지 눌림 대기 · 거래량 확인 · 봉 마감 확정 뒤 진입
   Risk_Management: 손절 = 최근 박스(횡보) 저점 아래 (큰 추세는 EMA200 이탈) · 여러 지표(EMA+피보나치+거래량)가 겹칠 때만 30~50% 증액
 
-출처에 숫자가 없는 곳은 설정 키로 뺐다(「Claude가 정함」). 판정은 **15분 완성봉** 기준(외부 전략 공통, ext_interval).
+출처에 숫자가 없는 곳은 설정 키로 뺐다(「Claude가 정함」).
+🗓 Fix 424 (2026-10-09 사장님 「전부 일봉」): 추세·정배열·눌림·거래량·확정 모두 **일봉 완성봉** 기준 (`emapb_interval` = 1d).
+   + 「진입 준비」 알림(텔레그램 + 화면): 추세·정배열이 맞고 **현재가**가 EMA20 근처로 눌려 온 상태 — 사장님이 직접 매매할 때 쓰는 신호.
 증액(30~50%)은 1차 버전에서 **실행하지 않고** 「겹침(confluence)」 여부만 기록한다 — 그림자 성과로 증액 효과를 먼저 본다.
 실주문은 기본 꺼짐(shadow). 켜기는 사장님(관제실 ⑥ 외부 매매법).
 """
@@ -28,7 +30,10 @@ SETTINGS: dict[str, tuple[str, str, str]] = {
     "emapb_capital_usdt": ("10", "1회 진입 증거금(USDT)", "Claude가 정함 — 실주문 규칙 가족과 같은 10"),
     "emapb_risk_pct": ("2", "2% 룰 상한 (외부 전략 공통)", "Claude가 정함"),
     "emapb_max_concurrent": ("2", "전용 동시 보유 상한", "Claude가 정함"),
-    "emapb_cooldown_hours": ("4", "심볼당 진입(또는 그림자 신호) 뒤 재신호 무시 시간", "Claude가 정함"),
+    "emapb_cooldown_hours": ("20", "심볼당 진입(또는 그림자 신호) 뒤 재신호 무시 시간 (일봉: 다음 날 신호는 허용 — 판정 시각 흔들림 여유)", "Claude가 정함"),
+    "emapb_interval": ("1d", "판정 봉 (1d 일봉 · 4h · 15m)", "사장님 10/09 「전부 일봉」"),
+    "emapb_ready_near_pct": ("2", "진입 준비 = 현재가가 EMA20 의 이 % 안 (LONG 은 위쪽, SHORT 는 아래쪽)", "Claude가 정함"),
+    "emapb_alert_enabled": ("1", "진입 준비·진입 신호 텔레그램 알림 (1=켬 0=끔, 화면 카드는 항상)", "사장님 10/09 「텔레그램 + 화면」"),
     "emapb_slope_bars": ("3", "EMA20 기울기 = 지금 vs N봉 전", "Claude가 정함 (출처 「slope UP」)"),
     "emapb_touch_bars": ("5", "최근 N봉 안에 EMA20/50 에 닿았으면 눌림", "Claude가 정함 (출처 「Wait for pullback」)"),
     "emapb_touch_tol_pct": ("0.2", "닿음 허용 오차(가격 %)", "Claude가 정함"),
@@ -79,8 +84,9 @@ def set_paper_params(settings_get) -> None:
 
 
 def min_bars(p: dict[str, float] | None = None) -> int:
+    """판정에 필요한 최소 봉 수. EMA200 은 기록 전용이라 넣지 않는다(일봉 = 상장 200일 미만 코인도 판정, Fix 424)."""
     p = p or params_from()
-    return max(EMA_MACRO, int(p["fib_bars"]), int(p["box_bars"]), VOL_N, int(p["touch_bars"]), int(p["slope_bars"])) + 5
+    return max(EMA_SLOW + 10, int(p["fib_bars"]), int(p["box_bars"]), VOL_N, int(p["touch_bars"]), int(p["slope_bars"])) + 5
 
 
 def emas(c: Sequence[float]) -> dict[int, list[float]]:
@@ -133,8 +139,9 @@ def signal(c: Sequence[float], h: Sequence[float], lo: Sequence[float], v: Seque
     # 손절 = 최근 박스 저점(고점). 큰 추세 기준선(EMA200)은 기록만 — 위치 판단은 그림자 성과로 본다.
     bb = max(1, int(p["box_bars"]))
     d["stop"] = min(lo[j - bb + 1:j + 1]) if long_ else max(h[j - bb + 1:j + 1])
-    d["macro"] = (c[j] > e200[j]) if long_ else (c[j] < e200[j])
-    d["ema200"] = e200[j]
+    if j >= EMA_MACRO:                           # EMA200 은 200봉 이상일 때만 의미 — 모자라면 기록하지 않는다 (Fix 424)
+        d["macro"] = (c[j] > e200[j]) if long_ else (c[j] < e200[j])
+        d["ema200"] = e200[j]
 
     # 증액 조건(기록만): 눌림 깊이가 최근 스윙의 피보나치 0.382~0.618 + 거래량 확인
     fb = max(5, int(p["fib_bars"]))
@@ -151,6 +158,36 @@ def signal(c: Sequence[float], h: Sequence[float], lo: Sequence[float], v: Seque
 
     ok = bool(d["trend"] and d["align"] and d["pullback"] and d["volume"])
     return ok, d
+
+
+# ───────── 🗓 Fix 424 진입 준비 (사장님 수동 매매용 알림) ─────────
+def ready_state(c: Sequence[float], h: Sequence[float], lo: Sequence[float], v: Sequence[float], live: float, side: str,
+                p: dict[str, float] | None = None, e: dict[int, list[float]] | None = None,
+                near_pct: float = 2.0) -> tuple[bool, dict[str, Any]]:
+    """마지막 완성봉 기준 추세·정배열이 맞고, 진행 중 봉의 현재가(live)가 EMA20 근처까지 눌려 왔나.
+
+    LONG : EMA20×(1−허용오차) ≤ 현재가 ≤ EMA20×(1+near%) 이고 현재가 ≥ EMA50×(1−허용오차)
+    SHORT: 반대. 진입 신호(마감 확정)는 아직 아님 — 「준비」다. 상세에 EMA20·EMA50·거리%·예상 손절가.
+    """
+    p = p or params_from()
+    j = len(c) - 1
+    d: dict[str, Any] = {"trend": False, "align": False, "dist_pct": None, "ema20": None, "ema50": None, "stop": None}
+    if side not in ("LONG", "SHORT") or j < min_bars(p) - 5 or not live or live <= 0:
+        return False, d
+    _ok, sd = signal(c, h, lo, v, j, side, p, e)
+    e = e or emas(c)
+    e20, e50 = e[EMA_MID][j], e[EMA_SLOW][j]
+    tol = p["touch_tol_pct"] / 100.0
+    near = max(0.0, float(near_pct)) / 100.0
+    d.update(trend=sd["trend"], align=sd["align"], ema20=e20, ema50=e50, dist_pct=(live - e20) / e20 * 100.0 if e20 else None)
+    bb = max(1, int(p["box_bars"]))
+    if side == "LONG":
+        zone = e20 * (1 - tol) <= live <= e20 * (1 + near) and live > e50          # EMA50 은 허용오차 없이 (교차 감사)
+        d["stop"] = min(min(lo[j - bb + 1:j + 1]), live)
+    else:
+        zone = e20 * (1 - near) <= live <= e20 * (1 + tol) and live < e50
+        d["stop"] = max(max(h[j - bb + 1:j + 1]), live)
+    return bool(sd["trend"] and sd["align"] and zone), d
 
 
 # ───────── 가상매매(chart_learning.RULES) — 시리즈당 EMA 1회 캐시 ─────────
@@ -170,8 +207,32 @@ def _emas_of(ctx: Any) -> dict[int, list[float]]:
     return e
 
 
+MS_15M, MS_DAY = 900_000, 86_400_000
+
+
+def needs_daily(kl15: Sequence[Sequence[float]] | None) -> bool:
+    """가상매매 워커가 일봉을 받아야 하나 = 이 15분봉이 UTC 하루의 마지막 봉(일봉 마감 직후 판정). (Fix 424)"""
+    try:
+        return bool(kl15) and int(kl15[-1][0]) % MS_DAY == MS_DAY - MS_15M
+    except (TypeError, ValueError, IndexError):
+        return False
+
+
 def _paper(ctx: Any, side: str) -> bool:
-    return signal(ctx.c, ctx.h, ctx.l, ctx.v, ctx.j, side, PAPER_PARAMS, e=_emas_of(ctx))[0]
+    """🗓 Fix 424: 일봉 규칙 — 하루 마지막 15분봉에서만, 방금 닫힌 일봉까지로 판정 (하루 한 번)."""
+    k1 = getattr(ctx, "kl1d", None)
+    if not needs_daily(getattr(ctx, "kl15", None)) or not k1:
+        return False
+    try:
+        if int(k1[-1][0]) + MS_DAY != int(ctx.kl15[-1][0]) + MS_15M:
+            return False                               # 일봉이 방금 닫힌 그날 것이 아니다 (조회 지연·누락) → 판정 안 함
+        c = [float(b[4]) for b in k1]
+        h = [float(b[2]) for b in k1]
+        lo = [float(b[3]) for b in k1]
+        v = [float(b[5]) for b in k1]
+    except (TypeError, ValueError, IndexError):
+        return False
+    return signal(c, h, lo, v, len(c) - 1, side, PAPER_PARAMS)[0]
 
 
 def _r_long(ctx: Any) -> bool: return _paper(ctx, "LONG")
@@ -179,6 +240,6 @@ def _r_short(ctx: Any) -> bool: return _paper(ctx, "SHORT")
 
 
 PAPER_RULES: tuple[tuple[str, str, str, Any], ...] = (
-    ("emapb_long", "LONG", "EMA 눌림 LONG: 가격>EMA20↑ · 10>20>50 · 20/50 눌림 · 거래량 · 마감 확정 (Fix 423, shadow)", _r_long),
-    ("emapb_short", "SHORT", "EMA 눌림 SHORT: 가격<EMA20↓ · 10<20<50 · 20/50 되돌림 · 거래량 · 마감 확정 (Fix 423, shadow)", _r_short),
+    ("emapb_long", "LONG", "EMA 눌림 LONG(일봉): 가격>EMA20↑ · 10>20>50 · 20/50 눌림 · 거래량 · 마감 확정 (Fix 423·424, shadow)", _r_long),
+    ("emapb_short", "SHORT", "EMA 눌림 SHORT(일봉): 가격<EMA20↓ · 10<20<50 · 20/50 되돌림 · 거래량 · 마감 확정 (Fix 423·424, shadow)", _r_short),
 )

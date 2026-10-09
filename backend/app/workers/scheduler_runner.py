@@ -903,6 +903,17 @@ def start_scheduler() -> None:
         id="external_strategies", replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🗓 Fix 424 (2026-10-09 사장님): EMA 추세 눌림 「진입 준비」·「진입 신호」 알림 — 텔레그램 + 화면. 주문 없음.
+    #   일봉 기준이라 15분마다면 충분 (감시 상위 60종목 × 일봉 300개 = 무게 120/회 ≈ 8/분).
+    def _emapb_watch():
+        from app.workers.emapb_watch_worker import run_emapb_watch_once
+        run_emapb_watch_once()
+    scheduler.add_job(
+        guarded_job("emapb_watch", 600, _emapb_watch),
+        trigger=IntervalTrigger(minutes=15),
+        id="emapb_watch", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     # 🌊 볼밴 스윙 (2026-09-14 사장님): 상승중 상단 꺾임+RSI 고점 = SHORT 분할 / 하단 지지 = LONG 분할 / 반대 신호에 전환.
     #   기본 **shadow** (주문 없음). SystemSetting bb_swing_mode = off|shadow|on. 60초 주기지만 15분 완성봉당 1회만 스캔.
     def _bb_swing():

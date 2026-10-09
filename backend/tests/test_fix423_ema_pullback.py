@@ -114,7 +114,7 @@ def test_worker_block_pins():
     src = (pathlib.Path(EP.__file__).resolve().parents[1] / "workers" / "external_strategies_worker.py").read_text(encoding="utf-8")
     blk = src[src.index("EMA 추세 눌림 (Fix 423)"):]
     blk = blk[:blk.index("except Exception as e")]
-    assert "sym not in act_ep" in blk                                 # 1회 진입 — 보유 중이면 건너뜀
+    assert "if sym in act_ep:" in blk                                 # 1회 진입 — 보유 중이면 건너뜀
     assert '_rget(r, _k_cool("emapb", sym))' in blk                   # 심볼 쿨다운
     assert 'if em == "shadow":' in blk and "_shadow(r, stat, \"emapb\"" in blk
     assert "prefix=EP.PREFIX, stype=EP.STYPE" in blk and 'risk_key="emapb_risk_pct"' in blk
@@ -145,12 +145,17 @@ def test_ema_cache_identity_not_just_id():
 
 
 def test_paper_uses_live_settings():
+    """Fix 424: 가상 규칙은 일봉(kl1d)을 하루 마지막 15분봉에서 판정 — 운영 설정 숫자를 그대로 쓴다."""
+    from types import SimpleNamespace as NS
     old = dict(EP.PAPER_PARAMS)
+    c, h, lo, v = uptrend_with_pullback(vol_mult=2.0)
+    day0 = 1_700_006_400_000 - 1_700_006_400_000 % EP.MS_DAY
+    kl1d = [[day0 + i * EP.MS_DAY, c[i], h[i], lo[i], c[i], v[i]] for i in range(N)]
+    last15 = kl1d[-1][0] + EP.MS_DAY - EP.MS_15M                      # 방금 닫힌 일봉의 마지막 15분봉
+    ctx = NS(kl15=[[last15, 0, 0, 0, 0, 0]], kl1d=kl1d, c=[], h=[], l=[], v=[], j=0)
     try:
+        assert EP._r_long(ctx) is True
         EP.set_paper_params(lambda k: "9" if k == "emapb_vol_mult" else EP.SETTINGS[k][0])
-        from types import SimpleNamespace as NS
-        c, h, lo, v = uptrend_with_pullback(vol_mult=2.0)
-        EP._EMA_CACHE.clear()
-        assert EP._r_long(NS(c=c, h=h, l=lo, v=v, j=N - 1)) is False  # 운영에서 9배로 올리면 가상도 같이 막힌다
+        assert EP._r_long(ctx) is False                              # 운영에서 9배로 올리면 가상도 같이 막힌다
     finally:
         EP.PAPER_PARAMS = old

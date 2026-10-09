@@ -32,6 +32,9 @@ CODE_MARKERS = {
     "app/static/js/tp-sl-advisor.js": ("if (!document.hidden) scanTpSlAdvisor();",),                           # 418
     "app/workers/scheduler_runner.py": ("wait_for_leader(guard)", "signal.signal(signal.SIGTERM, _on_signal)"),  # 420
     "app/workers/distributed_scheduler_guard.py": ("def release_leader(",),                                      # 420
+    "app/workers/emapb_watch_worker.py": ("def scan_symbol(", "_send(db, r, fresh, iv)"),                       # 424 알림
+    "app/api/v1/ema_pullback.py": ('APIRouter(prefix="/ema-pullback"',),                                         # 424 화면
+    "app/services/ema_pullback.py": ('"emapb_interval": ("1d"', "def ready_state("),                             # 424 일봉
 }
 STOPPING_STALE_SEC = 10 * 60      # Claude가 정함 — 감지 5분 + reconcile 2분 주기 두 번 여유
 REQ_COUNT_KEY = "binance:reqcount:{minute}"   # client._REQ_COUNT_KEY 와 같은 값 (보관 15분)

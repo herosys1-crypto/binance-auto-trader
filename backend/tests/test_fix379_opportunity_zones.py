@@ -145,7 +145,7 @@ def test_worker_fetches_daily_only_when_needed():
     w = (APP / "workers" / "paper_trading_worker.py").read_text(encoding="utf-8")
     i_need, i_eval = w.index("OZ.needs_daily("), w.index("fired = PT.evaluate_rules(series, j)")
     assert i_need < i_eval, "일봉은 규칙 평가 전에 채워야 한다"
-    assert 'interval="1d", limit=61' in w and "series.k1d = " in w
+    assert 'interval="1d", limit=300 if _need_ep else 61' in w and "series.k1d = " in w   # Fix 424: EMA 눌림 일봉이면 300
 
 
 # ── ⑥ 주문 경로 없음 ────────────────────────────────────────────────────
