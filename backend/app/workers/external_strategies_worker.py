@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -23,6 +24,15 @@ from app.services import bar_gate as BG
 from app.services import external_strategies as ES
 from app.services import ema_pullback as EP          # 📈 Fix 423
 from app.services import bb_ema as BE                 # 📊 Fix 429
+from app.services import bb_wave as BW                # 🌊 Fix 431
+from app.services import triple_ma as TM              # 📐 Fix 432
+from app.workers import ext_family_loop as FL         # 🧩 Fix 431·432 공용 루프 (새 가족은 여기 FAMILIES 에 추가)
+
+_EXIT_GAP = "출처 청산(중심선·EMA9 이탈 종가 청산)이 실주문 경로에 없음 + 사전 백테스트 본전"
+FAMILIES: tuple[FL.Family, ...] = (
+    FL.Family("bbwave", BW, "볼린저파동", ("5m", "15m"), force_shadow=_EXIT_GAP),
+    FL.Family("trima", TM, "3중이평", ("1h", "4h", "15m"), force_shadow=_EXIT_GAP),
+)
 from app.services.kline_incremental import INTERVAL_MS, IncrementalKlines
 from app.services.universe_cache import cached_universe
 
@@ -268,7 +278,9 @@ def run_external_strategies_once() -> dict:
             logger.warning("[%s] bbema_mode=on 이지만 전용 추세 보유 청산 미구현 → shadow 로 동작", FIX)
             bm = "shadow"
         stat["fujimoto"], stat["mach7"], stat["emapb"], stat["bbema"] = fm, mm, em, bm
-        if fm == "off" and mm == "off" and em == "off" and bm == "off":
+        fam_modes = {f.key: FL.mode(ES, db, f) for f in FAMILIES}   # 🧩 Fix 431·432
+        stat.update(fam_modes)
+        if fm == "off" and mm == "off" and em == "off" and bm == "off" and all(v == "off" for v in fam_modes.values()):
             return stat
         from app.core.crypto import decrypt_text
         from app.integrations.binance.client import BinanceClient
@@ -305,7 +317,7 @@ def run_external_strategies_once() -> dict:
         ep_p = EP.params_from(lambda k: ES.setting(db, k))
         ep_cap, ep_cool = ES.setting_float(db, "emapb_capital_usdt"), ES.setting_float(db, "emapb_cooldown_hours")
         act_bb = _active_by_prefix(db, BE.PREFIX) if bm != "off" else {}
-        equity = _equity(bc) if "on" in (fm, mm, em, bm) else None
+        equity = _equity(bc) if "on" in (fm, mm, em, bm, *fam_modes.values()) else None
         incremental = BG.parse_flag(ES.setting(db, "ext_kline_incremental"), default=True)
         last_ttl = max(LAST_TTL, 2 * INTERVAL_MS.get(interval, 0) // 1000)   # 4h·1d 간격에서도 같은 봉 재판정 없게
         stat["gate_skip"] = stat["kl_weight"] = 0
@@ -534,11 +546,16 @@ def run_external_strategies_once() -> dict:
                         db.rollback()
                     except Exception:  # noqa: BLE001
                         pass
+        # ── 🧩 Fix 431·432 단순 가족 (볼린저 중심선 파동 5m · 3중 이평 1h) — 공용 루프 ──
+        for fam in FAMILIES:
+            FL.run(sys.modules[__name__], fam, fam_modes[fam.key], db=db, r=r, bc=bc, stat=stat, universe=universe,
+                   cycle_now=cycle_now, settle_ms=settle_ms, incremental=incremental, equity=equity, lev=lev,
+                   sp_lo=sp_lo, sp_hi=sp_hi, now=now)
         try:
             r.setex(CYCLE_KEY, 3600, json.dumps({"at": now.isoformat(), **stat}, default=str))
         except Exception:  # noqa: BLE001
             pass
-        logger.info("[%s] 완료: fujimoto=%s mach7=%s emapb=%s bbema=%s 심볼=%d 평가=%d 신호=%s 그림자=%d 진입=%d 추가=%d 오류=%d 미충족=%s",
+        logger.info("[%s] 완료: fujimoto=%s mach7=%s emapb=%s bbema=%s " + " ".join(f"{k}={v}" for k, v in fam_modes.items()) + " 심볼=%d 평가=%d 신호=%s 그림자=%d 진입=%d 추가=%d 오류=%d 미충족=%s",
                     FIX, fm, mm, em, bm, stat["symbols"], stat["eval"], stat["sig"], stat["shadow"], stat["entered"], stat["added"],
                     stat["err"], stat["miss"])
         return stat

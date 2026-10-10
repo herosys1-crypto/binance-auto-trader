@@ -14,7 +14,7 @@ from app.models.paper_trade import PaperTrade as P
 from app.services import paper_trading as PT
 
 MAX_ROWS = 60000
-EXT_PREFIXES = ("fujimoto", "mach7", "emapb", "bbema")    # 📈 Fix 423 EMA 추세 눌림 · 📊 Fix 429 볼린저 EMA
+EXT_PREFIXES = ("fujimoto", "mach7", "emapb", "bbema", "bbwave", "trima")    # 📈 Fix 423 EMA 추세 눌림 · 📊 Fix 429 볼린저 EMA
 EXT = or_(*[P.rule.like(f"{p}%") for p in EXT_PREFIXES])
 
 db = SessionLocal()

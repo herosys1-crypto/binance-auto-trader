@@ -314,7 +314,9 @@ def _external_panels() -> list[Panel]:
     for fam, key, label in (("fujimoto", "fujimoto_mode", "후지모토 3역 호전"),
                             ("mach7", "mach7_mode", "마하세븐 속임수 돌파"),
                             ("emapb", "emapb_mode", "EMA 추세 눌림 (Fix 423)"),
-                            ("bbema", "bbema_mode", "볼린저 EMA 추세·반전 (Fix 429)")):
+                            ("bbema", "bbema_mode", "볼린저 EMA 추세·반전 (Fix 429)"),
+                            ("bbwave", "bbwave_mode", "볼린저 중심선 파동 5분 (Fix 431)"),
+                            ("trima", "trima_mode", "9EMA·20SMA·200SMA 눌림 1시간 (Fix 432)")):
         gate = _ctl_from(S, key, "모드", "mode3", ref=ref)
         if gate is not None:
             out.append(Panel(fam=fam, label=label, group=G_EXTERNAL, gate=gate, job="external_strategies", every="50초"))
@@ -449,7 +451,7 @@ LINE_ORDER: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("⑤ 규칙 가족 (가상매매 채택 규칙)", ("rf_s2_short", "rf_bottom_long", "rf_surge_long", "rf_confirm_peak",
                                       "rf_toprev", "rf_off8", "rf_s1_breakdown", "rf_wick_short", "rf_pullback_long",
                                       "rf_multiday_long", "rf_l1_hist_long", "rf_wick_long", "rf_zone_s4")),
-    ("⑥ 외부 매매법", ("fujimoto", "mach7", "emapb", "bbema")),
+    ("⑥ 외부 매매법", ("fujimoto", "mach7", "emapb", "bbema", "bbwave", "trima")),
 )
 SECTION_REST = "⑦ 기타"
 

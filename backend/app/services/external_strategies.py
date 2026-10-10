@@ -442,3 +442,8 @@ SETTINGS.update(_EMAPB_SETTINGS)
 # 📊 Fix 429: 볼린저 EMA — 설정 키를 같은 표에 (판정은 app/services/bb_ema.py)
 from app.services.bb_ema import SETTINGS as _BBEMA_SETTINGS  # noqa: E402
 SETTINGS.update(_BBEMA_SETTINGS)
+# 🌊📐 Fix 431·432: 볼린저 중심선 파동 · 3중 이평 (판정은 app/services/bb_wave.py · triple_ma.py)
+from app.services.bb_wave import SETTINGS as _BBWAVE_SETTINGS  # noqa: E402
+from app.services.triple_ma import SETTINGS as _TRIMA_SETTINGS  # noqa: E402
+SETTINGS.update(_BBWAVE_SETTINGS)
+SETTINGS.update(_TRIMA_SETTINGS)

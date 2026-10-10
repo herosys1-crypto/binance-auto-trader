@@ -76,6 +76,8 @@ _BY_PREFIX: tuple[tuple[str, AutoFamily], ...] = (
     ("mach7", AutoFamily("mach7", "마하세븐 속임수 돌파", "마하세븐")),
     ("ema_pullback", AutoFamily("emapb", "EMA 추세 눌림", "EMA눌림")),        # 📈 Fix 423
     ("bb_ema", AutoFamily("bbema", "볼린저 EMA", "볼린저EMA")),               # 📊 Fix 429
+    ("bb_wave", AutoFamily("bbwave", "볼린저 중심선 파동", "볼린저파동")),     # 🌊 Fix 431
+    ("triple_ma", AutoFamily("trima", "3중 이평 눌림", "3중이평")),            # 📐 Fix 432
 )
 MANAGED = AutoFamily("managed_reentry", "심볼 관리 재진입", "관리재진입")
 HUMAN_TEMPLATE_AUTO = AutoFamily("human_template_auto", "사람 전략 자동 재시작·재진입", "자동재시작")
