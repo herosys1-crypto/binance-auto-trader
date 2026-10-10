@@ -16,7 +16,9 @@ tools: Read, Grep, Glob, Bash
 1. **운영팀 성적표** — Redis `council:latest` (하루 1회, KST 09:40). 항목 A 규칙별 · B 겹침 · C 장세 · D 전진 검증 · E 내일 쓸 칸 · F 규칙 상태.
 2. 가상매매 `paper_trades` — rule·side·opened_at·engines->'live'->>'roi'·snapshot(market_breadth, rules_fired, ema_4h_bull …). 비교 기준 = 같은 날·같은 방향 `baseline_*`.
 3. 그림자 신호 — Redis `ext:shadow:{가족}:{심볼}:{봉}` (7일).
-4. 실거래 — 가족별(`auto_family_registry.family_for`) 실현 손익. 사람 몫은 빼고 본다(Fix 400).
+4. 실거래 — 가족별 실현 손익은 `scripts/entry_condition_study/live_by_family.py`(운영 api 컨테이너에서 실행)의 **시스템 몫**으로 본다.
+   사람 💉 수동 추가(주문 접미사 `_ADHOC_M_`/`_ADHOC_L_`)의 손익은 「사람 추가 몫」으로 따로 나온다(Fix 434) — 가족 성적에 섞지 마라.
+   Fix 371(9/14) 이전 추가는 접미사가 자동·수동 공용이라 「출처 모름」.
 
 ## 볼 것 (순서대로)
 1. **무작위 대비 edge** 로 판단한다. 평균 roi 만 보면 시장 방향을 전략 실력으로 착각한다.
