@@ -140,7 +140,7 @@ def build_report(rows: Iterable[Row], *, lo: Any = 0.4, hi: Any = 0.6, train_day
         # 겹침 k: 같은 봉에 함께 켜진 **같은 방향** 비-baseline 규칙(자기 포함, 중복 제거). side_of 는 1단계에서 이미 다 채워졌다.
         names = {r.rule}
         for x in (r.rf or ()):
-            if isinstance(x, str) and not x.startswith(BASE_PREFIX) and side_of.get(x) == r.side:
+            if isinstance(x, str) and not x.startswith(BASE_PREFIX) and x != "consensus_long" and side_of.get(x) == r.side:   # Fix 437: 합의 자신은 세지 않는다
                 names.add(x)
         bm = bm_d.get((r.side, r.d))
         ov[(r.side, min(len(names), 4))].add(1, r.roi, *((1, r.roi - bm) if bm is not None else (0, 0.0)))

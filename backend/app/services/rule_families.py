@@ -73,6 +73,9 @@ FAMILIES: tuple[Family, ...] = (
     #   기회 지도(모든 자리 83,927 채점)에서 두 장세 모두 이긴 SHORT 자리 = 하락 추세 속 짧은 급반등의 꼭대기.
     #   판정은 가상 규칙 zone_s4_spike_top_short (app/services/opportunity_zones.py) 그대로 쓴다.
     Family("rf_zone_s4", "zone_s4_spike_top_short", "SHORT", "RF_ZONES4", "rf_zone_s4", "기회지도 S4 급반등 꼭대기 SHORT", "S4꼭대기"),
+    # 🤝 Fix 437 (2026-10-11 사장님 「진행해줘」): 합의 LONG — 같은 봉 LONG 규칙 4개+ · 시장폭 < 0.4 (가상 30일 edge +2.99, 앞뒤 모두 +)
+    #   판정은 가상매매 워커의 consensus_long.apply. 기본 shadow — 2주 전진 확인 뒤 실주문·자본은 사장님.
+    Family("rf_consensus_long", "consensus_long", "LONG", "RF_CONSENSUS", "rf_consensus_long", "🤝 합의 LONG (4규칙+·시장폭 낮음)", "합의L"),
 )
 FAMILY_BY_KEY = {f.key: f for f in FAMILIES}
 RF_STRATEGY_TYPES = frozenset(f.stype for f in FAMILIES)
@@ -137,6 +140,11 @@ SETTINGS["rf_zone_s4_entry"] = ("single", "split | single(1회 진입) — S4 �
 SETTINGS["rf_zone_s4_chart_gate"] = ("shadow", "off | shadow(판정만 기록) | on",
                                      "Fix 387 근거: S4 신호의 84% 를 막고 성적 차이는 +5.02 vs +4.20 (Claude가 정함)")
 SETTINGS["rf_zone_s4_max_concurrent"] = ("2", "전용 동시 보유 상한", "Fix 387 — 하루 최대 1 과 함께 상한 (Claude가 정함)")
+# 🤝 Fix 437: 합의 LONG 은 **측정한 청산 그대로** — 가상 live 엔진 = 단일 10U · TP 15/20/25/30 · 손절 −25 · 차트 게이트 없이 쟀다.
+SETTINGS["rf_consensus_long_entry"] = ("single", "split | single(1회 진입) — 합의 LONG 은 단일 (검증한 청산과 같게)",
+                                       "Fix 437 근거: 가상 30일 측정은 단일 진입·TP1 15·손절 −25")
+SETTINGS["rf_consensus_long_chart_gate"] = ("shadow", "off | shadow(판정만 기록) | on",
+                                            "Fix 437 근거: 측정에 차트 게이트를 걸지 않았다 (Claude가 정함)")
 SETTINGS["entry_chart_gate_params"] = ("", "차트 게이트 숫자 JSON (비우면 기본: SHORT 16시간 고점 −3% 이내·일봉 UP 아님 / "
                                            "LONG 24h −5% 이하 또는 5분 고점 대비 −4% 이하)", "Claude가 정함 — 분석 값 그대로")
 

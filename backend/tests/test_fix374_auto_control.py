@@ -31,7 +31,7 @@ def test_every_family_has_a_switch():
 def test_all_twelve_rule_families_present():
     from app.services.rule_families import FAMILIES
     fams = {p.fam for p in AC.panels()}
-    assert len(FAMILIES) == 13          # 🗺 Fix 387: 기회지도 S4 추가
+    assert len(FAMILIES) == 14          # 🗺 Fix 387: 기회지도 S4 · 🤝 Fix 437 합의 LONG
     missing = [f.key for f in FAMILIES if f.key not in fams]
     assert missing == [], f"규칙 가족이 관제실에 없다: {missing}"
 
@@ -41,7 +41,7 @@ def test_groups_and_counts():
     by = {}
     for p in ps:
         by[p.group] = by.get(p.group, 0) + 1
-    assert by[AC.G_RULE] == 13          # 🗺 Fix 387: 기회지도 S4 추가
+    assert by[AC.G_RULE] == 14          # 🗺 Fix 387 · 🤝 Fix 437
     assert by[AC.G_WORKER] >= 12
     assert by[AC.G_EXTERNAL] == 6      # 후지모토 · 마하세븐 · EMA 눌림(Fix 423) · 볼린저 EMA(Fix 429) · 볼린저 파동(431) · 3중 이평(432)
     assert all(p.group in AC.GROUPS for p in ps)

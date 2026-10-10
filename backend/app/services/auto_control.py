@@ -450,7 +450,8 @@ LINE_ORDER: tuple[tuple[str, tuple[str, ...]], ...] = (
                           "chart_pattern", "sajangnim_top", "auto_other")),
     ("⑤ 규칙 가족 (가상매매 채택 규칙)", ("rf_s2_short", "rf_bottom_long", "rf_surge_long", "rf_confirm_peak",
                                       "rf_toprev", "rf_off8", "rf_s1_breakdown", "rf_wick_short", "rf_pullback_long",
-                                      "rf_multiday_long", "rf_l1_hist_long", "rf_wick_long", "rf_zone_s4")),
+                                      "rf_multiday_long", "rf_l1_hist_long", "rf_wick_long", "rf_zone_s4",
+                                      "rf_consensus_long")),
     ("⑥ 외부 매매법", ("fujimoto", "mach7", "emapb", "bbema", "bbwave", "trima")),
 )
 SECTION_REST = "⑦ 기타"

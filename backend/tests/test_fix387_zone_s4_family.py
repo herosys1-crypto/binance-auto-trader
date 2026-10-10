@@ -59,7 +59,9 @@ def test_control_room_line_and_order():
         assert k in wl, k
     n, sec = AC.line_order()["rf_zone_s4"]
     n_ext = len(dict(AC.LINE_ORDER)["⑥ 외부 매매법"])          # Fix 423: 외부 매매법 줄 수가 늘어도 깨지지 않게
-    assert sec.startswith("⑤") and n == max(x for x, _ in AC.line_order().values()) - n_ext   # 규칙 가족 묶음 끝
+    n_rf = len(dict(AC.LINE_ORDER)[sec])
+    rf_end = max(x for x, _ in AC.line_order().values()) - n_ext
+    assert sec.startswith("⑤") and rf_end - n_rf < n <= rf_end   # 규칙 가족 묶음 안 (🤝 Fix 437 합의 LONG 이 뒤에 붙음)
     assert any(p.fam == "rf_zone_s4" for p in AC.panels())
 
 

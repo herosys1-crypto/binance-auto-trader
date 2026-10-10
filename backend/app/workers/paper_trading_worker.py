@@ -203,6 +203,8 @@ def _emapb_params(db) -> None:
         from app.services import bb_wave as BW, triple_ma as TM   # 🌊📐 Fix 431·432
         BW.set_paper_params(lambda k: ES.setting(db, k))
         TM.set_paper_params(lambda k: ES.setting(db, k))
+        from app.services import consensus_long as CON           # 🤝 Fix 437
+        CON.set_paper_params(lambda k: _setting(db, k))
     except Exception as e:  # noqa: BLE001 — 실패하면 기본값/직전 값으로 판정
         logger.debug("[Fix423] EMA 눌림 가상 인자 갱신 실패: %s", e)
 
@@ -386,6 +388,13 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
             except Exception as e:  # noqa: BLE001
                 logger.warning("[%s] %s 규칙 평가 실패 → 신규 진입 없음: %s", FIX, sym, e)
                 fired = {}
+            _con_n = None
+            if fired:
+                try:                                                # 🤝 Fix 437: 같은 봉 LONG 규칙 수 + 시장폭 → 합의 LONG
+                    from app.services import consensus_long as _CON
+                    _con_n = _CON.apply(fired, rule_side, breadth)
+                except Exception as e:  # noqa: BLE001 — 합의 판정 실패가 다른 규칙 진입을 막지 않게
+                    logger.debug("[Fix437] %s 합의 판정 실패: %s", sym, e)
             try:                                                    # Fix 425: 평가 끝 → 플래그 기본값으로 (회차 밖으로 새지 않게)
                 _EPF.set_paper_symbol_ok(True)
                 _EPF.set_paper_daily_done(False)
@@ -408,6 +417,8 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                     t = PT.open_trade(symbol=sym, side=side, rule=key, series=series, j=j, tags=tags,
                                       chg_24h=chg24, chg_3d=chg3, chg_5d=chg5, source="live", fired=fired)
                     t["snapshot"]["market_breadth"] = breadth
+                    if key == "consensus_long":                    # 🤝 Fix 437: 판정 근거 기록
+                        t["snapshot"]["consensus"] = {"n_long": _con_n, "breadth": breadth}
                     _cs = _chart_state_for(bc, sym, side, series, now_ms, _cs_cache, on=_cs_on, include_1m=_cs_1m, th=_cs_th)
                     if _cs is not None:
                         t["snapshot"]["chart_state"] = _cs

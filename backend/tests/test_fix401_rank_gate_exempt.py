@@ -75,7 +75,7 @@ def test_others_still_gated(template_name: object) -> None:
 def test_exempt_list_is_a_setting() -> None:
     """사장님이 한 줄로 되돌릴 수 있어야 한다."""
     assert G.SETTING_EXEMPT == "entry_rank_gate_exempt_prefixes"
-    assert G.exempt_prefixes(_DB()) == ("RF_BOTTOM", "RF_WICKLONG", "RF_MULTIDAY")
+    assert G.exempt_prefixes(_DB()) == ("RF_BOTTOM", "RF_WICKLONG", "RF_MULTIDAY", "RF_CONSENSUS")   # 🤝 Fix 437 합의 LONG
     assert G.exempt_prefixes(_DB({G.SETTING_EXEMPT: "none"})) == ()   # 끄기 = 명시 토큰
     assert G.exempt_prefixes(_DB({G.SETTING_EXEMPT: "RF_X , rf_y"})) == ("RF_X", "RF_Y")
     # `none` 으로 되돌리면 면제가 사라진다

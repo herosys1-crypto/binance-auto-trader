@@ -198,7 +198,7 @@ def _is_manual(template_name: object) -> bool:
 #   되돌리려면 `entry_rank_gate_exempt_prefixes` 를 빈 문자열로 두면 된다.
 # ═══════════════════════════════════════════════════════════════════════════
 SETTING_EXEMPT = "entry_rank_gate_exempt_prefixes"
-EXEMPT_DEFAULT = "RF_BOTTOM,RF_WICKLONG,RF_MULTIDAY"     # 「Claude가 정함」 — 위 실측 3종
+EXEMPT_DEFAULT = "RF_BOTTOM,RF_WICKLONG,RF_MULTIDAY,RF_CONSENSUS"     # 「Claude가 정함」 — 위 실측 3종 + 🤝 Fix 437 합의 LONG(같은 LONG 반전 규칙들의 겹침 · 측정에 순위 게이트 없음)
 
 
 def exempt_prefixes(db) -> tuple[str, ...]:

@@ -42,6 +42,9 @@ CODE_MARKERS = {
     "app/workers/rule_family_worker.py": ("CG.judge(", "si = _enter_split("),                                   # 433 연결
     "app/services/family_loss_breaker.py": ("def family_part(", "begin_nested"),                                # 435 차단기 체결 기준
     "app/services/human_share.py": ("def split_for(", '"fills": len(es)'),                                    # 434·435
+    "app/services/consensus_long.py": ("def qualifies(", 'RULE_KEY = "consensus_long"'),                     # 437 합의 LONG
+    "app/workers/paper_trading_worker.py": ("_CON.apply(fired, rule_side, breadth)",),                       # 437 가상 판정
+    "app/services/rule_families.py": ('Family("rf_consensus_long"', '"rf_consensus_long_entry"'),       # 437 가족
 }
 STOPPING_STALE_SEC = 10 * 60      # Claude가 정함 — 감지 5분 + reconcile 2분 주기 두 번 여유
 REQ_COUNT_KEY = "binance:reqcount:{minute}"   # client._REQ_COUNT_KEY 와 같은 값 (보관 15분)

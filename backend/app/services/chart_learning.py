@@ -289,6 +289,7 @@ from app.services.ema_pullback import PAPER_RULES as _EMAPB_RULES          # �
 from app.services.bb_ema import PAPER_RULES as _BBEMA_RULES                 # 📊 Fix 429 볼린저 EMA 4종
 from app.services.bb_wave import PAPER_RULES as _BBWAVE_RULES               # 🌊 Fix 431 볼린저 중심선 파동 2종 (15분)
 from app.services.triple_ma import PAPER_RULES as _TRIMA_RULES              # 📐 Fix 432 3중 이평 2종 (15분)
+from app.services.consensus_long import PAPER_RULES as _CONSENSUS_RULES     # 🤝 Fix 437 합의 LONG (워커가 apply 로 세움)
 from app.services.opportunity_zones import PAPER_RULES as _OZ_RULES        # 🗺 Fix 379 기회 지도 2종 (가상만)
 
 _CFG = None
@@ -436,6 +437,7 @@ RULES: tuple[Rule, ...] = (
     *tuple(Rule(_k, _s, _lbl, "candidate", _fn) for _k, _s, _lbl, _fn in _BBEMA_RULES),   # 📊 Fix 429
     *tuple(Rule(_k, _s, _lbl, "candidate", _fn) for _k, _s, _lbl, _fn in _BBWAVE_RULES),  # 🌊 Fix 431
     *tuple(Rule(_k, _s, _lbl, "candidate", _fn) for _k, _s, _lbl, _fn in _TRIMA_RULES),   # 📐 Fix 432
+    *tuple(Rule(_k, _s, _lbl, "candidate", _fn) for _k, _s, _lbl, _fn in _CONSENSUS_RULES),   # 🤝 Fix 437
     # 🗺 Fix 379 (2026-09-19): 기회 지도 — 모든 자리 채점에서 두 장세 모두 이긴 구간 (app/services/opportunity_zones.py)
     *tuple(Rule(_k, _s, _lbl, "candidate", _fn) for _k, _s, _lbl, _fn in _OZ_RULES),
 )
