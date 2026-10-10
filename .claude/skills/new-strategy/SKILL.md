@@ -20,7 +20,11 @@ description: 새 매매 전략(사장님 첨부 md·yaml·설명)을 자동매�
 - 결과가 나빠도 그림자로는 넣는다(운영 데이터가 진짜 판정). 단 보고에 그대로 적는다.
 
 ## 2. 구현 = /duel → /merge (CLAUDE.md 규칙 10)
-외부 전략 가족 템플릿(Fix 423·429 를 본보기로):
+**가장 쉬운 길 (Fix 431·432):** 판정 모듈에 `PREFIX·STYPE·SETTINGS·params_from·min_bars·evaluate(bars, j, side, p, cache)` 를 두고
+`app/workers/external_strategies_worker.py` 의 `FAMILIES` 에 `FL.Family("<key>", 모듈, "이름", ("봉",…), force_shadow=…)` 한 줄 → 루프는 `ext_family_loop.py` 가 공용으로 돈다.
+가상 규칙은 `PAPER_RULES`(15분 `ctx.kl15` 또는 일봉 `ctx.kl1d`) → chart_learning RULES 에 추가하면 운영팀 성적표에 자동 편입.
+
+그 밖의 등록 지점(Fix 423·429·431 을 본보기로):
 | 곳 | 할 일 |
 |---|---|
 | `app/services/<이름>.py` | 지표·판정 순수 함수 · SETTINGS(기본 `<접두>_mode=shadow`) · `params_from` · 가상 규칙 `PAPER_RULES` |
