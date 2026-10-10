@@ -26,11 +26,16 @@
     const meta = document.getElementById('strategy-council-meta');
     const body = document.getElementById('strategy-council-body');
     if (!card || !body) return;
-    let d;
+    let d, lv = null;
     try {
       d = await api('/strategy-council/latest');
     } catch (e) {
       return;
+    }
+    try {
+      lv = await api('/strategy-council/live-families');     // 🧑‍⚖️ Fix 436 가족별 실거래 (5분 캐시)
+    } catch (e) {
+      lv = null;
     }
     if (!d || d.empty || !d.D_walk) {
       card.classList.add('hidden');
@@ -52,6 +57,22 @@
       `<span style="border:1px solid ${ST_COLOR[x.status] || '#94a3b8'}66;border-radius:6px;padding:1px 6px;margin:2px;display:inline-block;font-size:11px">` +
       `<b style="color:${ST_COLOR[x.status] || '#94a3b8'}">${esc(x.status)}</b> ${esc(x.rule)} ${esc(x.side)} <span style="color:${c(x.edge)}">${f(x.edge)}</span></span>`).join('');
     const th = 'style="text-align:left;color:#94a3b8;font-weight:normal;padding-right:8px"';
+    // 🧑‍⚖️ Fix 436: 가족별 실거래 — 시스템 몫(가족 판단용) · 사람 💉 추가 몫 · 손실 차단기(최근 7일 가족 몫 / 기준)
+    const fams = (lv && lv.families) || [];
+    const brk = b => {
+      if (!b || b.pnl === null || b.pnl === undefined) return '—';
+      if (b.tripped) return '<b style="color:#ef4444">⛔ 막힘</b>';
+      const pct = b.limit ? Math.min(100, Math.max(0, -Number(b.pnl) / Number(b.limit) * 100)) : 0;
+      return `${f(b.pnl)} / −${esc(b.limit)} <span style="color:${pct >= 70 ? '#f97316' : '#94a3b8'}">(${pct.toFixed(0)}%)</span>`;
+    };
+    const liveRows = fams.map(x =>
+      `<tr><td>${esc(x.label)}${x.mode === 'on' ? ' <b style="color:#22c55e">실주문</b>' : ''}</td><td>${x.closed}${x.open ? ' +' + x.open : ''}</td>` +
+      `<td style="color:${c(x.system)}"><b>${f(x.system)}</b></td><td style="color:${c(x.human)}">${f(x.human)}${x.human_n ? ' (' + x.human_n + ')' : ''}</td>` +
+      `<td>${x.unknown ? f(x.unknown) : '—'}</td><td>${brk(x.breaker)}</td></tr>`).join('');
+    const liveHtml = fams.length
+      ? `<div style="margin-top:8px;overflow-x:auto"><div style="font-size:12px;color:#c4b5fd">💵 가족별 실거래 최근 ${esc(lv.days)}일 (USDT · 가족 판단은 <b>시스템 몫</b> · 사람 💉 추가 몫은 따로)</div>` +
+        `<table style="font-size:12px;width:100%"><tr><th ${th}>가족</th><th ${th}>끝남+진행</th><th ${th}>시스템 몫</th><th ${th}>사람 추가 몫(건)</th><th ${th}>모름</th><th ${th}>손실 차단기 7일</th></tr>${liveRows}</table></div>`
+      : '';
     body.innerHTML =
       `<div style="font-size:12px;margin-bottom:6px">전진 검증 ${W.n_days}일 — 운영팀 선택 <b style="color:${c(T.sel)}">${f(T.sel)}</b> · 전체 ${f(T.all)} · 무작위 ${f(T.base)}` +
       ` · 선택&gt;전체 ${W.sel_gt_all_days}/${W.n_days}일 · 최악의 날 ${W.worst ? esc(W.worst.d) + ' <b style="color:#ef4444">' + f(W.worst.sel) + '</b>' : '—'}</div>` +
@@ -60,6 +81,7 @@
       `<table style="font-size:12px;width:100%"><tr><th ${th}>규칙</th><th ${th}>방향</th><th ${th}>장세</th><th ${th}>edge</th><th ${th}>n</th></tr>${cells || '<tr><td colspan=5>없음</td></tr>'}</table></div>` +
       `<div style="flex:0 1 220px;min-width:0"><div style="font-size:12px;color:#c4b5fd">🤝 같은 방향 규칙이 겹칠 때</div>` +
       `<table style="font-size:12px;width:100%"><tr><th ${th}>방향</th><th ${th}>겹침</th><th ${th}>edge</th><th ${th}>n</th></tr>${ov}</table></div></div>` +
+      liveHtml +
       `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:#c4b5fd">규칙 상태 ${(d.F_status || []).length}개 (새 전략은 「표본 부족」으로 시작)</summary><div style="margin-top:4px">${st}</div></details>` +
       `<div class="text-xs text-slate-500" style="margin-top:4px">※ 분석 전용 — 주문·설정을 바꾸지 않습니다. 켜기·끄기는 관제실에서 사장님이.</div>`;
   }

@@ -29,3 +29,38 @@ def strategy_council_latest(user_id: int = Depends(get_current_user_id)) -> dict
     except Exception as e:  # noqa: BLE001 — 화면이 죽지 않게
         logger.warning("[Fix430] 성적표 조회 실패: %s", e)
         return {"empty": True, "error": "조회 실패"}
+
+
+LIVE_KEY = "council:live_families"
+LIVE_TTL = 300          # 5분 캐시 — 화면 폴링이 DB 를 두드리지 않게 (Fix 386 교훈)
+
+
+@router.get("/live-families")
+def strategy_council_live(user_id: int = Depends(get_current_user_id)) -> dict:
+    """🧑‍⚖️ Fix 436: 가족별 실거래(시스템 몫 · 사람 💉 추가 몫 · 7일 · 손실 차단기). 읽기 전용, 5분 캐시."""
+    try:
+        from app.core.redis_client import get_redis_client
+        r = get_redis_client()
+        raw = r.get(LIVE_KEY)
+        if raw:
+            return json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[Fix436] 캐시 읽기 실패: %s", e)
+        r = None
+    from app.core.database import SessionLocal
+    from app.services import live_family_board as LB
+    db = SessionLocal()
+    try:
+        data = LB.build(db)
+    except Exception as e:  # noqa: BLE001 — 화면이 죽지 않게
+        logger.warning("[Fix436] 가족별 실거래 계산 실패: %s", e)
+        return {"families": [], "error": "계산 실패"}
+    finally:
+        db.close()
+    try:
+        # 교차 감사: 차단기 조회가 실패한 결과는 캐시하지 않는다 — 막힌 가족의 ⛔ 가 5분 동안 「—」로 보이지 않게
+        if r is not None and data.get("breaker_ok", True):
+            r.setex(LIVE_KEY, LIVE_TTL, json.dumps(data, ensure_ascii=False, default=str))
+    except Exception:  # noqa: BLE001
+        pass
+    return data
