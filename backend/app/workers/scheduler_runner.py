@@ -914,6 +914,17 @@ def start_scheduler() -> None:
         id="paper_retention", replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🧑‍⚖️ Fix 430 (2026-10-10 사장님): 전략 운영팀 성적표 — 가상매매 30일로 규칙 교차 검증·장세별 배치표·전진 검증.
+    #   하루 한 번 KST 09:40 (일봉 마감 09:00 + 가상 일봉 판정 창 뒤). 읽기·기록 전용(Redis council:latest + 텔레그램 1통).
+    def _strategy_council():
+        from app.workers.strategy_council_worker import run_strategy_council_once
+        run_strategy_council_once()
+    scheduler.add_job(
+        guarded_job("strategy_council", 900, _strategy_council),
+        trigger=CronTrigger(hour=9, minute=40),
+        id="strategy_council", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     # 🗓 Fix 424 (2026-10-09 사장님): EMA 추세 눌림 「진입 준비」·「진입 신호」 알림 — 텔레그램 + 화면. 주문 없음.
     #   일봉 기준이라 15분마다면 충분 (감시 상위 60종목 × 일봉 300개 = 무게 120/회 ≈ 8/분).
     def _emapb_watch():

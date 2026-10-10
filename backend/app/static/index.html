@@ -1555,6 +1555,17 @@
 
       <!-- v224 monitoring card MOVED UP to right after 지금 운영 상태 (v225 2026-08-23 사장님!) -->
 
+      <!-- 🧑‍⚖️ Fix 430 (2026-10-10 사장님): 전략 운영팀 성적표 — 규칙 교차 검증·장세별 배치표 (분석 전용) -->
+      <div id="strategy-council-card" class="card rounded-lg hidden" style="padding:8px 12px;background:linear-gradient(135deg,rgba(139,92,246,0.12),rgba(59,130,246,0.10));border:1px solid rgba(139,92,246,0.4)">
+        <details>
+          <summary style="cursor:pointer;list-style:none" class="flex items-center justify-between">
+            <span class="text-sm font-bold" style="color:#c4b5fd">🧑‍⚖️ 전략 운영팀 성적표</span>
+            <span id="strategy-council-meta" class="text-xs text-slate-400">-</span>
+          </summary>
+          <div id="strategy-council-body" style="margin-top:6px"></div>
+        </details>
+      </div>
+
       <!-- 🗓 Fix 424 (2026-10-09 사장님): EMA 추세 눌림 진입 준비·신호 (일봉, 알림 전용) -->
       <div id="ema-pullback-card" class="card rounded-lg hidden" style="padding:8px 12px;background:linear-gradient(135deg,rgba(34,197,94,0.12),rgba(59,130,246,0.12));border:1px solid rgba(34,197,94,0.4)">
         <div class="flex items-center justify-between mb-2">
@@ -2999,6 +3010,7 @@ function openBBMiddleRanking(direction) {
 <script src="/static/js/managed-symbols.js?v=20260909-fix365-managed-symbols"></script>
 <script src="/static/js/pump-bb-alerts.js?v=20260809v131-pump-bb"></script>
 <script src="/static/js/ema-pullback-board.js?v=fix424"></script>
+<script src="/static/js/strategy-council.js?v=fix430"></script>
 <script src="/static/js/strategy-suggestions.js?v=20260826-fix107-content-type"></script>
 <script src="/static/js/live-pump-dump-alerts.js?v=20260814v148a-pump-reversal-short"></script>
 <script src="/static/js/tp-sl-advisor.js?v=20260813v134-learning"></script>
