@@ -38,6 +38,8 @@ CODE_MARKERS = {
     "app/services/strategy_council.py": ("def build_report(", '"gap": (1, 10)'),                                 # 430 운영팀
     "app/workers/strategy_council_worker.py": ("council:latest", "stream_results"),                              # 430 워커
     "app/workers/scheduler_runner.py": ('guarded_job("strategy_council"',),                                      # 430 스케줄
+    "app/services/council_gate.py": ("def judge(", "council:gate:"),                                           # 433 기록 전용
+    "app/workers/rule_family_worker.py": ("CG.judge(", "si = _enter_split("),                                   # 433 연결
 }
 STOPPING_STALE_SEC = 10 * 60      # Claude가 정함 — 감지 5분 + reconcile 2분 주기 두 번 여유
 REQ_COUNT_KEY = "binance:reqcount:{minute}"   # client._REQ_COUNT_KEY 와 같은 값 (보관 15분)

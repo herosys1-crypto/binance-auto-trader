@@ -28,6 +28,7 @@ from app.core.database import SessionLocal
 from app.core.redis_client import get_redis_client
 from app.services import rule_families as RF
 from app.services import entry_conditions as EC
+from app.services import council_gate as CG          # 🧑‍⚖️ Fix 433 운영팀 게이트 (기록 전용)
 
 logger = logging.getLogger(__name__)
 
@@ -164,24 +165,24 @@ def _stop_price_pct(db, acc, fam: RF.Family, sym: str, price: float, lev: int) -
     return base, "roi(swing8 불가)"
 
 
-def _enter_split(db, r, stat: dict, acc, fam: RF.Family, sym: str, px: float, cool_key: str, cool_s: int, row_id: int, det: dict) -> None:
-    """분할 10/100/200 진입 — 가드 먼저, 실행은 공용 실행기."""
+def _enter_split(db, r, stat: dict, acc, fam: RF.Family, sym: str, px: float, cool_key: str, cool_s: int, row_id: int, det: dict):
+    """분할 10/100/200 진입 — 가드 먼저, 실행은 공용 실행기. 진입한 전략(없으면 None)을 돌려준다 (Fix 433 기록용)."""
     ok, why = _guards(db, acc, fam, sym)
     if not ok:
         _bump(stat, fam.key, "guards")
         logger.info("[%s] ⏸ %s %s %s 분할 진입 보류 — %s", FIX, fam.key, sym, fam.side, why)
-        return
+        return None
     from app.services.split_entry_executor import open_split_position, split_total_full
     caps, steps, sl, tp1, trail, note = RF.split_config(db)
     if note != "설정 OK":                                   # 사장님 설정과 다른 값(기본값)으로 거래하지 않는다 (반박 검증 9/15 L2)
         _bump(stat, fam.key, "split_config_invalid")
         logger.error("[%s] ⛔ %s 분할 설정 손상/정합성 실패 → 진입 안 함: %s", FIX, fam.key, note)
-        return
+        return None
     full, twhy = split_total_full(db)                       # 분할 예약이 다른 가족 2단계를 막지 않게 (반박 검증 9/15 H1)
     if full:
         _bump(stat, fam.key, "split_total_full")
         logger.info("[%s] ⏸ %s %s %s 분할 진입 보류 — %s", FIX, fam.key, sym, fam.side, twhy)
-        return
+        return None
     si, code, reason = open_split_position(
         db, acc, symbol=sym, side=fam.side, price=px, strategy_type=fam.stype, name_prefix=f"{fam.prefix}_",
         label=fam.label, caps=caps, steps=steps, sl_roi=sl, tp1=tp1, trail=trail,
@@ -191,13 +192,14 @@ def _enter_split(db, r, stat: dict, acc, fam: RF.Family, sym: str, px: float, co
         if code in ("start_failed", "start_unconfirmed"):
             r.setex(cool_key, START_FAIL_COOLDOWN_S, "1")
         logger.warning("[%s] ⛔ %s %s %s 분할 진입 안 됨 (%s): %s", FIX, fam.label, sym, fam.side, code, reason)
-        return
+        return None
     if cool_s > 0:
         r.setex(cool_key, cool_s, "1")
     stat["entered"] += 1
     _bump(stat, fam.key, "entered")
     logger.warning("[%s] 🎯 %s 분할 진입 #%s %s %s 자본 %s · 가상행 #%s 자리 %s", FIX, fam.label, si.id, sym, fam.side,
                    "/".join(str(c) for c in caps), row_id, det.get("groups"))
+    return si
 
 
 def run_rule_families_once() -> dict:
@@ -218,6 +220,8 @@ def run_rule_families_once() -> dict:
         max_drift = RF.setting_float(db, "rf_max_drift_pct")
         gate_params = EC.params(db)
         halted = any(m == "on" for m in modes.values()) and _halted(db)
+        cg_mode = CG.mode_from_db(db)                        # 🧑‍⚖️ Fix 433: 기록 전용 (off 면 안 봄)
+        cg_cells = CG.load(r) if cg_mode != "off" else None
         stat["halted"] = halted
         acc = None
         for row in _new_rows(db, sorted(active), since):
@@ -269,6 +273,11 @@ def run_rule_families_once() -> dict:
                                            p=gate_params, family=fam.key))   # 🎯 Fix 377 가족 전용 조건
                     if EC.blocks(gate_mode, gate):
                         blocks.append("chart_gate")
+                # 🧑‍⚖️ Fix 433: 운영팀 「오늘 쓸 칸」 안인가 — **기록만** (blocks 에 넣지 않는다)
+                cg = None
+                if cg_mode != "off":
+                    snap = getattr(row, "snapshot", None)
+                    cg = CG.judge(cg_cells, fam.rule, fam.side, snap.get("market_breadth") if isinstance(snap, dict) else None, now=now)
 
                 if is_shadow:
                     ok, why = _guards(db, acc, fam, sym)
@@ -279,8 +288,12 @@ def run_rule_families_once() -> dict:
                                "paper_trade_id": row.id, "entry": entry, "price_now": px, "entry_mode": entry_mode,
                                "drift_pct": None if mv is None else round(mv, 3), "opened_at": row.opened_at.isoformat(),
                                "tags": list(row.tags or []), **det, "would_enter": would, "blocks": blocks, "guards_why": why,
-                               "daily": dwhy, "halted": halted, "chart_gate": gate}
+                               "daily": dwhy, "halted": halted, "chart_gate": gate, "council_gate": cg}
                     r.setex(_k_shadow(fam.key, sym, row.id), SHADOW_TTL, json.dumps(payload, default=str))
+                    if cg is not None and would:
+                        CG.tally(stat, cg)
+                        CG.record(r, fam.key, row.id, {"at": now.isoformat(), "family": fam.key, "rule": fam.rule, "side": fam.side,
+                                                       "symbol": sym, "paper_trade_id": row.id, "mode": "shadow", "strategy_id": None, **cg})
                     if would and cool_s > 0:
                         r.setex(cool_key, cool_s, "1")
                     stat["shadow"] += 1
@@ -294,7 +307,11 @@ def run_rule_families_once() -> dict:
                                 fam.side, ",".join(blocks), entry, px, dwhy, gate.get("why"))
                     continue
                 if entry_mode == "split":
-                    _enter_split(db, r, stat, acc, fam, sym, px, cool_key, cool_s, row.id, det)
+                    si = _enter_split(db, r, stat, acc, fam, sym, px, cool_key, cool_s, row.id, det)
+                    if si is not None and cg is not None:
+                        CG.tally(stat, cg)
+                        CG.record(r, fam.key, row.id, {"at": now.isoformat(), "family": fam.key, "rule": fam.rule, "side": fam.side,
+                                                       "symbol": sym, "paper_trade_id": row.id, "mode": "on", "strategy_id": si.id, **cg})
                     continue
                 sp, stop_src = _stop_price_pct(db, acc, fam, sym, px, lev)
                 cap = RF.setting_float(db, f"{fam.key}_capital_usdt")
@@ -314,6 +331,10 @@ def run_rule_families_once() -> dict:
                     r.setex(cool_key, cool_s, "1")
                 stat["entered"] += 1
                 _bump(stat, fam.key, "entered")
+                if cg is not None:
+                    CG.tally(stat, cg)
+                    CG.record(r, fam.key, row.id, {"at": now.isoformat(), "family": fam.key, "rule": fam.rule, "side": fam.side,
+                                                   "symbol": sym, "paper_trade_id": row.id, "mode": "on", "strategy_id": si.id, **cg})
                 logger.warning("[%s] 🎯 %s 진입 #%s %s %s 증거금 %.1f 손절 가격 %.2f%%(%s) · 가상행 #%s 자리 %s", FIX, fam.label,
                                si.id, sym, fam.side, cap, sp, stop_src, row.id, det.get("groups"))
             except Exception as e:  # noqa: BLE001
