@@ -85,7 +85,7 @@ def _closed_rows(db: Any, since: datetime) -> list:
                              ST.strategy_type, ST.name,
                              SI.total_capital.label("actual_capital"),
                              ST.total_capital.label("designed_capital"),
-                             SI.id.label("sid"), SI.symbol.label("symbol"))
+                             SI.id.label("sid"), SI.symbol.label("symbol"), SI.side.label("side"))
                       .join(ST, ST.id == SI.strategy_template_id)
                       .where(SI.status.in_(tuple(TERMINAL_STATUSES)), closed_at >= since)).all()
 
@@ -120,6 +120,45 @@ def family_share(designed: Any, actual: Any) -> float:
     return d / a
 
 
+def _splits(db: Any, rows: list) -> dict:
+    """🧮 Fix 435 (2026-10-10 사장님 승인 「1번 진행」): 끝난 전략들의 체결 기준 분해(human_share) — 쿼리 한 번.
+    실패하면 {} → 행마다 Fix 400 자본 비율로 (예전 그대로)."""
+    import contextlib
+    try:
+        from app.services import human_share as HS
+        items = [(row.sid, getattr(row, "side", None) or "LONG", row[0]) for row in rows]
+        if not items:
+            return {}
+        # 교차 감사: 차단기는 전략 생성 트랜잭션 **도중**에 불린다 → 실패해도 그 트랜잭션을 통째로 롤백하지 않게 세이브포인트 안에서만 읽는다
+        nested = getattr(db, "begin_nested", None)
+        with (nested() if callable(nested) else contextlib.nullcontext()):
+            return HS.split_for(db, items)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[%s] 체결 기준 분해 실패 → 자본 비율: %s", FIX, e)
+        return {}
+
+
+def family_part(row: Any, sp: dict) -> tuple[float, bool]:
+    """그 거래의 (가족 몫 손익, 사람이 키웠나).
+
+    🧮 Fix 435: 체결 기록이 있으면 **체결 기준** — 가족 몫 = 시스템 몫 + 출처 모름(9/14 전 공용 접미사 = 보수적으로 가족에 센다).
+      Fix 400 의 자본 비율(설계 ÷ 실제)은 ① 익절 완료(COMPLETED) 전략의 실제 자본이 0 으로 남아 사람 몫을 못 덜어내고
+      (#4596 ARX 사람 추가 +43.94 가 가족 몫으로 셈 → 차단기가 덜 막음) ② 시스템 자동 추가(_ADHOC_AM_)로 커진 물량을 사람 몫으로 덜어냈다.
+    체결 기록이 없거나 분해가 실패하면 Fix 400 자본 비율 그대로."""
+    import math
+    pnl = float(row[0] or 0)
+    h = sp.get(getattr(row, "sid", None)) if sp else None
+    if h and h.get("method") != "error" and (h.get("fills") or h.get("method") in ("replay", "notional")):
+        try:
+            part = float(h["system"]) + float(h["unknown"])
+            if math.isfinite(part):                          # 교차 감사: NaN 이면 「NaN < −기준」 = False → 차단이 조용히 풀린다
+                return part, int(h.get("human_n") or 0) > 0
+        except (KeyError, TypeError, ValueError):
+            pass                                             # 형식이 깨진 분해 = 자본 비율로
+    share = family_share(*_cap_pair(row))
+    return pnl * share, share < 1.0
+
+
 def family_realized(db: Any, fam_key: str, since: datetime) -> tuple[float, int]:
     """그 가족의 since 이후 끝난 전략 실현 손익 합 · 건수. 사람 전략 제외.
 
@@ -134,17 +173,20 @@ def family_realized_detail(db: Any, fam_key: str, since: datetime) -> dict[str, 
     """{"pnl"(가족 몫), "pnl_raw"(원시), "n", "human_pnl"(사람이 키운 몫), "human_n"(개입 건수)}."""
     from app.services import auto_family_registry as AF
     counted, raw, n, human_n = 0.0, 0.0, 0, 0
+    mine = []
     for row in _closed_rows(db, since):
         rp, ca, _sa, origin, stype, name = row[0], row[1], row[2], row[3], row[4], row[5]
         fam = AF.family_for(strategy_type=stype, template_name=name, entry_origin=origin, created_at=ca)
-        if fam is None or fam.key != fam_key:
-            continue
-        pnl = float(rp or 0)
-        share = family_share(*_cap_pair(row))
-        counted += pnl * share
+        if fam is not None and fam.key == fam_key:
+            mine.append(row)
+    sp = _splits(db, mine)                                   # 🧮 Fix 435
+    for row in mine:
+        pnl = float(row[0] or 0)
+        part, human = family_part(row, sp)
+        counted += part
         raw += pnl
         n += 1
-        if share < 1.0:
+        if human:
             human_n += 1
     return {"pnl": round(counted, 2), "pnl_raw": round(raw, 2), "n": n,
             "human_pnl": round(raw - counted, 2), "human_n": human_n}
@@ -184,19 +226,23 @@ def all_states(db: Any, fam_keys: list[str], *, now: datetime | None = None) -> 
         out[k] = {"tripped": tripped, "pnl": 0.0, "n": 0, "since": since, "limit": limit, "days": days,
                   "pnl_raw": 0.0, "human_pnl": 0.0, "human_n": 0}
     rows = _closed_rows(db, base)
+    picked = []
     for row in rows:
         rp, ca, sa, origin, stype, name = row[0], row[1], row[2], row[3], row[4], row[5]
         fam = AF.family_for(strategy_type=stype, template_name=name, entry_origin=origin, created_at=ca)
         if fam is None or fam.key not in out or _aware(sa) < out[fam.key]["since"]:
             continue
-        pnl = float(rp or 0)
-        share = family_share(*_cap_pair(row))            # 🚨 Fix 400
-        out[fam.key]["pnl"] += pnl * share
-        out[fam.key]["pnl_raw"] += pnl
-        out[fam.key]["human_pnl"] += pnl - pnl * share
-        out[fam.key]["n"] += 1
-        if share < 1.0:
-            out[fam.key]["human_n"] += 1
+        picked.append((fam.key, row))
+    sp = _splits(db, [row for _k, row in picked])            # 🧮 Fix 435 체결 기준 (실패 = 🚨 Fix 400 자본 비율)
+    for key, row in picked:
+        pnl = float(row[0] or 0)
+        part, human = family_part(row, sp)
+        out[key]["pnl"] += part
+        out[key]["pnl_raw"] += pnl
+        out[key]["human_pnl"] += pnl - part
+        out[key]["n"] += 1
+        if human:
+            out[key]["human_n"] += 1
     for v in out.values():
         v["pnl"] = round(v["pnl"], 2)
         v["pnl_raw"] = round(v["pnl_raw"], 2)

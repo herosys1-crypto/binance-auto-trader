@@ -10,7 +10,7 @@
   사람 몫 = manual lot 의 재생 손익 · 출처 모름 = unknown lot · 시스템 몫 = 실현 손익 − 둘
   수수료·펀딩(실현 − 재생 총손익)은 진입 명목 비율로 나눈다
   청산 체결이 모자라 재생이 안 되면(청산 비율 < 95%) 진입 명목 비율로 실현 손익을 나눈다 (method = notional).
-매매 판정·차단기에는 쓰지 않는다 — 보고서(실거래 가족 집계 · 운영팀 게이트 판정)만.
+보고서(실거래 가족 집계 · 운영팀 게이트 판정) + 🧮 Fix 435 손실 차단기의 가족 몫(사장님 10/10 승인). 진입 판정에는 안 쓴다.
 """
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def split(side: Any, entries: Sequence[Mapping[str, Any]], exits: Sequence[Mappi
     es = [{**e, "origin": origin_of(e)} for e in entries]
     human_n = sum(1 for e in es if e["origin"] == "manual_add")
     unk_n = sum(1 for e in es if e["origin"] == "unknown")
-    base = {"realized": round(rp, 4), "human_n": human_n}
+    base = {"realized": round(rp, 4), "human_n": human_n, "fills": len(es)}
     if human_n == 0 and unk_n == 0:
         return {**base, "system": round(rp, 4), "human": 0.0, "unknown": 0.0, "method": "none"}
     def notional(kind: str) -> float:
@@ -102,5 +102,5 @@ def split_for(db: Any, items: Iterable[tuple[int, str, Any]]) -> dict[int, dict[
         except Exception as e:  # noqa: BLE001 — 한 전략의 이상한 체결이 보고 전체를 죽이지 않게 (교차 감사). 나누지 않고 드러낸다.
             r = _f(rp) or 0.0
             out[i] = {"system": round(r, 4), "human": 0.0, "unknown": 0.0, "realized": round(r, 4), "method": "error",
-                      "human_n": 0, "error": str(e)[:120]}
+                      "human_n": 0, "fills": 0, "error": str(e)[:120]}
     return out

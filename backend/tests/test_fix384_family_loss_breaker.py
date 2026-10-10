@@ -255,3 +255,93 @@ class TestFix400HumanShare:
         assert st["pnl"] == pytest.approx(-2.61, abs=0.02)
         assert st["pnl_raw"] == pytest.approx(-28.74, abs=0.01)
         assert st["human_n"] == 1
+
+
+# ── 🧮 Fix 435: 차단기 가족 몫 = 체결 기준 (사장님 10/10 승인) ─────────────────
+def _fake_splits(monkeypatch, by_sid):
+    from app.services import human_share as HS
+    monkeypatch.setattr(HS, "split_for", lambda db, items: {i: by_sid[i] for i, _s, _p in items if i in by_sid})
+
+
+def _sp(system, human, unknown=0.0, n=1, method="replay", fills=2):
+    return {"system": system, "human": human, "unknown": unknown, "realized": system + human + unknown,
+            "method": method, "human_n": n, "fills": fills}
+
+
+def test_fix435_completed_human_gain_not_counted_as_family(monkeypatch):
+    """#4596 ARX 모양: 익절 완료(실제 자본 0) · 사람 추가 수익 +43.94 → 자본 비율로는 못 덜어냈다. 체결 기준이면 가족 몫 +0.15."""
+    _fake_splits(monkeypatch, {7: _sp(0.15, 43.94)})
+    s = strat(44.09, 1, designed=10, actual=0)
+    s["sid"] = 7
+    st = FB.state(_DB(strategies=[s]), "bottom_long", now=NOW)
+    assert st["pnl"] == pytest.approx(0.15) and st["pnl_raw"] == pytest.approx(44.09)
+    assert st["human_pnl"] == pytest.approx(43.94) and st["human_n"] == 1
+
+
+def test_fix435_system_auto_add_is_family(monkeypatch):
+    """시스템 자동 추가(_ADHOC_AM_)로 실제 자본이 커져도 사람 몫이 아니다 — 손실 전액이 가족 몫 (자본 비율은 덜어냈었다)."""
+    _fake_splits(monkeypatch, {8: _sp(-31.0, 0.0, n=0, method="none", fills=3)})
+    s = strat(-31.0, 1, designed=10, actual=110)
+    s["sid"] = 8
+    st = FB.state(_DB(strategies=[s]), "bottom_long", now=NOW)
+    assert st["pnl"] == pytest.approx(-31.0) and st["human_n"] == 0
+
+
+def test_fix435_unknown_counts_as_family_and_fallbacks(monkeypatch):
+    _fake_splits(monkeypatch, {9: _sp(-1.0, 0.0, unknown=-4.0, n=0)})
+    s = strat(-5.0, 1)
+    s["sid"] = 9
+    assert FB.state(_DB(strategies=[s]), "bottom_long", now=NOW)["pnl"] == pytest.approx(-5.0)    # 모름 = 보수적으로 가족
+    # 체결 없음(fills 0, method none) → Fix 400 자본 비율 그대로
+    _fake_splits(monkeypatch, {10: _sp(-28.74, 0.0, n=0, method="none", fills=0)})
+    s2 = strat(-28.74, 1, designed=10, actual=110)
+    s2["sid"] = 10
+    assert FB.state(_DB(strategies=[s2]), "bottom_long", now=NOW)["pnl"] == pytest.approx(-28.74 * 10 / 110, abs=0.01)
+    # 분해 실패(method error) → 자본 비율
+    _fake_splits(monkeypatch, {10: _sp(-28.74, 0.0, n=0, method="error", fills=0)})
+    assert FB.state(_DB(strategies=[s2]), "bottom_long", now=NOW)["pnl"] == pytest.approx(-28.74 * 10 / 110, abs=0.01)
+
+
+def test_fix435_all_states_uses_same_rule(monkeypatch):
+    _fake_splits(monkeypatch, {7: _sp(0.15, 43.94)})
+    s = strat(44.09, 1, designed=10, actual=0)
+    s["sid"] = 7
+    out = FB.all_states(_DB(strategies=[s]), ["bottom_long"], now=NOW)
+    assert out["bottom_long"]["pnl"] == pytest.approx(0.15) and out["bottom_long"]["human_pnl"] == pytest.approx(43.94)
+
+
+def test_fix435_trips_on_system_loss_hidden_by_human_gain(monkeypatch, trips):
+    """사람 추가 수익(+43.94)이 가족 손실(−32)을 가려 차단기가 안 걸리던 경우 → 이제 걸린다."""
+    _fake_splits(monkeypatch, {7: _sp(0.15, 43.94), 11: _sp(-32.0, 0.0, n=0, method="none", fills=1)})
+    a, b = strat(44.09, 1, designed=10, actual=0), strat(-32.0, 2)
+    a["sid"], b["sid"] = 7, 11
+    with pytest.raises(ValueError):
+        run(_DB(strategies=[a, b]))
+    assert trips and trips[0][1] == pytest.approx(-31.85)
+
+
+def test_fix435_bad_split_values_fall_back(monkeypatch):
+    s2 = strat(-28.74, 1, designed=10, actual=110)
+    s2["sid"] = 12
+    for bad in ({"system": float("nan"), "unknown": 0.0, "method": "replay", "fills": 2, "human_n": 1},
+                {"system": None, "unknown": 0.0, "method": "replay", "fills": 2},
+                {"method": "replay", "fills": 2}):
+        _fake_splits(monkeypatch, {12: bad})
+        assert FB.state(_DB(strategies=[s2]), "bottom_long", now=NOW)["pnl"] == pytest.approx(-28.74 * 10 / 110, abs=0.01)
+
+
+def test_fix435_split_failure_uses_savepoint_not_rollback(monkeypatch):
+    from app.services import human_share as HS
+    calls = []
+
+    class _Nest:
+        def __enter__(self):
+            calls.append("nested")
+        def __exit__(self, *a):
+            return False
+    db = _DB(strategies=[dict(strat(-28.74, 1, designed=10, actual=110), sid=13)])
+    db.begin_nested = lambda: _Nest()
+    db.rollback = lambda: calls.append("rollback")
+    monkeypatch.setattr(HS, "split_for", lambda db_, items: (_ for _ in ()).throw(RuntimeError("db")))
+    st = FB.state(db, "bottom_long", now=NOW)
+    assert calls == ["nested"] and st["pnl"] == pytest.approx(-28.74 * 10 / 110, abs=0.01)
