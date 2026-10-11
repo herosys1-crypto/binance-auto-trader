@@ -155,6 +155,13 @@ for _k in ("rf_pumptop30", "rf_pumptop_mid"):
                                "Fix 438 근거: 가상 30일 측정은 단일 진입·TP1 15·손절 −25")
     SETTINGS[f"{_k}_chart_gate"] = ("shadow", "off | shadow(판정만 기록) | on",
                                     "Fix 438 근거: 측정에 차트 게이트를 걸지 않았다 (Claude가 정함)")
+# 🧭 Fix 439 장세 필터 (모든 규칙 가족 공통)
+SETTINGS["rf_regime_filter"] = ("on", "off | shadow(판정만 기록) | on(장세가 아니면 진입 안 함) — LONG 시장폭 낮음 · SHORT 24h 급등",
+                                "Claude가 정함 — 가상 30일 31규칙 실측 (진입을 줄이기만 한다) · 사장님 10/11 「모두 개선」")
+SETTINGS["rf_long_breadth_max"] = ("0.4", "LONG 은 시장폭(24h 상승 종목 비율)이 이 값 미만일 때만",
+                                   "Claude가 정함 — 운영팀 성적표 「낮음」 구간 0.4")
+SETTINGS["rf_short_chg24_min"] = ("10", "SHORT 은 그 종목 24h 등락이 이 % 이상일 때만",
+                                  "Claude가 정함 — 실측 +10% 이상 칸 (Fix 328 과 같은 경계)")
 SETTINGS["entry_chart_gate_params"] = ("", "차트 게이트 숫자 JSON (비우면 기본: SHORT 16시간 고점 −3% 이내·일봉 UP 아님 / "
                                            "LONG 24h −5% 이하 또는 5분 고점 대비 −4% 이하)", "Claude가 정함 — 분석 값 그대로")
 
@@ -184,6 +191,48 @@ def setting_float(db: Any, key: str) -> float:
 def mode_of(db: Any, fam_key: str) -> str:
     m = setting(db, f"{fam_key}_mode").lower()
     return m if m in MODES else SETTINGS[f"{fam_key}_mode"][0]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 🧭 Fix 439 (2026-10-11 사장님 「아담쿠 EMA 등등 매매전략과 기존 자동매매를 분석해서 큰수익이 가능하게 전략을 모두 개선해서 간략하게 만들어줘」)
+#   장세 필터 — 모든 규칙 가족 공통 두 줄:
+#     LONG  = 시장폭(24h 상승 종목 비율) < 0.4 일 때만   (시장 대부분이 빠진 날의 반등)
+#     SHORT = 그 종목 24h ≥ +10% 일 때만               (급등 정점)
+#   근거 [[전략 전체 개선 2026-10-11]] (가상 30일, 31규칙): LONG 규칙 13종 전부가 「시장폭 낮음」에서 앞 15일·뒤 15일 모두 +
+#   (+2.6~+3.4%/건, 전체로는 뒤 15일 −0.4~−1.1) · SHORT 는 24h +10%↑ 에서만 + (off8 +1.29 · S4 +3.22, 나머지 SHORT 는 어느 장세도 앞뒤 + 없음).
+#   실주문 2가족: 3B 저점 LONG 전체 +1.47(뒤 −0.69) → 필터 +3.17(뒤 +1.97) · S4 SHORT −0.00(뒤 −1.00) → 필터 +3.22(뒤 +2.49).
+#   진입을 **줄이기만** 한다. 값을 모르면 막는다(자본이 나가는 판정 = fail-closed). 되돌리기: rf_regime_filter = off.
+# ═══════════════════════════════════════════════════════════════════════════
+def regime_filter_mode(db: Any) -> str:
+    m = setting(db, "rf_regime_filter").lower()
+    return m if m in ("off", "shadow", "on") else SETTINGS["rf_regime_filter"][0]
+
+
+def regime_check(db: Any, side: str, snapshot: Any, chg_24h: Any) -> dict[str, Any]:
+    """{"ok", "why", "breadth", "chg_24h", "limit"} — LONG 은 시장폭, SHORT 는 24h 등락."""
+    def _f(x):
+        if isinstance(x, bool):
+            return None
+        try:
+            v = float(x)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return v if math.isfinite(v) else None
+    if side == "LONG":
+        lim = setting_float(db, "rf_long_breadth_max")
+        if not 0.05 <= lim <= 0.95:                          # 교차 감사: 범위 밖 = 기본 (필터가 조용히 꺼지지 않게)
+            lim = float(SETTINGS["rf_long_breadth_max"][0])
+        b = _f(snapshot.get("market_breadth")) if isinstance(snapshot, dict) else None
+        if b is None or not 0.0 <= b <= 1.0:
+            return {"ok": False, "why": "시장폭 모름", "breadth": None, "limit": lim}
+        return {"ok": b < lim, "why": "" if b < lim else f"시장폭 {b:.2f} ≥ {lim:g}", "breadth": b, "limit": lim}
+    lim = setting_float(db, "rf_short_chg24_min")
+    if not 3.0 <= lim <= 200.0:                              # 교차 감사: 「10%」를 0.1 로 넣으면 필터가 사실상 꺼진다 → 기본
+        lim = float(SETTINGS["rf_short_chg24_min"][0])
+    c = _f(chg_24h)
+    if c is None:
+        return {"ok": False, "why": "24h 등락 모름", "chg_24h": None, "limit": lim}
+    return {"ok": c >= lim, "why": "" if c >= lim else f"24h {c:+.1f}% < +{lim:g}%", "chg_24h": c, "limit": lim}
 
 
 def chart_gate_of(db: Any, fam_key: str) -> str:

@@ -221,6 +221,7 @@ def run_rule_families_once() -> dict:
         gate_params = EC.params(db)
         halted = any(m == "on" for m in modes.values()) and _halted(db)
         cg_mode = CG.mode_from_db(db)                        # 🧑‍⚖️ Fix 433: 기록 전용 (off 면 안 봄)
+        rg_mode = RF.regime_filter_mode(db)                  # 🧭 Fix 439: 장세 필터
         cg_cells = CG.load(r) if cg_mode != "off" else None
         stat["halted"] = halted
         acc = None
@@ -273,6 +274,13 @@ def run_rule_families_once() -> dict:
                                            p=gate_params, family=fam.key))   # 🎯 Fix 377 가족 전용 조건
                     if EC.blocks(gate_mode, gate):
                         blocks.append("chart_gate")
+                # 🧭 Fix 439: 장세 필터 — LONG 시장폭 낮음 · SHORT 24h 급등 (on 이면 막는다, shadow 면 기록만)
+                rg = None
+                if rg_mode != "off":
+                    rg = RF.regime_check(db, fam.side, getattr(row, "snapshot", None), getattr(row, "chg_24h", None))
+                    rg["mode"] = rg_mode
+                    if rg_mode == "on" and not rg["ok"]:
+                        blocks.append("regime_filter")
                 # 🧑‍⚖️ Fix 433: 운영팀 「오늘 쓸 칸」 안인가 — **기록만** (blocks 에 넣지 않는다)
                 cg = None
                 if cg_mode != "off":
@@ -288,7 +296,7 @@ def run_rule_families_once() -> dict:
                                "paper_trade_id": row.id, "entry": entry, "price_now": px, "entry_mode": entry_mode,
                                "drift_pct": None if mv is None else round(mv, 3), "opened_at": row.opened_at.isoformat(),
                                "tags": list(row.tags or []), **det, "would_enter": would, "blocks": blocks, "guards_why": why,
-                               "daily": dwhy, "halted": halted, "chart_gate": gate, "council_gate": cg}
+                               "daily": dwhy, "halted": halted, "chart_gate": gate, "council_gate": cg, "regime_filter": rg}
                     r.setex(_k_shadow(fam.key, sym, row.id), SHADOW_TTL, json.dumps(payload, default=str))
                     if cg is not None and would:
                         CG.tally(stat, cg)

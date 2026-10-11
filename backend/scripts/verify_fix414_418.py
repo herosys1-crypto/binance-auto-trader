@@ -44,6 +44,7 @@ CODE_MARKERS = {
     "app/services/human_share.py": ("def split_for(", '"fills": len(es)'),                                    # 434·435
     "app/services/consensus_long.py": ("def qualifies(", 'RULE_KEY = "consensus_long"'),                     # 437 합의 LONG
     "app/services/pump_top_short.py": ("def judge(", 'KEY_30 = "pumptop_short_30"'),                       # 438 급등 정점 SHORT
+    "app/workers/rule_family_worker.py": ('blocks.append("regime_filter")', "RF.regime_filter_mode(db)"),    # 439 장세 필터
     "app/workers/paper_trading_worker.py": ("_CON.apply(fired, rule_side, breadth)",),                       # 437 가상 판정
     "app/services/rule_families.py": ('Family("rf_consensus_long"', '"rf_consensus_long_entry"'),       # 437 가족
 }

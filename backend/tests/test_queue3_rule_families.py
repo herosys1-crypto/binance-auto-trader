@@ -21,6 +21,7 @@ NOW = datetime(2026, 9, 13, 0, 0, tzinfo=timezone.utc)
 
 class _DB:
     def __init__(self, **kv):
+        kv.setdefault("rf_regime_filter", "off")   # 🧭 Fix 439: 옛 사이클 테스트는 장세 필터 없이 (필터는 test_fix439 에서)
         self.kv = kv
         self.rolled = 0
 
