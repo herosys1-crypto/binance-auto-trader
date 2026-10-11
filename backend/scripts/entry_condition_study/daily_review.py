@@ -68,7 +68,10 @@ def main() -> None:
         fams = [f.key for f in AF.known_families()]
         st = FB.all_states(db, fams, now=now)
         tripped = [k for k, v in st.items() if v["tripped"]]
-        line(f"  손실 차단기: {'발동 ' + ', '.join(tripped) if tripped else '발동 없음'} (기준 최근 {st[fams[0]]['days']}일 −{st[fams[0]]['limit']:g})")
+        _base_lim = FB._num(db, FB.S_USDT, FB.DEFAULT_USDT, 1, 100000)             # 🧮 Fix 444: 공통 기준 + 가족별로 다른 기준은 따로
+        _own = {k: v["limit"] for k, v in st.items() if v["limit"] != _base_lim}
+        line(f"  손실 차단기: {'발동 ' + ', '.join(tripped) if tripped else '발동 없음'} (기준 최근 {st[fams[0]]['days']}일 −{_base_lim:g}"
+             + ("" if not _own else " · 가족별 " + ", ".join(f"{k} −{v:g}" for k, v in sorted(_own.items()))) + ")")
 
         # ── ② 실거래 ────────────────────────────────────────────────
         line("\n② 실거래 (가족별 실현 손익 USDT · 사람 전략 제외)")

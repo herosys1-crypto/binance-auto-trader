@@ -48,6 +48,7 @@ CODE_MARKERS = {
     "app/services/ext_regime.py": ("def chg24_from_bars(", "def breadth_now("),                              # 440 외부 장세 필터
     "app/workers/ext_family_loop.py": ('regime=payload["regime"]',),                                          # 440
     "app/services/mass_rebound.py": ("def detect(", "def retro_bars("),                                         # 442 동시 반등
+    "app/services/family_loss_breaker.py": ("def limit_for(", "limit = limit_for(db, fam_key)"),                # 444 가족별 기준
     "app/workers/paper_trading_worker.py": ("_CON.apply(fired, rule_side, breadth)",),                       # 437 가상 판정
     "app/services/rule_families.py": ('Family("rf_consensus_long"', '"rf_consensus_long_entry"'),       # 437 가족
 }

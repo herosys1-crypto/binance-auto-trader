@@ -40,6 +40,25 @@ def key_for(fam_key: str) -> str:
     return f"{fam_key}_loss_breaker"
 
 
+def usdt_key_for(fam_key: str) -> str:
+    """🧮 Fix 444: 가족별 기준 USDT 설정 키."""
+    return f"{fam_key}_loss_breaker_usdt"
+
+
+def limit_for(db: Any, fam_key: str) -> float:
+    """🧮 Fix 444 (2026-10-12 사장님 「1번 진행해줘」 — 자본 키우는 계획서 4절): 가족별 손실 차단 기준.
+    `<가족>_loss_breaker_usdt` 가 1~100000 숫자면 그 값, 없음·0·이상한 값이면 공통 `family_loss_breaker_usdt`(기본 30).
+    한 가족만 자본을 키울 때(단계 2 = 30U → 차단 −90U) 그 가족만 한도를 올릴 수 있게."""
+    r = _row(db, usdt_key_for(fam_key))
+    try:
+        v = float(str(r.value).strip()) if r is not None and str(r.value).strip() else 0.0
+    except (TypeError, ValueError):
+        v = 0.0
+    if v == v and 1 <= v <= 100000:
+        return v
+    return _num(db, S_USDT, DEFAULT_USDT, 1, 100000)
+
+
 def _row(db: Any, key: str):
     try:
         from app.models.system_setting import SystemSetting
@@ -196,7 +215,7 @@ def state(db: Any, fam_key: str, *, now: datetime | None = None) -> dict[str, An
     """화면·판정 공용. {"tripped", "pnl", "n", "since", "limit", "days"}."""
     now = now or datetime.now(timezone.utc)
     days = int(_num(db, S_DAYS, DEFAULT_DAYS, 1, 30))
-    limit = _num(db, S_USDT, DEFAULT_USDT, 1, 100000)
+    limit = limit_for(db, fam_key)                               # 🧮 Fix 444 가족별 (없으면 공통)
     row = _row(db, key_for(fam_key))
     tripped = row is not None and str(row.value).strip() == "1"
     since = now - timedelta(days=days)
@@ -215,7 +234,6 @@ def all_states(db: Any, fam_keys: list[str], *, now: datetime | None = None) -> 
     from app.services import auto_family_registry as AF
     now = now or datetime.now(timezone.utc)
     days = int(_num(db, S_DAYS, DEFAULT_DAYS, 1, 30))
-    limit = _num(db, S_USDT, DEFAULT_USDT, 1, 100000)
     base = now - timedelta(days=days)
     out: dict[str, dict[str, Any]] = {}
     for k in fam_keys:
@@ -223,7 +241,7 @@ def all_states(db: Any, fam_keys: list[str], *, now: datetime | None = None) -> 
         tripped = row is not None and str(row.value).strip() == "1"
         reset_at = _aware(getattr(row, "updated_at", None)) if row is not None and not tripped else None
         since = reset_at if reset_at is not None and reset_at > base else base
-        out[k] = {"tripped": tripped, "pnl": 0.0, "n": 0, "since": since, "limit": limit, "days": days,
+        out[k] = {"tripped": tripped, "pnl": 0.0, "n": 0, "since": since, "limit": limit_for(db, k), "days": days,   # 🧮 Fix 444
                   "pnl_raw": 0.0, "human_pnl": 0.0, "human_n": 0}
     rows = _closed_rows(db, base)
     picked = []

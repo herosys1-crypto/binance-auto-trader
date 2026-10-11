@@ -424,7 +424,10 @@ def _with_loss_breaker(p: Panel) -> Panel:
     c = Ctl(f"{p.fam}_loss_breaker", "손실 차단", "switch", "0",
             "막는 중 = 최근 손실로 차단기가 이 가족의 새 전략을 막고 있다. 「허용」으로 저장하면 풀리고, 그 시각 뒤 손익만 다시 센다.",
             source="Fix 384 가족별 손실 차단기 (자동으로 막는 중이 된다)", ref="services/family_loss_breaker.py (key_for)")
-    return replace(p, ctls=tuple(p.ctls) + (c,))
+    u = Ctl(f"{p.fam}_loss_breaker_usdt", "손실 차단 기준 USDT (0 = 공통값)", "num", "0",
+            "이 가족만의 차단 기준. 0(또는 1 미만)이면 공통 「손실 차단기 — 기준 USDT」(기본 30)를 쓴다. 자본을 키우면 같은 비율로 올린다(계획서 4절: 30U → 90 · 100U → 300).",
+            lo=0, hi=100000, source="Fix 444 (Claude가 정함 — 기본 0 = 지금과 같음)", ref="services/family_loss_breaker.py (limit_for)")
+    return replace(p, ctls=tuple(p.ctls) + (c, u))
 
 
 def panels() -> list[Panel]:

@@ -345,3 +345,38 @@ def test_fix435_split_failure_uses_savepoint_not_rollback(monkeypatch):
     monkeypatch.setattr(HS, "split_for", lambda db_, items: (_ for _ in ()).throw(RuntimeError("db")))
     st = FB.state(db, "bottom_long", now=NOW)
     assert calls == ["nested"] and st["pnl"] == pytest.approx(-28.74 * 10 / 110, abs=0.01)
+
+
+# ── 🧮 Fix 444: 가족별 손실 차단 기준 USDT (0·없음 = 공통값) ─────────────────
+def test_fix444_limit_for_family_override():
+    assert FB.limit_for(_DB(), "bottom_long") == 30.0                                         # 기본 공통
+    assert FB.limit_for(_DB({"family_loss_breaker_usdt": "50"}), "bottom_long") == 50.0       # 공통 바꿈
+    assert FB.limit_for(_DB({"bottom_long_loss_breaker_usdt": "90"}), "bottom_long") == 90.0  # 가족별
+    assert FB.limit_for(_DB({"bottom_long_loss_breaker_usdt": "90"}), "other") == 30.0        # 다른 가족은 공통
+    for bad in ("0", "", "x", "-5", "nan", "999999"):
+        assert FB.limit_for(_DB({"bottom_long_loss_breaker_usdt": bad}), "bottom_long") == 30.0, bad
+
+
+def test_fix444_trips_by_family_limit(trips):
+    db = _DB({"bottom_long_loss_breaker_usdt": "90"}, strategies=[strat(-20, 1), strat(-15, 3)])   # −35: 공통 30 이면 걸리지만 가족 90 이면 통과
+    run(db)
+    assert trips == []
+    db2 = _DB({"bottom_long_loss_breaker_usdt": "20"}, strategies=[strat(-25, 1)])
+    with pytest.raises(ValueError):
+        run(db2)
+    assert trips == [("bottom_long", -25.0)]
+
+
+def test_fix444_state_and_all_states_report_family_limit():
+    db = _DB({"bottom_long_loss_breaker_usdt": "300"}, strategies=[strat(-5, 1)])
+    assert FB.state(db, "bottom_long", now=NOW)["limit"] == 300.0
+    out = FB.all_states(db, ["bottom_long", "top_short"], now=NOW)
+    assert out["bottom_long"]["limit"] == 300.0 and out["top_short"]["limit"] == 30.0
+
+
+def test_fix444_control_room_has_per_family_limit():
+    from app.services import auto_control as AC
+    wl = AC.whitelist()
+    assert "rf_bottom_long_loss_breaker_usdt" in wl and "rf_zone_s4_loss_breaker_usdt" in wl
+    c = wl["rf_bottom_long_loss_breaker_usdt"]
+    assert c.default == "0" and c.clean("0") == "0.0" and c.clean("90") == "90.0"
