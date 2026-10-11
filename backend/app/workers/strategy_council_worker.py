@@ -68,6 +68,59 @@ def _fmt(x) -> str:
     return "—" if x is None or (isinstance(x, float) and not math.isfinite(x)) else f"{x:+.2f}"
 
 
+REGIME_SQL = text("""
+    SELECT rule, side, chg_24h, snapshot->>'market_breadth' AS mb
+    FROM paper_trades
+    WHERE source = 'live' AND opened_at > :since AND rule = ANY(:rules)
+""")
+
+
+def regime_24h(db, now: datetime) -> dict:
+    """🧭 Fix 443 (2026-10-11 사장님 「1번 진행해줘」): 최근 24시간 장세 필터 요약 — 읽기 전용.
+    규칙 가족 가상 신호(가족 규칙 행)를 Fix 439 regime_check 로 다시 갈라 LONG·SHORT 별 통과/막힘 + 실주문 진입 수 + 지금 시장폭."""
+    from app.services import ext_regime as RG
+    from app.services import rule_families as RF
+    out: dict = {"breadth": None, "LONG": [0, 0, 0], "SHORT": [0, 0, 0], "live_entries": 0}   # [통과, 막힘, 모름]
+    try:
+        from app.models.system_setting import SystemSetting
+        row = db.get(SystemSetting, RG.BREADTH_KEY)
+        out["breadth"] = RG.breadth_now(None if row is None else row.value, now=now)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[%s] 시장폭 읽기 실패: %s", FIX, e)
+    rules = [f.rule for f in RF.FAMILIES]
+    for r in db.execute(REGIME_SQL, {"since": now - timedelta(hours=24), "rules": rules}):
+        if r.side not in ("LONG", "SHORT"):
+            continue
+        res = RF.regime_check(db, r.side, {"market_breadth": r.mb}, r.chg_24h)
+        unknown = "모름" in str(res.get("why") or "")
+        out[r.side][2 if unknown else (0 if res["ok"] else 1)] += 1
+    try:
+        from app.models.strategy_instance import StrategyInstance as SI
+        from app.models.strategy_template import StrategyTemplate as ST
+        from sqlalchemy import func, select
+        on_types = [f.stype for f in RF.FAMILIES if RF.mode_of(db, f.key) == "on"]
+        if on_types:
+            out["live_entries"] = int(db.execute(
+                select(func.count()).select_from(SI).join(ST, ST.id == SI.strategy_template_id)
+                .where(ST.strategy_type.in_(on_types), SI.created_at > now - timedelta(hours=24), SI.current_stage >= 1)
+            ).scalar() or 0)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[%s] 실주문 진입 수 실패: %s", FIX, e)
+    out["mode"] = RF.regime_filter_mode(db)
+    return out
+
+
+def regime_line(g: dict | None) -> list[str]:
+    if not g:
+        return []
+    b = g.get("breadth")
+    lab = "모름" if b is None else ("낮음 → LONG 쓰는 날" if b < 0.4 else ("중간" if b <= 0.6 else "높음"))
+    L, S = g["LONG"], g["SHORT"]
+    return ["", f"🧭 장세 필터({g.get('mode')}) 24시간 — 지금 시장폭 {'—' if b is None else f'{b:.2f}'} ({lab})",
+            f"  LONG 신호 통과 {L[0]} · 막힘 {L[1]}{f' · 모름 {L[2]}' if L[2] else ''} | SHORT 신호 통과 {S[0]} · 막힘 {S[1]}{f' · 모름 {S[2]}' if S[2] else ''}"
+            f" | 실주문 진입 {g.get('live_entries', 0)}건"]
+
+
 def summary_text(rep: dict) -> tuple[str, str]:
     D = rep["D_walk"]
     t = D["total"]
@@ -89,6 +142,7 @@ def summary_text(rep: dict) -> tuple[str, str]:
     new = [f for f in rep["F_status"] if f["status"] == "표본 부족"]
     if new:
         lines += ["", "🆕 표본 부족(관찰 중): " + ", ".join(f"{f['rule']}({f['n']})" for f in new[:8])]
+    lines += regime_line(rep.get("regime_24h"))                       # 🧭 Fix 443
     lines += ["", "※ 분석 전용 — 주문·설정은 바꾸지 않습니다. 켜기·끄기는 사장님(관제실)."]
     return title, "\n".join(lines)
 
@@ -116,6 +170,11 @@ def run_strategy_council_once(*, now: datetime | None = None) -> dict:
         rep["at"] = now.isoformat()
         rep["window_days"] = days
         rep["skipped_rows"] = bad
+        try:
+            rep["regime_24h"] = regime_24h(db, now)                      # 🧭 Fix 443
+        except Exception as e:  # noqa: BLE001 — 요약 실패가 성적표를 막지 않게
+            logger.warning("[%s] 장세 필터 요약 실패: %s", FIX, e)
+            db.rollback()
         rep["secs"] = round(time.monotonic() - t0, 1)
         blob = json.dumps(rep, ensure_ascii=False, allow_nan=False)
         try:
