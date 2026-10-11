@@ -267,6 +267,8 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
         now_ms = _now_ms()
         opened = managed = closed = processed = 0
         upgraded = upgrade_skipped = 0
+        _mass_n: dict[str, int | None] = {}        # 📣 Fix 442: 종목별 이 봉 LONG 규칙 수 (시장 전체 동시 반등 감지)
+        _mass_ts = 0
         fails = 0
         # 📐 Fix 372: 규칙이 발동한 심볼만 일봉·5분·1분 차트 상태를 조회해 진입 기록에 붙인다 (사이클당 심볼 1회)
         from app.services import chart_state as CS
@@ -397,6 +399,11 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                     _con_n = _CON.apply(fired, rule_side, breadth)
                 except Exception as e:  # noqa: BLE001 — 합의 판정 실패가 다른 규칙 진입을 막지 않게
                     logger.debug("[Fix437] %s 합의 판정 실패: %s", sym, e)
+            _mass_n[sym] = _con_n                                   # 📣 Fix 442
+            try:
+                _mass_ts = max(_mass_ts, int(k15[j][0]))
+            except Exception:  # noqa: BLE001
+                pass
             _pts_n = None
             if fired:
                 try:                                                # 🔺 Fix 438: SHORT 규칙 + 24h 급등(+30% / +10% · 시장폭 중간) → 급등 정점 SHORT
@@ -455,6 +462,17 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                 db.commit()
             time.sleep(SLEEP)
         db.commit()
+
+        try:                                                         # 📣 Fix 442: 시장 전체 동시 반등 (알림·기록 전용)
+            from app.services import mass_rebound as MR
+            _mp = MR.params_from(lambda k: _setting(db, k))
+            _mh = MR.detect(_mass_n, _mp)
+            if _mh and _mass_ts:
+                from app.core.redis_client import get_redis_client
+                MR.record_and_alert(db, get_redis_client(), bar_ts=_mass_ts, symbols=_mh, breadth=breadth, p=_mp)
+                logger.warning("[Fix442] 📣 시장 전체 동시 반등 — %d종목 (봉 %s)", len(_mh), _mass_ts)
+        except Exception as e:  # noqa: BLE001 — 감지 실패가 가상매매를 막지 않게
+            logger.debug("[Fix442] 감지 실패: %s", e)
 
         backfill_res: dict[str, Any] | None = None
         if _bool_setting(db, PT.S_BACKFILL, True):     # Fix 361b: done 은 정보용 — 늦게 라벨된 행을 위해 매 사이클 확인

@@ -39,6 +39,7 @@ CUTOFFS = {
     "ext_regime": "2026-10-11T10:08:00+00:00",        # Fix 440 장세 필터 (외부 전략)
 }
 CRIT = {"min_n": 30, "min_days": 7, "win_days": 0.5, "live_min_n": 5, "gate_min_n": 30}
+CUTOFFS["mass_rebound"] = "2026-10-10T22:45:00+00:00"        # 📣 Fix 442 — 판정 재료는 가상 행이라 합의 LONG 배포 시각부터 같게
 EXT_PREFIX = {"emapb_": "emapb", "fujimoto_": "fujimoto", "mach7_": "mach7", "bbema_": "bbema", "bbwave_": "bbwave", "trima_": "trima"}
 NEW_RULES = {"consensus_long": "consensus", "pumptop_short_30": "pumptop", "pumptop_short_mid": "pumptop"}
 
@@ -142,7 +143,7 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
     db = SessionLocal()
     try:
         q = text("""select rule, side, symbol, entry_bar_ts ts, opened_at, opened_at::date d, (engines->'live'->>'roi')::float roi,
-                    chg_24h, snapshot->>'market_breadth' mb
+                    chg_24h, snapshot->>'market_breadth' mb, snapshot->'rules_fired' rf
                     from paper_trades where source='live' and status='CLOSED' and opened_at >= :since and opened_at <= :now
                     and engines->'live'->>'roi' is not null""")
         rows = [dict(r._mapping) for r in db.execute(q, {"since": earliest, "now": now})]
@@ -204,6 +205,20 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
                 continue
             n, s, h, op = agg[fam.key]
             print(f"| {fam.label} | {mode} | {n} | {s:+.2f} | {h:+.2f} | {op} | {live_verdict(s, n)} |")
+
+        print("\n## F. 📣 시장 전체 동시 반등 (Fix 442) — 같은 봉 LONG 규칙 4개+ 종목 16개+ 순간의 LONG 진입 (봉·종목당 1건)\n" + hdr)
+        from app.services import mass_rebound as MR
+        side_of = {}
+        for r_ in rows:
+            if not r_["rule"].startswith("baseline_"):
+                side_of.setdefault(r_["rule"], r_["side"])
+        mr_rows = [r_ for r_ in rows if r_["opened_at"] >= _dt(CUTOFFS["mass_rebound"])]
+        bars = MR.retro_bars(mr_rows, side_of=side_of)
+        one: dict = {}
+        for r_ in mr_rows:
+            if r_["ts"] in bars and r_["side"] == "LONG" and not r_["rule"].startswith("baseline_") and r_["rule"] not in NEW_RULES:
+                one.setdefault((r_["ts"], r_["symbol"]), r_)
+        print(line(f"동시 반등 봉 {len(bars)}개", evaluate(list(one.values()), bm)))
 
         print("\n## E. 운영팀 게이트 (Fix 433) — 칸 안 / 밖 (가상 roi, 그림자 기록)\n")
         r = get_redis_client()
