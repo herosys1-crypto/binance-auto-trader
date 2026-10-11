@@ -27,6 +27,7 @@ from app.services import bb_ema as BE                 # 📊 Fix 429
 from app.services import bb_wave as BW                # 🌊 Fix 431
 from app.services import triple_ma as TM              # 📐 Fix 432
 from app.workers import ext_family_loop as FL         # 🧩 Fix 431·432 공용 루프 (새 가족은 여기 FAMILIES 에 추가)
+from app.services import ext_regime as RG             # 🧭 Fix 440 외부 전략 장세 필터
 
 _EXIT_GAP = "출처 청산(중심선·EMA9 이탈 종가 청산)이 실주문 경로에 없음 + 사전 백테스트 본전"
 FAMILIES: tuple[FL.Family, ...] = (
@@ -197,8 +198,13 @@ def _size(db, bc_equity: float | None, *, risk_key: str, wanted: float, sp: floa
 
 
 def _enter(db, r, stat: dict, *, fam: str, sym: str, side: str, margin: float, sp: float, lev: int,
-           prefix: str, stype: str, cap_key: str, stop_price: float, cooldown_h: float, stage: int | None) -> bool:
+           prefix: str, stype: str, cap_key: str, stop_price: float, cooldown_h: float, stage: int | None,
+           regime: dict | None = None) -> bool:
     from app.services.surge_ladder_entry import create_surge_position
+    if regime is not None and regime.get("blocks"):        # 🧭 Fix 440: 장세가 아니면 실주문 신규 진입 안 함
+        stat["miss"]["장세 필터"] = stat["miss"].get("장세 필터", 0) + 1
+        logger.info("[%s] ⏸ %s %s %s 진입 안 함 — 장세 필터: %s", FIX, fam, sym, side, regime.get("why"))
+        return False
     if margin < MIN_MARGIN_USDT:
         stat["miss"]["증거금<5"] = stat["miss"].get("증거금<5", 0) + 1
         return False
@@ -319,6 +325,25 @@ def run_external_strategies_once() -> dict:
         act_bb = _active_by_prefix(db, BE.PREFIX) if bm != "off" else {}
         equity = _equity(bc) if "on" in (fm, mm, em, bm, *fam_modes.values()) else None
         incremental = BG.parse_flag(ES.setting(db, "ext_kline_incremental"), default=True)
+        _rg_mode = RG.mode_of(lambda k: ES.setting(db, k))              # 🧭 Fix 440 외부 전략 장세 필터
+        _rg_breadth = None
+        if _rg_mode != "off":
+            try:
+                from app.models.system_setting import SystemSetting
+                _bw = db.get(SystemSetting, RG.BREADTH_KEY)
+                _rg_breadth = RG.breadth_now(None if _bw is None else _bw.value)
+            except Exception as e:  # noqa: BLE001 — 모름 = 필터가 막는다 (fail-closed)
+                logger.debug("[%s] 시장폭 읽기 실패: %s", FIX, e)
+        stat["regime"] = {"mode": _rg_mode, "breadth": _rg_breadth}
+
+        def _regime(side: str, bars: list, iv: str) -> dict | None:
+            if _rg_mode == "off":
+                return None
+            try:
+                return RG.judge(db, side, _rg_breadth, RG.chg24_from_bars(bars, INTERVAL_MS.get(iv)), _rg_mode)
+            except Exception as e:  # noqa: BLE001
+                return {"ok": False, "why": f"판정 실패: {str(e)[:60]}", "mode": _rg_mode, "blocks": _rg_mode == "on"}
+        stat["_regime_fn"] = _regime
         last_ttl = max(LAST_TTL, 2 * INTERVAL_MS.get(interval, 0) // 1000)   # 4h·1d 간격에서도 같은 봉 재판정 없게
         stat["gate_skip"] = stat["kl_weight"] = 0
 
@@ -378,7 +403,7 @@ def run_external_strategies_once() -> dict:
                         sp = ES.clamp_stop_pct(ES.stop_pct(price, stop_price, side), sp_lo, sp_hi)
                         wanted = alloc * ratios[0] / 100.0
                         margin, capped = _size(db, equity, risk_key="fujimoto_risk_pct", wanted=wanted, sp=sp, lev=lev)
-                        payload = {"at": now.isoformat(), "family": "fujimoto", "symbol": sym, "side": side, "stage": 1,
+                        payload = {"regime": _regime(side, bars, interval), "at": now.isoformat(), "family": "fujimoto", "symbol": sym, "side": side, "stage": 1,
                                    "price": price, "stop": stop_price, "stop_pct": sp, "margin": margin, "capped": capped,
                                    "rsi": ind.rsi[j], "rsi_prev": ind.rsi[j - 1]}
                         if fm == "shadow":
@@ -387,7 +412,7 @@ def run_external_strategies_once() -> dict:
                         else:
                             _enter(db, r, stat, fam="fujimoto", sym=sym, side=side, margin=margin, sp=sp, lev=lev,
                                    prefix=ES.FUJIMOTO_PREFIX, stype=ES.FUJIMOTO_TYPE, cap_key="fujimoto_max_concurrent",
-                                   stop_price=stop_price, cooldown_h=fj_cool, stage=1)
+                                   stop_price=stop_price, cooldown_h=fj_cool, stage=1, regime=payload["regime"])
 
                 # ── 마하세븐 ──
                 if mm != "off" and sym not in act_m7:
@@ -401,7 +426,7 @@ def run_external_strategies_once() -> dict:
                         stop_price = float(d["stop"])
                         sp = ES.clamp_stop_pct(ES.stop_pct(price, stop_price, side), sp_lo, sp_hi)
                         margin, capped = _size(db, equity, risk_key="mach7_risk_pct", wanted=m7_cap, sp=sp, lev=lev)
-                        payload = {"at": now.isoformat(), "family": "mach7", "symbol": sym, "side": side, "price": price,
+                        payload = {"regime": _regime(side, bars, interval), "at": now.isoformat(), "family": "mach7", "symbol": sym, "side": side, "price": price,
                                    "stop": stop_price, "stop_pct": sp, "margin": margin, "capped": capped,
                                    "slope_pct": d.get("slope_pct")}
                         if mm == "shadow":
@@ -410,7 +435,7 @@ def run_external_strategies_once() -> dict:
                         else:
                             _enter(db, r, stat, fam="mach7", sym=sym, side=side, margin=margin, sp=sp, lev=lev,
                                    prefix=ES.MACH7_PREFIX, stype=ES.MACH7_TYPE, cap_key="mach7_max_concurrent",
-                                   stop_price=stop_price, cooldown_h=m7_cool, stage=None)
+                                   stop_price=stop_price, cooldown_h=m7_cool, stage=None, regime=payload["regime"])
                         break
 
             except Exception as e:  # noqa: BLE001
@@ -462,7 +487,7 @@ def run_external_strategies_once() -> dict:
                         stop_price = float(d["stop"])
                         sp = ES.clamp_stop_pct(ES.stop_pct(price, stop_price, side), sp_lo, sp_hi)
                         margin, capped = _size(db, equity, risk_key="emapb_risk_pct", wanted=ep_cap, sp=sp, lev=lev)
-                        payload = {"at": now.isoformat(), "family": "emapb", "interval": ep_iv, "symbol": sym, "side": side,
+                        payload = {"regime": _regime(side, bars, ep_iv), "at": now.isoformat(), "family": "emapb", "interval": ep_iv, "symbol": sym, "side": side,
                                    "price": price, "stop": stop_price, "stop_pct": sp, "margin": margin, "capped": capped,
                                    "vol_ratio": d.get("vol_ratio"), "fib": d.get("fib"), "confluence": d.get("confluence"),
                                    "macro": d.get("macro"), "ema200": d.get("ema200")}
@@ -472,7 +497,7 @@ def run_external_strategies_once() -> dict:
                         else:
                             _enter(db, r, stat, fam="emapb", sym=sym, side=side, margin=margin, sp=sp, lev=lev,
                                    prefix=EP.PREFIX, stype=EP.STYPE, cap_key="emapb_max_concurrent",
-                                   stop_price=stop_price, cooldown_h=ep_cool, stage=None)
+                                   stop_price=stop_price, cooldown_h=ep_cool, stage=None, regime=payload["regime"])
                         break
                     r.setex(lk, ep_ttl, str(ts))         # 교차 감사: 처리를 마친 뒤 기록 — 일시 오류면 다음 주기(1분)에 다시 판정
                 except Exception as e:  # noqa: BLE001
@@ -527,7 +552,7 @@ def run_external_strategies_once() -> dict:
                         stop_price = float(d["stop"])
                         sp = ES.clamp_stop_pct(ES.stop_pct(price, stop_price, side), sp_lo, sp_hi)
                         margin, capped = _size(db, equity, risk_key="bbema_risk_pct", wanted=bb_cap, sp=sp, lev=lev)
-                        payload = {"at": now.isoformat(), "family": "bbema", "kind": d["kind"], "interval": bb_iv,
+                        payload = {"regime": _regime(side, bars, bb_iv), "at": now.isoformat(), "family": "bbema", "kind": d["kind"], "interval": bb_iv,
                                    "symbol": sym, "side": side, "price": price, "stop": stop_price, "stop_pct": sp,
                                    "target": d.get("target"), "margin": margin, "capped": capped, "bbw": d.get("bbw")}
                         if bm == "shadow":
@@ -536,7 +561,7 @@ def run_external_strategies_once() -> dict:
                         else:
                             _enter(db, r, stat, fam="bbema", sym=sym, side=side, margin=margin, sp=sp, lev=lev,
                                    prefix=BE.PREFIX, stype=BE.STYPE, cap_key="bbema_max_concurrent",
-                                   stop_price=stop_price, cooldown_h=bb_cool, stage=None)
+                                   stop_price=stop_price, cooldown_h=bb_cool, stage=None, regime=payload["regime"])
                         break
                     r.setex(lk, bb_ttl, str(ts))         # 처리를 마친 뒤 기록 (일시 오류면 다음 주기 재판정)
                 except Exception as e:  # noqa: BLE001
@@ -551,6 +576,7 @@ def run_external_strategies_once() -> dict:
             FL.run(sys.modules[__name__], fam, fam_modes[fam.key], db=db, r=r, bc=bc, stat=stat, universe=universe,
                    cycle_now=cycle_now, settle_ms=settle_ms, incremental=incremental, equity=equity, lev=lev,
                    sp_lo=sp_lo, sp_hi=sp_hi, now=now)
+        stat.pop("_regime_fn", None)
         try:
             r.setex(CYCLE_KEY, 3600, json.dumps({"at": now.isoformat(), **stat}, default=str))
         except Exception:  # noqa: BLE001

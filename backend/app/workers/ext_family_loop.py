@@ -84,7 +84,9 @@ def run(ext: Any, fam: Family, m: str, *, db, r, bc, stat: dict, universe: list[
                 stop_price = float(d["stop"])
                 sp = ES.clamp_stop_pct(ES.stop_pct(price, stop_price, side), sp_lo, sp_hi)
                 margin, capped = ext._size(db, equity, risk_key=f"{fam.key}_risk_pct", wanted=cap, sp=sp, lev=lev)
-                payload = {"at": now.isoformat(), "family": fam.key, "interval": iv, "symbol": sym, "side": side,
+                _rgf = stat.get("_regime_fn")                       # 🧭 Fix 440 외부 전략 장세 필터
+                payload = {"regime": _rgf(side, bars, iv) if callable(_rgf) else None,
+                           "at": now.isoformat(), "family": fam.key, "interval": iv, "symbol": sym, "side": side,
                            "price": price, "stop": stop_price, "stop_pct": sp, "margin": margin, "capped": capped,
                            "detail": {k: v for k, v in d.items() if isinstance(v, (int, float, bool, str)) and k != "stop"}}
                 if m == "shadow":
@@ -93,7 +95,7 @@ def run(ext: Any, fam: Family, m: str, *, db, r, bc, stat: dict, universe: list[
                 else:
                     ext._enter(db, r, stat, fam=fam.key, sym=sym, side=side, margin=margin, sp=sp, lev=lev,
                                prefix=fam.mod.PREFIX, stype=fam.mod.STYPE, cap_key=f"{fam.key}_max_concurrent",
-                               stop_price=stop_price, cooldown_h=cool, stage=None)
+                               stop_price=stop_price, cooldown_h=cool, stage=None, regime=payload["regime"])
                 break
             r.setex(lk, ttl, str(ts))
         except Exception as e:  # noqa: BLE001
