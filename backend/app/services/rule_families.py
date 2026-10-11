@@ -76,6 +76,10 @@ FAMILIES: tuple[Family, ...] = (
     # 🤝 Fix 437 (2026-10-11 사장님 「진행해줘」): 합의 LONG — 같은 봉 LONG 규칙 4개+ · 시장폭 < 0.4 (가상 30일 edge +2.99, 앞뒤 모두 +)
     #   판정은 가상매매 워커의 consensus_long.apply. 기본 shadow — 2주 전진 확인 뒤 실주문·자본은 사장님.
     Family("rf_consensus_long", "consensus_long", "LONG", "RF_CONSENSUS", "rf_consensus_long", "🤝 합의 LONG (4규칙+·시장폭 낮음)", "합의L"),
+    # 🔺 Fix 438 (2026-10-11 사장님 「진행해줘」): 급등 정점 SHORT — SHORT 규칙이 켜진 24h 급등 종목 (가상 30일 무작위 대비 +2.5~+4.1, 앞뒤 +)
+    #   🚨 헌법 64 「급등 반대매매 금지」: 정점 반전 규칙이 켜진 자리만 · 기본 shadow · 실주문은 사장님이 켤 때만.
+    Family("rf_pumptop30", "pumptop_short_30", "SHORT", "RF_PUMPTOP30", "rf_pumptop_short_30", "🔺 급등 정점 SHORT (24h +30%↑)", "급등30S"),
+    Family("rf_pumptop_mid", "pumptop_short_mid", "SHORT", "RF_PUMPTOPMID", "rf_pumptop_short_mid", "🔺 급등 정점 SHORT (24h +10%↑·시장폭 중간)", "급등중간S"),
 )
 FAMILY_BY_KEY = {f.key: f for f in FAMILIES}
 RF_STRATEGY_TYPES = frozenset(f.stype for f in FAMILIES)
@@ -145,6 +149,12 @@ SETTINGS["rf_consensus_long_entry"] = ("single", "split | single(1회 진입) �
                                        "Fix 437 근거: 가상 30일 측정은 단일 진입·TP1 15·손절 −25")
 SETTINGS["rf_consensus_long_chart_gate"] = ("shadow", "off | shadow(판정만 기록) | on",
                                             "Fix 437 근거: 측정에 차트 게이트를 걸지 않았다 (Claude가 정함)")
+# 🔺 Fix 438: 급등 정점 SHORT 도 측정한 청산 그대로 (단일 · TP 15/20/25/30 · 손절 −25 · 차트 게이트 없이 쟀다)
+for _k in ("rf_pumptop30", "rf_pumptop_mid"):
+    SETTINGS[f"{_k}_entry"] = ("single", "split | single(1회 진입) — 급등 정점 SHORT 는 단일 (검증한 청산과 같게)",
+                               "Fix 438 근거: 가상 30일 측정은 단일 진입·TP1 15·손절 −25")
+    SETTINGS[f"{_k}_chart_gate"] = ("shadow", "off | shadow(판정만 기록) | on",
+                                    "Fix 438 근거: 측정에 차트 게이트를 걸지 않았다 (Claude가 정함)")
 SETTINGS["entry_chart_gate_params"] = ("", "차트 게이트 숫자 JSON (비우면 기본: SHORT 16시간 고점 −3% 이내·일봉 UP 아님 / "
                                            "LONG 24h −5% 이하 또는 5분 고점 대비 −4% 이하)", "Claude가 정함 — 분석 값 그대로")
 

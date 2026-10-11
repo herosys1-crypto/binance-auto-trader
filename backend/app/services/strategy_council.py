@@ -24,6 +24,7 @@ from typing import Any, Callable, Iterable
 
 FIX = "Fix430"
 BASE_PREFIX = "baseline_"
+META_RULES = frozenset({"consensus_long", "pumptop_short_30", "pumptop_short_mid"})   # 다른 규칙 결과로 켜지는 규칙 (Fix 437·438)
 DEFAULTS = {"lo": 0.4, "hi": 0.6, "train_days": 11, "gap": 3, "min_n": 30}
 KEYS = {"lo": "council_breadth_lo", "hi": "council_breadth_hi", "train_days": "council_train_days",
         "gap": "council_gap_days", "min_n": "council_min_n"}
@@ -140,7 +141,7 @@ def build_report(rows: Iterable[Row], *, lo: Any = 0.4, hi: Any = 0.6, train_day
         # 겹침 k: 같은 봉에 함께 켜진 **같은 방향** 비-baseline 규칙(자기 포함, 중복 제거). side_of 는 1단계에서 이미 다 채워졌다.
         names = {r.rule}
         for x in (r.rf or ()):
-            if isinstance(x, str) and not x.startswith(BASE_PREFIX) and x != "consensus_long" and side_of.get(x) == r.side:   # Fix 437: 합의 자신은 세지 않는다
+            if isinstance(x, str) and not x.startswith(BASE_PREFIX) and x not in META_RULES and side_of.get(x) == r.side:   # Fix 437·438: 규칙의 규칙은 세지 않는다
                 names.add(x)
         bm = bm_d.get((r.side, r.d))
         ov[(r.side, min(len(names), 4))].add(1, r.roi, *((1, r.roi - bm) if bm is not None else (0, 0.0)))

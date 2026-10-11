@@ -205,6 +205,8 @@ def _emapb_params(db) -> None:
         TM.set_paper_params(lambda k: ES.setting(db, k))
         from app.services import consensus_long as CON           # 🤝 Fix 437
         CON.set_paper_params(lambda k: _setting(db, k))
+        from app.services import pump_top_short as PTS           # 🔺 Fix 438
+        PTS.set_paper_params(lambda k: _setting(db, k))
     except Exception as e:  # noqa: BLE001 — 실패하면 기본값/직전 값으로 판정
         logger.debug("[Fix423] EMA 눌림 가상 인자 갱신 실패: %s", e)
 
@@ -395,6 +397,13 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                     _con_n = _CON.apply(fired, rule_side, breadth)
                 except Exception as e:  # noqa: BLE001 — 합의 판정 실패가 다른 규칙 진입을 막지 않게
                     logger.debug("[Fix437] %s 합의 판정 실패: %s", sym, e)
+            _pts_n = None
+            if fired:
+                try:                                                # 🔺 Fix 438: SHORT 규칙 + 24h 급등(+30% / +10% · 시장폭 중간) → 급등 정점 SHORT
+                    from app.services import pump_top_short as _PTS
+                    _pts_n = _PTS.apply(fired, rule_side, chg.get(sym), breadth)
+                except Exception as e:  # noqa: BLE001 — 실패가 다른 규칙 진입을 막지 않게
+                    logger.debug("[Fix438] %s 급등 정점 판정 실패: %s", sym, e)
             try:                                                    # Fix 425: 평가 끝 → 플래그 기본값으로 (회차 밖으로 새지 않게)
                 _EPF.set_paper_symbol_ok(True)
                 _EPF.set_paper_daily_done(False)
@@ -419,6 +428,8 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                     t["snapshot"]["market_breadth"] = breadth
                     if key == "consensus_long":                    # 🤝 Fix 437: 판정 근거 기록
                         t["snapshot"]["consensus"] = {"n_long": _con_n, "breadth": breadth}
+                    elif key in ("pumptop_short_30", "pumptop_short_mid"):   # 🔺 Fix 438: 판정 근거 기록
+                        t["snapshot"]["pumptop"] = {"n_short": _pts_n, "chg_24h": chg.get(sym), "breadth": breadth}
                     _cs = _chart_state_for(bc, sym, side, series, now_ms, _cs_cache, on=_cs_on, include_1m=_cs_1m, th=_cs_th)
                     if _cs is not None:
                         t["snapshot"]["chart_state"] = _cs

@@ -115,7 +115,7 @@ def test_block_carries_window_per_interval():
 def test_all_twelve_families_have_gate_default_on():
     for f in RF.FAMILIES:
         # 🗺 Fix 387: S4 만 기본 shadow — 이 게이트가 S4 신호의 84% 를 막는데 성적 차이는 작았다(+5.02 vs +4.20)
-        want = "shadow" if f.key in ("rf_zone_s4", "rf_consensus_long") else "on"   # 🤝 Fix 437: 합의 LONG 측정에 게이트 없음
+        want = "shadow" if f.key in ("rf_zone_s4", "rf_consensus_long", "rf_pumptop30", "rf_pumptop_mid") else "on"   # 🤝 Fix 437: 합의 LONG 측정에 게이트 없음
         assert RF.SETTINGS[f"{f.key}_chart_gate"][0] == want
         assert RF.chart_gate_of(_DB(), f.key) == want
         assert RF.chart_gate_of(_DB(**{f"{f.key}_chart_gate": "shadow"}), f.key) == "shadow"

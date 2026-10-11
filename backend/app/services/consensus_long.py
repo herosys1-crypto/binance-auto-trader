@@ -28,6 +28,8 @@ DEFAULTS = {"enabled": True, "min_rules": 4, "breadth_max": 0.4}
 
 
 def _num(raw: Any) -> float | None:
+    if isinstance(raw, bool):                              # Gemini: True/False 를 1/0 측정값으로 읽지 않는다
+        return None
     try:
         x = float(raw) if isinstance(raw, (int, float)) else float(str(raw).strip())
     except (TypeError, ValueError, OverflowError):        # 교차 감사: 아주 큰 정수 → OverflowError 도 「모름」
@@ -61,8 +63,9 @@ def set_paper_params(settings_get) -> None:
     global PAPER_PARAMS
     try:
         PAPER_PARAMS = params_from(settings_get)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001 — 직전 값 유지, 원인은 남긴다 (Gemini)
+        import logging
+        logging.getLogger(__name__).warning("[Fix437] 설정 읽기 실패 → 직전 값 유지: %s", e)
 
 
 def long_rule_count(fired: Mapping[str, bool], rule_side: Mapping[str, str]) -> int:
