@@ -148,3 +148,25 @@ def test_verdict_exit_compare_preregistered():
     assert ev2["worst_live"] == -20.0 and ev2["worst_eng"] == -8.0
     src = p_src = (Path(__file__).resolve().parents[1] / "scripts" / "entry_condition_study" / "verdict_2026_10_25.py").read_text(encoding="utf-8")
     assert "## G." in p_src and "engines->'live_trend' is not null" in src
+
+
+def test_stage1_table_fix448():
+    V = _verdict_mod()
+    rows = V.stage1_rows("rf_consensus_long", "rf", {"rf_consensus_long_mode": "shadow", "rf_consensus_long_capital_usdt": "10",
+                                                     "daily_max_rf_consensus_long": "1", "rf_consensus_long_max_concurrent": "1",
+                                                     "rf_consensus_long_entry": "split", "rf_regime_filter": "on"})
+    keys = [r[0] for r in rows]
+    assert keys == ["rf_consensus_long_mode", "rf_consensus_long_capital_usdt", "daily_max_rf_consensus_long",
+                    "rf_consensus_long_max_concurrent", "rf_consensus_long_loss_breaker_usdt", "rf_consensus_long_entry", "rf_regime_filter"]
+    t = V.stage1_table("rf_consensus_long", "합의 LONG", "rf", dict((r[0], r[1]) for r in rows))
+    assert "| `rf_consensus_long_mode` | shadow | on | ✏️ |" in t
+    assert "| `daily_max_rf_consensus_long` | 1 | 1~3 | — |" in t
+    assert "| `rf_consensus_long_loss_breaker_usdt` | — | 0 | — |" in t
+    assert "분할 유지면" in t
+    ext = V.stage1_rows("trima", "ext", {})
+    assert ext[0][3].startswith("⚠️ on 이어도 shadow") and ext[-1][0] == "ext_regime_filter"
+    fj = V.stage1_rows("fujimoto", "ext", {"fujimoto_total_alloc_usdt": "100"})[1]
+    assert fj[0] == "fujimoto_total_alloc_usdt" and fj[2] == "유지" and "단위가 달라" in fj[3]
+    assert "| `fujimoto_total_alloc_usdt` | 100 | 유지 | — |" in V.stage1_table("fujimoto", "후지모토", "ext", {"fujimoto_total_alloc_usdt": "100"})
+    src = (Path(__file__).resolve().parents[1] / "scripts" / "entry_condition_study" / "verdict_2026_10_25.py").read_text(encoding="utf-8")
+    assert "## H." in src and src.count("passed.setdefault(") == 5   # A·B·C·D + 미리 보기

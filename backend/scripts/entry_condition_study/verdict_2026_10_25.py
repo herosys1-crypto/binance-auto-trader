@@ -15,6 +15,7 @@
 ## 대상
   A 실주문 가족(장세 필터 뒤) · B 새 가상 규칙(합의 LONG · 급등 정점 SHORT 2) · C 외부 전략 가상 규칙(장세 필터 안/밖)
   D 규칙 가족 가상 규칙(장세 필터 안/밖) · E 운영팀 게이트(칸 안/밖) · G 청산 방식 비교(같은 거래 짝)
+  H 통과 전략의 단계 1 설정표 (Fix 448 — 자본 계획서 4절 값 vs 지금 값, 보여 주기만)
 """
 from __future__ import annotations
 
@@ -160,6 +161,43 @@ def exit_line(name: str, ev: dict) -> str:
             f"| {ev['verdict']} | {ev['why']} |")
 
 
+# 🪜 Fix 448 (2026-10-12 사장님 「1번 2번 진행해줘」): 통과 전략의 단계 1 설정표 — 자본 키우는 계획서(docs/spec/CAPITAL_SCALING_PLAN_2026-10-12.md) 4절
+#   값은 계획서 그대로(Claude가 정함). 보고서는 **보여 주기만** 한다 — 바꾸는 건 사장님(관제실·system_settings).
+FORCE_SHADOW = {"bbema": "전용 추세 보유 청산 미구현", "bbwave": "출처 청산이 실주문 경로에 없음",
+                "trima": "출처 청산이 실주문 경로에 없음"}     # on 으로 바꿔도 shadow 로 돈다 (external_strategies_worker)
+CAPITAL_KEY = {"fujimoto": "fujimoto_total_alloc_usdt"}            # 나머지는 <가족>_capital_usdt
+
+
+def stage1_rows(fam: str, kind: str, cur: dict) -> list[tuple[str, str, str, str]]:
+    """(설정 키, 지금 값, 단계 1, 메모). kind = "rf"(규칙 가족) | "ext"(외부 전략). cur = 키 → 지금 실효값(문자열|None)."""
+    def now(k: str) -> str:
+        v = cur.get(k)
+        return "—" if v is None or str(v).strip() == "" else str(v)
+    cap = CAPITAL_KEY.get(fam, f"{fam}_capital_usdt")
+    rows = [(f"{fam}_mode", now(f"{fam}_mode"), "on",
+             ("⚠️ on 이어도 shadow — " + FORCE_SHADOW[fam] + " (판정 G 추세 청산 결과 뒤 실주문 청산 개발 필요)") if fam in FORCE_SHADOW else ""),
+            ((cap, now(cap), "유지", "⚠️ 총 배정액(단계 비율로 나눠 진입) — 계획서 진입당 10U 와 단위가 달라 사장님이 정함")
+             if fam in CAPITAL_KEY else (cap, now(cap), "10", "진입당 증거금")),
+            (f"daily_max_{fam}", now(f"daily_max_{fam}"), "1~3", "권장 1 → 2주 표본 뒤 3까지"),
+            (f"{fam}_max_concurrent", now(f"{fam}_max_concurrent"), "2", ""),
+            (f"{fam}_loss_breaker_usdt", now(f"{fam}_loss_breaker_usdt"), "0", "0 = 공통 family_loss_breaker_usdt(30)")]
+    if kind == "rf":
+        e = now(f"{fam}_entry")
+        rows.append((f"{fam}_entry", e, "single", "" if e == "single" else "⚠️ 계획서 숫자는 단일 진입 기준 — 분할 유지면 자본 숫자 다시 정함"))
+        rows.append(("rf_regime_filter", now("rf_regime_filter"), "on", "장세 필터 (계획서 원칙 4)"))
+    else:
+        rows.append(("ext_regime_filter", now("ext_regime_filter"), "on", "장세 필터 (계획서 원칙 4)"))
+    return rows
+
+
+def stage1_table(fam: str, label: str, kind: str, cur: dict) -> str:
+    out = [f"### {label} (`{fam}`)", "| 설정 | 지금 | 단계 1 | 바꿈 | 메모 |", "|---|---|---|---|---|"]
+    for k, n, t, m in stage1_rows(fam, kind, cur):
+        same = n == t or t == "유지" or (t == "1~3" and n in ("1", "2", "3")) or (t == "0" and n in ("—", "0", "0.0"))
+        out.append(f"| `{k}` | {n} | {t} | {'—' if same else '✏️'} | {m} |")
+    return "\n".join(out)
+
+
 def live_verdict(system_sum: float, n_closed: int) -> str:
     if n_closed < CRIT["live_min_n"]:
         return "⏳ 보류"
@@ -195,6 +233,8 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
                     from paper_trades where source='live' and status='CLOSED' and opened_at >= :since and opened_at <= :now
                     and engines->'live'->>'roi' is not null""")
         rows = [dict(r._mapping) for r in db.execute(q, {"since": earliest, "now": now})]
+        passed: dict = {}                     # 🪜 Fix 448: 가족 키 → (이름, rf|ext, 통과 근거)
+        fam_of_rule = {f.rule: f for f in RF.FAMILIES}
         base: dict = defaultdict(list)
         for r in rows:
             if r["rule"].startswith("baseline_"):
@@ -207,7 +247,11 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
         print("## B. 새 가상 규칙 (강화판)\n" + hdr)
         for rule, ck in NEW_RULES.items():
             xs = [r for r in rows if r["rule"] == rule and r["opened_at"] >= _dt(CUTOFFS[ck])]
-            print(line(rule, evaluate(xs, bm)))
+            ev = evaluate(xs, bm)
+            print(line(rule, ev))
+            if ev["verdict"] == "✅ 통과" and rule in fam_of_rule:
+                f_ = fam_of_rule[rule]
+                passed.setdefault(f_.key, (f_.label, "rf", f"B {rule}"))
 
         print("\n## C. 외부 전략 가상 규칙 — 장세 필터 안 / 밖\n" + hdr)
         ext_rules = sorted({r["rule"] for r in rows if any(r["rule"].startswith(p) for p in EXT_PREFIX)})
@@ -216,7 +260,10 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
             xs = [r for r in rows if r["rule"] == rule and r["opened_at"] >= _dt(CUTOFFS[ck])]
             ins = [r for r in xs if regime_ok(r["side"], r["mb"], r["chg_24h"]) is True]
             outs = [r for r in xs if regime_ok(r["side"], r["mb"], r["chg_24h"]) is False]
-            print(line(f"{rule} · 필터 안", evaluate(ins, bm)))
+            ev = evaluate(ins, bm)
+            print(line(f"{rule} · 필터 안", ev))
+            if ev["verdict"] == "✅ 통과":
+                passed.setdefault(ck, (ck, "ext", f"C {rule} · 필터 안"))
             print(line(f"{rule} · 필터 밖", evaluate(outs, bm)))
 
         print("\n## D. 규칙 가족 가상 규칙 — 장세 필터 안 / 밖 (Fix 439 배포 뒤)\n" + hdr)
@@ -226,7 +273,10 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
             xs = [r for r in rows if r["rule"] == fam.rule and r["opened_at"] >= _dt(CUTOFFS["regime"])]
             ins = [r for r in xs if regime_ok(r["side"], r["mb"], r["chg_24h"]) is True]
             outs = [r for r in xs if regime_ok(r["side"], r["mb"], r["chg_24h"]) is False]
-            print(line(f"{fam.key} · 필터 안", evaluate(ins, bm)))
+            ev = evaluate(ins, bm)
+            print(line(f"{fam.key} · 필터 안", ev))
+            if ev["verdict"] == "✅ 통과":
+                passed.setdefault(fam.key, (fam.label, "rf", f"D {fam.rule} · 필터 안"))
             print(line(f"{fam.key} · 필터 밖", evaluate(outs, bm)))
 
         print("\n## A. 실주문 가족 — 장세 필터 뒤 실현 (시스템 몫 · 사람 💉 추가 몫 따로)\n")
@@ -253,6 +303,8 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
                 continue
             n, s, h, op = agg[fam.key]
             print(f"| {fam.label} | {mode} | {n} | {s:+.2f} | {h:+.2f} | {op} | {live_verdict(s, n)} |")
+            if live_verdict(s, n) == "✅ 통과":
+                passed.setdefault(fam.key, (fam.label, "rf", "A 실주문 시스템 몫"))
 
         print("\n## F. 📣 시장 전체 동시 반등 (Fix 442) — 같은 봉 LONG 규칙 4개+ 종목 16개+ 순간의 LONG 진입 (봉·종목당 1건)\n" + hdr)
         from app.services import mass_rebound as MR
@@ -313,6 +365,30 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
         for gname, grows in groups:
             for eng in EXIT_ENGINES:
                 print(exit_line(f"{gname} · {eng}", exit_compare(grows, eng)))
+
+        print("\n## H. 🪜 단계 1 설정표 (Fix 448) — 위에서 ✅ 통과한 전략만 · 계획서 4절 값 vs 지금 값 · 바꾸는 건 사장님\n")
+        # 미리 보기(판정 아님): VERDICT_PREVIEW_H=rf_consensus_long,trima — 표가 맞게 나오는지 판정 전에 확인용
+        rf_keys = {f.key: f.label for f in RF.FAMILIES}
+        for fk in [x.strip() for x in os.environ.get("VERDICT_PREVIEW_H", "").split(",") if x.strip()]:
+            if fk in rf_keys or fk in set(EXT_PREFIX.values()):
+                passed.setdefault(fk, (rf_keys.get(fk, fk), "rf" if fk in rf_keys else "ext", "🔎 미리 보기 — 판정 아님"))
+        if not passed:
+            print("통과한 전략 없음 → 단계 0 유지 (설정 변경 없음)")
+        else:
+            from app.models.system_setting import SystemSetting
+            from app.services import ext_regime as ER
+            from app.services import external_strategies as ES
+            defaults = {**{k: v[0] for k, v in RF.SETTINGS.items()}, **{k: v[0] for k, v in ES.SETTINGS.items()},
+                        **{k: v[0] for k, v in ER.SETTINGS.items()}}
+            for fk, (label, kind, why) in passed.items():
+                keys = [k for k, _n, _t, _m in stage1_rows(fk, kind, {})]
+                cur = {}
+                for k in keys:
+                    row = db.get(SystemSetting, k)
+                    raw = None if row is None or row.value is None or not str(row.value).strip() else str(row.value).strip()
+                    cur[k] = raw if raw is not None else defaults.get(k, "1" if k.startswith("daily_max_") else None)
+                print(stage1_table(fk, label, kind, cur))
+                print(f"근거: {why}\n")
     finally:
         db.close()
 
