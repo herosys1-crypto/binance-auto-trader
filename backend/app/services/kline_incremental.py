@@ -38,11 +38,15 @@ kline_incremental.py — 바이낸스 선물 /fapi/v1/klines 증분 캐시 (표�
     - 규칙 4(짧은 재사용): 마지막 실제 fetch 뒤 min(interval 초, reuse_window_s) 이내면 fetch 없이 응답한다.
       이때 결과는 '마지막 실제 fetch 시점'의 fetch(n) 과 같다. reuse_window_s=0 이면 끈다(엄격 불변식).
     - cap 은 줄지 않는다(가장 큰 limit 기준). 한 번 큰 limit 을 썼다면 forget() 으로 초기화한다.
+    - 🗄 Fix 446: interval 별 전체 재조회 주기(set_full_refresh) + 바깥 저장소(store). 저장소 항목은 메모리 캐시가
+      비었을 때 슬롯마다 한 번만 읽고, 형식·시각이 맞으면 메모리 항목처럼 쓴다 — 그 뒤 증분 병합의 겹침·확정 봉 대조가
+      그대로 지키므로(틀리면 전체 조회) 저장소가 낡았거나 깨져도 결과는 fetch 와 같다. 저장소 실패 = 없는 것으로 본다.
 """
 from __future__ import annotations
 
 import bisect
 import logging
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -106,11 +110,12 @@ class _Entry:
 
 class _Slot:
     """(symbol, interval) 별 락 + 캐시 항목. 항목 교체는 참조 하나를 바꾸는 원자적 대입이다."""
-    __slots__ = ("lock", "entry")
+    __slots__ = ("lock", "entry", "store_tried")
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.entry: _Entry | None = None
+        self.store_tried = False             # 🗄 Fix 446: 저장소는 슬롯마다 한 번만 읽는다
 
 
 def _copy_tail(rows: list[list], limit: int) -> list[list]:
@@ -121,7 +126,8 @@ class IncrementalKlines:
     """fetch(symbol, interval, limit) 와 같은 결과를 더 적은 요청 무게로 돌려주는 캐시."""
 
     def __init__(self, fetch: Fetch, *, tail: int = 5, full_refresh_s: float = 6 * 3600,
-                 clock: Callable[[], float] = time.time, reuse_window_s: float = 60.0) -> None:
+                 clock: Callable[[], float] = time.time, reuse_window_s: float = 60.0,
+                 store: Any = None) -> None:
         if not callable(fetch):
             raise TypeError("fetch must be callable")
         if not callable(clock):
@@ -137,16 +143,32 @@ class IncrementalKlines:
         self._full_refresh_s = float(full_refresh_s)
         self._reuse_window_s = float(reuse_window_s)
         self._clock = clock
+        self._refresh_iv: dict[int, float] = {}    # 🗄 Fix 446: interval(ms) 별 전체 재조회 주기 — 없으면 full_refresh_s
+        # 🗄 Fix 446: 바깥 저장소 — .intervals(집합) · .load(symbol, interval) → dict|None · .save(symbol, interval, dict)
+        self._store = store
         self._slots: dict[tuple[str, str], _Slot] = {}
         self._slots_lock = threading.Lock()
         self._stats_lock = threading.Lock()
         self._counts: dict[str, int] = dict.fromkeys(
             ("full", "incremental", "fallback", "reused", "passthrough", "closed_hit",
-             "fetch_calls", "fetch_errors", "weight"), 0)
+             "fetch_calls", "fetch_errors", "weight", "restored", "restore_rejected", "store_errors"), 0)
         self._reasons: dict[str, int] = {}
         self._last_reason: str | None = None
 
     # ------------------------------------------------------------------ 공개 API
+    def set_full_refresh(self, interval: str, seconds: float | None) -> None:
+        """🗄 Fix 446: 이 interval 만 전체 재조회 주기를 바꾼다(None = 기본 full_refresh_s). 일봉은 하루 한 번 받으니
+        기본 6시간이면 매번 전체 조회(300개 = 무게 2)가 된다 → 길게 두면 꼬리(무게 1)만 받는다."""
+        iv = INTERVAL_MS.get(interval)
+        if iv is None:
+            raise ValueError(f"unknown interval {interval!r}")
+        if seconds is None:
+            self._refresh_iv.pop(iv, None)
+            return
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not seconds >= 0:
+            raise ValueError(f"seconds must be a number >= 0, got {seconds!r}")
+        self._refresh_iv[iv] = float(seconds)
+
     def get(self, symbol: str, interval: str, limit: int) -> list[list]:
         """fetch(symbol, interval, limit) 를 불렀을 때와 같은 리스트(행 값 그대로, 복사본).
         fetch 예외는 캐시를 바꾸지 않고 그대로 전파한다."""
@@ -177,9 +199,10 @@ class IncrementalKlines:
             cur_open = now_ms // iv * iv                       # 지금 진행 중인 봉의 open_time
             slot = self._slot((symbol, interval))
             with slot.lock:
+                self._restore(slot, symbol, interval, iv)
                 e = slot.entry
                 if (e is not None and limit <= e.cap and e.times[-1] == cur_open
-                        and self._full_reason(e, limit, now_ms / 1000.0) is None):
+                        and self._full_reason(e, limit, now_ms / 1000.0, iv) is None):
                     self._add("closed_hit")
                     return _copy_tail(e.rows[:-1], limit - 1) if limit > 1 else []
         # 🚨 Fix 406 (Duel ext-bar-gate 테스트로 발견): get() 의 짧은 재사용 경로를 타면 「받을 때 진행 중이던 행」이
@@ -216,6 +239,8 @@ class IncrementalKlines:
         with self._slots_lock:
             for key in [k for k in self._slots if symbol is None or k[0] == symbol]:
                 self._slots.pop(key).entry = None
+                fresh = self._slots[key] = _Slot()
+                fresh.store_tried = True     # 🗄 Fix 446 반박 검토: 잊은 항목을 저장소가 되살리지 않게(다음 조회 = 전체 조회)
 
     # ------------------------------------------------------------------ 내부
     def _slot(self, key: tuple[str, str]) -> _Slot:
@@ -239,7 +264,7 @@ class IncrementalKlines:
             self._add("fetch_errors")
             raise                            # 삼키지 않는다 — 종류도 그대로
 
-    def _full_reason(self, e: _Entry | None, limit: int, now: float) -> str | None:
+    def _full_reason(self, e: _Entry | None, limit: int, now: float, iv: int | None = None) -> str | None:
         if e is None:
             return "no_cache"
         if limit > e.cap:
@@ -248,12 +273,13 @@ class IncrementalKlines:
             return "noncontiguous"
         if now < e.fetched_at:
             return "clock_backwards"
-        if now - e.full_at >= self._full_refresh_s:
+        if now - e.full_at >= self._refresh_iv.get(iv, self._full_refresh_s):
             return "refresh_due"
         return None
 
     def _get_locked(self, slot: _Slot, symbol: str, interval: str, iv: int, limit: int,
                     allow_reuse: bool = True) -> list[list]:
+        self._restore(slot, symbol, interval, iv)
         now = self._clock()
         e = slot.entry
         # 규칙 4: 직전 실제 fetch 뒤 아주 짧은 시간이면 fetch 없이 응답
@@ -262,7 +288,7 @@ class IncrementalKlines:
             self._add("reused")
             return _copy_tail(e.rows, limit)
 
-        reason = self._full_reason(e, limit, now)
+        reason = self._full_reason(e, limit, now, iv)
         if reason is None:
             assert e is not None
             gap = max(0, (int(now * 1000) - e.times[-1]) // iv)   # 캐시 마지막 봉 뒤 새로 열린 봉 수(추정)
@@ -287,6 +313,7 @@ class IncrementalKlines:
                     rows, times = merged
                     slot.entry = _Entry(rows, times, e.cap, True, e.full_at, now)   # 원자적 교체
                     self._add("incremental")
+                    self._persist(symbol, interval, slot.entry)
                     return _copy_tail(rows, limit)
         return self._full(slot, symbol, interval, iv, limit, reason, now)
 
@@ -314,7 +341,68 @@ class IncrementalKlines:
             log.info("klines %s %s: gap in exchange data (halt?) — incremental paused", symbol, interval)
         stored = [list(r) for r in rows]                         # fetch 가 준 원본과도 분리
         slot.entry = _Entry(stored, times, n, contiguous, now, now)
+        self._persist(symbol, interval, slot.entry)
         return _copy_tail(stored, limit)
+
+    # ------------------------------------------------------------------ 🗄 Fix 446 바깥 저장소
+    def _uses_store(self, interval: str) -> bool:
+        st = self._store
+        if st is None:
+            return False
+        try:
+            return interval in st.intervals
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _restore(self, slot: _Slot, symbol: str, interval: str, iv: int) -> None:
+        """메모리 항목이 없을 때 저장소에서 한 번 읽는다(슬롯 락 안에서). 형식·시각이 하나라도 이상하면 버린다."""
+        if slot.entry is not None or slot.store_tried or not self._uses_store(interval):
+            return
+        slot.store_tried = True
+        try:
+            d = self._store.load(symbol, interval)
+        except Exception:  # noqa: BLE001
+            self._add("store_errors")
+            return
+        if d is None:
+            return
+        e = self._entry_from(d, iv)
+        if e is None:
+            self._add("restore_rejected")
+            log.info("klines %s %s: stored cache rejected → normal fetch", symbol, interval)
+            return
+        slot.entry = e
+        self._add("restored")
+
+    def _entry_from(self, d: Any, iv: int) -> _Entry | None:
+        if not isinstance(d, dict):
+            return None
+        rows, cap, full_at, fetched_at = d.get("rows"), d.get("cap"), d.get("full_at"), d.get("fetched_at")
+        if isinstance(cap, bool) or not isinstance(cap, int) or not 1 <= cap <= 1500:
+            return None
+        for v in (full_at, fetched_at):
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+                return None
+        now = self._clock()
+        if not 0 < full_at <= fetched_at <= now:          # 미래 시각·뒤바뀐 시각 = 버림 (clock_backwards 와 같은 원칙)
+            return None
+        times = parse_open_times(rows)
+        # 반박 검토: 행 수 < cap 이면 「상장 이후 전부」(A1)인지 「앞이 잘린 값」인지 알 수 없다 → 버린다(상장 직후 종목만 한 번 더 전체 조회)
+        if not times or len(rows) != cap:
+            return None
+        if times[-1] > int(now * 1000):                   # 아직 열리지도 않은 봉
+            return None
+        contiguous = all(b - a == iv for a, b in zip(times, times[1:]))
+        return _Entry([list(r) for r in rows], times, cap, contiguous, float(full_at), float(fetched_at))
+
+    def _persist(self, symbol: str, interval: str, e: _Entry) -> None:
+        if not self._uses_store(interval):
+            return
+        try:
+            self._store.save(symbol, interval, {"rows": e.rows, "cap": e.cap, "full_at": e.full_at,
+                                                "fetched_at": e.fetched_at})
+        except Exception:  # noqa: BLE001
+            self._add("store_errors")
 
     def _merge(self, e: _Entry, new: Any, iv: int, req: int) -> tuple[list[list], list[int]] | str:
         """성공하면 (rows, times), 실패하면 거부 사유 문자열."""

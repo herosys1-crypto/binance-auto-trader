@@ -44,6 +44,7 @@ from app.services import chart_learning as CL
 from app.services import paper_trading as PT
 from app.services.market_movers import MIN_QUOTE_VOLUME, change_pct, quote_volume
 from app.services.kline_incremental import IncrementalKlines
+from app.services import kline_store as KS
 from app.workers.chart_learning_worker import MAX_CONSEC_FAIL, SLEEP, _klines, _now_ms, _open
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,9 @@ REDIS_TTL = 172800           # 2일
 #   재시작하면 첫 사이클만 예전 무게. 끄기 = system_settings `paper_kline_incremental` = 0 (재시작 불필요, 다음 사이클부터).
 KLINE_INCR_KEY = "paper_kline_incremental"
 _KC_BC: list = [None]                                   # 이번 사이클의 BinanceClient (fetch 가 매번 읽는다)
-_KC = IncrementalKlines(lambda s, i, n: _klines(_KC_BC[0], symbol=s, interval=i, limit=n))
+# 🗄 Fix 446: 일봉은 Redis 에도 보관 → 재시작해도 꼬리(무게 1)만 · 일봉 전체 재조회 7일마다 (끄기 kline_daily_persist=0)
+_KC_STORE = KS.RedisKlineStore("paper")
+_KC = IncrementalKlines(lambda s, i, n: _klines(_KC_BC[0], symbol=s, interval=i, limit=n), store=_KC_STORE)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -277,6 +280,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
         _cs_th = CS.thresholds(db)
         _cs_cache: dict[str, dict[str, Any]] = {}
         _KC_BC[0] = bc
+        KS.apply_settings(_KC, _KC_STORE, KS.db_getter(db))      # 🗄 Fix 446
         _incr = _float_setting(db, KLINE_INCR_KEY, 1.0, 0.0, 1.0) >= 0.5
         _kc0 = _KC.stats()
 

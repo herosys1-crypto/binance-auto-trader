@@ -35,6 +35,7 @@ FAMILIES: tuple[FL.Family, ...] = (
     FL.Family("trima", TM, "3중이평", ("1h", "4h", "15m"), force_shadow=_EXIT_GAP),
 )
 from app.services.kline_incremental import INTERVAL_MS, IncrementalKlines
+from app.services import kline_store as KS
 from app.services.universe_cache import cached_universe
 
 logger = logging.getLogger(__name__)
@@ -85,7 +86,8 @@ class _CycleFetch:
 
 
 _KFETCH = _CycleFetch()
-_KC = IncrementalKlines(_KFETCH)          # 프로세스 전역 하나 — 재시작하면 첫 사이클만 전체 조회
+_KC_STORE = KS.RedisKlineStore("ext")     # 🗄 Fix 446: 일봉은 Redis 에도 보관 (재시작해도 꼬리만)
+_KC = IncrementalKlines(_KFETCH, store=_KC_STORE)   # 프로세스 전역 하나 — 재시작하면 첫 사이클만 전체 조회(일봉 제외)
 
 
 def _now_ms() -> int:
@@ -325,6 +327,7 @@ def run_external_strategies_once() -> dict:
         act_bb = _active_by_prefix(db, BE.PREFIX) if bm != "off" else {}
         equity = _equity(bc) if "on" in (fm, mm, em, bm, *fam_modes.values()) else None
         incremental = BG.parse_flag(ES.setting(db, "ext_kline_incremental"), default=True)
+        KS.apply_settings(_KC, _KC_STORE, KS.db_getter(db))     # 🗄 Fix 446
         _rg_mode = RG.mode_of(lambda k: ES.setting(db, k))              # 🧭 Fix 440 외부 전략 장세 필터
         _rg_breadth = None
         if _rg_mode != "off":
