@@ -68,7 +68,14 @@ EXIT_VARIANTS: dict[str, dict[str, Any]] = {
     "live_be10": {"protect_at": 10.0, "protect_stop_roi": 0.0},     # TP1 전 최고 ROI +10 도달 → 손절을 본전(ROI 0)으로
     "live_lock5": {"protect_at": 5.0, "protect_stop_roi": -10.0},   # TP1 전 최고 ROI +5 도달 → 손절을 −10 으로
     "live_stale24": {"stale_bars": 96},                              # 24h(96봉) 째 봉 마감에 TP1 없고 ROI ≤ 0 → 그 종가에 청산
+    # 📈 Fix 447 (2026-10-12 사장님 「1번 진행해줘」 — 추세 보유 청산 가상 기록): 1시간봉 종가가 EMA9 를 깨면 남은 물량 절반,
+    #   SMA20 을 깨면 나머지 (Fix 445 통합 이평 백테스트에서 유일하게 나았던 청산). 손절 −25·48h 만료는 live 와 같다.
+    #   live_trend = TP1(15·25%) 뒤 트레일링 대신 추세선 · live_trend0 = 진입 직후부터 추세선(TP1 부분익절 없음). 값은 Claude가 정함.
+    "live_trend": {"trend": "after_tp1"},
+    "live_trend0": {"trend": "from_entry"},
 }
+TREND_EMA = 9               # Fix 447: 1시간봉 EMA9 · SMA20 (첨부 전략서 숫자)
+TREND_SMA = 20
 EXIT_VARIANT_ENGINES = tuple(EXIT_VARIANTS)
 ENGINES = ("house", "live", "live_sl15") + EXIT_VARIANT_ENGINES
 REPORT_V2_ENGINES = ("house", "live", "live_sl15")   # Fix 370 (반박 검증 H1): 옛 보고서는 모든 행에 있는 엔진만 — 새 변형은 새 행에만 있어 나란히 놓으면
@@ -279,10 +286,14 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
                   body_fn: Callable[[int], bool | None] | None = None,
                   horizon: int = LIVE_HORIZON, variants: Sequence[str] = VARIANTS,
                   sl_roi: float = LIVE_SL_ROI, protect_at: float | None = None,
-                  protect_stop_roi: float | None = None, stale_bars: int | None = None) -> dict[str, Any]:
+                  protect_stop_roi: float | None = None, stale_bars: int | None = None,
+                  trend: str | None = None, trend_lines: Sequence[tuple[float, float] | None] | None = None) -> dict[str, Any]:
     """진입 뒤 완성봉 `bars` 로 실매매 청산 규칙을 근사한다. 판정 순서(한 봉 안): 손절 → TP1 → 트레일링(직전 봉까지의 최고 기준)
     → 시간 만료. 추가 lot 은 봉 **종가**에서 열고, 자기 손절(`sl_roi`, 기본 −25% ROI) 또는 본 포지션 청산과 함께 닫힌다.
-    `hist[hist_off + i]` = i 번째 봉의 MACD hist. `body_fn(i)` = i 번째 봉까지의 몸통 성장 판정. 봉이 모자라면 done=False."""
+    `hist[hist_off + i]` = i 번째 봉의 MACD hist. `body_fn(i)` = i 번째 봉까지의 몸통 성장 판정. 봉이 모자라면 done=False.
+    📈 Fix 447 `trend`("after_tp1"|"from_entry") + `trend_lines[i]` = i 번째 봉이 1시간봉을 마감하면 (EMA9, SMA20), 아니면 None.
+    trend 가 있으면 트레일링 대신 1시간봉 종가 기준 추세선 청산(EMA9 이탈 = 남은 물량 절반 · SMA20 이탈 = 전부).
+    from_entry 는 TP1 부분익절도 하지 않는다(첨부 전략서 그대로). trend_lines 가 없으면 추세 청산 없이 손절·만료만."""
     long = side == "LONG"
     sl_price = price_at_roi(side, entry, -abs(float(sl_roi)))
     tp1_price = price_at_roi(side, entry, tp1_pct)
@@ -298,6 +309,7 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
     exit_price: float | None = None
     vs = {name: _Variant(name, anchor=entry) for name in variants}
     n = 0
+    trend_half = False               # Fix 447: EMA9 이탈 절반 청산을 이미 했나
     ambig_arm = False                # Fix 370: 보호 문턱 돌파와 보호선 이탈이 같은 봉 = 비관 가정으로 청산한 건
 
     def _close_lots(i: int, price: float, kind: str) -> None:
@@ -344,14 +356,14 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
                 ambig_arm = True
                 _close_lots(i, _pp, "BASE_PROTECT")
                 break
-        # TP1 부분익절
-        if not tp1_hit and ((long and h >= tp1_price) or (not long and l <= tp1_price)):
+        # TP1 부분익절 (Fix 447 from_entry 추세 청산은 TP1 없음)
+        if trend != "from_entry" and not tp1_hit and ((long and h >= tp1_price) or (not long and l <= tp1_price)):
             tp1_hit, tp1_bar = True, i
             realized += TP1_CLOSE_RATIO * tp1_pct
             remaining -= TP1_CLOSE_RATIO
             max_roi = max(max_roi, tp1_pct)
         # 트레일링 (TP1 뒤, 직전 봉까지의 최고 ROI 기준 — 같은 봉의 신고점은 다음 봉부터)
-        if tp1_hit and i > (tp1_bar or 0):
+        if trend is None and tp1_hit and i > (tp1_bar or 0):
             trail_roi = max_roi - TRAIL_RETRACE
             adv_roi = roi_of(side, entry, adv_px)
             if adv_roi <= trail_roi:
@@ -387,6 +399,22 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
                 v.last_add_bar = i
                 _w = BASE_USDT + LOT_USDT * len(v.lots)
                 v.anchor = (BASE_USDT * entry + LOT_USDT * sum(x.price for x in v.lots)) / _w
+        # 📈 Fix 447: 추세 보유 청산 — 1시간봉 마감 봉의 종가로만 (TP1 봉 자신은 다음 마감부터 = 트레일링과 같은 원칙)
+        _tl = trend_lines[i] if trend is not None and trend_lines is not None and i < len(trend_lines) else None
+        if _tl is not None and (trend == "from_entry" or (tp1_hit and i > (tp1_bar or 0))):
+            _e9, _s20 = _tl
+            _below9 = c < _e9 if long else c > _e9
+            _below20 = c < _s20 if long else c > _s20
+            if _below20:
+                realized += remaining * roi_c
+                exit_kind, exit_bar, exit_price = "TREND", i, c
+                remaining = 0.0
+                _close_lots(i, c, "BASE_TREND")
+                break
+            if _below9 and not trend_half:
+                realized += remaining * 0.5 * roi_c
+                remaining *= 0.5
+                trend_half = True
         # Fix 370: 무진전 조기 청산 — stale_bars 째 봉 마감에 TP1 없고 ROI ≤ 0 이면 그 종가에 닫는다
         if stale_bars is not None and i == int(stale_bars) - 1 and i != horizon - 1 and not tp1_hit and roi_c <= 0:
             realized += remaining * roi_c
@@ -412,6 +440,8 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
     }
     if protect_at is not None:
         out["ambig_arm"] = ambig_arm
+    if trend is not None:
+        out["trend_half"] = trend_half
     adds: dict[str, list[dict[str, Any]]] = {}
     for v in vs.values():
         rows = []
@@ -529,6 +559,38 @@ def open_trade(*, symbol: str, side: str, rule: str, series: Series, j: int, tag
     }
 
 
+def _ema_series(xs: Sequence[float], n: int) -> list[float | None]:
+    """SMA(n) 로 시작하는 EMA(n). 앞 n−1 개는 None."""
+    out: list[float | None] = [None] * len(xs)
+    if len(xs) < n:
+        return out
+    k = 2.0 / (n + 1)
+    e = sum(xs[:n]) / n
+    out[n - 1] = e
+    for i in range(n, len(xs)):
+        e = xs[i] * k + e * (1 - k)
+        out[i] = e
+    return out
+
+
+def trend_lines_for(series: "Series", j: int) -> list[tuple[float, float] | None]:
+    """📈 Fix 447: 진입 봉 j 뒤 i 번째 15분봉이 1시간봉을 마감하면 그 시점 (1h EMA9, 1h SMA20), 아니면 None.
+    1시간봉은 series.k1h(완전한 그룹만). SMA20 이 아직 없으면(창 앞쪽) None = 그 마감은 판정 안 함.
+    EMA 는 창 첫 봉부터 계산하므로 창이 밀리면 값이 아주 조금 바뀐다(20봉 뒤 영향 1% 미만) — 기록 전용이라 수용."""
+    k1h = series.k1h
+    closes = [float(b[4]) for b in k1h]
+    ema = _ema_series(closes, TREND_EMA)
+    sma: list[float | None] = [None] * len(closes)
+    for i in range(TREND_SMA - 1, len(closes)):
+        sma[i] = sum(closes[i - TREND_SMA + 1:i + 1]) / TREND_SMA
+    at = {series.close1h[n]: n for n in range(len(k1h))}
+    out: list[tuple[float, float] | None] = []
+    for b in series.allk[j + 1:]:
+        n = at.get(int(b[0]) + MS_15M)
+        out.append((ema[n], sma[n]) if n is not None and ema[n] is not None and sma[n] is not None else None)
+    return out
+
+
 def manage_trade(trade: Mapping[str, Any], series: Series) -> dict[str, Any]:
     """진입 봉 **이후** 완성봉으로 두 엔진을 처음부터 다시 돌린다(상태 없음 = 백필과 같은 코드 경로).
     반환: {"status", "engines", "adds", "bars_seen", "mfe", "mae", "close_reason"}."""
@@ -565,7 +627,10 @@ def manage_trade(trade: Mapping[str, Any], series: Series) -> dict[str, Any]:
         e = run_live_like(side, entry, after, tp1_pct=TP1_FLAT, variants=(), sl_roi=_sl)
         e.pop("adds", None)
         engines[f"live_sl{int(_sl)}"] = e
+    _tlines = trend_lines_for(series, j) if j is not None else None
     for _name, _kw in EXIT_VARIANTS.items():
+        if "trend" in _kw:
+            _kw = dict(_kw, trend_lines=_tlines)
         e = run_live_like(side, entry, after, tp1_pct=TP1_FLAT, variants=(), **_kw)
         e.pop("adds", None)
         engines[_name] = e

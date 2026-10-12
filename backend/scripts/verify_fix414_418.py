@@ -50,6 +50,7 @@ CODE_MARKERS = {
     "app/services/mass_rebound.py": ("def detect(", "def retro_bars("),                                         # 442 동시 반등
     "app/services/kline_store.py": ("class RedisKlineStore", "def apply_settings("),                         # 446 일봉 캐시 보관
     "app/services/kline_incremental.py": ("def set_full_refresh(", "def _restore("),                             # 446
+    "app/services/paper_trading.py": ('"live_trend": {"trend": "after_tp1"}', "def trend_lines_for("),         # 447 추세 보유 청산 기록
     "app/services/family_loss_breaker.py": ("def limit_for(", "limit = limit_for(db, fam_key)"),                # 444 가족별 기준
     "app/workers/paper_trading_worker.py": ("_CON.apply(fired, rule_side, breadth)",),                       # 437 가상 판정
     "app/services/rule_families.py": ('Family("rf_consensus_long"', '"rf_consensus_long_entry"'),       # 437 가족

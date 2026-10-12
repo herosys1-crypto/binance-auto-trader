@@ -818,7 +818,7 @@ def check_paper_improvement() -> None:
     print("⑩ Fix 370 가상매매 개선 (청산 변형 live_be10 · live_lock5 · live_stale24)")
     try:
         from app.services import paper_trading as PT
-        (ok if PT.EXIT_VARIANT_ENGINES == ("live_be10", "live_lock5", "live_stale24") else fail)(f"청산 변형 엔진 = {PT.EXIT_VARIANT_ENGINES}")
+        (ok if PT.EXIT_VARIANT_ENGINES[:3] == ("live_be10", "live_lock5", "live_stale24") else fail)(f"청산 변형 엔진 = {PT.EXIT_VARIANT_ENGINES}")   # Fix 447: 뒤에 live_trend·live_trend0
         (ok if PT.VERSION == 2 else fail)(f"엔진 VERSION = {PT.VERSION} (2 유지 — 올리면 백필 전체·실시간 CLOSED 재계산)")
         (ok if set(PT.ENGINES) == {"house", "live", "live_sl15", *PT.EXIT_VARIANT_ENGINES} else fail)(f"ENGINES = {PT.ENGINES}")
         _bars = [[0, 100.0, 105.5, 100.5, 105.0, 1.0], [1, 105.0, 105.2, 99.5, 100.0, 1.0]]

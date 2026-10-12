@@ -22,7 +22,7 @@ def _run(side, bars, **kw):
 
 
 def test_engine_set_and_variant_definitions():
-    assert PT.EXIT_VARIANT_ENGINES == ("live_be10", "live_lock5", "live_stale24")
+    assert PT.EXIT_VARIANT_ENGINES == ("live_be10", "live_lock5", "live_stale24", "live_trend", "live_trend0")   # Fix 447
     assert PT.EXIT_VARIANTS["live_be10"] == {"protect_at": 10.0, "protect_stop_roi": 0.0}
     assert PT.EXIT_VARIANTS["live_lock5"] == {"protect_at": 5.0, "protect_stop_roi": -10.0}
     assert PT.EXIT_VARIANTS["live_stale24"] == {"stale_bars": 96}

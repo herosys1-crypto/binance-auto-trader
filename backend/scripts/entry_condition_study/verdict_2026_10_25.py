@@ -9,10 +9,12 @@
   실주문 가족: 시스템 몫(Fix 434) 합 > 0 · 끝난 n ≥ 5 → 통과 / n < 5 → 보류 / 그 밖 → 기각   (사람 💉 추가 몫은 따로 표시)
   운영팀 게이트: 칸 안 평균 − 칸 밖 평균 > 0 (가상 roi, 각 n ≥ 30) → 「막기」 후보
   각 대상은 **자기 배포 시각 이후** 행만 센다 (아래 CUTOFFS).
+  📈 청산 방식(G, Fix 447 — 2026-10-12 추가 등록): 같은 거래 짝(지금 청산 live 대비) 평균 차 > 0 · 앞·뒤 절반 차 > 0 · 짝 n ≥ 30
+            → 「청산 후보」 / 짝 n < 30 → 보류. 최악의 날 합은 위험 참고(24h 정체 청산은 이 값으로 본다). 새 변형 키가 있는 행만.
 
 ## 대상
   A 실주문 가족(장세 필터 뒤) · B 새 가상 규칙(합의 LONG · 급등 정점 SHORT 2) · C 외부 전략 가상 규칙(장세 필터 안/밖)
-  D 규칙 가족 가상 규칙(장세 필터 안/밖) · E 운영팀 게이트(칸 안/밖)
+  D 규칙 가족 가상 규칙(장세 필터 안/밖) · E 운영팀 게이트(칸 안/밖) · G 청산 방식 비교(같은 거래 짝)
 """
 from __future__ import annotations
 
@@ -110,6 +112,52 @@ def evaluate(rows: list[dict], base_mean: dict) -> dict:
         fails.append(f"이긴 날 {win_days:.0%} < {CRIT['win_days']:.0%}")
     out.update(verdict="✅ 통과" if not fails else "❌ 기각", why=" · ".join(fails) or "기준 모두 충족")
     return out
+
+
+EXIT_ENGINES = ("live_stale24", "live_trend", "live_trend0")      # 📈 Fix 447: 지금 청산(live)과 짝으로 비교
+
+
+def exit_compare(rows: list[dict], engine: str) -> dict:
+    """rows = [{"d", "eng": {엔진: roi}}] → 엔진 vs live 같은 거래 짝 비교 + 사전 등록 판정 (Fix 447)."""
+    pairs = [(r["d"], r["eng"]["live"], r["eng"][engine]) for r in rows
+             if _f((r.get("eng") or {}).get("live")) is not None and _f((r.get("eng") or {}).get(engine)) is not None]
+    n = len(pairs)
+    if n == 0:
+        return {"n": 0, "verdict": "⏳ 보류", "why": "짝 없음"}
+    days = sorted({d for d, _a, _b in pairs})
+    mid = days[len(days) // 2]
+    diff = [b - a for _d, a, b in pairs]
+    h1 = [b - a for d, a, b in pairs if d < mid]
+    h2 = [b - a for d, a, b in pairs if d >= mid]
+    by_day_live: dict = defaultdict(float)
+    by_day_eng: dict = defaultdict(float)
+    for d, a, b in pairs:
+        by_day_live[d] += a
+        by_day_eng[d] += b
+    out = {"n": n, "days": len(days), "live": sum(a for _d, a, _b in pairs) / n, "eng": sum(b for _d, _a, b in pairs) / n,
+           "diff": sum(diff) / n, "first_half": (sum(h1) / len(h1)) if h1 else None,
+           "second_half": (sum(h2) / len(h2)) if h2 else None,
+           "worst_live": min(by_day_live.values()), "worst_eng": min(by_day_eng.values())}
+    if n < CRIT["min_n"]:
+        out.update(verdict="⏳ 보류", why=f"짝 n {n}/{CRIT['min_n']}")
+        return out
+    fails = []
+    if not out["diff"] > 0:
+        fails.append("평균 차 ≤ 0")
+    if out["first_half"] is None or not out["first_half"] > 0:
+        fails.append("앞 절반 차 ≤ 0")
+    if out["second_half"] is None or not out["second_half"] > 0:
+        fails.append("뒤 절반 차 ≤ 0")
+    out.update(verdict="✅ 청산 후보" if not fails else "❌ 지금 청산 유지", why=" · ".join(fails) or "기준 모두 충족")
+    return out
+
+
+def exit_line(name: str, ev: dict) -> str:
+    if not ev.get("n"):
+        return f"| {name} | 0 | — | — | — | — | — | {ev['verdict']} {ev.get('why', '')} |"
+    return (f"| {name} | {ev['n']} ({ev['days']}일) | {_fmt(ev['live'])} → {_fmt(ev['eng'])} | {_fmt(ev['diff'])} "
+            f"| {_fmt(ev['first_half'])} → {_fmt(ev['second_half'])} | {_fmt(ev['worst_live'], '+.0f')} → {_fmt(ev['worst_eng'], '+.0f')} "
+            f"| {ev['verdict']} | {ev['why']} |")
 
 
 def live_verdict(system_sum: float, n_closed: int) -> str:
@@ -247,6 +295,24 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
             print("→ " + ("✅ 「칸 밖 막기」 후보 (안 > 밖)" if mi > mo else "❌ 막지 않는다 (안 ≤ 밖)"))
         else:
             print(f"→ ⏳ 보류 (각 n ≥ {CRIT['gate_min_n']} 필요)")
+
+        print("\n## G. 📈 청산 방식 비교 (Fix 447) — 같은 거래 짝: 지금 청산(live) 대비 · 24h 정체 · 추세 보유(TP1 뒤) · 추세 보유(처음부터)\n")
+        print("| 대상 · 엔진 | 짝 n | 평균 live → 변형 | 평균 차 | 앞 → 뒤 차 | 최악의 날 합 live → 변형 | 판정 | 사유 |\n|---|---|---|---|---|---|---|---|")
+        qe = text("""select rule, side, opened_at::date d, engines->'live'->>'roi' live,
+                     engines->'live_stale24'->>'roi' live_stale24, engines->'live_trend'->>'roi' live_trend,
+                     engines->'live_trend0'->>'roi' live_trend0
+                     from paper_trades where source='live' and status='CLOSED' and opened_at >= :since and opened_at <= :now
+                     and engines->'live_trend' is not null""")
+        er = [{"rule": x.rule, "side": x.side, "d": x.d,
+               "eng": {k: _f(getattr(x, k)) for k in ("live",) + EXIT_ENGINES}}
+              for x in db.execute(qe, {"since": earliest, "now": now})]
+        on_rules = {f.rule: f.label for f in RF.FAMILIES if RF.mode_of(db, f.key) == "on"}
+        groups = [("🤝 합의 LONG", [r for r in er if r["rule"] == "consensus_long"])]
+        groups += [(f"실주문 {lab}", [r for r in er if r["rule"] == rule]) for rule, lab in on_rules.items()]
+        groups += [(f"전체 {sd}", [r for r in er if r["side"] == sd and not r["rule"].startswith("baseline_")]) for sd in ("LONG", "SHORT")]
+        for gname, grows in groups:
+            for eng in EXIT_ENGINES:
+                print(exit_line(f"{gname} · {eng}", exit_compare(grows, eng)))
     finally:
         db.close()
 
