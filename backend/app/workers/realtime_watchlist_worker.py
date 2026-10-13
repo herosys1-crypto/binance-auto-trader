@@ -86,19 +86,8 @@ def run_realtime_watchlist() -> dict:
             sum(1 for w in watchlist if w["reason"] == "TOP_VOLUME"),
             sum(1 for w in watchlist if w["reason"] == "REENTRY_CANDIDATE"),
         )
-        # 🎼 v206 사장님: 오케스트라 통합 = EventBus 발신!
-        try:
-            from app.agents.orchestrator.event_bus import get_event_bus
-            from app.agents.orchestrator.event_types import EventType
-            get_event_bus().publish(EventType.WATCHLIST_UPDATED, {
-                "count": len(watchlist),
-                "gain_count": sum(1 for w in watchlist if w["reason"] == "TOP_GAIN"),
-                "loss_count": sum(1 for w in watchlist if w["reason"] == "TOP_LOSS"),
-                "volume_count": sum(1 for w in watchlist if w["reason"] == "TOP_VOLUME"),
-                "reentry_count": sum(1 for w in watchlist if w["reason"] == "REENTRY_CANDIDATE"),
-            })
-        except Exception as e:
-            logger.debug("[v206] EventBus publish 실패 (fail-open): %s", e)
+        # 📥 Fix 450 (사장님 10/14 「전부 A」 ④): WATCHLIST_UPDATED 보내기 중단 — 받는 팀이 없었다(48h 250건 전부 0).
+        #   목록은 Redis(WATCHLIST_KEY)에 있고 감시 진단·화면은 그것을 읽는다.
 
         return {
             "count": len(watchlist),

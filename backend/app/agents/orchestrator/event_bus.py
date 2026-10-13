@@ -155,4 +155,9 @@ def get_event_bus() -> EventBus:
             if _bus_instance is None:
                 _bus_instance = EventBus()
                 logger.info("[EventBus] 🌟 초기화 완료!")
+                try:                                        # 📥 Fix 450: 받는 쪽(기록 전용) 설치
+                    from app.agents.orchestrator.receivers import install
+                    install(_bus_instance)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[EventBus] 받는 쪽 설치 실패 (기록만 빠짐): %s", e)
     return _bus_instance

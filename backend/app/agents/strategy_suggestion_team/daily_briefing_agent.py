@@ -56,10 +56,12 @@ class DailyBriefingAgent(BaseAgent):
         ).replace(tzinfo=KST).astimezone(timezone.utc)
 
         # 1. 오늘 신 제안 (PENDING!)
+        # 📥 Fix 450: 지난 24시간 — 브리핑은 UTC 22:30(KST 07:30)인데 제안은 UTC 06:30(KST 15:30 전날)에 생겨
+        #   「KST 오늘 0시 이후」로 세면 늘 0건이었다(10/12·10/13 운영 로그 pending=0, 제안 생성 이벤트 2건).
         pending = db.execute(
             select(StrategySuggestion)
             .where(StrategySuggestion.status == "PENDING")
-            .where(StrategySuggestion.created_at >= _today_start_utc)
+            .where(StrategySuggestion.created_at >= now_utc - timedelta(hours=24))
             .order_by(StrategySuggestion.confidence_score.desc())
         ).scalars().all()
 
@@ -157,6 +159,7 @@ class DailyBriefingAgent(BaseAgent):
 
         # 이벤트 발신!
         get_event_bus().publish(EventType.DAILY_LEARNING_DONE, {
+            "team": "strategy_suggestion:briefing",        # 📥 Fix 450: 브리핑은 학습이 아님 — 받는 쪽이 건너뛴다
             "briefing": True,
             "pending_count": len(pending),
             "active_strategies": active_count,

@@ -151,6 +151,11 @@ class StrategySuggestionTeamLead(BaseTeamLead):
     @stoppable                                       # 🎼 Fix 449 정지 중이면 건너뜀
     def run_auto_execute(self, db) -> dict:
         """매일 07:00 = 자동 실행 배치! (사장님 옵션 ON 시!)."""
+        # 📥 Fix 450 (사장님 10/14 「전부 A」 ⑤): auto_trading_halt 가 중단이면 자동 실행 안 함 (학습·브리핑은 계속)
+        from app.services import auto_trading_halt as AH
+        if AH.halt_enabled(db):
+            logger.warning("[%s Lead] ⛔ 자동매매 전면 중단 중 → 제안 자동 실행 건너뜀", self.TEAM)
+            return {"skipped": "auto_trading_halt"}
         executor = self.get_agent(AutoManualExecutor)
         return executor.execute_auto_batch(db)
 

@@ -159,6 +159,7 @@ class PumpDumpPredictor(BaseAgent):
         # EventBus publish!
         bus = get_event_bus()
         bus.publish(EventType.DAILY_LEARNING_DONE, {
+            "team": "strategy_suggestion",                 # 📥 Fix 450: 받는 쪽이 팀별 학습 시각을 기록
             "predictions": predictions,
             "pumps": len(pumps),
             "dumps": len(dumps),

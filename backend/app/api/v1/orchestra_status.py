@@ -117,6 +117,24 @@ def get_orchestra_status(
     except Exception as e:
         teams["silent_bug_detector"] = {"status": f"❌ 오류: {e}"}
 
+    # 📥 Fix 450: 받는 쪽 기록 — 마지막 감시 진단 · 팀별 마지막 학습
+    try:
+        from app.agents.orchestrator import receivers as RCV
+        h = RCV.health_last()
+        if h:
+            ok = h.get("checks") and h.get("healthy") == h.get("checks")
+            teams["orchestra_health"] = {"status": "✅ 정상" if ok else "⚠️ 이상 있음",
+                                         "detail": f"{h.get('healthy')}/{h.get('checks')} 정상 · {str(h.get('at', ''))[11:16]} UTC"}
+        else:
+            teams["orchestra_health"] = {"status": "⏳ 기록 없음", "detail": "배포 뒤 5분 안에 생김"}
+        rec = RCV.learning_last()
+        stale = dict(RCV.stale_learning(rec))
+        for t_, v in sorted(rec.items()):
+            teams[f"learning:{t_}"] = {"status": "⚠️ 멈춤?" if t_ in stale else "✅ 정상",
+                                      "detail": f"마지막 {str(v.get('at', ''))[5:16].replace('T', ' ')} UTC"}
+    except Exception as e:  # noqa: BLE001
+        teams["orchestra_health"] = {"status": f"❌ 오류: {e}"}
+
     # 6. 최근 이벤트 (30분!)
     recent_events = []
     try:

@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 # 자동 fix 이력 (30분 dedup!)
 _LAST_FIX_ATTEMPTS: dict[str, datetime] = {}
+_LAST_STALE_ALERT: dict[str, datetime] = {}       # 📥 Fix 450: 학습 멈춤 알림 12시간 dedup (Claude가 정함)
+STALE_ALERT_DEDUP_S = 12 * 3600
 
 
 def run_orchestra_health() -> dict:
@@ -37,6 +39,9 @@ def run_orchestra_health() -> dict:
     try:
         # 1. 학습 stale 감지 + 자동 재실행!
         _check_and_fix_learning(db, checks, fixes_attempted, alerts)
+
+        # 1b. 📥 Fix 450: 팀별 학습 완료 기록(orchestra:learning:last)으로 「학습 멈춤」 판정 (알림만, 자동 재실행 없음)
+        _check_learning_record(checks, alerts)
 
         # 2. Watchlist 없음 감지 + 자동 재갱신!
         _check_and_fix_watchlist(db, checks, fixes_attempted, alerts)
@@ -106,6 +111,27 @@ def _check_and_fix_learning(db, checks, fixes, alerts):
             })
     except Exception as e:
         logger.warning("[v206 P4] learning check 실패: %s", e)
+
+
+def _check_learning_record(checks, alerts, now=None):
+    """📥 Fix 450: 학습 팀이 보낸 「학습 완료」 기록이 26시간 넘게 없으면 STALE. 기록이 아예 없으면 판정하지 않는다(배포 직후)."""
+    try:
+        from app.agents.orchestrator import receivers as RCV
+        rec = RCV.learning_last()
+        stale = dict(RCV.stale_learning(rec, now=now))
+        for team in sorted(rec):
+            checks.append({"team": f"learning_record:{team}", "status": "STALE" if team in stale else "OK",
+                           "age_h": stale.get(team)})
+        t = now or datetime.now(timezone.utc)
+        for team, age in stale.items():
+            last = _LAST_STALE_ALERT.get(team)
+            if last is not None and (t - last).total_seconds() < STALE_ALERT_DEDUP_S:
+                continue
+            _LAST_STALE_ALERT[team] = t
+            if RCV.alert_once(team, STALE_ALERT_DEDUP_S):     # 반박 리뷰: 재시작해도 12시간 안엔 다시 안 보낸다
+                alerts.append(f"📚 {team} 학습 완료 기록 {age:.0f}시간 없음 (학습 멈춤?)")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[Fix450] 학습 기록 판정 실패: %s", e)
 
 
 def _check_and_fix_watchlist(db, checks, fixes, alerts):
@@ -207,10 +233,13 @@ def _publish_health_event(checks, fixes):
     try:
         from app.agents.orchestrator.event_bus import get_event_bus
         from app.agents.orchestrator.event_types import EventType
+        _base = [c for c in checks if not str(c.get("team", "")).startswith("learning_record:")]   # 📥 Fix 450
         get_event_bus().publish(EventType.ORCHESTRA_HEALTH_CHECK, {
-            "checks": len(checks),
-            "healthy": sum(1 for c in checks if c["status"] == "OK"),
+            "checks": len(_base),
+            "healthy": sum(1 for c in _base if c["status"] == "OK"),
             "fixes": len(fixes),
+            "learning_stale": sum(1 for c in checks if str(c.get("team", "")).startswith("learning_record:")
+                                  and c["status"] == "STALE"),
         })
     except Exception as e:
         logger.debug("[v206 P4] EventBus 실패: %s", e)
@@ -223,7 +252,7 @@ def _send_health_alerts(db, alerts):
         ns = NotificationService(db)
         ns.send_system_alert(
             title="🎼 [v206 P4] 오케스트라 자동 진단!",
-            body="\n".join(alerts) + "\n\n= 이 알림 = 30분 dedup!",
+            body="\n".join(alerts) + "\n\n= 같은 알림은 30분(학습 멈춤은 12시간) 안에 다시 안 보냄",
         )
     except Exception as e:
         logger.warning("[v206 P4] 알림 실패: %s", e)

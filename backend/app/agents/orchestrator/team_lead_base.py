@@ -129,8 +129,8 @@ class BaseTeamLead(BaseAgent):
         return self._agent_instances[key]
 
     def publish(self, event: EventType, data: dict | None = None) -> int:
-        """팀에서 이벤트 발신!"""
-        return self.event_bus.publish(event, data or {})
+        """팀에서 이벤트 발신! (📥 Fix 450: 보낸 팀 이름 `_from` 을 붙인다 — 이미 있으면 그대로)"""
+        return self.event_bus.publish(event, {"_from": self.TEAM, **(data or {})})
 
     def report_status(self) -> dict[str, Any]:
         """팀 상태 = Orchestrator 리포트!"""

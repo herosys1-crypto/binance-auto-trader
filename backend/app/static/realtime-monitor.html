@@ -169,6 +169,7 @@ function renderOrchestra(od) {
     if (t.limit !== undefined) detail += ` ${t.used}/${t.limit}`;
     if (t.banned_until) detail += ` ${t.banned_until}까지`;
     if (t.recent_1h !== undefined) detail += ` 1h ${t.recent_1h}건`;
+    if (t.detail) detail += ` ${String(t.detail).replace(/[<>&]/g, '')}`;   // 📥 Fix 450
     return `<div style="padding:4px 8px;background:rgba(0,0,0,0.2);border-radius:4px;margin:2px 0">
       <span style="color:${color};font-weight:bold">${status}</span>
       <span style="color:#e2e8f0;margin-left:6px">${name}</span>
