@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 
 from app.agents.orchestrator import BaseTeamLead, EventType
+from app.agents.orchestrator.team_lead_base import stoppable
 
 from app.agents.chart_pattern_learning_team.pattern_collector import PatternCollector
 from app.agents.chart_pattern_learning_team.pattern_detector import PatternDetector
@@ -32,6 +33,7 @@ class ChartPatternLearningTeamLead(BaseTeamLead):
         if event == EventType.EMERGENCY_STOP_ALL:
             logger.warning("[chart_pattern_learning] STOP: %s", data.get("reason", ""))
 
+    @stoppable                                       # 🎼 Fix 449 정지 중이면 건너뜀
     def run_full_scan(self, db, decrypt_text, top_n: int = 100) -> dict:
         """전체 사이클: 심볼 조회 → 각 심볼 스캔 → 저장 → outcome update!"""
         logger.info("[chart_pattern_learning] cycle 시작 (top_n=%d)", top_n)

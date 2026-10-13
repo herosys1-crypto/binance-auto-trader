@@ -49,7 +49,7 @@ class BaseAgent:
         # 2. 헌법 검증기 초기화
         self.validator = ConstitutionValidator(self.constitution_dict)
         # 3. 실행 로그
-        logger.info(
+        logger.debug(                                                 # 🎼 Fix 449: 스케줄마다 새로 만들어져 INFO 면 로그만 쌓인다
             "[%s/%s] 에이전트 초기화! (헌법=%d, spec=%d, default=%d)",
             self.TEAM, self.AGENT_NAME,
             len(self.constitution_dict), len(self.specs_dict), len(self.defaults_dict),

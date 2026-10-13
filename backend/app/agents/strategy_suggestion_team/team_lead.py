@@ -16,6 +16,7 @@ import logging
 from datetime import datetime, timezone
 
 from app.agents.orchestrator import BaseTeamLead, EventType
+from app.agents.orchestrator.team_lead_base import stoppable
 
 from app.agents.strategy_suggestion_team.bb_4h_scanner import BB4HScanner
 from app.agents.strategy_suggestion_team.pump_dump_predictor import PumpDumpPredictor
@@ -50,6 +51,7 @@ class StrategySuggestionTeamLead(BaseTeamLead):
         if event == EventType.EMERGENCY_STOP_ALL:
             self.emergency_stop(data.get("reason", ""))
 
+    @stoppable                                       # 🎼 Fix 449 정지 중이면 건너뜀
     def run_daily_prediction(self, db, decrypt_text, force: bool = False) -> dict:
         """매일 06:30 UTC 스케줄!
 
@@ -140,16 +142,19 @@ class StrategySuggestionTeamLead(BaseTeamLead):
             "created": gen_result.get("created", 0),
         }
 
+    @stoppable                                       # 🎼 Fix 449 정지 중이면 건너뜀
     def run_hourly_cleanup(self, db) -> dict:
         """매 1시간 = 자동 삭제!"""
         manager = self.get_agent(SuggestionManager)
         return manager.execute(db)
 
+    @stoppable                                       # 🎼 Fix 449 정지 중이면 건너뜀
     def run_auto_execute(self, db) -> dict:
         """매일 07:00 = 자동 실행 배치! (사장님 옵션 ON 시!)."""
         executor = self.get_agent(AutoManualExecutor)
         return executor.execute_auto_batch(db)
 
+    @stoppable                                       # 🎼 Fix 449 정지 중이면 건너뜀
     def run_daily_briefing(self, db) -> dict:
         """🌅 매일 아침 브리핑! (KST 07:30 = UTC 22:30!)"""
         briefer = self.get_agent(DailyBriefingAgent)

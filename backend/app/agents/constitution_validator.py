@@ -20,6 +20,26 @@ class ConstitutionViolationError(Exception):
         super().__init__(f"❌ 헌법 위반! {rule_id}: {action} (이유: {reason})")
 
 
+# 🎼 Fix 449: 실제 검사 함수 등록 — 범용 템플릿(templates/orchestra/rules.py)과 같은 원칙.
+#   check(action, ctx) -> 위반 사유(str) | None. 검사 오류는 기본 위반(fail-closed), 보조 검사만 fail_open=True.
+#   지금 등록된 검사는 0개 → 동작은 예전과 같다(파일 존재만 확인·경고). 규칙을 넣을 때는 사장님 승인 뒤.
+#   ⚠️ actions=["*"] 금지 — STAGE_ENTRY·SUGGESTION_(AUTO_)EXECUTE 같은 진입 경로에도 걸려, 검사 함수 오류 하나가 진입을 막는다.
+#   그리고 정지(team_lead_base._STOPPED)는 프로세스 단위다 — api 에서 걸어도 scheduler 는 따로 돈다.
+_CHECKS: dict[str, list[tuple[str, Any, bool]]] = {}
+
+
+def register_check(rule_id: str, actions: list[str], check, *, fail_open: bool = False) -> None:
+    for a in actions:
+        lst = _CHECKS.setdefault(a, [])
+        if any(r == rule_id for r, _c, _f in lst):
+            raise ValueError(f"duplicate check {rule_id} for {a}")
+        lst.append((rule_id, check, fail_open))
+
+
+def registered_checks() -> dict[str, list[str]]:
+    return {a: [r for r, _c, _f in lst] for a, lst in _CHECKS.items()}
+
+
 class ConstitutionValidator:
     """헌법 자동 검증기.
 
@@ -64,6 +84,16 @@ class ConstitutionValidator:
         Raises:
             ConstitutionViolationError: 위반 시!
         """
+        for rule_id, fn, fail_open in list(_CHECKS.get(action, [])) + list(_CHECKS.get("*", [])):
+            try:
+                reason = fn(action, dict(context or {}))
+            except Exception as e:  # noqa: BLE001
+                if fail_open:
+                    logger.warning("[constitution] %s 검사 오류(통과 처리): %s", rule_id, e)
+                    continue
+                raise ConstitutionViolationError(rule_id, action, f"검사 오류: {e}") from e
+            if reason:
+                raise ConstitutionViolationError(rule_id, action, str(reason))
         related_rules = self.ACTION_RULES.get(action, [])
         if not related_rules:
             # 매핑 없음 = 통과 (모든 액션 매핑 X = OK, 자율!)

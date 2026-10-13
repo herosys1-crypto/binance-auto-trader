@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 
 from app.agents.orchestrator import BaseTeamLead, EventType
+from app.agents.orchestrator.team_lead_base import stoppable
 
 from app.agents.learning_team.memory_agent import MemoryAgent
 from app.agents.learning_team.analysis_agent import AnalysisAgent
@@ -29,6 +30,7 @@ class LearningTeamLead(BaseTeamLead):
         if event == EventType.EMERGENCY_STOP_ALL:
             logger.warning("[Learning] STOP: %s", data.get("reason", ""))
 
+    @stoppable                                       # 🎼 Fix 449 정지 중이면 건너뜀
     def run_learning_cycle(self, db, days: int = 30) -> dict:
         """전체 학습 사이클! (매 4시간 or 사장님 요청!)
 
