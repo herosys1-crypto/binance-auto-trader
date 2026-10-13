@@ -76,7 +76,7 @@ Claude Code 에이전트(`.claude/agents`)가 **아니라** 자동매매 프로�
 - 팀 17개: `strategy_suggestion_team`(9, 1,515줄 — 매일 전략 제안) · `learning_team`(5) · `chart_pattern_learning_team`(5) · `coding_team`(6 — 8/16 「코딩·기획 2팀」) · `planning_team`(6) · `entry_team` · `market_flow_team` · `timezone_pattern_team` · 그리고 틀만 있는 `tp/sl/capital/alert/analysis/audit/maintenance/monitoring/ui_team`(각 13~16줄)
 - 10/13 운영 로그(48h): 이벤트 버스 879 · 팀 리더 공통 66 · 학습 팀 10 · 차트 패턴 학습 팀 10 · 전략 제안 팀 4 — **살아 있다**. 상태 감시 `orchestra_health_worker`
 - 설명서: `backend/app/agents/TEAMS.md` · `README.md` · `docs/ORCHESTRA_INTEGRATION_SPEC.md`
-- 다른 프로젝트로: 매매 DB·워커에 묶인 코드라 그대로는 못 옮긴다. 옮길 수 있는 뼈대 = `orchestrator/`(지휘자·이벤트 버스·팀 리더 틀) — 새 프로젝트에 이 폴더를 복사하고 팀을 새로 만드는 방식.
+- 다른 프로젝트로: 매매 DB·워커에 묶인 코드라 그대로는 못 옮긴다 → **범용 템플릿 `templates/orchestra/`** (10/13, 표준 라이브러리만 · 지휘자 Conductor · 팀 리더 TeamLead · 에이전트 Agent · 이벤트 버스 · 규칙집 Rulebook · 예시 3팀 · 테스트 9개). 사용법은 그 폴더 README — `orchestra/` 를 새 프로젝트에 복사하고 팀만 새로 만든다.
 
 ## 4. 바꿀 때
 - 사용자 범위 에이전트를 고치면 **모든 프로젝트**에 바로 적용된다 → 프로젝트 특유 규칙은 넣지 말고 그 프로젝트 `CLAUDE.md` 에 쓴다.
