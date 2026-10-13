@@ -49,6 +49,8 @@ CODE_MARKERS = {
     "app/workers/ext_family_loop.py": ('regime=payload["regime"]',),                                          # 440
     "app/services/mass_rebound.py": ("def detect(", "def retro_bars("),                                         # 442 동시 반등
     "app/services/kline_store.py": ("class RedisKlineStore", "def apply_settings("),                         # 446 일봉 캐시 보관
+    "app/agents/orchestrator/receivers.py": ("def install(", "def prune_learning("),                         # 450 메시지 받는 쪽
+    "app/agents/orchestrator/team_lead_base.py": ("def stoppable(", "key=f\"team:{self.TEAM}\""),          # 449
     "app/services/kline_incremental.py": ("def set_full_refresh(", "def _restore("),                             # 446
     "app/services/paper_trading.py": ('"live_trend": {"trend": "after_tp1"}', "def trend_lines_for("),         # 447 추세 보유 청산 기록
     "app/services/family_loss_breaker.py": ("def limit_for(", "limit = limit_for(db, fam_key)"),                # 444 가족별 기준
