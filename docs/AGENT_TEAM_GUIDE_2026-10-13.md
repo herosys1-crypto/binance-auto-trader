@@ -70,6 +70,14 @@
 3. 그 프로젝트에 성적표가 없다면 분석관은 「백테스트 결과·거래 기록 CSV」를 읽도록 입력 부분만 바꿔 쓴다 — 감사관의 반박 렌즈(미래 참조·생존 편향·겹친 거래·장세 편중·표본 부족·실주문 차이)는 그대로 쓸 수 있다.
 4. 사용자 범위로 올리지 않는다 — 트레이딩이 아닌 프로젝트에서 잘못 불리는 것을 막기 위해.
 
+## 3-3. 🎼 오케스트라 에이전트 팀 (프로그램 안 · 사장님이 8/11~8/25 구성)
+Claude Code 에이전트(`.claude/agents`)가 **아니라** 자동매매 프로그램 안의 Python 코드 — `backend/app/agents/` (운영 서버에서 돌고 있다).
+- 지휘자 `orchestrator/` — `GrandOrchestrator`(8/11 「개별 에이전트를 총괄지휘하는 지휘자」) · 이벤트 버스(30+ 이벤트) · 팀 리더 공통 틀(`team_lead_base`)
+- 팀 17개: `strategy_suggestion_team`(9, 1,515줄 — 매일 전략 제안) · `learning_team`(5) · `chart_pattern_learning_team`(5) · `coding_team`(6 — 8/16 「코딩·기획 2팀」) · `planning_team`(6) · `entry_team` · `market_flow_team` · `timezone_pattern_team` · 그리고 틀만 있는 `tp/sl/capital/alert/analysis/audit/maintenance/monitoring/ui_team`(각 13~16줄)
+- 10/13 운영 로그(48h): 이벤트 버스 879 · 팀 리더 공통 66 · 학습 팀 10 · 차트 패턴 학습 팀 10 · 전략 제안 팀 4 — **살아 있다**. 상태 감시 `orchestra_health_worker`
+- 설명서: `backend/app/agents/TEAMS.md` · `README.md` · `docs/ORCHESTRA_INTEGRATION_SPEC.md`
+- 다른 프로젝트로: 매매 DB·워커에 묶인 코드라 그대로는 못 옮긴다. 옮길 수 있는 뼈대 = `orchestrator/`(지휘자·이벤트 버스·팀 리더 틀) — 새 프로젝트에 이 폴더를 복사하고 팀을 새로 만드는 방식.
+
 ## 4. 바꿀 때
 - 사용자 범위 에이전트를 고치면 **모든 프로젝트**에 바로 적용된다 → 프로젝트 특유 규칙은 넣지 말고 그 프로젝트 `CLAUDE.md` 에 쓴다.
 - 이 프로젝트 원본(`.claude/agents/impl.md` 등)과 사용자 범위 일반화본은 따로 관리한다.
