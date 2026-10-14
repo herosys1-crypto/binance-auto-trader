@@ -132,7 +132,7 @@ def _verdict_mod():
 def test_verdict_exit_compare_preregistered():
     from datetime import date, timedelta
     V = _verdict_mod()
-    assert V.EXIT_ENGINES == ("live_stale24", "live_trend", "live_trend0")
+    assert V.EXIT_ENGINES == ("live_stale24", "live_trend", "live_trend0", "live_trail3", "live_trail8")   # Fix 453
     d0 = date(2026, 10, 13)
     rows = [{"d": d0 + timedelta(days=i % 10), "eng": {"live": 1.0, "live_trend": 1.5}} for i in range(40)]
     ev = V.exit_compare(rows, "live_trend")

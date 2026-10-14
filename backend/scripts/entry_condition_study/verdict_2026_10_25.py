@@ -17,6 +17,10 @@
   D 규칙 가족 가상 규칙(장세 필터 안/밖) · E 운영팀 게이트(칸 안/밖) · G 청산 방식 비교(같은 거래 짝)
   H 통과 전략의 단계 1 설정표 (Fix 448 — 자본 계획서 4절 값 vs 지금 값, 보여 주기만)
   💸 순수익 열(Fix 452, 2026-10-14 추가 — 참고용, 판정 기준은 위 그대로): 수수료·슬리피지 뺀 평균. 행에 roi_net 이 없으면 roi − 0.4.
+  I 가설(Fix 454, 2026-10-14 사전 등록 — 전략 손실 진단 감사관 제안): 장세 필터 안 SHORT(24h ≥ +10%) 중 시장폭 > 0.6 을 빼면 낫다.
+     이 시각(CUTOFFS["short_high"]) 뒤 진입만 센다(가설을 만든 30일 데이터는 쓰지 않는다).
+     「✅ 제외 후보」 = 시장폭 > 0.6 칸: n ≥ 30 · 7일 이상 · 평균 < 0 · 앞·뒤 절반 모두 < 0 · 그리고 ≤ 0.6 칸 평균보다 낮음.
+     n·일수 미달 = ⏳ 보류 · 그 밖 = ❌ 기각(지금 그대로). 숫자는 Claude가 정함.
 """
 from __future__ import annotations
 
@@ -41,6 +45,7 @@ CUTOFFS = {
     "pumptop": "2026-10-11T03:05:00+00:00",           # Fix 438
     "regime": "2026-10-11T03:05:00+00:00",            # Fix 439 장세 필터 (규칙 가족)
     "ext_regime": "2026-10-11T10:08:00+00:00",        # Fix 440 장세 필터 (외부 전략)
+    "short_high": "2026-10-14T04:00:00+00:00",        # Fix 454 가설 I 사전 등록 (이 뒤 진입만)
 }
 CRIT = {"min_n": 30, "min_days": 7, "win_days": 0.5, "live_min_n": 5, "gate_min_n": 30}
 CUTOFFS["mass_rebound"] = "2026-10-10T22:45:00+00:00"        # 📣 Fix 442 — 판정 재료는 가상 행이라 합의 LONG 배포 시각부터 같게
@@ -117,7 +122,7 @@ def evaluate(rows: list[dict], base_mean: dict) -> dict:
     return out
 
 
-EXIT_ENGINES = ("live_stale24", "live_trend", "live_trend0")      # 📈 Fix 447: 지금 청산(live)과 짝으로 비교
+EXIT_ENGINES = ("live_stale24", "live_trend", "live_trend0", "live_trail3", "live_trail8")   # 📈 Fix 447 · 📏 Fix 453 트레일링 폭
 
 
 def exit_compare(rows: list[dict], engine: str) -> dict:
@@ -198,6 +203,41 @@ def stage1_table(fam: str, label: str, kind: str, cur: dict) -> str:
         same = n == t or t == "유지" or (t == "1~3" and n in ("1", "2", "3")) or (t == "0" and n in ("—", "0", "0.0"))
         out.append(f"| `{k}` | {n} | {t} | {'—' if same else '✏️'} | {m} |")
     return "\n".join(out)
+
+
+HIGH_BREADTH = 0.6
+
+
+def short_high_hypothesis(rows: list[dict]) -> dict:
+    """I 가설 — rows = 장세 필터 안 SHORT 행(rule 이 baseline_ 아님) [{d, roi, mb}]. 시장폭 > 0.6 칸 vs 나머지."""
+    hi = [r for r in rows if _f(r.get("mb")) is not None and _f(r["mb"]) > HIGH_BREADTH]
+    lo = [r for r in rows if _f(r.get("mb")) is not None and _f(r["mb"]) <= HIGH_BREADTH]
+
+    def st(xs):
+        if not xs:
+            return {"n": 0, "days": 0, "mean": None, "h1": None, "h2": None}
+        days = sorted({r["d"] for r in xs})
+        mid = days[len(days) // 2]
+        a = [r["roi"] for r in xs if r["d"] < mid]
+        b = [r["roi"] for r in xs if r["d"] >= mid]
+        return {"n": len(xs), "days": len(days), "mean": sum(r["roi"] for r in xs) / len(xs),
+                "h1": (sum(a) / len(a)) if a else None, "h2": (sum(b) / len(b)) if b else None}
+    H, L = st(hi), st(lo)
+    out = {"high": H, "rest": L}
+    if H["n"] < CRIT["min_n"] or H["days"] < CRIT["min_days"]:
+        out.update(verdict="⏳ 보류", why=f"시장폭>{HIGH_BREADTH} 칸 n {H['n']}/{CRIT['min_n']} · 일 {H['days']}/{CRIT['min_days']}")
+        return out
+    fails = []
+    if not H["mean"] < 0:
+        fails.append("평균 ≥ 0")
+    if H["h1"] is None or not H["h1"] < 0:
+        fails.append("앞 절반 ≥ 0")
+    if H["h2"] is None or not H["h2"] < 0:
+        fails.append("뒤 절반 ≥ 0")
+    if L["mean"] is not None and not H["mean"] < L["mean"]:
+        fails.append("나머지 칸보다 낮지 않음")
+    out.update(verdict="✅ 제외 후보" if not fails else "❌ 기각(지금 그대로)", why=" · ".join(fails) or "기준 모두 충족")
+    return out
 
 
 def live_verdict(system_sum: float, n_closed: int) -> str:
@@ -366,7 +406,8 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
         print("| 대상 · 엔진 | 짝 n | 평균 live → 변형 | 평균 차 | 앞 → 뒤 차 | 최악의 날 합 live → 변형 | 판정 | 사유 |\n|---|---|---|---|---|---|---|---|")
         qe = text("""select rule, side, opened_at::date d, engines->'live'->>'roi' live,
                      engines->'live_stale24'->>'roi' live_stale24, engines->'live_trend'->>'roi' live_trend,
-                     engines->'live_trend0'->>'roi' live_trend0
+                     engines->'live_trend0'->>'roi' live_trend0,
+                     engines->'live_trail3'->>'roi' live_trail3, engines->'live_trail8'->>'roi' live_trail8
                      from paper_trades where source='live' and status='CLOSED' and opened_at >= :since and opened_at <= :now
                      and engines->'live_trend' is not null""")
         er = [{"rule": x.rule, "side": x.side, "d": x.d,
@@ -379,6 +420,15 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
         for gname, grows in groups:
             for eng in EXIT_ENGINES:
                 print(exit_line(f"{gname} · {eng}", exit_compare(grows, eng)))
+
+        print(f"\n## I. 🧪 가설(Fix 454) — 장세 필터 안 SHORT 중 시장폭 > {HIGH_BREADTH} 빼기 (10/14 사전 등록, 그 뒤 진입만)\n")
+        sh = [r for r in rows if r["side"] == "SHORT" and not r["rule"].startswith("baseline_")
+              and r["opened_at"] >= _dt(CUTOFFS["short_high"]) and regime_ok("SHORT", r["mb"], r["chg_24h"]) is True]
+        hv = short_high_hypothesis(sh)
+        for k, lab in (("high", f"시장폭 > {HIGH_BREADTH}"), ("rest", f"시장폭 ≤ {HIGH_BREADTH}")):
+            g = hv[k]
+            print(f"- {lab}: n {g['n']} ({g['days']}일) · 평균 {_fmt(g['mean'])} · 앞 {_fmt(g['h1'])} → 뒤 {_fmt(g['h2'])}")
+        print(f"→ {hv['verdict']} — {hv['why']}  (제외 후보여도 실주문 반영은 사장님 승인 뒤)")
 
         print("\n## H. 🪜 단계 1 설정표 (Fix 448) — 위에서 ✅ 통과한 전략만 · 계획서 4절 값 vs 지금 값 · 바꾸는 건 사장님\n")
         # 미리 보기(판정 아님): VERDICT_PREVIEW_H=rf_consensus_long,trima — 표가 맞게 나오는지 판정 전에 확인용

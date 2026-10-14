@@ -31,7 +31,7 @@ def test_breadth_and_tags():
     assert "UP24" in g and "MKT_DOWN" in g and "LIVE_OK" in g and "MKT_UP" not in g
     assert set(PT.GROUP_KEYS) >= {"MKT_UP", "MKT_DOWN", "LIVE_OK"}
     # Fix 370: 적응 TP·손절 −10 계산 중단 → 청산 개선 3종 (옛 행 값은 LEGACY_ENGINES 로 남는다)
-    assert PT.ENGINES == ("house", "live", "live_sl15", "live_be10", "live_lock5", "live_stale24", "live_trend", "live_trend0")   # Fix 447
+    assert PT.ENGINES == ("house", "live", "live_sl15", "live_be10", "live_lock5", "live_stale24", "live_trend", "live_trend0", "live_trail3", "live_trail8")   # Fix 447 · 453
     assert PT.LEGACY_ENGINES == ("live_adaptive", "live_sl10") and set(PT.LIVE_LIKE) >= set(PT.LEGACY_ENGINES)
 
 

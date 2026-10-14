@@ -73,6 +73,10 @@ EXIT_VARIANTS: dict[str, dict[str, Any]] = {
     #   live_trend = TP1(15·25%) 뒤 트레일링 대신 추세선 · live_trend0 = 진입 직후부터 추세선(TP1 부분익절 없음). 값은 Claude가 정함.
     "live_trend": {"trend": "after_tp1"},
     "live_trend0": {"trend": "from_entry"},
+    # 📏 Fix 453 (2026-10-14 사장님 「2번 진행해줘」 — 전략 손실 진단: 48h 만료 건이 평균 최고 +6.6 까지 갔다가 되돌아와 끝났다):
+    #   TP1 뒤 트레일링 되돌림 폭만 바꾼 쌍둥이 — 지금 5%p 대비 좁게 3%p(이익을 빨리 잠금) · 넓게 8%p(추세를 오래 보유). Claude가 정함.
+    "live_trail3": {"trail_retrace": 3.0},
+    "live_trail8": {"trail_retrace": 8.0},
 }
 # 💸 Fix 452 (2026-10-14 사장님 「1번 진행해줘」 — 전략 손실 진단: 가상 엔진에 수수료·슬리피지가 없어 실주문보다 좋게 나온다):
 #   엔진마다 roi 옆에 roi_net = roi − 왕복 비용(ROI). 기존 roi 는 그대로(판정 사전 등록 기준 불변) — 순수익은 따로 본다.
@@ -324,7 +328,8 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
                   horizon: int = LIVE_HORIZON, variants: Sequence[str] = VARIANTS,
                   sl_roi: float = LIVE_SL_ROI, protect_at: float | None = None,
                   protect_stop_roi: float | None = None, stale_bars: int | None = None,
-                  trend: str | None = None, trend_lines: Sequence[tuple[float, float] | None] | None = None) -> dict[str, Any]:
+                  trend: str | None = None, trend_lines: Sequence[tuple[float, float] | None] | None = None,
+                  trail_retrace: float = TRAIL_RETRACE) -> dict[str, Any]:
     """진입 뒤 완성봉 `bars` 로 실매매 청산 규칙을 근사한다. 판정 순서(한 봉 안): 손절 → TP1 → 트레일링(직전 봉까지의 최고 기준)
     → 시간 만료. 추가 lot 은 봉 **종가**에서 열고, 자기 손절(`sl_roi`, 기본 −25% ROI) 또는 본 포지션 청산과 함께 닫힌다.
     `hist[hist_off + i]` = i 번째 봉의 MACD hist. `body_fn(i)` = i 번째 봉까지의 몸통 성장 판정. 봉이 모자라면 done=False.
@@ -401,7 +406,7 @@ def run_live_like(side: str, entry: float, bars: Sequence[Sequence[float]], *, t
             max_roi = max(max_roi, tp1_pct)
         # 트레일링 (TP1 뒤, 직전 봉까지의 최고 ROI 기준 — 같은 봉의 신고점은 다음 봉부터)
         if trend is None and tp1_hit and i > (tp1_bar or 0):
-            trail_roi = max_roi - TRAIL_RETRACE
+            trail_roi = max_roi - float(trail_retrace)          # 📏 Fix 453: 변형별 되돌림 폭 (기본 = TRAIL_RETRACE 5)
             adv_roi = roi_of(side, entry, adv_px)
             if adv_roi <= trail_roi:
                 px = price_at_roi(side, entry, trail_roi)
