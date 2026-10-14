@@ -30,21 +30,24 @@ CODE_MARKERS = {
     ),
     "app/static/js/live-pump-dump-alerts.js": ("if (!document.hidden) scanLivePumpDump();",),                  # 418
     "app/static/js/tp-sl-advisor.js": ("if (!document.hidden) scanTpSlAdvisor();",),                           # 418
-    "app/workers/scheduler_runner.py": ("wait_for_leader(guard)", "signal.signal(signal.SIGTERM, _on_signal)"),  # 420
+    "app/workers/scheduler_runner.py": ("wait_for_leader(guard)", "signal.signal(signal.SIGTERM, _on_signal)",  # 420
+                                        'guarded_job("strategy_council"',                                     # 430 스케줄
+                                        "record_job_count(redis_client, job_name, _ok, _t1)",                 # 459 24h 오류
+                                        'CronTrigger(hour=10, minute=20, timezone="Asia/Seoul")'),            # 460 KST
     "app/workers/distributed_scheduler_guard.py": ("def release_leader(",),                                      # 420
     "app/workers/emapb_watch_worker.py": ("def scan_symbol(", "_send(db, r, fresh, iv)"),                       # 424 알림
     "app/api/v1/ema_pullback.py": ('APIRouter(prefix="/ema-pullback"',),                                         # 424 화면
     "app/services/ema_pullback.py": ('"emapb_interval": ("1d"', "def ready_state("),                             # 424 일봉
     "app/services/strategy_council.py": ("def build_report(", '"gap": (1, 10)'),                                 # 430 운영팀
     "app/workers/strategy_council_worker.py": ("council:latest", "stream_results"),                              # 430 워커
-    "app/workers/scheduler_runner.py": ('guarded_job("strategy_council"',),                                      # 430 스케줄
     "app/services/council_gate.py": ("def judge(", "council:gate:"),                                           # 433 기록 전용
-    "app/workers/rule_family_worker.py": ("CG.judge(", "si = _enter_split("),                                   # 433 연결
-    "app/services/family_loss_breaker.py": ("def family_part(", "begin_nested"),                                # 435 차단기 체결 기준
+    "app/workers/rule_family_worker.py": ("CG.judge(", "si = _enter_split(",                                   # 433 연결
+                                          'blocks.append("regime_filter")', "RF.regime_filter_mode(db)"),       # 439 장세 필터
+    "app/services/family_loss_breaker.py": ("def family_part(", "begin_nested",                                # 435 차단기 체결 기준
+                                            "def limit_for(", "limit = limit_for(db, fam_key)"),               # 444 가족별 기준
     "app/services/human_share.py": ("def split_for(", '"fills": len(es)'),                                    # 434·435
     "app/services/consensus_long.py": ("def qualifies(", 'RULE_KEY = "consensus_long"'),                     # 437 합의 LONG
     "app/services/pump_top_short.py": ("def judge(", 'KEY_30 = "pumptop_short_30"'),                       # 438 급등 정점 SHORT
-    "app/workers/rule_family_worker.py": ('blocks.append("regime_filter")', "RF.regime_filter_mode(db)"),    # 439 장세 필터
     "app/services/ext_regime.py": ("def chg24_from_bars(", "def breadth_now("),                              # 440 외부 장세 필터
     "app/workers/ext_family_loop.py": ('regime=payload["regime"]',),                                          # 440
     "app/services/mass_rebound.py": ("def detect(", "def retro_bars("),                                         # 442 동시 반등
@@ -53,7 +56,6 @@ CODE_MARKERS = {
     "app/agents/orchestrator/team_lead_base.py": ("def stoppable(", "key=f\"team:{self.TEAM}\""),          # 449
     "app/services/kline_incremental.py": ("def set_full_refresh(", "def _restore("),                             # 446
     "app/services/paper_trading.py": ('"live_trend": {"trend": "after_tp1"}', "def trend_lines_for("),         # 447 추세 보유 청산 기록
-    "app/services/family_loss_breaker.py": ("def limit_for(", "limit = limit_for(db, fam_key)"),                # 444 가족별 기준
     "app/workers/paper_trading_worker.py": ("_CON.apply(fired, rule_side, breadth)",),                       # 437 가상 판정
     "app/services/rule_families.py": ('Family("rf_consensus_long"', '"rf_consensus_long_entry"'),       # 437 가족
     "app/services/office_board.py": ("def parse_counts(", "BLIP_MIN_RUNS = 10", "def parse_next_runs("),   # 459 사무실 24h 오류·다음 실행
