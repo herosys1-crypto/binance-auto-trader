@@ -83,11 +83,27 @@
       `<table style="font-size:12px;width:100%"><tr><th ${th}>방향</th><th ${th}>겹침</th><th ${th}>edge</th><th ${th}>n</th></tr>${ov}</table></div></div>` +
       liveHtml +
       `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:#c4b5fd">규칙 상태 ${(d.F_status || []).length}개 (새 전략은 「표본 부족」으로 시작)</summary><div style="margin-top:4px">${st}</div></details>` +
+      `<details style="margin-top:6px" ontoggle="if(this.open)window.loadVerdictReport&&window.loadVerdictReport()"><summary style="cursor:pointer;font-size:12px;color:#c4b5fd">🧾 판정·중간 점검 보고서 (자동 실행 · 10/17 · 10/25)</summary>` +
+      `<pre id="verdict-report-body" style="white-space:pre-wrap;font-size:11px;max-height:480px;overflow:auto;margin-top:4px">불러오는 중…</pre></details>` +
       `<div class="text-xs text-slate-500" style="margin-top:4px">※ 분석 전용 — 주문·설정을 바꾸지 않습니다. 켜기·끄기는 관제실에서 사장님이.</div>`;
+  }
+
+  // 🧾 Fix 457: 펼칠 때만 불러온다 (보고서는 수십 KB)
+  async function loadVerdictReport() {
+    const el = document.getElementById('verdict-report-body');
+    if (!el) return;
+    try {
+      const r = await api('/strategy-council/verdict-report');
+      el.textContent = (!r || r.empty) ? '아직 자동 실행된 보고서가 없습니다 (10/17 중간 점검 · 10/25 통합 판정, KST 10:20).'
+        : `[${r.day} · ${r.kind === 'verdict' ? '통합 판정' : '중간 점검'}]\n\n` + (r.report || '');
+    } catch (e) {
+      el.textContent = '불러오기 실패';
+    }
   }
 
   if (typeof window !== 'undefined') {
     window.loadStrategyCouncil = loadStrategyCouncil;
+    window.loadVerdictReport = loadVerdictReport;
     document.addEventListener('DOMContentLoaded', () => {
       setTimeout(loadStrategyCouncil, 3000);
       setInterval(() => { if (!document.hidden) loadStrategyCouncil(); }, 10 * 60000);

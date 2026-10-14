@@ -925,6 +925,17 @@ def start_scheduler() -> None:
         id="strategy_council", replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🧾 Fix 457 (2026-10-14 사장님 「판정 보고서 자동 실행 진행해줘」): 정해진 날(verdict_auto_schedule) KST 10:20 에
+    #   중간 점검(10/17)·통합 판정(10/25) 보고서를 자동 실행 → Redis 원문 + 텔레그램 요약. 읽기·기록 전용.
+    def _verdict_report():
+        from app.workers.verdict_report_worker import run_verdict_report_once
+        run_verdict_report_once()
+    scheduler.add_job(
+        guarded_job("verdict_report", 900, _verdict_report),
+        trigger=CronTrigger(hour=10, minute=20),
+        id="verdict_report", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     # 🗓 Fix 424 (2026-10-09 사장님): EMA 추세 눌림 「진입 준비」·「진입 신호」 알림 — 텔레그램 + 화면. 주문 없음.
     #   일봉 기준이라 15분마다면 충분 (감시 상위 60종목 × 일봉 300개 = 무게 120/회 ≈ 8/분).
     def _emapb_watch():

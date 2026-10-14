@@ -31,6 +31,20 @@ def strategy_council_latest(user_id: int = Depends(get_current_user_id)) -> dict
         return {"empty": True, "error": "조회 실패"}
 
 
+@router.get("/verdict-report")
+def strategy_council_verdict_report(day: str | None = None, kind: str | None = None,
+                                    user_id: int = Depends(get_current_user_id)) -> dict:
+    """🧾 Fix 457: 자동 실행된 판정·중간 점검 보고서 원문(마크다운). 없으면 {"empty": True}."""
+    try:
+        from app.core.redis_client import get_redis_client
+        from app.workers.verdict_report_worker import latest_report
+        rep = latest_report(get_redis_client(), day=day, kind=kind)
+        return rep or {"empty": True}
+    except Exception as e:  # noqa: BLE001 — 화면이 죽지 않게
+        logger.warning("[Fix457] 판정 보고서 조회 실패: %s", e)
+        return {"empty": True, "error": "조회 실패"}
+
+
 LIVE_KEY = "council:live_families"
 LIVE_TTL = 300          # 5분 캐시 — 화면 폴링이 DB 를 두드리지 않게 (Fix 386 교훈)
 
