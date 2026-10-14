@@ -46,6 +46,17 @@ HEALTH_KEY_SCHEDULER_LEADER = "health:scheduler:leader"
 HEALTH_TTL_SECONDS = 60
 
 
+JOB_LAST_KEY = "sched:last"   # 🏢 Fix 458: 잡별 마지막 실행(시작·끝·성공/오류) — 「사무실」 화면이 읽는다. 기록 실패는 잡에 영향 없음
+
+
+def _record_job(redis_client, job_name: str, rec: dict) -> None:
+    try:
+        import json as _json
+        (redis_client or get_redis_client()).hset(JOB_LAST_KEY, job_name, _json.dumps(rec))
+    except Exception:  # noqa: BLE001 — 진단 기록이 잡 실행을 막으면 안 된다
+        pass
+
+
 def _set_scheduler_health(is_leader: bool, redis_client=None) -> None:
     try:
         client = redis_client or get_redis_client()
@@ -246,9 +257,19 @@ def start_scheduler() -> None:
                 _tok = set_caller(job_name)
             except Exception:      # 진단이 잡 실행을 막으면 안 된다
                 _tok = None
+            import time as _time
+            _t0 = _time.time()
+            _record_job(redis_client, job_name, {"s": round(_t0, 1), "st": "run"})     # 🏢 Fix 458
+            _ok, _err = False, None
             try:
                 fn()
+                _ok = True
+            except Exception as _e:
+                _err = f"{type(_e).__name__}: {_e}"[:160]
+                raise
             finally:
+                _record_job(redis_client, job_name, {"s": round(_t0, 1), "e": round(_time.time(), 1),
+                                                     "st": "ok" if _ok else "err", "err": _err})
                 if _tok is not None:
                     try:
                         from app.integrations.binance.client import reset_caller

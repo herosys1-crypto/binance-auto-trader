@@ -1340,6 +1340,11 @@
                     class="text-xs text-white px-2 py-1 rounded font-bold"
                     style="background:linear-gradient(135deg,#a78bfa,#f59e0b)"
                     title="🎯 v200 사장님 실시간 모니터링! 5패턴 (A~E) + 진입 중/예정/성공실패 = 한눈에!">📡 실시간</button>
+            <!-- 🏢 Fix 458 (2026-10-14 사장님): 자동매매 사무실 — 팀마다 지금 무엇을 하는지 -->
+            <button onclick="openOffice()"
+                    class="text-xs text-white px-2 py-1 rounded font-bold"
+                    style="background:linear-gradient(135deg,#f59e0b,#10b981)"
+                    title="🏢 자동매매 사무실 — 지휘실·매매실·연구실·학습실·감시실 팀 상태(작업 중·대기·오류)">🏢 사무실</button>
             <!-- 🎓 v207 사장님 (2026-08-21): 학습 인사이트! -->
             <button onclick="openLearningInsights()"
                     class="text-xs text-white px-2 py-1 rounded font-bold"
@@ -2930,6 +2935,11 @@ function openRealtimeMonitor() {
     'realtimeMonitor',
     'width=1300,height=1000,left=400,top=20'
   );
+}
+
+/* 🏢 Fix 458 (2026-10-14 사장님): 자동매매 사무실 */
+function openOffice() {
+  window.open(`/static/office.html`, 'office', 'width=1500,height=1000,left=200,top=20');
 }
 
 /* 🎛 Fix 374 (2026-09-16 사장님): 자동매매 관제실 — 「모든 자동매매를 한곳으로」 */

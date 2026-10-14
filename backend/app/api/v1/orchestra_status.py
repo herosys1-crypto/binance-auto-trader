@@ -179,3 +179,36 @@ def get_orchestra_status(
         "recent_events": recent_events,
         "note": "🎼 v206 Phase 3 사장님 오케스트라 상태!",
     }
+
+
+OFFICE_CACHE_KEY = "orchestra:office:cache"
+OFFICE_CACHE_TTL = 20      # 🏢 Fix 458: 화면 갱신(30초)보다 짧게 — 여러 창이 열려도 DB 를 두드리지 않게
+
+
+@router.get("/office")
+def get_orchestra_office(
+    db: Session = Depends(get_db),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """🏢 Fix 458 (2026-10-14 사장님 「사무실 탭」): 본부(방)·책상(팀)별 상태 — 읽기 전용."""
+    import json
+    from app.core.redis_client import get_redis_client
+    try:
+        r = get_redis_client()
+        raw = r.get(OFFICE_CACHE_KEY)
+        if raw:
+            return json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+    except Exception:  # noqa: BLE001
+        r = None
+    try:
+        from app.services import office_board as OB
+        data = OB.collect(db, r)
+    except Exception as e:  # noqa: BLE001 — 화면이 죽지 않게
+        logger.warning("[Fix458] 사무실 데이터 실패: %s", e)
+        return {"error": "조회 실패", "rooms": []}
+    try:
+        if r is not None:
+            r.setex(OFFICE_CACHE_KEY, OFFICE_CACHE_TTL, json.dumps(data, ensure_ascii=False))
+    except Exception:  # noqa: BLE001
+        pass
+    return data

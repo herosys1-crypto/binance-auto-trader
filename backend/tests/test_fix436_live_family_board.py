@@ -66,7 +66,7 @@ def test_api_and_card_wiring():
     js = (APP / "static" / "js" / "strategy-council.js").read_text(encoding="utf-8")
     assert "/strategy-council/live-families" in js and "시스템 몫" in js
     html = (APP / "static" / "index.html").read_text(encoding="utf-8")
-    assert "strategy-council.js?v=fix436" in html
+    assert "strategy-council.js?v=fix4" in html          # Fix 436 이후 버전 갱신 허용 (Fix 457 = fix457)
     src = (APP / "services" / "live_family_board.py").read_text(encoding="utf-8")
     assert "commit" not in src and "setex" not in src
 
