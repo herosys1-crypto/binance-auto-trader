@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Redis key = 실시간 watchlist!
 WATCHLIST_KEY = "v199:realtime_watchlist"
-WATCHLIST_TTL_SEC = 900  # 15분!
+WATCHLIST_TTL_SEC = 1200  # 20분 — 🩺 Fix 456: 갱신 주기(15분)와 같으면 조금만 늦어도 비어 「없음」(24h 31번)·강제 재갱신(33번) → 5분 여유 (Claude가 정함)
 
 MAX_WATCHLIST_SIZE = 50  # 사장님 「관리 가능한 수」!
 
