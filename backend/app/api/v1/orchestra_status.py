@@ -41,8 +41,11 @@ def get_orchestra_status(
             gen_at = datetime.fromisoformat(insights.get("generated_at", ""))
             age_min = (datetime.now(timezone.utc) - gen_at).total_seconds() / 60
             snap = insights.get("snapshot_conditions", {})
+            from app.workers.pattern_learning_worker import no_data_state   # ⏸ Fix 455
+            _nd = no_data_state() if age_min >= 65 else None
             teams["pattern_learning"] = {
-                "status": "✅ 정상" if age_min < 65 else "⚠️ 지연",
+                "status": "✅ 정상" if age_min < 65 else ("⏸ 재료 없음" if _nd else "⚠️ 지연"),
+                "detail": (f"결과 난 전략 제안이 30일 안에 없음(마지막 {str(_nd.get('newest_outcome') or '')[:10]})" if _nd else ""),
                 "samples": insights.get("total_samples", 0),
                 "last_run_min_ago": round(age_min, 1),
                 "conditions_learned": sum(len(v) for v in snap.values()),

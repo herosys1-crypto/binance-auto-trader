@@ -93,6 +93,13 @@ def _check_and_fix_learning(db, checks, fixes, alerts):
 
         gen_at = datetime.fromisoformat(insights.get("generated_at", ""))
         age_h = (datetime.now(timezone.utc) - gen_at).total_seconds() / 3600
+        # ⏸ Fix 455: 학습 재료가 없어서 멈춘 것 = 고장 아님 → 헛 재실행·지연 판정 안 함 (24h 46번 헛 재실행이었다)
+        from app.workers.pattern_learning_worker import no_data_state
+        _nd = no_data_state()
+        if _nd is not None and age_h > 3:
+            checks.append({"team": "pattern_learning", "status": "OK", "note": "no_data",
+                           "age_h": round(age_h, 1), "newest_outcome": _nd.get("newest_outcome")})
+            return
         checks.append({
             "team": "pattern_learning",
             "status": "OK" if age_h < 3 else "STALE",

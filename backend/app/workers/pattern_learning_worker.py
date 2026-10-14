@@ -32,6 +32,11 @@ from app.models.system_setting import SystemSetting
 logger = logging.getLogger(__name__)
 
 SETTING_KEY = "pattern_learning_insights_v187"
+# ⏸ Fix 455 (2026-10-14): 학습 재료(30일 안 결과 난 전략 제안)가 0건이면 「재료 없음」을 Redis 에 남긴다.
+#   10/14 실측: 결과 난 마지막 제안 = 9/12 → 10/12 부터 매번 no data · 감시 진단이 「지연」으로 보고 24h 46번 헛 재실행.
+#   인사이트(SETTING_KEY)는 덮지 않는다 — 옛 진입 워커(auto_bb_breakdown, 지금 꺼짐)가 읽는 값이라 그대로 둔다.
+NO_DATA_KEY = "pattern_learning:no_data"
+NO_DATA_TTL_S = 3 * 3600              # 매 1h 실행 · 두 번 놓쳐도 남게 (Claude가 정함)
 
 
 def run_pattern_learning() -> dict:
@@ -46,6 +51,7 @@ def run_pattern_learning() -> dict:
         ).scalars().all()
 
         if not rows:
+            _mark_no_data(db)                                    # ⏸ Fix 455
             return {"note": "no data", "insights": {}}
 
         # 1. suggestion_type + side 별 성공률!
@@ -482,6 +488,32 @@ def _bucket_obv(obv: float) -> str:
     if obv < 3: return "neutral (-3~+3%)"
     if obv < 10: return "up (+3~+10%)"
     return "strong_up (>+10%)"
+
+
+def _mark_no_data(db: Session) -> None:
+    try:
+        from app.core.redis_client import get_redis_client
+        newest = db.execute(
+            select(StrategySuggestion.created_at)
+            .where(StrategySuggestion.outcome_status.in_(["SUCCESS", "FAIL"]))
+            .order_by(StrategySuggestion.created_at.desc()).limit(1)
+        ).scalar()
+        get_redis_client().setex(NO_DATA_KEY, NO_DATA_TTL_S, json.dumps({
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "newest_outcome": newest.isoformat() if newest else None,
+        }))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[pattern_learning] 재료 없음 표시 실패: %s", e)
+
+
+def no_data_state() -> dict | None:
+    """⏸ Fix 455: 최근(3시간 안) 실행이 「재료 없음」이었으면 그 기록, 아니면 None. Redis 실패 = None(예전처럼 판정)."""
+    try:
+        from app.core.redis_client import get_redis_client
+        raw = get_redis_client().get(NO_DATA_KEY)
+        return json.loads(raw) if raw else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def get_learning_insights(db: Session) -> dict | None:

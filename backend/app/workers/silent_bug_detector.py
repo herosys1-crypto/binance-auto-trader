@@ -276,7 +276,8 @@ def _v206_system_sanity_check(db, result: dict, redis) -> None:
         if insights:
             gen_at = datetime.fromisoformat(insights.get("generated_at", ""))
             age_h = (datetime.now(timezone.utc) - gen_at).total_seconds() / 3600
-            if age_h > 3:  # 3시간 이상 = 갱신 안 됨!
+            from app.workers.pattern_learning_worker import no_data_state   # ⏸ Fix 455
+            if age_h > 3 and no_data_state() is None:  # 3시간 이상 = 갱신 안 됨! (재료 없음은 고장 아님)
                 result["bugs_found"] += 1
                 result["details"].append({
                     "type": "V206_LEARNING_STALE",
