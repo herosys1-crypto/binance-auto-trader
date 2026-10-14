@@ -108,7 +108,7 @@ def test_latest_report_and_wiring():
     assert V.latest_report(r, kind="midcheck")["report"] == "m"
     assert V.latest_report(r, day="2026-10-01") is None
     sch = (APP / "workers" / "scheduler_runner.py").read_text(encoding="utf-8")
-    assert 'id="verdict_report"' in sch and "CronTrigger(hour=10, minute=20)" in sch
+    assert 'id="verdict_report"' in sch and 'CronTrigger(hour=10, minute=20, timezone="Asia/Seoul")' in sch
     api = (APP / "api" / "v1" / "strategy_council.py").read_text(encoding="utf-8")
     assert '@router.get("/verdict-report")' in api
     for name in V.SCRIPTS.values():

@@ -75,7 +75,7 @@ def test_sql_safety_pins():
 
 def test_scheduled():
     sr = (APP / "workers" / "scheduler_runner.py").read_text(encoding="utf-8")
-    assert 'guarded_job("paper_retention"' in sr and "CronTrigger(hour=12, minute=40)" in sr
+    assert 'guarded_job("paper_retention"' in sr and 'CronTrigger(hour=12, minute=40, timezone="Asia/Seoul")' in sr
 
 
 def test_margin_keeps_rows_just_past_60_days(db):

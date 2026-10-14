@@ -355,7 +355,7 @@ def start_scheduler() -> None:
     scheduler.add_job(guarded_job("spec_audit", 300, run_spec_audit_once), trigger=IntervalTrigger(hours=1), id="spec_audit", replace_existing=True, max_instances=1, coalesce=True)
     # 🌟 2026-06-11 v49 Phase 3 worker 6: auto_fix_proposer (= 자동 fix 제안!)
     scheduler.add_job(guarded_job("auto_fix_proposer", 60, run_auto_fix_proposer_once), trigger=IntervalTrigger(minutes=5), id="auto_fix_proposer", replace_existing=True, max_instances=1, coalesce=True)
-    # 🌟 2026-06-11 v50 Phase 3 worker 7 (= 100% 완성!): memory_consolidator (매일 KST 03:00!)
+    # 🌟 2026-06-11 v50 Phase 3 worker 7 (= 100% 완성!): memory_consolidator (매일 KST 03:00! = UTC 18:00 — 트리거는 컨테이너 UTC)
     scheduler.add_job(guarded_job("memory_consolidator", 600, run_memory_consolidator_once), trigger=CronTrigger(hour=18, minute=0), id="memory_consolidator", replace_existing=True, max_instances=1, coalesce=True)
     # 🌟 2026-06-11 v51 신: mainnet_safety_worker (= #23 옛 미해결 = mainnet 진입 직전 점검!)
     scheduler.add_job(guarded_job("mainnet_safety", 300, run_mainnet_safety_check_once), trigger=IntervalTrigger(hours=1), id="mainnet_safety", replace_existing=True, max_instances=1, coalesce=True)
@@ -979,7 +979,7 @@ def start_scheduler() -> None:
         run_paper_retention_once()
     scheduler.add_job(
         guarded_job("paper_retention", 1800, _paper_retention),
-        trigger=CronTrigger(hour=12, minute=40),
+        trigger=CronTrigger(hour=12, minute=40, timezone="Asia/Seoul"),  # Fix 460: 시간대 없으면 컨테이너 UTC 로 돈다(9시간 늦음)
         id="paper_retention", replace_existing=True, max_instances=1, coalesce=True,
     )
 
@@ -990,7 +990,7 @@ def start_scheduler() -> None:
         run_strategy_council_once()
     scheduler.add_job(
         guarded_job("strategy_council", 900, _strategy_council),
-        trigger=CronTrigger(hour=9, minute=40),
+        trigger=CronTrigger(hour=9, minute=40, timezone="Asia/Seoul"),  # Fix 460: 시간대 없으면 컨테이너 UTC 로 돈다(9시간 늦음)
         id="strategy_council", replace_existing=True, max_instances=1, coalesce=True,
     )
 
@@ -1001,7 +1001,7 @@ def start_scheduler() -> None:
         run_verdict_report_once()
     scheduler.add_job(
         guarded_job("verdict_report", 900, _verdict_report),
-        trigger=CronTrigger(hour=10, minute=20),
+        trigger=CronTrigger(hour=10, minute=20, timezone="Asia/Seoul"),  # Fix 460: 시간대 없으면 컨테이너 UTC 로 돈다(9시간 늦음)
         id="verdict_report", replace_existing=True, max_instances=1, coalesce=True,
     )
 
