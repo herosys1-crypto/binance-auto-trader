@@ -60,6 +60,11 @@ REDIS_TTL = 172800           # 2일
 #   완료봉 증분 캐시로 ≈580 으로. 결과는 전체 조회 + compact 와 같다(시뮬 2,000스텝·3일 동등성 테스트). 프로세스 메모리 캐시라
 #   재시작하면 첫 사이클만 예전 무게. 끄기 = system_settings `paper_kline_incremental` = 0 (재시작 불필요, 다음 사이클부터).
 KLINE_INCR_KEY = "paper_kline_incremental"
+# 💾 Fix 451 (2026-10-14 사장님 「1번 진행해줘」 — 저장 방식 A): 열린 가상 포지션은 마지막 저장 뒤 N분이 지나야 다시 저장한다.
+#   10/14 실측: 열린 8,577건이 15분마다 100% 다시 저장(엔진 미실현 값이 매번 바뀜) → DB 변경 기록 하루 ≈1GB.
+#   마감(CLOSED)·버전 변경·엔진 없음은 바로 저장 — 판정(마감 행)은 그대로 정확하다. 열린 포지션 화면 값만 최대 N분 늦다.
+#   기본 60분(Claude가 정함) · 0 = 예전처럼 매 사이클 저장. 재시작 불필요.
+OPEN_WRITE_KEY = "paper_open_write_minutes"
 _KC_BC: list = [None]                                   # 이번 사이클의 BinanceClient (fetch 가 매번 읽는다)
 # 🗄 Fix 446: 일봉은 Redis 에도 보관 → 재시작해도 꼬리(무게 1)만 · 일봉 전체 재조회 7일마다 (끄기 kline_daily_persist=0)
 _KC_STORE = KS.RedisKlineStore("paper")
@@ -69,6 +74,22 @@ _KC = IncrementalKlines(lambda s, i, n: _klines(_KC_BC[0], symbol=s, interval=i,
 # ══════════════════════════════════════════════════════════════════════
 # 설정 (system_settings)
 # ══════════════════════════════════════════════════════════════════════
+
+def _open_skip_write(row: Any, res: dict, now: datetime, every_s: float) -> bool:
+    """💾 Fix 451: 이번 사이클에 이 열린 행의 저장을 건너뛰나.
+    건너뛰지 않음 = 끄기(0) · 이번에 마감 · 엔진 기록 없음 · 엔진 버전 다름 · 마지막 저장 시각 모름 · N분 지남 · 시계 역행."""
+    if every_s <= 0 or res.get("status") == "CLOSED":
+        return False
+    if row.engines is None or row.version != PT.VERSION:
+        return False
+    ua = getattr(row, "updated_at", None)
+    if ua is None:
+        return False
+    if ua.tzinfo is None:
+        ua = ua.replace(tzinfo=timezone.utc)
+    age = (now - ua).total_seconds()
+    return 0 <= age < every_s
+
 
 def _setting(db: Any, key: str) -> str | None:
     if db is None:
@@ -282,6 +303,8 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
         _KC_BC[0] = bc
         KS.apply_settings(_KC, _KC_STORE, KS.db_getter(db))      # 🗄 Fix 446
         _incr = _float_setting(db, KLINE_INCR_KEY, 1.0, 0.0, 1.0) >= 0.5
+        _open_write_s = _float_setting(db, OPEN_WRITE_KEY, 60.0, 0.0, 1440.0) * 60.0     # 💾 Fix 451
+        write_skipped = 0
         _kc0 = _KC.stats()
 
         def _kl(sym_: str, interval: str, limit: int) -> list:
@@ -349,6 +372,11 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                     continue
                 if res.get("engines") is None:                 # Fix 361b: 진입 봉이 조회 창 밖 = gap → 닫지 않고 유지
                     logger.info("[%s] %s/%s 진입 봉이 창 밖 (gap %s봉) → 열림 유지", FIX, sym, row.rule, res.get("gap_bars"))
+                    open_rule_set.add(row.rule)
+                    continue
+                if _open_skip_write(row, res, now, _open_write_s):      # 💾 Fix 451: 열린 행은 N분마다만 저장
+                    managed += 1
+                    write_skipped += 1
                     open_rule_set.add(row.rule)
                     continue
                 row.engines = res["engines"]
@@ -487,6 +515,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
 
         res: dict[str, Any] = {"at": now.isoformat(), "symbols": len(process_symbols), "opened": opened,
                                "managed": managed, "closed": closed, "seconds": round(time.time() - t0, 1),
+                               "write_skipped": write_skipped,
                                "breadth": breadth, "regime": mtag, "engine_version": PT.VERSION,
                                "upgraded": upgraded, "upgrade_skipped": upgrade_skipped}
         if backfill_res is not None:
@@ -496,8 +525,8 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
                          ("weight", "fetch_calls", "full", "incremental", "closed_hit", "fallback", "fetch_errors")}}
         _store_cycle_summary(res)
         # 🚨 할 일이 0건이어도 한 줄 남긴다 — 침묵을 고장으로 착각하지 않게 (Fix 353 교훈).
-        logger.info("[%s] 가상매매: 감시 %d · 열림 %d · 관리 %d · 마감 %d · 옛행갱신 %d(창밖 %d) · 국면 %s(%s) · %.0fs · 봉 무게 %d(%s)",
-                    FIX, res["symbols"], opened, managed, closed, upgraded, upgrade_skipped, mtag, breadth, res["seconds"],
+        logger.info("[%s] 가상매매: 감시 %d · 열림 %d · 관리 %d(저장 생략 %d) · 마감 %d · 옛행갱신 %d(창밖 %d) · 국면 %s(%s) · %.0fs · 봉 무게 %d(%s)",
+                    FIX, res["symbols"], opened, managed, write_skipped, closed, upgraded, upgrade_skipped, mtag, breadth, res["seconds"],
                     res["klines"]["weight"], "증분" if _incr else "전체")
         return res
     finally:
