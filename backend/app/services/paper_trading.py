@@ -74,6 +74,43 @@ EXIT_VARIANTS: dict[str, dict[str, Any]] = {
     "live_trend": {"trend": "after_tp1"},
     "live_trend0": {"trend": "from_entry"},
 }
+# 💸 Fix 452 (2026-10-14 사장님 「1번 진행해줘」 — 전략 손실 진단: 가상 엔진에 수수료·슬리피지가 없어 실주문보다 좋게 나온다):
+#   엔진마다 roi 옆에 roi_net = roi − 왕복 비용(ROI). 기존 roi 는 그대로(판정 사전 등록 기준 불변) — 순수익은 따로 본다.
+#   비용 = 2 × (수수료 + 슬리피지) × 레버 — 기본 수수료 0.05%(바이낸스 선물 시장가 기본 등급) · 슬리피지 0.05% (Claude가 정함)
+#   = 0.4 ROI/건. 펀딩비는 넣지 않았다(48h 보유 · 방향 따라 부호가 바뀜). 설정 paper_fee_pct · paper_slip_pct 로 바꾼다.
+FEE_PCT = 0.05
+SLIP_PCT = 0.05
+
+
+def cost_roi(fee_pct: float = FEE_PCT, slip_pct: float = SLIP_PCT) -> float:
+    return round(2.0 * (float(fee_pct) + float(slip_pct)) * LEV, 6)
+
+
+_COST = [cost_roi()]
+
+
+def set_costs(fee_pct: float | None, slip_pct: float | None) -> float:
+    """워커가 사이클마다 설정으로 부른다. 0~1% 밖·숫자 아님 = 기본값."""
+    def ok(v, d):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return d
+        return f if 0.0 <= f <= 1.0 else d
+    _COST[0] = cost_roi(ok(fee_pct, FEE_PCT), ok(slip_pct, SLIP_PCT))
+    return _COST[0]
+
+
+def add_net(engines: dict) -> dict:
+    """엔진마다 roi_net 을 붙인다(제자리). roi 가 숫자가 아니면 건너뛴다."""
+    for e in (engines or {}).values():
+        if isinstance(e, dict):
+            r = e.get("roi")
+            if isinstance(r, (int, float)) and not isinstance(r, bool):
+                e["roi_net"] = round(float(r) - _COST[0], 4)
+    return engines
+
+
 TREND_EMA = 9               # Fix 447: 1시간봉 EMA9 · SMA20 (첨부 전략서 숫자)
 TREND_SMA = 20
 EXIT_VARIANT_ENGINES = tuple(EXIT_VARIANTS)
@@ -634,6 +671,7 @@ def manage_trade(trade: Mapping[str, Any], series: Series) -> dict[str, Any]:
         e = run_live_like(side, entry, after, tp1_pct=TP1_FLAT, variants=(), **_kw)
         e.pop("adds", None)
         engines[_name] = e
+    add_net(engines)                                      # 💸 Fix 452
     done = all(bool(e.get("done")) for e in engines.values())
     exit_bars = 0
     for name, e in engines.items():

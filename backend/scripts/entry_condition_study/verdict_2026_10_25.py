@@ -16,6 +16,7 @@
   A 실주문 가족(장세 필터 뒤) · B 새 가상 규칙(합의 LONG · 급등 정점 SHORT 2) · C 외부 전략 가상 규칙(장세 필터 안/밖)
   D 규칙 가족 가상 규칙(장세 필터 안/밖) · E 운영팀 게이트(칸 안/밖) · G 청산 방식 비교(같은 거래 짝)
   H 통과 전략의 단계 1 설정표 (Fix 448 — 자본 계획서 4절 값 vs 지금 값, 보여 주기만)
+  💸 순수익 열(Fix 452, 2026-10-14 추가 — 참고용, 판정 기준은 위 그대로): 수수료·슬리피지 뺀 평균. 행에 roi_net 이 없으면 roi − 0.4.
 """
 from __future__ import annotations
 
@@ -93,8 +94,9 @@ def evaluate(rows: list[dict], base_mean: dict) -> dict:
         seen.add((r["d"], r["symbol"]))
     cap_sum = sum(first.values()) * 10 / 100                    # 10 USDT 증거금 기준 USDT
     win_days = sum(1 for v in first.values() if v > 0) / len(first) if first else 0.0
+    nets = [v for v in (net_of(r) for r in rows) if v is not None]
     out = {"n": n, "days": len(days), "roi": roi, "edge": edge, "first_half": a1, "second_half": a2,
-           "cap1_usdt": cap_sum, "win_days": win_days}
+           "cap1_usdt": cap_sum, "win_days": win_days, "net": (sum(nets) / len(nets)) if nets else None}
     if n < CRIT["min_n"] or len(days) < CRIT["min_days"]:
         out.update(verdict="⏳ 보류", why=f"표본 n {n}/{CRIT['min_n']} · 일 {len(days)}/{CRIT['min_days']}")
         return out
@@ -204,15 +206,26 @@ def live_verdict(system_sum: float, n_closed: int) -> str:
     return "✅ 통과" if system_sum > 0 else "❌ 기각"
 
 
+NET_COST_FALLBACK = 0.4          # Fix 452 이전 행: 왕복 (0.05 + 0.05)% × 2 × 레버 2
+
+
+def net_of(r: dict) -> float | None:
+    n = _f(r.get("roi_net"))
+    if n is not None:
+        return n
+    g = _f(r.get("roi"))
+    return None if g is None else g - NET_COST_FALLBACK
+
+
 def _fmt(x: Any, p: str = "+.2f") -> str:
     return "—" if x is None else format(x, p)
 
 
 def line(name: str, ev: dict) -> str:
     if not ev.get("n"):
-        return f"| {name} | 0 | — | — | — | — | — | — | {ev['verdict']} {ev.get('why', '')} |"
+        return f"| {name} | 0 | — | — | — | — | — | — | {ev['verdict']} {ev.get('why', '')} | — |"
     return (f"| {name} | {ev['n']} ({ev['days']}일) | {_fmt(ev['roi'])} | {_fmt(ev['edge'])} | {_fmt(ev['first_half'])} → {_fmt(ev['second_half'])} "
-            f"| {_fmt(ev['cap1_usdt'], '+.1f')}U | {ev['win_days']:.0%} | {ev['verdict']} | {ev['why']} |")
+            f"| {_fmt(ev['cap1_usdt'], '+.1f')}U | {ev['win_days']:.0%} | {ev['verdict']} | {ev['why']} | {_fmt(ev.get('net'))} |")
 
 
 def main() -> None:  # pragma: no cover — 운영 DB 필요
@@ -229,6 +242,7 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
     db = SessionLocal()
     try:
         q = text("""select rule, side, symbol, entry_bar_ts ts, opened_at, opened_at::date d, (engines->'live'->>'roi')::float roi,
+                    (engines->'live'->>'roi_net')::float roi_net,
                     chg_24h, snapshot->>'market_breadth' mb, snapshot->'rules_fired' rf
                     from paper_trades where source='live' and status='CLOSED' and opened_at >= :since and opened_at <= :now
                     and engines->'live'->>'roi' is not null""")
@@ -242,7 +256,7 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
         bm = {k: sum(v) / len(v) for k, v in base.items()}
         print(f"# 통합 판정 보고서 — {now:%Y-%m-%d %H:%M} UTC (사전 등록 기준 2026-10-11 고정)\n")
         print("기준: n ≥ 30 · 7일 이상 · 평균 > 0 · 무작위 대비 > 0 · 앞·뒤 절반 > 0 · 하루 1건 합 > 0 · 이긴 날 ≥ 50%\n")
-        hdr = "| 대상 | n | 평균 roi % | 무작위 대비 | 앞 → 뒤 | 하루 1건(10U) | 이긴 날 | 판정 | 사유 |\n|---|---|---|---|---|---|---|---|---|"
+        hdr = "| 대상 | n | 평균 roi % | 무작위 대비 | 앞 → 뒤 | 하루 1건(10U) | 이긴 날 | 판정 | 사유 | 💸 순수익 |\n|---|---|---|---|---|---|---|---|---|---|"
 
         print("## B. 새 가상 규칙 (강화판)\n" + hdr)
         for rule, ck in NEW_RULES.items():

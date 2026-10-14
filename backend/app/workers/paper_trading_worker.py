@@ -304,6 +304,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
         KS.apply_settings(_KC, _KC_STORE, KS.db_getter(db))      # 🗄 Fix 446
         _incr = _float_setting(db, KLINE_INCR_KEY, 1.0, 0.0, 1.0) >= 0.5
         _open_write_s = _float_setting(db, OPEN_WRITE_KEY, 60.0, 0.0, 1440.0) * 60.0     # 💾 Fix 451
+        PT.set_costs(_setting(db, "paper_fee_pct"), _setting(db, "paper_slip_pct"))      # 💸 Fix 452
         write_skipped = 0
         _kc0 = _KC.stats()
 
