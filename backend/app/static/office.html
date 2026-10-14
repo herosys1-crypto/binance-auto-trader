@@ -26,6 +26,8 @@
   .st { position:absolute; top:4px; right:4px; font-size:10px; border-radius:6px; padding:1px 6px; color:#fff; }
   .st.working { background:#2563eb } .st.waiting { background:#10b981 } .st.error { background:#ef4444 } .st.stale { background:#f59e0b }
   .st.off, .st.unknown { background:#94a3b8 } .st.nodata { background:#a78bfa } .st.on { background:#10b981 }
+  .st.blip { background:#fb923c }
+  .meta { font-size:10px; color:#64748b; margin-top:2px; word-break:keep-all } .meta .bad { color:#dc2626; font-weight:600 }
   .desk.off, .desk.unknown { opacity:.7 } .desk.stale { box-shadow:0 0 0 2px rgba(245,158,11,.5) }
   .desk.error { animation: blink 1s infinite; } .desk.working .avatar { animation: bob 1.2s infinite; }
   @keyframes blink { 50% { box-shadow:0 0 0 3px rgba(239,68,68,.35) } }
@@ -35,7 +37,7 @@
   .side h4 { margin:0 0 4px; font-size:14px } .side .k { color:var(--muted); font-size:11px; margin-top:8px }
   .legend { margin-top:8px; display:flex; gap:10px; flex-wrap:wrap; font-size:11px; color:var(--muted) }
   .legend span::before { content:"●"; margin-right:3px }
-  .l-working::before{color:#2563eb} .l-waiting::before{color:#10b981} .l-error::before{color:#ef4444} .l-stale::before{color:#f59e0b} .l-off::before{color:#94a3b8} .l-nodata::before{color:#a78bfa}
+  .l-working::before{color:#2563eb} .l-waiting::before{color:#10b981} .l-error::before{color:#ef4444} .l-stale::before{color:#f59e0b} .l-off::before{color:#94a3b8} .l-nodata::before{color:#a78bfa} .l-blip::before{color:#fb923c}
   .err { color:#b91c1c; font-size:11px; word-break:break-all }
   @media (max-width: 760px) { .wrap { flex-direction:column } .side { position:static; flex-basis:auto; width:auto } }
 </style>
@@ -51,7 +53,7 @@
 </div>
 <div class="legend">
   <span class="l-working">작업 중</span><span class="l-waiting">다음 실행 대기</span><span class="l-error">오류</span>
-  <span class="l-stale">멈춤?(주기의 3배 넘게 실행 없음)</span><span class="l-nodata">재료 없음</span><span class="l-off">꺼짐·기록 없음</span>
+  <span class="l-blip">일시 오류(24h 1번)</span><span class="l-stale">멈춤?(주기의 3배 넘게 실행 없음)</span><span class="l-nodata">재료 없음</span><span class="l-off">꺼짐·기록 없음</span>
   <span style="margin-left:auto" id="at"></span>
 </div>
 <script>
@@ -62,11 +64,18 @@ async function api(path) {
   if (window.opener && !window.opener.closed && typeof window.opener.api === 'function') return window.opener.api(path);
   throw new Error('부모 창이 닫혀 있습니다 — 대시보드에서 다시 여세요');
 }
+// 🏢 Fix 459: 「24h 오류 e/r」 · 「다음 n분 뒤」
+function meta(k) {
+  const parts = [];
+  if (k.runs_24h != null) parts.push(`<span class="${k.errors_24h > 0 ? 'bad' : ''}">24h 오류 ${esc(k.errors_24h)}/${esc(k.runs_24h)}</span>`);
+  if (k.next_run && k.next_run !== '—') parts.push(`다음 ${esc(k.next_run)}`);
+  return parts.length ? `<div class="meta">${parts.join(' · ')}</div>` : '';
+}
 function render() {
   const d = DATA;
   if (!d || !d.rooms) return;
-  const order = ['error', 'stale', 'working', 'waiting', 'nodata', 'off', 'unknown', 'on'];
-  const names = {error:'오류', stale:'멈춤?', working:'작업 중', waiting:'대기', nodata:'재료 없음', off:'꺼짐', unknown:'기록 없음', on:'켜짐'};
+  const order = ['error', 'blip', 'stale', 'working', 'waiting', 'nodata', 'off', 'unknown', 'on'];
+  const names = {error:'오류', blip:'일시 오류', stale:'멈춤?', working:'작업 중', waiting:'대기', nodata:'재료 없음', off:'꺼짐', unknown:'기록 없음', on:'켜짐'};
   document.getElementById('summary').innerHTML = order.filter(k => d.counts && d.counts[k])
     .map(k => `<span class="chip"><b>${names[k]}</b> ${d.counts[k]}</span>`).join('') +
     (d.other_errors && d.other_errors.length ? `<span class="chip" style="border-color:#ef4444">그 밖의 오류 잡 ${d.other_errors.length}</span>` : '');
@@ -76,7 +85,7 @@ function render() {
       `<span class="st ${esc(k.status)}">${esc(k.status_label)}</span>` +
       (k.status === 'waiting' || k.status === 'nodata' ? '<span class="zz">z z</span>' : '') +
       `<div class="avatar">${esc(k.avatar)}</div><div class="table"></div><div class="name">${esc(k.label)}</div>` +
-      (k.badge ? `<div style="font-size:10px;color:#475569">${esc(k.badge)}</div>` : '') +
+      (k.badge ? `<div style="font-size:10px;color:#475569">${esc(k.badge)}</div>` : '') + meta(k) +
       `</div>`).join('') + `</div></div>`).join('');
   document.querySelectorAll('.desk').forEach(el => el.onclick = () => { SEL = el.dataset.k; render(); });
   document.getElementById('at').textContent = `갱신 ${d.at || ''} · 기록된 잡 ${d.jobs_recorded || 0}개`;
@@ -86,6 +95,8 @@ function render() {
       `<span class="st ${esc(k.status)}" style="position:static">${esc(k.status_label)}</span>` +
       `<div class="k">하는 일</div><div>${esc(k.detail)}</div>` +
       `<div class="k">마지막 실행</div><div>${esc(k.last)}${k.job ? ' · ' + esc(k.job) : ''}</div>` +
+      `<div class="k">최근 24시간</div><div>${k.runs_24h != null ? `실행 ${esc(k.runs_24h)}번 · 오류 ${esc(k.errors_24h)}번` : '기록 없음(Fix 459 배포 뒤부터 셈)'}</div>` +
+      `<div class="k">다음 실행</div><div>${esc(k.next_run || '—')}${k.next_run_at ? ' (' + esc(k.next_run_at) + ')' : ''}</div>` +
       (k.error ? `<div class="k">마지막 오류</div><div class="err">${esc(k.error)}</div>` : '') +
       (d.other_errors && d.other_errors.length ? `<div class="k">그 밖의 오류 잡</div><div class="err">${d.other_errors.map(esc).join(', ')}</div>` : '') +
       `<div class="k" style="margin-top:12px">※ 보기 전용 — 켜기·끄기는 관제실에서 대표님이.</div>`;

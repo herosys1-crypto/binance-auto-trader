@@ -19,6 +19,12 @@ from typing import Any, Callable
 KST = timezone(timedelta(hours=9))
 JOB_LAST_KEY = "sched:last"
 STALE_FACTOR = 3.0          # 주기의 3배 넘게 실행이 없으면 「멈춤?」 (Claude가 정함)
+# 🏢 Fix 459: 마지막이 오류여도 24h 오류 ≤1번 · 실행 ≥10번이면 「일시 오류」(blip) — 288번 중 1번 시간 초과를 「오류」로 키우지 않게 (Claude가 정함)
+BLIP_MAX_ERRORS = 1
+BLIP_MIN_RUNS = 10
+JOB_RUNS_PREFIX = "sched:runs:"
+JOB_ERRS_PREFIX = "sched:errs:"
+JOB_NEXT_KEY = "sched:next"
 
 
 @dataclass(frozen=True)
@@ -75,7 +81,56 @@ ROOMS: tuple[Room, ...] = (
 STATUS_LABEL = {
     "working": "작업 중", "waiting": "다음 실행 대기", "error": "오류", "stale": "멈춤?",
     "off": "꺼짐", "nodata": "재료 없음", "unknown": "기록 없음", "on": "켜짐", "shadow": "그림자",
+    "blip": "일시 오류",
 }
+
+
+def _s(x) -> str:
+    return x.decode() if isinstance(x, bytes) else str(x)
+
+
+def hour_keys(now: float, hours: int = 24) -> list[str]:
+    """지금 시간 칸 포함 최근 hours 칸(UTC YYYYMMDDHH), 최근 것부터."""
+    base = datetime.fromtimestamp(now, timezone.utc).replace(minute=0, second=0, microsecond=0)
+    return [(base - timedelta(hours=i)).strftime("%Y%m%d%H") for i in range(hours)]
+
+
+def parse_counts(runs: list[dict | None], errs: list[dict | None]) -> dict[str, tuple[int, int]]:
+    """시간 칸 해시들 → 잡별 (실행 합, 오류 합). bytes/str 혼합 · 숫자 아닌 값은 건너뜀."""
+    tot: dict[str, list[int]] = {}
+    for i, group in enumerate((runs, errs)):
+        for h in group or ():
+            for k, v in (h or {}).items():
+                try:
+                    n = int(_s(v))
+                except (TypeError, ValueError):
+                    continue
+                tot.setdefault(_s(k), [0, 0])[i] += n
+    return {k: (r, e) for k, (r, e) in tot.items()}
+
+
+def parse_next_runs(raw: dict | None) -> dict[str, float | None]:
+    out: dict[str, float | None] = {}
+    for k, v in (raw or {}).items():
+        try:
+            val = json.loads(_s(v))
+            out[_s(k)] = float(val) if val is not None else None
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _until(ts: float, now: float) -> str:
+    s = int(ts - now)
+    if s <= 0:
+        return "곧"
+    if s < 90:
+        return f"{s}초 뒤"
+    if s < 5400:
+        return f"{(s + 30) // 60}분 뒤"          # 반올림(은행가 반올림 round 대신 — 150초 = 3분)
+    if s < 172800:
+        return f"{(s + 1800) // 3600}시간 뒤"
+    return f"{(s + 43200) // 86400}일 뒤"
 
 
 def parse_job_records(raw: dict | None) -> dict[str, dict]:
@@ -118,7 +173,8 @@ def _ago(ts: float | None, now: float) -> str:
     return f"{s // 86400}일 전"
 
 
-def build(*, recs: dict[str, dict], extras: dict[str, Any], now: float | None = None) -> dict:
+def build(*, recs: dict[str, dict], extras: dict[str, Any], now: float | None = None,
+          counts24: dict[str, tuple[int, int]] | None = None, next_runs: dict[str, float | None] | None = None) -> dict:
     """화면 데이터. extras = {halt, modes{fam: on/shadow/off}, active{fam: n}, health, learning, pattern_no_data,
     paper_last, council_today, verdict_latest}. 순수 함수(테스트용)."""
     now = now or time.time()
@@ -128,6 +184,15 @@ def build(*, recs: dict[str, dict], extras: dict[str, Any], now: float | None = 
         desks = []
         for d in room.desks:
             status, rec = job_status(recs, d.jobs, d.every_s, now) if d.jobs else ("unknown", None)
+            runs24 = errs24 = None
+            if counts24 is not None and any(j in counts24 for j in d.jobs):
+                runs24 = sum(counts24.get(j, (0, 0))[0] for j in d.jobs)
+                errs24 = sum(counts24.get(j, (0, 0))[1] for j in d.jobs)
+            if status == "error" and errs24 is not None and errs24 <= BLIP_MAX_ERRORS and runs24 >= BLIP_MIN_RUNS:
+                status = "blip"
+            nxt = [t for j in d.jobs if (t := (next_runs or {}).get(j)) is not None]
+            fut = [t for t in nxt if t > now]       # 가장 이른 「미래」 — 스냅숏(60초)이 지난 시각만 있으면 「곧」
+            soon = min(fut) if fut else (max(nxt) if nxt else None)
             detail = d.role
             badge = None
             if d.key == "halt":
@@ -169,6 +234,9 @@ def build(*, recs: dict[str, dict], extras: dict[str, Any], now: float | None = 
                 "status_label": STATUS_LABEL.get(status, status), "badge": badge, "detail": detail,
                 "last": _ago((rec or {}).get("e") or (rec or {}).get("s"), now) if rec else "—",
                 "job": (rec or {}).get("job"), "error": (rec or {}).get("err"),
+                "runs_24h": runs24, "errors_24h": errs24,
+                "next_run": _until(soon, now) if soon is not None else "—",
+                "next_run_at": datetime.fromtimestamp(soon, KST).strftime("%H:%M") if soon is not None else None,
             })
         rooms.append({"key": room.key, "label": room.label, "icon": room.icon, "color": room.color, "desks": desks})
     others_err = sorted(j for j, r in recs.items() if r.get("st") == "err"
@@ -223,4 +291,16 @@ def collect(db: Any, redis: Any, *, now: float | None = None) -> dict:
         r = latest_report(redis)
         return {"day": r["day"], "kind": r["kind"]} if r else None
     extras["verdict_latest"] = safe(_verdict)
-    return build(recs=recs, extras=extras, now=now)
+
+    def _counts():
+        keys = hour_keys(now)
+        pipe = redis.pipeline(transaction=False)
+        for k in keys:
+            pipe.hgetall(JOB_RUNS_PREFIX + k)
+        for k in keys:
+            pipe.hgetall(JOB_ERRS_PREFIX + k)
+        res = pipe.execute()
+        return parse_counts(res[:len(keys)], res[len(keys):])
+    counts24 = safe(_counts)
+    next_runs = safe(lambda: parse_next_runs(redis.hgetall(JOB_NEXT_KEY)))
+    return build(recs=recs, extras=extras, now=now, counts24=counts24, next_runs=next_runs)

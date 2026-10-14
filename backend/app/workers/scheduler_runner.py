@@ -57,6 +57,51 @@ def _record_job(redis_client, job_name: str, rec: dict) -> None:
         pass
 
 
+# 🏢 Fix 459 (2026-10-15 사장님 「1번 2번 진행해줘」): 사무실 화면의 「최근 24시간 오류 n/실행 m」 · 「다음 실행」
+JOB_RUNS_PREFIX = "sched:runs:"     # + UTC YYYYMMDDHH, 필드 = 잡 이름, 값 = 그 시간 칸 실행 수
+JOB_ERRS_PREFIX = "sched:errs:"     # 같은 칸 오류 수
+JOB_COUNT_TTL = 26 * 3600
+JOB_NEXT_KEY = "sched:next"         # 잡 id → 다음 실행 epoch 초(일시정지면 null)
+JOB_NEXT_TTL = 600
+
+
+def record_job_count(redis_client, job_name: str, ok: bool, now: float) -> None:
+    """끝난 잡 1건을 시간 칸에 센다(파이프라인 한 번). 실패는 삼킨다 — 잡 실행·예외 전파에 영향 없음."""
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        hour = _dt.fromtimestamp(now, _tz.utc).strftime("%Y%m%d%H")
+        pipe = (redis_client or get_redis_client()).pipeline(transaction=False)
+        keys = [JOB_RUNS_PREFIX + hour] + ([] if ok else [JOB_ERRS_PREFIX + hour])
+        for k in keys:
+            pipe.hincrby(k, job_name, 1)
+            pipe.expire(k, JOB_COUNT_TTL)
+        pipe.execute()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def snapshot_next_runs(scheduler, redis_client) -> int:
+    """스케줄러 잡별 다음 실행 시각을 Redis 에 한 번에 남긴다(API 프로세스는 스케줄러를 못 본다). 기록한 잡 수."""
+    try:
+        import json as _json
+        m = {}
+        for job in scheduler.get_jobs():
+            nrt = getattr(job, "next_run_time", None)
+            # 사무실 책상은 guarded_job 이름으로 찾는다 — 잡 id 가 달라도 이어지게 래퍼에 단 이름을 우선
+            name = getattr(getattr(job, "func", None), "job_name", None) or job.id
+            m[name] = _json.dumps(round(nrt.timestamp(), 1) if nrt else None)
+        if not m:
+            return 0
+        pipe = (redis_client or get_redis_client()).pipeline(transaction=True)   # MULTI — 지우고 쓰는 사이 빈 해시를 읽지 않게(감사 지적)
+        pipe.delete(JOB_NEXT_KEY)          # 지워진 잡이 남지 않게 통째로 바꾼다
+        pipe.hset(JOB_NEXT_KEY, mapping=m)
+        pipe.expire(JOB_NEXT_KEY, JOB_NEXT_TTL)
+        pipe.execute()
+        return len(m)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _set_scheduler_health(is_leader: bool, redis_client=None) -> None:
     try:
         client = redis_client or get_redis_client()
@@ -268,14 +313,17 @@ def start_scheduler() -> None:
                 _err = f"{type(_e).__name__}: {_e}"[:160]
                 raise
             finally:
-                _record_job(redis_client, job_name, {"s": round(_t0, 1), "e": round(_time.time(), 1),
+                _t1 = _time.time()
+                _record_job(redis_client, job_name, {"s": round(_t0, 1), "e": round(_t1, 1),
                                                      "st": "ok" if _ok else "err", "err": _err})
+                record_job_count(redis_client, job_name, _ok, _t1)     # 🏢 Fix 459
                 if _tok is not None:
                     try:
                         from app.integrations.binance.client import reset_caller
                         reset_caller(_tok)
                     except Exception:
                         pass
+        _wrapped.job_name = job_name       # 🏢 Fix 459: 다음 실행 스냅숏이 잡 id 대신 이 이름으로 남긴다
         return _wrapped
 
     scheduler.add_job(guarded_job("listenkey_keepalive", 120, lambda: run_keepalive_once(decrypt_text)), trigger=IntervalTrigger(minutes=30), id="listenkey_keepalive", replace_existing=True, max_instances=1, coalesce=True)
@@ -1065,6 +1113,12 @@ def start_scheduler() -> None:
 
     # Fix 47 LONG 시스템 (long_bottom_detector + auto_long_at_bottom) =
     # 위쪽 (line ~382-399) 에서 이미 등록됨. 중복 등록 방지 = 여기서는 재등록 안 함.
+
+    # 🏢 Fix 459: 다음 실행 시각 스냅샷(가벼움, guarded_job 밖 — sched:last 소음 방지). 리더만 이 프로세스를 돈다.
+    # 리더만 쓴다 — 재시작 순간 두 프로세스가 겹치면 대기 쪽 예정 시각(실제로 안 도는)이 덮어쓰지 않게(감사 지적)
+    scheduler.add_job(lambda: snapshot_next_runs(scheduler, redis_client) if guard.refresh_leader() else 0,
+                      trigger=IntervalTrigger(seconds=60),
+                      id="sched_next_snapshot", replace_existing=True, max_instances=1, coalesce=True)
 
     if not _stopping.is_set():
         try:
