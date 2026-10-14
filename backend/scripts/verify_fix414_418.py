@@ -58,7 +58,8 @@ CODE_MARKERS = {
     "app/services/paper_trading.py": ('"live_trend": {"trend": "after_tp1"}', "def trend_lines_for("),         # 447 추세 보유 청산 기록
     "app/workers/paper_trading_worker.py": ("_CON.apply(fired, rule_side, breadth)",),                       # 437 가상 판정
     "app/services/rule_families.py": ('Family("rf_consensus_long"', '"rf_consensus_long_entry"'),       # 437 가족
-    "app/services/office_board.py": ("def parse_counts(", "BLIP_MIN_RUNS = 10", "def parse_next_runs("),   # 459 사무실 24h 오류·다음 실행
+    "app/services/office_board.py": ("def parse_counts(", "BLIP_MIN_RUNS = 10", "def parse_next_runs(",   # 459 사무실 24h 오류·다음 실행
+                                      "def daily_table(", "DAILY_GRACE_MIN = 10"),                       # 461 오늘 하루 1번 잡
 }
 STOPPING_STALE_SEC = 10 * 60      # Claude가 정함 — 감지 5분 + reconcile 2분 주기 두 번 여유
 REQ_COUNT_KEY = "binance:reqcount:{minute}"   # client._REQ_COUNT_KEY 와 같은 값 (보관 15분)

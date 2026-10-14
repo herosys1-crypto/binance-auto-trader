@@ -39,6 +39,13 @@
   .legend span::before { content:"●"; margin-right:3px }
   .l-working::before{color:#2563eb} .l-waiting::before{color:#10b981} .l-error::before{color:#ef4444} .l-stale::before{color:#f59e0b} .l-off::before{color:#94a3b8} .l-nodata::before{color:#a78bfa} .l-blip::before{color:#fb923c}
   .err { color:#b91c1c; font-size:11px; word-break:break-all }
+  .daily { margin-top:10px; background:#fff; border-radius:12px; padding:10px 12px; box-shadow:0 1px 3px rgba(0,0,0,.08) }
+  .daily h3 { margin:0 0 6px; font-size:13px } .daily .scroll { overflow-x:auto }
+  .daily table { border-collapse:collapse; width:100%; font-size:12px } .daily td, .daily th { padding:4px 6px; border-bottom:1px solid #f1f5f9; text-align:left; word-break:keep-all }
+  .daily th { color:#64748b; font-weight:600; font-size:11px }
+  .ds { border-radius:6px; padding:1px 6px; color:#fff; font-size:10px; white-space:nowrap }
+  .ds.done { background:#10b981 } .ds.running { background:#2563eb } .ds.failed { background:#ef4444 } .ds.missed { background:#f59e0b }
+  .ds.later, .ds.skip, .ds.unknown { background:#94a3b8 }
   @media (max-width: 760px) { .wrap { flex-direction:column } .side { position:static; flex-basis:auto; width:auto } }
 </style>
 </head>
@@ -51,6 +58,7 @@
   <div class="office" id="office"></div>
   <div class="side" id="side"><h4>책상을 누르세요</h4><div class="k">팀을 누르면 하는 일·마지막 실행·오류를 보여 줍니다.</div></div>
 </div>
+<div class="daily" id="daily"></div>
 <div class="legend">
   <span class="l-working">작업 중</span><span class="l-waiting">다음 실행 대기</span><span class="l-error">오류</span>
   <span class="l-blip">일시 오류(24h 1번)</span><span class="l-stale">멈춤?(주기의 3배 넘게 실행 없음)</span><span class="l-nodata">재료 없음</span><span class="l-off">꺼짐·기록 없음</span>
@@ -71,6 +79,17 @@ function meta(k) {
   if (k.next_run && k.next_run !== '—') parts.push(`다음 ${esc(k.next_run)}`);
   return parts.length ? `<div class="meta">${parts.join(' · ')}</div>` : '';
 }
+// 📅 Fix 461: 오늘 하루 1번 잡 표
+const DS = {done:'완료', running:'작업 중', failed:'실패', missed:'놓침?', later:'예정', skip:'해당 없음', unknown:'기록 없음'};
+function renderDaily(rows) {
+  const el = document.getElementById('daily');
+  if (!rows || !rows.length) { el.innerHTML = ''; return; }
+  const errs = rows.filter(r => r.err);
+  el.innerHTML = '<h3>📅 오늘 하루 1번 잡 (KST)</h3><div class="scroll"><table><tr><th>예정</th><th>잡</th><th>상태</th><th>마지막</th><th>다음</th></tr>' +
+    rows.map(r => `<tr><td>${esc(r.kst)}</td><td>${esc(r.label)}</td><td><span class="ds ${esc(r.state)}">${esc(DS[r.state] || r.state)}</span></td>` +
+      `<td>${r.last ? esc(r.last) + ' · ' + esc(r.ago) : '—'}</td><td>${esc(r.next)}</td></tr>`).join('') + '</table></div>' +
+    errs.map(r => `<div class="err">${esc(r.label)}: ${esc(r.err)}</div>`).join('');
+}
 function render() {
   const d = DATA;
   if (!d || !d.rooms) return;
@@ -88,6 +107,7 @@ function render() {
       (k.badge ? `<div style="font-size:10px;color:#475569">${esc(k.badge)}</div>` : '') + meta(k) +
       `</div>`).join('') + `</div></div>`).join('');
   document.querySelectorAll('.desk').forEach(el => el.onclick = () => { SEL = el.dataset.k; render(); });
+  renderDaily(d.daily);
   document.getElementById('at').textContent = `갱신 ${d.at || ''} · 기록된 잡 ${d.jobs_recorded || 0}개`;
   const k = d.rooms.flatMap(r => r.desks).find(x => x.key === SEL);
   if (k) {

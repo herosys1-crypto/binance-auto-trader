@@ -173,6 +173,76 @@ def _ago(ts: float | None, now: float) -> str:
     return f"{s // 86400}일 전"
 
 
+@dataclass(frozen=True)
+class DailyJob:
+    job: str
+    label: str
+    kst: str            # 예정 시각 "HH:MM" (KST, 표시·놓침 판정용 — 실제 트리거는 scheduler_runner)
+
+
+# 📅 Fix 461 (2026-10-15 사장님 「실장님 승인으로 모두 개발 완료」): 오늘 하루 1번 잡 표 — 돌았는지·실패·놓침
+DAILY_JOBS: tuple[DailyJob, ...] = (
+    DailyJob("daily_summary", "일일 운영 요약", "00:00"),
+    DailyJob("memory_consolidator", "기억 정리", "03:00"),
+    DailyJob("daily_briefing", "아침 브리핑", "07:30"),
+    DailyJob("daily_report", "일일 운영 보고", "09:00"),
+    DailyJob("strategy_council", "전략 운영팀 성적표", "09:40"),
+    DailyJob("verdict_report", "판정 보고서(정해진 날만)", "10:20"),
+    DailyJob("symbol_sync_daily", "심볼 동기화", "12:00"),
+    DailyJob("paper_retention", "가상 상세 정리", "12:40"),
+    DailyJob("suggestion_daily_predict", "전략 제안 예측", "15:30"),
+    DailyJob("suggestion_auto_execute", "제안 자동 실행(옵션)", "16:00"),
+)
+DAILY_OPTIONAL = frozenset({"verdict_report", "suggestion_auto_execute"})   # 정해진 날·옵션일 때만 일을 한다
+DAILY_GRACE_MIN = 10        # 예정 + 10분이 지나야 「놓침?」 (Claude가 정함)
+
+
+def _epoch(v) -> float | None:
+    """유효한 epoch 초만(유한·0~1e11), 아니면 None."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if f == f and 0 < f < 1e11 else None
+
+
+def daily_table(recs: dict[str, dict], next_runs: dict[str, float | None], now: float) -> list[dict]:
+    """DAILY_JOBS 순서대로 오늘(KST) 실행 여부. 순수 함수."""
+    now_k = datetime.fromtimestamp(now, KST)
+    out = []
+    for dj in DAILY_JOBS:
+        rec = recs.get(dj.job) or {}
+        s, e = _epoch(rec.get("s")), _epoch(rec.get("e"))   # 깨진 기록(문자열·NaN·무한대)은 「기록 없음」(감사·Gemini 지적)
+        if s is None:
+            e = None
+        hh, mm = (int(x) for x in dj.kst.split(":"))
+        due = now_k.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        late = now_k > due + timedelta(minutes=DAILY_GRACE_MIN)
+        today = bool(s) and datetime.fromtimestamp(s, KST).date() == now_k.date()
+        st = rec.get("st")
+        if today and st == "run":
+            state = "running"
+        elif today and st == "err":
+            state = "failed"
+        elif today:
+            state = "done"
+        elif not late:
+            state = "later"
+        elif not s:
+            state = "unknown"
+        else:
+            state = "skip" if dj.job in DAILY_OPTIONAL else "missed"
+        nxt = _epoch((next_runs or {}).get(dj.job))
+        out.append({
+            "job": dj.job, "label": dj.label, "kst": dj.kst, "state": state, "today": today,
+            "last": datetime.fromtimestamp(s, KST).strftime("%m-%d %H:%M") if s else None,
+            "ago": _ago(e or s, now) if s else "—",
+            "next": _until(nxt, now) if nxt is not None else "—",
+            "err": (str(rec.get("err") or "")[:120] or None) if state == "failed" else None,
+        })
+    return out
+
+
 def build(*, recs: dict[str, dict], extras: dict[str, Any], now: float | None = None,
           counts24: dict[str, tuple[int, int]] | None = None, next_runs: dict[str, float | None] | None = None) -> dict:
     """화면 데이터. extras = {halt, modes{fam: on/shadow/off}, active{fam: n}, health, learning, pattern_no_data,
@@ -242,7 +312,14 @@ def build(*, recs: dict[str, dict], extras: dict[str, Any], now: float | None = 
     others_err = sorted(j for j, r in recs.items() if r.get("st") == "err"
                         and not any(j in d.jobs for room in ROOMS for d in room.desks))
     return {"at": datetime.fromtimestamp(now, KST).strftime("%Y-%m-%d %H:%M:%S KST"), "rooms": rooms, "counts": counts,
-            "jobs_recorded": len(recs), "other_errors": others_err[:20]}
+            "jobs_recorded": len(recs), "other_errors": others_err[:20], "daily": _daily_safe(recs, next_runs, now)}
+
+
+def _daily_safe(recs, next_runs, now) -> list[dict]:
+    try:
+        return daily_table(recs, next_runs or {}, now)
+    except Exception:  # noqa: BLE001 — 표 하나 때문에 사무실 전체가 죽으면 안 된다
+        return []
 
 
 def collect(db: Any, redis: Any, *, now: float | None = None) -> dict:
