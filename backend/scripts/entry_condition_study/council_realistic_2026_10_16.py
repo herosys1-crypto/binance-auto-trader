@@ -8,6 +8,13 @@
   무작위 = baseline 행 중 이른 1건 (방향별)
 결과 = live 엔진 roi(%) 와 순수익(roi − 0.4, Fix 452 가정). 끝난 행만.
 운영:  docker compose exec -T api python - < scripts/entry_condition_study/council_realistic_2026_10_16.py
+      채점 시작일만 바꾸기: docker compose exec -T -e SCORE_FROM=2026-10-17 -e DAYS=60 api python - < 이 파일
+
+10/16 추가(사장님 「1 2 3 진행해줘」):
+  § J  가설 J 사전 등록 판정(SCORE_FROM 이 있을 때) — 기준은 아래 J_* 상수. 10/16 이전 27일은 이미 본 탐색 표본이라
+       **2026-10-17 00:00 UTC 이후 진입만** 센다.
+  § S  「작게 여러 건」 모의 — 같은 하루 위험(10 USDT)을 1건 × 10U / 3건 × 3.33U 로 나눴을 때 하루 손익(USDT)의 평균·흔들림·최악
+  § X  LONG 날 사이 이어짐 — 전날 규칙 LONG 평균이 나쁘면 다음 날도 나쁜가(급락 2~3일 묶음 뒤 반등)
 """
 from __future__ import annotations
 
@@ -22,8 +29,16 @@ from sqlalchemy import text  # noqa: E402
 from app.core.database import SessionLocal  # noqa: E402
 from app.services import strategy_council as SC  # noqa: E402
 
-DAYS = 34
+import os  # noqa: E402
+
+DAYS = int(os.environ.get("DAYS") or 34)
+SCORE_FROM = os.environ.get("SCORE_FROM")           # "YYYY-MM-DD" — 이 날부터만 채점(학습창은 그 전 데이터도 씀)
 NET = 0.4
+DAY_RISK = 10.0                                      # 가족당 하루 위험 USDT(지금 실주문 단일 10U)
+# 가설 J (2026-10-16 사전 등록, 판정 ≈ 2026-11-15): 「운영팀 SHORT 첫 1건(A1)」 이 「S4 규칙 첫 1건(L)」 보다 낫다.
+#   통과 = ① 두 정책 모두 n ≥ 30 ② A1 순수익 평균 − L 순수익 평균 ≥ +1.0%p ③ A1 순수익 > 무작위 ④ 둘 다 있는 날 A1 이 이긴 날 > 진 날
+#   기각 = n ≥ 30 인데 ② 가 0 이하 · 그 밖은 보류. (숫자는 Claude가 정함)
+J_MIN_N, J_MARGIN = 30, 1.0
 LIVE_RULES = {"LONG": "bottom_331", "SHORT": "zone_s4_spike_top_short"}
 
 SQL = text("""
@@ -87,7 +102,16 @@ def main():
 
     pol = defaultdict(lambda: defaultdict(list))     # policy → side → [roi...]
     daily = []
+    usd = defaultdict(lambda: defaultdict(list))     # 정책·크기 → side → [하루 손익 USDT]
+    h2h = defaultdict(lambda: [0, 0])                # side → [A1 이긴 날, 진 날]
+    long_day = {}                                    # d → 규칙 LONG(시장폭<0.4) 평균
     for D in days:
+        lv = [x[4] for x in by_day_rows[D]
+              if x[2] == "LONG" and not x[1].startswith(SC.BASE_PREFIX) and x[5] is not None and x[5] < 0.4]
+        if len(lv) >= 30:
+            long_day[D] = sum(lv) / len(lv)
+        if SCORE_FROM and D.isoformat() < SCORE_FROM:
+            continue
         sel, ok = pick(D)
         if not ok:
             continue
@@ -100,11 +124,17 @@ def main():
                     pol[nm][side].append(x[4])
             if insel:
                 line[f"A1_{side}"] = round(insel[0][4], 2)
+                usd["A·1×10U"][side].append(DAY_RISK * insel[0][4] / 100)
+                usd["A·3×3.3U"][side].append(sum(DAY_RISK / 3 * x[4] / 100 for x in insel[:3]))
             want = LIVE_RULES[side]
             cond = (lambda x: x[5] is not None and x[5] < 0.4) if side == "LONG" else (lambda x: x[6] is not None and x[6] >= 10)
             liv = [x for x in rs if x[1] == want and x[2] == side and cond(x)]
             if liv:
                 pol["L"][side].append(liv[0][4]); line[f"L_{side}"] = round(liv[0][4], 2)   # noqa: E702
+                usd["L·1×10U"][side].append(DAY_RISK * liv[0][4] / 100)
+                usd["L·3×3.3U"][side].append(sum(DAY_RISK / 3 * x[4] / 100 for x in liv[:3]))
+            if insel and liv and insel[0][4] != liv[0][4]:
+                h2h[side][0 if insel[0][4] > liv[0][4] else 1] += 1
             bas = [x for x in rs if x[1].startswith(SC.BASE_PREFIX) and x[2] == side]
             if bas:
                 pol["무작위"][side].append(bas[0][4])
@@ -119,6 +149,49 @@ def main():
             if v:
                 m = sum(v) / len(v)
                 print(f"| {nm} | {side} | {len(v)} | {m:+.2f} | {m - NET:+.2f} | {sum(x > 0 for x in v) / len(v):.0%} | {min(v):+.1f} |")
+    import statistics as st
+    print("\n## § S 「작게 여러 건」 — 하루 위험 10 USDT 를 1건/3건으로 (하루 손익 USDT, 수수료 전)")
+    print("| 정책·크기 | 방향 | 날 | 하루 평균 | 흔들림(표준편차) | 최악의 날 | 플러스 날 |")
+    print("|---|---|---|---|---|---|---|")
+    for nm in ("L·1×10U", "L·3×3.3U", "A·1×10U", "A·3×3.3U"):
+        for side in ("LONG", "SHORT"):
+            v = usd[nm][side]
+            if len(v) >= 2:
+                print(f"| {nm} | {side} | {len(v)} | {sum(v) / len(v):+.2f} | {st.pstdev(v):.2f} | {min(v):+.2f} | "
+                      f"{sum(x > 0 for x in v)}/{len(v)} |")
+
+    print("\n## § X LONG 날 사이 이어짐 (규칙 LONG · 시장폭<0.4 · 하루 30건 이상인 날)")
+    print("⚠️ 「진입한 날」 결과끼리의 상관 = 그날엔 아직 모르는 값(최대 48h 뒤 끝남) → 규칙으로 못 씀. 10/16 실시간 대리값"
+          "(어제 「끝난」 LONG 평균 → 오늘 진입) 은 r = +0.05 · 나쁜 날 뒤 오히려 +1.32 → 「손실 다음 날 LONG 쉬기」 기각.")
+    ds = sorted(long_day)
+    pairs = [(long_day[a], long_day[b]) for a, b in zip(ds, ds[1:]) if (b - a).days == 1]
+    if len(pairs) >= 5:
+        xs, ys = [a for a, _ in pairs], [b for _, b in pairs]
+        mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+        den = (sum((x - mx) ** 2 for x in xs) * sum((y - my) ** 2 for y in ys)) ** 0.5
+        r = sum((x - mx) * (y - my) for x, y in pairs) / den if den else 0.0
+        after_bad = [b for a, b in pairs if a < -3]
+        after_bad2 = [long_day[c] for a, b, c in zip(ds, ds[1:], ds[2:])
+                      if (c - a).days == 2 and long_day[a] < -3 and long_day[b] < -3]
+        print(f"이어진 날 짝 {len(pairs)} · 전날→다음날 상관 r = {r:+.2f}")
+        print(f"전날 < −3% 다음 날 평균 {sum(after_bad) / len(after_bad):+.2f} (n {len(after_bad)})" if after_bad else "전날 < −3% 다음 날 없음")
+        print(f"이틀 연속 < −3% 다음 날 평균 {sum(after_bad2) / len(after_bad2):+.2f} (n {len(after_bad2)})"
+              if after_bad2 else "이틀 연속 < −3% 다음 날 없음")
+        print(f"전체 날 평균 {sum(long_day.values()) / len(long_day):+.2f} (n {len(long_day)})")
+
+    if SCORE_FROM:
+        a, l_, b = pol["A1"]["SHORT"], pol["L"]["SHORT"], pol["무작위"]["SHORT"]
+        w, lo_ = h2h["SHORT"]
+        print(f"\n## § J 가설 J 판정 (SCORE_FROM {SCORE_FROM}) — A1 SHORT n {len(a)} · L SHORT n {len(l_)} · 맞대결 이긴 {w} / 진 {lo_}")
+        if len(a) >= J_MIN_N and len(l_) >= J_MIN_N:
+            ma, ml = sum(a) / len(a) - NET, sum(l_) / len(l_) - NET
+            mb = (sum(b) / len(b) - NET) if b else None
+            ok = ma - ml >= J_MARGIN and (mb is None or ma > mb) and w > lo_
+            verdict = "✅ 통과" if ok else ("❌ 기각" if ma - ml <= 0 else "⏳ 보류")
+            print(f"A1 순수익 {ma:+.2f} · L {ml:+.2f} · 차 {ma - ml:+.2f}%p · 무작위 {'—' if mb is None else f'{mb:+.2f}'} → {verdict}")
+        else:
+            print("⏳ 표본 부족 — 판정하지 않음")
+
     print("\n## 날짜별 (A1 = 운영팀 첫 1건 · L = 지금 실주문 규칙 첫 1건)")
     for x in daily:
         print(x)
