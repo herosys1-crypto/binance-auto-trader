@@ -12,7 +12,7 @@
 
 10/16 추가(사장님 「1 2 3 진행해줘」):
   § J  가설 J 사전 등록 판정(SCORE_FROM 이 있을 때) — 기준은 아래 J_* 상수. 10/16 이전 27일은 이미 본 탐색 표본이라
-       **2026-10-17 00:00 UTC 이후 진입만** 센다.
+       **2026-10-17 KST 이후 진입만** 센다(하루 = KST).
   § S  「작게 여러 건」 모의 — 같은 하루 위험(10 USDT)을 1건 × 10U / 3건 × 3.33U 로 나눴을 때 하루 손익(USDT)의 평균·흔들림·최악
   § X  LONG 날 사이 이어짐 — 전날 규칙 LONG 평균이 나쁘면 다음 날도 나쁜가(급락 2~3일 묶음 뒤 반등)
 """
@@ -34,6 +34,7 @@ import os  # noqa: E402
 DAYS = int(os.environ.get("DAYS") or 34)
 SCORE_FROM = os.environ.get("SCORE_FROM")           # "YYYY-MM-DD" — 이 날부터만 채점(학습창은 그 전 데이터도 씀)
 NET = 0.4
+KST_OFF = timedelta(hours=9)                         # 하루 = KST(실주문 「하루 최대」 와 같은 경계, auto_family_registry)
 DAY_RISK = 10.0                                      # 가족당 하루 위험 USDT(지금 실주문 단일 10U)
 # 가설 J (2026-10-16 사전 등록, 판정 ≈ 2026-11-15): 「운영팀 SHORT 첫 1건(A1)」 이 「S4 규칙 첫 1건(L)」 보다 낫다.
 #   통과 = ① 두 정책 모두 n ≥ 30 ② A1 순수익 평균 − L 순수익 평균 ≥ +1.0%p ③ A1 순수익 > 무작위 ④ 둘 다 있는 날 A1 이 이긴 날 > 진 날
@@ -68,7 +69,7 @@ def main():
             if roi is None or r.side not in ("LONG", "SHORT"):
                 continue
             mb = num(r.mb)
-            rows.append((str(r.rule), r.side, r.opened_at, r.d, roi, mb if mb is not None and 0 <= mb <= 1 else None, num(r.chg_24h)))
+            rows.append((str(r.rule), r.side, r.opened_at, (r.opened_at + KST_OFF).date(), roi, mb if mb is not None and 0 <= mb <= 1 else None, num(r.chg_24h)))
     finally:
         db.close()
     p = SC.clean_params()
