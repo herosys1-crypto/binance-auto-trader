@@ -23,12 +23,14 @@ logger = logging.getLogger(__name__)
 
 FIX = "Fix457"
 SETTING_KEY = "verdict_auto_schedule"
-DEFAULT_SCHEDULE = "2026-10-17=midcheck,2026-10-25=verdict"
+DEFAULT_SCHEDULE = "2026-10-17=midcheck,2026-10-25=verdict,2026-11-15=jk"   # jk = 가설 J·K (10/16 사전 등록)
 KST = timezone(timedelta(hours=9))
 SCRIPTS = {
     "midcheck": "midcheck_2026_10_17.py",
     "verdict": "verdict_2026_10_25.py",
+    "jk": "jk_2026_11_15.py",
 }
+TITLES = {"verdict": "🧾 통합 판정 보고서", "midcheck": "🩺 중간 점검 보고서", "jk": "🧪 가설 J·K 판정"}
 REPORT_KEY = "verdict:report:{day}:{kind}"
 DONE_KEY = "verdict:done:{day}:{kind}"
 REPORT_TTL = 60 * 86400
@@ -70,6 +72,16 @@ def run_script(kind: str) -> str:
 def summarize(kind: str, report: str) -> str:
     """텔레그램 요약 — 통과·후보만 이름으로, 나머지는 개수."""
     lines = report.splitlines()
+    if kind == "jk":                       # J = 「§ J …」 다음 줄 · K = 「판정:」 줄
+        out = []
+        for i, ln in enumerate(lines):
+            if ln.startswith("## § J"):
+                out.append("J (운영팀 SHORT 첫 1건 vs S4): " + (lines[i + 1] if i + 1 < len(lines) else "?"))
+            if ln.startswith("판정:"):
+                out.append("K (LONG + 24h 시장폭<0.45): " + ln[3:].strip())
+            if ln.startswith("하루 1건(그날 첫 진입)"):
+                out.append("K " + ln)
+        return "\n".join(out) or "(요약 줄 없음 — 원문 확인)"
     if kind == "midcheck":
         keep = [ln for ln in lines if ln.startswith("요약:") or "끝난" in ln and "평균" in ln]
         warn = [ln.split("|")[1].strip() for ln in lines if ln.startswith("|") and "⚠️ 부족 예상" in ln]
@@ -126,7 +138,7 @@ def run_verdict_report_once(*, now: datetime | None = None, redis=None, db=None,
             raise
         redis.setex(REPORT_KEY.format(day=day, kind=kind), REPORT_TTL, report)
         out.update(ran=True, chars=len(report))
-        title = ("🧾 통합 판정 보고서" if kind == "verdict" else "🩺 중간 점검 보고서") + f" {day}"
+        title = TITLES.get(kind, "🧾 판정 보고서") + f" {day}"
         body = summarize(kind, report)[:TELEGRAM_MAX] + "\n\n원문: 운영팀 카드 → 판정 보고서 (실주문 반영은 대표님 승인 뒤)"
         try:
             from app.services.notification_service import NotificationService

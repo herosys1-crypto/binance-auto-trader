@@ -49,7 +49,7 @@ class _DB:
 
 
 def test_parse_schedule():
-    assert V.parse_schedule(None) == {"2026-10-17": "midcheck", "2026-10-25": "verdict"}
+    assert V.parse_schedule(None) == {"2026-10-17": "midcheck", "2026-10-25": "verdict", "2026-11-15": "jk"}   # 10/16 J·K 추가
     assert V.parse_schedule("off") == {}
     assert V.parse_schedule("2026-10-20=verdict, bad=verdict, 2026-10-21=nope,2026-10-22") == {"2026-10-20": "verdict"}
 

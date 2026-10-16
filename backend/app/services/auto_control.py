@@ -133,7 +133,7 @@ def _ctl_from(settings: dict[str, tuple[str, str, str]], key: str, label: str, k
 def _rule_panels() -> list[Panel]:
     """규칙 가족 12 — 모든 값이 rule_families.SETTINGS 에 있다."""
     try:
-        from app.services.rule_families import FAMILIES
+        from app.services.rule_families import FAMILIES, REVIEW_NOTES
     except Exception as e:  # noqa: BLE001
         logger.warning("[%s] rule_families 읽기 실패: %s", FIX, e)
         return []
@@ -153,7 +153,8 @@ def _rule_panels() -> list[Panel]:
         ) if c is not None]
         out.append(Panel(fam=f.key, label=f"{f.label} ({f.side})", group=G_RULE, gate=gate, ctls=tuple(ctls),
                          job="rule_families", every="60초",
-                         note=f"신호 = 가상매매 규칙 {f.rule} · 진입 = {f.prefix}_*"))
+                         note=f"신호 = 가상매매 규칙 {f.rule} · 진입 = {f.prefix}_*"
+                              + (f" · {REVIEW_NOTES[f.key]}" if f.key in REVIEW_NOTES else "")))
     return out
 
 

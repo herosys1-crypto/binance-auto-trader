@@ -82,6 +82,21 @@ FAMILIES: tuple[Family, ...] = (
     Family("rf_pumptop_mid", "pumptop_short_mid", "SHORT", "RF_PUMPTOPMID", "rf_pumptop_short_mid", "🔺 급등 정점 SHORT (24h +10%↑·시장폭 중간)", "급등중간S"),
 )
 FAMILY_BY_KEY = {f.key: f for f in FAMILIES}
+
+# 🧹 2026-10-16 전 전략 검토(docs: Obsidian 「전 전략 검토 2026-10-16」, scripts/entry_condition_study/strategy_audit_2026_10_16.py)
+#   관제실에 「왜 이 상태인가」 를 같이 보여 준다(설정 값은 대표님이 바꾼 그대로 — 여기는 설명만).
+REVIEW_NOTES: dict[str, str] = {
+    "rf_zone_s4": "10/16 검토 ✅ 유지 — 필터 안 순수익 +2.75% · 앞/뒤 기간 모두 + · 하루 1건도 +",
+    "rf_bottom_long": "10/16 검토 → 그림자(대표님 승인) — 앞 기간 +3.97% → 뒤 −0.95% · 하루 1건 − · 시장 방향 탓, 고칠 필터 못 찾음(가설 K ≈11/15)",
+    "rf_surge_long": "10/16 검토 ❌ 폐기 → 끔(대표님 승인) — 필터 안·밖 순수익 ≤ 0 · 무작위보다 나쁨",
+    "rf_s2_short": "10/16 검토 ❌ 폐기 → 끔(대표님 승인) — 필터 안 순수익 −0.13% · 하루 1건 −",
+    "rf_confirm_peak": "10/16 검토 ❌ 폐기 → 끔(대표님 승인) — 필터 안 순수익 −0.19%",
+    "rf_s1_breakdown": "10/16 검토 ❌ 폐기 → 끔(대표님 승인) — 필터 안 순수익 −0.36%",
+    "rf_consensus_long": "10/16 검토 ❌ 폐기 → 끔(대표님 승인) — 순수익 −9.08% (268건)",
+    "rf_pumptop30": "10/16 검토 ❌ 폐기 → 끔(대표님 승인) — 무작위보다 −4.0%p",
+    "rf_pumptop_mid": "10/16 검토 ❌ 폐기 → 끔(대표님 승인) — 무작위보다 −5.3%p",
+    "rf_off8": "10/16 검토 ↔ 판정이 하루 경계(UTC/KST)에 따라 뒤집힘 → 그림자 유지",
+}
 RF_STRATEGY_TYPES = frozenset(f.stype for f in FAMILIES)
 RF_TEMPLATE_PREFIXES = tuple(f.prefix for f in FAMILIES)
 

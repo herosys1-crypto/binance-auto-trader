@@ -243,6 +243,27 @@ def daily_table(recs: dict[str, dict], next_runs: dict[str, float | None], now: 
     return out
 
 
+LIVE_CACHE_KEY = "orchestra:office:live"
+LIVE_CACHE_TTL = 300        # 📒 10/16: 가족 손익 분해는 무겁다 — 사무실(20초 캐시)이 DB 를 두드리지 않게 5분
+LIVE_DAYS = 14
+LIVE_FAIL_KEY = "orchestra:office:live:fail"
+LIVE_FAIL_TTL = 60          # 표 만들기가 실패하면 60초 동안 다시 시도하지 않는다(느린 DB 를 20초마다 더 두드리지 않게 — 교차 감사)
+
+
+def live_line(v: dict | None) -> str:
+    """실주문 가족 책상 한 줄: 오늘 진입·14일 시스템 몫·사람 추가 몫. 값이 없으면 빈 문자열."""
+    if not isinstance(v, dict):
+        return ""
+    parts = []
+    if v.get("cap") is not None:
+        parts.append(f"오늘 {'?' if v.get('today') is None else v['today']}/{v['cap']}건")
+    if v.get("system") is not None:
+        parts.append(f"{LIVE_DAYS}일 시스템 몫 {float(v['system']):+.1f} (끝난 {int(v.get('closed') or 0)}·이긴 {int(v.get('wins') or 0)})")
+    if v.get("human") and round(float(v["human"]), 1) != 0:        # 반올림해 0 이면 「+0.0」 대신 생략
+        parts.append(f"사람 추가 몫 {float(v['human']):+.1f}")
+    return (" · " + " · ".join(parts)) if parts else ""
+
+
 def build(*, recs: dict[str, dict], extras: dict[str, Any], now: float | None = None,
           counts24: dict[str, tuple[int, int]] | None = None, next_runs: dict[str, float | None] | None = None) -> dict:
     """화면 데이터. extras = {halt, modes{fam: on/shadow/off}, active{fam: n}, health, learning, pattern_no_data,
@@ -274,7 +295,7 @@ def build(*, recs: dict[str, dict], extras: dict[str, Any], now: float | None = 
                 badge = STATUS_LABEL.get(mode, mode)
                 if mode == "off":
                     status = "off"
-                detail = f"모드 {badge} · 진행 중 {n}건 · {d.role}"
+                detail = f"모드 {badge} · 진행 중 {n}건 · {d.role}" + live_line((extras.get("live") or {}).get(d.key))
             elif d.key == "conductor" and extras.get("health"):
                 h = extras["health"]
                 ok = h.get("checks") and h.get("healthy") == h.get("checks")
@@ -355,6 +376,39 @@ def collect(db: Any, redis: Any, *, now: float | None = None) -> dict:
         m = {"rf_bottom_331": "rf_bottom_long", "rf_zone_s4": "rf_zone_s4"}
         return {m[t]: int(n) for t, n in rows if t in m}
     extras["active"] = safe(_active, {})
+
+    def _live():
+        raw = redis.get(LIVE_CACHE_KEY)
+        if raw:
+            board = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+        else:
+            if redis.get(LIVE_FAIL_KEY):
+                return None
+            from app.services import live_family_board as LFB
+            try:
+                board = LFB.build(db, days=LIVE_DAYS)
+            except Exception:
+                try:
+                    redis.setex(LIVE_FAIL_KEY, LIVE_FAIL_TTL, "1")
+                except Exception:  # noqa: BLE001
+                    pass
+                raise
+            try:
+                redis.setex(LIVE_CACHE_KEY, LIVE_CACHE_TTL, json.dumps(board, ensure_ascii=False, default=str))
+            except Exception:  # noqa: BLE001
+                pass
+        out = {f["key"]: {k: f.get(k) for k in ("system", "human", "closed", "wins")} for f in board.get("families") or []}
+        from app.services import auto_family_registry as AF
+        for key in ("rf_bottom_long", "rf_zone_s4"):
+            row = out.setdefault(key, {})
+            cap = safe(lambda key=key: AF.daily_max(db, key))
+            used = safe(lambda key=key: AF.count_today(db, key))
+            row["cap"] = cap
+            row["today"] = None if used is None or used >= AF.COUNT_FAILED else used
+        return out
+    live = safe(_live)
+    if live:
+        extras["live"] = live
     extras["health"] = safe(lambda: jget("orchestra:health:last"))
     extras["learning"] = safe(lambda: {(k.decode() if isinstance(k, bytes) else k): json.loads(v)
                                        for k, v in (redis.hgetall("orchestra:learning:last") or {}).items()}, {})

@@ -92,4 +92,5 @@ def main():
         print("판정: ⏳ 표본 부족")
 
 
-main()
+if __name__ == "__main__":
+    main()

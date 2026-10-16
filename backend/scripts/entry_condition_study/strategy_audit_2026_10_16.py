@@ -115,4 +115,5 @@ def main():
         print(f"무작위 {side}: n {len(v)} · 순수익 {f(mean(v) - NET if v else None)}")
 
 
-main()
+if __name__ == "__main__":
+    main()
