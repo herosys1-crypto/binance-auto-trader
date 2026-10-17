@@ -47,6 +47,7 @@ SQL = text("""
            snapshot->>'market_breadth' AS mb, chg_24h
     FROM paper_trades
     WHERE source = 'live' AND status = 'CLOSED' AND opened_at > :since AND engines->'live'->>'roi' IS NOT NULL
+    ORDER BY opened_at, md5(symbol)          -- 같은 봉 동점을 늘 같은 순서로(10/17 감사: 「첫 1건」 이 DB 반환 순서에 따라 바뀌던 것)
 """)
 
 

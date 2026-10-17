@@ -121,6 +121,24 @@ def regime_line(g: dict | None) -> list[str]:
             f" | 실주문 진입 {g.get('live_entries', 0)}건"]
 
 
+def apply_live_bucket(rep: dict) -> None:
+    """「오늘 시장폭 구간」 = 지금 시장폭(regime_24h.breadth)으로. 성적표 계산 값은 「어제 끝난 행」 중앙값이라
+    급락·반등 날 실제와 어긋났다(10/17 분석관: 표시 high · 실제 0.30). 칸 목록은 그대로, 순서만 지금 장세 먼저.
+    실주문 기록 게이트(council_gate)는 진입 때 시장폭을 따로 쓰므로 영향 없음."""
+    try:
+        E = rep.get("E_today") or {}
+        br = (rep.get("regime_24h") or {}).get("breadth")
+        if br is None or not E:
+            return
+        p = rep.get("params") or {}
+        lo, hi = p.get("lo", 0.4), p.get("hi", 0.6)
+        E["current_b_closed"] = E.get("current_b")
+        E["current_b"] = SC.bucket(float(br), lo, hi)
+        E["cells"] = sorted(E.get("cells") or [], key=lambda x: (x.get("b") != E["current_b"], -(x.get("edge") or 0.0), x.get("rule") or ""))
+    except Exception as e:  # noqa: BLE001 — 표시용, 성적표를 막지 않게
+        logger.warning("[%s] 지금 장세 구간 표시 실패: %s", FIX, e)
+
+
 def summary_text(rep: dict) -> tuple[str, str]:
     D = rep["D_walk"]
     t = D["total"]
@@ -129,7 +147,8 @@ def summary_text(rep: dict) -> tuple[str, str]:
     lines = [
         f"전진 검증 {D['n_days']}일: 선택 {_fmt(t['sel'])} (n={t['sel_n']}) · 전체 {_fmt(t['all'])} · 무작위 {_fmt(t['base'])}",
         f"선택>전체 {D['sel_gt_all_days']}/{D['n_days']}일 · 최악의 날 {D['worst']['d'] if D['worst'] else '—'} {_fmt(D['worst']['sel'] if D['worst'] else None)}",
-        f"오늘 시장폭 구간: {E['current_b']}",
+        f"오늘 시장폭 구간: {E['current_b']}" + (f" (어제 끝난 행 기준 {E['current_b_closed']})"
+                                                 if E.get("current_b_closed") not in (None, E["current_b"]) else ""),
         "",
         "▶ 오늘 쓸 칸 (지금 장세 먼저 · 규칙·방향·장세 · 무작위 대비 edge):",
     ]
@@ -175,6 +194,7 @@ def run_strategy_council_once(*, now: datetime | None = None) -> dict:
         except Exception as e:  # noqa: BLE001 — 요약 실패가 성적표를 막지 않게
             logger.warning("[%s] 장세 필터 요약 실패: %s", FIX, e)
             db.rollback()
+        apply_live_bucket(rep)
         rep["secs"] = round(time.monotonic() - t0, 1)
         blob = json.dumps(rep, ensure_ascii=False, allow_nan=False)
         try:

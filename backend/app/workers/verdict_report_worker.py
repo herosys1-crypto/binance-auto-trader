@@ -83,6 +83,8 @@ def summarize(kind: str, report: str) -> str:
                 out.append("K " + ln)
             if ln.startswith("L 판정:"):                  # 10/17 추가 — S4 트레일링 3%p
                 out.append("L (S4 트레일링 3%p vs 지금): " + ln[len("L 판정:"):].strip())
+            if ln.startswith("S4 판정:"):                 # 10/17 반박 감사 — S4 날 단위 성적
+                out.append("S4 (날 단위 순수익): " + ln[len("S4 판정:"):].strip())
         return "\n".join(out) or "(요약 줄 없음 — 원문 확인)"
     if kind == "midcheck":
         keep = [ln for ln in lines if ln.startswith("요약:") or "끝난" in ln and "평균" in ln]

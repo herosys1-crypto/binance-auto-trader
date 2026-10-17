@@ -34,7 +34,8 @@ LONG5 = {"bottom_331", "pullback_331", "l1_hist_turn_up", "multiday_rebound_352"
 K_AVG24 = 0.45
 SCORE_FROM = os.environ.get("SCORE_FROM")
 SQL = text("""SELECT opened_at, side, rule, (engines->'live'->>'roi')::float AS r, (snapshot->>'market_breadth')::float AS mb
-  FROM paper_trades WHERE source='live' AND status='CLOSED' AND opened_at > :s AND engines->'live'->>'roi' IS NOT NULL""")
+  FROM paper_trades WHERE source='live' AND status='CLOSED' AND opened_at > :s AND engines->'live'->>'roi' IS NOT NULL
+  ORDER BY opened_at, md5(symbol)""")   # 같은 봉 동점을 늘 같은 순서로(10/17 감사)
 
 
 def main():
@@ -80,7 +81,7 @@ def main():
             print(f"{k}: n {len(v)} · 날 {len({(x[0] + KST_OFF).date() for x in v})} · 순수익 {net(v):+.2f}")
     k, two, bk = grp["규칙5·K"], grp["규칙5·두줄"], grp["무작위·K"]
     first = {}
-    for at, r in sorted(k):
+    for at, r in sorted(k, key=lambda x: x[0]):    # 시각만으로(안정 정렬 = DB 순서) — 예전 sorted(k) 는 동점에서 수익 낮은 행을 골랐다
         first.setdefault((at + KST_OFF).date(), r)
     one = (sum(first.values()) / len(first) - NET) if first else None
     print(f"하루 1건(그날 첫 진입) 순수익 {'—' if one is None else f'{one:+.2f}'} (n {len(first)})")

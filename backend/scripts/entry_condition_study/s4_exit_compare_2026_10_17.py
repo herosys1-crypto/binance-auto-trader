@@ -12,6 +12,13 @@
   대상 = SCORE_FROM(2026-10-17 KST) 이후 진입 · 24h +10% 필터 안 · live·live_trail3 둘 다 끝난 짝
   통과(Claude가 정함) = 짝 ≥ 100 · 차 평균 > 0 · 부트스트랩 90% 구간 아래 끝 > 0 · 앞·뒤 절반 차 모두 > 0 · 기각 = 짝 ≥ 100 인데 차 평균 ≤ 0
   탐색 표본(10/13~16, 36짝): +0.51%p (+0.15~+0.83) · 앞 +0.27 / 뒤 +0.75 — 실주문 반영은 대표님 결정
+  🔁 10/17 반박 감사 반영(10/17 이후 결과를 보기 전 고침): 같은 봉의 짝은 독립이 아니다 → **날(KST) 단위**로 센다.
+     통과 = 짝 ≥ 100 · **날 ≥ 12** · 날 평균 차의 평균 > 0 · **날 묶음 부트스트랩** 90% 아래 끝 > 0 · 앞·뒤 절반(날 기준) 모두 > 0
+     기각 = 날 ≥ 12 인데 날 평균 차의 평균 ≤ 0
+
+S4 날 단위 성적 (10/17 반박 감사 C1 — 「S4 유지」 를 닫는 측정, 같은 jk 자동 판정에서 출력):
+  SCORE_FROM 이후 S4 필터 안 live 순수익을 **날(KST) 평균** 으로 · 날 묶음 부트스트랩 · 앞·뒤 절반 · 플러스 날 비율
+  통과선(Claude가 정함) = 날 ≥ 15 · 날 평균의 평균 > 0 · 90% 아래 끝 > 0. 실주문 시스템 몫(live_by_family)과는 판정 때 따로 대조.
 """
 from __future__ import annotations
 
@@ -47,9 +54,36 @@ def roi_of(eng, k):
 
 
 def boot(diffs, n=2000, seed=7):
+    """행 단위 부트스트랩(표 A·B 참고용 — 같은 봉 짝이 묶여 있어 구간이 좁게 나온다)."""
     rnd = random.Random(seed)
     ms = sorted(sum(rnd.choice(diffs) for _ in diffs) / len(diffs) for _ in range(n))
     return ms[int(n * 0.05)], ms[int(n * 0.95)]
+
+
+def day_means(pairs):
+    """[(opened_at, 값)] → 날(KST) 순서대로 [날 평균] — 같은 날 짝을 한 표본으로(10/17 반박 감사)."""
+    by = {}
+    for at, v in pairs:
+        by.setdefault((at + KST_OFF).date(), []).append(v)
+    return [sum(v) / len(v) for _, v in sorted(by.items())]
+
+
+def day_verdict(name, pairs, min_days, min_pairs=0):
+    """날 묶음 부트스트랩 판정 줄 출력 → (판정 문자, 날 수)."""
+    dm = day_means(pairs)
+    print(f"{name}: 짝 {len(pairs)} · 날 {len(dm)}", end="")
+    if len(dm) < min_days or len(pairs) < min_pairs:
+        print(" → ⏳ 표본 부족(날 단위)")
+        return "⏳", len(dm)
+    lo_, hi_ = boot(dm)
+    h = len(dm) // 2
+    a1, a2 = sum(dm[:h]) / h, sum(dm[h:]) / (len(dm) - h)
+    md = sum(dm) / len(dm)
+    plus = sum(x > 0 for x in dm)
+    ok = md > 0 and lo_ > 0 and a1 > 0 and a2 > 0
+    v = "✅ 통과" if ok else ("❌ 기각" if md <= 0 else "⏳ 보류")
+    print(f" · 날 평균의 평균 {md:+.2f} (날 묶음 90% {lo_:+.2f}~{hi_:+.2f}) · 앞 {a1:+.2f} / 뒤 {a2:+.2f} · 플러스 날 {plus}/{len(dm)} → {v}")
+    return v, len(dm)
 
 
 def main():
@@ -90,18 +124,16 @@ def main():
     # 가설 L 판정
     pair = sorted((r for r in rows if roi_of(r.engines, "live") is not None and roi_of(r.engines, "live_trail3") is not None),
                   key=lambda r: r.opened_at)
-    d = [roi_of(r.engines, "live_trail3") - roi_of(r.engines, "live") for r in pair]
-    print(f"\n## 가설 L 판정 (SCORE_FROM {SCORE_FROM or '없음 = 탐색 재현'}) — S4 트레일링 3%p vs 지금 · 짝 {len(d)}")
-    if len(d) >= 100:
-        lo_, hi_ = boot(d)
-        h = len(d) // 2
-        a1, a2 = sum(d[:h]) / h, sum(d[h:]) / (len(d) - h)
-        md = sum(d) / len(d)
-        ok = md > 0 and lo_ > 0 and a1 > 0 and a2 > 0
-        print(f"L 판정: 차 평균 {md:+.2f}%p (90% {lo_:+.2f}~{hi_:+.2f}) · 앞 {a1:+.2f} / 뒤 {a2:+.2f} → "
-              + ("✅ 통과" if ok else ("❌ 기각" if md <= 0 else "⏳ 보류")))
-    else:
-        print("L 판정: ⏳ 표본 부족 — 판정하지 않음")
+    d = [(r.opened_at, roi_of(r.engines, "live_trail3") - roi_of(r.engines, "live")) for r in pair]
+    print(f"\n## 가설 L 판정 (SCORE_FROM {SCORE_FROM or '없음 = 탐색 재현'}) — S4 트레일링 3%p vs 지금 · 날(KST) 단위")
+    day_verdict("L 판정", d, min_days=12, min_pairs=100)
+
+    # S4 날 단위 성적 (반박 감사 C1)
+    s4 = sorted(((r.opened_at, roi_of(r.engines, "live") - NET) for r in rows if roi_of(r.engines, "live") is not None),
+                key=lambda x: x[0])
+    print(f"\n## S4 날 단위 성적 (SCORE_FROM {SCORE_FROM or '없음 = 탐색 재현'}) — 지금 청산 순수익 · 날(KST) 평균")
+    day_verdict("S4 판정", s4, min_days=15)
+    print("  ※ 같은 기간 실주문 시스템 몫은 scripts/entry_condition_study/live_by_family.py 로 따로 대조")
     print("\n읽는 법: 「live 대비 차」 90% 구간이 0 을 넘지 않으면(아래 끝 > 0) 그 청산이 더 낫다고 말할 수 있다. 앞·뒤 절반 부호가 같아야 안정.")
 
 
