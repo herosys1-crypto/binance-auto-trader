@@ -20,16 +20,19 @@ def test_jk_summary_lines():
         "A1 순수익 +3.10 · L +1.20 · 차 +1.90%p · 무작위 +0.20 → ✅ 통과",
         "하루 1건(그날 첫 진입) 순수익 -2.00 (n 25)",
         "판정: ⏳ 보류",
+        "L 판정: 차 평균 +0.40%p (90% +0.10~+0.70) · 앞 +0.30 / 뒤 +0.50 → ✅ 통과",
     ])
     out = V.summarize("jk", rep)
     assert "J (운영팀 SHORT 첫 1건 vs S4): A1 순수익 +3.10" in out and "✅ 통과" in out
     assert "K (LONG + 24h 시장폭<0.45): ⏳ 보류" in out and "하루 1건" in out
+    assert "L (S4 트레일링 3%p vs 지금): 차 평균 +0.40%p" in out
     assert V.summarize("jk", "") == "(요약 줄 없음 — 원문 확인)"
 
 
 def test_jk_scripts_do_not_run_on_import():
-    for f in ("council_realistic_2026_10_16.py", "long_trend_k_2026_10_16.py", "strategy_audit_2026_10_16.py", "jk_2026_11_15.py"):
+    for f in ("council_realistic_2026_10_16.py", "long_trend_k_2026_10_16.py", "strategy_audit_2026_10_16.py", "jk_2026_11_15.py",
+              "s4_exit_compare_2026_10_17.py"):
         src = (SCRIPTS / f).read_text(encoding="utf-8")
         assert 'if __name__ == "__main__":\n    main()' in src.replace("\r\n", "\n"), f
     jk = (SCRIPTS / "jk_2026_11_15.py").read_text(encoding="utf-8")
-    assert 'SCORE_FROM = "2026-10-17"' in jk
+    assert 'SCORE_FROM = "2026-10-17"' in jk and '"s4_exit_compare_2026_10_17.py"' in jk

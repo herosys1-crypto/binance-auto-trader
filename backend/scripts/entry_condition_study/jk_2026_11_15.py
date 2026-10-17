@@ -14,7 +14,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent if "__file__" in globals() else Path("/app/scripts/entry_condition_study")
 SCORE_FROM = "2026-10-17"
-FILES = (("J", "council_realistic_2026_10_16.py", "60"), ("K", "long_trend_k_2026_10_16.py", "60"))
+FILES = (("J", "council_realistic_2026_10_16.py", "60"), ("K", "long_trend_k_2026_10_16.py", "60"),
+         ("L", "s4_exit_compare_2026_10_17.py", "60"))      # L = S4 트레일링 3%p (10/17 사전 등록)
 
 
 def _load(name: str, fname: str):
