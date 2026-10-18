@@ -1,0 +1,139 @@
+# 일목 기준선 복합 전략 — 자동매매·전략 인스턴스 적용 기획서 (Fix 465 예정)
+
+- 작성 2026-10-18 · 출처 = 사장님 첨부 `code_artifact (1).md` 「일목균형표 기준선 및 복합 지표 통합 매매 전략 시스템 로직」
+- 상태: **기획·사전 검증 끝, 구현 대기** (사장님 「개발」 지시 뒤 `/duel ichikijun` 착수)
+- 참조 판정: `backend/scripts/entry_condition_study/ichikijun_ref.py` · 사전 백테스트: `ichikijun_backtest.py`
+
+## 1. 전략 명세 (출처 숫자 verbatim)
+
+| 항목 | 출처 | 운영 정의 |
+|---|---|---|
+| 봉 | 1일봉 (BTC·개별 자산) | 일봉 완성봉 j 에서 판정 |
+| 장세 | BTC 종가 > SMA 20 = 상승장 / 아래 = 하락장 | 같은 날 BTC 완성 일봉. 모르면 진입 안 함 |
+| 핵심 타점 | 종가가 기준선(26) 상향 돌파 / 하향 이탈 | `c[j-1] ≤ kijun[j-1]` 이고 `c[j] > kijun[j]` (SHORT 거울) |
+| 추세 확인 | MA 5 / 20 골든(데드)크로스 · MACD 12/26/9 시그널 교차 | 「근접한 시일」 창 안에 두 교차가 있었고 j 에 상태 유지 |
+| 모멘텀 | RSI 14 가 50 상향 돌파 또는 50 이상 유지 (SHORT: 50 미만) | `rsi[j] ≥ 50` / `< 50` |
+| 수급 | 거래량 > 거래량 MA 30 · OBV 상승(하락) 추세 | `v[j] > vma30[j]` · `obv[j] > obv[j − L]` |
+| 1차 손절 | 진입 캔들 또는 직전 캔들 저점(고점) 이탈 | `min(low[j], low[j-1])` / `max(high…)` |
+| 2차 손절 | 종가가 기준선 다시 이탈 → 즉시 시장가 청산 | 일봉 종가 `c[k] < kijun[k]` (SHORT 거울) → 종가 청산 |
+| 익절 | 손절폭 대비 1:2 지정가 | 진입가 ± 2 × 손절폭 |
+
+출처에 없는 숫자 = 설정 키 (전부 **Claude가 정함**, 사장님이 바꿀 수 있음):
+
+| 키 | 기본 | 뜻 |
+|---|---|---|
+| `ichikijun_mode` | `shadow` | off · shadow · on (on 도 2차 손절 청산이 실주문 경로에 생길 때까지 shadow 강제) |
+| `ichikijun_sides` | `LONG,SHORT` | 출처 양방향 |
+| `ichikijun_interval` | `1d` | 일봉만 |
+| `ichikijun_window` | `3` | 「동시 또는 근접한 시일」 = 기준선 돌파 봉 포함 이전 3봉 안 교차 |
+| `ichikijun_obv_lookback` | `5` | OBV 상승 = 5봉 전보다 큼 |
+| `ichikijun_ma_type` | `sma` | 출처 「지수 또는 단순」 |
+| `ichikijun_capital_usdt` | `10` | 외부 전략 공통 |
+| `ichikijun_risk_pct` | `2` | 2% 룰 |
+| `ichikijun_max_concurrent` | `2` | 전용 동시 보유 |
+| `ichikijun_cooldown_hours` | `20` | 일봉 = 다음 날 허용 |
+| `ichikijun_stop_min_pct` / `_max_pct` | `0.3` / `15` | 손절폭 클램프 (외부 전략 공통 값) — 상한에 걸리면 기록에 `clamped=1` |
+| `ichikijun_max_hold_days` | `60` | 가상·그림자 최대 보유(일) |
+| `ichikijun_kijun_exit_enabled` | `0` | 2차 손절(기준선 재이탈 청산) — 실주문 경로가 생길 때까지 0, 가상은 두 변형 다 기록 |
+
+## 2. 사전 백테스트 (2026-10-18, 공개 API · 코인 상위 80 · 일봉 ≤1500봉 ≈ 2022~2026)
+
+진입 = 신호 봉 종가 · 겹침 없음 · 같은 봉 손절·익절 = 손절 · 최대 60봉 · ⚠️ 생존 편향(지금 상위 종목) · 비용 줄은 왕복 0.1% **가정**.
+
+| 변형 | 방향 | 건수 | 승률 | 평균 R (비용 뒤) | 같은 날 무작위 | 연도 부호 |
+|---|---|---|---|---|---|---|
+| **기본(출처 그대로, 창 3)** | LONG | 150 | 26% | −0.015 (−0.026) | +0.061 | 2025 −0.20 |
+| | SHORT | 77 | 30% | +0.031 (+0.020) | −0.075 | 2024 +0.68 · 2025 −0.38 |
+| 기본, 2차 손절 빼고 2R·손절만 | LONG | 150 | 35% | +0.040 | | |
+| | SHORT | 77 | 35% | +0.031 | | |
+| 엄격(같은 날 교차) | L / S | 27 / 18 | 22% / 17% | −0.105 / −0.227 | | 표본 부족 |
+| 창 5 | L / S | 226 / 116 | 27% / 27% | −0.003 / −0.079 | −0.002 / −0.005 | |
+| 교차 없이 상태만 | L / S | 557 / 209 | 28% / 31% | +0.033 / −0.004 | +0.064 / −0.009 | |
+| BTC 필터 끔 | L / S | 196 / 110 | 28% / 34% | +0.010 / +0.150 | +0.003 / −0.001 | S: 2025 −0.42 |
+| EMA 이평 | L / S | 225 / 101 | 32% / 31% | +0.181 / +0.007 | +0.220 / −0.037 | L: 2025 −0.26 |
+| 거래량·OBV 끔 | L / S | 253 / 150 | 26% / 39% | −0.039 / +0.245 | +0.030 / +0.177 | |
+
+**읽는 법 (반박 감사 반영 뒤)**
+1. 출처 그대로는 **본전(±0.03R)**. 같은 날 무작위와의 차이는 **구별 불가** — LONG 차이 0.076R 은 표준오차(≈0.10R) 안, SHORT 우위는 신호 날이 40일뿐이고 최고 5일을 빼면 −0.36R.
+2. 2차 손절(기준선 재이탈 종가 청산)은 LONG 에서 2R 고정보다 ≈−0.06R — 방향은 손해 쪽이지만 표준오차 안(청산 150건 중 74건이 기준선 청산).
+3. 좋아 보이는 변형(EMA LONG +0.18, 거래량 끔 SHORT +0.25)은 같은 날 무작위도 같이 좋다(+0.22 / +0.18). 14개 줄에서 고른 최고값 = 다중 비교 함정. 가장 센 후보(거래량·OBV 끔 SHORT)도 날 묶음 95% 구간 [−0.08, +0.52] · 최고 5일 제외 −0.05R.
+4. 모든 변형이 **2025 년 손실** — 한 장세 의존.
+5. 🚨 **1차 손절이 너무 넓다** — 돌파 장대봉 때문에 손절폭 평균 10~12%, 15% 상한에 걸리는 비율 LONG 21% · SHORT 39% → 출처의 「직전 봉 저점 손절」이 실제로는 지켜지지 않는 건이 많다. 레버 2 기준 ROI −20~−30%.
+6. 결론: **실주문 근거 없음. 그림자 + 가상매매로 운영 데이터 판정.** (스킬 절차: 결과가 나빠도 그림자로는 넣는다)
+
+## 3. 반박 감사 (strategy-auditor, 2026-10-18) — 판정 「조건부」
+
+| 렌즈 | 결과 | 요지 |
+|---|---|---|
+| ① 미래 참조 | 조건부 | 지표·BTC SMA 는 j 까지만 — 누수 없음. 실주문은 마감 뒤 지연 진입이라 정합 차이 |
+| ② 생존 편향 | 실패 | 지금 상위 80종목 → 무작위 LONG 도 +0.06~+0.22R. 상대 비교만 쓸 수 있다 |
+| ③ 겹침 | 조건부 | 종목별 겹침 없음은 맞음. 그러나 같은 날 군집 — LONG 147건 = 91일, SHORT 76건 = 40일 |
+| ④ 장세 편중 | 실패 | SHORT 2024 +0.68 / 2025 −0.38. 최고 5일 빼면 부호 바뀜 |
+| ⑤ 표본·다중 비교 | 실패 | 날 묶음 95% 구간 LONG [−0.20, +0.21] · SHORT [−0.33, +0.45] — 0 포함 |
+| ⑥ 무작위 공정성 | 조건부 | 무작위 손절폭 6.7% vs 신호 10.2% → 손절폭 맞춘 무작위로 다시 재야 함 |
+| ⑦ 실주문 경로 | 실패 | 기준선 재이탈 청산·2R 지정가·일봉 마감 뒤 진입이 실주문에 없음 · 15% 상한 걸림 21%/39% |
+| ⑧ 해석 | 조건부 | 창 3·OBV 5·SMA = Claude가 정함. 결과가 해석 선택에 좌우 |
+
+리드 결론 정정: 「LONG 이 무작위보다 나쁘다 / SHORT 가 우위」 → **「둘 다 구별 불가」**. 「실주문 근거 없음 · on → shadow 강제」는 유지.
+
+### 사전 등록 (판정 기준, Claude가 정함 — 운영 데이터가 쌓인 뒤 이 기준으로만 판정)
+- 판정 대상 = **출처 그대로(기본형) LONG·SHORT 2줄만**. 변형은 기록만(다중 비교 방지).
+- 통과 = 신호 **날 ≥ 60** · 앞뒤 절반 모두 + · 같은 날 **손절폭 맞춘** 무작위 대비 날 묶음 부트스트랩 95% 구간 아래 끝 > 0 · 최고 5일 제외해도 + · 장세 2개 이상에서 부호 유지.
+- 일봉 신호가 드물어(신호 날 ≈ 20~25일/년/방향) 날 ≥ 60 까지 **수개월 이상**. 그 전엔 표본 확인만.
+
+## 4. 개발 범위 — 두 갈래
+
+### A. 외부 전략 7번째 가족 `ichikijun` (자동, 기본 shadow)
+Fix 431·432 공용 루프 사용 — 가족 모듈 + `FAMILIES` 한 줄.
+
+| 곳 | 할 일 |
+|---|---|
+| `app/services/ichimoku_kijun.py` (신규) | `FIX·PREFIX="ICHIKJ"·STYPE="ichimoku_kijun"·SETTINGS·params_from·min_bars·evaluate(bars,j,side,p,cache)` · 지표는 `external_strategies.ichimoku/macd_lines/rsi/sma/ema` + `chart_learning.obv` 재사용 · `PAPER_RULES` 2개(`ichikijun_long`/`_short`, `ctx.kl1d`, `daily_is_fresh`) |
+| BTC 장세 | `evaluate` 는 BTC 값을 인자로 못 받는다 → `cache["btc_up"]` 를 루프가 사이클마다 한 번 채운다(BTC 일봉 1회 조회, 증분 캐시). 가상은 `ctx` 의 BTC 일봉 |
+| `app/workers/external_strategies_worker.py` | `FAMILIES += FL.Family("ichikijun", IK, "일목기준선", ("1d",), force_shadow=_EXIT_GAP_KJ)` |
+| `app/workers/ext_family_loop.py` | 가족 모듈에 `prepare(bc, r, p, cache_global)` 훅(있으면 호출) — BTC 장세 주입. 다른 가족 무변경 |
+| `app/services/external_strategies.py` | `SETTINGS.update(IK.SETTINGS)` |
+| `app/services/chart_learning.py` | RULES 에 `IK.PAPER_RULES` (→ 운영팀 성적표 자동 편입) |
+| `app/workers/paper_trading_worker.py` | `IK.set_paper_params` |
+| `auto_control.py` · `auto_family_registry.py` · `single_entry_guard.py` · `api/v1/terminal.py` | 관제실 패널·LINE_ORDER·가족 등록 |
+| `ext_rules_report.py` · `verify_fix364_deploy.py` | 보고서 접두사 · 배포 검사 표식 `Fix465` |
+| 테스트 | `tests/test_fix465_ichimoku_kijun.py` + 규칙 수 핀(test_fix353·361·374) |
+
+### B. 전략 인스턴스에 적용 (사람이 만드는 예약 전략)
+지금 예약 전략(Fix 182 `capital_management_mode="scheduled"` · `scheduled_entry_worker`)은 진입 판정이 `check_stage_entry_signal` 하나뿐이다.
+→ **예약 진입 신호 선택**을 붙여, 사장님이 새 전략 모달에서 「📅 예약 + 일목 기준선(일봉)」을 고르면 그 종목·방향에 신호가 날 때 1단계를 넣는다.
+
+| 곳 | 할 일 |
+|---|---|
+| alembic (신규) | `strategy_instances.entry_signal` String(32) NULL — NULL = 지금 그대로(`check_stage_entry_signal`) · `ichikijun` = 일목 기준선 |
+| `models/strategy_instance.py` · `schemas/strategy.py` · `api/v1/strategies/crud.py` | 필드·허용값 검증(목록 밖이면 400) — **CRLF 파일 줄끝 보존** |
+| `workers/scheduled_entry_worker.py` | `si.entry_signal == "ichikijun"` 이면 `IK.evaluate` (일봉 완성봉 · 판정한 봉 기록 · 같은 봉 재판정 없음) — 나머지 가드(슬롯·중복·ban·만료·건수 제한)는 그대로 |
+| 손절 | 인스턴스 손절 ROI = 1차 손절(2봉 저점) 가격 % → `sl_roi_for_price_pct` (외부 전략과 같은 변환) · ⚠️ 사전 검증 손절폭 평균 10~12% = 레버 2 에서 ROI −20~−30% → 모달에 예상 손절 ROI 를 미리 보여 준다 |
+| 2차 손절 (기준선 재이탈) | **B-2 단계로 분리** — 일봉 마감 뒤 `entry_signal="ichikijun"` 활성 인스턴스만 보는 청산 워커. 사전 검증에서 손해였으므로 기본 끔 `ichikijun_kijun_exit_enabled=0` |
+| 익절 1:2 | 인스턴스 TP1 = 손절폭 × 2 가격 % → ROI 로 (`tp1_pct_override`). 단일 단계 전량 |
+| 화면 `static/index.html` · `cm-submit.js` · `cm-preview.js` · `helpers.js` | 예약 버튼 옆 「진입 신호」 선택(기본 · 일목 기준선) · 배지 「📅 일목」 · 미리보기 문구 |
+| 가족 | `strategy_family.family_of` 는 바꾸지 않는다(기존 방식/OBV 자동 분리 유지, CLAUDE.md 규칙 5). 진입 신호만 다르다 |
+| 기본값 | `scheduled_entry_enabled` 가 이미 사장님 스위치. 새 신호는 사장님이 인스턴스를 만들 때만 쓰인다 |
+
+규칙 3: `evaluate`·예약 워커 분기·손절/TP 환산 = 매매 판정 → **리드가 직접 작성**(듀얼 초안은 참고). 화면·스키마·테스트·문서는 듀얼 결과 반영.
+
+## 5. 검증 계획 (모두 통과해야 「완료」)
+
+1. **일치 테스트** — 운영 `evaluate` 와 `ichikijun_ref.signal` 이 실데이터 80종목 × 전 구간에서 신호·손절가 불일치 0.
+2. 단위 테스트 — 기준선 돌파 경계(같음=돌파 아님) · 창 경계 · BTC 모름=진입 없음 · 봉 부족 · NaN · 진행 중 봉 제외 · SHORT 거울.
+3. 루프 테스트 — 같은 봉 재판정 없음 · shadow 에서 주문 0 · on → shadow 강제 경고 · 다른 가족 무변경(기존 테스트 전부).
+4. 예약 인스턴스 — `entry_signal` NULL 경로 무변경(회귀) · `ichikijun` 신호 없으면 대기 · 신호 나면 1단계 + 손절 ROI·TP1 값 확인 · 허용값 밖 400.
+5. 통합 테스트 0 실패 → `/merge` Gemini PASS → 사장님 배포 승인 → `verify_fix364_deploy.py` 3층 PASS · 첫 일봉 사이클 로그(오류 0, `ichikijun_eval` 수).
+6. 배포 다음 날 운영팀 성적표 F 에 `ichikijun_long/short` 「표본 부족」으로 등장.
+7. (감사 보완) 그림자·가상 기록에 신호일 · BTC 장세값 · 손절 클램프 여부 · 기준선 청산 표식 · 지연 진입가(마감 뒤 첫 시가)를 남긴다 — 판정 때 클램프 건·지연 진입을 따로 센다.
+8. (감사 보완) 판정 스크립트 `ichikijun_verdict.py`(배포 때 함께) = 날 단위 집계 · 날 묶음 부트스트랩 · 최고 N일 제외 · 손절폭 맞춘 같은 날 무작위.
+9. (감사 보완) on 을 넣어도 shadow 로 도는 가드와 그 테스트.
+
+## 6. 승격 기준 (스킬 4절, Claude가 정함)
+가상 n ≥ 100 · 진입일 ≥ 10 · 배치표 「사용 후보」 14일 중 7일 · 같은 날 무작위 대비 edge > 0 장세 2개 이상 · 감사 통과 · 실주문 청산 = 검증 청산 · **사장님 승인**.
+일봉 전략이라 신호가 드물다(사전 검증 연 ≈ 40~60건/방향) → n ≥ 100 까지 **수개월** 예상. 판정 예정일 = 배포 + 14일에 1차 점검(표본 확인만).
+
+## 7. 일정 (사장님 「개발」 뒤)
+1. `/duel ichikijun` (요구사항 = 이 문서 1·4·5절, 비밀·서버 정보 없음) → `/merge ichikijun`
+2. A 갈래 먼저(그림자·가상 — 실주문 영향 0) → B 갈래(예약 인스턴스, alembic 포함) → B-2(기준선 청산, 기본 끔)
+3. 배포는 UTC 00:00 ±1시간 피함
