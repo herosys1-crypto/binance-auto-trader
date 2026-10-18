@@ -30,7 +30,8 @@ BAR = 900
 KST_OFF = timedelta(hours=9)
 MIN_BASKET = 5
 SQL = text("""SELECT opened_at, side, rule, (engines->'live'->>'roi')::float AS r, chg_24h, symbol
-  FROM paper_trades WHERE source='live' AND status='CLOSED' AND opened_at > :s AND engines->'live'->>'roi' IS NOT NULL""")
+  FROM paper_trades WHERE source='live' AND status='CLOSED' AND opened_at > :s AND engines->'live'->>'roi' IS NOT NULL
+  ORDER BY opened_at, md5(symbol)""")   # 같은 봉 동점을 늘 같은 순서로(10/17 반박 감사)
 
 
 def main():
@@ -63,7 +64,7 @@ def main():
         if not pairs:
             continue
         first = {}
-        for at, h, _s in sorted(pairs):
+        for at, h, _s in sorted(pairs, key=lambda x: x[0]):   # 시각만으로 — 예전 sorted(pairs) 는 동점에서 값이 가장 낮은 짝을 골라 「하루 1건」 이 늘 −13 이었다(10/18)
             first.setdefault((at + KST_OFF).date(), h)
         v = list(first.values())
         h1 = [h for at, h, _ in pairs if (at + KST_OFF).date() < mid]

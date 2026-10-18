@@ -35,3 +35,5 @@ def test_judgement_scripts_fixed():
     s4 = (SCRIPTS / "s4_exit_compare_2026_10_17.py").read_text(encoding="utf-8")
     assert "def day_means(" in s4 and 'day_verdict("L 판정", d, min_days=12, min_pairs=100)' in s4
     assert 'day_verdict("S4 판정", s4, min_days=15)' in s4
+    nb = (SCRIPTS / "neutral_basket_2026_10_16.py").read_text(encoding="utf-8")
+    assert "ORDER BY opened_at, md5(symbol)" in nb and "sorted(pairs, key=lambda x: x[0])" in nb   # 10/18: 무작위 하루 1건 −13 의 원인
