@@ -57,3 +57,13 @@ def test_lab_card_reads_applied():
 def test_cache_busters_bumped():
     for f in ("helpers", "cm-submit", "multi-symbol", "ichikijun-lab-board"):
         assert re.search(rf'/static/js/{f}\.js\?v=fix466"', HTML), f
+
+
+def test_fix469_entry_signal_sticky_with_buttons():
+    """🗾 Fix 469 — 「진입 신호」 가 모달 맨 아래(스크롤해야 보임)가 아니라 버튼과 함께 아래에 고정된다."""
+    import pathlib
+    html = (pathlib.Path(__file__).resolve().parents[1] / "app/static/index.html").read_text(encoding="utf-8")
+    bar = html.split('id="cm-action-bar"', 1)[1].split('id="cm-submit" onclick="submitCreate()"', 1)[0]
+    assert "position:sticky" in html.split('id="cm-action-bar"', 1)[1][:120]
+    assert 'id="cm-entry-signal"' in bar and 'id="cm-submit-scheduled"' in bar
+    assert html.count('id="cm-entry-signal"') == 1

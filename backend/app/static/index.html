@@ -2706,19 +2706,18 @@
         </div>
       </div>
 
-      <!-- 🗾 Fix 466: 예약 전략 「진입 신호」 (예약일 때만 적용) -->
-      <div class="pt-3" style="font-size:12px">
-        <label for="cm-entry-signal" class="text-slate-300">진입 신호 (📅 예약)</label>
-        <select id="cm-entry-signal" class="input" style="width:100%">
+      <!-- 액션 버튼 — 🗾 Fix 469: 「진입 신호」 와 함께 모달 아래에 고정(스크롤해도 보임). 예전엔 맨 아래라 스크롤해야 보였다 -->
+      <div id="cm-action-bar" style="position:sticky;bottom:0;z-index:5;background:#0f172a;margin:0 -8px -8px;padding:8px 8px 8px;border-top:1px solid #334155">
+      <div id="cm-entry-signal-wrap" style="font-size:12px;border:1px solid #a78bfa;border-radius:8px;padding:6px 8px;margin-bottom:8px;background:rgba(167,139,250,0.08)">
+        <label for="cm-entry-signal" style="color:#c4b5fd;font-weight:600">🗾 진입 신호 — 📅 예약 버튼으로 만들 때만 적용</label>
+        <select id="cm-entry-signal" class="input" style="width:100%;margin-top:4px">
           <option value="">기본 (기존 예약 판정)</option>
           <option value="ichikijun">🗾 일목 실험실 챔피언 따름</option>
           <optgroup label="🗾 일목 변형 지정"><option value="ichikijun:1h_src_now_r2">1h_src_now_r2</option><option value="ichikijun:1h_src_now_r15">1h_src_now_r15</option><option value="ichikijun:1h_src_now_r2kj">1h_src_now_r2kj</option><option value="ichikijun:1h_src_pb_r2">1h_src_pb_r2</option><option value="ichikijun:1h_src_pb_r15">1h_src_pb_r15</option><option value="ichikijun:1h_src_pb_r2kj">1h_src_pb_r2kj</option><option value="ichikijun:1h_loose_now_r2">1h_loose_now_r2</option><option value="ichikijun:1h_loose_now_r15">1h_loose_now_r15</option><option value="ichikijun:1h_loose_now_r2kj">1h_loose_now_r2kj</option><option value="ichikijun:1h_loose_pb_r2">1h_loose_pb_r2</option><option value="ichikijun:1h_loose_pb_r15">1h_loose_pb_r15</option><option value="ichikijun:1h_loose_pb_r2kj">1h_loose_pb_r2kj</option><option value="ichikijun:4h_src_now_r2">4h_src_now_r2</option><option value="ichikijun:4h_src_now_r15">4h_src_now_r15</option><option value="ichikijun:4h_src_now_r2kj">4h_src_now_r2kj</option><option value="ichikijun:4h_src_pb_r2">4h_src_pb_r2</option><option value="ichikijun:4h_src_pb_r15">4h_src_pb_r15</option><option value="ichikijun:4h_src_pb_r2kj">4h_src_pb_r2kj</option><option value="ichikijun:4h_loose_now_r2">4h_loose_now_r2</option><option value="ichikijun:4h_loose_now_r15">4h_loose_now_r15</option><option value="ichikijun:4h_loose_now_r2kj">4h_loose_now_r2kj</option><option value="ichikijun:4h_loose_pb_r2">4h_loose_pb_r2</option><option value="ichikijun:4h_loose_pb_r15">4h_loose_pb_r15</option><option value="ichikijun:4h_loose_pb_r2kj">4h_loose_pb_r2kj</option><option value="ichikijun:1d_src_now_r2">1d_src_now_r2</option><option value="ichikijun:1d_src_now_r15">1d_src_now_r15</option><option value="ichikijun:1d_src_now_r2kj">1d_src_now_r2kj</option><option value="ichikijun:1d_src_pb_r2">1d_src_pb_r2</option><option value="ichikijun:1d_src_pb_r15">1d_src_pb_r15</option><option value="ichikijun:1d_src_pb_r2kj">1d_src_pb_r2kj</option><option value="ichikijun:1d_loose_now_r2">1d_loose_now_r2</option><option value="ichikijun:1d_loose_now_r15">1d_loose_now_r15</option><option value="ichikijun:1d_loose_now_r2kj">1d_loose_now_r2kj</option><option value="ichikijun:1d_loose_pb_r2">1d_loose_pb_r2</option><option value="ichikijun:1d_loose_pb_r15">1d_loose_pb_r15</option><option value="ichikijun:1d_loose_pb_r2kj">1d_loose_pb_r2kj</option></optgroup>
         </select>
-        <div class="text-xs text-slate-400">예약일 때만 적용 · 챔피언이 없거나 방향이 다르면 대기 · 손절=2봉 저점(가격)→ROI 환산 · 익절=R×손절폭 · 기준선 청산(r2kj)은 실주문에 없음</div>
+        <div class="text-xs text-slate-400" style="margin-top:2px">기본 = 기존 예약 판정 · 챔피언이 없거나 방향이 다르면 대기 · 손절=2봉 저점(가격)→ROI · 익절=R×손절폭 · r2kj 기준선 청산은 지금 그림자(기록만)</div>
       </div>
-
-      <!-- 액션 버튼 -->
-      <div class="flex justify-end gap-2 pt-3 border-t border-slate-700">
+      <div class="flex justify-end gap-2">
         <button onclick="closeCreateModal()" class="btn-ghost btn">취소</button>
         <!-- 2026-05-12 (사용자 요청): 「💾 템플릿으로 저장」 — 전략 시작 안 하고 설정만 명명 저장 -->
         <button id="cm-save-template" onclick="saveAsTemplate()" class="btn-ghost btn"
@@ -2732,6 +2731,7 @@
           style="border-color:#a78bfa;color:#c4b5fd"
           title="지금 진입하지 않고 「예정」 상태로 저장합니다. 시스템이 운영 진입 로직(15분 정점확인 등)을 감시하다가 조건이 맞으면 자동으로 1단계를 넣습니다. 기본 7일 후 만료.">📅 예약으로 저장</button>
         <button id="cm-submit" onclick="submitCreate()" class="btn-success btn" disabled>🚀 전략 시작</button>
+      </div>
       </div>
     </div>
   </div>
