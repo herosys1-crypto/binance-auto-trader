@@ -251,9 +251,12 @@ async function submitCreate(scheduled = false) {
     // 🔀 Fix 369 (2026-09-13): 두 「+ 새 전략」 버튼이 어느 가족을 원하는지 명시적으로 보낸다 —
     //   서버(crud.py)가 고른 템플릿의 trigger_mode 와 일치하는지 검증하고, 안 맞으면 400.
     const _familyToSend369 = (cmState._triggerMode === 'OBV_REVERSE') ? 'obv_auto' : 'legacy_manual';
+    // 🗾 Fix 466: 예약일 때만 「진입 신호」를 보낸다 (예약이 아니면 서버가 400)
+    const _entrySig466 = scheduled ? ((document.getElementById('cm-entry-signal') || {}).value || '') : '';
     const created = await api('/strategies', {
       method: 'POST',
       body: {
+        ...(scheduled && _entrySig466 ? { entry_signal: _entrySig466 } : {}),
         exchange_account_id: cmState.accountId,
         strategy_template_id: templateId,
         symbol, side: cmState.side, start_price: startPrice,

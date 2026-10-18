@@ -91,6 +91,9 @@ class StrategyInstance(Base):
     # ⛔ Fix 371 (alembic 0040): 누가 만들었나 — 'manual_modal' = 사람이 화면 모달(POST /strategies)로 생성, NULL = 자동 워커·배포 전.
     #   소급은 entry_profile='legacy_manual' 행만. 자동매매 중단 게이트(services/auto_trading_halt)가 이 값만 본다.
     entry_origin: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # 🗾 Fix 466 (alembic 0042): 예약 전략 진입 신호 — NULL = 기존 경로 · 'ichikijun' = 일목 실험실 챔피언 · 'ichikijun:<변형>' = 변형 고정
+    entry_signal: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    entry_signal_meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)   # 진입 때 쓴 변형·봉·손절폭·익절R (결과 검토용)
     # 누적 실현 손실 (USDT!) - 자본 차감 계산용!
     cumulative_realized_loss: Mapped[Decimal] = mapped_column(Numeric(20, 8), default=Decimal("0"), nullable=False)
     # 마지막 청산가 - 다음 단계 트리거 기준!

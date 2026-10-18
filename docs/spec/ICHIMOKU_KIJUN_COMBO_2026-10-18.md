@@ -218,3 +218,36 @@ id · kind(sig/rand) · variant · side · interval · symbol · pair_symbol · 
 - **되돌림 진입(pb)이 상위 8줄 중 7줄** — 「이미 움직인 뒤 돌파 봉에서 들어가 손절 먼저」(10/18 진단)를 되돌림이 줄인다는 가설과 맞다.
 - 승률 1위들은 전부 1.5R(`r15`): `1d_src_pb_r15` LONG 52% · `1d_loose_now_r15` SHORT 52% — 그러나 무작위 대비 아래 끝 −0.41 / −0.24. **승률 순으로 고르면 틀린다**는 실례.
 - ⚠️ 72줄 중 최고값 = 다중 비교. 우연만으로도 몇 줄은 아래 끝 > 0 이 나올 수 있다 → 그래서 챔피언은 **배포 뒤 앞으로 쌓인 표본만**으로 고른다.
+
+## 9. 전략 인스턴스 적용 + 적용 결과 검토 (2026-10-18 사장님 「시스템은 개발해 두고 가상매매로 업데이트 지속적으로 하고 시스템을 적용해서 나오는 결과도 검토해야해」) — Fix 466
+
+### 9-1. 사람이 만드는 예약 전략에 「진입 신호」 선택
+- 새 전략 모달의 **📅 예약** 으로 만들 때 「진입 신호」를 고른다: `기본`(지금 그대로 `check_stage_entry_signal`) · `🗾 일목 실험실 챔피언`(`ichikijun`) · `🗾 일목 변형 지정`(`ichikijun:<변형 키>`, 72줄 중 하나).
+- 저장 = `strategy_instances.entry_signal` String(32) NULL (alembic 0042) + `entry_signal_meta` JSONB NULL (진입 때 쓴 변형·신호 봉·진입 봉·손절폭·익절 R·BTC 장세·챔피언 점수). NULL = 기존 경로 그대로(회귀 없음).
+- 검증: 허용값 밖이면 400 · `ichikijun*` 는 예약(`capital_management_mode=scheduled`)일 때만 허용.
+
+### 9-2. 예약 워커 분기 (`scheduled_entry_worker`, 5분 주기 — 가드는 전부 기존 그대로)
+기존 순서(만료 → 같은 심볼·방향 활성 → 동시보유 상한) 뒤 「진입 신호」 단계만 갈린다:
+1. 변형 결정: `ichikijun` = 지금 챔피언(`ichikijun_champion` 의 변형, **방향이 인스턴스 방향과 같을 때만**) — 없거나 방향이 다르면 「대기: 챔피언 없음/방향 다름」. `ichikijun:<키>` = 그 변형.
+2. 그 변형 봉(1h·4h·1d)의 **마지막 완성봉**이 이 인스턴스에서 아직 판정 안 한 봉일 때만 klines 1회(300봉, 무게 2) + BTC 1회 — Redis `ichisched:last:{sid}:{iv}` (같은 봉 재조회 없음).
+3. 판정 = 실험실과 **같은 함수** `IK.entry_at` (실험실 72줄과 같은 결과).
+4. 신선도: 그 봉이 마감된 지 `ichikijun_sched_fresh_min`(1h·4h = 30분, 1d = 90분 — Claude가 정함)을 넘었으면 진입 안 함(늦은 진입 금지).
+5. 진입 직전 인스턴스에 박는다: `force_sl_enabled_override=True` · `force_sl_roi_override = sl_roi_for_price_pct(손절폭%, 레버)` · `tp1_pct_override = 익절R × 손절폭% × 레버` (ROI %). 그 뒤 기존 `start_stage1`.
+6. 만료: `ichikijun*` 예약은 `ichikijun_sched_expire_days`(30 — 일봉 신호가 드물어 기존 7일보다 길게, Claude가 정함).
+- ⚠️ 실주문 청산 = 손절·TP1 뿐. 변형의 `r2kj`(기준선 재이탈 청산)는 실주문에 없다 → meta 에 `kj_exit_missing=true` 로 남기고 결과 검토에서 따로 센다. 2단계 이상 계획이 있는 인스턴스는 2·3단계가 기존 단계 트리거로 붙는다(실험실은 단일 진입) → 결과 검토에서 「단계 추가 있음」 표시.
+
+### 9-3. 적용 결과 검토 (매일 KST 10:30 순위표 잡에 붙임)
+- 대상 = `entry_signal LIKE 'ichikijun%'` 인스턴스 전부.
+- 줄마다: id · 심볼·방향 · 변형 · 진입 시각 · 상태 · 실현 손익(USDT) · **실주문 R** = 실현 손익 ÷ (증거금 × 레버 × 손절폭) · **같은 진입의 실험실 R**(같은 변형·심볼·방향·진입 봉의 sig 행이 있으면) · 차이 · 표식(기준선 청산 없음 / 단계 추가 / 클램프).
+- 요약: 끝난 건수 · 실주문 평균 R · 실험실 평균 R(짝 있는 것) · 차이 평균 = **「가상과 실주문이 같은가」**.
+- 기록: Redis `ichilab:board.applied` · 화면 카드에 「적용 결과」 표 · 순위표 텔레그램에 적용 줄(끝난 건이 생긴 날만).
+
+### 9-4. 안전
+- 기본 상태에서 동작 변화 0: `entry_signal` 을 고른 예약만 영향 · 예약 워커 스위치(`scheduled_entry_enabled`)는 지금처럼 사장님 것.
+- 실험실 챔피언이 바뀌면 `ichikijun`(챔피언 따름) 예약은 **다음 신호부터** 새 챔피언을 쓴다(이미 진입한 건 그대로).
+
+### 9-5. 구현 메모 (Fix 466)
+- 생성: 일목 예약은 `fixed` 로 만든 뒤 **한 커밋**에서 `entry_signal` + `scheduled` (교차 감사 2건 + Gemini 1차 FAIL 지적 — 「신호 없는 예약」이 생기는 틈을 원천 차단). 실패하면 새 세션으로 보관·중지.
+- 예약 워커: 생성 60초 이내 예약은 한 사이클 건너뜀 · 일목 예약 만료 30일(`ichikijun_sched_expire_days`).
+- 주의: 1차 진입에는 기존 운영 게이트(Fix 310 거래량 순위 100 등)가 그대로 걸린다 → 실험실(게이트 없음)과 다른 점. 막히면 대기 사유에 「진입 실패: [Fix310] …」로 보이고, 결과 검토의 「진입」 수에서 빠진다.
+- 파일: services/ichikijun_apply.py · workers/ichikijun_sched.py · scheduled_entry_worker 분기 · crud/schemas · alembic 0042 · 화면 모달·배지·카드 「적용 결과」.

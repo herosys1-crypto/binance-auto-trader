@@ -67,6 +67,7 @@ DEFAULT_EXPIRE_DAYS = 7
 MAX_PER_CYCLE = 3
 BLOCK_KEY = "scheduled_entry_block:strategy:{sid}"
 BLOCK_TTL = 900   # 15분 (다음 사이클까지 표시)
+FRESH_CREATE_SKIP_SEC = 60   # 🗾 Fix 466: 생성 60초 이내 예약은 건너뜀 (생성·진입 신호 저장 두 커밋 사이 틈, Claude가 정함)
 
 
 def _redis():
@@ -152,6 +153,13 @@ def run_scheduled_entry_once() -> dict:
 
         exp_days = _expire_days(db)
         cutoff = datetime.now(timezone.utc) - timedelta(days=exp_days)
+        # 🗾 Fix 466: 일목 진입 신호 예약은 만료가 따로(기본 30일 — 일봉 신호가 드물다)
+        from app.services import ichikijun_apply as _IA466
+        from app.workers import ichikijun_sched as _IS466
+        exp_days_ichi = _IS466.expire_days(db)
+        cutoff_ichi = datetime.now(timezone.utc) - timedelta(days=exp_days_ichi)
+        _now_ms466 = int(datetime.now(timezone.utc).timestamp() * 1000)
+        _r466 = _redis()
 
         from app.services.position_limit import check_position_slot
         from app.services.stage_entry_signal import check_stage_entry_signal
@@ -162,19 +170,26 @@ def run_scheduled_entry_once() -> dict:
                 continue
 
             # ── 만료 (잊힌 예약이 갑자기 들어가는 걸 막는다) ──
+            _ichi466 = _IA466.is_ichikijun(getattr(si, "entry_signal", None))   # 🗾 Fix 466 일목 진입 신호 예약
+            _cut = cutoff_ichi if _ichi466 else cutoff
             _created = si.created_at
             if _created is not None:
                 if _created.tzinfo is None:
                     _created = _created.replace(tzinfo=timezone.utc)
-                if _created < cutoff:
+                if _created < _cut:
                     si.is_archived = True
                     db.commit()
                     stat["expired"] += 1
                     logger.warning(
                         "[scheduled_entry] ⌛ #%s %s %s 예약 만료 (%d일 경과) → 보관 처리",
-                        si.id, si.symbol, si.side, exp_days,
+                        si.id, si.symbol, si.side, exp_days_ichi if _ichi466 else exp_days,
                     )
                     continue
+
+            # 🗾 Fix 466 (교차 감사): 생성 커밋과 진입 신호 저장 사이 틈 — 방금 만든 예약은 한 사이클 건너뛴다
+            if _created is not None and (datetime.now(timezone.utc) - _created).total_seconds() < FRESH_CREATE_SKIP_SEC:
+                _skip("just_created")
+                continue
 
             # ── 같은 심볼·방향에 이미 활성 전략이 있으면 skip ──
             dup = db.execute(
@@ -203,9 +218,13 @@ def run_scheduled_entry_once() -> dict:
                 _skip("slot_full")
                 break
 
-            # ── 진입 신호 = 운영 로직 (Fix 173) ──
+            # ── 진입 신호 = 운영 로직 (Fix 173) · 🗾 Fix 466: entry_signal=ichikijun* 이면 일목 실험실과 같은 판정 ──
+            _meta466: dict = {}
             try:
-                sig_ok, sig_why, _det = check_stage_entry_signal(bc, db, si.symbol, si.side)
+                if _ichi466:
+                    sig_ok, sig_why, _meta466 = _IS466.judge(db, bc, _r466, si, _now_ms466)
+                else:
+                    sig_ok, sig_why, _det = check_stage_entry_signal(bc, db, si.symbol, si.side)
             except Exception as e:
                 logger.warning("[scheduled_entry] #%s 신호 판정 실패 → 보류: %s", si.id, e)
                 _record(si.id, f"신호 판정 실패: {e}")
@@ -219,6 +238,15 @@ def run_scheduled_entry_once() -> dict:
                 _record(si.id, sig_why)
                 _skip("signal_wait")
                 continue
+
+            # ── 🗾 Fix 466: 진입 직전 손절 ROI·TP1 ROI·근거를 인스턴스에 박는다 (값 계산 실패면 진입 안 함) ──
+            if _ichi466:
+                if not _IS466.apply_overrides(si, _meta466):
+                    db.rollback()
+                    _record(si.id, "일목 손절·익절 값 계산 실패")
+                    _skip("ichikijun_override_fail")
+                    continue
+                db.commit()
 
             # ── 진입! ──
             try:

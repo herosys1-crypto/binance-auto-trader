@@ -230,9 +230,12 @@ async function submitCreateMulti(scheduled = false) {
         console.log(`[batch] ${sym} POST /strategies`, { exchange_account_id: cmState.accountId, strategy_template_id: templateId, side: cmState.side, start_price: String(startPrice) });
         let created;
         try {
+          // 🗾 Fix 466: 예약일 때만 「진입 신호」 (예약이 아니면 서버가 400)
+          const _entrySig466 = scheduled ? ((document.getElementById('cm-entry-signal') || {}).value || '') : '';
           created = await api('/strategies', {
             method: 'POST',
             body: {
+              ...(scheduled && _entrySig466 ? { entry_signal: _entrySig466 } : {}),
               exchange_account_id: cmState.accountId,
               strategy_template_id: templateId,
               symbol: sym, side: cmState.side, start_price: String(startPrice),

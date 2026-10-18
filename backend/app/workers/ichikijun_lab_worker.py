@@ -245,6 +245,39 @@ def _rows_for_board(db, since: datetime) -> list[dict]:
     return out
 
 
+def _applied(db) -> dict:
+    """🗾 Fix 466 — 일목 진입 신호 예약 인스턴스의 실주문 결과 vs 같은 진입의 실험실 결과."""
+    from app.models.ichikijun_lab_trade import IchikijunLabTrade as T
+    from app.models.strategy_instance import StrategyInstance as SI
+    from app.models.strategy_stage_plan import StrategyStagePlan as SP
+    from app.services import ichikijun_apply as IA
+
+    sis = db.execute(select(SI).where(SI.entry_signal.like("ichikijun%"))).scalars().all()
+    items, keys = [], set()
+    for si in sis:
+        plans = db.execute(select(SP).where(SP.strategy_instance_id == si.id)).scalars().all()
+        p1 = next((p for p in plans if p.stage_no == 1), None)
+        meta = si.entry_signal_meta or {}
+        items.append({"id": si.id, "symbol": si.symbol, "side": si.side, "status": si.status, "leverage": si.leverage,
+                      "realized_pnl": float(si.realized_pnl or 0),
+                      "stage1_capital": float(p1.planned_capital) if p1 is not None else None,
+                      "stages": sum(1 for p in plans if p.is_enabled), "entry_signal": si.entry_signal, "meta": meta,
+                      "started_at": si.started_at.isoformat() if si.started_at else None,
+                      "stopped_at": si.stopped_at.isoformat() if si.stopped_at else None})
+        if meta.get("variant") and meta.get("entry_bar_ts"):
+            keys.add((meta["variant"], si.side, si.symbol, int(meta["entry_bar_ts"])))
+    lab: dict[tuple, float] = {}
+    for var, side, sym, ts in keys:
+        rn = db.execute(select(T.r_net).where(T.kind == "sig", T.variant == var, T.side == side, T.symbol == sym,
+                                              T.entry_bar_ts == ts, T.status == "CLOSED")).scalar()
+        if rn is not None:
+            lab[(var, side, sym, ts)] = float(rn)
+    return IA.applied_report(items, lab)
+
+
+S_APPLIED_N = "ichikijun_applied_finished_n"
+
+
 def run_ichikijun_board_once() -> dict[str, Any]:
     from app.core.database import SessionLocal
     from app.core.redis_client import get_redis_client
@@ -269,8 +302,19 @@ def run_ichikijun_board_once() -> dict[str, Any]:
             hist.append(champ)
             _set_setting(db, S_HIST, json.dumps(hist, ensure_ascii=False))
         db.commit()
+        try:
+            applied = _applied(db)
+        except Exception as e:  # noqa: BLE001 — 결과 검토 실패가 순위표를 막지 않게
+            db.rollback()
+            logger.warning("[%s] 적용 결과 검토 실패: %s", FIX, e)
+            applied = {"rows": [], "summary": {}, "error": f"{e!r:.120}"}
+        fin_n = int((applied.get("summary") or {}).get("finished") or 0)
+        prev_fin = int(_setting(db, S_APPLIED_N) or 0)
+        if fin_n != prev_fin:
+            _set_setting(db, S_APPLIED_N, str(fin_n))
+            db.commit()
         payload = {"at": datetime.now(timezone.utc).isoformat(), "since": started, "champion": champ,
-                   "streak": streak, "board": board}
+                   "streak": streak, "board": board, "applied": applied}
         try:
             get_redis_client().setex(K_BOARD, 3 * 86400, json.dumps(payload, ensure_ascii=False))
         except Exception as e:  # noqa: BLE001
@@ -284,6 +328,18 @@ def run_ichikijun_board_once() -> dict[str, Any]:
                           f'승률 {champ["win"]:.0%} · {champ["n"]}건/{champ["days"]}일\n(가상 전용 — 실주문은 사장님 승인)'))
             except Exception as e:  # noqa: BLE001
                 logger.warning("[%s] 텔레그램 실패: %s", FIX, e)
-        return {"rows": len(board), "champion": champ, "changed": changed}
+        sm = applied.get("summary") or {}
+        if fin_n > prev_fin:
+            try:
+                from app.services.notification_service import NotificationService
+                f = (lambda x: "—" if x is None else f"{x:+.2f}R")
+                NotificationService(db).send_system_alert(
+                    title="🗾 일목 신호 예약 — 실주문 결과",
+                    body=(f'끝난 {sm.get("finished")}건 · 실주문 평균 {f(sm.get("live_avg_r"))} · '
+                          f'같은 진입 실험실 {f(sm.get("lab_avg_r"))} (짝 {sm.get("paired")}건) · 차이 {f(sm.get("diff_avg_r"))} · '
+                          f'실현 합계 {sm.get("pnl_sum", 0):+.2f} USDT'))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[%s] 적용 결과 텔레그램 실패: %s", FIX, e)
+        return {"rows": len(board), "champion": champ, "changed": changed, "applied": sm}
     finally:
         db.close()

@@ -91,6 +91,20 @@ function renderStageBar(current, total) {
  */
 function scheduledBadge(s) {
   if (!s) return '';
+  return _scheduledBadgeBase(s) + ichikijunSignalBadge(s);
+}
+
+// 🗾 Fix 466: 예약 전략의 「진입 신호」 (entry_signal 이 ichikijun 으로 시작) 배지
+function ichikijunSignalBadge(s) {
+  const sig = String((s && s.entry_signal) || '');
+  if (!sig.startsWith('ichikijun')) return '';
+  return '<span style="display:inline-block;background:#3730a3;color:#c7d2fe;padding:2px 6px;'
+    + 'border-radius:4px;font-size:var(--font-badge);margin-left:4px" '
+    + 'title="' + sig.replace(/[&<>"]/g, '') + '">🗾 일목</span>';
+}
+
+function _scheduledBadgeBase(s) {
+  if (!s) return '';
   if (String(s.capital_management_mode || '') !== 'scheduled') return '';
   const st = String(s.status || '').toUpperCase();
   if (st === 'WAITING') {

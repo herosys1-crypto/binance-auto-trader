@@ -31,6 +31,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/strategies", tags=["strategies"])
 
 
+def _compensate_466(cls, sid) -> bool:
+    """🗾 Fix 466: 진입 신호 저장 실패한 예약을 **새 세션**으로 보관·중지 (원래 세션은 실패 상태일 수 있다). 3번까지."""
+    from app.core.database import SessionLocal
+    for _ in range(3):
+        s = SessionLocal()
+        try:
+            row = s.get(cls, sid)
+            if row is None:
+                return True
+            row.is_archived = True
+            row.status = "STOPPED"
+            s.commit()
+            return True
+        except Exception:
+            s.rollback()
+        finally:
+            s.close()
+    return False
+
+
 @router.post("", response_model=StrategyDetailResponse, status_code=status.HTTP_201_CREATED)
 def create_strategy(
     payload: StrategyCreateRequest,
@@ -65,6 +85,15 @@ def create_strategy(
             "(구 프론트/외부 호출자로 추정, 화면 배지·자동 채움 정확도에 영향 없음)",
             payload.symbol, payload.strategy_template_id, user_id,
         )
+    # 🗾 Fix 466 (2026-10-18 사장님 「시스템을 적용해서 나오는 결과도 검토」): 예약 전략 진입 신호 검증 — 생성 전에 막는다.
+    from app.services import ichikijun_apply as _IA466
+    _sig_ok466, _sig_key466 = _IA466.parse_entry_signal(payload.entry_signal)
+    if not _sig_ok466:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"⚠️ 진입 신호 {payload.entry_signal!r} 는 쓸 수 없습니다 (ichikijun 또는 ichikijun:<변형 키>).")
+    if _sig_key466 is not None and str(payload.capital_management_mode or "fixed").lower() != "scheduled":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="⚠️ 일목 진입 신호는 📅 예약 전략에서만 쓸 수 있습니다.")
     try:
         instance = StrategyService(db).create_strategy_instance(
             user_id=user_id,
@@ -77,7 +106,9 @@ def create_strategy(
             # 🌟 v131 신 (2026-08-09): 청산 후 자동 재진입 옵션!
             retry_after_liquidation_enabled=payload.retry_after_liquidation_enabled,
             retry_trigger_pct=payload.retry_trigger_pct,
-            capital_management_mode=payload.capital_management_mode,
+            # 🗾 Fix 466: 일목 예약은 먼저 「fixed」로 만든다(예약 워커가 집지 않음) → 아래 한 커밋에서 entry_signal + scheduled 를 함께 박는다.
+            #   두 번째 커밋이 실패해도 「진입 신호 없는 예약」은 생기지 않는다(fixed WAITING = 사람이 시작 누를 때만 진입).
+            capital_management_mode=("fixed" if _sig_key466 is not None else payload.capital_management_mode),
             # 🌟 v131 단계별 개별 트리거 (사장님 하이브리드!)
             retry_stage_trigger_pcts=payload.retry_stage_trigger_pcts,
             # 🎯 Fix 367: 사람이 모달로 만든 전략 — 「➕ 새 전략 (기존 방식)」 판정(TP1 +25 · 강제손절 없음)에 쓴다
@@ -85,6 +116,22 @@ def create_strategy(
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    if _sig_key466 is not None:
+        # 교차 감사(치명): 생성 커밋 뒤 신호 저장이 실패하면 entry_signal=NULL 예약이 남아 **기본 신호로 실주문**될 수 있다
+        #   → 실패 시 같은 인스턴스를 보관(is_archived)·중지로 되돌리고 500. 두 커밋 사이 틈은 예약 워커의 「생성 60초 이내 건너뜀」이 막는다.
+        _sid466, _cls466 = instance.id, type(instance)   # Gemini 심판: 롤백 뒤 만료된 객체에서 id 를 읽지 않게 먼저 잡아 둔다
+        try:
+            instance.entry_signal = payload.entry_signal.strip()
+            instance.capital_management_mode = "scheduled"
+            db.commit()
+            db.refresh(instance)
+        except Exception as _e466:
+            db.rollback()
+            _comp_ok466 = _compensate_466(_cls466, _sid466)
+            logger.error("[Fix466] #%s 진입 신호 저장 실패 → 보관·중지 %s: %s", _sid466,
+                         "완료" if _comp_ok466 else "🚨 실패 (수동 확인 필요)", _e466)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail="⚠️ 진입 신호 저장 실패 — 예약을 만들지 않았습니다(보관 처리). 다시 시도하세요.") from _e466
     resp = StrategyDetailResponse.model_validate(instance)
     # Fix 369: 화면이 토스트에 "실제로 만들어진 가족"을 보여줄 수 있게 — 단일 진실(family_of) 로 계산.
     from app.services.strategy_family import family_of

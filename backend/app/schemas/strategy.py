@@ -56,6 +56,9 @@ class StrategyCreateRequest(BaseModel):
     # 막는 판정이 아니라 표시/검증용이라 여기서 막으면 기존 통합 흐름이 깨진다).
     # 값이 있으면 반드시 템플릿의 trigger_mode 와 일치해야 함 (불일치 = 400).
     family: Literal["legacy_manual", "obv_auto"] | None = Field(default=None)
+    # 🗾 Fix 466 (2026-10-18 사장님): 예약 전략 진입 신호 — None = 기존 · "ichikijun" = 일목 실험실 챔피언 · "ichikijun:<변형 키>" = 변형 고정.
+    #   예약(capital_management_mode="scheduled")일 때만 허용, 허용값 밖 = 400 (crud 에서 검증).
+    entry_signal: str | None = Field(default=None, max_length=32)
 
 class StrategyStopRequest(BaseModel):
     mode: Literal["cancel_only", "close_position_market", "emergency_stop"]
@@ -113,6 +116,7 @@ class StrategyDetailResponse(StrategyInstanceResponse):
     force_sl_roi_override: Decimal | None = None
     # 🎯 Fix 367c: 가족 표식 ('legacy_manual' = 기존 방식 처음 방식 / None)
     entry_profile: str | None = None
+    entry_signal: str | None = None   # 🗾 Fix 466 예약 진입 신호 (배지용)
     # 🔀 Fix 369 (2026-09-13): 단일 진실 판정 — app.services.strategy_family.family_of() 의 결과.
     # 'legacy_manual' / 'obv_auto' / 'split' / 'single' / 'ladder' / 'other' / 'unknown'.
     # entry_profile 은 창구(사람이 만든 두 모달)만 구분하고, family 는 SPLIT/사다리/단일진입까지

@@ -1592,6 +1592,7 @@
         <div id="ichikijun-lab-champion" class="text-xs" style="color:#e9d5ff">불러오는 중…</div>
         <div id="ichikijun-lab-streak" class="text-xs text-slate-400"></div>
         <div id="ichikijun-lab-table" style="max-height:260px;overflow:auto;margin-top:6px;"></div>
+        <div id="ichikijun-lab-applied" style="margin-top:6px;"></div>
         <div class="text-xs text-slate-400" style="margin-top:4px;" title="변형 키: {봉}_{src 출처|loose 거래량·OBV 끔}_{now 돌파 즉시|pb 되돌림}_{r2 2R|r15 1.5R|r2kj 2R+기준선 청산}">
           승률 순이 아니라 무작위 대비 아래 끝 순 — 실주문은 사장님 승인<br>
           변형 키 = {봉}_{src 출처 | loose 거래량·OBV 끔}_{now 돌파 즉시 | pb 되돌림}_{r2 2R | r15 1.5R | r2kj 2R+기준선 청산}
@@ -2705,6 +2706,17 @@
         </div>
       </div>
 
+      <!-- 🗾 Fix 466: 예약 전략 「진입 신호」 (예약일 때만 적용) -->
+      <div class="pt-3" style="font-size:12px">
+        <label for="cm-entry-signal" class="text-slate-300">진입 신호 (📅 예약)</label>
+        <select id="cm-entry-signal" class="input" style="width:100%">
+          <option value="">기본 (기존 예약 판정)</option>
+          <option value="ichikijun">🗾 일목 실험실 챔피언 따름</option>
+          <optgroup label="🗾 일목 변형 지정"><option value="ichikijun:1h_src_now_r2">1h_src_now_r2</option><option value="ichikijun:1h_src_now_r15">1h_src_now_r15</option><option value="ichikijun:1h_src_now_r2kj">1h_src_now_r2kj</option><option value="ichikijun:1h_src_pb_r2">1h_src_pb_r2</option><option value="ichikijun:1h_src_pb_r15">1h_src_pb_r15</option><option value="ichikijun:1h_src_pb_r2kj">1h_src_pb_r2kj</option><option value="ichikijun:1h_loose_now_r2">1h_loose_now_r2</option><option value="ichikijun:1h_loose_now_r15">1h_loose_now_r15</option><option value="ichikijun:1h_loose_now_r2kj">1h_loose_now_r2kj</option><option value="ichikijun:1h_loose_pb_r2">1h_loose_pb_r2</option><option value="ichikijun:1h_loose_pb_r15">1h_loose_pb_r15</option><option value="ichikijun:1h_loose_pb_r2kj">1h_loose_pb_r2kj</option><option value="ichikijun:4h_src_now_r2">4h_src_now_r2</option><option value="ichikijun:4h_src_now_r15">4h_src_now_r15</option><option value="ichikijun:4h_src_now_r2kj">4h_src_now_r2kj</option><option value="ichikijun:4h_src_pb_r2">4h_src_pb_r2</option><option value="ichikijun:4h_src_pb_r15">4h_src_pb_r15</option><option value="ichikijun:4h_src_pb_r2kj">4h_src_pb_r2kj</option><option value="ichikijun:4h_loose_now_r2">4h_loose_now_r2</option><option value="ichikijun:4h_loose_now_r15">4h_loose_now_r15</option><option value="ichikijun:4h_loose_now_r2kj">4h_loose_now_r2kj</option><option value="ichikijun:4h_loose_pb_r2">4h_loose_pb_r2</option><option value="ichikijun:4h_loose_pb_r15">4h_loose_pb_r15</option><option value="ichikijun:4h_loose_pb_r2kj">4h_loose_pb_r2kj</option><option value="ichikijun:1d_src_now_r2">1d_src_now_r2</option><option value="ichikijun:1d_src_now_r15">1d_src_now_r15</option><option value="ichikijun:1d_src_now_r2kj">1d_src_now_r2kj</option><option value="ichikijun:1d_src_pb_r2">1d_src_pb_r2</option><option value="ichikijun:1d_src_pb_r15">1d_src_pb_r15</option><option value="ichikijun:1d_src_pb_r2kj">1d_src_pb_r2kj</option><option value="ichikijun:1d_loose_now_r2">1d_loose_now_r2</option><option value="ichikijun:1d_loose_now_r15">1d_loose_now_r15</option><option value="ichikijun:1d_loose_now_r2kj">1d_loose_now_r2kj</option><option value="ichikijun:1d_loose_pb_r2">1d_loose_pb_r2</option><option value="ichikijun:1d_loose_pb_r15">1d_loose_pb_r15</option><option value="ichikijun:1d_loose_pb_r2kj">1d_loose_pb_r2kj</option></optgroup>
+        </select>
+        <div class="text-xs text-slate-400">예약일 때만 적용 · 챔피언이 없거나 방향이 다르면 대기 · 손절=2봉 저점(가격)→ROI 환산 · 익절=R×손절폭 · 기준선 청산(r2kj)은 실주문에 없음</div>
+      </div>
+
       <!-- 액션 버튼 -->
       <div class="flex justify-end gap-2 pt-3 border-t border-slate-700">
         <button onclick="closeCreateModal()" class="btn-ghost btn">취소</button>
@@ -2997,7 +3009,7 @@ function openBBMiddleRanking(direction) {
      (app/main.py 의 _rewrite_asset_versions). 여기 적힌 문자열은 무시됩니다.
      이 자동화 이전에는 18개 파일의 버전이 낡은 채로 방치돼 있었습니다. -->
 <script src="/static/js/api.js?v=20260826-fix107-content-type"></script>
-<script src="/static/js/helpers.js?v=20260825-fix96-stage-2lines"></script>
+<script src="/static/js/helpers.js?v=fix466"></script>
 <script src="/static/js/stats-modals.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/health-page.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/ranking-page.js?v=20260722v119-grid-align"></script>
@@ -3018,9 +3030,9 @@ function openBBMiddleRanking(direction) {
 <script src="/static/js/indicators.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/strategies-list.js?v=20260904-fix341-ladder-split"></script>
 <script src="/static/js/external-positions.js?v=20260722v119-grid-align"></script>
-<script src="/static/js/multi-symbol.js?v=20260722v119-grid-align"></script>
+<script src="/static/js/multi-symbol.js?v=fix466"></script>
 <script src="/static/js/template-save.js?v=20260722v119-grid-align"></script>
-<script src="/static/js/cm-submit.js?v=20260722v119-grid-align"></script>
+<script src="/static/js/cm-submit.js?v=fix466"></script>
 <script src="/static/js/strategy-detail.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/chart-detail.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/symbol-trading-modal.js?v=20260611v44-symbol-modal"></script>
@@ -3035,7 +3047,7 @@ function openBBMiddleRanking(direction) {
 <script src="/static/js/managed-symbols.js?v=20260909-fix365-managed-symbols"></script>
 <script src="/static/js/pump-bb-alerts.js?v=20260809v131-pump-bb"></script>
 <script src="/static/js/ema-pullback-board.js?v=fix424"></script>
-<script src="/static/js/ichikijun-lab-board.js?v=fix465"></script>
+<script src="/static/js/ichikijun-lab-board.js?v=fix466"></script>
 <script src="/static/js/strategy-council.js?v=fix457"></script>
 <script src="/static/js/strategy-suggestions.js?v=20260826-fix107-content-type"></script>
 <script src="/static/js/live-pump-dump-alerts.js?v=20260814v148a-pump-reversal-short"></script>
