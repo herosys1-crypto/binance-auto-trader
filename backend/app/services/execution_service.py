@@ -186,7 +186,7 @@ class ExecutionService:
                 f"   error: {err_msg}"
             )
 
-    def start_stage1(self, strategy_id: int, *, origin: str = "auto") -> Order:   # ⛔ Fix 371: 「전략 시작」 버튼만 origin="manual"
+    def start_stage1(self, strategy_id: int, *, origin: str = "auto", force_market: bool = False) -> Order:   # 🗾 Fix 470 force_market: 일목 예약 신호 진입   # ⛔ Fix 371: 「전략 시작」 버튼만 origin="manual"
         strategy = self.strategy_repo.get_strategy(strategy_id)
         if not strategy:
             raise ValueError("Strategy not found")
@@ -274,7 +274,7 @@ class ExecutionService:
 
         self.ensure_isolated_margin(strategy)  # 2026-05-06 (사용자 결정): 모든 거래 ISOLATED
         self.apply_leverage(strategy)
-        order = self._place_stage_entry_order(strategy, stage_plan)
+        order = self._place_stage_entry_order(strategy, stage_plan, force_market=force_market)
         strategy.status = "STAGE1_OPEN_PENDING"
         strategy.current_stage = 1
         self.db.commit()

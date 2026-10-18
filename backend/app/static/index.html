@@ -574,6 +574,7 @@
      🌟 2026-07-16 v94 revert: v93 완전 전체 화면 취소! (사장님 = 데스크탑처럼 원함!)
      = 모바일 = 데스크탑 rounded card 스타일 유지!
      = 심볼 sticky top = 유지 (도움됨!) */
+  #cm-entry-signal option, #cm-entry-signal optgroup { background:#1e293b; color:#e2e8f0; }   /* 🗾 Fix 470: 흰 바탕 흐린 글씨 */
   .cm-inner-default {
     max-width: 720px;
     width: 60vw;
@@ -2710,12 +2711,12 @@
       <div id="cm-action-bar" style="position:sticky;bottom:0;z-index:5;background:#0f172a;margin:0 -8px -8px;padding:8px 8px 8px;border-top:1px solid #334155">
       <div id="cm-entry-signal-wrap" style="font-size:12px;border:1px solid #a78bfa;border-radius:8px;padding:6px 8px;margin-bottom:8px;background:rgba(167,139,250,0.08)">
         <label for="cm-entry-signal" style="color:#c4b5fd;font-weight:600">🗾 진입 신호 — 📅 예약 버튼으로 만들 때만 적용</label>
-        <select id="cm-entry-signal" class="input" style="width:100%;margin-top:4px">
+        <select id="cm-entry-signal" class="input" style="width:100%;margin-top:4px;background:#1e293b;color:#e2e8f0;border:1px solid #475569;border-radius:6px;padding:4px 6px">
           <option value="">기본 (기존 예약 판정)</option>
           <option value="ichikijun">🗾 일목 실험실 챔피언 따름</option>
           <optgroup label="🗾 일목 변형 지정"><option value="ichikijun:1h_src_now_r2">1h_src_now_r2</option><option value="ichikijun:1h_src_now_r15">1h_src_now_r15</option><option value="ichikijun:1h_src_now_r2kj">1h_src_now_r2kj</option><option value="ichikijun:1h_src_pb_r2">1h_src_pb_r2</option><option value="ichikijun:1h_src_pb_r15">1h_src_pb_r15</option><option value="ichikijun:1h_src_pb_r2kj">1h_src_pb_r2kj</option><option value="ichikijun:1h_loose_now_r2">1h_loose_now_r2</option><option value="ichikijun:1h_loose_now_r15">1h_loose_now_r15</option><option value="ichikijun:1h_loose_now_r2kj">1h_loose_now_r2kj</option><option value="ichikijun:1h_loose_pb_r2">1h_loose_pb_r2</option><option value="ichikijun:1h_loose_pb_r15">1h_loose_pb_r15</option><option value="ichikijun:1h_loose_pb_r2kj">1h_loose_pb_r2kj</option><option value="ichikijun:4h_src_now_r2">4h_src_now_r2</option><option value="ichikijun:4h_src_now_r15">4h_src_now_r15</option><option value="ichikijun:4h_src_now_r2kj">4h_src_now_r2kj</option><option value="ichikijun:4h_src_pb_r2">4h_src_pb_r2</option><option value="ichikijun:4h_src_pb_r15">4h_src_pb_r15</option><option value="ichikijun:4h_src_pb_r2kj">4h_src_pb_r2kj</option><option value="ichikijun:4h_loose_now_r2">4h_loose_now_r2</option><option value="ichikijun:4h_loose_now_r15">4h_loose_now_r15</option><option value="ichikijun:4h_loose_now_r2kj">4h_loose_now_r2kj</option><option value="ichikijun:4h_loose_pb_r2">4h_loose_pb_r2</option><option value="ichikijun:4h_loose_pb_r15">4h_loose_pb_r15</option><option value="ichikijun:4h_loose_pb_r2kj">4h_loose_pb_r2kj</option><option value="ichikijun:1d_src_now_r2">1d_src_now_r2</option><option value="ichikijun:1d_src_now_r15">1d_src_now_r15</option><option value="ichikijun:1d_src_now_r2kj">1d_src_now_r2kj</option><option value="ichikijun:1d_src_pb_r2">1d_src_pb_r2</option><option value="ichikijun:1d_src_pb_r15">1d_src_pb_r15</option><option value="ichikijun:1d_src_pb_r2kj">1d_src_pb_r2kj</option><option value="ichikijun:1d_loose_now_r2">1d_loose_now_r2</option><option value="ichikijun:1d_loose_now_r15">1d_loose_now_r15</option><option value="ichikijun:1d_loose_now_r2kj">1d_loose_now_r2kj</option><option value="ichikijun:1d_loose_pb_r2">1d_loose_pb_r2</option><option value="ichikijun:1d_loose_pb_r15">1d_loose_pb_r15</option><option value="ichikijun:1d_loose_pb_r2kj">1d_loose_pb_r2kj</option></optgroup>
         </select>
-        <div class="text-xs text-slate-400" style="margin-top:2px">기본 = 기존 예약 판정 · 챔피언이 없거나 방향이 다르면 대기 · 손절=2봉 저점(가격)→ROI · 익절=R×손절폭 · r2kj 기준선 청산은 지금 그림자(기록만)</div>
+        <div class="text-xs text-slate-400" style="margin-top:2px">기본 = 기존 예약 판정 · 🗾 일목은 <b>1단계 전략만</b> · 신호 때 <b>시장가</b> 진입 · 챔피언이 없거나 방향이 다르면 대기 · 손절=2봉 저점(가격)→ROI · 익절=R×손절폭 · r2kj 기준선 청산은 지금 그림자(기록만)</div>
       </div>
       <div class="flex justify-end gap-2">
         <button onclick="closeCreateModal()" class="btn-ghost btn">취소</button>

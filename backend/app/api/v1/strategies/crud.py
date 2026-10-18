@@ -119,6 +119,12 @@ def create_strategy(
     if _sig_key466 is not None:
         # 교차 감사(치명): 생성 커밋 뒤 신호 저장이 실패하면 entry_signal=NULL 예약이 남아 **기본 신호로 실주문**될 수 있다
         #   → 실패 시 같은 인스턴스를 보관(is_archived)·중지로 되돌리고 500. 두 커밋 사이 틈은 예약 워커의 「생성 60초 이내 건너뜀」이 막는다.
+        # 🗾 Fix 470: 일목 신호는 1단계 전략만(실험실 = 단일 진입 · 2·3단계 트리거가 모달 시작가 기준이라 시장가 1단계와 어긋남)
+        from app.workers.ichikijun_sched import single_stage as _single470
+        if not _single470(instance):
+            _compensate_466(type(instance), instance.id)
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="⚠️ 일목 진입 신호는 1단계 전략(단일 진입)에서만 쓸 수 있습니다. 단계 수를 1로 하거나 진입 신호를 「기본」으로 고르세요.")
         _sid466, _cls466 = instance.id, type(instance)   # Gemini 심판: 롤백 뒤 만료된 객체에서 id 를 읽지 않게 먼저 잡아 둔다
         try:
             instance.entry_signal = payload.entry_signal.strip()

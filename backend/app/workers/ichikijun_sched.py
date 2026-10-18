@@ -82,8 +82,19 @@ def apply_overrides(si: Any, meta: dict) -> bool:
     if ov is None:
         return False
     sl, tp1 = ov
+    # 🗾 Fix 470: 1단계는 시장가로 낸다 — DB 의 trigger_price 는 건드리지 않고 start_stage1(force_market=True) 로(반박 검토:
+    #   값을 지우면 진입 실패 때 None 이 남고 모달 시작가 기록이 사라진다). 일목 신호는 1단계 전략만(아래 single_stage).
+    if not single_stage(si):
+        return False
     si.force_sl_enabled_override = True
     si.force_sl_roi_override = Decimal(f"{sl:.2f}")
     si.tp1_pct_override = Decimal(f"{tp1:.2f}")
-    si.entry_signal_meta = {**meta, "sl_roi": sl, "tp1_roi": tp1}
+    si.entry_signal_meta = {**meta, "sl_roi": sl, "tp1_roi": tp1, "market_entry": True}
     return True
+
+
+def single_stage(si: Any) -> bool:
+    """🗾 Fix 470: 켜진 단계 계획이 1단계 하나뿐인가. 실험실은 단일 진입만 잰다 + 2·3단계 트리거는 모달 시작가 기준이라
+    며칠 뒤 시장가 1단계 체결가와 간격이 어긋난다(반박 검토) → 일목 신호는 1단계 전략에만."""
+    plans = [p for p in (getattr(si, "stage_plans", None) or []) if getattr(p, "is_enabled", True)]
+    return len(plans) == 1 and getattr(plans[0], "stage_no", None) == 1

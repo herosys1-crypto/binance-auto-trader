@@ -243,7 +243,7 @@ def run_scheduled_entry_once() -> dict:
             if _ichi466:
                 if not _IS466.apply_overrides(si, _meta466):
                     db.rollback()
-                    _record(si.id, "일목 손절·익절 값 계산 실패")
+                    _record(si.id, "일목: 손절·익절 값 계산 실패 또는 1단계 전략 아님(Fix 470)")
                     _skip("ichikijun_override_fail")
                     continue
                 db.commit()
@@ -256,7 +256,7 @@ def run_scheduled_entry_once() -> dict:
                     api_key=decrypt_text(account.api_key_enc),
                     api_secret=decrypt_text(account.api_secret_enc),
                     is_testnet=account.is_testnet,
-                ).start_stage1(si.id)
+                ).start_stage1(si.id, force_market=_ichi466)   # 🗾 Fix 470: 일목 신호 진입은 시장가(기본 예약은 그대로 지정가)
                 stat["entered"] += 1
                 try:
                     r = _redis()

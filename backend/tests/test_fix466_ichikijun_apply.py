@@ -145,14 +145,22 @@ def test_judge_signal_returns_meta_and_overrides(monkeypatch):
     meta = {"variant": "4h_src_pb_r15", "stop_pct": 4.0, "rr": 1.5, "entry_bar_ts": target}
     monkeypatch.setattr(IA, "decide", lambda *a, **k: (True, "진입", dict(meta)))
     ch = json.dumps({"variant": "4h_src_pb_r15", "side": "LONG", "score": 0.1, "since": "d"})
+    p1 = SimpleNamespace(stage_no=1, trigger_price=Decimal("1.234"), is_enabled=True)
+    p2 = SimpleNamespace(stage_no=2, trigger_price=Decimal("1.1"), is_enabled=False)    # 꺼진 단계는 세지 않음
     si = SimpleNamespace(id=3, symbol="AAAUSDT", side="LONG", entry_signal="ichikijun", leverage=3,
                          force_sl_enabled_override=False, force_sl_roi_override=None, tp1_pct_override=Decimal("25"),
-                         entry_signal_meta=None)
+                         entry_signal_meta=None, stage_plans=[p2, p1])
     ok, why, m = S.judge(_DB(ch), _BC(data), _R(), si, target + 4 * H + 61_000)
     assert ok and m["champion_score"] == 0.1 and m["by"].startswith("챔피언")
     assert S.apply_overrides(si, m)
     assert si.force_sl_enabled_override is True and si.force_sl_roi_override == Decimal("12.00")
     assert si.tp1_pct_override == Decimal("18.00") and si.entry_signal_meta["tp1_roi"] == 18.0
+    # 🗾 Fix 470: DB 의 1단계 가격은 그대로(시장가는 start_stage1(force_market) 로) · 1단계 전략만
+    assert p1.trigger_price == Decimal("1.234") and si.entry_signal_meta["market_entry"] is True
+    assert S.apply_overrides(SimpleNamespace(leverage=2, stage_plans=[]), m) is False
+    two = SimpleNamespace(leverage=2, stage_plans=[SimpleNamespace(stage_no=1, is_enabled=True),
+                                                   SimpleNamespace(stage_no=2, is_enabled=True)])
+    assert S.apply_overrides(two, m) is False and S.single_stage(two) is False
 
 
 # ───────── 예약 워커 분기 (전부 가짜 — 주문 없음) ─────────
@@ -218,8 +226,9 @@ def _run_worker(monkeypatch, si, judge_result):
         def __init__(self, *a, **k):
             pass
 
-        def start_stage1(self, sid):
+        def start_stage1(self, sid, **kw):
             calls["start"].append(sid)
+            calls["force_market"] = kw.get("force_market")
     monkeypatch.setattr(ES, "ExecutionService", _Ex)
     stat = W.run_scheduled_entry_once()
     return calls, stat
@@ -229,12 +238,14 @@ def _si(sig, age_s=300):
     from datetime import datetime, timedelta, timezone
     return SimpleNamespace(id=11, symbol="AAAUSDT", side="LONG", entry_signal=sig, leverage=2, is_archived=False,
                            created_at=datetime.now(timezone.utc) - timedelta(seconds=age_s), force_sl_enabled_override=False,
-                           force_sl_roi_override=None, tp1_pct_override=Decimal("25"), entry_signal_meta=None)
+                           force_sl_roi_override=None, tp1_pct_override=Decimal("25"), entry_signal_meta=None,
+                           stage_plans=[SimpleNamespace(stage_no=1, trigger_price=Decimal("1"))])
 
 
 def test_worker_null_signal_uses_old_path(monkeypatch):
     calls, stat = _run_worker(monkeypatch, _si(None), (True, "x", {}))
     assert calls["check"] == 1 and calls["judge"] == 0 and calls["start"] == []
+    assert "force_market" not in calls
     assert stat["skipped"] == {"signal_wait": 1}
 
 
@@ -242,6 +253,7 @@ def test_worker_ichikijun_enters_with_overrides(monkeypatch):
     si = _si("ichikijun:4h_src_now_r2")
     calls, stat = _run_worker(monkeypatch, si, (True, "진입", {"variant": "4h_src_now_r2", "stop_pct": 5.0, "rr": 2.0}))
     assert calls["check"] == 0 and calls["judge"] == 1 and calls["start"] == [11] and stat["entered"] == 1
+    assert calls["force_market"] is True                                         # 🗾 Fix 470 일목 = 시장가
     assert si.force_sl_roi_override == Decimal("10.00") and si.tp1_pct_override == Decimal("20.00")
 
 
@@ -258,12 +270,13 @@ def test_worker_skips_just_created(monkeypatch):
 
 
 # ───────── 생성 API: 검증 · 저장 실패 보상 ─────────
-def _create(monkeypatch, sig, mode, fail_commit=False):
+def _create(monkeypatch, sig, mode, fail_commit=False, stages=1):
     from fastapi import HTTPException
     from app.api.v1.strategies import crud as C
     from app.schemas.strategy import StrategyCreateRequest
 
-    inst = SimpleNamespace(id=5, entry_signal=None, is_archived=False, status="WAITING", capital_management_mode=None)
+    inst = SimpleNamespace(id=5, entry_signal=None, is_archived=False, status="WAITING", capital_management_mode=None,
+                           stage_plans=[SimpleNamespace(stage_no=s, is_enabled=True) for s in range(1, stages + 1)])
 
     class _Svc:
         def __init__(self, db):
@@ -327,6 +340,13 @@ def test_create_validation_and_save(monkeypatch):
     assert code is None and inst.entry_signal is None                          # 기존 경로 무변경
     inst, code = _create(monkeypatch, None, "scheduled")
     assert code is None and inst.created_mode == "scheduled"                   # 기본 예약도 그대로
+
+
+def test_create_ichikijun_rejects_multi_stage(monkeypatch):
+    inst, code = _create(monkeypatch, "ichikijun", "scheduled", stages=3)
+    assert code == 400 and inst.is_archived is True and inst.entry_signal is None      # 만든 것은 보관(fixed 라 진입 없음)
+    inst, code = _create(monkeypatch, None, "scheduled", stages=3)
+    assert code is None                                                                # 기본 예약은 다단계 그대로
 
 
 def test_create_signal_save_failure_archives(monkeypatch):

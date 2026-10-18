@@ -67,3 +67,11 @@ def test_fix469_entry_signal_sticky_with_buttons():
     assert "position:sticky" in html.split('id="cm-action-bar"', 1)[1][:120]
     assert 'id="cm-entry-signal"' in bar and 'id="cm-submit-scheduled"' in bar
     assert html.count('id="cm-entry-signal"') == 1
+
+
+def test_fix470_entry_signal_dark_style():
+    import pathlib
+    html = (pathlib.Path(__file__).resolve().parents[1] / "app/static/index.html").read_text(encoding="utf-8")
+    tag = html.split('<select id="cm-entry-signal"', 1)[1].split(">", 1)[0]
+    assert "background:#1e293b" in tag and "color:#e2e8f0" in tag
+    assert "#cm-entry-signal option" in html
