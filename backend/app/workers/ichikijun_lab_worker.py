@@ -82,7 +82,11 @@ def _universe(bc, r, top_n: int) -> list[str]:
             rows.append((float(t.get("quoteVolume") or 0), s))
         except (TypeError, ValueError):
             continue
-    syms = [s for _, s in sorted(rows, reverse=True)[:top_n]]
+    ranked = [s for _, s in sorted(rows, reverse=True)]
+    # 🔧 Fix 472 (10/18 운영 확인): 거래대금 순위만 보면 주식·원자재형 선물(SOXSUSDT 등 TRADIFI)이 무작위 짝에 섞인다
+    #   → 사전 백테스트와 같은 「코인 무기한만」 (Fix 425 공용 판정 — DB 종목 표, 거래소 조회 추가 없음). 실패면 거르지 않음.
+    from app.services.ema_pullback import coin_symbols
+    syms = coin_symbols(None, ranked)[:top_n]
     try:
         r.setex(K_UNIV, UNIV_TTL, json.dumps({"top_n": top_n, "symbols": syms}))
     except Exception:  # noqa: BLE001

@@ -344,3 +344,14 @@ def test_no_order_imports(rel):
     names |= {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
     bad = ("execution_service", "surge_ladder_entry", "order", "tp_sl")
     assert not any(b in x for x in names for b in bad), names
+
+
+def test_fix472_universe_coin_only(monkeypatch):
+    """🔧 Fix 472 — 감시 목록 = 코인 무기한만 (주식형 선물 SOXSUSDT 가 무작위 짝에 섞이던 것)."""
+    from app.workers import ichikijun_lab_worker as W
+    import app.services.ema_pullback as EP
+    monkeypatch.setattr(EP, "coin_symbols", lambda db, syms: [s for s in syms if s != "SOXSUSDT"])
+    bc = SimpleNamespace(get_24hr_ticker=lambda: [{"symbol": "SOXSUSDT", "quoteVolume": "9e9"},
+                                                  {"symbol": "BTCUSDT", "quoteVolume": "8e9"},
+                                                  {"symbol": "ETHUSDT", "quoteVolume": "7e9"}])
+    assert W._universe(bc, _Redis(), 2) == ["BTCUSDT", "ETHUSDT"]
