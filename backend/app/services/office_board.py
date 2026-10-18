@@ -62,6 +62,7 @@ ROOMS: tuple[Room, ...] = (
     Room("lab", "가상매매 연구실", "🧪", "#bbf7d0", (
         Desk("paper", "가상매매 엔진", "🧪", ("paper_trading",), 900, "608종목 · 15분마다 규칙 판정·청산 변형 기록"),
         Desk("council", "전략 운영팀", "🧑‍⚖️", ("strategy_council",), 86400, "매일 KST 09:40 성적표·배치표"),
+        Desk("ichilab", "일목 기준선 실험실", "🗾", ("ichikijun_lab", "ichikijun_board"), 900, "변형 72줄 가상 기록 · 매일 10:30 챔피언 (Fix 465)"),
         Desk("chart_journal", "차트 학습 일지", "📚", ("chart_learning_snapshot", "chart_learning_outcome"), 86400, "상승·하락 50 종목 기록·라벨"),
     )),
     Room("learn", "학습실", "🎓", "#e9d5ff", (
@@ -188,6 +189,7 @@ DAILY_JOBS: tuple[DailyJob, ...] = (
     DailyJob("daily_report", "일일 운영 보고", "09:00"),
     DailyJob("strategy_council", "전략 운영팀 성적표", "09:40"),
     DailyJob("verdict_report", "판정 보고서(정해진 날만)", "10:20"),
+    DailyJob("ichikijun_board", "일목 실험실 순위표·챔피언", "10:30"),
     DailyJob("symbol_sync_daily", "심볼 동기화", "12:00"),
     DailyJob("paper_retention", "가상 상세 정리", "12:40"),
     DailyJob("suggestion_daily_predict", "전략 제안 예측", "15:30"),

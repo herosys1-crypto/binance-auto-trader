@@ -994,6 +994,27 @@ def start_scheduler() -> None:
         id="strategy_council", replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🗾 Fix 465 (2026-10-18 사장님 「가상매매로 이 전략을 수정해서 승률이 제일 높은 방법을 지속적으로 찾아서 업데이트」):
+    #   일목 기준선 변형 72줄 가상 실험실 — 15분마다 새 완성봉(1h·4h·1d)만 처리(주문 0) + 매일 KST 10:30 순위표·챔피언.
+    def _ichikijun_lab():
+        from app.workers.ichikijun_lab_worker import run_ichikijun_lab_once
+        run_ichikijun_lab_once(decrypt_text)
+    scheduler.add_job(
+        guarded_job("ichikijun_lab", 600, _ichikijun_lab),
+        trigger=CronTrigger(minute="3,18,33,48"),
+        id="ichikijun_lab", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
+    def _ichikijun_board():
+        from app.workers.ichikijun_lab_worker import run_ichikijun_board_once
+        run_ichikijun_board_once()
+    scheduler.add_job(
+        guarded_job("ichikijun_board", 600, _ichikijun_board),
+        trigger=CronTrigger(hour=10, minute=30, timezone="Asia/Seoul"),
+        id="ichikijun_board", replace_existing=True, max_instances=1, coalesce=True,
+        misfire_grace_time=3600,   # 교차 감사: 놓친 날 = 챔피언 연속 일수가 끊긴다 → 1시간 안이면 늦게라도 돈다
+    )
+
     # 🧾 Fix 457 (2026-10-14 사장님 「판정 보고서 자동 실행 진행해줘」): 정해진 날(verdict_auto_schedule) KST 10:20 에
     #   중간 점검(10/17)·통합 판정(10/25) 보고서를 자동 실행 → Redis 원문 + 텔레그램 요약. 읽기·기록 전용.
     def _verdict_report():

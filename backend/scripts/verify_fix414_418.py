@@ -33,7 +33,8 @@ CODE_MARKERS = {
     "app/workers/scheduler_runner.py": ("wait_for_leader(guard)", "signal.signal(signal.SIGTERM, _on_signal)",  # 420
                                         'guarded_job("strategy_council"',                                     # 430 스케줄
                                         "record_job_count(redis_client, job_name, _ok, _t1)",                 # 459 24h 오류
-                                        'CronTrigger(hour=10, minute=20, timezone="Asia/Seoul")'),            # 460 KST
+                                        'CronTrigger(hour=10, minute=20, timezone="Asia/Seoul")',
+                                        'guarded_job("ichikijun_lab"'),                                     # 460 KST · 465 스케줄
     "app/workers/distributed_scheduler_guard.py": ("def release_leader(",),                                      # 420
     "app/workers/emapb_watch_worker.py": ("def scan_symbol(", "_send(db, r, fresh, iv)"),                       # 424 알림
     "app/api/v1/ema_pullback.py": ('APIRouter(prefix="/ema-pullback"',),                                         # 424 화면
@@ -63,6 +64,10 @@ CODE_MARKERS = {
     "app/services/office_board.py": ("def parse_counts(", "BLIP_MIN_RUNS = 10", "def parse_next_runs(",   # 459 사무실 24h 오류·다음 실행
                                       "def daily_table(", "DAILY_GRACE_MIN = 10",                        # 461 오늘 하루 1번 잡
                                       "def live_line(", "LIVE_FAIL_TTL = 60"),                            # 462 실주문 가족 한 줄
+    "app/services/ichimoku_kijun.py": ("def entry_at(", 'SOURCE_KEY = "1d_src_now_r2kj"'),                # 465 일목 실험실 판정
+    "app/services/ichikijun_lab.py": ("def build_board(", "def update_champion("),                         # 465 순위표·챔피언
+    "app/workers/ichikijun_lab_worker.py": ("def process_interval(", "def run_ichikijun_board_once("),     # 465 워커
+    "app/api/v1/ichikijun_lab.py": ('APIRouter(prefix="/ichikijun-lab"',),                                  # 465 화면
 }
 STOPPING_STALE_SEC = 10 * 60      # Claude가 정함 — 감지 5분 + reconcile 2분 주기 두 번 여유
 REQ_COUNT_KEY = "binance:reqcount:{minute}"   # client._REQ_COUNT_KEY 와 같은 값 (보관 15분)

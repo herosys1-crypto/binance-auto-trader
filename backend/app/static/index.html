@@ -1583,6 +1583,21 @@
         </details>
       </div>
 
+      <!-- 🗾 Fix 465: 일목 기준선 실험실 (가상 전용, 읽기 전용) -->
+      <div id="ichikijun-lab-card" class="card rounded-lg" style="padding:8px 12px;background:linear-gradient(135deg,rgba(168,85,247,0.10),rgba(59,130,246,0.10));border:1px solid rgba(168,85,247,0.4)">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-bold" style="color:#d8b4fe">🗾 일목 기준선 실험실 (가상 전용)</span>
+          <span id="ichikijun-lab-meta" class="text-xs text-slate-400">-</span>
+        </div>
+        <div id="ichikijun-lab-champion" class="text-xs" style="color:#e9d5ff">불러오는 중…</div>
+        <div id="ichikijun-lab-streak" class="text-xs text-slate-400"></div>
+        <div id="ichikijun-lab-table" style="max-height:260px;overflow:auto;margin-top:6px;"></div>
+        <div class="text-xs text-slate-400" style="margin-top:4px;" title="변형 키: {봉}_{src 출처|loose 거래량·OBV 끔}_{now 돌파 즉시|pb 되돌림}_{r2 2R|r15 1.5R|r2kj 2R+기준선 청산}">
+          승률 순이 아니라 무작위 대비 아래 끝 순 — 실주문은 사장님 승인<br>
+          변형 키 = {봉}_{src 출처 | loose 거래량·OBV 끔}_{now 돌파 즉시 | pb 되돌림}_{r2 2R | r15 1.5R | r2kj 2R+기준선 청산}
+        </div>
+      </div>
+
       <!-- 🌟 v131 신 (2026-08-09 사장님!): 급등 + BB중단 알람 카드! -->
       <div id="pump-bb-alerts-card" class="card rounded-lg hidden" style="padding:8px 12px;background:linear-gradient(135deg,rgba(245,158,11,0.15),rgba(239,68,68,0.15));border:1px solid rgba(245,158,11,0.4)">
         <div class="flex items-center justify-between mb-2">
@@ -3020,6 +3035,7 @@ function openBBMiddleRanking(direction) {
 <script src="/static/js/managed-symbols.js?v=20260909-fix365-managed-symbols"></script>
 <script src="/static/js/pump-bb-alerts.js?v=20260809v131-pump-bb"></script>
 <script src="/static/js/ema-pullback-board.js?v=fix424"></script>
+<script src="/static/js/ichikijun-lab-board.js?v=fix465"></script>
 <script src="/static/js/strategy-council.js?v=fix457"></script>
 <script src="/static/js/strategy-suggestions.js?v=20260826-fix107-content-type"></script>
 <script src="/static/js/live-pump-dump-alerts.js?v=20260814v148a-pump-reversal-short"></script>

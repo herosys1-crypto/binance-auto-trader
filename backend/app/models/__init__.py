@@ -18,4 +18,5 @@ from app.models.market_observation import MarketObservation  # v136 관찰!
 from app.models.chart_pattern import ChartPattern  # v152 차트 패턴!
 from app.models.chart_learning_day import ChartLearningDay  # 📚 Fix 353 차트 학습 일지
 from app.models.paper_trade import PaperTrade  # 🧪 Fix 361 가상 매매 학습
+from app.models.ichikijun_lab_trade import IchikijunLabTrade  # 🗾 Fix 465 일목 기준선 변형 실험실
 from app.models.managed_symbol import ManagedSymbol  # 🧭 Fix 365 심볼 관리 재진입
