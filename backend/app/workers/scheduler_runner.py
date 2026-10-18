@@ -1005,6 +1005,16 @@ def start_scheduler() -> None:
         id="ichikijun_lab", replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🗾 Fix 467 (2026-10-18 사장님 「다음으로 진행해줘」): 일목 예약 인스턴스(_r2kj 변형)의 기준선 재이탈 청산 — 기본 shadow(기록만).
+    def _ichikijun_exit():
+        from app.workers.ichikijun_exit_worker import run_ichikijun_exit_once
+        run_ichikijun_exit_once(decrypt_text)
+    scheduler.add_job(
+        guarded_job("ichikijun_exit", 600, _ichikijun_exit),
+        trigger=CronTrigger(minute="4,19,34,49"),
+        id="ichikijun_exit", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     def _ichikijun_board():
         from app.workers.ichikijun_lab_worker import run_ichikijun_board_once
         run_ichikijun_board_once()

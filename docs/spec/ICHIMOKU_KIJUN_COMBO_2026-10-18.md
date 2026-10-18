@@ -251,3 +251,13 @@ id · kind(sig/rand) · variant · side · interval · symbol · pair_symbol · 
 - 예약 워커: 생성 60초 이내 예약은 한 사이클 건너뜀 · 일목 예약 만료 30일(`ichikijun_sched_expire_days`).
 - 주의: 1차 진입에는 기존 운영 게이트(Fix 310 거래량 순위 100 등)가 그대로 걸린다 → 실험실(게이트 없음)과 다른 점. 막히면 대기 사유에 「진입 실패: [Fix310] …」로 보이고, 결과 검토의 「진입」 수에서 빠진다.
 - 파일: services/ichikijun_apply.py · workers/ichikijun_sched.py · scheduled_entry_worker 분기 · crud/schemas · alembic 0042 · 화면 모달·배지·카드 「적용 결과」.
+
+## 10. 실주문 「기준선 재이탈 청산」 (B-2, 2026-10-18 사장님 「다음으로 진행해줘」) — Fix 467
+
+왜: 실험실 `r2kj` 변형(2R + 출처 2차 손절 = 종가가 기준선 재이탈하면 청산)은 가상에만 청산이 있고, 실주문은 손절·TP1 뿐 → 가상과 실주문 결과가 다르게 나온다(9-2 ⚠️). 과거 재생 1위 `4h_loose_pb_r2kj` 가 이 변형이다.
+
+- 대상 = 포지션이 있는(ACTIVE_LIKE · 수량 ≠ 0) 인스턴스 중 `entry_signal LIKE 'ichikijun%'` 이고 `entry_signal_meta.variant` 가 기준선 청산 변형(`_r2kj`)인 것만. 다른 전략·가족은 손대지 않는다(CLAUDE.md 규칙 5).
+- 판정 = 실험실 `simulate` 와 같은 정의: 진입 봉 **뒤** 완성봉 종가가 기준선(26) 반대편(LONG: 종가 < 기준선 · SHORT: 종가 > 기준선). 그 변형 봉(1h·4h·1d)의 새 완성봉이 생겼을 때만 klines 1회(Redis `ichiexit:last:{sid}:{iv}` — 같은 봉 재조회 없음). 아직 판정 안 한 봉 중 하나라도 이탈이면 이탈(장애로 놓친 봉 포함).
+- 모드 `ichikijun_kijun_exit_mode`: `off` · **`shadow`(기본 — Claude가 정함, 실주문 청산이라 사장님이 켠다)** = 청산하지 않고 meta 에 `kj_exit_signal`(봉·종가·기준선) 1회 기록 + 로그 · `on` = 기존 `ExecutionService.emergency_close_position(전량)` 시장가 청산 + meta `kj_exit_done`.
+- 15분마다(분 4·19·34·49). 실패 = 롤백·다음 사이클 재시도. 청산 중복은 emergency_close 의 5초 락 + 같은 봉 표식.
+- 결과 검토(9-3) 표식: `기준선 청산 신호(그림자)` · `기준선 청산 실행` · (on 전에 끝난 건) `기준선 청산 없음`.

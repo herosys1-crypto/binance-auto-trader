@@ -128,8 +128,12 @@ def applied_report(instances: list[dict], lab_r: dict[tuple, float]) -> dict:
         key = (meta.get("variant"), it.get("side"), it.get("symbol"), meta.get("entry_bar_ts"))
         lab = lab_r.get(key) if entered else None
         flags = []
-        if meta.get("kj_exit_missing"):
-            flags.append("기준선 청산 없음")
+        if meta.get("kj_exit_done"):                       # 🗾 Fix 467 실주문 기준선 청산
+            flags.append("기준선 청산 실행")
+        elif meta.get("kj_exit_signal"):
+            flags.append("기준선 청산 신호(그림자·청산 안 함)")
+        elif meta.get("kj_exit_missing"):                 # 기획서 10절: 기준선 청산 전에 끝난 건 = 「기준선 청산 없음」
+            flags.append("기준선 청산 없음" if done else "기준선 청산 대상")
         if int(it.get("stages") or 1) > 1:
             flags.append("단계 추가 계획")
         if meta.get("clamped"):

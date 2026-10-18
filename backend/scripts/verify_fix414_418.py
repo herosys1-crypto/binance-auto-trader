@@ -72,6 +72,8 @@ CODE_MARKERS = {
     "app/workers/ichikijun_sched.py": ("def judge(", "def apply_overrides("),                             # 466 예약 판정
     "app/workers/scheduled_entry_worker.py": ("_IS466.judge(db, bc, _r466, si, _now_ms466)",),             # 466 분기
     "app/api/v1/strategies/crud.py": ("_IA466.parse_entry_signal(payload.entry_signal)",),               # 466 생성 검증
+    "app/services/ichikijun_exit.py": ("def kijun_break(", 'MODE_DEFAULT = "shadow"'),                     # 467 기준선 청산 판정
+    "app/workers/ichikijun_exit_worker.py": ("def run_ichikijun_exit_once(", "def _close("),                # 467 워커
 }
 STOPPING_STALE_SEC = 10 * 60      # Claude가 정함 — 감지 5분 + reconcile 2분 주기 두 번 여유
 REQ_COUNT_KEY = "binance:reqcount:{minute}"   # client._REQ_COUNT_KEY 와 같은 값 (보관 15분)
