@@ -235,13 +235,14 @@ def run_ichikijun_lab_once(decrypt_text) -> dict[str, Any]:
 
 def _rows_for_board(db, since: datetime) -> list[dict]:
     from app.models.ichikijun_lab_trade import IchikijunLabTrade as T
-    q = select(T.kind, T.variant, T.side, T.symbol, T.pair_symbol, T.entry_bar_ts, T.r_net).where(
+    q = select(T.kind, T.variant, T.side, T.symbol, T.pair_symbol, T.entry_bar_ts, T.r_net, T.btc_up).where(
         T.status == "CLOSED", T.opened_at >= since)
     out = []
-    for kind, var, side, sym, pair, ts, rn in db.execute(q):
+    for kind, var, side, sym, pair, ts, rn, bu in db.execute(q):
         key_sym = sym if kind == "sig" else pair
         out.append({"kind": kind, "variant": var, "side": side, "symbol": sym, "entry_bar_ts": int(ts),
-                    "r_net": None if rn is None else float(rn), "pair_key": f"{var}|{side}|{key_sym}|{ts}"})
+                    "r_net": None if rn is None else float(rn), "pair_key": f"{var}|{side}|{key_sym}|{ts}",
+                    "btc_up": bu})                       # 🏁 Fix 471 G6 장세 관문
     return out
 
 
@@ -276,6 +277,33 @@ def _applied(db) -> dict:
 
 
 S_APPLIED_N = "ichikijun_applied_finished_n"
+S_PROMO = "ichikijun_promotion"
+
+
+def _promotion(db, board: list[dict], rows_all: list[dict], applied: dict, today: str) -> tuple[list[str], list[str]]:
+    """🏁 Fix 471 — 줄마다 승격 관문 결과를 붙이고, 통과 목록(첫 통과일)을 저장. → (새 통과, 해제)."""
+    from app.services import ichikijun_promo as PR
+    try:
+        p = PR.params_from(lambda k: _setting(db, k))
+        res = PR.evaluate_all(rows_all, (applied or {}).get("rows") or [], p)
+        for r in board:
+            g = res.get((r["variant"], r["side"]))
+            if g is not None:
+                r["promo"] = g
+        saved = json.loads(_setting(db, S_PROMO) or "{}")
+        prev = saved.get("pass") or {}
+        first = dict(saved.get("first") or {})                 # 교차 감사: 해제 뒤 재통과해도 최초 통과일은 남긴다
+        now = {f"{k[0]}|{k[1]}": prev.get(f"{k[0]}|{k[1]}", today) for k, g in res.items() if g["status"] == PR.PASS}
+        for k in now:
+            first.setdefault(k, now[k])
+        new, lost = PR.transitions(prev.keys(), now.keys())
+        _set_setting(db, S_PROMO, json.dumps({"pass": now, "first": first, "at": today}, ensure_ascii=False))
+        db.commit()
+        return new, lost
+    except Exception as e:  # noqa: BLE001 — 관문 실패가 순위표를 막지 않게
+        db.rollback()
+        logger.warning("[%s] 승격 관문 실패: %s", FIX, e)
+        return [], []
 
 
 def run_ichikijun_board_once() -> dict[str, Any]:
@@ -289,7 +317,8 @@ def run_ichikijun_board_once() -> dict[str, Any]:
             return {"skipped": "not started"}
         params = _params(db)
         since = datetime.fromisoformat(started)
-        board = LAB.build_board(_rows_for_board(db, since), params)
+        rows_all = _rows_for_board(db, since)
+        board = LAB.build_board(rows_all, params)
         today = (datetime.now(timezone.utc) + timedelta(hours=9)).strftime("%Y-%m-%d")
         prev = json.loads(_setting(db, S_CHAMP) or "null")
         streak = json.loads(_setting(db, S_STREAK) or "null")
@@ -308,6 +337,7 @@ def run_ichikijun_board_once() -> dict[str, Any]:
             db.rollback()
             logger.warning("[%s] 적용 결과 검토 실패: %s", FIX, e)
             applied = {"rows": [], "summary": {}, "error": f"{e!r:.120}"}
+        promo_new, promo_lost = _promotion(db, board, rows_all, applied, today)   # 🏁 Fix 471 승격 관문
         fin_n = int((applied.get("summary") or {}).get("finished") or 0)
         prev_fin = int(_setting(db, S_APPLIED_N) or 0)
         if fin_n != prev_fin:
@@ -328,6 +358,21 @@ def run_ichikijun_board_once() -> dict[str, Any]:
                           f'승률 {champ["win"]:.0%} · {champ["n"]}건/{champ["days"]}일\n(가상 전용 — 실주문은 사장님 승인)'))
             except Exception as e:  # noqa: BLE001
                 logger.warning("[%s] 텔레그램 실패: %s", FIX, e)
+        if promo_new or promo_lost:
+            try:
+                from app.services.notification_service import NotificationService
+                body = []
+                for k in promo_new:
+                    r = next((x for x in board if f'{x["variant"]}|{x["side"]}' == k), {})
+                    d = (r.get("promo") or {}).get("detail") or {}
+                    body.append(f"🏁 검증 통과 후보: {k} · {d.get('n')}건/{d.get('days')}일 · 비용 뒤 평균 "
+                                f"{(d.get('avg_r') or 0):+.3f}R · 무작위 대비 99.9% 아래 끝 {(d.get('low_q') or 0):+.3f}R")
+                for k in promo_lost:
+                    body.append(f"⚠️ 검증 통과 해제: {k}")
+                body.append("(가상 판정 — 실주문은 사장님 승인)")
+                NotificationService(db).send_system_alert(title="🏁 일목 승격 관문", body=chr(10).join(body))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[%s] 승격 텔레그램 실패: %s", FIX, e)
         sm = applied.get("summary") or {}
         if fin_n > prev_fin:
             try:
