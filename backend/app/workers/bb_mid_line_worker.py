@@ -95,7 +95,7 @@ def _mode(db) -> str:
     return v if v in ("off", "shadow", "on") else MODE_DEFAULT
 
 
-def _close_expired(db, max_hold_hours: float) -> int:
+def _close_expired(db, max_hold_hours: float, keys: dict | None = None) -> int:
     """Fix 287 — 보유 시간이 지난 BB_MIDLINE 포지션을 전량 시장가 청산한다.
 
     ⚠️ **이 전략 전용**이다. time_reverse_exit(4시간)를 그냥 켜면 전 전략에 적용돼
@@ -142,7 +142,12 @@ def _close_expired(db, max_hold_hours: float) -> int:
             from decimal import Decimal
 
             from app.services.execution_service import ExecutionService
-            ExecutionService(db).emergency_close_position(
+            # 🔧 Fix 468 (2026-10-18): 예전엔 ExecutionService(db) — 키 인자가 없어 생성자에서 TypeError(청산이 한 번도 안 됨).
+            #   이 사이클의 mainnet 계정 키를 넘긴다. 키를 모르면 청산하지 않는다.
+            if not keys:
+                logger.warning("[bb_mid] Fix287 #%s 계정 키 없음 → 청산 건너뜀", si.id)
+                continue
+            ExecutionService(db, **keys).emergency_close_position(
                 si.id, quantity=Decimal(str(qty)))
             si.last_error_message = (
                 f"[Fix287] 최대 보유 {max_hold_hours:g}시간 초과 청산 ({SPEC})")
@@ -223,9 +228,9 @@ def run_bb_mid_line_once() -> dict:
         if acc is None:
             logger.warning("[bb_mid] mainnet 계정 없음")
             return out
-        bc = BinanceClient(api_key=decrypt_text(acc.api_key_enc),
-                           api_secret=decrypt_text(acc.api_secret_enc),
-                           is_testnet=False)
+        _keys468 = {"api_key": decrypt_text(acc.api_key_enc), "api_secret": decrypt_text(acc.api_secret_enc),
+                    "is_testnet": False}
+        bc = BinanceClient(**_keys468)
 
         top_n = int(_setting(db, TOP_N_KEY, TOP_N_DEFAULT))
         capital = float(_setting(db, CAPITAL_KEY, CAPITAL_DEFAULT))
@@ -234,7 +239,7 @@ def run_bb_mid_line_once() -> dict:
         max_hold = float(_setting(db, MAX_HOLD_HOURS_KEY, MAX_HOLD_HOURS_DEFAULT))
         cool_h = float(_setting(db, COOLDOWN_HOURS_KEY, COOLDOWN_HOURS_DEFAULT))
         # Fix 287: 보유 시간 초과분을 **먼저** 정리한다 (슬롯을 비우고 시작)
-        out["closed_expired"] = _close_expired(db, max_hold) if mode == "on" else 0
+        out["closed_expired"] = _close_expired(db, max_hold, _keys468) if mode == "on" else 0
 
         # 패턴별 스위치 — 실측 통과분만 기본 ON (bb_mid_line.PATTERN_DEFAULT_ON)
         on_map = {p: bool(_setting(db, f"bb_mid_line_{p}_enabled",
