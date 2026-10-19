@@ -66,3 +66,24 @@ def test_read_only():
     src = (ROOT / "scripts" / "entry_condition_study" / "verdict_2026_10_25.py").read_text(encoding="utf-8")
     low = src.lower()
     assert "commit" not in low and "update " not in low and "insert " not in low and "delete " not in low and "setex" not in low
+
+
+def test_first_bar_tie_mean_and_warning():
+    """10/20 판정 전 점검 — 첫 봉 동점: 판정은 정렬 순서의 첫 1건(SQL ORDER BY 로 고정) · 동점 평균은 참고 + 부호가 갈리면 ⚠️."""
+    rows = []
+    for i in range(10):
+        d = D0 + timedelta(days=i)
+        rows += [{"d": d, "side": "LONG", "symbol": "A", "ts": 0, "roi": 4.0},     # 첫 봉 동점 2개: +4 / −10 → 평균 −3
+                 {"d": d, "side": "LONG", "symbol": "B", "ts": 0, "roi": -10.0},
+                 {"d": d, "side": "LONG", "symbol": "C", "ts": 1, "roi": 9.0},
+                 {"d": d, "side": "LONG", "symbol": "D", "ts": 2, "roi": 9.0}]
+    ev = V.evaluate(rows, _base())
+    assert ev["cap1_usdt"] == 4.0 * 10 / 100 * 10              # 입력 순서의 첫 1건(A) — 기준 그대로
+    assert ev["cap1_tie_usdt"] == -3.0 * 10 / 100 * 10
+    assert "동점 순서에 달림" in ev["why"]
+    assert "동점 순서" not in V.evaluate(_rows(), _base())["why"]   # 동점 없으면 경고 없음
+
+
+def test_sql_orders_ties():
+    src = (ROOT / "scripts" / "entry_condition_study" / "verdict_2026_10_25.py").read_text(encoding="utf-8")
+    assert "order by entry_bar_ts, opened_at, md5(symbol), rule" in src

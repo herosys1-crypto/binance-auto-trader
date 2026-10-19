@@ -98,10 +98,21 @@ def evaluate(rows: list[dict], base_mean: dict) -> dict:
         first[r["d"]] = r["roi"]
         seen.add((r["d"], r["symbol"]))
     cap_sum = sum(first.values()) * 10 / 100                    # 10 USDT 증거금 기준 USDT
+    # 10/20 판정 전 점검: 그날 첫 봉에 종목이 여럿이면 「첫 1건」은 순서에 따라 바뀐다(실측: 같은 규칙이 +6.3U ↔ +12.9U).
+    # 참고값 = 그날 첫 봉 동점 전부의 평균(무작위로 하나 고를 때의 기대값). 판정 기준은 위 cap_sum 그대로.
+    first_ts: dict = {}
+    for r in rows:
+        if r["d"] not in first_ts or r["ts"] < first_ts[r["d"]]:
+            first_ts[r["d"]] = r["ts"]
+    tie: dict = defaultdict(list)
+    for r in rows:
+        if r["ts"] == first_ts[r["d"]]:
+            tie[r["d"]].append(r["roi"])
+    cap_tie = sum(sum(v) / len(v) for v in tie.values()) * 10 / 100
     win_days = sum(1 for v in first.values() if v > 0) / len(first) if first else 0.0
     nets = [v for v in (net_of(r) for r in rows) if v is not None]
     out = {"n": n, "days": len(days), "roi": roi, "edge": edge, "first_half": a1, "second_half": a2,
-           "cap1_usdt": cap_sum, "win_days": win_days, "net": (sum(nets) / len(nets)) if nets else None}
+           "cap1_usdt": cap_sum, "cap1_tie_usdt": cap_tie, "win_days": win_days, "net": (sum(nets) / len(nets)) if nets else None}
     if n < CRIT["min_n"] or len(days) < CRIT["min_days"]:
         out.update(verdict="⏳ 보류", why=f"표본 n {n}/{CRIT['min_n']} · 일 {len(days)}/{CRIT['min_days']}")
         return out
@@ -118,7 +129,10 @@ def evaluate(rows: list[dict], base_mean: dict) -> dict:
         fails.append("하루 1건 합 ≤ 0")
     if win_days < CRIT["win_days"]:
         fails.append(f"이긴 날 {win_days:.0%} < {CRIT['win_days']:.0%}")
-    out.update(verdict="✅ 통과" if not fails else "❌ 기각", why=" · ".join(fails) or "기준 모두 충족")
+    why = " · ".join(fails) or "기준 모두 충족"
+    if (cap_sum > 0) != (cap_tie > 0):
+        why += f" · ⚠️ 하루 1건이 동점 순서에 달림(동점 평균 {cap_tie:+.1f}U)"
+    out.update(verdict="✅ 통과" if not fails else "❌ 기각", why=why)
     return out
 
 
@@ -285,7 +299,8 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
                     (engines->'live'->>'roi_net')::float roi_net,
                     chg_24h, snapshot->>'market_breadth' mb, snapshot->'rules_fired' rf
                     from paper_trades where source='live' and status='CLOSED' and opened_at >= :since and opened_at <= :now
-                    and engines->'live'->>'roi' is not null""")
+                    and engines->'live'->>'roi' is not null
+                    order by entry_bar_ts, opened_at, md5(symbol), rule""")   # 같은 봉 동점(하루 1건·봉·종목당 1건)을 늘 같은 순서로 — 10/20 판정 전 점검(Fix 464 와 같은 결함)
         rows = [dict(r._mapping) for r in db.execute(q, {"since": earliest, "now": now})]
         passed: dict = {}                     # 🪜 Fix 448: 가족 키 → (이름, rf|ext, 통과 근거)
         fam_of_rule = {f.rule: f for f in RF.FAMILIES}
@@ -397,6 +412,25 @@ def main() -> None:  # pragma: no cover — 운영 DB 필요
         mi = sum(g["안"]) / len(g["안"]) if g["안"] else None
         mo = sum(g["밖"]) / len(g["밖"]) if g["밖"] else None
         print(f"칸 안 n {len(g['안'])} 평균 {_fmt(mi)} · 칸 밖 n {len(g['밖'])} 평균 {_fmt(mo)}")
+        # 10/20 판정 전 점검: 위 합계는 가족을 섞은 값(LONG 가족이 칸 밖에 몰리면 「밖이 나쁨」이 방향 차이일 수 있다) → 가족별로도 보여 준다(판정 기준은 그대로)
+        fam = defaultdict(lambda: {"안": [], "밖": []})
+        for x in recs:
+            v = roi_of.get(x.get("paper_trade_id"))
+            if v is not None and x.get("in_cells") is not None:
+                fam[x.get("family")]["안" if x["in_cells"] else "밖"].append(v)
+        print("\n| 가족(그림자 가상 roi) | 칸 안 n · 평균 | 칸 밖 n · 평균 | 안 − 밖 |\n|---|---|---|---|")
+        for f_, d_ in sorted(fam.items(), key=lambda kv: str(kv[0])):
+            a_ = sum(d_["안"]) / len(d_["안"]) if d_["안"] else None
+            b_ = sum(d_["밖"]) / len(d_["밖"]) if d_["밖"] else None
+            print(f"| {f_} | {len(d_['안'])} · {_fmt(a_)} | {len(d_['밖'])} · {_fmt(b_)} | "
+                  f"{_fmt(a_ - b_) if a_ is not None and b_ is not None else '—'} |")
+        live_cnt = defaultdict(lambda: {"안": 0, "밖": 0, "모름": 0})
+        for x in recs:
+            if x.get("mode") == "on":
+                live_cnt[x.get("family")]["모름" if x.get("in_cells") is None else ("안" if x["in_cells"] else "밖")] += 1
+        for f_, c_ in sorted(live_cnt.items(), key=lambda kv: str(kv[0])):
+            warn = " → ⚠️ 칸 안 0건: 막으면 이 가족 실주문 0건" if c_["안"] == 0 and c_["밖"] > 0 else ""
+            print(f"- 실주문 기록 {f_}: 칸 안 {c_['안']} · 칸 밖 {c_['밖']} · 모름 {c_['모름']}{warn}")
         if len(g["안"]) >= CRIT["gate_min_n"] and len(g["밖"]) >= CRIT["gate_min_n"] and mi is not None and mo is not None:
             print("→ " + ("✅ 「칸 밖 막기」 후보 (안 > 밖)" if mi > mo else "❌ 막지 않는다 (안 ≤ 밖)"))
         else:
