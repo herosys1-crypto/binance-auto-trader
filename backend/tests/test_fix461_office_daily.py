@@ -30,7 +30,7 @@ def test_states():
         "verdict_report": {"s": _ts("10-14 10:20"), "e": _ts("10-14 10:20"), "st": "ok"},         # 정해진 날만 → 해당 없음
     }
     rows = OB.daily_table(recs, {"suggestion_daily_predict": NOW + 7300}, NOW)
-    assert [r["job"] for r in rows] == [d.job for d in OB.DAILY_JOBS] and len(rows) == 11   # Fix 465 ichikijun_board
+    assert [r["job"] for r in rows] == [d.job for d in OB.DAILY_JOBS] and len(rows) == 13   # Fix 465 ichikijun_board · Fix 475 coin_mcap · Fix 476 pump_profile
     assert _row(rows, "daily_briefing")["state"] == "done" and _row(rows, "daily_briefing")["today"]
     c = _row(rows, "strategy_council")
     assert c["state"] == "failed" and c["err"].startswith("Boom") and len(c["err"]) == 120
@@ -61,7 +61,7 @@ def test_today_is_kst_date():
 
 def test_build_has_daily_and_keeps_rest():
     d0 = OB.build(recs={}, extras={}, now=NOW)
-    assert len(d0["daily"]) == 11 and {"rooms", "counts", "at", "jobs_recorded", "other_errors"} <= set(d0)
+    assert len(d0["daily"]) == 13 and {"rooms", "counts", "at", "jobs_recorded", "other_errors"} <= set(d0)
     assert [r["label"] for r in d0["rooms"]] == ["지휘실", "실주문 매매실", "가상매매 연구실", "학습실", "감시실"]
 
 
@@ -82,7 +82,7 @@ def test_broken_records_do_not_break():
     assert _row(rows, "daily_briefing")["state"] == "unknown" and _row(rows, "strategy_council")["state"] == "unknown"
     assert _row(rows, "paper_retention")["state"] == "unknown"                 # 시작 시각 없는 기록 = 기록 없음
     assert _row(rows, "symbol_sync_daily")["state"] == "done"                  # 끝 시각만 깨지면 시작 기준으로 판정
-    assert len(OB.build(recs={"memory_consolidator": {"s": object(), "st": "ok"}}, extras={}, now=NOW)["daily"]) == 11
+    assert len(OB.build(recs={"memory_consolidator": {"s": object(), "st": "ok"}}, extras={}, now=NOW)["daily"]) == 13
 
 
 def test_stale_run_from_yesterday_is_missed():
@@ -99,7 +99,7 @@ def test_nan_inf_end_and_next_only_affect_that_row():
     recs = {"daily_briefing": {"s": _ts("10-15 07:30"), "e": "NaN", "st": "ok"},
             "daily_report": {"s": _ts("10-15 09:00"), "e": float("inf"), "st": "ok"}}
     rows = OB.daily_table(recs, {"strategy_council": float("nan"), "paper_retention": "inf"}, NOW)
-    assert len(rows) == 11
+    assert len(rows) == 13
     assert _row(rows, "daily_briefing")["state"] == "done" and _row(rows, "daily_briefing")["ago"].endswith("전")
     assert _row(rows, "daily_report")["state"] == "done"
     assert _row(rows, "strategy_council")["next"] == "—" and _row(rows, "paper_retention")["next"] == "—"

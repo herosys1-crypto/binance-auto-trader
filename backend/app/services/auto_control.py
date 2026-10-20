@@ -317,7 +317,8 @@ def _external_panels() -> list[Panel]:
                             ("emapb", "emapb_mode", "EMA 추세 눌림 (Fix 423)"),
                             ("bbema", "bbema_mode", "볼린저 EMA 추세·반전 (Fix 429)"),
                             ("bbwave", "bbwave_mode", "볼린저 중심선 파동 5분 (Fix 431)"),
-                            ("trima", "trima_mode", "9EMA·20SMA·200SMA 눌림 1시간 (Fix 432)")):
+                            ("trima", "trima_mode", "9EMA·20SMA·200SMA 눌림 1시간 (Fix 432)"),
+                            ("trpb", "trpb_mode", "정상 추세 눌림 LONG 대형 일봉 (Fix 475)")):
         gate = _ctl_from(S, key, "모드", "mode3", ref=ref)
         if gate is not None:
             out.append(Panel(fam=fam, label=label, group=G_EXTERNAL, gate=gate, job="external_strategies", every="50초"))
@@ -456,7 +457,7 @@ LINE_ORDER: tuple[tuple[str, tuple[str, ...]], ...] = (
                                       "rf_toprev", "rf_off8", "rf_s1_breakdown", "rf_wick_short", "rf_pullback_long",
                                       "rf_multiday_long", "rf_l1_hist_long", "rf_wick_long", "rf_zone_s4",
                                       "rf_consensus_long", "rf_pumptop30", "rf_pumptop_mid")),
-    ("⑥ 외부 매매법", ("fujimoto", "mach7", "emapb", "bbema", "bbwave", "trima")),
+    ("⑥ 외부 매매법", ("fujimoto", "mach7", "emapb", "bbema", "bbwave", "trima", "trpb")),
 )
 SECTION_REST = "⑦ 기타"
 

@@ -26,6 +26,7 @@ from app.services import ema_pullback as EP          # 📈 Fix 423
 from app.services import bb_ema as BE                 # 📊 Fix 429
 from app.services import bb_wave as BW                # 🌊 Fix 431
 from app.services import triple_ma as TM              # 📐 Fix 432
+from app.services import trend_pullback as TRPB       # 🏔 Fix 475 정상 추세 눌림 LONG(대형)
 from app.workers import ext_family_loop as FL         # 🧩 Fix 431·432 공용 루프 (새 가족은 여기 FAMILIES 에 추가)
 from app.services import ext_regime as RG             # 🧭 Fix 440 외부 전략 장세 필터
 
@@ -33,6 +34,7 @@ _EXIT_GAP = "출처 청산(중심선·EMA9 이탈 종가 청산)이 실주문 �
 FAMILIES: tuple[FL.Family, ...] = (
     FL.Family("bbwave", BW, "볼린저파동", ("5m", "15m"), force_shadow=_EXIT_GAP),
     FL.Family("trima", TM, "3중이평", ("1h", "4h", "15m"), force_shadow=_EXIT_GAP),
+    FL.Family("trpb", TRPB, "정상추세눌림", ("1d",), force_shadow=TRPB.EXIT_GAP, symbol_ok=TRPB.symbol_ok),   # 🏔 Fix 475
 )
 from app.services.kline_incremental import INTERVAL_MS, IncrementalKlines
 from app.services import kline_store as KS

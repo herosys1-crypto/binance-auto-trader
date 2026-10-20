@@ -227,6 +227,8 @@ def _emapb_params(db) -> None:
         from app.services import bb_wave as BW, triple_ma as TM   # 🌊📐 Fix 431·432
         BW.set_paper_params(lambda k: ES.setting(db, k))
         TM.set_paper_params(lambda k: ES.setting(db, k))
+        from app.services import trend_pullback as TRPB           # 🏔 Fix 475
+        TRPB.set_paper_params(lambda k: ES.setting(db, k))
         from app.services import consensus_long as CON           # 🤝 Fix 437
         CON.set_paper_params(lambda k: _setting(db, k))
         from app.services import pump_top_short as PTS           # 🔺 Fix 438
@@ -402,6 +404,8 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
             try:
                 from app.services import ema_pullback as _EPF
                 _EPF.set_paper_symbol_ok(_ep_ok)
+                from app.services import trend_pullback as _TRPBF        # 🏔 Fix 475: 대형 규칙이 시총을 보려면 심볼이 필요
+                _TRPBF.set_paper_symbol(sym)
             except Exception:  # noqa: BLE001
                 pass
             _need_ep, _dc, _cx = False, None, None                 # Fix 427: 앞 심볼 값이 새지 않게 먼저 초기화

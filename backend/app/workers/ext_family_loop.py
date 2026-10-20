@@ -23,6 +23,7 @@ class Family:
     label: str                   # 로그·미충족 이름
     intervals: tuple[str, ...]   # 허용 판정 봉 (첫 값 = 기본)
     force_shadow: str = ""       # 비어 있지 않으면 on → shadow + 이 이유를 경고
+    symbol_ok: Any = None        # 🏔 Fix 475: (sym, p) -> (ok, 이유) — 봉을 받기 전에 종목을 거른다(예: 시총). None = 모두
 
 
 def k_last(key: str, interval: str, sym: str) -> str:
@@ -58,6 +59,14 @@ def run(ext: Any, fam: Family, m: str, *, db, r, bc, stat: dict, universe: list[
     for sym in universe:
         if sym in active:
             continue
+        if fam.symbol_ok is not None:
+            try:
+                sok, why = fam.symbol_ok(sym, p)
+            except Exception as e:  # noqa: BLE001 — 거르기 실패 = 이번엔 이 종목 안 봄
+                sok, why = False, f"거르기 실패 {type(e).__name__}"
+            if not sok:
+                stat["miss"][f"{fam.label} {why}"] = stat["miss"].get(f"{fam.label} {why}", 0) + 1
+                continue
         try:
             lk = k_last(fam.key, iv, sym)
             bars, seen = ext._closed_bars(bc, r, sym, iv, settle_ms=settle_ms, incremental=incremental, stat=stat,

@@ -516,9 +516,10 @@ def check_external_strategies() -> None:
                            ("prefix=BE.PREFIX, stype=BE.STYPE", "볼린저 EMA 실주문 = create_surge_position 경로"),
                            ('FL.Family("bbwave", BW', "볼린저 중심선 파동 가족 (Fix 431)"),
                            ('FL.Family("trima", TM', "3중 이평 가족 (Fix 432)"),
+                           ('FL.Family("trpb", TRPB', "정상 추세 눌림 LONG(대형) 가족 (Fix 475)"),
                            ("for fam in FAMILIES:", "단순 가족 공용 루프 호출")):
             (ok if pin in wk else fail)(f"{label}: {pin}")
-        (ok if all(ES.SETTINGS[k][0] == "shadow" for k in ("fujimoto_mode", "mach7_mode", "emapb_mode", "bbema_mode", "bbwave_mode", "trima_mode")) else fail)("코드 기본 모드 = shadow (주문 없음)")
+        (ok if all(ES.SETTINGS[k][0] == "shadow" for k in ("fujimoto_mode", "mach7_mode", "emapb_mode", "bbema_mode", "bbwave_mode", "trima_mode", "trpb_mode")) else fail)("코드 기본 모드 = shadow (주문 없음)")
         with open(os.path.join(_ROOT, "app/workers/ext_family_loop.py"), encoding="utf-8") as f:
             fl = f.read()
         (ok if "prefix=fam.mod.PREFIX, stype=fam.mod.STYPE" in fl and "r.setex(lk, ttl, str(ts))" in fl else fail)("공용 루프 실주문 경로·처리 뒤 기록 (Fix 431·432)")
@@ -560,6 +561,9 @@ def check_external_strategies() -> None:
             n_bb = sum(1 for _ in r.scan_iter("ext:shadow:bbema:*", count=500))
             n_bw = sum(1 for _ in r.scan_iter("ext:shadow:bbwave:*", count=500))
             n_tm = sum(1 for _ in r.scan_iter("ext:shadow:trima:*", count=500))
+            n_tp = sum(1 for _ in r.scan_iter("ext:shadow:trpb:*", count=500))       # 🏔 Fix 475
+            _mc_at = r.get("coin:mcap:at")
+            print(f"  ▸ 🏔 Fix 475 정상 추세 눌림 그림자 {n_tp} · 시총 자료 받은 시각 {(_mc_at.decode() if isinstance(_mc_at, bytes) else _mc_at) or '없음'}")
             print(f"  ▸ 그림자 신호(7일 보관): 후지모토 {n_fj} · 마하세븐 {n_m7} · EMA 눌림 {n_ep} · 볼린저 EMA {n_bb} · 볼린저 파동 {n_bw} · 3중 이평 {n_tm}")
         except Exception as e:  # noqa: BLE001
             skip(f"Redis 조회 실패: {e!r}")

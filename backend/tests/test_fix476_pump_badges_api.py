@@ -31,6 +31,8 @@ def pp(monkeypatch):
     m.badges_for = badges_for
     m.profiles = lambda redis=None: {"AAAUSDT": {}, "BBBUSDT": {}}
     monkeypatch.setitem(sys.modules, "app.services.pump_profile", m)
+    import app.services as _svc                         # 진짜 모듈이 이미 불려 있으면 패키지 속성이 우선 — 같이 바꾼다
+    monkeypatch.setattr(_svc, "pump_profile", m, raising=False)
     monkeypatch.setattr(S, "get_redis_client", lambda: _Redis())
     return m
 

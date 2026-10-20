@@ -447,6 +447,9 @@ from app.services.bb_wave import SETTINGS as _BBWAVE_SETTINGS  # noqa: E402
 from app.services.triple_ma import SETTINGS as _TRIMA_SETTINGS  # noqa: E402
 SETTINGS.update(_BBWAVE_SETTINGS)
 SETTINGS.update(_TRIMA_SETTINGS)
+# 🏔 Fix 475: 정상 추세 눌림 LONG(대형) (판정은 app/services/trend_pullback.py)
+from app.services.trend_pullback import SETTINGS as _TRPB_SETTINGS  # noqa: E402
+SETTINGS.update(_TRPB_SETTINGS)
 # 🧭 Fix 440: 외부 전략 장세 필터 (app/services/ext_regime.py)
 from app.services.ext_regime import SETTINGS as _EXT_REGIME_SETTINGS  # noqa: E402
 SETTINGS.update(_EXT_REGIME_SETTINGS)

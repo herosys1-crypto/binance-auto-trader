@@ -1036,6 +1036,42 @@ def start_scheduler() -> None:
         id="verdict_report", replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🏔 Fix 475 (2026-10-21 사장님 「a b로 해줘」): 시총·유통 비율 캐시 — 공개 CoinGecko 8쪽(키 없음, 거래소 IP 무게 0)
+    #   → Redis coin:mcap:v1 (3일). 정상 추세 눌림 LONG(대형) 이 시총 10억$ 이상만 본다. 매일 KST 08:50 + 시작 90초 뒤 한 번.
+    def _coin_mcap():
+        from app.core.redis_client import get_redis_client
+        from app.services import coin_mcap as CM
+        CM.refresh(get_redis_client())
+    scheduler.add_job(
+        guarded_job("coin_mcap", 600, _coin_mcap),
+        trigger=CronTrigger(hour=8, minute=50, timezone="Asia/Seoul"),
+        id="coin_mcap", replace_existing=True, max_instances=1, coalesce=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=90),
+    )
+
+    # 🏷 Fix 476 (2026-10-21 사장님 「새전략시 구분 · 전략인스턴스에서도 한눈에」): 종목 세력 그림 표시 갱신 —
+    #   코인 무기한 USDT 전부 × 공개 일봉 99개(무게 1) ≈ 하루 500 무게 · 매일 KST 09:15(일봉 마감 뒤) + 시작 2분 뒤. 표시 전용.
+    def _pump_profile():
+        from sqlalchemy import select
+        from app.core.database import SessionLocal
+        from app.core.redis_client import get_redis_client
+        from app.integrations.binance.client import BinanceClient
+        from app.models.symbol import Symbol
+        from app.services import pump_profile as PP
+        from app.services.ema_pullback import coin_symbols
+        s_ = SessionLocal()
+        try:
+            syms = [x for (x,) in s_.execute(select(Symbol.symbol).where(Symbol.status == "TRADING", Symbol.quote_asset == "USDT"))]
+        finally:
+            s_.close()
+        PP.refresh(get_redis_client(), BinanceClient(api_key="", api_secret=""), coin_symbols(None, syms))
+    scheduler.add_job(
+        guarded_job("pump_profile", 900, _pump_profile),
+        trigger=CronTrigger(hour=9, minute=15, timezone="Asia/Seoul"),
+        id="pump_profile", replace_existing=True, max_instances=1, coalesce=True,
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=120),
+    )
+
     # 🗓 Fix 424 (2026-10-09 사장님): EMA 추세 눌림 「진입 준비」·「진입 신호」 알림 — 텔레그램 + 화면. 주문 없음.
     #   일봉 기준이라 15분마다면 충분 (감시 상위 60종목 × 일봉 300개 = 무게 120/회 ≈ 8/분).
     def _emapb_watch():

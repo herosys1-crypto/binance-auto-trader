@@ -186,7 +186,9 @@ DAILY_JOBS: tuple[DailyJob, ...] = (
     DailyJob("daily_summary", "일일 운영 요약", "00:00"),
     DailyJob("memory_consolidator", "기억 정리", "03:00"),
     DailyJob("daily_briefing", "아침 브리핑", "07:30"),
+    DailyJob("coin_mcap", "시총 자료 받기(대형 판정용)", "08:50"),     # 🏔 Fix 475
     DailyJob("daily_report", "일일 운영 보고", "09:00"),
+    DailyJob("pump_profile", "종목 세력 그림 표시", "09:15"),          # 🏷 Fix 476
     DailyJob("strategy_council", "전략 운영팀 성적표", "09:40"),
     DailyJob("verdict_report", "판정 보고서(정해진 날만)", "10:20"),
     DailyJob("ichikijun_board", "일목 실험실 순위표·챔피언", "10:30"),

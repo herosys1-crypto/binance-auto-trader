@@ -163,7 +163,7 @@ def test_paper_rules_use_15m():
 def test_on_forced_to_shadow():
     from app.workers import external_strategies_worker as W
     from app.workers import ext_family_loop as FL
-    assert {f.key for f in W.FAMILIES} == {"bbwave", "trima"} and all(f.force_shadow for f in W.FAMILIES)
+    assert {f.key for f in W.FAMILIES} == {"bbwave", "trima", "trpb"} and all(f.force_shadow for f in W.FAMILIES)   # Fix 475: +trpb
     fake_es = NS(mode_of=lambda db, k: "on")
     assert FL.mode(fake_es, None, W.FAMILIES[0]) == "shadow"
 
