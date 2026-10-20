@@ -15,7 +15,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent if "__file__" in globals() else Path("/app/scripts/entry_condition_study")
 SCORE_FROM = "2026-10-17"
 FILES = (("J", "council_realistic_2026_10_16.py", "60"), ("K", "long_trend_k_2026_10_16.py", "60"),
-         ("L", "s4_exit_compare_2026_10_17.py", "60"))      # L = S4 트레일링 3%p (10/17 사전 등록)
+         ("L", "s4_exit_compare_2026_10_17.py", "60"),      # L = S4 트레일링 3%p (10/17 사전 등록)
+         ("M", "s4_pattern_m_2026_11_15.py", "60", "2026-10-21"))   # M = 세력 그림 S4 (10/21 사전 등록 — 이 날부터)
 
 
 def _load(name: str, fname: str):
@@ -28,8 +29,8 @@ def _load(name: str, fname: str):
 def main() -> None:
     old = {k: os.environ.get(k) for k in ("SCORE_FROM", "DAYS")}
     try:
-        for name, fname, days in FILES:
-            os.environ["SCORE_FROM"], os.environ["DAYS"] = SCORE_FROM, days     # 모듈 상수가 import 때 읽는다
+        for name, fname, days, *frm in FILES:
+            os.environ["SCORE_FROM"], os.environ["DAYS"] = (frm[0] if frm else SCORE_FROM), days     # 모듈 상수가 import 때 읽는다
             print(f"\n# ── 가설 {name} ({fname}) ──")
             _load(name, fname).main()
     finally:

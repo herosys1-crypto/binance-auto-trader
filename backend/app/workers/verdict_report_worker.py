@@ -30,7 +30,7 @@ SCRIPTS = {
     "verdict": "verdict_2026_10_25.py",
     "jk": "jk_2026_11_15.py",
 }
-TITLES = {"verdict": "🧾 통합 판정 보고서", "midcheck": "🩺 중간 점검 보고서", "jk": "🧪 가설 J·K 판정"}
+TITLES = {"verdict": "🧾 통합 판정 보고서", "midcheck": "🩺 중간 점검 보고서", "jk": "🧪 가설 J·K·L·M 판정"}
 REPORT_KEY = "verdict:report:{day}:{kind}"
 DONE_KEY = "verdict:done:{day}:{kind}"
 REPORT_TTL = 60 * 86400
@@ -85,6 +85,10 @@ def summarize(kind: str, report: str) -> str:
                 out.append("L (S4 트레일링 3%p vs 지금): " + ln[len("L 판정:"):].strip())
             if ln.startswith("S4 판정:"):                 # 10/17 반박 감사 — S4 날 단위 성적
                 out.append("S4 (날 단위 순수익): " + ln[len("S4 판정:"):].strip())
+            if ln.startswith("M1 판정:"):                 # 10/21 가설 M — 세력 그림 S4
+                out.append("M1 (평범 문맥 S4 빼기): " + ln[len("M1 판정:"):].strip())
+            if ln.startswith("M2 판정:"):
+                out.append("M2 (② 펌프·회귀 문맥 크기 키우기): " + ln[len("M2 판정:"):].strip())
         return "\n".join(out) or "(요약 줄 없음 — 원문 확인)"
     if kind == "midcheck":
         keep = [ln for ln in lines if ln.startswith("요약:") or "끝난" in ln and "평균" in ln]
