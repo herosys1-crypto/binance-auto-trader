@@ -2193,6 +2193,8 @@
           <!-- 2026-05-07: 화이트리스트 안내 (운영 정책 가시성) -->
           <div id="cm-symbol-whitelist-hint" class="mt-1 text-xs hidden"></div>
           <div id="cm-symbol-status" class="mt-1 text-xs hidden"></div>
+          <!-- 🏷 Fix 476: 종목 세력 그림 배지 (③ 펌프·덤프 / ② 펌프·회귀 / 🐋 / ① 정상) — 없으면 숨김 -->
+          <div id="cm-pump-badge" class="mt-1 text-xs hidden"></div>
           <div id="cm-multi-preview" class="mt-1 text-xs hidden"></div>
         </div>
         <div>
@@ -3011,6 +3013,7 @@ function openBBMiddleRanking(direction) {
      이 자동화 이전에는 18개 파일의 버전이 낡은 채로 방치돼 있었습니다. -->
 <script src="/static/js/api.js?v=20260826-fix107-content-type"></script>
 <script src="/static/js/helpers.js?v=fix466"></script>
+<script src="/static/js/pump-badge.js?v=fix476"></script>   <!-- 🏷 Fix 476 종목 세력 그림 배지 (api/escapeHtml 은 호출 시점에 사용) -->
 <script src="/static/js/stats-modals.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/health-page.js?v=20260722v119-grid-align"></script>
 <script src="/static/js/ranking-page.js?v=20260722v119-grid-align"></script>
