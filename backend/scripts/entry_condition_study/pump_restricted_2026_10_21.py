@@ -32,6 +32,11 @@ def arrays(kl):
             [float(k[4]) for k in kl], [float(k[7]) for k in kl])
 
 
+def _med20(qv, d):
+    w = sorted(qv[d - 20:d])
+    return w[len(w) // 2] if w else 0.0
+
+
 def day(ms):
     return datetime.fromtimestamp(ms / 1000, timezone.utc).date().isoformat()
 
@@ -54,6 +59,8 @@ def scan(sym, kl, ci):
             vsp = max(qv[org:pk + 1]) / med if med > 0 else 0
             if gain >= 1.0 and vsp >= 10 and used != pk:
                 used = pk
+                day30 = any(c[d - 1] > 0 and c[d] / c[d - 1] - 1 >= 0.30 and _med20(qv, d) > 0 and qv[d] / _med20(qv, d) >= 10
+                            for d in range(max(21, org + 1), pk + 1))         # 10/21 「랠리 +100% 과 일 +30%·거래대금 ×10」 함께
                 back = lw[org] + 0.25 * (h[pk] - lw[org])
                 res = "횡보"
                 for j in range(t + 1, min(len(c), t + 61)):
@@ -85,7 +92,7 @@ def scan(sym, kl, ci):
                 # LONG A3: 눌림 날 종가 LONG · 손절 하단 −3%(3~15%) · 익절 직전 고점 · 40일 (비교용)
                 l_stop = max(min(lo[t] * 0.97, e * 0.97), e * 0.85)
                 rA3 = D3.sim("LONG", e, l_stop, h[pk], h, lw, c, t + 1, 40)
-                A.append({"sym": sym, "d": day(t0[t]), "res": res, "dd": dd, "hold": e >= mid[t], "deep": lw[t] <= lo[t],
+                A.append({"sym": sym, "d": day(t0[t]), "res": res, "day30": day30, "dd": dd, "hold": e >= mid[t], "deep": lw[t] <= lo[t],
                           "whale": whale, "mcap": ci.get("mcap"), "A1": rA1, "A1risk": s_stop / e - 1, "A2": rA2, "A2d": d2, "A2risk": risk2,
                           "A3": rA3, "A3risk": 1 - l_stop / e})
         # (나) ③ 당일 +30%↑ · 그날 거래대금 ×10↑
@@ -108,7 +115,8 @@ def scan(sym, kl, ci):
                 n = t + 1
                 half = base + 0.5 * (c[t] - base)
                 red = c[n] < c[t]
-                rec = {"sym": sym, "d": day(t0[t]), "lab": lab, "red": red, "wick": wick, "whale": whale, "mcap": ci.get("mcap"),
+                lo60 = min(lw[max(0, t - 60):t + 1])
+                rec = {"sym": sym, "d": day(t0[t]), "lab": lab, "red": red, "rally100": lo60 > 0 and h[t] / lo60 - 1 >= 1.0, "wick": wick, "whale": whale, "mcap": ci.get("mcap"),
                        "surge": c[t] / base - 1}
                 # SHORT B1: 다음 날 음봉 → 그날 종가 SHORT · 손절 = 두 날 최고가 +2%(≤25%) · 익절 = 급등분 절반 반납 · 10일
                 if red and half < c[n]:
@@ -199,6 +207,39 @@ def main():
     rtab("B2 SHORT 급등 날 윗꼬리 ≥40% (급등 날 종가)", B, "B2", "B2risk")
     rtab("B3 LONG 다음 날 양봉", B, "B3", "B3risk")
     rtab("B3 · 🐋 제외", [x for x in B if not x["whale"]], "B3", "B3risk")
+    # 세 조건 함께 (10/21 두 번째 요청)
+    A3 = [x for x in A if x["day30"]]
+    d3 = [x for x in A3 if x["res"] != "진행 중"]
+    print(f"\n## (다) 세 조건 함께 ① — 랠리 +100%↑ · 거래대금 ×10↑ · 랠리 안에 하루 +30%↑·그날 거래대금 ×10↑ 인 날 → 그 뒤 중단·하단 눌림 {len(A3)}개 (결과 난 것 {len(d3)})")
+    print("| 묶음 | n | 지속(고점 돌파) | 회귀(75% 반납) | 횡보 |\n|---|---|---|---|---|")
+    for nm, f in (("전체", lambda x: True), ("중단 위 마감", lambda x: x["hold"]), ("중단 아래 마감", lambda x: not x["hold"]),
+                  ("고점 −10% 이내", lambda x: x["dd"] < 0.10), ("고점 −25%↓", lambda x: x["dd"] >= 0.25), ("고점 −40%↓", lambda x: x["dd"] >= 0.40),
+                  ("🐋 소형·큰손", lambda x: x["whale"]), ("시총 10억$↑", lambda x: (x["mcap"] or 0) >= 1e9)):
+        g = [x for x in d3 if f(x)]
+        if g:
+            print(f"| {nm} | {len(g)} | {sum(x['res'] == '지속' for x in g) / len(g):.0%} | {sum(x['res'] == '회귀' for x in g) / len(g):.0%} | "
+                  f"{sum(x['res'] == '횡보' for x in g) / len(g):.0%} |")
+    print("\n" + hdr)
+    rtab("A1 SHORT 눌림 날 종가 · 세 조건", A3, "A1", "A1risk")
+    rtab("A1 · 세 조건 + 고점 −25%↓", [x for x in A3 if x["dd"] >= 0.25], "A1", "A1risk")
+    rtab("A1 · 세 조건 + 중단 아래 마감", [x for x in A3 if not x["hold"]], "A1", "A1risk")
+    rtab("A2 SHORT 반등 실패 + 저가 이탈 · 세 조건", A3, "A2", "A2risk")
+    rtab("A3 LONG 눌림 날 종가 · 세 조건", A3, "A3", "A3risk")
+    rtab("A3 · 세 조건 + 고점 −10% 이내", [x for x in A3 if x["dd"] < 0.10], "A3", "A3risk")
+    B3_ = [x for x in B if x.get("rally100")]
+    l3 = [x for x in B3_ if x["lab"] != "모름"]
+    print(f"\n## (다) 세 조건 함께 ② — 하루 +30%↑·거래대금 ×10↑ 인 날이 60일 최저 대비 +100%↑ 랠리 안 {len(B3_)}개 (결과 난 것 {len(l3)})")
+    print("| 묶음 | n | 바로 하락 | 더 오름 |\n|---|---|---|---|")
+    for nm, f in (("전체", lambda x: True), ("다음 날 음봉", lambda x: x["red"]), ("다음 날 양봉", lambda x: not x["red"]),
+                  ("윗꼬리 ≥40%", lambda x: x["wick"] >= 0.4), ("🐋 소형·큰손", lambda x: x["whale"]), ("🐋 + 다음 날 음봉", lambda x: x["whale"] and x["red"])):
+        g = [x for x in l3 if f(x)]
+        if g:
+            print(f"| {nm} | {len(g)} | {sum(x['lab'] == '바로 하락' for x in g) / len(g):.0%} | {sum(x['lab'] == '더 오름' for x in g) / len(g):.0%} |")
+    print("\n" + hdr)
+    rtab("B1 SHORT 다음 날 음봉 · 세 조건", B3_, "B1", "B1risk")
+    rtab("B1 · 세 조건 + 🐋", [x for x in B3_ if x["whale"]], "B1", "B1risk")
+    rtab("B2 SHORT 급등 날 윗꼬리 ≥40% · 세 조건", B3_, "B2", "B2risk")
+    rtab("B3 LONG 다음 날 양봉 · 세 조건", B3_, "B3", "B3risk")
     # S4 문맥
     if len(sys.argv) > 1:
         s4 = json.loads(Path(sys.argv[1]).read_text())
