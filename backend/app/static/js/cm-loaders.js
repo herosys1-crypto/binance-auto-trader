@@ -92,6 +92,7 @@ async function loadCmSymbols() {
     // limit 200 → 1000 으로 증가. testnet 에 586+ TRADING 심볼이 있어 200 제한 시
     // 알파벳 순으로 SOL/XRP/DOGE 등 인기 코인이 자동완성에서 누락되는 문제 해결.
     const data = await api('/symbols?only_trading=true&limit=1000');
+    if (typeof loadPumpBadges === 'function') { try { await loadPumpBadges(); } catch (_e) { /* 배지 없이 진행 */ } }   // 🏷 Fix 476
     const list = document.getElementById('cm-symbol-list');
     // 2026-05-07: datalist option 의 label 에 화이트리스트 상태 표시
     // (브라우저별 렌더링 차이 있지만 Chrome/Firefox/Edge 에서 자동완성 시 표시됨).
@@ -101,7 +102,9 @@ async function loadCmSymbols() {
       const label = _cmWhitelistInfo.enabled
         ? (isAllowed ? `${sym} ✓ 허용` : `${sym} 🚫 화이트리스트 외`)
         : sym;
-      return `<option value="${sym}" label="${label}"></option>`;
+      // 🏷 Fix 476: 세력 그림 태그가 있으면 라벨 뒤에 붙인다 (캐시에 있을 때만 — 없으면 그대로)
+      const pb = (typeof pumpBadgeLabel === 'function') ? pumpBadgeLabel(sym) : '';
+      return `<option value="${sym}" label="${label}${pb ? ' · ' + pb : ''}"></option>`;
     }).join('');
   } catch { /* symbols 없으면 무시 — 사용자 직접 입력 가능 */ }
   // 심볼 입력 변경 시 시세 자동 로드 + 화이트리스트 검증 (debounce)

@@ -4,6 +4,7 @@
 거래소 거래 가능한 심볼 목록(`/admin/symbol-sync` 으로 동기화된 것)을 노출.
 """
 import json
+import re
 from decimal import Decimal
 from typing import Literal
 
@@ -65,6 +66,42 @@ class WhitelistInfoResponse(BaseModel):
     enforced: bool       # 가드 적용 중 (env 설정 + DB 토글 ON)
     allowed_symbols: list[str]  # env 의 등재 심볼 (항상 — 토글 OFF 여도 표시)
     env_configured: bool
+
+
+# 🏷 Fix 476 (2026-10-21 사장님): 종목 「세력 그림」 배지 — 표시 전용 (Redis 읽기만, 주문·판정 무변경).
+PUMP_BADGE_MAX_SYMBOLS = 200      # 한 번에 물을 수 있는 심볼 수 (Claude가 정함)
+_PUMP_SYM_RE = re.compile(r"^[A-Z0-9]{1,30}$")
+
+
+@router.get("/pump-badges")
+def pump_badges(
+    symbols: str | None = Query(default=None, description="쉼표 구분 심볼 (최대 200). 없으면 태그 있는 전체"),
+    user_id: int = Depends(get_current_user_id),
+) -> dict:
+    """③ 펌프·덤프 / ② 펌프·회귀 / 🐋 소형·큰손 / ① 정상 추세 배지. 못 읽으면 빈 표 (fail-open)."""
+    # 함수 안 import — 지역 이름 충돌 방지를 위해 모듈 별칭으로만 쓴다.
+    import app.services.pump_profile as _pp
+    req: list[str] | None = None
+    if symbols is not None and symbols.strip():
+        raw = [x.strip().upper() for x in symbols.split(",") if x.strip()]
+        if len(raw) > PUMP_BADGE_MAX_SYMBOLS:
+            raise HTTPException(status_code=422, detail=f"symbols 는 최대 {PUMP_BADGE_MAX_SYMBOLS}개")
+        req = [x for x in raw if _PUMP_SYM_RE.match(x)]      # 형식이 틀린 건 거른다
+    try:
+        if req is None:
+            badges = _pp.badges_for(list(_pp.profiles().keys()))
+        else:
+            badges = _pp.badges_for(req) if req else {}
+    except Exception:  # noqa: BLE001
+        badges = {}
+    at = None
+    try:
+        raw_at = get_redis_client().get(_pp.AT_KEY)
+        if raw_at is not None:
+            at = raw_at.decode() if isinstance(raw_at, bytes) else str(raw_at)
+    except Exception:  # noqa: BLE001
+        at = None
+    return {"at": at, "badges": badges}
 
 
 @router.get("/whitelist-info", response_model=WhitelistInfoResponse)

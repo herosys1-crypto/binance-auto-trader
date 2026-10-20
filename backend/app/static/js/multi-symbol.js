@@ -123,7 +123,7 @@ function _renderMultiSymbolChips() {
       const ic = s.status === 'valid' ? '✓' : s.status === 'invalid' ? '✗' : '⏳';
       return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs ${cls}" title="${escapeHtml(s.reason)}">
         <span>${ic}</span>
-        <span class="font-mono">${escapeHtml(s.symbol)}</span>
+        <span class="font-mono">${escapeHtml(s.symbol)}</span>${typeof pumpBadgeHtml === 'function' ? pumpBadgeHtml(s.symbol) : ''}
         <button onclick="removeSymbolChip('${escapeHtml(s.symbol).replace(/'/g, "\\'")}')" class="hover:text-white" style="font-weight:bold" title="제거">×</button>
       </span>`;
     }).join('');
