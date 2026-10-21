@@ -93,9 +93,9 @@ def _stop_untagged(si) -> None:
 
 
 def no_position_error(e: Exception) -> bool:
-    """emergency_close_position 의 「거래소에 포지션 없음」 메시지만 (교차 감사: "does not" 등 다른 오류를 포지션 없음으로 보면 안 됨)."""
-    m = str(e).lower()
-    return "exchange has no" in m and "position" in m
+    """emergency_close_position 의 「거래소에 포지션 없음」 메시지만 — 공용 판정(🩹 Fix 478)."""
+    from app.services.execution_service import is_no_position_error
+    return is_no_position_error(e)
 
 
 def _active(db) -> list:

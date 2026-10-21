@@ -125,7 +125,8 @@ def run_ichikijun_exit_once(decrypt_text=None) -> dict[str, Any]:  # decrypt_tex
                         except ValueError as ve:
                             # 교차 감사: 거래소엔 이미 포지션이 없는데 DB 수량만 남은 경우(손절 먼저 체결 등) — 15분마다
                             #   영원히 재시도하지 않게 「포지션 없음」으로 끝낸다 (기존 정지 API 와 같은 판별).
-                            if not ("no" in str(ve).lower() and "position" in str(ve).lower()):
+                            from app.services.execution_service import is_no_position_error   # 🩹 Fix 478
+                            if not is_no_position_error(ve):
                                 raise
                             db.rollback()
                             meta["kj_exit_done"] = {**info, "at": datetime.now(timezone.utc).isoformat(), "no_position": True}

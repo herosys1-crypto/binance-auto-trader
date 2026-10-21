@@ -788,7 +788,8 @@ def stop_strategy(
                 except ValueError as ve:
                     # UX (2026-04-29): Bug #8 fix 가 거래소 포지션 0 일 때 ValueError 를
                     # 던짐 (cleanup 은 이미 완료). 이 경우 502 가 아닌 정상 응답으로 처리.
-                    if "no" in str(ve).lower() and "position" in str(ve).lower():
+                    from app.services.execution_service import is_no_position_error   # 🩹 Fix 478
+                    if is_no_position_error(ve):
                         db.refresh(strategy)
                         return StrategyActionResponse(
                             strategy_id=strategy.id,

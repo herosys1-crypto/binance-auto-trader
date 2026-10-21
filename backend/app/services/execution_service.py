@@ -40,6 +40,17 @@ EMERGENCY_CLOSE_SUCCESS_THRESHOLD_RATIO = Decimal("0.9")
 logger = logging.getLogger(__name__)
 
 
+NO_POSITION_MARK = "exchange has no"   # _emergency_close_position_locked 의 「거래소 포지션 0」 메시지 머리
+
+
+def is_no_position_error(e: Exception) -> bool:
+    """🩹 Fix 478: emergency_close_position 이 「거래소에 포지션 없음(정리만 하고 STOPPED)」 으로 끝났을 때만 True.
+    예전 판정 `"no" in msg and "position" in msg` 은 "position side does not match"(-4061) 같은 다른 실패도 잡아
+    열린 포지션을 「이미 청산됨」으로 보던 결함(2026-10-21 Fix 477 교차 감사에서 발견)."""
+    m = str(e).lower()
+    return NO_POSITION_MARK in m and "position" in m
+
+
 class EmergencyCloseInProgress(Exception):
     """다른 caller 가 같은 strategy 의 emergency_close 를 처리 중 — 중복 발사 방지."""
     pass

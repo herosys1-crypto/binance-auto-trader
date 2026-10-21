@@ -243,3 +243,16 @@ def test_service_pure(rel):
     tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"))
     mods = {n.module or "" for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
     assert not any(b in m for m in mods for b in ("execution_service", "database", "redis"))
+
+
+def test_fix478_other_value_error_is_not_no_position(monkeypatch):
+    """🩹 Fix 478: 「position side does not match」 같은 다른 ValueError 는 끝내지 않고 재시도(열린 포지션 방치 금지)."""
+    from app.services.execution_service import is_no_position_error
+    assert is_no_position_error(ValueError("Exchange has no SHORT position for X; cancelled pending orders and marked STOPPED."))
+    assert not is_no_position_error(ValueError("Order's position side does not match user's setting."))
+    assert not is_no_position_error(ValueError("Cannot close position now"))
+    import pathlib
+    root = pathlib.Path(__file__).resolve().parents[1] / "app"
+    for f in ("api/v1/strategies/lifecycle.py", "workers/ichikijun_exit_worker.py"):
+        src = (root / f).read_text(encoding="utf-8")
+        assert '"no" in str(ve).lower()' not in src and "is_no_position_error(ve)" in src, f
