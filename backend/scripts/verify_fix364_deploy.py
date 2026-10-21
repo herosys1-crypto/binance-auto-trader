@@ -567,6 +567,11 @@ def check_external_strategies() -> None:
             n_pds = sum(1 for _ in r.scan_iter("pds:shadow:*", count=500))       # 🎰 Fix 477
             _pp_at = r.get("pump:profile:at")
             print(f"  ▸ 🎰 Fix 477 세력 펌프·덤프 SHORT 그림자 신호 {n_pds} · 🏷 세력 그림 표시 갱신 {(_pp_at.decode() if isinstance(_pp_at, bytes) else _pp_at) or '없음'}")
+            try:                                                                  # 💰 Fix 479
+                _n_snap = r.zcard("acct:snap:index")
+            except Exception:  # noqa: BLE001
+                _n_snap = "?"
+            print(f"  ▸ 💰 Fix 479 잔액 기록 {_n_snap}개 (매시 7분 · 120일)")
             print(f"  ▸ 그림자 신호(7일 보관): 후지모토 {n_fj} · 마하세븐 {n_m7} · EMA 눌림 {n_ep} · 볼린저 EMA {n_bb} · 볼린저 파동 {n_bw} · 3중 이평 {n_tm}")
         except Exception as e:  # noqa: BLE001
             skip(f"Redis 조회 실패: {e!r}")

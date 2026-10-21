@@ -1097,6 +1097,19 @@ def start_scheduler() -> None:
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=120),
     )
 
+    # 💰 Fix 479 (2026-10-22 「거래소잔액이 300USDT가 줄었는데 이유를 찾아줘」): 매시간 분 7 계정 숫자 기록(읽기·기록만, 무게 5)
+    #   → `python -m app.services.account_snapshot explain --hours 24` 로 지갑·미실현 변화를 나눠 본다.
+    def _account_snapshot():
+        from app.services import account_snapshot as AS
+        st = AS.run_take_once()
+        if not st.get("ok"):
+            logger.warning("[Fix479] 잔액 기록 실패: %s", st.get("why"))
+    scheduler.add_job(
+        guarded_job("account_snapshot", 120, _account_snapshot),
+        trigger=CronTrigger(minute=7),
+        id="account_snapshot", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     # 🎰 Fix 477: 세력 펌프·덤프 SHORT 열린 포지션 익절(급등분 절반 반납 · 평단 −0.5%)·기한(10일) 정리 — 5분마다, 모드와 관계없이
     #   (손절·단계 추가는 엔진 사다리가 한다 · 열린 pds 포지션이 없으면 DB 조회 1번으로 끝)
     def _pds_exit():
