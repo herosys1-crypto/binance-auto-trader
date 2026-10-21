@@ -79,6 +79,7 @@ _BY_PREFIX: tuple[tuple[str, AutoFamily], ...] = (
     ("bb_wave", AutoFamily("bbwave", "볼린저 중심선 파동", "볼린저파동")),     # 🌊 Fix 431
     ("triple_ma", AutoFamily("trima", "3중 이평 눌림", "3중이평")),            # 📐 Fix 432
     ("trend_pullback", AutoFamily("trpb", "정상 추세 눌림 LONG(대형)", "정상추세")),   # 🏔 Fix 475
+    ("pump_dump_short", AutoFamily("pds", "세력 펌프·덤프 SHORT 마틴게일", "펌프덤프")),   # 🎰 Fix 477
 )
 MANAGED = AutoFamily("managed_reentry", "심볼 관리 재진입", "관리재진입")
 HUMAN_TEMPLATE_AUTO = AutoFamily("human_template_auto", "사람 전략 자동 재시작·재진입", "자동재시작")

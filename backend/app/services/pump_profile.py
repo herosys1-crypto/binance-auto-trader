@@ -112,8 +112,9 @@ def badge(profile: dict | None) -> dict | None:
 
 
 def build(symbols: Iterable[str], fetch: Callable[[str], list | None], mcap_of: Callable[[str], dict | None],
-          *, sleep: float = 0.15) -> dict[str, dict]:
-    """심볼마다 일봉을 받아 분류. fetch(sym) → 마감 봉 포함 리스트(마지막 진행 중 봉은 여기서 뺀다)."""
+          *, sleep: float = 0.15, on_kl: Callable[[str, list, dict], None] | None = None) -> dict[str, dict]:
+    """심볼마다 일봉을 받아 분류. fetch(sym) → 마감 봉 포함 리스트(마지막 진행 중 봉은 여기서 뺀다).
+    on_kl(sym, 마감 봉, 시총 정보) — 🎰 Fix 477: 같은 일봉으로 세력 펌프·덤프 SHORT 신호도 본다(무게 추가 0). 실패해도 분류는 계속."""
     out: dict[str, dict] = {}
     now_ms = int(time.time() * 1000)
     for sym in symbols:
@@ -124,6 +125,11 @@ def build(symbols: Iterable[str], fetch: Callable[[str], list | None], mcap_of: 
             prof = classify(kl, _num(mi.get("mcap")), _num(mi.get("float")))
             if prof.get("tags"):
                 out[sym] = prof
+            if on_kl is not None:
+                try:
+                    on_kl(sym, kl, mi)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("[%s] %s 일봉 후처리 실패: %s", FIX, sym, e)
         except Exception as e:  # noqa: BLE001
             logger.debug("[%s] %s 분류 실패: %s", FIX, sym, e)
         if sleep:
@@ -131,7 +137,7 @@ def build(symbols: Iterable[str], fetch: Callable[[str], list | None], mcap_of: 
     return out
 
 
-def refresh(redis, bc, symbols: Iterable[str]) -> dict:
+def refresh(redis, bc, symbols: Iterable[str], on_kl: Callable[[str, list, dict], None] | None = None) -> dict:
     """스케줄러 잡. 결과 저장(태그 있는 심볼만). 반환 stat."""
     from app.services import coin_mcap as CM
 
@@ -142,7 +148,7 @@ def refresh(redis, bc, symbols: Iterable[str]) -> dict:
         return CM.info(sym, redis=redis)
 
     syms = list(symbols)
-    prof = build(syms, fetch, mcap_of)
+    prof = build(syms, fetch, mcap_of, on_kl=on_kl)
     redis.setex(KEY, TTL, json.dumps(prof, ensure_ascii=False))
     redis.setex(AT_KEY, TTL, datetime.now(timezone.utc).isoformat())
     stat = {"symbols": len(syms), "tagged": len(prof),

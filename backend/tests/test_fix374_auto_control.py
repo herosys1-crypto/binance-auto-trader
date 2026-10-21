@@ -43,7 +43,7 @@ def test_groups_and_counts():
         by[p.group] = by.get(p.group, 0) + 1
     assert by[AC.G_RULE] == 16          # 🗺 Fix 387 · 🤝 Fix 437 · 🔺 Fix 438
     assert by[AC.G_WORKER] >= 12
-    assert by[AC.G_EXTERNAL] == 7      # +정상 추세 눌림(475) · 후지모토 · 마하세븐 · EMA 눌림(Fix 423) · 볼린저 EMA(Fix 429) · 볼린저 파동(431) · 3중 이평(432)
+    assert by[AC.G_EXTERNAL] == 8      # +세력 펌프·덤프(477) +정상 추세 눌림(475) · 후지모토 · 마하세븐 · EMA 눌림(Fix 423) · 볼린저 EMA(Fix 429) · 볼린저 파동(431) · 3중 이평(432)
     assert all(p.group in AC.GROUPS for p in ps)
 
 

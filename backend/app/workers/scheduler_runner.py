@@ -1064,12 +1064,48 @@ def start_scheduler() -> None:
             syms = [x for (x,) in s_.execute(select(Symbol.symbol).where(Symbol.status == "TRADING", Symbol.quote_asset == "USDT"))]
         finally:
             s_.close()
-        PP.refresh(get_redis_client(), BinanceClient(api_key="", api_secret=""), coin_symbols(None, syms))
+        # 🎰 Fix 477: 같은 일봉으로 세력 펌프·덤프 SHORT 신호 → 그림자 기록 (무게 추가 0 · 실주문은 pds_mode=on + Fix 477 실주문 경로)
+        from app.services import pump_dump_short as PDS
+        r_ = get_redis_client()
+        s2 = SessionLocal()
+        try:
+            pds_p = PDS.params_from(PDS.settings_get(s2))
+        finally:
+            s2.close()
+        pds_stat: dict = {}
+        PP.refresh(r_, BinanceClient(api_key="", api_secret=""), coin_symbols(None, syms),
+                   on_kl=PDS.make_daily_hook(r_, pds_p, pds_stat))
+        logger.info("[Fix477] 세력 펌프·덤프 SHORT 일봉 판정 — 모드 %s · 신호 %s · 그림자 기록 %s · 실주문 후보 %s",
+                    pds_p["mode"], pds_stat.get("signals"), pds_stat.get("recorded"), len(pds_stat.get("candidates") or []))
+        if pds_p["mode"] == "on" and pds_stat.get("candidates"):
+            from app.services import pump_dump_short_live as PDL
+            _pub = BinanceClient(api_key="", api_secret="")
+
+            def _px(sym):
+                t = _pub.get_24hr_ticker(symbol=sym)
+                t = t[0] if isinstance(t, list) and t else t
+                return float((t or {}).get("lastPrice") or 0) or None
+            s3 = SessionLocal()
+            try:
+                PDL.open_positions(s3, pds_stat["candidates"], pds_p, price_of=_px)
+            finally:
+                s3.close()
     scheduler.add_job(
         guarded_job("pump_profile", 900, _pump_profile),
         trigger=CronTrigger(hour=9, minute=15, timezone="Asia/Seoul"),
         id="pump_profile", replace_existing=True, max_instances=1, coalesce=True,
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=120),
+    )
+
+    # 🎰 Fix 477: 세력 펌프·덤프 SHORT 열린 포지션 익절(급등분 절반 반납 · 평단 −0.5%)·기한(10일) 정리 — 5분마다, 모드와 관계없이
+    #   (손절·단계 추가는 엔진 사다리가 한다 · 열린 pds 포지션이 없으면 DB 조회 1번으로 끝)
+    def _pds_exit():
+        from app.services import pump_dump_short_live as PDL
+        PDL.run_exit_once()
+    scheduler.add_job(
+        guarded_job("pds_exit", 240, _pds_exit),
+        trigger=IntervalTrigger(minutes=5),
+        id="pds_exit", replace_existing=True, max_instances=1, coalesce=True,
     )
 
     # 🗓 Fix 424 (2026-10-09 사장님): EMA 추세 눌림 「진입 준비」·「진입 신호」 알림 — 텔레그램 + 화면. 주문 없음.
