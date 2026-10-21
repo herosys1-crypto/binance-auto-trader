@@ -43,6 +43,10 @@ DEFAULTS = {
 #   외부 전략 = 봉은 경계마다만(≈4/분) + 감시 종목 선정 24h 티커 40/분 (회귀 = 160/분)
 LIMITS = {"paper_trading": 100, "external_strategies": 60}
 COLD_MIN = 20   # Claude가 정함: 재시작 직후 냉캐시 첫 사이클(전체 조회, 가상매매 ≈1,900·6분)을 측정에서 뺀다
+# 🩹 Fix 478 (2026-10-21 「가상매매 IP 무게」): 30분 창은 4시간봉이 열리는 주기(가상매매 614 → 1,237 = 15분봉+4시간봉 다시 받음)가
+#   들어가면 평균 100/분을 넘겨 FAIL — 평소 주기는 614(=41/분) · 하루 평균 ≈43/분(10/21 실측 04:01 1,237 · 04:16 614).
+#   지속 부하를 보려는 판정이라 창을 2시간(가상매매 8주기)으로 넓힌다. 문턱(LIMITS)은 그대로. (Claude가 정함)
+WINDOW_MIN = 120
 BASELINES = {"paper_trading": 128, "external_strategies": 147}
 
 
@@ -317,7 +321,7 @@ def _measure(redis, start, now, window, settings, external_off, ok, fail, skip, 
 def check_ip_weight(ok, fail, skip, *, root: str, code_only: bool,
                     process_start_epoch: float | None,
                     get_setting=None, redis=None, now_epoch: float | None = None,
-                    window_min: int = 30, cold_min: int = COLD_MIN) -> None:
+                    window_min: int = WINDOW_MIN, cold_min: int = COLD_MIN) -> None:
     """절 제목을 출력하고 코드·프로세스·운영 층을 읽기 전용으로 검사한다."""
     try:
         print(TITLE)

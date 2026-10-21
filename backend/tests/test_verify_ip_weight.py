@@ -402,3 +402,15 @@ def test_cold_start_minutes_excluded(deployment):
     result = run(deployment)
     assert contains(result, "skip", "재시작 20분 뒤부터 측정")
     assert not contains(result, "ok", "무게 판정") and not contains(result, "fail", "무게 판정")
+
+
+def test_fix478_default_window_is_two_hours():
+    """🩹 Fix 478: 4시간봉 주기 하나가 30분 창 평균을 끌어올리던 것 → 기본 창 2시간."""
+    import inspect
+    from importlib import util
+    import pathlib
+    p = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "verify_ip_weight.py"
+    spec = util.spec_from_file_location("vipw", p)
+    m = util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert m.WINDOW_MIN == 120 and inspect.signature(m.check_ip_weight).parameters["window_min"].default == 120
