@@ -103,7 +103,8 @@ services:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - ./deploy/prometheus/alerts-binance-auto-trader.yml:/etc/prometheus/alerts-binance-auto-trader.yml
     ports:
-      - "9090:9090"
+      # 🔒 Fix 482 (2026-10-23 사장님 「3번 Prometheus 닫기」): 인터넷 공개 → 서버 안에서만 (그라파나는 내부망으로 읽음)
+      - "127.0.0.1:9090:9090"
     depends_on:
       - api
 

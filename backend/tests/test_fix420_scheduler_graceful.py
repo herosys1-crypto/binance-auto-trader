@@ -47,7 +47,15 @@ class FakeRedis:
             n += self.data.pop(k, None) is not None
         return n
 
-    def eval(self, script, numkeys, key, owner):
+    def eval(self, script, numkeys, key, owner, *rest):
+        if "expire" in script:                       # Fix 483 refresh Lua 흉내: 내 값 연장 · 없으면(종료 아님) 다시 잡음
+            ttl, stopping = rest
+            cur = self.get(key)
+            if cur is not None and cur.decode() == owner:
+                return int(self.expire(key, int(ttl)))
+            if cur is None and stopping == "0":
+                return 2 if self.set(key, owner, nx=True, ex=int(ttl)) else 0
+            return 0
         assert numkeys == 1 and "get" in script and "del" in script
         cur = self.get(key)
         if cur is not None and cur.decode() == owner:
@@ -202,5 +210,5 @@ def test_runner_wiring():
     src = inspect.getsource(R.start_scheduler)
     assert "wait_for_leader(guard)" in src
     assert "signal.signal(signal.SIGTERM, _on_signal)" in src
-    assert "args=(redis_client, _stopping)" in src
+    assert "args=(redis_client, _stopping, guard)" in src   # Fix 483: 하트비트가 리더 잠금도 확인
     assert "release_job" not in src and "sched:job" not in src   # 잡 잠금은 건드리지 않는다

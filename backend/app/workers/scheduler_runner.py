@@ -113,18 +113,27 @@ def _set_scheduler_health(is_leader: bool, redis_client=None) -> None:
         pass
 
 
-def _scheduler_heartbeat_loop(redis_client, stop=None) -> None:
-    """30초마다 Redis 에 scheduler heartbeat 갱신 — 별도 thread. Fix 420: 종료 신호(stop) 뒤엔 health 키를 되살리지 않는다."""
+HEARTBEAT_SECONDS = 10      # Claude가 정함 — 리더 잠금 TTL 30초의 1/3 (Fix 483)
+
+
+def _scheduler_heartbeat_loop(redis_client, stop=None, guard=None) -> None:
+    """30초마다 Redis 에 scheduler heartbeat 갱신 — 별도 thread. Fix 420: 종료 신호(stop) 뒤엔 health 키를 되살리지 않는다.
+    🩹 Fix 483: guard 가 있으면 리더 잠금도 확인·연장(사라졌으면 다시 잡음)하고, **리더일 때만** health "1" — 아니면 지운다
+    (10/22 사고 때 리더가 아닌데도 health 가 「정상」이라 20시간 정지를 가렸다)."""
     import time
     while not (stop is not None and stop.is_set()):
         try:
-            redis_client.setex(HEALTH_KEY_SCHEDULER_LEADER, HEALTH_TTL_SECONDS, "1")
+            if guard is None or guard.refresh_leader():
+                redis_client.setex(HEALTH_KEY_SCHEDULER_LEADER, HEALTH_TTL_SECONDS, "1")
+            else:
+                redis_client.delete(HEALTH_KEY_SCHEDULER_LEADER)
         except Exception as e:
             logger.warning("scheduler heartbeat thread 실패: %s", e)
+        # Fix 483 교차 감사: 주기 = 리더 TTL(30초)이면 잡이 막힐 때 잠금이 만료돼 헛 「다시 잡음」 → TTL/3
         if stop is not None:
-            stop.wait(30)
+            stop.wait(HEARTBEAT_SECONDS)
         else:
-            time.sleep(30)
+            time.sleep(HEARTBEAT_SECONDS)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -251,7 +260,7 @@ def start_scheduler() -> None:
     signal.signal(signal.SIGTERM, _on_signal)      # Fix 420: PID 1 은 기본 처리기가 없다
     signal.signal(signal.SIGINT, _on_signal)
 
-    hb_thread = threading.Thread(target=_scheduler_heartbeat_loop, args=(redis_client, _stopping), daemon=True, name="scheduler-heartbeat")
+    hb_thread = threading.Thread(target=_scheduler_heartbeat_loop, args=(redis_client, _stopping, guard), daemon=True, name="scheduler-heartbeat")
     hb_thread.start()
     print("[scheduler] heartbeat thread started")
 
