@@ -983,6 +983,17 @@ def start_scheduler() -> None:
         id="paper_retention", replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🗄 Fix 480 (2026-10-22 사장님 「다음으로 진행」): 보관 일수(기본 30일) 지난 포지션 스냅샷 지우기 — 전략별 최신 행은 남김.
+    #   하루 한 번 KST 12:50 — Fix 428 정리(12:40) 바로 뒤. 묶음 5,000행 × 최대 60.
+    def _position_retention():
+        from app.workers.position_retention_worker import run_position_retention_once
+        run_position_retention_once()
+    scheduler.add_job(
+        guarded_job("position_retention", 1800, _position_retention),
+        trigger=CronTrigger(hour=12, minute=50, timezone="Asia/Seoul"),
+        id="position_retention", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     # 🧑‍⚖️ Fix 430 (2026-10-10 사장님): 전략 운영팀 성적표 — 가상매매 30일로 규칙 교차 검증·장세별 배치표·전진 검증.
     #   하루 한 번 KST 09:40 (일봉 마감 09:00 + 가상 일봉 판정 창 뒤). 읽기·기록 전용(Redis council:latest + 텔레그램 1통).
     def _strategy_council():

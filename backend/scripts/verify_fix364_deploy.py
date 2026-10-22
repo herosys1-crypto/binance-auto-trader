@@ -572,6 +572,17 @@ def check_external_strategies() -> None:
             except Exception:  # noqa: BLE001
                 _n_snap = "?"
             print(f"  ▸ 💰 Fix 479 잔액 기록 {_n_snap}개 (매시 7분 · 120일)")
+            try:                                                                  # 🗄 Fix 480
+                from sqlalchemy import text as _t480
+                from app.core.database import SessionLocal as _S480
+                _d = _S480()
+                try:
+                    _n480, _old480 = _d.execute(_t480("select count(*), min(snapshot_time) from positions")).first()
+                finally:
+                    _d.close()
+                print(f"  ▸ 🗄 Fix 480 포지션 스냅샷 {_n480:,}행 · 가장 오래된 {_old480} (매일 KST 12:50 · 기본 30일 보관)")
+            except Exception as _e480:  # noqa: BLE001
+                skip(f"Fix 480 포지션 스냅샷 조회 실패: {_e480!r}")
             print(f"  ▸ 그림자 신호(7일 보관): 후지모토 {n_fj} · 마하세븐 {n_m7} · EMA 눌림 {n_ep} · 볼린저 EMA {n_bb} · 볼린저 파동 {n_bw} · 3중 이평 {n_tm}")
         except Exception as e:  # noqa: BLE001
             skip(f"Redis 조회 실패: {e!r}")
