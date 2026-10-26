@@ -14,6 +14,9 @@
 10. **개발 방식 = Duel 파이프라인 (2026-10-02 사장님 「모두 /duel 로 개발」).** 코드 개발은 `/duel 과제명 요구사항`(GPT·Claude 초안 + 서로 교차 감사) → `/merge 과제명`(리드 병합·테스트 → Gemini 심판 PASS/FAIL) 순서로 한다.
     작업 폴더 `C:\ai_hq\02_Output\Duel_Lab\<과제명>\`, PASS 뒤 이 저장소에 반영. 요구사항에 비밀·서버 정보 금지(외부 AI 3곳으로 전송). **규칙 3 우선** — 매매 판정 코드는 초안·감사를 참고만 하고 리드가 직접 쓴다.
     예외(듀얼 생략): 한두 줄 수정 · 문서만 · 운영 DB 읽기 측정 쿼리 · 긴급 장애 대응(사후 보고).
+    **절약 모드(2026-10-26 사장님 「gpt codex 에서 개발하고 제미나이 검증과 클로드에서도 검증으로 코인사용을 최소화 … 주간이용시간이 종료직전부터 … 중요한 코딩개발은 클로드 코더가 가능할때」)**:
+    `C:\ai_hq\tools\duel_mode.py` 가 saver(주간 리셋 전 N시간 또는 Claude 사용량 한도 뒤)면 초안·수정 = Codex · 감사 = Gemini + Claude(Sonnet, 한도면 생략) · 심판 = Gemini.
+    매매 판정 코드·실자금 경로·보안은 `--important` 로 불러 saver 에선 Claude 대기열(`_claude_queue.md`)에 넣고 normal 이 되면 리드가 개발한다.
 11. **개발 기록 = Obsidian (2026-10-03 사장님 「지금까지 개발을 정리해서 obsidian 에 기록하고 앞으로도 계속 기록」).** 볼트 `C:\Users\user\OneDrive\Obsidian\바이낸스 자동매매\`.
     개발·판정·배포 확인이 하나 끝날 때마다(커밋 직후) 같은 턴에 기록한다: ① `Fix/Fix NNN.md`(속성 fix·date·status·commit·duel·summary — `템플릿/Fix 템플릿.md` 모양)
     또는 `판정·측정/<제목>.md` ② `개발일지/YYYY-MM-DD.md` 에 한 줄 + 링크 ③ `00 대시보드.md` 의 배포 대기·진행 중·결정 대기·최근 개발 갱신.
