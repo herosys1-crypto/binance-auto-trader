@@ -8,6 +8,8 @@
 4. **숫자를 정할 땐 설정 키로 뺀다.** 에이전트가 고른 값은 `system_settings` 키로 두고 문서에 「Claude가 정함」이라 적는다. 사장님이 말한 숫자는 verbatim 으로 남긴다.
 5. **가족별 적용.** 변경은 전략 가족(OBV 자동 / v219 사다리 / 볼밴 분할 / 재진입) 단위로, 공용 경로에는 넣지 않는다.
 6. **완료 = 실검증.** 테스트 통과 + 배포 뒤 `backend/scripts/verify_fix364_deploy.py`(코드·프로세스·운영 3층) 로 확인한 뒤에만 「완료」라고 말한다. 반박 검증(여러 렌즈)을 거친 뒤 실자금 경로를 배포한다.
+    **수학 기반 검증(2026-10-29 사장님 「지금 프로젝트에서도 사용할수 있게해줘」)**: 돈·자본·손익·잠금 같은 계산·상태 코드를 바꾸면 불변식을 적고 `backend/tests/properties/`(Hypothesis)에 속성 테스트를 더한다.
+    실행 `py -3.14 -m pytest backend/tests/properties`(깊게: `HYPOTHESIS_PROFILE=nightly`) 또는 `python C:i_hq	ools\pbt_check.py tests/properties`. 반례는 테스트를 약하게 하지 말고 원인을 본다 · 표준 `C:i_hq_Wiki\개발_수학검증_PBT_표준.md`.
 7. **`git stash` 금지**(워크트리 공유). 배포 = VPS `git pull origin main` + `docker compose restart api scheduler` (+ `alembic upgrade head`).
 8. **줄끝.** 일부 파일은 CRLF(`strategy_service.py`, `strategy_status.py`, `execution_service.py`, `auto_long_at_bottom_worker.py`, `capital_calculator.py`, `models/__init__.py`) — 패치 스크립트는 줄끝을 보존한다.
 9. **문서 위치.** 사양·검증은 `docs/spec/`, 학습은 `docs/learning/`, 운영 지침은 `docs/`. Ruflo 사용법은 `docs/RUFLO_GUIDE_2026-09-09.md`.
