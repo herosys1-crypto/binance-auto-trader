@@ -9,13 +9,16 @@
 5. **가족별 적용.** 변경은 전략 가족(OBV 자동 / v219 사다리 / 볼밴 분할 / 재진입) 단위로, 공용 경로에는 넣지 않는다.
 6. **완료 = 실검증.** 테스트 통과 + 배포 뒤 `backend/scripts/verify_fix364_deploy.py`(코드·프로세스·운영 3층) 로 확인한 뒤에만 「완료」라고 말한다. 반박 검증(여러 렌즈)을 거친 뒤 실자금 경로를 배포한다.
     **수학 기반 검증(2026-10-29 사장님 「지금 프로젝트에서도 사용할수 있게해줘」)**: 돈·자본·손익·잠금 같은 계산·상태 코드를 바꾸면 불변식을 적고 `backend/tests/properties/`(Hypothesis)에 속성 테스트를 더한다.
-    실행 `py -3.14 -m pytest backend/tests/properties`(깊게: `HYPOTHESIS_PROFILE=nightly`) 또는 `python C:i_hq	ools\pbt_check.py tests/properties`. 반례는 테스트를 약하게 하지 말고 원인을 본다 · 표준 `C:i_hq_Wiki\개발_수학검증_PBT_표준.md`.
+    실행 `py -3.14 -m pytest backend/tests/properties`(깊게: `HYPOTHESIS_PROFILE=nightly`) 또는 `python C:\ai_hq\tools\pbt_check.py tests/properties`. 반례는 테스트를 약하게 하지 말고 원인을 본다 · 표준 `C:i_hq_Wiki\개발_수학검증_PBT_표준.md`.
 7. **`git stash` 금지**(워크트리 공유). 배포 = VPS `git pull origin main` + `docker compose restart api scheduler` (+ `alembic upgrade head`).
 8. **줄끝.** 일부 파일은 CRLF(`strategy_service.py`, `strategy_status.py`, `execution_service.py`, `auto_long_at_bottom_worker.py`, `capital_calculator.py`, `models/__init__.py`) — 패치 스크립트는 줄끝을 보존한다.
 9. **문서 위치.** 사양·검증은 `docs/spec/`, 학습은 `docs/learning/`, 운영 지침은 `docs/`. Ruflo 사용법은 `docs/RUFLO_GUIDE_2026-09-09.md`.
 10. **개발 방식 = Duel 파이프라인 (2026-10-02 사장님 「모두 /duel 로 개발」).** 코드 개발은 `/duel 과제명 요구사항`(GPT·Claude 초안 + 서로 교차 감사) → `/merge 과제명`(리드 병합·테스트 → Gemini 심판 PASS/FAIL) 순서로 한다.
     작업 폴더 `C:\ai_hq\02_Output\Duel_Lab\<과제명>\`, PASS 뒤 이 저장소에 반영. 요구사항에 비밀·서버 정보 금지(외부 AI 3곳으로 전송). **규칙 3 우선** — 매매 판정 코드는 초안·감사를 참고만 하고 리드가 직접 쓴다.
     예외(듀얼 생략): 한두 줄 수정 · 문서만 · 운영 DB 읽기 측정 쿼리 · 긴급 장애 대응(사후 보고).
+    **경로 먼저(2026-11-05 사장님 「모든 개발에 사용하는 에이전트팀을 개선해줘」 — D-104)**: 시작할 때 `python C:\ai_hq\tools\dev_flow.py route --git <저장소>` 또는 `--files …` 로 경로를 고른다.
+    solo(문서·읽기·한두 줄) → `gate` / **pair(기본 — 일반 코드·UI·API·도구)** → `/pair`(작업자 + 다른 모델 검토자 1명, 시험 먼저, 왕복 최대 2회) / **duel(돈·주문·권한·비밀·스키마·`workers/*`)** → `/duel`·`/merge` 그대로. 위험 경로는 낮출 수 없다(`tools/dev_flow.json`).
+    팀 편성: 기본은 혼자 또는 2명. 아래 Ruflo 절의 스웜·다인 파이프라인 표는 쓰지 않는다 — 서로 독립인 조사·구현을 나눌 때만 대화 없는 독립 작업자 + 리드 취합으로, 파일 범위를 겹치지 않게.
     **절약 모드(2026-10-26 사장님 「gpt codex 에서 개발하고 제미나이 검증과 클로드에서도 검증으로 코인사용을 최소화 … 주간이용시간이 종료직전부터 … 중요한 코딩개발은 클로드 코더가 가능할때」)**:
     `C:\ai_hq\tools\duel_mode.py` 가 saver(주간 리셋 전 N시간 또는 Claude 사용량 한도 뒤)면 초안·수정 = Codex · 감사 = Gemini + Claude(Sonnet, 한도면 생략) · 심판 = Gemini.
     매매 판정 코드·실자금 경로·보안은 `--important` 로 불러 saver 에선 Claude 대기열(`_claude_queue.md`)에 넣고 normal 이 되면 리드가 개발한다.
