@@ -192,7 +192,7 @@ def build_report(rows: Iterable[Row], *, lo: Any = 0.4, hi: Any = 0.6, train_day
         return sel, covered >= (p["train_days"] + 1) // 2
 
     D_days = []
-    tot = {"sel": [0, 0.0], "all": [0, 0.0], "base": [0, 0.0]}
+    tot = {"sel": [0, 0.0], "all": [0, 0.0], "base": [0, 0.0], "base_m": [0, 0.0], "edge": [0, 0.0]}
     for D in days:
         sel, seen = pick(D)
         if not seen:
@@ -202,10 +202,19 @@ def build_report(rows: Iterable[Row], *, lo: Any = 0.4, hi: Any = 0.6, train_day
         an, as_ = day_all[D]
         bn = sum(base_d[(sd, D)][0] for sd in ("LONG", "SHORT") if (sd, D) in base_d)
         bs = sum(base_d[(sd, D)][1] for sd in ("LONG", "SHORT") if (sd, D) in base_d)
-        for k, n_, s_ in (("sel", sn, ss), ("all", an, as_), ("base", bn, bs)):
+        # 🎯 맞춘 무작위 (11/08): 「무작위」 base 는 LONG·SHORT 섞인 평균이라 선택이 한쪽(SHORT)에 몰리면 시장 방향을 실력으로 착각한다
+        #    → 선택한 칸마다 같은 날·같은 방향·같은 장세 무작위 평균을 같은 건수만큼 빼서 「선택이 무작위보다 나은 정도」(edge)를 잰다.
+        mn, ms, ens = 0, 0.0, 0.0
+        for (rule, side, b), (n_, s_) in by_day[D].items():
+            if (rule, side, b) in sel:
+                m = bm_db.get((side, D, b))
+                if m is not None:
+                    mn += n_; ms += n_ * m; ens += s_ - n_ * m   # noqa: E702
+        for k, n_, s_ in (("sel", sn, ss), ("all", an, as_), ("base", bn, bs), ("base_m", mn, ms), ("edge", mn, ens)):
             tot[k][0] += n_; tot[k][1] += s_   # noqa: E702
         D_days.append({"d": D.isoformat(), "cells": len(sel), "n_sel": sn, "sel": _r(ss / sn if sn else None),
-                       "all": _r(as_ / an if an else None), "base": _r(bs / bn if bn else None)})
+                       "all": _r(as_ / an if an else None), "base": _r(bs / bn if bn else None),
+                       "base_m": _r(ms / mn if mn else None), "edge": _r(ens / mn if mn else None)})
     scored = [x for x in D_days if x["sel"] is not None]
     worst = min(scored, key=lambda x: x["sel"]) if scored else None
     D_walk = {
@@ -214,6 +223,7 @@ def build_report(rows: Iterable[Row], *, lo: Any = 0.4, hi: Any = 0.6, train_day
                   **{f"{k}_n": v[0] for k, v in tot.items()}},
         "sel_gt_all_days": sum(1 for x in scored if x["all"] is not None and x["sel"] > x["all"]),
         "sel_pos_days": sum(1 for x in scored if x["sel"] > 0),
+        "edge_pos_days": sum(1 for x in scored if x["edge"] is not None and x["edge"] > 0),
         "n_days": len(D_days),
         "worst": {"d": worst["d"], "sel": worst["sel"]} if worst else None,
     }

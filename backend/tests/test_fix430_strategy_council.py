@@ -142,3 +142,34 @@ def test_worker_reads_roi_as_text():
     from app.workers import strategy_council_worker as W
     assert "::float AS roi" not in W.SQL.text and "stream_results" in pathlib.Path(W.__file__).read_text(encoding="utf-8")
     assert W.to_row(NS(rule="a", side="LONG", d=D0, roi="abc", mb="x", rf=None)) is None
+
+
+def test_walk_edge_vs_matched_baseline_not_mixed():
+    """11/08: 선택이 SHORT 에 몰리고 시장이 내리면 섞인 「무작위」(LONG 손실 포함)보다 좋아 보인다.
+    맞춘 무작위(같은 날·방향·장세) 대비 edge 는 실력이 없으면 0 근처여야 한다."""
+    rnd = random.Random(3)
+    rows = []
+    for i in range(30):
+        d = _day(i)
+        for _ in range(40):
+            rows.append(Row("baseline_LONG", "LONG", d, rnd.gauss(-2, 0.5), 0.5))
+            rows.append(Row("baseline_SHORT", "SHORT", d, rnd.gauss(2, 0.5), 0.5))
+            rows.append(Row("dumb_short", "SHORT", d, rnd.gauss(2, 0.5), 0.5))    # 무작위 SHORT 와 같은 분포 = 실력 0
+    t = SC.build_report(rows)["D_walk"]["total"]
+    assert t["sel"] > t["base"] + 1.5          # 섞인 무작위 대비로는 「잘하는」 것처럼 보인다
+    assert abs(t["edge"]) < 0.2                # 맞춘 무작위 대비로는 실력 0
+    assert abs(t["base_m"] - 2) < 0.2
+    assert t["edge_n"] == t["sel_n"]
+
+
+def test_walk_edge_skips_cells_without_baseline():
+    rows = []
+    for i in range(20):
+        d = _day(i)
+        rows += [Row("good", "LONG", d, 3.0, 0.5)] * 40
+        if i % 2 == 0:
+            rows += [Row("baseline_LONG", "LONG", d, 1.0, 0.5)] * 5
+    W = SC.build_report(rows)["D_walk"]
+    assert W["total"]["edge"] == 2.0
+    assert W["total"]["edge_n"] < W["total"]["sel_n"]
+    assert all(x["edge"] is None for x in W["days"] if date.fromisoformat(x["d"]).toordinal() % 2 != _day(0).toordinal() % 2)
