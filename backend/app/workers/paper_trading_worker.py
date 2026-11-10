@@ -144,6 +144,15 @@ def _int_setting(db: Any, key: str, default: int, lo: int, hi: int) -> int:
         return default
 
 
+RULES_OFF_KEY = "paper_rules_off"   # 🧹 Fix 486 (사장님 11/11 「무작위보다 나쁜 11개 전략 지금 가상매매에서 꺼줘」) — 쉼표 목록
+
+
+def rules_off_set(raw: str | None) -> frozenset[str]:
+    """`paper_rules_off` → 새 가상 진입을 건너뛸 규칙 키. 기준선(무작위)은 비교 기준이라 끌 수 없다."""
+    keys = {s.strip() for s in (raw or "").split(",") if s.strip()}
+    return frozenset(keys - set(PT.BASELINE_KEYS))
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 1) 실시간 사이클 — 15분마다
 # ══════════════════════════════════════════════════════════════════════
@@ -289,6 +298,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
             process_symbols = process_symbols[:limit_symbols]
 
         rule_side = {r.key: r.side for r in CL.RULES}
+        rules_off = rules_off_set(_setting(db, RULES_OFF_KEY))   # 🧹 Fix 486: 진입만 건너뜀 (판정·합의·열린 거래는 그대로)
         now = datetime.now(timezone.utc)
         now_ms = _now_ms()
         opened = managed = closed = processed = 0
@@ -461,7 +471,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
             chg3 = daily.get(sym, {}).get("chg_3d")
             chg5 = daily.get(sym, {}).get("chg_5d")
             for key, hit in fired.items():
-                if not hit or key in open_rule_set:      # 이미 열린 같은 (심볼, 규칙) = 한 번에 하나만
+                if not hit or key in open_rule_set or key in rules_off:      # 이미 열린 같은 (심볼, 규칙) = 한 번에 하나만 · Fix 486 끈 규칙
                     continue
                 side = PT.BASELINE_KEYS.get(key) or rule_side.get(key)
                 if side is None:
