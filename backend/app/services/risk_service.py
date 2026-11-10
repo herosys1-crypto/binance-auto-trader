@@ -10,6 +10,7 @@ from app.models.risk_event import RiskEvent
 from app.observability.metrics import strategy_stop_loss_total
 from app.repositories.position_repository import PositionRepository
 from app.repositories.strategy_repository import StrategyRepository
+from app.services import sl_margin_follow as _SMF   # 🛡 Fix 486 증거금 추가 → 손절선 추종
 from app.services.strategy_calculator import StrategyCalculator, SymbolRule
 
 # 트레일링 익절 / 크라이시스 / 손실 알림 정책 상수 — 2026-05-14 Phase 2 centralize.
@@ -189,6 +190,84 @@ class RiskService:
             logger.exception("[Fix235] 다음 단계 ROI 산출 실패 — 게이트는 옛 동작 유지")
             return None
 
+    # ══════════════════════════════════════════════════════════════════════
+    # 🛡 Fix 486 (2026-11-11) — 증거금을 넣으면 손절선도 따라 내려가게
+    #   사장님: "증거금을 넣으면 손절선도 따라 내려가게" · "운영중인 인스턴스도 모두 같이 적용되게 해줘"
+    #   판정은 순수 함수(sl_margin_follow.py). 여기서는 입력만 모은다:
+    #     · A = DB 에 기록된 증거금 추가 합 (RiskEvent ADD_MARGIN_SUCCESS payload.amount)
+    #     · 최신 포지션 스냅샷(격리증거금·미실현손익·청산가·수량·평단·시각)
+    #   어떤 실패든 「미적용」(옛 판정)으로 돌아간다 — 손절을 느슨하게 만드는 쪽으로 실패하지 않는다.
+    # ══════════════════════════════════════════════════════════════════════
+    def _added_margin_recorded(self, strategy_id: int) -> Decimal:
+        """이 전략에 사람이 넣은 증거금 합(USDT). 기록이 없거나 읽기 실패면 0."""
+        from sqlalchemy import select
+        total = Decimal("0")
+        rows = self.db.execute(
+            select(RiskEvent.event_payload).where(
+                RiskEvent.strategy_instance_id == strategy_id,
+                RiskEvent.event_type == "ADD_MARGIN_SUCCESS",
+            )
+        ).all()
+        for (payload,) in rows:
+            try:
+                amt = Decimal(str((payload or {}).get("amount")))
+            except Exception:  # noqa: BLE001 — 깨진 한 줄 때문에 전체를 버리지 않는다
+                continue
+            if amt.is_finite() and amt > 0:
+                total += amt
+        return total
+
+    def _margin_follow(self, strategy, sl_pct, leverage, avg_entry, mark_price, latest_position=None):
+        """증거금 추가를 반영한 유효 손절% (FollowResult). 실패 = 미적용."""
+        _base = Decimal(str(sl_pct))
+        try:
+            from app.services.system_settings_service import SystemSettingsService
+            ss = SystemSettingsService(self.db)
+            if not ss.get_bool(_SMF.S_ENABLED, _SMF.DEFAULT_ENABLED):
+                return _SMF.FollowResult(False, _base, False, Decimal("0"), "꺼짐")
+            added = self._added_margin_recorded(strategy.id)
+            if added <= 0:
+                return _SMF.FollowResult(False, _base, False, Decimal("0"), "증거금 추가 기록 없음")
+            # 설정값은 안전 범위로 자른다 (버퍼 0 이면 거래소 청산이 먼저 올 수 있다)
+            buf = min(max(ss.get_decimal(_SMF.S_LIQ_BUFFER, _SMF.DEFAULT_LIQ_BUFFER_PCT), Decimal("0.5")), Decimal("20"))
+            age_max = int(min(max(ss.get_decimal(_SMF.S_MAX_AGE, Decimal(_SMF.DEFAULT_MAX_AGE_SEC)), Decimal("30")), Decimal("900")))
+            min_extra = min(max(ss.get_decimal(_SMF.S_MIN_EXTRA, _SMF.DEFAULT_MIN_EXTRA_PCT), Decimal("0")), Decimal("50"))
+            # 스냅샷은 positionRisk 동기화 것만 쓴다. 사용자 스트림(ACCOUNT_UPDATE) 스냅샷은 isolated_margin 칸이
+            #   「격리지갑(iw)」이라 뜻이 다르고(W 가 손실만큼 부풀어 보인다) 청산가도 전략의 옛 값이다.
+            from sqlalchemy import select as _select
+            from app.models.position import Position as _Position
+            pos = self.db.execute(
+                _select(_Position)
+                .where(_Position.strategy_instance_id == strategy.id, _Position.source == _SMF.SNAPSHOT_SOURCE)
+                .order_by(_Position.snapshot_time.desc(), _Position.id.desc())
+                .limit(1)
+            ).scalars().first()
+            age = None
+            snap_time = getattr(pos, "snapshot_time", None)
+            if snap_time is not None:
+                if snap_time.tzinfo is None:
+                    snap_time = snap_time.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - snap_time).total_seconds()
+            res = _SMF.follow(
+                side=strategy.side, sl_pct=_base, leverage=leverage,
+                qty=strategy.current_position_qty, avg_entry=avg_entry, mark_price=mark_price,
+                added_margin_recorded=added,
+                snap_qty=getattr(pos, "position_amt", None),
+                snap_entry_price=getattr(pos, "entry_price", None),
+                snap_isolated_margin=getattr(pos, "isolated_margin", None),
+                snap_unrealized_pnl=getattr(pos, "unrealized_pnl", None),
+                snap_liq_price=getattr(pos, "liquidation_price", None),
+                snap_margin_type=getattr(pos, "margin_type", None),
+                snapshot_age_sec=age,
+                params=_SMF.FollowParams(True, buf, age_max, min_extra),
+                snap_side=getattr(pos, "position_side", None) or getattr(pos, "side", None),
+            )
+            logger.info("[Fix486] #%s %s 증거금 추종: %s", strategy.id, strategy.symbol, res.reason)
+            return res
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[Fix486] #%s 증거금 추종 계산 실패 → 옛 판정: %s", getattr(strategy, "id", "?"), e)
+            return _SMF.FollowResult(False, _base, False, Decimal("0"), f"계산 실패 — 옛 판정 ({type(e).__name__})")
+
     def _stage_gate_exempt(self, strategy) -> tuple[bool, str]:
         """단계 게이트(「단계가 남으면 손절 보류」)를 **면제**받는가.
 
@@ -341,7 +420,15 @@ class RiskService:
         # ROI = 가격 변동 × leverage
         unrealized_roi = price_change_pct * leverage
         # SL 발동: ROI <= -80%
-        is_stop = unrealized_roi <= -sl_pct
+        # 🛡 Fix 486 (2026-11-11 사장님 「증거금을 넣으면 손절선도 따라 내려가게」 · 「운영중인 인스턴스도 모두」):
+        #   사람이 「증거금 추가」를 한 전략은 추가분만큼 손절%가 넓어지고, 거래소 청산가 앞 버퍼에서 닫는다.
+        #   기록된 추가가 없거나 스냅샷이 이상하면 _fol.applied=False = 옛 판정 그대로 (sl_margin_follow.py).
+        #   옛 손절선을 넘었을 때만 계산한다 (I1: 새 판정이 손절 ⇒ 옛 판정도 손절 → 그 전엔 볼 필요가 없다).
+        if unrealized_roi <= -sl_pct:
+            _fol = self._margin_follow(strategy, sl_pct, leverage, avg_entry, mark_price, latest_position)
+        else:
+            _fol = _SMF.FollowResult(False, sl_pct, False, Decimal("0"), "옛 손절선 전")
+        is_stop = _SMF.should_stop(roi=unrealized_roi, sl_pct=sl_pct, result=_fol)
 
         # 🌟 2026-08-06 v130 사장님 CRITICAL 요구:
         # '손실설정시 모든 단계가 진입한 상태에서 설정한 손실일때 정산이 진행되어야 해
@@ -375,6 +462,9 @@ class RiskService:
                     f"평단 {avg_entry} → 현재가 {mark_price} = 가격 변동 {price_change_pct:.2f}% "
                     f"× lev {leverage}x = ROI {unrealized_roi:.2f}% (= 한도 -{sl_pct}% 도달) → 강제 전량 청산. "
                     f"(= 사장님 사상 2026-06-11 v4 — 포지션 진입가 기준 ROI -{sl_pct}%, 자본 무관!)"
+                    + (f" 🛡 Fix 486: {_fol.reason}"
+                       + (" — 거래소 청산 가드선 도달로 청산" if _fol.guard_hit and unrealized_roi > -_fol.sl_pct_effective else "")
+                       if _fol.applied else "")
                 ),
                 event_payload={
                     "avg_entry_price": str(avg_entry),
@@ -383,6 +473,12 @@ class RiskService:
                     "leverage": str(leverage),
                     "unrealized_roi": str(unrealized_roi),
                     "sl_pct": str(sl_pct),
+                    "margin_follow": {
+                        "applied": _fol.applied, "sl_pct_effective": str(_fol.sl_pct_effective),
+                        "extra_margin": str(_fol.extra_margin), "guard_hit": _fol.guard_hit,
+                        "guard_price": str(_fol.guard_price) if _fol.guard_price is not None else None,
+                        "reason": _fol.reason,
+                    },
                     "current_loss_amount": str(current_loss_amount),
                     "side": strategy.side,
                 },
@@ -433,6 +529,18 @@ class RiskService:
             side=side, avg_entry=avg_entry, mark_price=mark_price,
             leverage=leverage, enabled=enabled, threshold=threshold,
         )
+        # 🛡 Fix 486 (2026-11-11): 강제손절도 증거금 추가를 따라간다 (최종 손절과 같은 배율·같은 청산 가드).
+        #   옛 기준을 넘었을 때만 계산하고, 넓어진 기준 또는 (청산 가드 + 옛 기준)일 때만 발동 —
+        #   옛 규칙보다 일찍 닫는 경우는 없다.
+        if is_force:
+            _fol_f = self._margin_follow(strategy, threshold, leverage, avg_entry, mark_price, None)
+            if _fol_f.applied:
+                is_force = _fol_f.guard_hit or force_sl_should_trigger(
+                    side=side, avg_entry=avg_entry, mark_price=mark_price,
+                    leverage=leverage, enabled=enabled, threshold=_fol_f.sl_pct_effective,
+                )
+                if not is_force:
+                    logger.info("[Fix486] #%s %s 강제손절 보류 — %s", strategy.id, strategy.symbol, _fol_f.reason)
         # 🌟 2026-08-06 v130 사장님 CRITICAL:
         # 다음 단계 미진입 시 = force SL도 발동 X! (손실 회복 기회 유지!)
         #

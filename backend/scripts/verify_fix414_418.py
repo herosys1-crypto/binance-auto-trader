@@ -75,6 +75,10 @@ CODE_MARKERS = {
     "app/services/ichikijun_exit.py": ("def kijun_break(", 'MODE_DEFAULT = "shadow"'),                     # 467 기준선 청산 판정
     "app/workers/ichikijun_exit_worker.py": ("def run_ichikijun_exit_once(", "def _close("),                # 467 워커
     "app/services/ichikijun_promo.py": ("def gate(", "def transitions("),                                 # 471 승격 관문
+    "app/services/sl_margin_follow.py": ("def follow(", "def should_stop(",                              # 486 증거금 추가 → 손절선 추종
+                                         'SNAPSHOT_SOURCE = "POSITION_RISK_SYNC"'),
+    "app/services/risk_service.py": ("_SMF.should_stop(roi=unrealized_roi", "_Position.source == _SMF.SNAPSHOT_SOURCE",  # 486 연결
+                                     "threshold=_fol_f.sl_pct_effective"),
 }
 STOPPING_STALE_SEC = 10 * 60      # Claude가 정함 — 감지 5분 + reconcile 2분 주기 두 번 여유
 REQ_COUNT_KEY = "binance:reqcount:{minute}"   # client._REQ_COUNT_KEY 와 같은 값 (보관 15분)
