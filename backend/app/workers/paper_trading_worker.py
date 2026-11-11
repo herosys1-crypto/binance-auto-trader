@@ -317,6 +317,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
         _incr = _float_setting(db, KLINE_INCR_KEY, 1.0, 0.0, 1.0) >= 0.5
         _open_write_s = _float_setting(db, OPEN_WRITE_KEY, 60.0, 0.0, 1440.0) * 60.0     # 💾 Fix 451
         PT.set_costs(_setting(db, "paper_fee_pct"), _setting(db, "paper_slip_pct"))      # 💸 Fix 452
+        PT.set_limit_params(_setting(db, "dir_limit_valid_bars"), _setting(db, "paper_maker_fee_pct"))   # 🧭 Fix 488
         write_skipped = 0
         _kc0 = _KC.stats()
 
@@ -374,7 +375,7 @@ def run_paper_trading_once(decrypt_text, *, limit_symbols: int | None = None) ->
             open_rule_set: set[str] = set()
             for row in open_rows:
                 trade_map = {"side": row.side, "entry_price": float(row.entry_price),
-                            "entry_bar_ts": int(row.entry_bar_ts),
+                            "entry_bar_ts": int(row.entry_bar_ts), "rule": row.rule,     # 🧭 Fix 488: 기준선 행 지정가 엔진
                             "tp1_pct": float(row.tp1_pct) if row.tp1_pct is not None else None,
                             "chg_24h": float(row.chg_24h) if row.chg_24h is not None else None}
                 try:

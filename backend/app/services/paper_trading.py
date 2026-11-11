@@ -102,7 +102,57 @@ def set_costs(fee_pct: float | None, slip_pct: float | None) -> float:
             return d
         return f if 0.0 <= f <= 1.0 else d
     _COST[0] = cost_roi(ok(fee_pct, FEE_PCT), ok(slip_pct, SLIP_PCT))
+    _LMT["fee"], _LMT["slip"] = ok(fee_pct, FEE_PCT), ok(slip_pct, SLIP_PCT)     # 🧭 Fix 488: 지정가 엔진 청산 쪽 비용
     return _COST[0]
+
+
+# 🧭 Fix 488 (방향 엔진 v1 그림자 · D-119): 기준선 행에만 지정가 진입 엔진 `live_lmt`.
+#   진입 종가에 지정가 → 유효 봉(기본 1) 안에 그 가격을 **뚫고 지나가야** 체결(닿기만 = 미체결, 보수적) → 체결 봉 다음부터 live 청산.
+#   비용 = (메이커 + 수수료 + 슬리피지) × 레버 — 진입은 메이커(슬리피지 없음), 청산은 시장가. 기본 (0.02+0.05+0.05)×2 = 0.24.
+MAKER_FEE_PCT = 0.02         # 실계정 11/12 측정 메이커 0.0200% (D-118)
+LMT_VALID_BARS = 1           # 「Claude가 정함」 — 24개월: 1봉 체결 95% · 4봉 97% (D-119)
+LMT_ENGINE = "live_lmt"
+_LMT = {"valid": LMT_VALID_BARS, "maker": MAKER_FEE_PCT, "fee": FEE_PCT, "slip": SLIP_PCT}
+
+
+def set_limit_params(valid: Any, maker: Any) -> None:
+    """워커가 사이클마다 설정(dir_limit_valid_bars · paper_maker_fee_pct)으로 부른다. 범위 밖·숫자 아님 = 기본값."""
+    try:
+        f = float(valid)
+        _LMT["valid"] = int(f) if f == f and 1 <= f <= 16 else LMT_VALID_BARS     # NaN·inf·1e309 = 범위 밖 → 기본 (감사 지적)
+    except (TypeError, ValueError, OverflowError):
+        _LMT["valid"] = LMT_VALID_BARS
+    try:
+        m = float(maker)
+        _LMT["maker"] = m if m == m and 0.0 <= m <= 1.0 else MAKER_FEE_PCT
+    except (TypeError, ValueError, OverflowError):
+        _LMT["maker"] = MAKER_FEE_PCT
+
+
+def lmt_cost_roi() -> float:
+    return round((float(_LMT["maker"]) + float(_LMT["fee"]) + float(_LMT["slip"])) * LEV, 6)
+
+
+def limit_fill(side: str, price: float, bars: Sequence[Sequence[float]], valid: int) -> int | None:
+    """지정가 체결 봉 인덱스(0 = 진입 다음 봉). LONG = 저가 < 가격 · SHORT = 고가 > 가격. 유효 봉 안에 없으면 None."""
+    for i, b in enumerate(bars[:max(0, int(valid))]):
+        if (side == "LONG" and float(b[3]) < price) or (side == "SHORT" and float(b[2]) > price):
+            return i
+    return None
+
+
+def run_limit(side: str, entry: float, after: Sequence[Sequence[float]]) -> dict[str, Any]:
+    valid = int(_LMT["valid"])
+    k = limit_fill(side, entry, after, valid)
+    if k is None:
+        done = len(after) >= valid
+        return {"filled": False, "fill_bar": None, "done": done, "hit": "NOFILL" if done else "OPEN"}
+    e = run_live_like(side, entry, after[k + 1:], tp1_pct=TP1_FLAT, variants=(), horizon=LIVE_HORIZON - (k + 1))
+    e.pop("adds", None)
+    if e.get("exit_bar") is not None:
+        e["exit_bar"] = int(e["exit_bar"]) + k + 1          # 다른 엔진과 같은 기준(진입 뒤 n 번째 봉)
+    e.update(filled=True, fill_bar=k)
+    return e
 
 
 def add_net(engines: dict) -> dict:
@@ -676,7 +726,12 @@ def manage_trade(trade: Mapping[str, Any], series: Series) -> dict[str, Any]:
         e = run_live_like(side, entry, after, tp1_pct=TP1_FLAT, variants=(), **_kw)
         e.pop("adds", None)
         engines[_name] = e
+    if str(trade.get("rule") or "") in BASELINE_KEYS:     # 🧭 Fix 488: 기준선 행만 지정가 엔진 (방향 엔진 v1 그림자)
+        engines[LMT_ENGINE] = run_limit(side, entry, after)
     add_net(engines)                                      # 💸 Fix 452
+    _le = engines.get(LMT_ENGINE)
+    if isinstance(_le, dict) and isinstance(_le.get("roi"), (int, float)) and not isinstance(_le.get("roi"), bool):
+        _le["roi_net"] = round(float(_le["roi"]) - lmt_cost_roi(), 4)     # 지정가 비용으로 덮어씀
     done = all(bool(e.get("done")) for e in engines.values())
     exit_bars = 0
     for name, e in engines.items():

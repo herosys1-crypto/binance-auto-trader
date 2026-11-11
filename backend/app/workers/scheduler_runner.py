@@ -1014,6 +1014,17 @@ def start_scheduler() -> None:
         id="strategy_council", replace_existing=True, max_instances=1, coalesce=True,
     )
 
+    # 🧭 Fix 488 (2026-11-12 사장님 「… 개발을 완료해줘」 · 전면 개편 v1): 방향 엔진 그림자 — 매일 00:05 UTC 그날 방향 판정 → Redis dir:engine:*.
+    #   판정·기록 전용(주문 0). 직전 24h 마감 기준선이 나빴던 쪽(역방향). 사양 docs/spec/direction_engine_v1_spec_2026-11-12.md
+    def _direction_engine():
+        from app.services.direction_engine import run_once
+        run_once()
+    scheduler.add_job(
+        guarded_job("direction_engine", 300, _direction_engine),
+        trigger=CronTrigger(hour=0, minute=5, timezone="UTC"),
+        id="direction_engine", replace_existing=True, max_instances=1, coalesce=True,
+    )
+
     # 🗾 Fix 465 (2026-10-18 사장님 「가상매매로 이 전략을 수정해서 승률이 제일 높은 방법을 지속적으로 찾아서 업데이트」):
     #   일목 기준선 변형 72줄 가상 실험실 — 15분마다 새 완성봉(1h·4h·1d)만 처리(주문 0) + 매일 KST 10:30 순위표·챔피언.
     def _ichikijun_lab():
