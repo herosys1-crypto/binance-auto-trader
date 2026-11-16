@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
@@ -135,6 +136,10 @@ SETTINGS: dict[str, tuple[str, str, str]] = {
     "rf_split_sl_roi": ("10", "분할 평단 ROI 손절 % (가격상 2·3차 트리거보다 뒤 — 단 2·3차는 볼밴 분할 추가 게이트를 통과해야 들어가 1차만 든 채 손절될 수 있다)", "볼밴 분할과 같음 · 실측 A5/10"),
     "rf_split_tp1_pct": ("5", "분할 TP1 ROI % (TP2~4 = 2·3·4배, 25%씩)", "실측 A5/10 (TP1 15 + 손절 10 이 가장 나쁨)"),
     "rf_split_trailing_pct": ("3", "분할 TP1 뒤 고점 대비 회귀 % 잔량 청산", "볼밴 분할과 같음"),
+    # 🪢 Fix 489 (2026-11-16 사장님 「실매매 청산값을 바꾸는 일이라 승인」): 단일 진입도 트레일링 5 → 3 %p.
+    #   근거 = 가상 같은 거래 짝(36일): 규칙 가족 재료 LONG +0.149 · SHORT +0.143 %p/건, 앞·뒤 절반 모두 + · 11/15 가설 L(S4) 통과.
+    "rf_single_trailing_pct": ("3", "단일 진입 TP1 뒤 최고 ROI 대비 되돌림 %p 잔량 청산 (0 = 공용 기본 5 그대로)",
+                               "사장님 2026-11-16 승인 (3%p 는 가상 판정에서 Claude가 제안)"),
 }
 for _f in FAMILIES[3:]:
     SETTINGS.update({
@@ -269,6 +274,30 @@ def split_config(db: Any) -> tuple[list, list, Any, float, float, str]:
     trail = setting_float(db, "rf_split_trailing_pct")
     trail = trail if 0.5 <= trail <= 20 else float(SETTINGS["rf_split_trailing_pct"][0])
     return caps, steps, sl, tp1, trail, note
+
+
+_PLAIN_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def single_trailing_pct(db: Any) -> float | None:
+    """🪢 Fix 489 — 단일 진입 인스턴스에 넣을 트레일링 되돌림 %p.
+
+    None = 넣지 않는다 = 공용 기본(5) 그대로 — 설정값이 수치상 0 일 때만(끄는 스위치).
+    0.5~20 = 그 값. 그 밖(범위 밖·숫자 아님·NaN·무한) = 기본값 3 — 오타로 조용히 옛 동작이 되지 않게.
+    예외를 던지지 않는다. 새로 만드는 인스턴스에만 쓰인다(열린 포지션·사람 전략은 그대로)."""
+    from decimal import Decimal
+    default = float(SETTINGS["rf_single_trailing_pct"][0])
+    try:
+        raw = str(setting(db, "rf_single_trailing_pct")).strip()   # setting() 도 떼지만 이 함수가 그 계약에 기대지 않게
+        # 평범한 ASCII 숫자 표기만 받는다 (밑줄·전각 숫자·nan·inf = 오타 취급 → 기본값).
+        if not _PLAIN_NUMBER.fullmatch(raw):
+            return default
+        d = Decimal(raw)        # float 로 먼저 바꾸면 1e-10000 이 0.0 이 돼 「끄기」로 오인된다 (duel 감사)
+    except Exception:  # noqa: BLE001
+        return default
+    if d.is_zero():
+        return None
+    return float(d) if Decimal("0.5") <= d <= Decimal("20") else default
 
 
 def _parse_places(raw: str) -> set[str]:

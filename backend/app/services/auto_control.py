@@ -173,6 +173,7 @@ def _shared_rule_ctls() -> tuple[Ctl, ...]:
         _ctl_from(S, "rf_max_signal_age_min", "신호 유효 시간(분)", "num", lo=1, hi=240, ref=ref),
         _ctl_from(S, "rf_max_drift_pct", "가격 이동 상한 %", "num", lo=0.1, hi=20, ref=ref),
         _ctl_from(S, "rf_tp_percents", "단일 진입 TP1~4 ROI%", "text", ref=ref),
+        _ctl_from(S, "rf_single_trailing_pct", "단일 진입 TP1 뒤 트레일링 %p (0 = 기본 5)", "num", lo=0, hi=20, ref=ref),
         _ctl_from(S, "entry_chart_gate_params", "차트 게이트 숫자 (JSON)", "json", ref="services/entry_conditions.py (params)"),
     )
     return tuple(c for c in got if c is not None)

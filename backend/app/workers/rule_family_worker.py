@@ -331,6 +331,7 @@ def run_rule_families_once() -> dict:
                     db, symbol=sym, capital=cap, sl_price_pct=sp, attempt_no=1, leverage=lev, side=fam.side,
                     template_prefix=fam.prefix, strategy_type=fam.stype, cap_key=f"{fam.key}_max_concurrent",
                     cap_default=_cap_default(fam), tp_percents=RF.tp_percents(db),
+                    trailing_pct=RF.single_trailing_pct(db),     # 🪢 Fix 489: 단일 진입 트레일링 3%p (설정 0 = 공용 기본 5)
                 )
                 if si is None:
                     _bump(stat, fam.key, "entry_blocked")

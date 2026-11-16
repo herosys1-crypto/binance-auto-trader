@@ -194,7 +194,18 @@ def test_on_enters_through_create_surge_position_with_family_params(monkeypatch)
     assert (k["symbol"], k["side"], k["capital"], k["sl_price_pct"], k["leverage"], k["attempt_no"]) == ("XUSDT", "SHORT", 10.0, 12.5, 2, 1)
     assert (k["template_prefix"], k["strategy_type"]) == ("RF_S2SHORT", "rf_s2_hist_turn_down")
     assert (k["cap_key"], k["cap_default"], k["tp_percents"]) == ("rf_s2_short_max_concurrent", 2, (15.0, 20.0, 25.0, 30.0))
+    assert k["trailing_pct"] == 3.0                                            # 🪢 Fix 489: 단일 진입 트레일링 기본 3%p
     assert "rf:cooldown:rf_s2_short:XUSDT" in red.store and "rf:cooldown:rf_s2_short:YUSDT" not in red.store
+
+
+@pytest.mark.parametrize("raw,want", [("0", None), ("4.5", 4.5), ("abc", 3.0), ("25", 3.0)])
+def test_fix489_single_entry_passes_trailing_setting(monkeypatch, raw, want):
+    """🪢 Fix 489: 설정 0 = 넣지 않음(공용 기본 5) · 범위 안 = 그 값 · 오타·범위 밖 = 기본 3 (조용히 옛 동작이 되지 않게)."""
+    calls = []
+    monkeypatch.setattr("app.services.surge_ladder_entry.create_surge_position", lambda db, **k: calls.append(k) or NS(id=1))
+    db = _DB(rf_s2_short_mode="on", rf_s2_short_entry="single", rf_single_trailing_pct=raw)
+    _run(monkeypatch, db, [_row(10, "s2_hist_turn_down", "SHORT", ["UP"], sym="XUSDT", entry="2.0")], price=lambda s: 2.01)
+    assert len(calls) == 1 and calls[0]["trailing_pct"] == want
 
 
 def test_on_blocks_opposite_side_and_global_off(monkeypatch):

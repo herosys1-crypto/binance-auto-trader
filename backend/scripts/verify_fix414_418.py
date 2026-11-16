@@ -43,7 +43,8 @@ CODE_MARKERS = {
     "app/workers/strategy_council_worker.py": ("council:latest", "stream_results"),                              # 430 워커
     "app/services/council_gate.py": ("def judge(", "council:gate:"),                                           # 433 기록 전용
     "app/workers/rule_family_worker.py": ("CG.judge(", "si = _enter_split(",                                   # 433 연결
-                                          'blocks.append("regime_filter")', "RF.regime_filter_mode(db)"),       # 439 장세 필터
+                                          'blocks.append("regime_filter")', "RF.regime_filter_mode(db)",
+                                          "trailing_pct=RF.single_trailing_pct(db)"),                   # 489 단일 진입 트레일링 3%p       # 439 장세 필터
     "app/services/family_loss_breaker.py": ("def family_part(", "begin_nested",                                # 435 차단기 체결 기준
                                             "def limit_for(", "limit = limit_for(db, fam_key)"),               # 444 가족별 기준
     "app/services/human_share.py": ("def split_for(", '"fills": len(es)'),                                    # 434·435
@@ -59,7 +60,8 @@ CODE_MARKERS = {
     "app/services/paper_trading.py": ('"live_trend": {"trend": "after_tp1"}', "def trend_lines_for("),         # 447 추세 보유 청산 기록
     "app/workers/paper_trading_worker.py": ("_CON.apply(fired, rule_side, breadth)",),                       # 437 가상 판정
     "app/services/rule_families.py": ('Family("rf_consensus_long"', '"rf_consensus_long_entry"',       # 437 가족
-                                      "REVIEW_NOTES: dict[str, str] = {"),                                # 462 10/16 검토 설명
+                                      "REVIEW_NOTES: dict[str, str] = {",
+                                      "def single_trailing_pct(", '"rf_single_trailing_pct": ("3"'),   # 489                                # 462 10/16 검토 설명
     "app/workers/verdict_report_worker.py": ('"jk": "jk_2026_11_15.py"',),                                  # 462 가설 J·K 자동 판정
     "app/services/office_board.py": ("def parse_counts(", "BLIP_MIN_RUNS = 10", "def parse_next_runs(",   # 459 사무실 24h 오류·다음 실행
                                       "def daily_table(", "DAILY_GRACE_MIN = 10",                        # 461 오늘 하루 1번 잡
