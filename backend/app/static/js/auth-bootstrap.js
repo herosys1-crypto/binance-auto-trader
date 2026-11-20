@@ -31,6 +31,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
     if (!res.ok) throw new Error('로그인 실패: ' + res.status);
     const data = await res.json();
     token = data.access_token;
+    _consecutive401 = 0;  // 2026-11-20: 로그인 전 401 누적분이 새 토큰을 로그아웃시키지 않게
     localStorage.setItem('access_token', token);
     showDashboard();
     refreshAll();

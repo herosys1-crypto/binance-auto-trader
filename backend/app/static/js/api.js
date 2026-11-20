@@ -41,6 +41,9 @@ let _consecutive401 = 0;
 
 async function api(path, opts = {}) {
   const headers = opts.headers || {};
+  // 2026-11-20 모바일 로그인 직후 튕김: 로그인 전에 토큰 없이 나간 요청의 401 이 로그인 뒤 도착해
+  //   새 토큰까지 로그아웃시켰다. 401 은 「지금 토큰으로 보낸 요청」일 때만 센다.
+  const sentToken = token;
   if (token) headers['Authorization'] = 'Bearer ' + token;
   // 🚨 Fix 107 (2026-08-26 CRITICAL): 사장님 UI 세팅 저장 422 진짜 원인!
   //
@@ -66,6 +69,9 @@ async function api(path, opts = {}) {
   }
   const res = await fetch(API_BASE + path, {...opts, headers});
   if (res.status === 401) {
+    if (!sentToken || sentToken !== token) {
+      throw new Error('인증 필요 — 로그인 전·이전 토큰 요청 (무시)');
+    }
     _consecutive401 += 1;
     if (_consecutive401 >= 3) {
       // 진짜 토큰 만료 — 로그아웃
