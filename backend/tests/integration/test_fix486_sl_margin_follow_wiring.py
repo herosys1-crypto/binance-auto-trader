@@ -71,7 +71,9 @@ def test_follows_added_margin_then_stops_at_liq_guard(db_session, mark, make_use
     _snapshot(db_session, s, mark=48)
     assert _check(db_session, mark, s, 48) is False, "옛 손절가(50) 아래 48 — 증거금 100 을 넣었으니 버틴다"
     _snapshot(db_session, s, mark=43)
-    assert _check(db_session, mark, s, 43) is True, "청산가 42 의 3% 위(43.26)에 닿음 → 거래소 청산 전에 손절"
+    # ⚠️ Fix 492 (2026-11-21 사장님): 증거금 추가 인스턴스는 청산 가드에서도 닫지 않는다(바이낸스 강제청산까지)
+    assert _check(db_session, mark, s, 43) is False, "Fix 492 — 증거금 추가 = 우리 시스템 청산 없음"
+    return
     ev = db_session.query(RiskEvent).filter_by(strategy_instance_id=s.id, event_type="STOP_LOSS_TRIGGERED").one()
     assert ev.event_payload["margin_follow"]["applied"] is True
     assert ev.event_payload["margin_follow"]["guard_hit"] is True
@@ -91,7 +93,7 @@ def test_stale_snapshot_keeps_old_rule(db_session, mark, make_user, make_exchang
     s = _strategy(make_user, make_exchange_account, make_symbol, make_template, make_strategy)
     _add_margin_event(db_session, s)
     _snapshot(db_session, s, mark=48, age_sec=3600)
-    assert _check(db_session, mark, s, 48) is True, "스냅샷이 1시간 전 — 청산 가드를 믿을 수 없으니 옛 규칙"
+    assert _check(db_session, mark, s, 48) is False, "Fix 492 — 스냅샷이 낡아도 증거금 추가 인스턴스는 닫지 않는다(#4568 사고)"
 
 
 def test_switch_off_restores_old_rule(db_session, mark, make_user, make_exchange_account,
@@ -103,7 +105,7 @@ def test_switch_off_restores_old_rule(db_session, mark, make_user, make_exchange
     _snapshot(db_session, s, mark=48)
     SystemSettingsService(db_session).set(F.S_ENABLED, "0", description="test")
     db_session.commit()
-    assert _check(db_session, mark, s, 48) is True, "스위치를 끄면 옛 규칙으로 돌아간다"
+    assert _check(db_session, mark, s, 48) is False, "Fix 492 — Fix 486 스위치와 무관하게 증거금 추가 인스턴스는 닫지 않는다"
 
 
 def test_above_old_line_untouched(db_session, mark, make_user, make_exchange_account,
@@ -132,7 +134,7 @@ def test_stream_snapshot_is_ignored(db_session, mark, make_user, make_exchange_a
         snapshot_time=datetime.now(timezone.utc) - timedelta(seconds=5),
     ))
     db_session.commit()
-    assert _check(db_session, mark, s, 48) is True
+    assert _check(db_session, mark, s, 48) is False, "Fix 492 — 증거금 추가 기록이 있으면 닫지 않는다"
 
 
 def test_newer_stream_snapshot_does_not_hide_sync_snapshot(db_session, mark, make_user, make_exchange_account,
@@ -145,4 +147,4 @@ def test_newer_stream_snapshot_does_not_hide_sync_snapshot(db_session, mark, mak
     assert _check(db_session, mark, s, 48) is False, "동기화 스냅샷(지갑 600·청산가 42) 기준으로 버틴다"
     _snapshot(db_session, s, mark=43, age_sec=30)
     _snapshot(db_session, s, mark=43, age_sec=5, wallet=Decimal("9999"), liq=Decimal("1"), source="ACCOUNT_UPDATE")
-    assert _check(db_session, mark, s, 43) is True, "스트림 스냅샷의 청산가 1 이 아니라 동기화의 42 로 가드"
+    assert _check(db_session, mark, s, 43) is False, "Fix 492 — 증거금 추가 = 청산 가드도 걸지 않음"

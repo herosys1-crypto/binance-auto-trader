@@ -198,6 +198,24 @@ class RiskService:
     #     · 최신 포지션 스냅샷(격리증거금·미실현손익·청산가·수량·평단·시각)
     #   어떤 실패든 「미적용」(옛 판정)으로 돌아간다 — 손절을 느슨하게 만드는 쪽으로 실패하지 않는다.
     # ══════════════════════════════════════════════════════════════════════
+    def _margin_added_hold(self, strategy, kind: str, roi) -> bool:
+        """🛑 Fix 492 (2026-11-21 사장님 「증거금을 추가해서 모두 바이낸스 강제청산전까지 우리 시스템에서는
+        모든 인스턴스에서 청산은 없어」): 사람이 증거금을 추가한 인스턴스는 손절·강제손절·청산 가드를 걸지 않는다.
+
+        사고: #4568 SNXXUSDT — IP 차단으로 포지션 스냅샷이 5분 넘게 낡자 Fix 486 이 옛 손절선(−100%)으로
+        돌아가 ROI −130% 에서 손절 발동 → 시장가 매도가 차단 때문에 6분마다 실패하며 반복(차단 풀리면 체결될 뻔).
+        증거금 추가 기록(RiskEvent ADD_MARGIN_SUCCESS)이 하나라도 있으면 True(= 청산 안 함). 읽기 실패는 False(옛 동작)."""
+        try:
+            added = self._added_margin_recorded(strategy.id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[Fix492] #%s 증거금 추가 기록 읽기 실패 → 옛 판정: %s", getattr(strategy, "id", "?"), e)
+            return False
+        if added > 0:
+            logger.warning("[Fix492] #%s %s %s 조건(ROI %.2f%%)이지만 증거금 추가 %s USDT 인스턴스 = 우리 시스템 청산 없음",
+                           strategy.id, strategy.symbol, kind, roi, added)
+            return True
+        return False
+
     def _added_margin_recorded(self, strategy_id: int) -> Decimal:
         """이 전략에 사람이 넣은 증거금 합(USDT). 기록이 없거나 읽기 실패면 0."""
         from sqlalchemy import select
@@ -424,6 +442,8 @@ class RiskService:
         #   사람이 「증거금 추가」를 한 전략은 추가분만큼 손절%가 넓어지고, 거래소 청산가 앞 버퍼에서 닫는다.
         #   기록된 추가가 없거나 스냅샷이 이상하면 _fol.applied=False = 옛 판정 그대로 (sl_margin_follow.py).
         #   옛 손절선을 넘었을 때만 계산한다 (I1: 새 판정이 손절 ⇒ 옛 판정도 손절 → 그 전엔 볼 필요가 없다).
+        if unrealized_roi <= -sl_pct and self._margin_added_hold(strategy, "SL", unrealized_roi):
+            return False   # Fix 492: 증거금 추가 인스턴스 = 우리 시스템은 청산하지 않음(바이낸스 강제청산까지)
         if unrealized_roi <= -sl_pct:
             _fol = self._margin_follow(strategy, sl_pct, leverage, avg_entry, mark_price, latest_position)
         else:
@@ -532,6 +552,8 @@ class RiskService:
         # 🛡 Fix 486 (2026-11-11): 강제손절도 증거금 추가를 따라간다 (최종 손절과 같은 배율·같은 청산 가드).
         #   옛 기준을 넘었을 때만 계산하고, 넓어진 기준 또는 (청산 가드 + 옛 기준)일 때만 발동 —
         #   옛 규칙보다 일찍 닫는 경우는 없다.
+        if is_force and self._margin_added_hold(strategy, "강제손절", Decimal("0")):
+            return False   # Fix 492: 증거금 추가 인스턴스 = 우리 시스템은 청산하지 않음
         if is_force:
             _fol_f = self._margin_follow(strategy, threshold, leverage, avg_entry, mark_price, None)
             if _fol_f.applied:
