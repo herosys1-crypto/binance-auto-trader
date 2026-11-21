@@ -56,6 +56,15 @@ class EmergencyCloseInProgress(Exception):
     pass
 
 
+class CloseBlockedMarginAdded(Exception):
+    """🛑 Fix 492b (2026-11-21 사장님): 증거금을 추가한 인스턴스는 우리 시스템이 자동 청산하지 않는다(바이낸스 강제청산까지).
+    허용 = 익절(purpose="take_profit") · 사장님 직접 조작(purpose="human"). 그 밖의 자동 청산은 이 예외로 막는다."""
+    pass
+
+
+CLOSE_ALLOWED_WITH_MARGIN = ("take_profit", "human")   # 사장님 11/21 「익절만 허용」 + 사람이 누른 것
+
+
 class PreflightCheckFailed(Exception):
     """진입 사전 검증 실패 — 거래소 호출 전에 차단 (Phase 3, 2026-05-21 사장님 요구).
 
@@ -382,10 +391,35 @@ class ExecutionService:
         self.db.refresh(order)
         return order
 
+    def _margin_added_blocks(self, strategy_id: int, purpose: str) -> bool:
+        """Fix 492b: 증거금 추가 기록(RiskEvent ADD_MARGIN_SUCCESS amount>0)이 있고 purpose 가 허용 목록 밖이면 True.
+        기록 읽기 실패는 False(옛 동작) — Fix 492 와 같은 방향."""
+        if purpose in CLOSE_ALLOWED_WITH_MARGIN:
+            return False
+        try:
+            from app.services.risk_service import RiskService
+            added = RiskService(self.db)._added_margin_recorded(strategy_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[Fix492b] #%s 증거금 추가 기록 읽기 실패 → 옛 동작: %s", strategy_id, e)
+            return False
+        if added > 0:
+            logger.warning("[Fix492b] #%s 자동 청산(%s) 차단 — 증거금 추가 %s USDT 인스턴스 = 우리 시스템 청산 없음(익절·사람 조작만)",
+                           strategy_id, purpose, added)
+            return True
+        return False
+
     def emergency_close_position(
         self, strategy_id: int, *, quantity: Decimal,
         for_stage_transition: bool = False,
+        purpose: str = "auto",
     ) -> Order:
+        # 🛑 Fix 492b (2026-11-21 사장님 「증거금을 추가해서 모두 바이낸스 강제청산전까지 우리 시스템에서는 모든 인스턴스에서
+        #   청산은 없어」 · 범위 = 「익절만 허용」): 모든 청산이 지나는 이 한 곳에서 막는다(경로별로 흩어 막지 않음 — 헌법 6).
+        #   purpose: "take_profit"(익절) · "human"(사장님이 화면에서 누름) 만 증거금 추가 인스턴스를 닫을 수 있다.
+        if self._margin_added_blocks(strategy_id, purpose):
+            raise CloseBlockedMarginAdded(
+                f"strategy_id={strategy_id} 증거금 추가 인스턴스 — 자동 청산({purpose}) 차단, 익절·사람 조작만 허용"
+            )
         # 2026-05-08 (사용자 #120 DYDXUSDT orphan 사례): emergency_close_position 이
         # 같은 strategy 에 대해 동시 다발 호출되면 (manual stop API + tp_sl_orchestrator
         # + admin cleanup 등) 같은 양 (예: 245 DYDX) 이 여러 번 청산되어 거래소-DB

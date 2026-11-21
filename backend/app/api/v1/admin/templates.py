@@ -396,7 +396,7 @@ def cleanup_quick_templates(
                         qty = Decimal(str(r.current_position_qty or 0)).copy_abs()
                         if qty > 0:
                             try:
-                                exec_svc.emergency_close_position(r.id, quantity=qty)
+                                exec_svc.emergency_close_position(r.id, quantity=qty, purpose="human")   # Fix 492b: 관리자 화면 조작
                             except ValueError:
                                 pass  # Bug #8: 거래소 포지션 0 시 ValueError
                             except EmergencyCloseInProgress:

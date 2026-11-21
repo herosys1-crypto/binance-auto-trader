@@ -362,7 +362,7 @@ def manual_take_profit(
             strategy_id, target_qty,
         )
         close_order = execution.emergency_close_position(
-            strategy.id, quantity=target_qty
+            strategy.id, quantity=target_qty, purpose="human",   # Fix 492b: 사장님 수동 익절
         )
         # 2026-06-06 강화: close_order 필드 명시적 logging — Sentry/log 즉시 확인
         # Sub-Account 권한/잔액/precision 등 silent 실패 추적 핵심
@@ -784,7 +784,7 @@ def stop_strategy(
             qty = Decimal(str(strategy.current_position_qty or 0)).copy_abs()
             if qty > 0:
                 try:
-                    execution_service.emergency_close_position(strategy.id, quantity=qty)
+                    execution_service.emergency_close_position(strategy.id, quantity=qty, purpose="human")   # Fix 492b: 사장님 긴급 종료
                 except ValueError as ve:
                     # UX (2026-04-29): Bug #8 fix 가 거래소 포지션 0 일 때 ValueError 를
                     # 던짐 (cleanup 은 이미 완료). 이 경우 502 가 아닌 정상 응답으로 처리.

@@ -381,7 +381,7 @@ class TPSLOrchestratorService:
         # 2026-05-08 #120 fix: 다른 caller (manual stop, admin cleanup) 가 이미 청산 중이면
         # idempotency lock 이 EmergencyCloseInProgress 발생 → 다음 cycle 에 재평가.
         try:
-            close_order = self.execution_service.emergency_close_position(strategy.id, quantity=close_qty)
+            close_order = self.execution_service.emergency_close_position(strategy.id, quantity=close_qty, purpose="take_profit")   # Fix 492b: 익절 = 허용
         except EmergencyCloseInProgress:
             return  # 다른 caller 가 청산 중 — status/qty 변경 없이 대기, 다음 cycle 재평가
         # 청산 후 남은 수량 계산
