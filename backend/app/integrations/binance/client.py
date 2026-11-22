@@ -340,7 +340,7 @@ def get_request_counts(minutes: int = 5) -> dict:
         "by_status": out_st,
     }
 _ip_ban_until_ms_local: int = 0          # 프로세스 로컬 캐시
-_ip_ban_redis_checked_at: float = 0.0    # Redis 재확인 쓰로틀 (초)
+_ip_ban_redis_checked_at: float = float("-inf")    # Redis 재확인 쓰로틀 (초) — 시작 직후 첫 확인은 바로(ban-warmup)
 _IP_BAN_REDIS_RECHECK_SEC = 5.0
 
 _BAN_UNTIL_RE = __import__("re").compile(r"banned\s+until\s+(\d{13})", __import__("re").IGNORECASE)
@@ -369,6 +369,9 @@ def _ip_ban_remaining_ms() -> int:
             until = int(raw.decode() if isinstance(raw, bytes) else raw)
             if until > now:
                 _ip_ban_until_ms_local = until
+                # 🌅 ban-warmup 불변식: 예열 끝 ≥ 차단 끝 + 15분 — 다른 컨테이너가 본 차단도 예열을 끌고 온다(감사 치명)
+                if until + POST_BAN_WARMUP_SEC * 1000 > _warmup_until_ms_local:
+                    _set_warmup(until + POST_BAN_WARMUP_SEC * 1000)   # 로컬 + Redis(원자) — 공유가 끊기지 않게(속성 시험이 찾음)
                 return until - now
     except Exception:
         # Redis 장애 = 로컬 캐시만으로 동작 (fail-open, 기존 흐름 유지).
@@ -377,12 +380,91 @@ def _ip_ban_remaining_ms() -> int:
     return 0
 
 
+# ════════════════════════════════════════════════════════
+# 🌅 차단 뒤 예열 (2026-11-22 ban-warmup): 11/21~22 실측 — 차단이 풀리는 순간 밀린 요청이 몰려
+#   짧은 새 차단 → 429 → 60초 뒤 재개 → 장기 차단(13,864초 → … → 16,952초)이 28시간 반복, 학습 잡 전면 정지.
+#   차단이 끝난 뒤 POST_BAN_WARMUP_SEC 동안 스캔 상한을 낮추고 학습 잡 스캔은 막는다. 필수(주문·포지션·계정)는 그대로 통과.
+# ════════════════════════════════════════════════════════
+_WARMUP_REDIS_KEY = "api_backoff:ip:warmup_until_ms"
+POST_BAN_WARMUP_SEC = 900                 # Claude가 정함 — 차단 끝난 뒤 15분
+WARMUP_SCAN_BUDGET_PER_MIN = 500          # Claude가 정함 — 예열 중 스캔 상한(평상 1,500)
+WARMUP_LOW_BUDGET_PER_MIN = 0             # 예열 중 학습·관측 잡 스캔 = 전부 거절
+DEFAULT_429_BLOCK_SEC = 120               # Claude가 정함 — 시각·Retry-After 없는 429 (옛 60초는 바로 재개해 재차단)
+_warmup_until_ms_local: int = 0
+_warmup_redis_checked_at: float = float("-inf")   # 시작 직후에도 첫 재확인은 바로(monotonic 이 0 근처여도 — Gemini 심판)
+
+
+# 더 늦은 값으로만 원자 갱신(GET·SET 사이 경합으로 짧은 값이 긴 값을 덮지 않게 — duel 감사·Gemini 심판)
+_SET_MAX_LUA = (
+    "local cur = tonumber(redis.call('GET', KEYS[1]) or '0') "
+    "if tonumber(ARGV[1]) > cur then redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2]) return 1 end return 0"
+)
+
+
+def _redis_set_max(r, key: str, until_ms: int, now_ms: int) -> None:
+    """Redis 키를 until_ms 로 올리되 기존보다 늦을 때만(원자). eval 을 못 쓰면 옛 GET·SETEX 로 대신."""
+    ttl_ms = max(1000, until_ms - now_ms + 5000)
+    try:
+        r.eval(_SET_MAX_LUA, 1, key, str(until_ms), str(ttl_ms))
+        return
+    except Exception:  # noqa: BLE001 — 모의 객체·구버전 Redis
+        pass
+    raw = r.get(key)
+    cur = int(raw.decode() if isinstance(raw, bytes) else raw) if raw else 0
+    if until_ms > cur:
+        r.setex(key, max(1, ttl_ms // 1000), str(until_ms))
+
+
+def _warmup_until_ms_local_set(until_ms: int) -> None:
+    """로컬 예열 시각만 올림(Redis 쓰기 없음 — 차단 재확인 경로용)."""
+    global _warmup_until_ms_local
+    if until_ms > _warmup_until_ms_local:
+        _warmup_until_ms_local = until_ms
+
+
+def _set_warmup(until_ms: int) -> None:
+    """예열 종료 시각 기록(로컬 + Redis) — 더 늦은 값으로만."""
+    global _warmup_until_ms_local
+    now = _now_ms()
+    if until_ms <= now:
+        return
+    if until_ms > _warmup_until_ms_local:
+        _warmup_until_ms_local = until_ms
+    try:
+        from app.core.redis_client import get_redis_client
+        _redis_set_max(get_redis_client(), _WARMUP_REDIS_KEY, until_ms, now)
+    except Exception:
+        pass
+
+
+def _in_warmup() -> bool:
+    """차단은 끝났고 예열 종료 전인가. Redis 는 5초마다 재확인(다른 컨테이너가 본 차단 공유). 실패 = 로컬만."""
+    global _warmup_until_ms_local, _warmup_redis_checked_at
+    if _ip_ban_remaining_ms() > 0:
+        return False
+    now = _now_ms()
+    mono = time.monotonic()
+    if _warmup_until_ms_local <= now and mono - _warmup_redis_checked_at >= _IP_BAN_REDIS_RECHECK_SEC:
+        _warmup_redis_checked_at = mono
+        try:
+            from app.core.redis_client import get_redis_client
+            raw = get_redis_client().get(_WARMUP_REDIS_KEY)
+            if raw:
+                until = int(raw.decode() if isinstance(raw, bytes) else raw)
+                if until > _warmup_until_ms_local:
+                    _warmup_until_ms_local = until
+        except Exception:
+            _warmup_redis_checked_at = mono + 60.0
+    return now < _warmup_until_ms_local
+
+
 def _set_ip_ban(until_ms: int, *, source: str = "") -> None:
-    """IP ban 마킹 (로컬 + Redis). 더 늦은 만료로만 갱신."""
+    """IP ban 마킹 (로컬 + Redis). 더 늦은 만료로만 갱신. 예열 종료 시각(차단 끝 + 15분)도 함께 기록."""
     global _ip_ban_until_ms_local
     now = _now_ms()
     if until_ms <= now:
         return
+    _set_warmup(until_ms + POST_BAN_WARMUP_SEC * 1000)
     if until_ms > _ip_ban_until_ms_local:
         _ip_ban_until_ms_local = until_ms
         logger.error(
@@ -391,11 +473,7 @@ def _set_ip_ban(until_ms: int, *, source: str = "") -> None:
         )
     try:
         from app.core.redis_client import get_redis_client
-        r = get_redis_client()
-        raw = r.get(_IP_BAN_REDIS_KEY)
-        cur = int(raw.decode() if isinstance(raw, bytes) else raw) if raw else 0
-        if until_ms > cur:
-            r.setex(_IP_BAN_REDIS_KEY, max(1, (until_ms - now) // 1000 + 5), str(until_ms))
+        _redis_set_max(get_redis_client(), _IP_BAN_REDIS_KEY, until_ms, now)
     except Exception:
         pass
 
@@ -412,8 +490,18 @@ def _mark_ip_ban_from_response(response: "requests.Response") -> None:
     m = _BAN_UNTIL_RE.search(text)
     if m:
         _set_ip_ban(int(m.group(1)), source=f"status={response.status_code} explicit")
-    else:
+        return
+    if response.status_code != 429:   # 418 등은 옛 기본 60초 그대로(바꾸는 건 429 만 — 감사)
         _set_ip_ban(_now_ms() + 60_000, source=f"status={response.status_code} default60s")
+        return
+    sec = DEFAULT_429_BLOCK_SEC   # 429: 시각 없으면 Retry-After(1~3600초) → 없으면 120초 (옛 60초는 바로 재개해 재차단, ban-warmup)
+    try:
+        ra = (getattr(response, "headers", None) or {}).get("Retry-After")
+        if ra is not None and str(ra).strip().isdigit() and 1 <= int(str(ra).strip()) <= 3600:
+            sec = int(str(ra).strip())
+    except Exception:  # noqa: BLE001
+        pass
+    _set_ip_ban(_now_ms() + sec * 1000, source=f"status={response.status_code} default{sec}s")
 
 
 def get_ip_ban_remaining_sec() -> int:
@@ -789,10 +877,12 @@ class BinanceClient:
             _wcaller = _caller_var.get()
         except Exception:  # noqa: BLE001
             _wcaller = ""
-        _wlimit = _scan_throttled(path, _wtotal, _wcaller, scan_endpoints=_SCAN_ENDPOINTS,
-                                  budget=SCAN_WEIGHT_BUDGET_PER_MIN)
+        _warm = _in_warmup()   # 🌅 ban-warmup: 차단 끝난 뒤 15분은 스캔 500 · 학습 잡 0 (필수 요청은 scan_throttled 가 항상 통과)
+        _wbudget = WARMUP_SCAN_BUDGET_PER_MIN if _warm else SCAN_WEIGHT_BUDGET_PER_MIN
+        _wlimit = _scan_throttled(path, _wtotal, _wcaller, scan_endpoints=_SCAN_ENDPOINTS, budget=_wbudget,
+                                  **({"low_budget": WARMUP_LOW_BUDGET_PER_MIN} if _warm else {}))
         if _wlimit is not None:
-            _wlow = _wlimit != SCAN_WEIGHT_BUDGET_PER_MIN
+            _wlow = _wlimit != _wbudget
             # 🚨 Fix 127 (2026-08-26): 차단한 요청의 weight 는 되돌린다!
             #   옛: _add_weight 를 판정보다 먼저 불러 「차단된 요청」까지 누적 →
             #       카운터가 부풀고 → 더 많이 차단하고 → 더 부푸는 악순환.

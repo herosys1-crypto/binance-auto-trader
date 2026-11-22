@@ -195,5 +195,8 @@ def test_client_does_not_pin_low_budget():
     src = inspect.getsource(C.BinanceClient._request)
     call = src[src.index("_scan_throttled("):]
     call = call[:call.index(")") + 1]
-    assert "low_budget" not in call and "scan_endpoints=_SCAN_ENDPOINTS" in call
+    # 평상시는 low_budget 을 넘기지 않는다(weight_priority 상수가 단일 출처). 예외 = ban-warmup(2026-11-22) 예열 중에만
+    #   WARMUP_LOW_BUDGET_PER_MIN 으로 덮는다 — 조건부 한 곳 외에 low_budget 을 고정하면 안 된다.
+    assert "scan_endpoints=_SCAN_ENDPOINTS" in call
+    assert call.count("low_budget") == 1 and '{"low_budget": WARMUP_LOW_BUDGET_PER_MIN} if _warm else {}' in call
     assert "int(r.incrby(key, w))" in inspect.getsource(C._add_weight)
