@@ -45,11 +45,12 @@ router = APIRouter(prefix="/exchange-accounts", tags=["exchange-accounts"])
 # 🚨 호출 위치가 중요하다: **캐시 조회 뒤, 네트워크 직전**에 둔다.
 #    캐시가 살아 있으면 ban 중에도 화면은 마지막 값을 계속 보여 준다.
 # ═══════════════════════════════════════════════════════════════════════════
-def _guard_ip_ban(where: str) -> None:
-    """IP ban 중이면 네트워크로 나가기 전에 끊는다 (ban 연장 되먹임 차단)."""
+def _guard_ip_ban(where: str, testnet: bool = False) -> None:
+    """IP ban 중이면 네트워크로 나가기 전에 끊는다 (ban 연장 되먹임 차단).
+    Fix 494: testnet 계정은 testnet 차단만, mainnet 계정은 mainnet 차단만 본다."""
     try:
-        from app.integrations.binance.client import get_ip_ban_remaining_sec
-        left = get_ip_ban_remaining_sec()
+        from app.integrations.binance.client import get_ip_ban_remaining_sec, get_testnet_ban_remaining_sec
+        left = get_testnet_ban_remaining_sec() if testnet else get_ip_ban_remaining_sec()
     except Exception:      # 진단 함수 때문에 화면이 죽으면 안 된다
         return
     if left > 0:
@@ -523,7 +524,7 @@ def get_balance(
             _ts_v99 = int(_time_v99.time() * 1000)
             _qs = f"timestamp={_ts_v99}&recvWindow=5000"
             _sig = _hmac.new(_sk.encode(), _qs.encode(), _hashlib.sha256).hexdigest()
-            _guard_ip_ban("balance/positionRisk")   # 🚨 네트워크 직전 (캐시 미스일 때만 여기 온다)
+            _guard_ip_ban("balance/positionRisk", bool(account.is_testnet))   # 🚨 네트워크 직전 (캐시 미스일 때만 여기 온다)
             _resp = _requests.get(
                 f"{_base}/fapi/v2/positionRisk?{_qs}&signature={_sig}",
                 headers={"X-MBX-APIKEY": _ak},
@@ -815,7 +816,7 @@ def get_binance_positions(
     ts = int(time.time() * 1000)
     qs = f"timestamp={ts}&recvWindow=5000"
     sig = hmac.new(sk.encode(), qs.encode(), hashlib.sha256).hexdigest()
-    _guard_ip_ban("binance-positions")          # 🚨 네트워크 직전 (캐시 미스일 때만 여기 온다)
+    _guard_ip_ban("binance-positions", bool(account.is_testnet))          # 🚨 네트워크 직전 (캐시 미스일 때만 여기 온다)
     try:
         r = requests.get(
             f"{base}/fapi/v2/positionRisk?{qs}&signature={sig}",
@@ -995,7 +996,7 @@ def get_binance_open_orders_summary(
     # 🚨 ban 가드는 try 밖에 둔다 — 아래 `except Exception` 이 넓어서 안에 두면
     #    503 이 삼켜져 `{"error": ...}` 200 으로 나간다. 호출을 막는 효과는 같지만
     #    「왜 안 나오는지」가 화면에서 사라진다.
-    _guard_ip_ban("binance-open-orders-summary")   # weight 40 짜리 전체 조회
+    _guard_ip_ban("binance-open-orders-summary", bool(account.is_testnet))   # weight 40 짜리 전체 조회
     try:
         ak = decrypt_text(account.api_key_enc)
         sk = decrypt_text(account.api_secret_enc)

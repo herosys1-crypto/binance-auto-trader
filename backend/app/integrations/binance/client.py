@@ -482,17 +482,19 @@ def _mark_ip_ban_from_response(response: "requests.Response") -> None:
     """418/429 응답에서 「banned until <ms>」 추출 → 전역 마킹.
 
     명시 시각이 없으면 보수적으로 60초.
+    Fix 494: 응답 URL 이 testnet 이면 testnet 전용 키에만 기록(mainnet 을 막지 않는다).
     """
+    _setter = _set_testnet_ban if _is_testnet_response(response) else _set_ip_ban
     try:
         text = response.text or ""
     except Exception:
         text = ""
     m = _BAN_UNTIL_RE.search(text)
     if m:
-        _set_ip_ban(int(m.group(1)), source=f"status={response.status_code} explicit")
+        _setter(int(m.group(1)), source=f"status={response.status_code} explicit")
         return
     if response.status_code != 429:   # 418 등은 옛 기본 60초 그대로(바꾸는 건 429 만 — 감사)
-        _set_ip_ban(_now_ms() + 60_000, source=f"status={response.status_code} default60s")
+        _setter(_now_ms() + 60_000, source=f"status={response.status_code} default60s")
         return
     sec = DEFAULT_429_BLOCK_SEC   # 429: 시각 없으면 Retry-After(1~3600초) → 없으면 120초 (옛 60초는 바로 재개해 재차단, ban-warmup)
     try:
@@ -501,7 +503,7 @@ def _mark_ip_ban_from_response(response: "requests.Response") -> None:
             sec = int(str(ra).strip())
     except Exception:  # noqa: BLE001
         pass
-    _set_ip_ban(_now_ms() + sec * 1000, source=f"status={response.status_code} default{sec}s")
+    _setter(_now_ms() + sec * 1000, source=f"status={response.status_code} default{sec}s")
 
 
 def get_ip_ban_remaining_sec() -> int:
@@ -518,6 +520,77 @@ def clear_ip_ban() -> None:
         get_redis_client().delete(_IP_BAN_REDIS_KEY)
     except Exception:
         pass
+
+
+# ════════════════════════════════════════════════════════
+# 🧪 Fix 494 (2026-11-22): testnet 차단은 testnet 만 막는다.
+#   실측 11/22 15:03:02 UTC — 계정 4(testnet, 키 무효 401) 고아 주문 점검이 맞은 testnet 418(17,637초)이
+#   하나뿐인 전역 키에 기록돼 mainnet 요청 전부(감시·익절·대조)가 4.9시간 로컬 차단됐다.
+#   같은 순간 mainnet /fapi/v1/time = 200, x-mbx-used-weight-1m = 1 (mainnet 은 차단 아님).
+#   api 쪽 차단 감지도 전부 testnet openOrders(5초마다 401) 바로 뒤였다.
+#   → 응답 URL 이 testnet 이면 testnet 전용 키에만 기록. mainnet 키·예열은 mainnet 응답만 쓴다.
+# ════════════════════════════════════════════════════════
+_TESTNET_BAN_REDIS_KEY = "api_backoff:ip:testnet:ban_until_ms"
+_testnet_ban_until_ms_local: int = 0
+_testnet_ban_redis_checked_at: float = float("-inf")
+
+
+def _is_testnet_response(response) -> bool:
+    """응답(또는 그 요청)의 URL 에 testnet 이 있나. 모르면 False(= mainnet, 옛 동작)."""
+    try:
+        url = getattr(response, "url", None)
+        if not isinstance(url, str):
+            url = getattr(getattr(response, "request", None), "url", None)
+        return isinstance(url, str) and "testnet" in url.lower()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _testnet_ban_remaining_ms() -> int:
+    """남은 testnet 차단(ms). 0 = 차단 아님. Redis 는 5초마다 재확인, 실패 = 로컬만."""
+    global _testnet_ban_until_ms_local, _testnet_ban_redis_checked_at
+    now = _now_ms()
+    if _testnet_ban_until_ms_local > now:
+        return _testnet_ban_until_ms_local - now
+    mono = time.monotonic()
+    if mono - _testnet_ban_redis_checked_at < _IP_BAN_REDIS_RECHECK_SEC:
+        return 0
+    _testnet_ban_redis_checked_at = mono
+    try:
+        from app.core.redis_client import get_redis_client
+        raw = get_redis_client().get(_TESTNET_BAN_REDIS_KEY)
+        if raw:
+            until = int(raw.decode() if isinstance(raw, bytes) else raw)
+            if until > now:
+                _testnet_ban_until_ms_local = until
+                return until - now
+    except Exception:  # noqa: BLE001
+        _testnet_ban_redis_checked_at = mono + 60.0
+    return 0
+
+
+def _set_testnet_ban(until_ms: int, *, source: str = "") -> None:
+    """testnet 차단 기록(로컬 + Redis) — 더 늦은 값으로만. mainnet 키·예열은 건드리지 않는다."""
+    global _testnet_ban_until_ms_local
+    now = _now_ms()
+    if until_ms <= now:
+        return
+    if until_ms > _testnet_ban_until_ms_local:
+        _testnet_ban_until_ms_local = until_ms
+        logger.warning(
+            "[Fix494] 🧪 testnet 차단 감지 — testnet 요청만 로컬 차단 (mainnet 은 그대로) 만료까지 %ds (%s)",
+            (until_ms - now) // 1000, source,
+        )
+    try:
+        from app.core.redis_client import get_redis_client
+        _redis_set_max(get_redis_client(), _TESTNET_BAN_REDIS_KEY, until_ms, now)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def get_testnet_ban_remaining_sec() -> int:
+    """운영/진단용 — 남은 testnet 차단 초."""
+    return _testnet_ban_remaining_ms() // 1000
 
 
 class BinanceClient:
@@ -855,7 +928,8 @@ class BinanceClient:
         #
         # 418 은 계정이 아니라 「IP」 ban 이므로 전역 키를 쓴다.
         # ══════════════════════════════════════════════════════════════════
-        _ban_left = _ip_ban_remaining_ms()
+        _is_tn = bool(getattr(self, "is_testnet", False)) or "testnet" in str(getattr(self, "base_url", "")).lower()
+        _ban_left = _testnet_ban_remaining_ms() if _is_tn else _ip_ban_remaining_ms()   # Fix 494: 망별 차단
         if _ban_left > 0:
             binance_api_requests_total.labels(
                 endpoint=path, method=method, status="ip_banned_skip",
@@ -863,7 +937,7 @@ class BinanceClient:
             _count_request(path, "ip_banned_skip")   # Fix 118
             raise BinanceAPIError(
                 f"Binance API error: status=418, code=-1003, "
-                f"msg=IP ban active — request suppressed locally "
+                f"msg=IP ban active{' (testnet)' if _is_tn else ''} — request suppressed locally "
                 f"({_ban_left // 1000}s left). Fix116 circuit breaker.",
                 status_code=418,
                 code=-1003,
@@ -877,7 +951,7 @@ class BinanceClient:
             _wcaller = _caller_var.get()
         except Exception:  # noqa: BLE001
             _wcaller = ""
-        _warm = _in_warmup()   # 🌅 ban-warmup: 차단 끝난 뒤 15분은 스캔 500 · 학습 잡 0 (필수 요청은 scan_throttled 가 항상 통과)
+        _warm = (not _is_tn) and _in_warmup()   # Fix 494: 예열은 mainnet 만 · 🌅 ban-warmup: 차단 끝난 뒤 15분은 스캔 500 · 학습 잡 0 (필수 요청은 scan_throttled 가 항상 통과)
         _wbudget = WARMUP_SCAN_BUDGET_PER_MIN if _warm else SCAN_WEIGHT_BUDGET_PER_MIN
         _wlimit = _scan_throttled(path, _wtotal, _wcaller, scan_endpoints=_SCAN_ENDPOINTS, budget=_wbudget,
                                   **({"low_budget": WARMUP_LOW_BUDGET_PER_MIN} if _warm else {}))
