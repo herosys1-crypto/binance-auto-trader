@@ -10,6 +10,7 @@
 6. **완료 = 실검증.** 테스트 통과 + 배포 뒤 `backend/scripts/verify_fix364_deploy.py`(코드·프로세스·운영 3층) 로 확인한 뒤에만 「완료」라고 말한다. 반박 검증(여러 렌즈)을 거친 뒤 실자금 경로를 배포한다.
     **수학 기반 검증(2026-10-29 사장님 「지금 프로젝트에서도 사용할수 있게해줘」)**: 돈·자본·손익·잠금 같은 계산·상태 코드를 바꾸면 불변식을 적고 `backend/tests/properties/`(Hypothesis)에 속성 테스트를 더한다.
     실행 `py -3.14 -m pytest backend/tests/properties`(깊게: `HYPOTHESIS_PROFILE=nightly`) 또는 `python C:\ai_hq\tools\pbt_check.py tests/properties`. 반례는 테스트를 약하게 하지 말고 원인을 본다 · 표준 `C:\ai_hq\01_Wiki\개발_수학검증_PBT_표준.md`.
+    **외부 API 연동(2026-11-23 사장님 「ai_hq 개발실과 우리 모든 개발에 사용할 수 있게 적용해줘」)**: 바이낸스·외부 서비스 연결 코드는 `C:\ai_hq\01_Wiki\개발_외부API연동_표준.md` A1~A11 을 따른다 — 특히 **testnet/mainnet 의 키·차단·캐시를 섞지 않는다**(Fix 494) · 차단 중엔 나가기 전에 끊는다 · 주문 같은 쓰기 요청은 중복 방지 키(newClientOrderId) + 시간 초과 뒤 조회로 확인.
 7. **`git stash` 금지**(워크트리 공유). 배포 = VPS `git pull origin main` + `docker compose restart api scheduler` (+ `alembic upgrade head`).
 8. **줄끝.** 일부 파일은 CRLF(`strategy_service.py`, `strategy_status.py`, `execution_service.py`, `auto_long_at_bottom_worker.py`, `capital_calculator.py`, `models/__init__.py`) — 패치 스크립트는 줄끝을 보존한다.
 9. **문서 위치.** 사양·검증은 `docs/spec/`, 학습은 `docs/learning/`, 운영 지침은 `docs/`. Ruflo 사용법은 `docs/RUFLO_GUIDE_2026-09-09.md`.
