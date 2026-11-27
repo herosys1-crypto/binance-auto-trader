@@ -143,14 +143,23 @@ def summary_text(rep: dict) -> tuple[str, str]:
     D = rep["D_walk"]
     t = D["total"]
     E = rep["E_today"]
-    title = f"🧑‍⚖️ 전략 운영팀 성적표 {E['d'] or ''} — 오늘 쓸 칸 {len(E['cells'])}"
+    ok = E.get("walk_ok", D.get("walk_ok"))                           # 🚦 Fix 496: 전진 검증 관문(Fix 495) 을 요약에도
+    if ok is False:
+        title = f"🧑‍⚖️ 전략 운영팀 성적표 {E['d'] or ''} — ⚠️ 전진 검증 실패 · 쓸 칸 없음 (참고 {len(E['cells'])})"
+    else:
+        title = f"🧑‍⚖️ 전략 운영팀 성적표 {E['d'] or ''} — 오늘 쓸 칸 {len(E['cells'])}"
     lines = [
         f"전진 검증 {D['n_days']}일: 선택 {_fmt(t['sel'])} (n={t['sel_n']}) · 전체 {_fmt(t['all'])} · 무작위 {_fmt(t['base'])}",
+    ]
+    if t.get("edge_n"):
+        lines.append(f"🎯 같은 방향·장세 무작위 {_fmt(t.get('base_m'))} 대비 실력 {_fmt(t.get('edge'))} · 플러스 날 {D.get('edge_pos_days')}/{D['n_days']}")
+    lines += [
         f"선택>전체 {D['sel_gt_all_days']}/{D['n_days']}일 · 최악의 날 {D['worst']['d'] if D['worst'] else '—'} {_fmt(D['worst']['sel'] if D['worst'] else None)}",
         f"오늘 시장폭 구간: {E['current_b']}" + (f" (어제 끝난 행 기준 {E['current_b_closed']})"
                                                  if E.get("current_b_closed") not in (None, E["current_b"]) else ""),
         "",
-        "▶ 오늘 쓸 칸 (지금 장세 먼저 · 규칙·방향·장세 · 무작위 대비 edge):",
+        ("▷ 참고 칸 — 전진 검증 실패: 과거 성적일 뿐 실주문 근거 아님 (규칙·방향·장세 · 무작위 대비 edge):" if ok is False
+         else "▶ 오늘 쓸 칸 (지금 장세 먼저 · 규칙·방향·장세 · 무작위 대비 edge):"),
     ]
     for c in E["cells"][:8]:
         lines.append(f"  {c['rule']} {c['side']} {c['b']} · {_fmt(c['edge'])} (n={c['n']})")

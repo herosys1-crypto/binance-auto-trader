@@ -201,3 +201,21 @@ def test_fix495_walk_ok_keeps_use_candidate():
 def test_fix495_empty_report_walk_not_ok():
     rep = SC.build_report([])
     assert rep["D_walk"]["walk_ok"] is False and rep["F_status"] == []
+
+
+def test_fix496_summary_warns_when_walk_forward_fails():
+    import random as _r
+    from app.workers.strategy_council_worker import summary_text
+    rnd = _r.Random(5)
+    rows = []
+    for i in range(30):
+        d = _day(i)
+        for _ in range(40):
+            rows.append(Row("baseline_SHORT", "SHORT", d, rnd.gauss(2, 1.0), 0.5))
+            rows.append(Row("dumb_short", "SHORT", d, rnd.gauss(2, 1.0), 0.5))
+    rep = SC.build_report(rows)
+    title, body = summary_text(rep)
+    assert "전진 검증 실패" in title and "쓸 칸 없음" in title
+    assert "실주문 근거 아님" in body and "🎯" in body
+    title2, body2 = summary_text(SC.build_report(_synthetic(), min_n=10))
+    assert "오늘 쓸 칸" in title2 and "전진 검증 실패" not in title2
