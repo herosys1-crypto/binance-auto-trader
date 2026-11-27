@@ -239,24 +239,38 @@ def build_report(rows: Iterable[Row], *, lo: Any = 0.4, hi: Any = 0.6, train_day
     cur_b = bucket(mbs[len(mbs) // 2], lo_, hi_) if mbs else "?"
     E_cells.sort(key=lambda x: (x["b"] != cur_b, -(x["edge"] or 0.0), x["rule"]))   # 지금 장세 칸이 먼저
 
+    # 🚦 Fix 495 (2026-11-27 사장님 「우리가 운영할수 있는 자동매매의 문제점을 파악하고 개선안을 만들어서 수정해줘」):
+    #   전진 검증(맞춘 무작위 대비 edge)이 실패하면 「오늘 쓸 칸」은 참고일 뿐이다 → 「사용 후보」를 주지 않는다.
+    #   walk_ok = 맞춘 무작위 대비 edge > 0 그리고 edge>0 인 날이 절반 넘음 (Claude가 정함). 규칙 전체 edge 가 음수여도 「사용 후보」 아님.
+    _te, _tn = D_walk["total"].get("edge"), D_walk["total"].get("edge_n") or 0
+    walk_ok = bool(_tn) and _te is not None and _te > 0 and 2 * D_walk["edge_pos_days"] > len(scored)
+    D_walk["walk_ok"] = walk_ok
+
     # ── F 규칙 상태 ──
     used = {(c["rule"], c["side"]) for c in E_cells}
     F = []
     for a in A:
+        why = None
         if a["n"] < p["min_n"]:
             st = "표본 부족"
         elif (a["rule"], a["side"]) in used:
-            st = "사용 후보"
+            if not walk_ok:
+                st, why = "보류 후보", "전진 검증 실패"
+            elif a["edge"] is not None and a["edge"] < 0:
+                st, why = "보류 후보", "전체 edge 음수"
+            else:
+                st = "사용 후보"
         elif a["edge"] is not None and a["edge"] < 0:
             st = "중지 후보"
         else:
             st = "관찰"
-        F.append({"rule": a["rule"], "side": a["side"], "status": st, "n": a["n"], "edge": a["edge"]})
+        F.append({"rule": a["rule"], "side": a["side"], "status": st, "n": a["n"], "edge": a["edge"], "why": why})
 
     return {
         "fix": FIX, "params": p, "rows": len(rows),
         "days": {"first": days[0].isoformat() if days else None, "last": last.isoformat() if last else None},
         "A_rules": A, "B_overlap": B, "C_regime": C, "D_walk": D_walk,
-        "E_today": {"d": D_next.isoformat() if D_next else None, "current_b": cur_b, "cells": E_cells},
+        "E_today": {"d": D_next.isoformat() if D_next else None, "current_b": cur_b, "cells": E_cells,
+                    "walk_ok": walk_ok},                                     # 🚦 Fix 495
         "F_status": F,
     }

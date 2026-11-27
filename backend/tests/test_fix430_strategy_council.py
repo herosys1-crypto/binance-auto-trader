@@ -173,3 +173,31 @@ def test_walk_edge_skips_cells_without_baseline():
     assert W["total"]["edge"] == 2.0
     assert W["total"]["edge_n"] < W["total"]["sel_n"]
     assert all(x["edge"] is None for x in W["days"] if date.fromisoformat(x["d"]).toordinal() % 2 != _day(0).toordinal() % 2)
+
+
+def test_fix495_no_use_candidate_when_walk_forward_fails():
+    """11/27: 전진 검증이 실패하면(맞춘 무작위 대비 실력 0) 「오늘 쓸 칸」에 든 규칙도 「사용 후보」가 아니라 「보류 후보」."""
+    rnd = random.Random(5)
+    rows = []
+    for i in range(30):
+        d = _day(i)
+        for _ in range(40):
+            rows.append(Row("baseline_SHORT", "SHORT", d, rnd.gauss(2, 1.0), 0.5))
+            rows.append(Row("dumb_short", "SHORT", d, rnd.gauss(2, 1.0), 0.5))     # 실력 0 · 평균은 플러스
+    rep = SC.build_report(rows)
+    assert rep["D_walk"]["walk_ok"] is False and rep["E_today"]["walk_ok"] is False
+    st = {f["rule"]: f for f in rep["F_status"]}
+    if ("dumb_short", "SHORT") in {(c["rule"], c["side"]) for c in rep["E_today"]["cells"]}:
+        assert st["dumb_short"]["status"] == "보류 후보" and st["dumb_short"]["why"] == "전진 검증 실패"
+    assert all(f["status"] != "사용 후보" for f in rep["F_status"])
+
+
+def test_fix495_walk_ok_keeps_use_candidate():
+    rep = SC.build_report(_synthetic(), min_n=10)
+    assert rep["D_walk"]["walk_ok"] is True
+    assert {f["rule"]: f["status"] for f in rep["F_status"]}["good"] == "사용 후보"
+
+
+def test_fix495_empty_report_walk_not_ok():
+    rep = SC.build_report([])
+    assert rep["D_walk"]["walk_ok"] is False and rep["F_status"] == []

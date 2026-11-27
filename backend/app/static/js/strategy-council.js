@@ -19,7 +19,7 @@
     return String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   }
   const B_NAME = { low: '시장폭 낮음', mid: '시장폭 중간', high: '시장폭 높음', '?': '모름' };
-  const ST_COLOR = { '사용 후보': '#22c55e', '중지 후보': '#ef4444', '표본 부족': '#93c5fd', '관찰': '#94a3b8' };
+  const ST_COLOR = { '사용 후보': '#22c55e', '보류 후보': '#f59e0b', '중지 후보': '#ef4444', '표본 부족': '#93c5fd', '관찰': '#94a3b8' };
 
   async function loadStrategyCouncil() {
     const card = document.getElementById('strategy-council-card');
@@ -55,7 +55,7 @@
       `<td style="color:${c(x.edge)}">${f(x.edge)}</td><td>${x.n}</td></tr>`).join('');
     const st = (d.F_status || []).map(x =>
       `<span style="border:1px solid ${ST_COLOR[x.status] || '#94a3b8'}66;border-radius:6px;padding:1px 6px;margin:2px;display:inline-block;font-size:11px">` +
-      `<b style="color:${ST_COLOR[x.status] || '#94a3b8'}">${esc(x.status)}</b> ${esc(x.rule)} ${esc(x.side)} <span style="color:${c(x.edge)}">${f(x.edge)}</span></span>`).join('');
+      `<b style="color:${ST_COLOR[x.status] || '#94a3b8'}">${esc(x.status)}</b> ${esc(x.rule)} ${esc(x.side)} <span style="color:${c(x.edge)}">${f(x.edge)}</span>${x.why ? ' <span style="color:#94a3b8">(' + esc(x.why) + ')</span>' : ''}</span>`).join('');
     const th = 'style="text-align:left;color:#94a3b8;font-weight:normal;padding-right:8px"';
     // 🧑‍⚖️ Fix 436: 가족별 실거래 — 시스템 몫(가족 판단용) · 사람 💉 추가 몫 · 손실 차단기(최근 7일 가족 몫 / 기준)
     const fams = (lv && lv.families) || [];
@@ -77,6 +77,7 @@
       `<div style="font-size:12px;margin-bottom:6px">전진 검증 ${W.n_days}일 — 운영팀 선택 <b style="color:${c(T.sel)}">${f(T.sel)}</b> · 전체 ${f(T.all)} · 무작위 ${f(T.base)}` +
       ` · 선택&gt;전체 ${W.sel_gt_all_days}/${W.n_days}일 · 최악의 날 ${W.worst ? esc(W.worst.d) + ' <b style="color:#ef4444">' + f(W.worst.sel) + '</b>' : '—'}</div>` +
       (T.edge_n ? `<div style="font-size:12px;margin-bottom:6px">🎯 같은 방향·장세 무작위 ${f(T.base_m)} 대비 선택 실력(edge) <b style="color:${c(T.edge)}">${f(T.edge)}</b> · edge&gt;0 ${W.edge_pos_days}/${W.n_days}일 <span style="color:#94a3b8">(선택이 한 방향에 몰리면 위 「무작위」는 시장 방향을 실력으로 보이게 한다)</span></div>` : '') +
+      (E.walk_ok === false ? `<div style="font-size:12px;margin-bottom:6px;color:#f59e0b">⚠️ 전진 검증 실패 — 아래 「오늘 쓸 칸」은 과거 성적일 뿐 다음 날로 이어지지 않았다. 실주문 근거로 쓰지 않는다 (Fix 495)</div>` : '') +
       `<div style="display:flex;flex-wrap:wrap;gap:12px">` +
       `<div style="flex:1 1 300px;min-width:0;overflow-x:auto"><div style="font-size:12px;color:#c4b5fd">▶ 오늘 쓸 칸 (무작위 대비 edge, ◀ = 지금 장세)</div>` +
       `<table style="font-size:12px;width:100%"><tr><th ${th}>규칙</th><th ${th}>방향</th><th ${th}>장세</th><th ${th}>edge</th><th ${th}>n</th></tr>${cells || '<tr><td colspan=5>없음</td></tr>'}</table></div>` +
