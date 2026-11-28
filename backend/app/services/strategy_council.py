@@ -193,7 +193,13 @@ def build_report(rows: Iterable[Row], *, lo: Any = 0.4, hi: Any = 0.6, train_day
 
     D_days = []
     tot = {"sel": [0, 0.0], "all": [0, 0.0], "base": [0, 0.0], "base_m": [0, 0.0], "edge": [0, 0.0]}
+    # 🧑‍⚖️ Fix 497 (11/28): 채점도 학습창과 같은 완결 기준 — 실행일 − gap 이후의 날은 아직 안 끝난 거래가 많아
+    #   빨리 끝난 거래(주로 손절)만 남는다(11/28 「최악의 날 11/28 −25.00」). 그 날들은 채점하지 않는다.
+    _ref = today or (days[-1] + timedelta(days=1) if days else None)
+    score_until = _ref - timedelta(days=p["gap"]) if _ref else None
     for D in days:
+        if score_until is not None and D > score_until:
+            continue
         sel, seen = pick(D)
         if not seen:
             continue
@@ -225,6 +231,7 @@ def build_report(rows: Iterable[Row], *, lo: Any = 0.4, hi: Any = 0.6, train_day
         "sel_pos_days": sum(1 for x in scored if x["sel"] > 0),
         "edge_pos_days": sum(1 for x in scored if x["edge"] is not None and x["edge"] > 0),
         "n_days": len(D_days),
+        "score_until": score_until.isoformat() if score_until else None,   # Fix 497
         "worst": {"d": worst["d"], "sel": worst["sel"]} if worst else None,
     }
 

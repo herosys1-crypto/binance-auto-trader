@@ -219,3 +219,20 @@ def test_fix496_summary_warns_when_walk_forward_fails():
     assert "실주문 근거 아님" in body and "🎯" in body
     title2, body2 = summary_text(SC.build_report(_synthetic(), min_n=10))
     assert "오늘 쓸 칸" in title2 and "전진 검증 실패" not in title2
+
+def test_fix497_incomplete_recent_days_not_scored():
+    """실행일 − gap 이후의 날은 채점하지 않는다 — 그 날의 행을 아무리 나쁘게 바꿔도 전진 검증 불변."""
+    rows = []
+    for i in range(30):
+        for _ in range(40):
+            rows += [Row("r1", "LONG", _day(i), 2.0, mb=0.5), Row("baseline_LONG", "LONG", _day(i), 1.0, mb=0.5)]
+    today = _day(30)
+    base = SC.build_report(rows, min_n=10, today=today)["D_walk"]
+    bad = rows + [Row("r1", "LONG", _day(d), -500.0, mb=0.5) for d in (27, 28, 29) for _ in range(50)]
+    rep = SC.build_report(bad, min_n=10, today=today)["D_walk"]
+    assert rep["score_until"] == _day(27).isoformat()
+    assert max(x["d"] for x in rep["days"]) == _day(27).isoformat()
+    # 27 일은 채점(완결) — 28·29 의 나쁜 행만 바꾼 경우와 비교
+    bad2 = rows + [Row("r1", "LONG", _day(d), -500.0, mb=0.5) for d in (28, 29) for _ in range(50)]
+    assert SC.build_report(bad2, min_n=10, today=today)["D_walk"]["total"] == base["total"]
+    assert all(x["d"] <= _day(27).isoformat() for x in base["days"])
